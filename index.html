@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover" />
+  <title>PMD Dashboard</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <div class="top">
+    <button id="bk" class="hidden" data-nav="#/">&larr; Back</button>
+    <h1 id="pt">PMD Dashboard</h1>
+    <span class="st" id="ss">&#9729; ready</span>
+    <button id="refreshBtn" title="Refresh">&#10227;</button>
+  </div>
+  <div class="dbanner"><b>Mock backend</b> &mdash; in-memory data, changes are not persisted</div>
+  <div class="vw" id="app"></div>
+  <div class="mbg" id="modal"><div class="mdl" id="mc"></div></div>
+  <div class="toast" id="toast"></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
