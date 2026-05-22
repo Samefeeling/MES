@@ -67,7 +67,7 @@ describe('slots (§5.1)', () => {
 describe('current shift (§2.3)', () => {
   it('maps clock hour to the right shift', () => {
     expect(currentShift(new Date(2026, 4, 15, 9)).code).toBe('Day');
-    expect(currentShift(new Date(2026, 4, 15, 18)).code).toBe('Eve');
+    expect(currentShift(new Date(2026, 4, 15, 18)).code).toBe('Afternoon');
     expect(currentShift(new Date(2026, 4, 15, 23, 30)).code).toBe('Night');
   });
 

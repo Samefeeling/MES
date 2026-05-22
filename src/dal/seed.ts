@@ -127,35 +127,46 @@ export function seedProducts(): Product[] {
   }));
 }
 
+// 21 PMD-standard reject codes — matches the .bas modPMDOperator master schema:
+//   5 "named" codes get their own fixed row on the operator sheet (rows 7-11);
+//   16 "other" codes are selectable from the Other (Drop Down) row (row 12).
+const NAMED_REJECTS: Array<[string, string]> = [
+  ['P11', 'Colour Change'],
+  ['P12', 'Startups'],
+  ['P1', 'Contamination'],
+  ['P5', 'Flow Marks'],
+  ['P9', 'White Stress Marks'],
+];
+
+const OTHER_REJECTS: Array<[string, string]> = [
+  ['P2', 'Cracked'],
+  ['P3', 'Damaged/Marked'],
+  ['P4', 'Dirty'],
+  ['P8', 'Warpage'],
+  ['P13', 'Short Shots'],
+  ['P17', 'Melt Out'],
+  ['P18', 'Burn Marks'],
+  ['P19', 'Sinks'],
+  ['P20', 'Blisters'],
+  ['P6', 'Die Maintenance'],
+  ['P14', 'Machine Problem'],
+  ['P15', 'Robots'],
+  ['P22', 'Dryer Problem'],
+  ['P16', 'Operator'],
+  ['P21', 'Material Shortage'],
+  ['P23', 'Wet Material'],
+];
+
 export function seedRejectCategories(): RejectCategory[] {
-  const labels: Record<string, string> = {
-    P1: 'Short shot',
-    P2: 'Flash',
-    P3: 'Sink mark',
-    P4: 'Warpage',
-    P5: 'Burn mark',
-    P6: 'Splay / silver streak',
-    P7: 'Weld line',
-    P8: 'Black spot / contamination',
-    P9: 'Dimensional out of spec',
-    P11: 'Surface scratch',
-    P12: 'Colour mismatch',
-    P13: 'Insert missing / misplaced',
-    P14: 'Gate vestige',
-    P15: 'Ejector pin mark',
-    P16: 'Drag mark',
-    P17: 'Void / bubble',
-    P18: 'Brittleness / cracking',
-    P19: 'Delamination',
-    P20: 'Incomplete trim',
-    P21: 'Mixed part',
-    P22: 'Damaged in handling',
-  }; // 21 PMD-standard reject codes (§2.1)
-  return Object.keys(labels).map((code, i) => ({
-    code,
-    label: labels[code],
-    sequence: i + 1,
-  }));
+  let seq = 1;
+  const out: RejectCategory[] = [];
+  for (const [code, label] of NAMED_REJECTS) {
+    out.push({ code, label, sequence: seq++, kind: 'named' });
+  }
+  for (const [code, label] of OTHER_REJECTS) {
+    out.push({ code, label, sequence: seq++, kind: 'other' });
+  }
+  return out; // 5 + 16 = 21
 }
 
 export function seedBdCodes(): BdCode[] {
@@ -302,6 +313,9 @@ export function seedProduction(now: Date, planning: PlanningOrder[]): Production
           countEnd: onSlot0 ? good * (lastSlot + 1) : null,
           rejectCount: rejQty,
           rejects: rejQty ? JSON.stringify({ P11: rejQty }) : '{}',
+          otherType: '',
+          otherCount: 0,
+          purgeKg: onSlot0 && rng() < 0.4 ? +(rng() * 2).toFixed(1) : null,
           operator: OPERATOR_NAMES[(id + dayBack) % OPERATOR_NAMES.length],
           supervisor: dayBack > 0 ? SUPERVISOR_NAMES[dayBack % SUPERVISOR_NAMES.length] : '',
           bdIssue: status === 'B' ? 'BD01' : '',

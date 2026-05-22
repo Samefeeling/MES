@@ -12,7 +12,17 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
 
   it('serves seeded reference data', async () => {
     expect((await dal.listMachines()).length).toBe(8);
-    expect((await dal.listRejectCategories()).length).toBe(21);
+    const rcats = await dal.listRejectCategories();
+    expect(rcats.length).toBe(21);
+    // Matches the .bas operator sheet: 5 fixed rows + 16 "Other (Drop Down)".
+    expect(rcats.filter((r) => r.kind === 'named').map((r) => r.code)).toEqual([
+      'P11',
+      'P12',
+      'P1',
+      'P5',
+      'P9',
+    ]);
+    expect(rcats.filter((r) => r.kind === 'other').length).toBe(16);
     expect((await dal.listBdCodes()).length).toBe(31);
     expect((await dal.listOperators()).length).toBeGreaterThan(0);
     expect((await dal.listSupervisors()).length).toBe(3);
@@ -45,6 +55,9 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
       countEnd: null,
       rejectCount: 0,
       rejects: '{}',
+      otherType: '',
+      otherCount: 0,
+      purgeKg: null,
       operator: 'Op',
       supervisor: '',
       bdIssue: '',
@@ -87,6 +100,9 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
       countEnd: 10,
       rejectCount: 0,
       rejects: '{}',
+      otherType: '',
+      otherCount: 0,
+      purgeKg: null,
       operator: 'Op',
       supervisor: '',
       bdIssue: '',
@@ -108,10 +124,10 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
   });
 
   it('lockShift on an empty shift creates a SlotIndex=0 placeholder (§5.5)', async () => {
-    await dal.lockShift('HS', '2026-05-10-Eve', 'Jeff Penn', 'Tin');
+    await dal.lockShift('HS', '2026-05-10-Afternoon', 'Jeff Penn', 'Tin');
     const rows = await dal.listProduction({
       machineCode: 'HS',
-      shiftId: '2026-05-10-Eve',
+      shiftId: '2026-05-10-Afternoon',
     });
     expect(rows).toHaveLength(1);
     expect(rows[0].slotIndex).toBe(0);

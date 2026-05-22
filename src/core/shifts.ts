@@ -14,7 +14,7 @@ export interface ShiftDef {
 // START date (night beginning 23:00 on 15 May = 2026-05-15-Night, §2.3).
 export const SHIFTS: ShiftDef[] = [
   { code: 'Day', label: 'Day 07–15', startHour: 7, spanHours: 8 },
-  { code: 'Eve', label: 'Eve 15–23', startHour: 15, spanHours: 8 },
+  { code: 'Afternoon', label: 'Afternoon 15–23', startHour: 15, spanHours: 8 },
   { code: 'Night', label: 'Night 23–07', startHour: 23, spanHours: 8 },
 ];
 
@@ -38,7 +38,7 @@ export function buildShiftId(d: Date, code: ShiftCode): string {
 export function parseShiftId(
   shiftId: string,
 ): { year: number; month: number; day: number; code: ShiftCode } | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})-(Day|Eve|Night)$/.exec(shiftId);
+  const m = /^(\d{4})-(\d{2})-(\d{2})-(Day|Afternoon|Night)$/.exec(shiftId);
   if (!m) return null;
   return {
     year: +m[1],
@@ -96,7 +96,7 @@ export function currentShift(now: Date = new Date()): {
 } {
   const h = now.getHours();
   if (h >= 7 && h < 15) return { code: 'Day', shiftId: buildShiftId(now, 'Day') };
-  if (h >= 15 && h < 23) return { code: 'Eve', shiftId: buildShiftId(now, 'Eve') };
+  if (h >= 15 && h < 23) return { code: 'Afternoon', shiftId: buildShiftId(now, 'Afternoon') };
   // 23:00–06:59 — Night. If we're past midnight the shift started yesterday.
   const anchor = new Date(now);
   if (h < 7) anchor.setDate(anchor.getDate() - 1);

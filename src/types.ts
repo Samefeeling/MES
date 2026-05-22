@@ -3,7 +3,7 @@
 // physical column names (PascalCase in SharePoint/SQL).
 
 export type StatusCode = 'R' | 'B' | 'C' | 'D' | 'I' | 'M' | 'O' | 'P' | 'S';
-export type ShiftCode = 'Day' | 'Eve' | 'Night';
+export type ShiftCode = 'Day' | 'Afternoon' | 'Night';
 export type Role = 'operator' | 'supervisor' | 'admin';
 
 /** How a status code is accounted for in KPI rollups (§2.2). */
@@ -37,10 +37,15 @@ export interface Product {
   active: boolean;
 }
 
+// `named` = the 5 fixed reject rows on the operator sheet (P11/P12/P1/P5/P9);
+// `other` = the codes selectable from the "Other (Drop Down)" row.
+export type RejectKind = 'named' | 'other';
+
 export interface RejectCategory {
   code: string;
   label: string;
   sequence: number;
+  kind: RejectKind;
 }
 
 export interface BdCode {
@@ -71,7 +76,7 @@ export interface PlanningOrder {
 export interface ProductionRecord {
   id: number;
   machineCode: string;
-  shiftId: string; // YYYY-MM-DD-<Day|Eve|Night>
+  shiftId: string; // YYYY-MM-DD-<Day|Afternoon|Night>
   jobNumber: string;
   slotIndex: number; // 0..15
   statusCode: StatusCode | '';
@@ -79,6 +84,9 @@ export interface ProductionRecord {
   countEnd: number | null;
   rejectCount: number;
   rejects: string; // JSON, e.g. {"P11":3,"P14":1}
+  otherType: string; // "Other (Drop Down)" value for this slot (.bas row 12)
+  otherCount: number; // "Other #" qty for this slot (.bas row 13)
+  purgeKg: number | null; // Purge(kg) per (machine, shift, job) — canonical on slot 0
   operator: string;
   supervisor: string;
   bdIssue: string;

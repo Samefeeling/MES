@@ -1,22 +1,15 @@
 import { createDataLayer, type PmdDataLayer } from './dal';
-import { renderDashboard } from './ui/dashboard';
-import { renderMachine, machinePollTick } from './ui/machine';
+import { renderOperator, operatorPollTick } from './ui/operator';
 
 const dal: PmdDataLayer = createDataLayer(import.meta.env as Record<string, string>);
 
-const POLL_MS = 60_000; // §6.2 — active shift polls every 60s
+const POLL_MS = 60_000; // §6.2 — active shift refresh
 let pollTimer: ReturnType<typeof setInterval> | undefined;
 
-interface Route {
-  view: 'dashboard' | 'machine';
-  machineCode?: string;
-}
-
-function parseRoute(): Route {
+function parseMachineFromHash(): string {
   const h = window.location.hash || '#/';
-  const m = /^#\/machine\/(.+)$/.exec(h);
-  if (m) return { view: 'machine', machineCode: decodeURIComponent(m[1]) };
-  return { view: 'dashboard' };
+  const m = /^#\/op\/(.+)$/.exec(h);
+  return m ? decodeURIComponent(m[1]) : '';
 }
 
 function setStatus(text: string): void {
@@ -25,25 +18,24 @@ function setStatus(text: string): void {
 }
 
 async function route(): Promise<void> {
-  const r = parseRoute();
-  const back = document.getElementById('bk');
-  const title = document.getElementById('pt');
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = undefined;
   }
   try {
     setStatus('☁ syncing');
-    if (r.view === 'machine' && r.machineCode) {
-      back?.classList.remove('hidden');
-      if (title) title.textContent = r.machineCode;
-      await renderMachine(dal, r.machineCode);
-      pollTimer = setInterval(machinePollTick, POLL_MS);
-    } else {
-      back?.classList.add('hidden');
-      if (title) title.textContent = 'PMD Dashboard';
-      await renderDashboard(dal);
+    let mc = parseMachineFromHash();
+    if (!mc) {
+      const machines = await dal.listMachines();
+      mc = machines[0]?.machineCode ?? '';
+      if (mc) {
+        // Stamp the hash so a refresh keeps the same machine.
+        window.location.hash = `#/op/${encodeURIComponent(mc)}`;
+        return; // hashchange will re-enter route()
+      }
     }
+    await renderOperator(dal, mc);
+    pollTimer = setInterval(operatorPollTick, POLL_MS);
     setStatus('☁ ready');
   } catch (e) {
     setStatus('☁ offline');
@@ -52,9 +44,6 @@ async function route(): Promise<void> {
 }
 
 window.addEventListener('hashchange', () => void route());
-document.getElementById('bk')?.addEventListener('click', () => {
-  window.location.hash = '#/';
-});
 document.getElementById('refreshBtn')?.addEventListener('click', () => void route());
 
 void route();
