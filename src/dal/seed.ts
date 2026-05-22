@@ -9,6 +9,7 @@ import type {
   StatusCode,
   Supervisor,
 } from '../types';
+import { bdAsBdCodes } from '../core/breakdown';
 import { generateDieChanges } from '../core/planning';
 import {
   SLOTS_PER_SHIFT,
@@ -169,25 +170,10 @@ export function seedRejectCategories(): RejectCategory[] {
   return out; // 5 + 16 = 21
 }
 
+// Two-tier breakdown classification from breakdown_classification_taxonomy.md
+// (11 categories × 6-11 causes = 91 codes, ELE-01..OTH-99).
 export function seedBdCodes(): BdCode[] {
-  const groups: Array<[string, string[]]> = [
-    ['Hydraulic', ['Pump failure', 'Hose burst', 'Valve stuck', 'Oil leak', 'Low pressure']],
-    ['Electrical', ['Drive fault', 'Sensor failure', 'Wiring fault', 'PLC fault', 'Heater band open']],
-    ['Mechanical', ['Toggle wear', 'Tie-bar issue', 'Ejector jam', 'Clamp misalign', 'Bearing failure']],
-    ['Mould/Tool', ['Mould stuck', 'Cooling blocked', 'Core pin broken', 'Hot runner fault']],
-    ['Robot/Auto', ['Robot fault', 'Gripper fail', 'Conveyor jam', 'Vision fault']],
-    ['Process', ['Material starvation', 'Feed throat block', 'Dryer fault', 'Temperature drift', 'Material contamination']],
-    ['Utilities', ['Air supply loss', 'Water cooling loss', 'Power dip']],
-  ];
-  const out: BdCode[] = [];
-  let seq = 1;
-  for (const [subCategory, labels] of groups) {
-    for (const label of labels) {
-      out.push({ code: `BD${String(seq).padStart(2, '0')}`, label, subCategory, sequence: seq });
-      seq++;
-    }
-  }
-  return out; // 31 codes
+  return bdAsBdCodes();
 }
 
 // Two ERP orders per machine per Day shift, across the same 7-day window the
@@ -318,7 +304,7 @@ export function seedProduction(now: Date, planning: PlanningOrder[]): Production
           purgeKg: onSlot0 && rng() < 0.4 ? +(rng() * 2).toFixed(1) : null,
           operator: OPERATOR_NAMES[(id + dayBack) % OPERATOR_NAMES.length],
           supervisor: dayBack > 0 ? SUPERVISOR_NAMES[dayBack % SUPERVISOR_NAMES.length] : '',
-          bdIssue: status === 'B' ? 'BD01' : '',
+          bdIssue: status === 'B' ? 'MEC-11' : '', // Abnormal noise / vibration — generic seed
           mangoTicket: status === 'B' ? `MAN-3${String(1000 + id).slice(-4)}` : '',
           handoverNote:
             onSlot0 && dayBack === 1

@@ -23,7 +23,10 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
       'P9',
     ]);
     expect(rcats.filter((r) => r.kind === 'other').length).toBe(16);
-    expect((await dal.listBdCodes()).length).toBe(31);
+    const bd = await dal.listBdCodes();
+    expect(bd.length).toBe(91); // 11 categories × 6–11 causes, taxonomy MD
+    expect(bd.find((b) => b.code === 'ELE-01')?.subCategory).toBe('Electrical');
+    expect(bd.find((b) => b.code === 'OTH-99')).toBeTruthy();
     expect((await dal.listOperators()).length).toBeGreaterThan(0);
     expect((await dal.listSupervisors()).length).toBe(3);
   });

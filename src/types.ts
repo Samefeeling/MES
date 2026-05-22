@@ -53,6 +53,7 @@ export interface BdCode {
   label: string;
   subCategory?: string;
   sequence: number;
+  owner?: string; // Likely-owner per the breakdown taxonomy MD
 }
 
 export interface PlanningOrder {

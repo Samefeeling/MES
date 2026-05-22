@@ -17,6 +17,8 @@ import {
   slotClock,
 } from '../core/shifts';
 import { STATUSES, STATUS_MAP } from '../core/status';
+import { bdLabelFor } from '../core/breakdown';
+import { openBreakdownCascade } from './breakdown';
 import { toast } from './toast';
 import { escapeHtml } from './modal';
 
@@ -46,7 +48,8 @@ let S: OpState | null = null;
 let dalRef: PmdDataLayer;
 let nowTimer: ReturnType<typeof setInterval> | undefined;
 
-const ZOOM_PX: Record<number, number> = { 1: 30, 2: 42, 3: 56, 4: 72 };
+// Wider defaults for 10" iPad / elderly operators (touch targets ≥ Apple 44 HIG).
+const ZOOM_PX: Record<number, number> = { 1: 48, 2: 64, 3: 80, 4: 100 };
 
 function sid(): string {
   return buildShiftId(S!.viewDate, S!.shiftCode);
@@ -267,7 +270,11 @@ function buildNav(): string {
   </div>`;
 }
 
-function statusCellHtml(slot: number, code: StatusCode | ''): string {
+function statusCellHtml(
+  slot: number,
+  code: StatusCode | '',
+  bdIssue: string,
+): string {
   const opts = [`<option value="">·</option>`]
     .concat(
       STATUSES.map(
@@ -280,7 +287,13 @@ function statusCellHtml(slot: number, code: StatusCode | ''): string {
   const style = def
     ? `background:${def.color};color:${def.text};border-color:${def.border}`
     : '';
-  return `<td class="status-cell"><select class="slot-status" style="${style}" data-slot="${slot}" data-row="status">${opts}</select></td>`;
+  const tip =
+    code === 'B' && bdIssue ? ` title="${escapeHtml(bdIssue)} — ${escapeHtml(bdLabelFor(bdIssue))}"` : '';
+  const tag =
+    code === 'B' && bdIssue
+      ? `<span class="bd-tag">${escapeHtml(bdIssue.split('-')[0])}</span>`
+      : '';
+  return `<td class="status-cell"${tip}><select class="slot-status" style="${style}" data-slot="${slot}" data-row="status">${opts}</select>${tag}</td>`;
 }
 
 function buildGrid(): string {
@@ -293,7 +306,9 @@ function buildGrid(): string {
 
   const statusRow =
     `<tr class="row-status"><th class="rh">Machine Status</th>` +
-    recs.map((r, i) => statusCellHtml(i, r?.statusCode ?? '')).join('') +
+    recs
+      .map((r, i) => statusCellHtml(i, r?.statusCode ?? '', r?.bdIssue ?? ''))
+      .join('') +
     `</tr>`;
 
   const namedRows = S!.namedRej
@@ -393,7 +408,15 @@ function buildLegend(): string {
   ).join('')}</div>`;
 }
 
+function applyShiftTheme(): void {
+  // Day → blue (102,204,255); Afternoon → green (131,226,142); Night → yellow (255,255,0).
+  // Drives CSS variables in styles.css, including the top bar.
+  const cls = `shift-${S!.shiftCode.toLowerCase()}`;
+  if (document.body.className !== cls) document.body.className = cls;
+}
+
 function render(): void {
+  applyShiftTheme();
   const app = document.getElementById('app')!;
   app.innerHTML = `<div class="op-sheet">
     ${buildHeader()}
@@ -482,13 +505,32 @@ function wire(): void {
     .querySelector<HTMLTextAreaElement>('textarea[data-meta="comments"]')
     ?.addEventListener('blur', (e) => onMetaChange(e.target as HTMLElement));
 
-  // Status cells
+  // Status cells — picking B triggers the breakdown cascade.
   app.querySelectorAll<HTMLSelectElement>('.slot-status').forEach((sel) =>
     sel.addEventListener('change', () => {
       const slot = Number(sel.dataset.slot);
-      const code = sel.value as StatusCode | '';
+      const newCode = sel.value as StatusCode | '';
+      const cur = slotRec(slot);
+      const prev = (cur?.statusCode ?? '') as StatusCode | '';
+      if (newCode === 'B') {
+        // Revert visual until the cascade confirms — render() restores it on save.
+        sel.value = prev;
+        const lbl = `Slot ${slot + 1}/${SLOTS_PER_SHIFT} · ${slotClock(sid(), slot)}`;
+        openBreakdownCascade(lbl, cur?.bdIssue ?? '', (pick) => {
+          void upsertSlot(slot, (r) => {
+            r.statusCode = 'B';
+            r.bdIssue = pick.code;
+            if (pick.note) r.mangoTicket = pick.note;
+          });
+        });
+        return;
+      }
+      // TS narrowed newCode away from 'B' above; clearing BD context is
+      // always safe here since this branch is the non-B path.
       void upsertSlot(slot, (r) => {
-        r.statusCode = code;
+        r.statusCode = newCode;
+        r.bdIssue = '';
+        r.mangoTicket = '';
       });
     }),
   );
