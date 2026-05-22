@@ -38,24 +38,26 @@ body.shift-night    {
 html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--tx);-webkit-text-size-adjust:100%;font-size:16px}
 .hidden{display:none!important}
 
-/* ===== top bar (uses theme-dark) ===== */
-.top{background:var(--theme-dark);color:var(--theme-on-dark);padding:14px 22px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:50;box-shadow:0 2px 6px rgba(0,0,0,.15);transition:background .25s}
-.top h1{margin:0;font-size:22px;font-weight:700;flex:1;letter-spacing:.2px}
-.top button{background:rgba(255,255,255,.18);color:var(--theme-on-dark);border:1px solid rgba(255,255,255,.4);padding:10px 18px;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;min-height:48px;min-width:48px}
-.top button:hover{background:rgba(255,255,255,.28)}
-.top .st{font-size:14px;opacity:.92}
-.brand-logo{height:38px;width:auto;background:rgba(255,255,255,.96);padding:4px 10px;border-radius:8px}
+/* ===== top bar (uses theme-dark) — slim: logo + title + connection status ===== */
+.top{background:var(--theme-dark);color:var(--theme-on-dark);padding:8px 18px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:50;box-shadow:0 2px 6px rgba(0,0,0,.15);transition:background .25s}
+.top h1{margin:0;font-size:20px;font-weight:700;flex:1;letter-spacing:.2px}
+.top .st{font-size:14px;opacity:.92;background:rgba(255,255,255,.16);padding:4px 10px;border-radius:99px;font-weight:600}
+.brand-logo{height:36px;width:auto;background:rgba(255,255,255,.96);padding:4px 10px;border-radius:8px}
 .vw{padding:14px}
 
 /* ===== operator sheet ===== */
 .op-sheet{background:var(--theme-base);border:1px solid var(--theme-accent);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:12px;transition:background .25s,border-color .25s}
 
-.op-title{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding-bottom:8px;border-bottom:1px solid var(--theme-accent)}
-.op-title h2{margin:0;font-size:24px;font-weight:800;color:var(--theme-on-base)}
-.op-shift-label{font-size:18px;color:var(--theme-on-base);font-weight:700;background:rgba(255,255,255,.4);padding:6px 14px;border-radius:20px}
-.btn-load{margin-left:auto;padding:14px 22px;background:#fff;border:2px solid var(--theme-dark);color:var(--theme-dark);border-radius:10px;font-weight:700;font-size:17px;cursor:pointer;min-height:56px}
+/* Unified action bar — date nav + shift tabs + view level + Refresh + Save in one row.
+   Replaces the old op-title and op-nav strips. */
+.op-actionbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:var(--theme-panel);padding:10px 14px;border-radius:10px;border:1px solid var(--theme-accent)}
+.ab-date{display:flex;align-items:center;gap:6px}
+.ab-date-input{padding:10px 12px;border:2px solid var(--bd);border-radius:10px;font-size:16px;font-weight:700;background:#fff;min-height:52px;color:var(--tx);min-width:170px;text-align:center}
+.ab-shifts{display:flex;gap:6px;flex-wrap:wrap}
+.ab-right{display:flex;align-items:center;gap:10px;margin-left:auto;flex-wrap:wrap}
+.btn-load{padding:12px 18px;background:#fff;border:2px solid var(--theme-dark);color:var(--theme-dark);border-radius:10px;font-weight:700;font-size:16px;cursor:pointer;min-height:52px}
 .btn-load:hover{background:rgba(255,255,255,.85)}
-.btn-save{padding:14px 22px;background:var(--rd);color:#fff;border:0;border-radius:10px;font-weight:800;font-size:17px;cursor:pointer;min-height:56px;box-shadow:0 2px 0 #991b1b}
+.btn-save{padding:12px 20px;background:var(--rd);color:#fff;border:0;border-radius:10px;font-weight:800;font-size:16px;cursor:pointer;min-height:52px;box-shadow:0 2px 0 #991b1b}
 .btn-save:hover{background:#b91c1c}
 
 .op-meta{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;background:var(--theme-panel);padding:12px 14px;border-radius:10px}
@@ -70,19 +72,14 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .op-meta .wide{flex:1 1 260px;min-width:240px}
 .op-meta .wide input{width:100%}
 
-.op-nav{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--theme-panel);padding:10px 14px;border-radius:10px}
-.dnav-btn,.today-btn{padding:12px 16px;border:2px solid var(--bd);background:#fff;border-radius:10px;font-size:17px;font-weight:700;cursor:pointer;min-height:56px;min-width:56px;color:var(--tx)}
-.today-btn{background:var(--theme-dark);color:var(--theme-on-dark);border-color:var(--theme-dark);padding:12px 22px}
-.cur-date{font-weight:800;font-size:18px;min-width:170px;text-align:center;color:var(--theme-on-base)}
-
-.shift-tabs{display:flex;gap:6px;margin-left:10px}
-.shift-btn{padding:12px 18px;border:2px solid var(--bd);background:#fff;border-radius:10px;font-size:17px;font-weight:700;cursor:pointer;color:var(--mu);min-height:56px}
+.dnav-btn,.today-btn{padding:10px 14px;border:2px solid var(--bd);background:#fff;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;min-height:52px;min-width:52px;color:var(--tx)}
+.today-btn{background:var(--theme-dark);color:var(--theme-on-dark);border-color:var(--theme-dark);padding:10px 18px}
+.shift-btn{padding:10px 16px;border:2px solid var(--bd);background:#fff;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;color:var(--mu);min-height:52px}
 .shift-btn.a{background:var(--theme-dark);color:var(--theme-on-dark);border-color:var(--theme-dark);box-shadow:inset 0 -3px 0 rgba(0,0,0,.2)}
-
-.zoom{display:inline-flex;align-items:center;gap:6px;margin-left:auto}
-.zoom button{width:48px;height:48px;border:2px solid var(--bd);background:#fff;border-radius:8px;cursor:pointer;font-weight:800;font-size:22px}
+.zoom{display:inline-flex;align-items:center;gap:6px}
+.zoom button{width:44px;height:44px;border:2px solid var(--bd);background:#fff;border-radius:8px;cursor:pointer;font-weight:800;font-size:20px}
 .zoom button:disabled{opacity:.4;cursor:not-allowed}
-.zoom span{font-size:15px;color:var(--theme-on-base);width:30px;text-align:center;font-weight:700}
+.zoom span{font-size:14px;color:var(--theme-on-base);min-width:80px;text-align:center;font-weight:700;padding:0 4px}
 
 /* ===== grid ===== */
 .op-grid-row{display:flex;gap:10px;align-items:stretch}

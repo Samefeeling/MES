@@ -209,14 +209,6 @@ async function refreshJobTotal(): Promise<void> {
   S!.jobTotalGood = total;
 }
 
-function fmtDate(d: Date): string {
-  return d.toLocaleDateString('en-AU', {
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-  });
-}
-
 function selOpts(values: string[], selected: string, placeholder: string): string {
   return [`<option value="">— ${escapeHtml(placeholder)} —</option>`]
     .concat(
@@ -228,21 +220,35 @@ function selOpts(values: string[], selected: string, placeholder: string): strin
     .join('');
 }
 
-function buildHeader(): string {
-  const cs = currentShift(new Date());
-  const isLive = cs.shiftId === sid();
-  return `<div class="op-title">
-    <h2>PMD Operator Production Sheet</h2>
-    <span class="op-shift-label">${escapeHtml(S!.shiftCode)} shift${
-      isLive ? ' · live' : ''
-    }</span>
-    <button class="btn-load" data-refresh title="Re-pull planning from SharePoint &amp; recompute Job Left">⟳ Refresh</button>
-    <button class="btn-save" data-saveclear>✅ Sign off &amp; Save</button>
+function buildActionBar(): string {
+  const dateIso = S!.viewDate.toISOString().slice(0, 10);
+  const tabs = SHIFTS.map(
+    (s) =>
+      `<button class="shift-btn${s.code === S!.shiftCode ? ' a' : ''}" data-shift="${s.code}">${escapeHtml(
+        s.label,
+      )}</button>`,
+  ).join('');
+  return `<div class="op-actionbar">
+    <div class="ab-date">
+      <button class="dnav-btn" data-day="-1" title="Previous day">◀</button>
+      <input type="date" class="ab-date-input" data-meta="date" value="${dateIso}">
+      <button class="dnav-btn" data-day="1" title="Next day">▶</button>
+      <button class="today-btn" data-today>Now</button>
+    </div>
+    <div class="ab-shifts">${tabs}</div>
+    <div class="ab-right">
+      <div class="zoom" title="− zooms in (single shift) · + zooms out to today / week / month">
+        <button data-zoom="-1" ${S!.viewLevel <= 1 ? 'disabled' : ''}>−</button>
+        <span>${escapeHtml(VIEW_LEVELS[S!.viewLevel - 1]?.label ?? 'Shift')}</span>
+        <button data-zoom="1" ${S!.viewLevel >= 4 ? 'disabled' : ''}>+</button>
+      </div>
+      <button class="btn-load" data-refresh title="Re-pull planning from SharePoint &amp; recompute Job Left">⟳ Refresh</button>
+      <button class="btn-save" data-saveclear>✅ Sign off &amp; Save</button>
+    </div>
   </div>`;
 }
 
 function buildMeta(): string {
-  const dateIso = S!.viewDate.toISOString().slice(0, 10);
   const machineOpts = S!.machines
     .map(
       (m) =>
@@ -263,10 +269,8 @@ function buildMeta(): string {
     )
     .join('');
   const o = selectedOrder();
-  // Compact widths via CSS (`.op-meta input/select` uses default width;
-  // Product Description gets a wider field via the `.wide` modifier).
+  // Date moved into the action bar — meta is now strictly "who/what is running".
   return `<div class="op-meta">
-    <label class="m-date">Date <input type="date" data-meta="date" value="${dateIso}"></label>
     <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
     <label class="m-job">Job# <select data-meta="job">${jobOpts}</select></label>
     <label class="m-part">Part# <input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
@@ -281,27 +285,6 @@ function buildMeta(): string {
       S!.selSupervisor,
       'supervisor',
     )}</select></label>
-  </div>`;
-}
-
-function buildNav(): string {
-  const tabs = SHIFTS.map(
-    (s) =>
-      `<button class="shift-btn${s.code === S!.shiftCode ? ' a' : ''}" data-shift="${s.code}">${escapeHtml(
-        s.label,
-      )}</button>`,
-  ).join('');
-  return `<div class="op-nav">
-    <button class="dnav-btn" data-day="-1">◀</button>
-    <span class="cur-date">${fmtDate(S!.viewDate)}</span>
-    <button class="dnav-btn" data-day="1">▶</button>
-    <button class="today-btn" data-today>Now</button>
-    <div class="shift-tabs">${tabs}</div>
-    <div class="zoom" title="− zooms in (single shift) · + zooms out to today / week / month">
-      <button data-zoom="-1" ${S!.viewLevel <= 1 ? 'disabled' : ''}>−</button>
-      <span>${escapeHtml(VIEW_LEVELS[S!.viewLevel - 1]?.label ?? 'Shift')}</span>
-      <button data-zoom="1" ${S!.viewLevel >= 4 ? 'disabled' : ''}>+</button>
-    </div>
   </div>`;
 }
 
@@ -626,9 +609,8 @@ function render(): void {
       ? `<div class="op-grid-row">${buildGrid()}${buildSide()}</div>${buildLegend()}`
       : buildSummary();
   app.innerHTML = `<div class="op-sheet">
-    ${buildHeader()}
+    ${buildActionBar()}
     ${buildMeta()}
-    ${buildNav()}
     ${detail}
   </div>`;
   wire();
