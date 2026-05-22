@@ -20,7 +20,7 @@ import { STATUSES, STATUS_MAP } from '../core/status';
 import { bdLabelFor } from '../core/breakdown';
 import { openBreakdownCascade } from './breakdown';
 import { toast } from './toast';
-import { escapeHtml } from './modal';
+import { closeModal, escapeHtml, openModal } from './modal';
 
 // PMD Operator Production Sheet — Excel-style rebuild of modPMDOperator.bas.
 // One machine + one shift + one job at a time. 16 half-hour slots horizontally;
@@ -40,16 +40,25 @@ interface OpState {
   otherRej: RejectCategory[];
   selOperator: string;
   selSupervisor: string;
-  signedOff: boolean;
-  zoom: number; // 1..4 — cell width multiplier
+  /** 1 = single-shift detail (editable); 2 = today's 3 shifts;
+   *  3 = past 7 days; 4 = past 30 days. Levels 2-4 are read-only summaries. */
+  viewLevel: number;
+  /** Sum of Good across all shifts of selJob — drives the cross-shift Job Left. */
+  jobTotalGood: number;
 }
 
 let S: OpState | null = null;
 let dalRef: PmdDataLayer;
 let nowTimer: ReturnType<typeof setInterval> | undefined;
 
-// Wider defaults for 10" iPad / elderly operators (touch targets ≥ Apple 44 HIG).
-const ZOOM_PX: Record<number, number> = { 1: 48, 2: 64, 3: 80, 4: 100 };
+const SLOT_PX = 64; // touch target for the half-hour status cell on 10" iPad
+
+const VIEW_LEVELS: Array<{ level: number; label: string }> = [
+  { level: 1, label: 'Shift' },
+  { level: 2, label: 'Today (3 shifts)' },
+  { level: 3, label: 'Past 7 days' },
+  { level: 4, label: 'Past 30 days' },
+];
 
 function sid(): string {
   return buildShiftId(S!.viewDate, S!.shiftCode);
@@ -164,7 +173,40 @@ async function reload(): Promise<void> {
     if (!S!.selOperator) S!.selOperator = c.operator;
     if (!S!.selSupervisor) S!.selSupervisor = c.supervisor;
   }
+  await refreshJobTotal();
   render();
+}
+
+/**
+ * Job Left = JobRequired − sum(Good) across ALL shifts of this job
+ * (matches the .bas Master rollup: each shift contributes one row).
+ */
+async function refreshJobTotal(): Promise<void> {
+  if (!S!.selJob) {
+    S!.jobTotalGood = 0;
+    return;
+  }
+  const all = await dalRef.listProduction({ jobNumber: S!.selJob });
+  const seen = new Set<string>();
+  let total = 0;
+  for (const r of all) {
+    if (r.slotIndex !== 0) continue;
+    const key = `${r.machineCode}|${r.shiftId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const cs = Number(r.countStart ?? 0);
+    const ce = Number(r.countEnd ?? 0);
+    const gross = Math.max(0, ce - cs);
+    let rej = 0;
+    try {
+      const obj = JSON.parse(r.rejects || '{}') as Record<string, number>;
+      rej = Object.values(obj).reduce((a, v) => a + (Number(v) || 0), 0);
+    } catch {
+      rej = Number(r.rejectCount) || 0;
+    }
+    total += Math.max(0, gross - rej);
+  }
+  S!.jobTotalGood = total;
 }
 
 function fmtDate(d: Date): string {
@@ -194,8 +236,8 @@ function buildHeader(): string {
     <span class="op-shift-label">${escapeHtml(S!.shiftCode)} shift${
       isLive ? ' · live' : ''
     }</span>
-    <button class="btn-load" data-loadjobs>Load Jobs</button>
-    <button class="btn-save" data-saveclear>Save and Clear out</button>
+    <button class="btn-load" data-refresh title="Re-pull planning from SharePoint &amp; recompute Job Left">⟳ Refresh</button>
+    <button class="btn-save" data-saveclear>✅ Sign off &amp; Save</button>
   </div>`;
 }
 
@@ -221,31 +263,24 @@ function buildMeta(): string {
     )
     .join('');
   const o = selectedOrder();
-  const c = canonical();
+  // Compact widths via CSS (`.op-meta input/select` uses default width;
+  // Product Description gets a wider field via the `.wide` modifier).
   return `<div class="op-meta">
-    <label>Date <input type="date" data-meta="date" value="${dateIso}"></label>
-    <label>Machine <select data-meta="machine">${machineOpts}</select></label>
-    <label>Job# <select data-meta="job">${jobOpts}</select></label>
-    <label>Part <input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
-    <label>Operator <select data-meta="operator">${selOpts(
+    <label class="m-date">Date <input type="date" data-meta="date" value="${dateIso}"></label>
+    <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
+    <label class="m-job">Job# <select data-meta="job">${jobOpts}</select></label>
+    <label class="m-part">Part# <input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
+    <label class="m-desc wide">Product Description <input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
+    <label class="m-op">Operator <select data-meta="operator">${selOpts(
       S!.operators,
       S!.selOperator,
       'operator',
     )}</select></label>
-    <label>Purge(kg) <input type="number" step="0.1" data-meta="purge" value="${
-      c?.purgeKg ?? ''
-    }"></label>
-    <label class="op-signoff">Supervisor Sign-off
-      <select data-meta="supervisor">${selOpts(
-        S!.supervisors,
-        S!.selSupervisor,
-        'supervisor',
-      )}</select>
-      <span class="signoff-check">
-        <input type="checkbox" data-meta="signoff"${S!.signedOff ? ' checked' : ''}>
-        <span>Check by ${escapeHtml(S!.selSupervisor || '—')}</span>
-      </span>
-    </label>
+    <label class="m-sup">Supervisor <select data-meta="supervisor">${selOpts(
+      S!.supervisors,
+      S!.selSupervisor,
+      'supervisor',
+    )}</select></label>
   </div>`;
 }
 
@@ -262,10 +297,10 @@ function buildNav(): string {
     <button class="dnav-btn" data-day="1">▶</button>
     <button class="today-btn" data-today>Now</button>
     <div class="shift-tabs">${tabs}</div>
-    <div class="zoom">
-      <button data-zoom="-1" ${S!.zoom <= 1 ? 'disabled' : ''}>−</button>
-      <span>${S!.zoom}×</span>
-      <button data-zoom="1" ${S!.zoom >= 4 ? 'disabled' : ''}>+</button>
+    <div class="zoom" title="− zooms in (single shift) · + zooms out to today / week / month">
+      <button data-zoom="-1" ${S!.viewLevel <= 1 ? 'disabled' : ''}>−</button>
+      <span>${escapeHtml(VIEW_LEVELS[S!.viewLevel - 1]?.label ?? 'Shift')}</span>
+      <button data-zoom="1" ${S!.viewLevel >= 4 ? 'disabled' : ''}>+</button>
     </div>
   </div>`;
 }
@@ -274,6 +309,7 @@ function statusCellHtml(
   slot: number,
   code: StatusCode | '',
   bdIssue: string,
+  isNow: boolean,
 ): string {
   const opts = [`<option value="">·</option>`]
     .concat(
@@ -293,7 +329,8 @@ function statusCellHtml(
     code === 'B' && bdIssue
       ? `<span class="bd-tag">${escapeHtml(bdIssue.split('-')[0])}</span>`
       : '';
-  return `<td class="status-cell"${tip}><select class="slot-status" style="${style}" data-slot="${slot}" data-row="status">${opts}</select>${tag}</td>`;
+  const cls = `status-cell${isNow ? ' is-now' : ''}`;
+  return `<td class="${cls}"${tip}><select class="slot-status" style="${style}" data-slot="${slot}" data-row="status">${opts}</select>${tag}</td>`;
 }
 
 function buildGrid(): string {
@@ -304,10 +341,17 @@ function buildGrid(): string {
 
   const recs = Array.from({ length: SLOTS_PER_SHIFT }, (_, i) => slotRec(i));
 
+  // §2 — highlight the slot that the live wall clock falls in (only when
+  // viewing the active shift on today).
+  const liveShiftId = currentShift(new Date()).shiftId;
+  const nowSlot = liveShiftId === sid() ? currentSlotIndex(sid(), new Date()) : null;
+
   const statusRow =
     `<tr class="row-status"><th class="rh">Machine Status</th>` +
     recs
-      .map((r, i) => statusCellHtml(i, r?.statusCode ?? '', r?.bdIssue ?? ''))
+      .map((r, i) =>
+        statusCellHtml(i, r?.statusCode ?? '', r?.bdIssue ?? '', nowSlot === i),
+      )
       .join('') +
     `</tr>`;
 
@@ -357,7 +401,7 @@ function buildGrid(): string {
       .join('') +
     `</tr>`;
 
-  return `<div class="op-grid-wrap" style="--slot-w:${ZOOM_PX[S!.zoom]}px">
+  return `<div class="op-grid-wrap" style="--slot-w:${SLOT_PX}px">
     <table class="op-grid">
       <thead>
         <tr><th class="rh corner">Timeline</th>${headers}</tr>
@@ -377,28 +421,187 @@ function buildSide(): string {
   const cs = c?.countStart ?? '';
   const ce = c?.countEnd ?? '';
   const cn = Number(c?.countEnd ?? 0) - Number(c?.countStart ?? 0);
-  let totalRej = 0;
-  let totalOther = 0;
-  for (const r of S!.prod.filter((x) => x.jobNumber === S!.selJob)) {
-    const obj = parseRejects(r);
-    totalRej += Object.values(obj).reduce((a, v) => a + (Number(v) || 0), 0);
-    totalOther += Number(r.otherCount) || 0;
-  }
-  const totalReject = totalRej;
+  const { rej: totalReject, other: totalOther } = jobTotals();
   const good = Math.max(0, cn - totalReject);
   const o = selectedOrder();
+  // §7 — Job Left = JobRequired - Σ Good across ALL shifts, not just this one.
   const jobLeft =
-    o && !o.isDieChange ? Math.max(0, o.jobRequired - good) : '—';
-  const comments = c?.handoverNote ?? '';
+    o && !o.isDieChange
+      ? Math.max(0, o.jobRequired - (S!.jobTotalGood + good))
+      : '—';
+  const purge = c?.purgeKg ?? '';
+  const h = parseHandover(c);
   return `<aside class="op-side">
     <div class="sk"><label>Job left</label><b>${jobLeft}</b></div>
-    <div class="sk"><label>Total Reject</label><b class="r">${totalReject}</b></div>
-    <div class="sk other-line"><span>(Other # logged: <b>${totalOther}</b> — mapped into reject codes on save)</span></div>
     <div class="sk"><label>Count Start</label><input type="number" data-meta="cstart" value="${cs}"></div>
     <div class="sk"><label>Count End</label><input type="number" data-meta="cend" value="${ce}"></div>
     <div class="sk"><label>Total Good</label><b class="g">${good}</b></div>
-    <div class="sk col"><label>Comments</label><textarea data-meta="comments" placeholder="Handover / notes…">${escapeHtml(comments)}</textarea></div>
+    <div class="sk sk-pair">
+      <span class="sk-pair-cell"><label>Total Reject</label><b class="r">${totalReject}</b></span>
+      <span class="sk-pair-cell"><label>Purge(kg)</label><input type="number" step="0.1" data-meta="purge" value="${purge}"></span>
+    </div>
+    <div class="sk other-line"><span>(Other # logged: <b>${totalOther}</b> — mapped into reject codes on save)</span></div>
+    <div class="handover">
+      <div class="handover-title">Handover / Journey — supervisor notes</div>
+      <div class="handover-grid">
+        <label><span>👥 People</span><textarea data-meta="hand-people" placeholder="Staffing, swaps, training, fatigue…">${escapeHtml(h.people)}</textarea></label>
+        <label><span>🏭 Plant</span><textarea data-meta="hand-plant" placeholder="Utilities, services, ambient, housekeeping…">${escapeHtml(h.plant)}</textarea></label>
+        <label><span>🛠 Machine</span><textarea data-meta="hand-machine" placeholder="Press state, mould, robot, breakdown follow-ups…">${escapeHtml(h.machine)}</textarea></label>
+        <label><span>📦 Material</span><textarea data-meta="hand-material" placeholder="Material lot, dryer, regrind, masterbatch…">${escapeHtml(h.material)}</textarea></label>
+      </div>
+    </div>
   </aside>`;
+}
+
+interface SummaryBucket {
+  label: string;
+  shiftId: string;
+  goCs: number;
+  goCe: number;
+  good: number;
+  rej: number;
+  downHrs: number; // B + M slots × 0.5
+  setupHrs: number; // C + D + I + P + S slots × 0.5
+}
+
+async function loadProdRange(from: Date, to: Date): Promise<ProductionRecord[]> {
+  // Lex-from prefix is enough for date-only filtering (IDs start with YYYY-MM-DD).
+  const fromKey = `${from.getFullYear()}-${String(from.getMonth() + 1).padStart(2, '0')}-${String(from.getDate()).padStart(2, '0')}`;
+  const toKey = `${to.getFullYear()}-${String(to.getMonth() + 1).padStart(2, '0')}-${String(to.getDate()).padStart(2, '0')}￿`;
+  return dalRef.listProduction({
+    machineCode: S!.mc,
+    shiftIdFrom: fromKey,
+    shiftIdTo: toKey,
+  });
+}
+
+function rollup(label: string, shiftId: string, rows: ProductionRecord[]): SummaryBucket {
+  let good = 0;
+  let rej = 0;
+  let goCs = 0;
+  let goCe = 0;
+  let down = 0;
+  let setup = 0;
+  const seen = new Set<string>();
+  for (const r of rows) {
+    // Down / setup slot counts ignore SlotIndex grouping — each filled slot
+    // contributes 30 min.
+    if (r.statusCode === 'B' || r.statusCode === 'M') down++;
+    else if (
+      r.statusCode === 'C' ||
+      r.statusCode === 'D' ||
+      r.statusCode === 'I' ||
+      r.statusCode === 'P' ||
+      r.statusCode === 'S'
+    )
+      setup++;
+    if (r.slotIndex !== 0) continue;
+    const key = `${r.jobNumber}|${r.shiftId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const cs = Number(r.countStart ?? 0);
+    const ce = Number(r.countEnd ?? 0);
+    const gross = Math.max(0, ce - cs);
+    let jobRej = 0;
+    try {
+      const obj = JSON.parse(r.rejects || '{}') as Record<string, number>;
+      jobRej = Object.values(obj).reduce((a, v) => a + (Number(v) || 0), 0);
+    } catch {
+      jobRej = Number(r.rejectCount) || 0;
+    }
+    goCs += cs;
+    goCe += ce;
+    rej += jobRej;
+    good += Math.max(0, gross - jobRej);
+  }
+  return {
+    label,
+    shiftId,
+    goCs,
+    goCe,
+    good,
+    rej,
+    downHrs: down * 0.5,
+    setupHrs: setup * 0.5,
+  };
+}
+
+let summaryCache: { level: number; buckets: SummaryBucket[] } | null = null;
+
+function buildSummary(): string {
+  const lvl = S!.viewLevel;
+  // Kick off async fetch; render placeholder, then replace on resolve.
+  if (!summaryCache || summaryCache.level !== lvl) {
+    void rebuildSummary();
+    return `<div class="summary-loading">Loading ${escapeHtml(
+      VIEW_LEVELS[lvl - 1]?.label ?? '',
+    )} summary…</div>`;
+  }
+  const rows = summaryCache.buckets
+    .map(
+      (b) =>
+        `<tr data-jump-shift="${escapeHtml(b.shiftId)}">
+          <th>${escapeHtml(b.label)}</th>
+          <td class="num">${b.good}</td>
+          <td class="num r">${b.rej}</td>
+          <td class="num">${b.goCe - b.goCs}</td>
+          <td class="num">${b.downHrs.toFixed(1)}h</td>
+          <td class="num">${b.setupHrs.toFixed(1)}h</td>
+        </tr>`,
+    )
+    .join('');
+  const title = VIEW_LEVELS[lvl - 1]?.label ?? '';
+  return `<div class="summary-wrap">
+    <h3 class="summary-title">${escapeHtml(title)} — ${escapeHtml(S!.mc)}</h3>
+    <p class="bd-sub">Read-only roll-up · tap a row to drill into that shift.</p>
+    <table class="summary-table">
+      <thead><tr>
+        <th>Bucket</th><th>Good</th><th>Reject</th><th>Output (gross)</th><th>Down</th><th>Setup</th>
+      </tr></thead>
+      <tbody>${rows || '<tr><td colspan="6" class="muted">No data</td></tr>'}</tbody>
+    </table>
+  </div>`;
+}
+
+async function rebuildSummary(): Promise<void> {
+  const lvl = S!.viewLevel;
+  const now = new Date();
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const buckets: SummaryBucket[] = [];
+  if (lvl === 2) {
+    // Today × 3 shifts. Night actually starts at 23:00 today (its shiftId
+    // date is today), so we pull a 24h window starting at today 00:00.
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const rows = await loadProdRange(today, tomorrow);
+    for (const code of ['Day', 'Afternoon', 'Night'] as const) {
+      const sid = buildShiftId(today, code);
+      buckets.push(
+        rollup(`${code} — ${sid.slice(0, 10)}`, sid, rows.filter((r) => r.shiftId === sid)),
+      );
+    }
+  } else {
+    const days = lvl === 3 ? 7 : 30;
+    const from = new Date(today);
+    from.setDate(from.getDate() - (days - 1));
+    const rows = await loadProdRange(from, today);
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const datePart = d.toISOString().slice(0, 10);
+      const dayRows = rows.filter((r) => r.shiftId.startsWith(`${datePart}-`));
+      const label = d.toLocaleDateString('en-AU', {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+      });
+      // shiftId target for click-through: jump to Day shift of that date.
+      buckets.push(rollup(label, `${datePart}-Day`, dayRows));
+    }
+  }
+  summaryCache = { level: lvl, buckets };
+  render();
 }
 
 function buildLegend(): string {
@@ -418,18 +621,18 @@ function applyShiftTheme(): void {
 function render(): void {
   applyShiftTheme();
   const app = document.getElementById('app')!;
+  const detail =
+    S!.viewLevel === 1
+      ? `<div class="op-grid-row">${buildGrid()}${buildSide()}</div>${buildLegend()}`
+      : buildSummary();
   app.innerHTML = `<div class="op-sheet">
     ${buildHeader()}
     ${buildMeta()}
     ${buildNav()}
-    <div class="op-grid-row">
-      ${buildGrid()}
-      ${buildSide()}
-    </div>
-    ${buildLegend()}
+    ${detail}
   </div>`;
   wire();
-  renderNowLine();
+  if (S!.viewLevel === 1) renderNowLine();
 }
 
 function renderNowLine(): void {
@@ -487,12 +690,29 @@ function wire(): void {
     }),
   );
 
-  // Zoom
+  // View level (+/-): shift → today → week → month (§9 — read-only summary above level 1).
   app.querySelectorAll<HTMLButtonElement>('[data-zoom]').forEach((b) =>
     b.addEventListener('click', () => {
       const dz = Number(b.dataset.zoom);
-      S!.zoom = Math.max(1, Math.min(4, S!.zoom + dz));
+      const next = Math.max(1, Math.min(4, S!.viewLevel + dz));
+      if (next === S!.viewLevel) return;
+      S!.viewLevel = next;
+      summaryCache = null; // force fresh fetch for the new level
       render();
+    }),
+  );
+  // Drill from a summary row back into single-shift detail.
+  app.querySelectorAll<HTMLElement>('[data-jump-shift]').forEach((row) =>
+    row.addEventListener('click', () => {
+      const sid = row.dataset.jumpShift!;
+      const m = /^(\d{4})-(\d{2})-(\d{2})-(Day|Afternoon|Night)$/.exec(sid);
+      if (!m) return;
+      S!.viewDate = new Date(+m[1], +m[2] - 1, +m[3]);
+      S!.shiftCode = m[4] as ShiftCode;
+      S!.viewLevel = 1;
+      summaryCache = null;
+      S!.selJob = '';
+      void reload();
     }),
   );
 
@@ -592,8 +812,8 @@ function wire(): void {
   );
 
   // Buttons
-  app.querySelector('[data-loadjobs]')?.addEventListener('click', () => void loadJobs());
-  app.querySelector('[data-saveclear]')?.addEventListener('click', () => void saveAndClear());
+  app.querySelector('[data-refresh]')?.addEventListener('click', () => void refreshAll());
+  app.querySelector('[data-saveclear]')?.addEventListener('click', () => openSaveSignoffModal());
 }
 
 function onMetaChange(el: HTMLElement): void {
@@ -616,6 +836,7 @@ function onMetaChange(el: HTMLElement): void {
     case 'machine':
       S!.mc = val;
       S!.selJob = '';
+      summaryCache = null; // cache is per-machine
       void reload();
       break;
     case 'job':
@@ -639,9 +860,6 @@ function onMetaChange(el: HTMLElement): void {
         r.purgeKg = val === '' ? null : Number(val);
       });
       break;
-    case 'signoff':
-      S!.signedOff = target.checked;
-      break;
     case 'cstart':
       void upsertSlot(0, (r) => {
         r.countStart = val === '' ? null : Number(val);
@@ -652,32 +870,63 @@ function onMetaChange(el: HTMLElement): void {
         r.countEnd = val === '' ? null : Number(val);
       });
       break;
-    case 'comments':
+    case 'hand-people':
+    case 'hand-plant':
+    case 'hand-machine':
+    case 'hand-material': {
+      const field = key.slice('hand-'.length) as 'people' | 'plant' | 'machine' | 'material';
       void upsertSlot(0, (r) => {
-        r.handoverNote = val;
+        const obj = parseHandover(r);
+        obj[field] = val;
+        r.handoverNote = JSON.stringify(obj);
       });
       break;
+    }
   }
 }
 
-async function loadJobs(): Promise<void> {
+interface Handover {
+  people: string;
+  plant: string;
+  machine: string;
+  material: string;
+}
+
+function parseHandover(r: ProductionRecord | undefined): Handover {
+  const blank: Handover = { people: '', plant: '', machine: '', material: '' };
+  if (!r || !r.handoverNote) return blank;
+  // New shape: JSON {people,plant,machine,material}.
+  // Legacy: plain string — surface it under "people" so nothing is lost.
+  try {
+    const j = JSON.parse(r.handoverNote) as Partial<Handover>;
+    return { ...blank, ...j };
+  } catch {
+    return { ...blank, people: r.handoverNote };
+  }
+}
+
+/**
+ * Refresh (§7): pull the latest planning from the data source (real
+ * backend = SharePoint Schedule master via the DAL) and re-fetch this
+ * shift's production records + the cross-shift Good total used by Job Left.
+ */
+async function refreshAll(): Promise<void> {
   S!.planning = await dalRef.listPlanning({});
-  toast(`Loaded ${shiftOrders().length} job(s) for this shift`, 'ok');
-  render();
+  summaryCache = null;
+  await reload();
+  toast(`Refreshed · ${shiftOrders().length} job(s) for this shift`, 'ok');
 }
 
-async function saveAndClear(): Promise<void> {
-  // Mirrors btnSaveAndClear_Click in modPMDOperator.bas:
-  //   1. require Supervisor sign-off
-  //   2. validate count end >= count start
-  //   3. persist (we already write-through, so this is a "commit" toast)
-  //   4. clear the form ready for the next job
+/**
+ * Sign-off + Save in one modal (§5). Replaces the separate checkbox.
+ * Pre-flight = same gates as the .bas btnSaveAndClear_Click:
+ *   - Supervisor selected
+ *   - countEnd >= countStart (when both present)
+ * Confirming locks the shift records and clears the in-form selection.
+ */
+function openSaveSignoffModal(): void {
   if (!S!.selSupervisor) {
-    toast('Missing Supervisor Signoff', 'err');
-    return;
-  }
-  if (!S!.signedOff) {
-    toast('Missing Supervisor Signoff (tick the checkbox)', 'err');
+    toast('Pick a Supervisor before signing off', 'err');
     return;
   }
   const c = canonical();
@@ -687,10 +936,55 @@ async function saveAndClear(): Promise<void> {
     toast('Count End must be ≥ Count Start', 'err');
     return;
   }
-  toast(`Saved ${S!.selJob || '(no job)'} to Master`, 'ok');
-  S!.signedOff = false;
-  S!.selJob = '';
-  await reload();
+  const totalRej = jobTotals().rej;
+  const good = Math.max(0, ce - cs - totalRej);
+  const o = selectedOrder();
+
+  const mc = openModal(`<div class="bd-modal">
+    <h2 class="bd-title">✅ Sign off &amp; Save</h2>
+    <p class="bd-sub">${escapeHtml(sid())} · ${escapeHtml(S!.mc)} · job ${escapeHtml(S!.selJob || '—')}</p>
+    <div class="signoff-summary">
+      <div><span>Operator</span><b>${escapeHtml(S!.selOperator || '—')}</b></div>
+      <div><span>Supervisor</span><b>${escapeHtml(S!.selSupervisor)}</b></div>
+      <div><span>Part</span><b>${escapeHtml(o?.partNumber ?? '—')}</b></div>
+      <div><span>Required</span><b>${o && !o.isDieChange ? o.jobRequired : '—'}</b></div>
+      <div><span>Count Start → End</span><b>${cs} → ${ce}</b></div>
+      <div><span>Good (this shift)</span><b class="g">${good}</b></div>
+      <div><span>Total Reject</span><b class="r">${totalRej}</b></div>
+    </div>
+    <p class="bd-sub">By signing off you confirm the above figures are correct and lock the shift records.</p>
+    <div class="bd-actions">
+      <button class="btn-ghost-big" data-cancel>Cancel</button>
+      <button class="btn-primary-big" data-confirm-save>Sign off as ${escapeHtml(S!.selSupervisor)}</button>
+    </div>
+  </div>`);
+  mc.querySelector('[data-cancel]')?.addEventListener('click', closeModal);
+  mc.querySelector('[data-confirm-save]')?.addEventListener('click', () => {
+    void doSignoffSave();
+  });
+}
+
+async function doSignoffSave(): Promise<void> {
+  try {
+    await dalRef.lockShift(S!.mc, sid(), S!.selSupervisor, S!.selOperator);
+    closeModal();
+    toast(`Signed off · ${S!.selJob || 'shift'} saved to Master`, 'ok');
+    S!.selJob = '';
+    await reload();
+  } catch {
+    toast('Cannot save — check network', 'err');
+  }
+}
+
+function jobTotals(): { rej: number; other: number } {
+  let rej = 0;
+  let other = 0;
+  for (const r of S!.prod.filter((x) => x.jobNumber === S!.selJob)) {
+    const obj = parseRejects(r);
+    rej += Object.values(obj).reduce((a, v) => a + (Number(v) || 0), 0);
+    other += Number(r.otherCount) || 0;
+  }
+  return { rej, other };
 }
 
 export async function renderOperator(
@@ -723,8 +1017,8 @@ export async function renderOperator(
     otherRej: rcats.filter((r) => r.kind === 'other'),
     selOperator: '',
     selSupervisor: '',
-    signedOff: false,
-    zoom: 2,
+    viewLevel: 1,
+    jobTotalGood: 0,
   };
   if (nowTimer) clearInterval(nowTimer);
   nowTimer = setInterval(renderNowLine, 30_000);

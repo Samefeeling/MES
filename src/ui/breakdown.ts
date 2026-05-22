@@ -34,7 +34,6 @@ export function openBreakdownCascade(
       (c) =>
         `<button class="bd-cat" data-cat="${c.prefix}">
           <span class="bd-emoji">${c.emoji}</span>
-          <span class="bd-prefix">${c.prefix}</span>
           <span class="bd-cat-label">${escapeHtml(c.label)}</span>
         </button>`,
     ).join('');

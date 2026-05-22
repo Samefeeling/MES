@@ -44,8 +44,7 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .top button{background:rgba(255,255,255,.18);color:var(--theme-on-dark);border:1px solid rgba(255,255,255,.4);padding:10px 18px;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;min-height:48px;min-width:48px}
 .top button:hover{background:rgba(255,255,255,.28)}
 .top .st{font-size:14px;opacity:.92}
-
-.dbanner{background:var(--theme-banner);border-bottom:2px solid var(--theme-banner-bd);padding:6px 22px;font-size:13px;color:var(--theme-banner-tx);text-align:center}
+.brand-logo{height:38px;width:auto;background:rgba(255,255,255,.96);padding:4px 10px;border-radius:8px}
 .vw{padding:14px}
 
 /* ===== operator sheet ===== */
@@ -59,13 +58,17 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .btn-save{padding:14px 22px;background:var(--rd);color:#fff;border:0;border-radius:10px;font-weight:800;font-size:17px;cursor:pointer;min-height:56px;box-shadow:0 2px 0 #991b1b}
 .btn-save:hover{background:#b91c1c}
 
-.op-meta{display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;background:var(--theme-panel);padding:12px 14px;border-radius:10px}
-.op-meta label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:700;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.5px}
-.op-meta input,.op-meta select{padding:12px 12px;border:2px solid var(--bd);border-radius:8px;font-size:17px;background:#fff;min-height:52px;min-width:160px;color:var(--tx)}
+.op-meta{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;background:var(--theme-panel);padding:12px 14px;border-radius:10px}
+.op-meta label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:700;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.5px}
+.op-meta input,.op-meta select{padding:10px 12px;border:2px solid var(--bd);border-radius:8px;font-size:17px;background:#fff;min-height:52px;color:var(--tx);width:auto}
 .op-meta input[disabled]{background:#f1f5f9;color:var(--mu)}
-.op-signoff{border-left:3px solid var(--am);padding-left:14px;flex-direction:column;align-items:flex-start}
-.signoff-check{display:inline-flex;align-items:center;gap:10px;font-size:15px;text-transform:none;color:var(--tx);font-weight:700;margin-top:2px}
-.signoff-check input{min-width:auto;min-height:0;transform:scale(1.8);margin-left:4px;margin-right:4px}
+.op-meta .m-date input{width:160px}
+.op-meta .m-mc select{width:120px}
+.op-meta .m-job select{width:170px}
+.op-meta .m-part input{width:160px}
+.op-meta .m-op select,.op-meta .m-sup select{width:200px}
+.op-meta .wide{flex:1 1 260px;min-width:240px}
+.op-meta .wide input{width:100%}
 
 .op-nav{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--theme-panel);padding:10px 14px;border-radius:10px}
 .dnav-btn,.today-btn{padding:12px 16px;border:2px solid var(--bd);background:#fff;border-radius:10px;font-size:17px;font-weight:700;cursor:pointer;min-height:56px;min-width:56px;color:var(--tx)}
@@ -96,6 +99,9 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 
 .slot-status{width:100%;height:60px;border:0;background:transparent;font-size:24px;font-weight:900;text-align:center;cursor:pointer;appearance:none;-webkit-appearance:none;padding:0;text-align-last:center;color:inherit}
 .slot-status:focus{outline:3px solid var(--theme-dark);outline-offset:-3px}
+/* §2 — live slot highlight: thick frame + soft pulse so operators see it at a glance. */
+.op-grid td.is-now{box-shadow:inset 0 0 0 3px var(--rd);animation:nowPulse 1.6s ease-in-out infinite}
+@keyframes nowPulse{0%,100%{box-shadow:inset 0 0 0 3px var(--rd)}50%{box-shadow:inset 0 0 0 3px var(--rd),0 0 0 4px rgba(220,38,38,.25)}}
 .bd-tag{position:absolute;bottom:2px;right:4px;font-size:9px;font-weight:800;background:rgba(0,0,0,.55);color:#fff;padding:1px 4px;border-radius:3px;letter-spacing:.3px;pointer-events:none}
 
 .rej-input{width:100%;height:60px;border:0;background:transparent;text-align:right;font-size:18px;padding:0 8px;font-weight:600;color:var(--tx)}
@@ -114,9 +120,39 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .op-side .sk b.r{color:var(--rd)}
 .op-side .sk b.g{color:var(--gn)}
 .op-side .sk input{width:120px;padding:10px;border:2px solid var(--bd);border-radius:8px;font-size:18px;text-align:right;min-height:48px;font-weight:700}
-.op-side .sk.col{flex-direction:column;align-items:stretch}
-.op-side .sk.col textarea{width:100%;min-height:80px;border:2px solid var(--bd);border-radius:8px;padding:10px;font-family:inherit;font-size:15px;background:#fef9c3}
+.op-side .sk.sk-pair{gap:6px}
+.op-side .sk-pair-cell{display:flex;align-items:center;gap:6px;flex:1}
+.op-side .sk-pair-cell label{font-size:11px}
+.op-side .sk-pair-cell input{width:90px}
 .op-side .other-line{font-size:12px;color:var(--mu);text-transform:none;letter-spacing:0;font-weight:500;font-style:italic}
+
+/* §6 — Handover / Journey: 2x2 grid of textareas for People / Plant / Machine / Material. */
+.handover{display:flex;flex-direction:column;gap:8px;margin-top:4px;border-top:2px solid var(--theme-accent);padding-top:10px}
+.handover-title{font-size:13px;font-weight:800;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.5px}
+.handover-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.handover-grid label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:700;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.4px}
+.handover-grid textarea{width:100%;min-height:64px;resize:vertical;border:2px solid var(--bd);border-radius:8px;padding:8px;font-family:inherit;font-size:14px;background:#fef9c3}
+
+/* §9 — Summary view shown when zoom is at Today / Week / Month. Read-only. */
+.summary-wrap{background:#fff;border-radius:10px;border:2px solid var(--theme-accent);padding:14px}
+.summary-title{margin:0 0 4px;font-size:20px;font-weight:800;color:var(--theme-on-base)}
+.summary-loading{padding:30px;text-align:center;color:var(--theme-on-base);font-weight:700;background:rgba(255,255,255,.6);border-radius:10px}
+.summary-table{width:100%;border-collapse:collapse;margin-top:8px;font-size:15px}
+.summary-table th,.summary-table td{padding:12px 10px;text-align:left;border-bottom:1px solid #e2e8f0}
+.summary-table thead th{background:var(--theme-dark);color:var(--theme-on-dark);font-size:13px;text-transform:uppercase;letter-spacing:.4px}
+.summary-table tbody tr{cursor:pointer;min-height:56px}
+.summary-table tbody tr:hover{background:#f1f5f9}
+.summary-table td.num{text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
+.summary-table td.num.r{color:var(--rd)}
+.summary-table .muted{text-align:center;color:var(--mu);padding:30px}
+
+/* §5 — Sign-off summary inside the Save modal. */
+.signoff-summary{display:grid;grid-template-columns:1fr 1fr;gap:8px 18px;padding:14px;background:#f8fafc;border-radius:10px;border:1px solid var(--bd)}
+.signoff-summary div{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-size:14px}
+.signoff-summary span{color:var(--mu);text-transform:uppercase;letter-spacing:.4px;font-size:11px;font-weight:700}
+.signoff-summary b{font-size:17px;font-weight:800;color:var(--tx)}
+.signoff-summary b.r{color:var(--rd)}
+.signoff-summary b.g{color:var(--gn)}
 
 .op-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:14px;color:var(--theme-on-base);padding:8px 12px;background:var(--theme-panel);border-radius:8px;font-weight:600}
 .op-legend span{display:inline-flex;align-items:center;gap:6px}
@@ -135,9 +171,8 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .bd-cat{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:18px 10px;min-height:120px;background:#f8fafc;border:2px solid var(--bd);border-radius:14px;cursor:pointer;transition:transform .08s,background .15s,border-color .15s}
 .bd-cat:hover{background:#eff6ff;border-color:var(--theme-dark)}
 .bd-cat:active{transform:scale(.96)}
-.bd-cat .bd-emoji{font-size:36px;line-height:1}
-.bd-cat .bd-prefix{font-size:14px;font-weight:800;color:var(--theme-dark);letter-spacing:.6px}
-.bd-cat .bd-cat-label{font-size:15px;font-weight:700;color:var(--tx);text-align:center;line-height:1.2}
+.bd-cat .bd-emoji{font-size:44px;line-height:1}
+.bd-cat .bd-cat-label{font-size:19px;font-weight:800;color:var(--tx);text-align:center;line-height:1.2}
 
 .bd-cause-list{display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow:auto}
 .bd-cause{display:flex;align-items:center;gap:12px;padding:14px 14px;background:#f8fafc;border:2px solid var(--bd);border-radius:12px;cursor:pointer;text-align:left;min-height:64px;transition:transform .08s,background .15s,border-color .15s}
@@ -165,4 +200,6 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
   .op-side{width:100%}
   .op-grid th.rh{width:160px}
   .bd-cat-grid{grid-template-columns:repeat(2,1fr)}
+  .handover-grid{grid-template-columns:1fr}
+  .signoff-summary{grid-template-columns:1fr}
 }
