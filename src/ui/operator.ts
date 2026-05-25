@@ -1,4 +1,5 @@
 import type { PmdDataLayer } from '../dal';
+import { canSyncPlanning } from '../dal';
 import type {
   Machine,
   PlanningOrder,
@@ -21,6 +22,7 @@ import { bdLabelFor } from '../core/breakdown';
 import { openBreakdownCascade } from './breakdown';
 import { toast } from './toast';
 import { closeModal, escapeHtml, openModal } from './modal';
+import { renderOutputRejectChart } from './charts';
 
 // PMD Operator Production Sheet — Excel-style rebuild of modPMDOperator.bas.
 // One machine + one shift + one job at a time. 16 half-hour slots horizontally;
@@ -45,6 +47,9 @@ interface OpState {
   viewLevel: number;
   /** Sum of Good across all shifts of selJob — drives the cross-shift Job Left. */
   jobTotalGood: number;
+  /** Multi-fill mode: tap/drag status cells to build a range, then pick one code. */
+  multiSel: boolean;
+  selSet: Set<number>;
 }
 
 let S: OpState | null = null;
@@ -242,6 +247,7 @@ function buildActionBar(): string {
         <span>${escapeHtml(VIEW_LEVELS[S!.viewLevel - 1]?.label ?? 'Shift')}</span>
         <button data-zoom="1" ${S!.viewLevel >= 4 ? 'disabled' : ''}>+</button>
       </div>
+      <button class="btn-multi${S!.multiSel ? ' a' : ''}" data-multisel title="Tap or drag status cells to select a range, then pick one code">🖌 Multi-fill${S!.multiSel ? ` (${S!.selSet.size})` : ''}</button>
       <button class="btn-load" data-refresh title="Re-pull planning from SharePoint &amp; recompute Job Left">⟳ Refresh</button>
       <button class="btn-save" data-saveclear>✅ Sign off &amp; Save</button>
     </div>
@@ -312,7 +318,13 @@ function statusCellHtml(
     code === 'B' && bdIssue
       ? `<span class="bd-tag">${escapeHtml(bdIssue.split('-')[0])}</span>`
       : '';
-  const cls = `status-cell${isNow ? ' is-now' : ''}`;
+  let cls = `status-cell${isNow ? ' is-now' : ''}`;
+  if (S!.multiSel && S!.selSet.has(slot)) cls += ' multisel';
+  // Multi-fill mode: render a button (no native select); single-tap toggles
+  // selection, drag across cells extends it (handled in wire()).
+  if (S!.multiSel) {
+    return `<td class="${cls}"${tip}><button type="button" class="slot-cell" style="${style}" data-slot="${slot}" data-row="status">${code || '·'}</button>${tag}</td>`;
+  }
   return `<td class="${cls}"${tip}><select class="slot-status" style="${style}" data-slot="${slot}" data-row="status">${opts}</select>${tag}</td>`;
 }
 
@@ -534,9 +546,17 @@ function buildSummary(): string {
     )
     .join('');
   const title = VIEW_LEVELS[lvl - 1]?.label ?? '';
+  const chart = renderOutputRejectChart(
+    summaryCache.buckets.map((b) => ({
+      label: b.label.split(' — ')[0],
+      good: b.good,
+      reject: b.rej,
+    })),
+  );
   return `<div class="summary-wrap">
     <h3 class="summary-title">${escapeHtml(title)} — ${escapeHtml(S!.mc)}</h3>
     <p class="bd-sub">Read-only roll-up · tap a row to drill into that shift.</p>
+    <div class="summary-chart">${chart}</div>
     <table class="summary-table">
       <thead><tr>
         <th>Bucket</th><th>Good</th><th>Reject</th><th>Output (gross)</th><th>Down</th><th>Setup</th>
@@ -796,6 +816,12 @@ function wire(): void {
   // Buttons
   app.querySelector('[data-refresh]')?.addEventListener('click', () => void refreshAll());
   app.querySelector('[data-saveclear]')?.addEventListener('click', () => openSaveSignoffModal());
+  app.querySelector('[data-multisel]')?.addEventListener('click', () => {
+    S!.multiSel = !S!.multiSel;
+    S!.selSet.clear();
+    render();
+  });
+  wireMultiFillDrag();
 }
 
 function onMetaChange(el: HTMLElement): void {
@@ -893,6 +919,18 @@ function parseHandover(r: ProductionRecord | undefined): Handover {
  * shift's production records + the cross-shift Good total used by Job Left.
  */
 async function refreshAll(): Promise<void> {
+  // Real backend (§7.1): pull the Excel "Planning" sheet from the SP site,
+  // clear PMD_Planning, repopulate. Mock backend: skip the sync, just reload.
+  if (canSyncPlanning(dalRef)) {
+    try {
+      toast('Syncing planning from Excel…', 'warn');
+      const { inserted, skipped } = await dalRef.syncPlanningFromExcel();
+      toast(`Planning synced · ${inserted} rows in, ${skipped} skipped`, 'ok');
+    } catch (e) {
+      console.error(e);
+      toast(`Excel sync failed: ${(e as Error).message}`, 'err');
+    }
+  }
   S!.planning = await dalRef.listPlanning({});
   summaryCache = null;
   await reload();
@@ -944,6 +982,205 @@ function openSaveSignoffModal(): void {
   mc.querySelector('[data-confirm-save]')?.addEventListener('click', () => {
     void doSignoffSave();
   });
+}
+
+// ---------- Multi-fill (drag-to-select + same-as-previous) ----------
+
+function wireMultiFillDrag(): void {
+  if (!S!.multiSel) return;
+  const wrap = document.querySelector<HTMLElement>('.op-grid-wrap');
+  if (!wrap) return;
+
+  let anchor: number | null = null;
+
+  const slotAt = (clientX: number, clientY: number): number | null => {
+    const el = document
+      .elementFromPoint(clientX, clientY)
+      ?.closest<HTMLElement>('[data-slot][data-row="status"]');
+    if (!el) return null;
+    return Number(el.dataset.slot);
+  };
+
+  const setRange = (a: number, b: number): void => {
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    S!.selSet = new Set<number>();
+    for (let i = lo; i <= hi; i++) S!.selSet.add(i);
+    paintSelection();
+  };
+
+  wrap.addEventListener('pointerdown', (e) => {
+    const slot = slotAt(e.clientX, e.clientY);
+    if (slot == null) return;
+    anchor = slot;
+    if (e.shiftKey && S!.selSet.size > 0) {
+      // Shift-click extends from the lowest currently-selected slot.
+      const lo = Math.min(...S!.selSet);
+      setRange(lo, slot);
+    } else {
+      // Toggle on plain tap; drag will overwrite the set.
+      if (S!.selSet.has(slot)) S!.selSet.delete(slot);
+      else S!.selSet.add(slot);
+      paintSelection();
+    }
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    e.preventDefault();
+  });
+
+  wrap.addEventListener('pointermove', (e) => {
+    if (anchor == null || e.pressure === 0) return;
+    const slot = slotAt(e.clientX, e.clientY);
+    if (slot == null || slot === anchor) return;
+    setRange(anchor, slot);
+  });
+
+  wrap.addEventListener('pointerup', () => {
+    anchor = null;
+    paintFillBar();
+  });
+
+  paintSelection();
+  paintFillBar();
+}
+
+function paintSelection(): void {
+  document.querySelectorAll<HTMLElement>('[data-slot][data-row="status"]').forEach((el) => {
+    const slot = Number(el.dataset.slot);
+    const td = el.closest<HTMLElement>('.status-cell');
+    if (!td) return;
+    if (S!.selSet.has(slot)) td.classList.add('multisel');
+    else td.classList.remove('multisel');
+  });
+  paintFillBar();
+}
+
+function paintFillBar(): void {
+  let bar = document.getElementById('multifill-bar');
+  if (S!.selSet.size === 0) {
+    if (bar) bar.remove();
+    return;
+  }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'multifill-bar';
+    bar.className = 'multifill-bar';
+    document.body.appendChild(bar);
+  }
+  bar.innerHTML = `
+    <span class="mf-count">${S!.selSet.size} slot${S!.selSet.size === 1 ? '' : 's'} selected</span>
+    <button class="btn-ghost-big" data-mf-clear>Clear</button>
+    <button class="btn-primary-big" data-mf-fill>Fill with…</button>
+  `;
+  bar.querySelector('[data-mf-clear]')?.addEventListener('click', () => {
+    S!.selSet.clear();
+    paintSelection();
+  });
+  bar.querySelector('[data-mf-fill]')?.addEventListener('click', openMultiFillPicker);
+}
+
+/** Find the most recent filled slot with index < min(selSet). */
+function previousFilled(beforeSlot: number): ProductionRecord | undefined {
+  for (let i = beforeSlot - 1; i >= 0; i--) {
+    const r = slotRec(i);
+    if (r && r.statusCode) return r;
+  }
+  return undefined;
+}
+
+function openMultiFillPicker(): void {
+  if (S!.selSet.size === 0) return;
+  if (!S!.selJob) {
+    toast('Pick a Job# first', 'warn');
+    return;
+  }
+  const slots = [...S!.selSet].sort((a, b) => a - b);
+  const prev = previousFilled(slots[0]);
+  const sameAsPrev = prev
+    ? `<button class="bd-cause" data-pick-same>
+        <span class="bd-code">↪ ${escapeHtml(prev.statusCode)}</span>
+        <span class="bd-cause-text">Same as previous (${escapeHtml(prev.statusCode)} ${escapeHtml(STATUS_MAP[prev.statusCode as StatusCode]?.label ?? '')})</span>
+      </button>`
+    : '';
+  const codes: StatusCode[] = ['R', 'B', 'C', 'D', 'I', 'M', 'O', 'P', 'S'];
+  const pills = codes
+    .map((c) => {
+      const d = STATUS_MAP[c];
+      return `<button class="ab-pill" style="background:${d.color};border-color:${d.border};color:${d.text}" data-pick="${c}">
+        <span class="ab-cd">${c}</span><span class="ab-lb">${escapeHtml(d.label)}</span>
+      </button>`;
+    })
+    .join('');
+
+  const mc = openModal(`<div class="bd-modal">
+    <h2 class="bd-title">🖌 Fill ${slots.length} slot${slots.length === 1 ? '' : 's'}</h2>
+    <p class="bd-sub">Slots: ${slots.map((s) => `${s + 1}`).join(', ')}</p>
+    ${sameAsPrev ? `<div class="bd-cause-list">${sameAsPrev}</div>` : ''}
+    <div class="ab-grid">${pills}</div>
+    <div class="bd-actions">
+      <button class="btn-ghost-big" data-cancel>Cancel</button>
+    </div>
+  </div>`);
+  mc.querySelector('[data-cancel]')?.addEventListener('click', closeModal);
+  mc.querySelector('[data-pick-same]')?.addEventListener('click', () => {
+    closeModal();
+    void multiFillApply(slots, prev!.statusCode as StatusCode, prev!.bdIssue, prev!.mangoTicket);
+  });
+  mc.querySelectorAll<HTMLButtonElement>('[data-pick]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const code = b.dataset.pick as StatusCode;
+      if (code === 'B') {
+        openBreakdownCascade(`${slots.length} slot${slots.length === 1 ? '' : 's'}`, '', (pick) => {
+          void multiFillApply(slots, 'B', pick.code, pick.note);
+        });
+        return;
+      }
+      closeModal();
+      void multiFillApply(slots, code, '', '');
+    }),
+  );
+}
+
+async function multiFillApply(
+  slots: number[],
+  code: StatusCode,
+  bdIssue: string,
+  mangoNote: string,
+): Promise<void> {
+  // Sequential upserts — keep simple; could batch later if needed.
+  for (const slot of slots) {
+    await upsertSlotNoReload(slot, (r) => {
+      r.statusCode = code;
+      r.bdIssue = code === 'B' ? bdIssue : '';
+      if (code === 'B' && mangoNote) r.mangoTicket = mangoNote;
+      else if (code !== 'B') r.mangoTicket = '';
+    });
+  }
+  S!.selSet.clear();
+  S!.multiSel = false; // exit mode after fill
+  toast(`Filled ${slots.length} slot${slots.length === 1 ? '' : 's'} with ${code}`, 'ok');
+  await reload();
+}
+
+/** Like upsertSlot but doesn't call reload — caller batches the final render. */
+async function upsertSlotNoReload(
+  slot: number,
+  mut: (r: ProductionRecord) => void,
+): Promise<void> {
+  if (!S!.selJob) return;
+  const existing = S!.prod.find(
+    (r) => r.jobNumber === S!.selJob && r.slotIndex === slot,
+  );
+  const rec = existing ? { ...existing } : blankRecord(slot);
+  mut(rec);
+  let total = 0;
+  try {
+    const obj = JSON.parse(rec.rejects || '{}') as Record<string, number>;
+    total = Object.values(obj).reduce((a, v) => a + (Number(v) || 0), 0);
+  } catch {
+    /* keep 0 */
+  }
+  rec.rejectCount = total;
+  await dalRef.upsertProductionRecord(rec);
 }
 
 async function doSignoffSave(): Promise<void> {
@@ -1001,6 +1238,8 @@ export async function renderOperator(
     selSupervisor: '',
     viewLevel: 1,
     jobTotalGood: 0,
+    multiSel: false,
+    selSet: new Set<number>(),
   };
   if (nowTimer) clearInterval(nowTimer);
   nowTimer = setInterval(renderNowLine, 30_000);
