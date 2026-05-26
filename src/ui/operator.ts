@@ -242,10 +242,10 @@ function buildActionBar(): string {
     </div>
     <div class="ab-shifts">${tabs}</div>
     <div class="ab-right">
-      <div class="zoom" title="− zooms in (single shift) · + zooms out to today / week / month">
-        <button data-zoom="-1" ${S!.viewLevel <= 1 ? 'disabled' : ''}>−</button>
+      <div class="zoom" title="+ = zoom in to single-shift detail · − = zoom out to today / week / month">
+        <button data-zoom="1" ${S!.viewLevel >= 4 ? 'disabled' : ''} title="Zoom out">−</button>
         <span>${escapeHtml(VIEW_LEVELS[S!.viewLevel - 1]?.label ?? 'Shift')}</span>
-        <button data-zoom="1" ${S!.viewLevel >= 4 ? 'disabled' : ''}>+</button>
+        <button data-zoom="-1" ${S!.viewLevel <= 1 ? 'disabled' : ''} title="Zoom in">+</button>
       </div>
       <button class="btn-multi${S!.multiSel ? ' a' : ''}" data-multisel title="Tap or drag status cells to select a range, then pick one code">🖌 Multi-fill${S!.multiSel ? ` (${S!.selSet.size})` : ''}</button>
       <button class="btn-load" data-refresh title="Re-pull planning from SharePoint &amp; recompute Job Left">⟳ Refresh</button>
