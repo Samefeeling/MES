@@ -1,6 +1,16 @@
 import type { PlanningOrder } from '../types';
 import { SLOTS_PER_SHIFT, shiftBounds, slotTimeRange } from './shifts';
 
+// In-shift planning helpers: where each order's Gantt bar sits within
+// the 16-slot grid, and auto die-change generation between consecutive
+// same-machine orders with different part numbers.
+//
+// Looking for the Excel → PMD_Planning sync? That lives in
+// `src/dal/sharepoint.ts → SharePointDataLayer.syncPlanningFromExcel()`,
+// since it depends on Microsoft Graph + SharePoint REST. The Refresh
+// button (operator.ts) and the in-app daily auto-sync (main.ts) both
+// invoke it via the duck-typed `canSyncPlanning(dal)` gate.
+//
 // §5.2 Order Bar Width — every bar spans the full 16 slots; slots outside the
 // order's ERP-planned region are dimmed (still clickable). These helpers
 // compute the in-plan region for rendering.
