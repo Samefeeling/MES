@@ -13,7 +13,7 @@ import type {
 } from '../types';
 import type { PmdDataLayer } from './types';
 import { bdCategoryOf, bdLabelFor, BD_TAXONOMY } from '../core/breakdown';
-import { slotClock } from '../core/shifts';
+import { shiftBounds, slotClock } from '../core/shifts';
 
 // =====================================================================
 // SharePointDataLayer — Resero Operations AU site.
@@ -81,17 +81,22 @@ const DEFAULT_FIELDS = {
     dc: 'D_x002f_C',
   },
   production: {
-    machine: 'Machine',
-    date: 'Date',
-    shift: 'Shift',
-    timeline: 'Timeline',
+    // Schema discovered from ?$top=1 response:
+    //   Title=Batt1, MachineCode=6 (Edm.Double, sort key),
+    //   SlotStart_x003a_=DateTime (display "Date"), ShiftId="Day",
+    //   Status="RRR..." (display "Timeline"), Reject, Downtime.
+    // RunTime column doesn't exist — leave runTime: '' to skip writes.
+    machine: 'Title',
+    date: 'SlotStart_x003a_',
+    shift: 'ShiftId',
+    timeline: 'Status',
     jobNumber: 'JobNumber',
     countStart: 'CountStart',
     countEnd: 'CountEnd',
     reject: 'Reject',
     operator: 'Operator',
     supervisor: 'Supervisor',
-    runTime: 'RunTime',
+    runTime: '',
     downTime: 'Downtime',
   },
   rejects: {
@@ -425,18 +430,21 @@ export class SharePointDataLayer implements PmdDataLayer {
     const parts: string[] = [];
     if (filter.machineCode) parts.push(`${F.machine} eq '${filter.machineCode}'`);
     if (filter.jobNumber) parts.push(`${F.jobNumber} eq '${filter.jobNumber}'`);
+    // F.date points at SlotStart_x003a_ (DateTime). Filter with datetime'...'
+    // and combine with ShiftId for an exact-shift match.
     if (filter.shiftId) {
-      const { date, shift } = parseShiftIdLoose(filter.shiftId);
-      if (date) parts.push(`${F.date} eq '${date}'`);
+      const { shift } = parseShiftIdLoose(filter.shiftId);
+      const b = shiftBounds(filter.shiftId);
+      if (b) parts.push(`${F.date} eq datetime'${b.start.toISOString()}'`);
       if (shift) parts.push(`${F.shift} eq '${shift}'`);
     }
     if (filter.shiftIdFrom) {
-      const { date } = parseShiftIdLoose(filter.shiftIdFrom);
-      if (date) parts.push(`${F.date} ge '${date}'`);
+      const b = shiftBounds(filter.shiftIdFrom);
+      if (b) parts.push(`${F.date} ge datetime'${b.start.toISOString()}'`);
     }
     if (filter.shiftIdTo) {
-      const { date } = parseShiftIdLoose(filter.shiftIdTo);
-      if (date) parts.push(`${F.date} le '${date}'`);
+      const b = shiftBounds(filter.shiftIdTo);
+      if (b) parts.push(`${F.date} le datetime'${b.end.toISOString()}'`);
     }
     const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
     const rows = await this.getAllItems(LISTS.production, qs);
@@ -452,7 +460,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       reject: num(r[F.reject]),
       operator: str(r[F.operator]),
       supervisor: str(r[F.supervisor]),
-      runTime: num(r[F.runTime]),
+      runTime: F.runTime ? num(r[F.runTime]) : 0,
       downTime: num(r[F.downTime]),
     }));
   }
@@ -655,15 +663,20 @@ export class SharePointDataLayer implements PmdDataLayer {
   }
 
   async unlockShift(machineCode: string, shiftId: string): Promise<void> {
-    // Find PMD_Production rows for this (Machine, Date, Shift) and delete
-    // their corresponding analytic + reject rows so the operator can refile.
+    // Find PMD_Production rows for this (Machine, SlotStart:, Shift) and
+    // delete their corresponding analytic + reject rows so the operator can
+    // refile.
     const F = this.F.production;
     const date = shiftId.slice(0, 10);
     const shift = shiftId.slice(11);
+    const b = shiftBounds(shiftId);
+    const dateClause = b
+      ? `${F.date} eq datetime'${b.start.toISOString()}'`
+      : `${F.date} eq null`;
     const qs =
       '$filter=' +
       encodeURIComponent(
-        `${F.machine} eq '${machineCode}' and ${F.date} eq '${date}' and ${F.shift} eq '${shift}'`,
+        `${F.machine} eq '${machineCode}' and ${dateClause} and ${F.shift} eq '${shift}'`,
       );
     const rows = await this.getAllItems<{ ID?: number; Id?: number }>(LISTS.production, qs);
     for (const r of rows) await this.del(`${this.listUrl(LISTS.production)}/items(${r.ID ?? r.Id})`);
@@ -680,11 +693,15 @@ export class SharePointDataLayer implements PmdDataLayer {
 
   private async upsertProductionHeader(h: HeaderInput): Promise<void> {
     const F = this.F.production;
+    // The date column is a DateTime (SlotStart:); store the shift's wall-clock
+    // start instant. F.machine is mapped to Title, so writing [F.machine]
+    // populates Title with the machine code (e.g. "Batt1") — no separate
+    // Machine column exists.
+    const b = shiftBounds(`${h.date}-${h.shift}`);
+    const slotStartIso = b?.start.toISOString();
     const body: Record<string, unknown> = {
       __metadata: { type: SharePointDataLayer.itemType(LISTS.production) },
-      Title: `${h.machineCode}-${h.date}-${h.shift}-${h.jobNumber || 'none'}`,
       [F.machine]: h.machineCode,
-      [F.date]: h.date,
       [F.shift]: h.shift,
       [F.jobNumber]: h.jobNumber,
       [F.timeline]: h.timeline,
@@ -693,14 +710,18 @@ export class SharePointDataLayer implements PmdDataLayer {
       [F.reject]: h.reject,
       [F.operator]: h.operator,
       [F.supervisor]: h.supervisor,
-      [F.runTime]: h.runTime,
       [F.downTime]: h.downTime,
     };
+    if (slotStartIso) body[F.date] = slotStartIso;
+    if (F.runTime) body[F.runTime] = h.runTime;
     // Find existing by composite key; MERGE if found, else POST.
+    const dateClause = slotStartIso
+      ? `${F.date} eq datetime'${slotStartIso}'`
+      : `${F.date} eq null`;
     const qs =
       '$filter=' +
       encodeURIComponent(
-        `${F.machine} eq '${h.machineCode}' and ${F.date} eq '${h.date}' and ${F.shift} eq '${h.shift}' and ${F.jobNumber} eq '${h.jobNumber}'`,
+        `${F.machine} eq '${h.machineCode}' and ${dateClause} and ${F.shift} eq '${h.shift}' and ${F.jobNumber} eq '${h.jobNumber}'`,
       );
     const existing = await this.getAllItems<{ ID?: number; Id?: number }>(LISTS.production, qs);
     if (existing.length > 0) {
