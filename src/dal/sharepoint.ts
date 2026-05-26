@@ -37,7 +37,7 @@ const LISTS = {
   planning: 'PMD_Planning',
   production: 'PMD_Production',
   rejects: 'PMD_Rejects',
-  breakdown: 'PMD_BreakDown',
+  breakdown: 'PMD_BreakDownlog',
   rejectCategories: 'PMD_RejectCategories',
   breakdownMaster: 'PMD_BreakdownMaster',
   rdoRoster: 'RDO Roster 2026-2030',
@@ -128,25 +128,25 @@ const DEFAULT_FIELDS = {
     rejectNumber: 'RejectNumber',
   },
   breakdown: {
-    // ⚠️ NOT yet confirmed by diagnoseFields — PMD_BreakDown was missing
-    // from the user's diagnose output. Best guesses based on the column
-    // titles in the screenshot; treat reads/writes as tentative until
-    // the real internal names are pasted back.
+    // Confirmed against diagnoseFields on PMD_BreakDownlog (renamed from
+    // PMD_BreakDown). Adds a new BDCode column for the dominant breakdown
+    // code on the shift (picked from the slots that had B status).
     date: 'Date',
     machine: 'Title',
     jobNum: 'JobHead_JobNum',
     partNum: 'JobHead_PartNum',
     shift: 'Shift',
     statusTimeline: 'StatusTimeline',
+    bdCode: 'BDCode',
     r: 'R_Runtime',
     b: 'B_BreakDown',
     c: 'C_ColorChange',
     d: 'D_DieChange',
     i: 'I_InsertChange',
     m: 'M_Maintainance',
-    o: 'O_No_work_or_operator',
-    p: 'P_Purge_x002f_Cleaning',
-    s: 'S_Startup_x002f_Shutdown',
+    o: 'O_NoWork',
+    p: 'P_Purge',
+    s: 'S_StartUpShutdown',
   },
   rejectCategories: {
     // Title = Code (P11, P12, ...); Description = the human label.
@@ -684,6 +684,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         partNumber: slots[0]?.handoverNote ? '' : '',
         timeline: agg.timeline,
         hours: agg.hours,
+        bdCode: agg.bdCode,
       });
       await this.replaceRejectEvents(
         { machineCode, date, shift, jobNumber: job },
@@ -787,6 +788,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       [F.jobNum]: h.jobNumber,
       [F.partNum]: h.partNumber,
       [F.statusTimeline]: h.timeline,
+      [F.bdCode]: h.bdCode,
       [F.r]: h.hours.R,
       [F.b]: h.hours.B,
       [F.c]: h.hours.C,
@@ -1110,6 +1112,8 @@ interface BreakdownInput {
   partNumber: string;
   timeline: string;
   hours: StatusHours;
+  /** Dominant breakdown code on this shift (PMD_BreakDownlog.BDCode). Empty if no B slots. */
+  bdCode: string;
 }
 
 interface StatusHours {
@@ -1149,18 +1153,25 @@ function aggregateSlots(slots: ProductionRecord[]): {
   downTime: number;
   hours: StatusHours;
   rejectEvents: RejectEvent[];
+  bdCode: string;
 } {
   const timelineArr = Array.from({ length: 16 }, () => '·');
   const hours: StatusHours = { R: 0, B: 0, C: 0, D: 0, I: 0, M: 0, O: 0, P: 0, S: 0 };
   let canonical: ProductionRecord | undefined;
   let reject = 0;
   const rejectEvents: RejectEvent[] = [];
+  // Tally BD codes across all B slots so we can pick the most frequent one
+  // for PMD_BreakDownlog.BDCode (analytic-level dominant code).
+  const bdTally = new Map<string, number>();
   for (const r of slots) {
     if (r.slotIndex === 0) canonical = r;
     if (r.statusCode && r.slotIndex >= 0 && r.slotIndex < 16) {
       timelineArr[r.slotIndex] = r.statusCode;
       const code = r.statusCode as keyof StatusHours;
       if (code in hours) hours[code] += 0.5;
+    }
+    if (r.statusCode === 'B' && r.bdIssue) {
+      bdTally.set(r.bdIssue, (bdTally.get(r.bdIssue) ?? 0) + 1);
     }
     let obj: Record<string, number> = {};
     try {
@@ -1181,6 +1192,15 @@ function aggregateSlots(slots: ProductionRecord[]): {
       });
     }
   }
+  // Most frequent BD code wins; ties broken by insertion order.
+  let bdCode = '';
+  let bdMax = 0;
+  for (const [code, n] of bdTally) {
+    if (n > bdMax) {
+      bdMax = n;
+      bdCode = code;
+    }
+  }
   return {
     timeline: timelineArr.join(''),
     countStart: canonical?.countStart ?? null,
@@ -1191,6 +1211,7 @@ function aggregateSlots(slots: ProductionRecord[]): {
     downTime: hours.B + hours.M,
     hours,
     rejectEvents,
+    bdCode,
   };
 }
 

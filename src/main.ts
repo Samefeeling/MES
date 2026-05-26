@@ -4,6 +4,13 @@ import { renderTrace } from './ui/trace';
 
 const dal: PmdDataLayer = createDataLayer(import.meta.env as Record<string, string>);
 
+// Dev convenience: expose the DAL so the smoke-test snippets in
+// docs/LOCAL_DEV_WITH_SHAREPOINT.md and `diagnoseFields()` work without
+// editing the source. Stripped in production builds.
+if (import.meta.env.DEV) {
+  (window as unknown as { __pmdDal: PmdDataLayer }).__pmdDal = dal;
+}
+
 const POLL_MS = 60_000; // §6.2 — active shift refresh
 let pollTimer: ReturnType<typeof setInterval> | undefined;
 

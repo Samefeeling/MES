@@ -153,6 +153,55 @@ npm run typecheck    # tsc --noEmit
 npm run build        # static bundle to dist/
 ```
 
+## Smoke test — verify the field map end-to-end in 5 seconds
+
+Open the running app at `http://localhost:5173`, pop the console, paste:
+
+```js
+await (async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const sid = `${today}-Day`;
+  const job = 'SMOKE-TEST';
+  const machine = '1600T';   // ← any code from your PMD_Machine list
+
+  // 1. Cache 3 slots: slot 0 carries counts + a P11 reject; slot 1 = B with ELE-02; slot 2 = R
+  for (const slot of [0, 1, 2]) {
+    await window.__pmdDal.upsertProductionRecord({
+      id: 0, machineCode: machine, shiftId: sid, jobNumber: job, slotIndex: slot,
+      statusCode: slot === 1 ? 'B' : 'R',
+      countStart: slot === 0 ? 0 : null,
+      countEnd:   slot === 0 ? 250 : null,
+      rejectCount: 0, rejects: slot === 0 ? '{"P11":3}' : '{}',
+      otherType: '', otherCount: 0, purgeKg: slot === 0 ? 0.5 : null,
+      operator: 'SmokeOp', supervisor: 'SmokeSup',
+      bdIssue: slot === 1 ? 'ELE-02' : '',
+      mangoTicket: '', handoverNote: '{}',
+      locked: false, lockedBy: '', lockedAt: '', createdAt: '', updatedAt: '',
+    });
+  }
+
+  // 2. Sign off → flushes 1 PMD_Production + 1 PMD_BreakDownlog + N PMD_Rejects
+  await window.__pmdDal.lockShift(machine, sid, 'SmokeSup', 'SmokeOp');
+  console.log('✓ Wrote header, analytic, and reject rows.');
+
+  // 3. Read back
+  const back = await window.__pmdDal.listProduction({ jobNumber: job });
+  console.log('✓ Read back', back.length, 'slot record(s):', back);
+
+  // 4. Cleanup (deletes the header, analytic, and reject rows we just wrote)
+  await window.__pmdDal.unlockShift(machine, sid);
+  console.log('✓ Cleanup done. Any earlier "POST → 400/500" means a field-name mismatch.');
+})();
+```
+
+What success looks like:
+- A row appears in PMD_Production with Title=1600T, ShiftId=Day, Reject=3, Downtime=0.5, RunTime=1.0, Status="RBR…".
+- A row appears in PMD_BreakDownlog with BDCode=ELE-02 and B_BreakDown=0.5.
+- One row appears in PMD_Rejects with RejectCode=P11, RejectNumber=3.
+- After unlockShift, all three are deleted.
+
+If you see `400 The field 'XYZ' is not recognised`, that's the column name to patch in `DEFAULT_FIELDS`.
+
 ## What to send back if something doesn't read
 
 For each list that shows empty rows / null values, paste the output of:
