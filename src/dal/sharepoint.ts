@@ -48,90 +48,118 @@ const LISTS = {
 // spaces become `_x0020_`, slashes become `_x002f_`. If your actual
 // internal names differ, override per-list via `SharePointOptions.fieldMap`
 // at construction time (printed by `diagnoseFields()` for confirmation).
+// Field map calibrated against the diagnoseFields() output on
+// reseroglobal.sharepoint.com/sites/ReseroOperationsAU (2026-05-26).
+// Pattern note: Many lists were imported from Excel/external sources,
+// which left the primary column in `Title` (machine code, part number,
+// reject code, etc.) and gave the other columns auto-generated names
+// like `field_1`. Don't try to "fix" by hand — match what's there.
 const DEFAULT_FIELDS = {
-  machine: { code: 'MachineCode', active: 'IsActive', displayOrder: 'DisplayOrder' },
-  operator: {
-    shift: 'Shift',
-    name: 'Name',
-    position: 'Position',
-    supervisor1: 'Supervisor_x005f_1',
-    supervisor: 'Supervisor',
+  machine: {
+    code: 'Title', // machine code (e.g. "1600T") lives in Title
+    active: 'IsActive_x003a_Yes_x002f_No', // display is literally "IsActive: Yes/No"
+    displayOrder: 'DisplayOrder',
   },
-  supervisor: { title: 'Title', name: 'Name' },
+  operator: {
+    // Title = operator name; `Supervisor` (internal) displays as
+    // "Supervisor_1", and `Supervisor0` (internal) is the Lookup column.
+    shift: 'Shift',
+    name: 'Title',
+    position: 'Position',
+    supervisor1: 'Supervisor',
+    supervisor: 'Supervisor0',
+  },
+  supervisor: {
+    // Title = role title (e.g. "Day shift Supervisor"); Name = person name.
+    title: 'Title',
+    name: 'Name',
+  },
   products: {
-    partNum: 'PartNum',
-    desc: 'PartDescription',
-    family: 'Product_x005f_Family',
-    group: 'Product_x005f_Group',
-    partClass: 'Part_x005f_Class',
-    typeCode: 'TypeCode',
-    cost: 'Part_x005f_Cost',
+    // Title = PartNum; other columns are auto-named field_1..field_6.
+    partNum: 'Title',
+    desc: 'field_1',
+    family: 'field_2',
+    group: 'field_3',
+    partClass: 'field_4',
+    typeCode: 'field_5',
+    cost: 'field_6',
   },
   planning: {
-    machine: 'Machine',
+    // Title = machine code (e.g. "1600T"). The column with internal
+    // name `Machine` actually displays as "DieNumber" — don't confuse
+    // them. JobHead/Calculated/D_C use the names below verbatim.
+    machine: 'Title',
     startDateTime: 'StartDateTime',
     qtyHour: 'Qty_x002f_Hour',
-    dueDate: 'Due_x005f_Date',
-    jobNum: 'JobHead_x005f_JobNum',
-    partNum: 'JobHead_x005f_PartNum',
-    partDesc: 'JobHead_x005f_PartDescription',
-    remaining: 'Calculated_x005f_Remaining',
+    dueDate: 'DueDate',
+    jobNum: 'JobHead_JobNum',
+    partNum: 'JobHead_PartNum',
+    partDesc: 'JobHead_PartDescription',
+    remaining: 'Calculated_RemainingQty',
     duration: 'Duration',
-    dieNumber: 'DieNumber',
+    dieNumber: 'Machine', // weird but real — internal Machine = DieNumber
     dc: 'D_x002f_C',
   },
   production: {
-    // Schema discovered from ?$top=1 response:
-    //   Title=Batt1, MachineCode=6 (Edm.Double, sort key),
-    //   SlotStart_x003a_=DateTime (display "Date"), ShiftId="Day",
-    //   Status="RRR..." (display "Timeline"), Reject, Downtime.
-    // RunTime column doesn't exist — leave runTime: '' to skip writes.
+    // Schema from ?$top=1 response. RunTime confirmed present by user
+    // (it was just absent from the sample row's data); re-enabled.
     machine: 'Title',
-    date: 'SlotStart_x003a_',
+    date: 'SlotStart_x003a_', // display "Date", actually the DateTime "SlotStart:"
     shift: 'ShiftId',
-    timeline: 'Status',
+    timeline: 'Status', // display "Timeline"
     jobNumber: 'JobNumber',
     countStart: 'CountStart',
     countEnd: 'CountEnd',
     reject: 'Reject',
     operator: 'Operator',
     supervisor: 'Supervisor',
-    runTime: '',
+    runTime: 'RunTime',
     downTime: 'Downtime',
   },
   rejects: {
-    machine: 'Machine',
+    // Title = Machine; Date is a DateTime (not date-only).
+    machine: 'Title',
     shift: 'Shift',
     date: 'Date',
     timeline: 'Timeline',
-    jobNum: 'JobHead_x005f_JobNum',
+    jobNum: 'JobHead_JobNum',
     rejectCode: 'RejectCode',
     rejectCategory: 'RejectCategory',
     rejectNumber: 'RejectNumber',
   },
   breakdown: {
+    // ⚠️ NOT yet confirmed by diagnoseFields — PMD_BreakDown was missing
+    // from the user's diagnose output. Best guesses based on the column
+    // titles in the screenshot; treat reads/writes as tentative until
+    // the real internal names are pasted back.
     date: 'Date',
-    machine: 'Machine',
-    jobNum: 'JobHead_x005f_JobNum',
-    partNum: 'JobHead_x005f_PartNum',
+    machine: 'Title',
+    jobNum: 'JobHead_JobNum',
+    partNum: 'JobHead_PartNum',
     shift: 'Shift',
     statusTimeline: 'StatusTimeline',
-    r: 'R_x005f_Runtime',
-    b: 'B_x005f_BreakDown',
-    c: 'C_x005f_ColorChange',
-    d: 'D_x005f_DieChange',
-    i: 'I_x005f_InsertChange',
-    m: 'M_x005f_Maintainance',
-    o: 'O_x005f_No_x005f_work_x005f_or_x005f_operator',
-    p: 'P_x005f_Purge_x002f_Cleaning',
-    s: 'S_x005f_Startup_x002f_Shutdown',
+    r: 'R_Runtime',
+    b: 'B_BreakDown',
+    c: 'C_ColorChange',
+    d: 'D_DieChange',
+    i: 'I_InsertChange',
+    m: 'M_Maintainance',
+    o: 'O_No_work_or_operator',
+    p: 'P_Purge_x002f_Cleaning',
+    s: 'S_Startup_x002f_Shutdown',
   },
-  rejectCategories: { code: 'Code', description: 'Description' },
+  rejectCategories: {
+    // Title = Code (P11, P12, ...); Description = the human label.
+    code: 'Title',
+    description: 'Description',
+  },
   breakdownMaster: {
+    // Title = Cause (the longest descriptive field); Code/Category/
+    // LikelyOwner are explicit columns.
     code: 'Code',
     category: 'Category',
-    cause: 'Cause',
-    likelyOwner: 'Likely_x0020_Owner',
+    cause: 'Title',
+    likelyOwner: 'LikelyOwner',
   },
 } as const;
 
@@ -369,7 +397,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     const F = this.F.planning;
     const body: Record<string, unknown> = {
       __metadata: { type: SharePointDataLayer.itemType(LISTS.planning) },
-      Title: order.jobNumber,
+      // F.machine → Title (machine code lives in Title, e.g. "1600T")
       [F.machine]: order.machineCode,
       [F.startDateTime]: order.plannedStart,
       [F.qtyHour]: order.qtyPerHr,
@@ -472,9 +500,12 @@ export class SharePointDataLayer implements PmdDataLayer {
     const parts: string[] = [];
     if (filter.machineCode) parts.push(`${F.machine} eq '${filter.machineCode}'`);
     if (filter.jobNumber) parts.push(`${F.jobNum} eq '${filter.jobNumber}'`);
+    // PMD_Rejects.Date is DateTime — filter by the shift's start instant,
+    // computed from shiftBounds(shiftId) to match what we wrote on save.
     if (filter.shiftId) {
-      const { date, shift } = parseShiftIdLoose(filter.shiftId);
-      if (date) parts.push(`${F.date} eq '${date}'`);
+      const { shift } = parseShiftIdLoose(filter.shiftId);
+      const b = shiftBounds(filter.shiftId);
+      if (b) parts.push(`${F.date} eq datetime'${b.start.toISOString()}'`);
       if (shift) parts.push(`${F.shift} eq '${shift}'`);
     }
     const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
@@ -681,14 +712,25 @@ export class SharePointDataLayer implements PmdDataLayer {
     const rows = await this.getAllItems<{ ID?: number; Id?: number }>(LISTS.production, qs);
     for (const r of rows) await this.del(`${this.listUrl(LISTS.production)}/items(${r.ID ?? r.Id})`);
     // Best-effort matching deletion in PMD_BreakDown and PMD_Rejects.
-    await this.deleteWhere(LISTS.breakdown, this.F.breakdown.machine, machineCode, [
-      [this.F.breakdown.date, date],
-      [this.F.breakdown.shift, shift],
-    ]);
-    await this.deleteWhere(LISTS.rejects, this.F.rejects.machine, machineCode, [
-      [this.F.rejects.date, date],
-      [this.F.rejects.shift, shift],
-    ]);
+    // Their Date columns are DateTime; use the shift's start instant.
+    const isoStart = b?.start.toISOString();
+    if (isoStart) {
+      const Fb = this.F.breakdown;
+      await this.deleteByFilter(
+        LISTS.breakdown,
+        `${Fb.machine} eq '${machineCode}' and ${Fb.date} eq datetime'${isoStart}' and ${Fb.shift} eq '${shift}'`,
+      );
+      const Fr = this.F.rejects;
+      await this.deleteByFilter(
+        LISTS.rejects,
+        `${Fr.machine} eq '${machineCode}' and ${Fr.date} eq datetime'${isoStart}' and ${Fr.shift} eq '${shift}'`,
+      );
+    }
+    // Drop hydrated cache for this shift so a re-read pulls fresh.
+    this.hydratedKeys.forEach((k) => {
+      if (k.startsWith(`${machineCode}|${shiftId}|`)) this.hydratedKeys.delete(k);
+    });
+    void date; // kept for future per-list `date`-only deletes
   }
 
   private async upsertProductionHeader(h: HeaderInput): Promise<void> {
@@ -734,11 +776,13 @@ export class SharePointDataLayer implements PmdDataLayer {
 
   private async upsertBreakdownAnalytic(h: BreakdownInput): Promise<void> {
     const F = this.F.breakdown;
+    // F.machine → Title (no separate Machine column on PMD_BreakDown).
+    // F.date → DateTime; write the shift's start instant.
+    const sb = shiftBounds(`${h.date}-${h.shift}`);
+    const slotStartIso = sb?.start.toISOString();
     const body: Record<string, unknown> = {
       __metadata: { type: SharePointDataLayer.itemType(LISTS.breakdown) },
-      Title: `${h.machineCode}-${h.date}-${h.shift}-${h.jobNumber || 'none'}`,
       [F.machine]: h.machineCode,
-      [F.date]: h.date,
       [F.shift]: h.shift,
       [F.jobNum]: h.jobNumber,
       [F.partNum]: h.partNumber,
@@ -753,10 +797,14 @@ export class SharePointDataLayer implements PmdDataLayer {
       [F.p]: h.hours.P,
       [F.s]: h.hours.S,
     };
+    if (slotStartIso) body[F.date] = slotStartIso;
+    const dateClause = slotStartIso
+      ? `${F.date} eq datetime'${slotStartIso}'`
+      : `${F.date} eq null`;
     const qs =
       '$filter=' +
       encodeURIComponent(
-        `${F.machine} eq '${h.machineCode}' and ${F.date} eq '${h.date}' and ${F.shift} eq '${h.shift}' and ${F.jobNum} eq '${h.jobNumber}'`,
+        `${F.machine} eq '${h.machineCode}' and ${dateClause} and ${F.shift} eq '${h.shift}' and ${F.jobNum} eq '${h.jobNumber}'`,
       );
     const existing = await this.getAllItems<{ ID?: number; Id?: number }>(LISTS.breakdown, qs);
     if (existing.length > 0) {
@@ -771,44 +819,45 @@ export class SharePointDataLayer implements PmdDataLayer {
     key: { machineCode: string; date: string; shift: string; jobNumber: string },
     events: RejectEvent[],
   ): Promise<void> {
-    await this.deleteWhere(LISTS.rejects, this.F.rejects.machine, key.machineCode, [
-      [this.F.rejects.date, key.date],
-      [this.F.rejects.shift, key.shift],
-      [this.F.rejects.jobNum, key.jobNumber],
-    ]);
     const F = this.F.rejects;
+    // PMD_Rejects.Date is DateTime — derive the shift's start instant the
+    // same way the write does so the wipe matches what we'll insert.
+    const sb = shiftBounds(`${key.date}-${key.shift}`);
+    const slotStartIso = sb?.start.toISOString();
+    const dateClause = slotStartIso
+      ? `${F.date} eq datetime'${slotStartIso}'`
+      : `${F.date} eq null`;
+    await this.deleteByFilter(
+      LISTS.rejects,
+      `${F.machine} eq '${key.machineCode}' and ${dateClause} and ${F.shift} eq '${key.shift}' and ${F.jobNum} eq '${key.jobNumber}'`,
+    );
     for (const ev of events) {
       const body: Record<string, unknown> = {
         __metadata: { type: SharePointDataLayer.itemType(LISTS.rejects) },
-        Title: `${key.jobNumber}-${ev.timeline}-${ev.code}`,
+        // F.machine is mapped to Title; setting it populates Title with the
+        // machine code. No separate Machine column exists.
         [F.machine]: key.machineCode,
         [F.shift]: key.shift,
-        [F.date]: key.date,
         [F.timeline]: ev.timeline,
         [F.jobNum]: key.jobNumber,
         [F.rejectCode]: ev.code,
         [F.rejectCategory]: ev.category,
         [F.rejectNumber]: ev.qty,
       };
+      if (slotStartIso) body[F.date] = slotStartIso;
       await this.post(`${this.listUrl(LISTS.rejects)}/items`, body);
     }
   }
 
-  private async deleteWhere(
-    list: string,
-    keyField: string,
-    keyValue: string,
-    extras: Array<[string, string]>,
-  ): Promise<void> {
-    const filter =
-      `${keyField} eq '${keyValue}'` +
-      extras.map(([f, v]) => ` and ${f} eq '${v}'`).join('');
+  /** Delete every item matching a pre-built OData $filter clause. */
+  private async deleteByFilter(list: string, filterClause: string): Promise<void> {
     const rows = await this.getAllItems<{ ID?: number; Id?: number }>(
       list,
-      '$filter=' + encodeURIComponent(filter),
+      '$filter=' + encodeURIComponent(filterClause),
     );
     for (const r of rows) await this.del(`${this.listUrl(list)}/items(${r.ID ?? r.Id})`);
   }
+
 
   async whoAmI(): Promise<UserContext> {
     const res = await this.getJson<{
