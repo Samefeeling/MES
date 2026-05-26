@@ -13,9 +13,9 @@ export interface ShiftDef {
 // §2.3 Shift Definitions. Night spans midnight; its ShiftId date is the
 // START date (night beginning 23:00 on 15 May = 2026-05-15-Night, §2.3).
 export const SHIFTS: ShiftDef[] = [
-  { code: 'Day', label: 'Day 07:00–15:00', startHour: 7, spanHours: 8 },
-  { code: 'Afternoon', label: 'Afternoon 15:00–23:00', startHour: 15, spanHours: 8 },
-  { code: 'Night', label: 'Night 23:00–07:00', startHour: 23, spanHours: 8 },
+  { code: 'Day', label: 'Day', startHour: 7, spanHours: 8 },
+  { code: 'Afternoon', label: 'Afternoon', startHour: 15, spanHours: 8 },
+  { code: 'Night', label: 'Night', startHour: 23, spanHours: 8 },
 ];
 
 export const SHIFT_MAP: Record<ShiftCode, ShiftDef> = Object.fromEntries(
