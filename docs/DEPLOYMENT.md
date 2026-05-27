@@ -160,13 +160,10 @@ export default class PMDOperatorSheetWebPart extends BaseClientSideWebPart<{}> {
 }
 ```
 
-> **Note:** Vite's bundle filenames have content hashes
-> (`index-CYX-PL67.css`). After each `npm run build` you'll need to
-> update the `require()` paths above. To avoid that pain, configure
-> Vite to emit non-hashed filenames for the SPFx target — add
-> `rollupOptions: { output: { entryFileNames: 'assets/index.js',
-> assetFileNames: 'assets/index[extname]' } }` to `vite.config.ts`
-> before `npm run build`.
+> **Stable filenames**: `vite.config.ts` is configured to emit
+> `assets/index.js` and `assets/index.css` (no hash) so the
+> `require()` paths above stay valid after every `npm run build`.
+> No manual edit needed between builds.
 
 Edit `pmd-spfx/config/package-solution.json` to declare Graph
 permissions:
