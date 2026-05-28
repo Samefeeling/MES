@@ -334,9 +334,8 @@ export class SharePointDataLayer implements PmdDataLayer {
     const rows = await this.getAllItems(LISTS.rejectCategories);
     return rows.map((r, i) => {
       const code = str(r[F.code]);
-      // Named rejects on the operator sheet are P11,P12,P1,P5,P9 (modPMDOperator.bas).
-      const kind: 'named' | 'other' = ['P11', 'P12', 'P1', 'P5', 'P9'].includes(code) ? 'named' : 'other';
-      return { code, label: str(r[F.description]), sequence: i + 1, kind };
+      // The 10 D-codes are all fixed rows on the operator sheet (no "other").
+      return { code, label: str(r[F.description]), sequence: i + 1, kind: 'named' as const };
     });
   }
 
@@ -1215,10 +1214,9 @@ function aggregateSlots(slots: ProductionRecord[]): {
   };
 }
 
-function categoryFor(code: string): string {
-  // P11/P12/P1/P5/P9 are the 5 named rejects on the operator sheet.
-  if (['P11', 'P12', 'P1', 'P5', 'P9'].includes(code)) return 'Named';
-  return 'Other';
+function categoryFor(_code: string): string {
+  // The 10 D-codes are flat (no sub-grouping); RejectCode carries the detail.
+  return 'Defect';
 }
 
 function excelDate(v: unknown): Date | null {

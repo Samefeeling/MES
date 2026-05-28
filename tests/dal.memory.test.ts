@@ -13,16 +13,13 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
   it('serves seeded reference data', async () => {
     expect((await dal.listMachines()).length).toBe(8);
     const rcats = await dal.listRejectCategories();
-    expect(rcats.length).toBe(21);
-    // Matches the .bas operator sheet: 5 fixed rows + 16 "Other (Drop Down)".
-    expect(rcats.filter((r) => r.kind === 'named').map((r) => r.code)).toEqual([
-      'P11',
-      'P12',
-      'P1',
-      'P5',
-      'P9',
+    expect(rcats.length).toBe(10);
+    // The 10 D-codes are all fixed rows; no "other" dropdown codes.
+    expect(rcats.map((r) => r.code)).toEqual([
+      'D01', 'D02', 'D03', 'D04', 'D05', 'D06', 'D07', 'D08', 'D09', 'D10',
     ]);
-    expect(rcats.filter((r) => r.kind === 'other').length).toBe(16);
+    expect(rcats.every((r) => r.kind === 'named')).toBe(true);
+    expect(rcats.find((r) => r.code === 'D01')?.label).toBe('ShortShot');
     const bd = await dal.listBdCodes();
     expect(bd.length).toBe(91); // 11 categories × 6–11 causes, taxonomy MD
     expect(bd.find((b) => b.code === 'ELE-01')?.subCategory).toBe('Electrical');

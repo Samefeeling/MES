@@ -366,35 +366,41 @@ function buildGrid(): string {
     })
     .join('');
 
-  const otherTypeRow =
-    `<tr class="row-other-type"><th class="rh">Other (Drop Down)</th>` +
-    recs
-      .map((r, i) => {
-        const v = r?.otherType ?? '';
-        const opts =
-          `<option value=""${v === '' ? ' selected' : ''}>·</option>` +
-          S!.otherRej
-            .map(
-              (c) =>
-                `<option value="${escapeHtml(c.code)}"${
-                  c.code === v ? ' selected' : ''
-                }>${escapeHtml(c.label)}</option>`,
-            )
-            .join('');
-        return `<td><select class="other-type-sel" data-row="othertype" data-slot="${i}">${opts}</select></td>`;
-      })
-      .join('') +
-    `</tr>`;
+  // "Other (Drop Down)" + "Other #" rows only render if there are reject
+  // codes flagged as kind:'other'. With the flat 10 D-codes there are none,
+  // so these rows are hidden — every defect has its own named row.
+  const hasOther = S!.otherRej.length > 0;
+  const otherTypeRow = !hasOther
+    ? ''
+    : `<tr class="row-other-type"><th class="rh">Other (Drop Down)</th>` +
+      recs
+        .map((r, i) => {
+          const v = r?.otherType ?? '';
+          const opts =
+            `<option value=""${v === '' ? ' selected' : ''}>·</option>` +
+            S!.otherRej
+              .map(
+                (c) =>
+                  `<option value="${escapeHtml(c.code)}"${
+                    c.code === v ? ' selected' : ''
+                  }>${escapeHtml(c.label)}</option>`,
+              )
+              .join('');
+          return `<td><select class="other-type-sel" data-row="othertype" data-slot="${i}">${opts}</select></td>`;
+        })
+        .join('') +
+      `</tr>`;
 
-  const otherCountRow =
-    `<tr class="row-other-count"><th class="rh">Other #</th>` +
-    recs
-      .map((r, i) => {
-        const v = r?.otherCount ?? 0;
-        return `<td class="num-cell"><input type="number" min="0" step="1" class="rej-input" data-row="othercount" data-slot="${i}" value="${v || ''}"></td>`;
-      })
-      .join('') +
-    `</tr>`;
+  const otherCountRow = !hasOther
+    ? ''
+    : `<tr class="row-other-count"><th class="rh">Other #</th>` +
+      recs
+        .map((r, i) => {
+          const v = r?.otherCount ?? 0;
+          return `<td class="num-cell"><input type="number" min="0" step="1" class="rej-input" data-row="othercount" data-slot="${i}" value="${v || ''}"></td>`;
+        })
+        .join('') +
+      `</tr>`;
 
   return `<div class="op-grid-wrap" style="--slot-w:${SLOT_PX}px">
     <table class="op-grid">
@@ -435,7 +441,11 @@ function buildSide(): string {
       <span class="sk-pair-cell"><label>Total Reject</label><b class="r">${totalReject}</b></span>
       <span class="sk-pair-cell"><label>Purge(kg)</label><input type="number" step="0.1" data-meta="purge" value="${purge}"></span>
     </div>
-    <div class="sk other-line"><span>(Other # logged: <b>${totalOther}</b> — mapped into reject codes on save)</span></div>
+    ${
+      S!.otherRej.length > 0
+        ? `<div class="sk other-line"><span>(Other # logged: <b>${totalOther}</b> — mapped into reject codes on save)</span></div>`
+        : ''
+    }
     <div class="handover">
       <div class="handover-title">Handover / Journey — supervisor notes</div>
       <div class="handover-grid">

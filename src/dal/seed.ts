@@ -128,47 +128,32 @@ export function seedProducts(): Product[] {
   }));
 }
 
-// 21 PMD-standard reject codes — matches the .bas modPMDOperator master schema:
-//   5 "named" codes get their own fixed row on the operator sheet (rows 7-11);
-//   16 "other" codes are selectable from the Other (Drop Down) row (row 12).
-const NAMED_REJECTS: Array<[string, string]> = [
-  ['P11', 'Colour Change'],
-  ['P12', 'Startups'],
-  ['P1', 'Contamination'],
-  ['P5', 'Flow Marks'],
-  ['P9', 'White Stress Marks'],
-];
-
-const OTHER_REJECTS: Array<[string, string]> = [
-  ['P2', 'Cracked'],
-  ['P3', 'Damaged/Marked'],
-  ['P4', 'Dirty'],
-  ['P8', 'Warpage'],
-  ['P13', 'Short Shots'],
-  ['P17', 'Melt Out'],
-  ['P18', 'Burn Marks'],
-  ['P19', 'Sinks'],
-  ['P20', 'Blisters'],
-  ['P6', 'Die Maintenance'],
-  ['P14', 'Machine Problem'],
-  ['P15', 'Robots'],
-  ['P22', 'Dryer Problem'],
-  ['P16', 'Operator'],
-  ['P21', 'Material Shortage'],
-  ['P23', 'Wet Material'],
+// 10 PMD defect codes (D01-D10). Each gets its own fixed row on the
+// operator sheet — there are no "other" codes, so the Other (Drop Down)
+// row is hidden. The longer "Visual Signs" text is operator-training
+// material and lives on PMD_RejectCategories, not in the app data model.
+const DEFECT_CODES: Array<[string, string]> = [
+  ['D01', 'ShortShot'],
+  ['D02', 'FlashMelt-out'],
+  ['D03', 'Burnmarks'],
+  ['D04', 'SinksWarpage'],
+  ['D05', 'FlowMarks'],
+  ['D06', 'WhiteStressMarks'],
+  ['D07', 'BubblesBlisters'],
+  ['D08', 'Cracked'],
+  ['D09', 'DamagedDirty'],
+  ['D10', 'Contamination'],
 ];
 
 export function seedRejectCategories(): RejectCategory[] {
-  let seq = 1;
-  const out: RejectCategory[] = [];
-  for (const [code, label] of NAMED_REJECTS) {
-    out.push({ code, label, sequence: seq++, kind: 'named' });
-  }
-  for (const [code, label] of OTHER_REJECTS) {
-    out.push({ code, label, sequence: seq++, kind: 'other' });
-  }
-  return out; // 5 + 16 = 21
+  return DEFECT_CODES.map(([code, label], i) => ({
+    code,
+    label,
+    sequence: i + 1,
+    kind: 'named' as const,
+  }));
 }
+
 
 // Two-tier breakdown classification from breakdown_classification_taxonomy.md
 // (11 categories × 6-11 causes = 91 codes, ELE-01..OTH-99).
@@ -298,7 +283,7 @@ export function seedProduction(now: Date, planning: PlanningOrder[]): Production
           countStart: onSlot0 ? 0 : null,
           countEnd: onSlot0 ? good * (lastSlot + 1) : null,
           rejectCount: rejQty,
-          rejects: rejQty ? JSON.stringify({ P11: rejQty }) : '{}',
+          rejects: rejQty ? JSON.stringify({ D01: rejQty }) : '{}',
           otherType: '',
           otherCount: 0,
           purgeKg: onSlot0 && rng() < 0.4 ? +(rng() * 2).toFixed(1) : null,
