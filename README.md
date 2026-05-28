@@ -1,5 +1,11 @@
 # PMD Dashboard
 
+> **AI / contributor onboarding:** start with [`docs/ai/`](docs/ai/) —
+> `architecture.md`, `current-status.md`, `coding-rules.md`,
+> `data-model.md`, `api-contract.md`, `backlog.md`, `known-issues.md`.
+> That folder is the maintained source of truth; load it first to avoid
+> re-reading the whole codebase.
+
 Backend-agnostic, real-time shift production tracking for the Precision
 Moulding Department (8 machines, 3 shifts, 30-min slots). Rebuilt from the
 DEMO per `PMD_Dashboard_Spec.md` v1.0.
