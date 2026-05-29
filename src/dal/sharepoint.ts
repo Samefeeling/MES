@@ -115,6 +115,10 @@ const DEFAULT_FIELDS = {
     supervisor: 'Supervisor',
     runTime: 'RunTime',
     downTime: 'Downtime',
+    // Supervisor handover/journey notes. Empty = column doesn't exist yet →
+    // skip the write. Add a multi-line "Handover" column to PMD_Production
+    // then set this to 'Handover' (or override via fieldMap).
+    handover: '',
   },
   rejects: {
     // Title = Machine; Date is a DateTime (not date-only).
@@ -674,6 +678,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         supervisor,
         runTime: agg.runTime,
         downTime: agg.downTime,
+        handover: agg.handover,
       });
       await this.upsertBreakdownAnalytic({
         machineCode,
@@ -756,6 +761,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     };
     if (slotStartIso) body[F.date] = slotStartIso;
     if (F.runTime) body[F.runTime] = h.runTime;
+    if (F.handover) body[F.handover] = formatHandover(h.handover);
     // Find existing by composite key; MERGE if found, else POST.
     const dateClause = slotStartIso
       ? `${F.date} eq datetime'${slotStartIso}'`
@@ -1101,6 +1107,7 @@ interface HeaderInput {
   supervisor: string;
   runTime: number;
   downTime: number;
+  handover: string; // JSON {people,plant,machine,material} from the canonical slot
 }
 
 interface BreakdownInput {
@@ -1153,6 +1160,7 @@ function aggregateSlots(slots: ProductionRecord[]): {
   hours: StatusHours;
   rejectEvents: RejectEvent[];
   bdCode: string;
+  handover: string;
 } {
   const timelineArr = Array.from({ length: 16 }, () => '·');
   const hours: StatusHours = { R: 0, B: 0, C: 0, D: 0, I: 0, M: 0, O: 0, P: 0, S: 0 };
@@ -1186,7 +1194,9 @@ function aggregateSlots(slots: ProductionRecord[]): {
       rejectEvents.push({
         timeline: slotLabel,
         code,
-        category: categoryFor(code),
+        // RejectCategory = the machine STATUS in that slot (R/D/C/...). Lets
+        // Power BI split "defects while running" vs "during a die change" etc.
+        category: r.statusCode || 'R',
         qty,
       });
     }
@@ -1211,12 +1221,23 @@ function aggregateSlots(slots: ProductionRecord[]): {
     hours,
     rejectEvents,
     bdCode,
+    handover: canonical?.handoverNote ?? '',
   };
 }
 
-function categoryFor(_code: string): string {
-  // The 10 D-codes are flat (no sub-grouping); RejectCode carries the detail.
-  return 'Defect';
+
+/** Turn the handover JSON {people,plant,machine,material} into readable text. */
+function formatHandover(json: string): string {
+  if (!json) return '';
+  try {
+    const h = JSON.parse(json) as Record<string, string>;
+    return (['people', 'plant', 'machine', 'material'] as const)
+      .filter((k) => (h[k] ?? '').trim())
+      .map((k) => `${k[0].toUpperCase()}${k.slice(1)}: ${h[k].trim()}`)
+      .join('\n');
+  } catch {
+    return json; // already plain text
+  }
 }
 
 function excelDate(v: unknown): Date | null {

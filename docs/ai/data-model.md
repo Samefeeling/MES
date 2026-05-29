@@ -76,8 +76,8 @@ constructor `fieldMap` option, never edit call sites.
 | `PMD_Supervisor` | role title | `Name` (person) |
 | `PMD_Products` | PartNum | `field_1`=desc, `field_2..6`=family/group/class/type/cost |
 | `PMD_Planning` | machine code | `StartDateTime`, `Qty_x002f_Hour`, `DueDate`, `JobHead_JobNum`, `JobHead_PartNum`, `JobHead_PartDescription`, `Calculated_RemainingQty`, `Duration`, `Machine`(=DieNumber!), `D_x002f_C` |
-| `PMD_Production` | machine code | `SlotStart_x003a_`(DateTime, "Date"), `ShiftId`, `Status`(timeline), `JobNumber`, `CountStart/End`, `Reject`, `Operator`, `Supervisor`, `RunTime`, `Downtime` |
-| `PMD_Rejects` | machine code | `Date`(DateTime), `Shift`, `Timeline`, `JobHead_JobNum`, `RejectCode`, `RejectCategory`, `RejectNumber` |
+| `PMD_Production` | machine code | `SlotStart_x003a_`(DateTime, "Date"), `ShiftId`, `Status`(timeline), `JobNumber`, `CountStart/End`, `Reject`, `Operator`, `Supervisor`, `RunTime`, `Downtime`, **`Handover`** (multi-line, **must be added** — field map default `''` skips it until present) |
+| `PMD_Rejects` | machine code | `Date`(DateTime), `Shift`, `Timeline`, `JobHead_JobNum`, `RejectCode`, **`RejectCategory` = the slot's machine STATUS** (R/D/C/…) so you can split defects "while running" vs "during a die change", `RejectNumber` |
 | `PMD_BreakDownlog` | machine code | `Date`(DateTime), `Shift`, `JobHead_JobNum`, `JobHead_PartNum`, `StatusTimeline`, `BDCode`, `R_Runtime`,`B_BreakDown`,`C_ColorChange`,`D_DieChange`,`I_InsertChange`,`M_Maintainance`,`O_NoWork`,`P_Purge`,`S_StartUpShutdown` |
 | `PMD_RejectCategories` | code (D01..) | `Description` (label) |
 | `PMD_BreakdownMaster` | cause (Title) | `Code`, `Category`, `LikelyOwner` |

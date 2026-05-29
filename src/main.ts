@@ -1,6 +1,7 @@
 import { canSyncPlanning, createDataLayer, type PmdDataLayer } from './dal';
 import { renderOperator, operatorPollTick } from './ui/operator';
 import { renderTrace } from './ui/trace';
+import { renderKpi } from './ui/kpi';
 
 const dal: PmdDataLayer = createDataLayer(import.meta.env as Record<string, string>);
 
@@ -31,13 +32,14 @@ const AUTO_SYNC_AFTER_MS = 6 * 60 * 60 * 1000;
 const LAST_SYNC_KEY = 'pmd:lastPlanningSync';
 
 interface Route {
-  view: 'operator' | 'trace';
+  view: 'operator' | 'trace' | 'kpi';
   machineCode?: string;
 }
 
 function parseRoute(): Route {
   const h = window.location.hash || '#/';
   if (h.startsWith('#/trace')) return { view: 'trace' };
+  if (h.startsWith('#/kpi')) return { view: 'kpi' };
   const m = /^#\/op\/(.+)$/.exec(h);
   if (m) return { view: 'operator', machineCode: decodeURIComponent(m[1]) };
   return { view: 'operator' };
@@ -58,6 +60,8 @@ async function route(): Promise<void> {
     const r = parseRoute();
     if (r.view === 'trace') {
       await renderTrace(dal);
+    } else if (r.view === 'kpi') {
+      await renderKpi(dal);
     } else {
       let mc = r.machineCode ?? '';
       if (!mc) {

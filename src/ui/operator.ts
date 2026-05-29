@@ -329,17 +329,19 @@ function statusCellHtml(
 }
 
 function buildGrid(): string {
-  const headers = Array.from({ length: SLOTS_PER_SHIFT }, (_, i) => {
-    const lbl = slotClock(sid(), i).replace('–', '-');
-    return `<th class="slot-head">${escapeHtml(lbl)}</th>`;
-  }).join('');
-
   const recs = Array.from({ length: SLOTS_PER_SHIFT }, (_, i) => slotRec(i));
 
   // §2 — highlight the slot that the live wall clock falls in (only when
-  // viewing the active shift on today).
+  // viewing the active shift on today). The whole column (time header +
+  // status + every reject row) is tinted so operators see which time to fill.
   const liveShiftId = currentShift(new Date()).shiftId;
   const nowSlot = liveShiftId === sid() ? currentSlotIndex(sid(), new Date()) : null;
+
+  const headers = Array.from({ length: SLOTS_PER_SHIFT }, (_, i) => {
+    const lbl = slotClock(sid(), i).replace('–', '-');
+    const now = nowSlot === i ? ' is-now-col' : '';
+    return `<th class="slot-head${now}">${escapeHtml(lbl)}</th>`;
+  }).join('');
 
   const statusRow =
     `<tr class="row-status"><th class="rh">Machine Status</th>` +
@@ -355,7 +357,8 @@ function buildGrid(): string {
       const cells = recs
         .map((r, i) => {
           const v = parseRejects(r)[cat.code] ?? 0;
-          return `<td class="num-cell"><input type="number" min="0" step="1" class="rej-input" data-row="named" data-code="${escapeHtml(
+          const now = nowSlot === i ? ' is-now-col' : '';
+          return `<td class="num-cell${now}"><input type="number" min="0" step="1" class="rej-input" data-row="named" data-code="${escapeHtml(
             cat.code,
           )}" data-slot="${i}" value="${v || ''}"></td>`;
         })

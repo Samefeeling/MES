@@ -114,56 +114,115 @@ Copy `MES/dist/` into the SPFx project:
 xcopy /E /I dist ..\pmd-spfx\src\webparts\pMDOperatorSheet\assets
 ```
 
-Edit `pmd-spfx/src/webparts/pMDOperatorSheet/PMDOperatorSheetWebPart.ts`:
+Edit `pmd-spfx/src/webparts/pmdOperatorSheet/PmdOperatorSheetWebPart.ts`.
+The app's JS/CSS are hosted in `SiteAssets/pmd/` (uploaded separately,
+step B.3a below) and loaded by URL — NOT bundled through SPFx's webpack
+(which chokes on pre-built `.js`/`.css`). In **read mode** the web part
+mounts into a fixed full-viewport overlay so the app uses the whole iPad
+screen and the SharePoint chrome (suite bar / site header / command bar /
+left nav) is hidden behind it; in **edit mode** it renders inline so the
+page stays editable.
 
 ```ts
-import { Version } from '@microsoft/sp-core-library';
+import { Version, DisplayMode } from '@microsoft/sp-core-library';
 import { BaseClientSideWebPart } from '@microsoft/sp-webpart-base';
-import { AadTokenProvider } from '@microsoft/sp-http';
 
-export default class PMDOperatorSheetWebPart extends BaseClientSideWebPart<{}> {
+export interface IPmdOperatorSheetWebPartProps {}
+
+const ASSET_FOLDER = '/SiteAssets/pmd';
+
+export default class PmdOperatorSheetWebPart
+  extends BaseClientSideWebPart<IPmdOperatorSheetWebPartProps> {
+
+  private booted = false;
+  private host?: HTMLElement;
+
   protected async onInit(): Promise<void> {
-    // Provide Graph token to the bundled app so syncPlanningFromExcel works.
-    const tokenProvider: AadTokenProvider =
+    const tokenProvider =
       await this.context.aadTokenProviderFactory.getTokenProvider();
-    (window as any).__pmdGraphToken = () =>
-      tokenProvider.getToken('https://graph.microsoft.com');
+    (window as unknown as { __pmdGraphToken: () => Promise<string> })
+      .__pmdGraphToken = () => tokenProvider.getToken('https://graph.microsoft.com');
   }
 
   public render(): void {
-    this.domElement.innerHTML = `
+    if (this.booted) return;
+    this.booted = true;
+
+    if (this.displayMode === DisplayMode.Edit) {
+      this.host = this.domElement;
+      this.host.innerHTML =
+        `<div style="padding:10px;background:#fffbe6;border:1px solid #f0c36d;
+          border-radius:6px;font:600 13px/1.4 sans-serif;color:#7a5b00">
+          PMD Operator Sheet — shown inline while editing.
+          Publish &amp; open the page to see it full-screen.
+        </div>`;
+      return;
+    }
+
+    const host = document.createElement('div');
+    host.id = 'pmd-fullscreen-host';
+    host.style.cssText =
+      'position:fixed;inset:0;z-index:2147483000;background:#f1f5f9;' +
+      'overflow:auto;-webkit-overflow-scrolling:touch;';
+    document.body.appendChild(host);
+    document.body.style.overflow = 'hidden';
+    this.host = host;
+
+    const base = this.context.pageContext.web.absoluteUrl + ASSET_FOLDER;
+    host.innerHTML = `
       <div class="top">
-        <img class="brand-logo" src="${require('./assets/resero-logo.svg')}" alt="Resero" />
-        <h1>PMD Operator Sheet</h1>
+        <img class="brand-logo" src="${base}/resero-logo.svg" alt="Resero" />
+        <h1 id="pt">PMD Operator Sheet</h1>
         <span class="top-nav">
           <a href="#/">Operator</a>
-          <a href="#/trace">🔍 Trace</a>
+          <a href="#/trace">&#128269; Trace</a>
+          <a href="#/kpi">&#128202; KPIs</a>
         </span>
-        <span class="st" id="ss">☁ ready</span>
+        <span class="st" id="ss">&#9729; ready</span>
       </div>
       <div class="vw" id="app"></div>
       <div class="mbg" id="modal"><div class="mdl" id="mc"></div></div>
       <div class="toast" id="toast"></div>
     `;
-    // Inject the Vite bundle styles + scripts.
+
     const css = document.createElement('link');
     css.rel = 'stylesheet';
-    css.href = require('./assets/assets/index.css'); // hash will be filled by webpack
+    css.href = `${base}/assets/index.css`;
     document.head.appendChild(css);
+
     const js = document.createElement('script');
     js.type = 'module';
-    js.src = require('./assets/assets/index.js');
+    js.src = `${base}/assets/index.js`;
     document.body.appendChild(js);
+  }
+
+  protected onDispose(): void {
+    if (this.host && this.host.id === 'pmd-fullscreen-host') {
+      this.host.remove();
+      document.body.style.overflow = '';
+    }
   }
 
   protected get dataVersion(): Version { return Version.parse('1.0'); }
 }
 ```
 
-> **Stable filenames**: `vite.config.ts` is configured to emit
-> `assets/index.js` and `assets/index.css` (no hash) so the
-> `require()` paths above stay valid after every `npm run build`.
-> No manual edit needed between builds.
+**B.3a — upload the app assets to SiteAssets** (once per app-code change):
+build the Vite app (`npm run build` in the MES repo with `.env.local` set,
+see § A) then drag `dist/resero-logo.svg`, `dist/assets/index.js`, and
+`dist/assets/index.css` into `SiteAssets/pmd/` (keep the `assets/`
+subfolder). Hard-refresh (Ctrl+F5) after replacing — filenames are
+hash-free so the browser caches them.
+
+**iPad full-screen**: the overlay reclaims the SharePoint chrome. To also
+hide the Edge/Safari browser chrome, open the page in **Safari → Share →
+Add to Home Screen**, or for a locked-down floor tablet use **iPad
+Settings → Accessibility → Guided Access** (triple-click to lock to the
+page).
+
+> **Stable filenames**: `vite.config.ts` emits `assets/index.js` and
+> `assets/index.css` (no hash) so the SiteAssets URLs stay valid after
+> every `npm run build`.
 
 Edit `pmd-spfx/config/package-solution.json` to declare Graph
 permissions:

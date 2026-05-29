@@ -23,6 +23,18 @@
 - [ ] Confirm/ء add **`RunTime`** handling end-to-end (column exists in
       PMD_Production; adapter writes it).
 
+## P2.5 — recently added, needs follow-up
+
+- [ ] **Handover → PMD_Production**: code writes it once a `Handover`
+      multi-line column exists + `production.handover` map is set to it.
+      Add the column, flip the map.
+- [ ] **KPI view OEE** is simplified (Availability × Quality). Add
+      Performance (needs ideal cycle time / standard rate per part) for a
+      true OEE. Standard rate is in PMD_Planning.qtyPerHr.
+- [ ] **KPI Schedule Adherence** = good ÷ planned qty. Could improve
+      "scheduled time" using the `RDO Roster 2026-2030` list (which shifts
+      were actually rostered vs RDO/holiday).
+
 ## P3 — UX / analytics
 
 - [ ] **Defect "Visual Signs" tooltip** — add a `VisualSigns` column to

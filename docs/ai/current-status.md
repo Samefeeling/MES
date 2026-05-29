@@ -25,6 +25,21 @@ ok (~76 KB JS / 24 KB gzip).
   repopulates PMD_Planning. Wired to ⟳ Refresh + daily auto-sync.
 - Reject catalog migrated 21 P-codes → **10 flat D-codes (D01-D10)**.
 - SessionStart hook (`.claude/hooks/session-start.sh`) installs deps on web.
+- **KPI meeting view** (`#/kpi`): per-machine Output/Reject/Yield%/Run/Down/
+  Setup/OEE*/Schedule-Adherence, period selector (this/last week/month).
+- **Full-screen SPFx web part**: read mode mounts a fixed full-viewport
+  overlay (hides SP chrome on iPad); edit mode renders inline.
+- **Reject↔status**: `PMD_Rejects.RejectCategory` now carries the slot's
+  machine status so die-change defects are distinguishable.
+- **Live-column highlight**: the whole current-time column (status + all
+  reject rows) is tinted, not just the status cell.
+
+## Action needed on the SharePoint side
+
+- **Add a multi-line `Handover` column to PMD_Production**, then set the
+  field map `production.handover` to `'Handover'` (currently `''` = skipped)
+  so supervisor handover notes persist. Until then sign-off still works,
+  just doesn't store the handover text.
 
 ## Verified against the real tenant
 
