@@ -4,12 +4,21 @@ import { renderTrace } from './ui/trace';
 
 const dal: PmdDataLayer = createDataLayer(import.meta.env as Record<string, string>);
 
-// Dev convenience: expose the DAL so the smoke-test snippets in
-// docs/LOCAL_DEV_WITH_SHAREPOINT.md and `diagnoseFields()` work without
-// editing the source. Stripped in production builds.
-if (import.meta.env.DEV) {
-  (window as unknown as { __pmdDal: PmdDataLayer }).__pmdDal = dal;
-}
+// Which backend got baked in at build time. If this logs "memory" on a
+// deployed page, the build was missing VITE_BACKEND=sharepoint — rebuild
+// with .env.local set (see docs/known-issues.md).
+console.info(
+  `[pmd] backend = ${import.meta.env.VITE_BACKEND ?? 'memory'} · site = ${
+    import.meta.env.VITE_SITE_URL ?? '(none)'
+  }`,
+);
+
+// Expose the DAL on window so the smoke-test / diagnoseFields() snippets in
+// docs/ work from the browser console — including on the deployed SPFx page,
+// which is exactly where field-name mismatches need diagnosing. Internal LOB
+// app; callers already have their own SharePoint permissions.
+(window as unknown as { __pmdDal: PmdDataLayer }).__pmdDal = dal;
+
 
 const POLL_MS = 60_000; // §6.2 — active shift refresh
 let pollTimer: ReturnType<typeof setInterval> | undefined;

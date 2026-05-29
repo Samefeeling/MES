@@ -54,6 +54,19 @@
 
 ## Build / toolchain
 
+- **Deployed app shows mock data / old P-codes = built without
+  `VITE_BACKEND=sharepoint`.** Vite bakes env vars in at *build* time only.
+  No `.env.local` (or wrong content) → `createDataLayer` falls back to
+  `memory`, so you see seeded data and Afternoon/Night look empty. Fix:
+  create `.env.local` (VITE_BACKEND + VITE_SITE_URL + VITE_PLANNING_PATH),
+  `npm run build`, re-upload `dist/assets/index.js` + `index.css` to
+  `SiteAssets/pmd/assets/`, hard-refresh (Ctrl+F5). Confirm via the
+  `[pmd] backend = …` console log on boot.
+- **Stable filenames + browser cache**: assets are hash-free
+  (`assets/index.js`), so after re-uploading you MUST hard-refresh
+  (Ctrl+F5) or the browser serves the cached old bundle. If sticky, add a
+  `?v=<n>` query param to the `<script>`/`<link>` src in the SPFx web part.
+
 - SPFx needs **Node 18** (`nvm use 18.20.x`); 20/22 are fine for plain Vite
   but the SPFx generator (`@microsoft/generator-sharepoint@1.18`) wants 18.
 - Vite emits **hash-free** `assets/index.js` / `index.css` on purpose so the
