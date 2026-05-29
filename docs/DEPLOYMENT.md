@@ -1,5 +1,29 @@
 # Deploying the PMD Operator Sheet
 
+## TL;DR — IT is needed ONCE; everyday updates are self-service
+
+The SPFx web part is a thin shell that loads the app's JS/CSS from
+`SiteAssets/pmd/` by URL. So:
+
+- **One-time (needs IT):** deploy the `.sppkg` to the App Catalog + approve
+  the Graph API permissions (§ B). The shell rarely changes after that.
+- **Every release (just you, no IT):** `npm run deploy` — builds and uploads
+  the two asset files to SiteAssets via the m365 CLI. No App Catalog, no
+  `.sppkg`, no waiting on IT. The web part cache-busts on each page open so
+  there's no manual hard-refresh.
+
+```bash
+npm i -g @pnp/cli-microsoft365   # once per machine
+m365 login                        # once (device code; no app registration)
+npm run deploy                    # every release: build + upload to SiteAssets
+```
+
+Only re-deploy the `.sppkg` (back to IT) if you change the **web part shell
+itself** — full-screen behaviour, Graph token wiring, the asset folder path.
+Normal app iteration (UI, logic, field maps, KPIs) never touches it.
+
+---
+
 You have three deployment paths. Pick based on how much you want to
 test before going to production.
 
@@ -185,14 +209,19 @@ export default class PmdOperatorSheetWebPart
       <div class="toast" id="toast"></div>
     `;
 
+    // Cache-bust so a re-uploaded SiteAssets bundle is picked up without a
+    // manual hard-refresh. Filenames are hash-free; ~26 KB gzip re-download
+    // per page open is negligible for a once-a-shift iPad.
+    const v = `?v=${Date.now()}`;
+
     const css = document.createElement('link');
     css.rel = 'stylesheet';
-    css.href = `${base}/assets/index.css`;
+    css.href = `${base}/assets/index.css${v}`;
     document.head.appendChild(css);
 
     const js = document.createElement('script');
     js.type = 'module';
-    js.src = `${base}/assets/index.js`;
+    js.src = `${base}/assets/index.js${v}`;
     document.body.appendChild(js);
   }
 

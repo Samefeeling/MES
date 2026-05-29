@@ -68,6 +68,20 @@ Then commit + push to `claude/rewrite-production-app-e18pD` (updates PR #1).
 - Small, focused, descriptive. Body explains the *why*.
 - Don't include the model identifier anywhere in commits/PRs/code.
 
+## Deploying updates (no IT after the first .sppkg)
+
+The SPFx web part loads the app's JS/CSS from `SiteAssets/pmd/` by URL, so
+app-code releases don't touch the `.sppkg`:
+
+```
+m365 login          # once per machine
+npm run deploy      # build + upload dist assets to SiteAssets (scripts/deploy-assets.mjs)
+```
+
+Only rebuild/redeploy the `.sppkg` (needs IT/App Catalog) when the **web
+part shell** changes (full-screen logic, Graph token, asset path). Keep the
+shell stable so this stays rare.
+
 ## Don't
 
 - Don't add runtime dependencies without a strong reason (zero today).
