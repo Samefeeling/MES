@@ -176,8 +176,6 @@ export class MemoryDataLayer implements PmdDataLayer {
         countEnd: null,
         rejectCount: 0,
         rejects: '{}',
-        otherType: '',
-        otherCount: 0,
         purgeKg: null,
         operator,
         supervisor,

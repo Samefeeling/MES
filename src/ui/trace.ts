@@ -116,12 +116,8 @@ function renderCard(r: TraceRow): string {
             .filter(([, v]) => v)
             .map(([k, v]) => `${escapeHtml(k)} × ${v}`)
             .join(', ');
-          if (!parts && !p.otherCount) return '';
-          return `<li><span class="ts">${escapeHtml(slotClock(r.shiftId, p.slotIndex))}</span> ${parts || ''}${
-            p.otherType && p.otherCount
-              ? ` · ${escapeHtml(p.otherType)} × ${p.otherCount}`
-              : ''
-          }</li>`;
+          if (!parts) return '';
+          return `<li><span class="ts">${escapeHtml(slotClock(r.shiftId, p.slotIndex))}</span> ${parts}</li>`;
         })
         .filter(Boolean)
         .join('')}</ul></div>`
@@ -266,7 +262,7 @@ async function doSearch(): Promise<void> {
       countEnd: canonical?.countEnd ?? null,
       good: Math.max(0, ce - cs - totalRej),
       reject: totalRej,
-      rejects: list.filter((r) => r.rejectCount > 0 || r.otherCount > 0),
+      rejects: list.filter((r) => r.rejectCount > 0 || r.rejects !== '{}'),
       bdSlots,
       records: list,
     });

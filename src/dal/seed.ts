@@ -129,8 +129,7 @@ export function seedProducts(): Product[] {
 }
 
 // 10 PMD defect codes (D01-D10). Each gets its own fixed row on the
-// operator sheet — there are no "other" codes, so the Other (Drop Down)
-// row is hidden. The longer "Visual Signs" text is operator-training
+// operator sheet. The longer "Visual Signs" text is operator-training
 // material and lives on PMD_RejectCategories, not in the app data model.
 const DEFECT_CODES: Array<[string, string]> = [
   ['D01', 'ShortShot'],
@@ -140,7 +139,7 @@ const DEFECT_CODES: Array<[string, string]> = [
   ['D05', 'FlowMarks'],
   ['D06', 'WhiteStressMarks'],
   ['D07', 'BubblesBlisters'],
-  ['D08', 'Cracked'],
+  ['D08', 'CrackedDelamination'],
   ['D09', 'DamagedDirty'],
   ['D10', 'Contamination'],
 ];
@@ -150,7 +149,6 @@ export function seedRejectCategories(): RejectCategory[] {
     code,
     label,
     sequence: i + 1,
-    kind: 'named' as const,
   }));
 }
 
@@ -284,8 +282,6 @@ export function seedProduction(now: Date, planning: PlanningOrder[]): Production
           countEnd: onSlot0 ? good * (lastSlot + 1) : null,
           rejectCount: rejQty,
           rejects: rejQty ? JSON.stringify({ D01: rejQty }) : '{}',
-          otherType: '',
-          otherCount: 0,
           purgeKg: onSlot0 && rng() < 0.4 ? +(rng() * 2).toFixed(1) : null,
           operator: OPERATOR_NAMES[(id + dayBack) % OPERATOR_NAMES.length],
           supervisor: dayBack > 0 ? SUPERVISOR_NAMES[dayBack % SUPERVISOR_NAMES.length] : '',

@@ -338,8 +338,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     const rows = await this.getAllItems(LISTS.rejectCategories);
     return rows.map((r, i) => {
       const code = str(r[F.code]);
-      // The 10 D-codes are all fixed rows on the operator sheet (no "other").
-      return { code, label: str(r[F.description]), sequence: i + 1, kind: 'named' as const };
+      return { code, label: str(r[F.description]), sequence: i + 1 };
     });
   }
 
@@ -557,8 +556,6 @@ export class SharePointDataLayer implements PmdDataLayer {
         countEnd: i === 0 ? h.countEnd : null,
         rejectCount: 0,
         rejects: '{}',
-        otherType: '',
-        otherCount: 0,
         purgeKg: null,
         operator: i === 0 ? h.operator : '',
         supervisor: i === 0 ? h.supervisor : '',
@@ -585,8 +582,6 @@ export class SharePointDataLayer implements PmdDataLayer {
         countEnd: h.countEnd,
         rejectCount: h.reject,
         rejects: '{}',
-        otherType: '',
-        otherCount: 0,
         purgeKg: null,
         operator: h.operator,
         supervisor: h.supervisor,

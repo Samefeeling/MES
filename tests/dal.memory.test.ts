@@ -18,8 +18,8 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
     expect(rcats.map((r) => r.code)).toEqual([
       'D01', 'D02', 'D03', 'D04', 'D05', 'D06', 'D07', 'D08', 'D09', 'D10',
     ]);
-    expect(rcats.every((r) => r.kind === 'named')).toBe(true);
     expect(rcats.find((r) => r.code === 'D01')?.label).toBe('ShortShot');
+    expect(rcats.find((r) => r.code === 'D08')?.label).toBe('CrackedDelamination');
     const bd = await dal.listBdCodes();
     expect(bd.length).toBe(91); // 11 categories × 6–11 causes, taxonomy MD
     expect(bd.find((b) => b.code === 'ELE-01')?.subCategory).toBe('Electrical');
@@ -55,8 +55,6 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
       countEnd: null,
       rejectCount: 0,
       rejects: '{}',
-      otherType: '',
-      otherCount: 0,
       purgeKg: null,
       operator: 'Op',
       supervisor: '',
@@ -100,8 +98,6 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
       countEnd: 10,
       rejectCount: 0,
       rejects: '{}',
-      otherType: '',
-      otherCount: 0,
       purgeKg: null,
       operator: 'Op',
       supervisor: '',

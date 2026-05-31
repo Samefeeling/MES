@@ -26,7 +26,7 @@ import { renderOutputRejectChart } from './charts';
 
 // PMD Operator Production Sheet — Excel-style rebuild of modPMDOperator.bas.
 // One machine + one shift + one job at a time. 16 half-hour slots horizontally;
-// rows are: Machine Status / 5 named reject rows / Other (Drop Down) / Other #.
+// rows are: Machine Status / 10 defect rows (D01-D10).
 
 interface OpState {
   mc: string;
@@ -38,8 +38,7 @@ interface OpState {
   machines: Machine[];
   operators: string[];
   supervisors: string[];
-  namedRej: RejectCategory[];
-  otherRej: RejectCategory[];
+  rejCats: RejectCategory[];
   selOperator: string;
   selSupervisor: string;
   /** 1 = single-shift detail (editable); 2 = today's 3 shifts;
@@ -82,8 +81,6 @@ function blankRecord(slot: number): ProductionRecord {
     countEnd: null,
     rejectCount: 0,
     rejects: '{}',
-    otherType: '',
-    otherCount: 0,
     purgeKg: null,
     operator: S!.selOperator,
     supervisor: S!.selSupervisor,
@@ -352,7 +349,7 @@ function buildGrid(): string {
       .join('') +
     `</tr>`;
 
-  const namedRows = S!.namedRej
+  const rejRows = S!.rejCats
     .map((cat) => {
       const cells = recs
         .map((r, i) => {
@@ -369,42 +366,6 @@ function buildGrid(): string {
     })
     .join('');
 
-  // "Other (Drop Down)" + "Other #" rows only render if there are reject
-  // codes flagged as kind:'other'. With the flat 10 D-codes there are none,
-  // so these rows are hidden — every defect has its own named row.
-  const hasOther = S!.otherRej.length > 0;
-  const otherTypeRow = !hasOther
-    ? ''
-    : `<tr class="row-other-type"><th class="rh">Other (Drop Down)</th>` +
-      recs
-        .map((r, i) => {
-          const v = r?.otherType ?? '';
-          const opts =
-            `<option value=""${v === '' ? ' selected' : ''}>·</option>` +
-            S!.otherRej
-              .map(
-                (c) =>
-                  `<option value="${escapeHtml(c.code)}"${
-                    c.code === v ? ' selected' : ''
-                  }>${escapeHtml(c.label)}</option>`,
-              )
-              .join('');
-          return `<td><select class="other-type-sel" data-row="othertype" data-slot="${i}">${opts}</select></td>`;
-        })
-        .join('') +
-      `</tr>`;
-
-  const otherCountRow = !hasOther
-    ? ''
-    : `<tr class="row-other-count"><th class="rh">Other #</th>` +
-      recs
-        .map((r, i) => {
-          const v = r?.otherCount ?? 0;
-          return `<td class="num-cell"><input type="number" min="0" step="1" class="rej-input" data-row="othercount" data-slot="${i}" value="${v || ''}"></td>`;
-        })
-        .join('') +
-      `</tr>`;
-
   return `<div class="op-grid-wrap" style="--slot-w:${SLOT_PX}px">
     <table class="op-grid">
       <thead>
@@ -412,9 +373,7 @@ function buildGrid(): string {
       </thead>
       <tbody>
         ${statusRow}
-        ${namedRows}
-        ${otherTypeRow}
-        ${otherCountRow}
+        ${rejRows}
       </tbody>
     </table>
   </div>`;
@@ -425,7 +384,7 @@ function buildSide(): string {
   const cs = c?.countStart ?? '';
   const ce = c?.countEnd ?? '';
   const cn = Number(c?.countEnd ?? 0) - Number(c?.countStart ?? 0);
-  const { rej: totalReject, other: totalOther } = jobTotals();
+  const totalReject = jobTotals();
   const good = Math.max(0, cn - totalReject);
   const o = selectedOrder();
   // §7 — Job Left = JobRequired - Σ Good across ALL shifts, not just this one.
@@ -444,11 +403,6 @@ function buildSide(): string {
       <span class="sk-pair-cell"><label>Total Reject</label><b class="r">${totalReject}</b></span>
       <span class="sk-pair-cell"><label>Purge(kg)</label><input type="number" step="0.1" data-meta="purge" value="${purge}"></span>
     </div>
-    ${
-      S!.otherRej.length > 0
-        ? `<div class="sk other-line"><span>(Other # logged: <b>${totalOther}</b> — mapped into reject codes on save)</span></div>`
-        : ''
-    }
     <div class="handover">
       <div class="handover-title">Handover / Journey — supervisor notes</div>
       <div class="handover-grid">
@@ -785,47 +739,6 @@ function wire(): void {
     }),
   );
 
-  // Other type dropdown
-  app
-    .querySelectorAll<HTMLSelectElement>('select[data-row="othertype"]')
-    .forEach((sel) =>
-      sel.addEventListener('change', () => {
-        const slot = Number(sel.dataset.slot);
-        const newType = sel.value;
-        void upsertSlot(slot, (r) => {
-          // Move any existing other-count under the new code key.
-          const obj = parseRejects(r);
-          if (r.otherType && r.otherType !== newType) {
-            const moved = obj[r.otherType];
-            if (moved) {
-              delete obj[r.otherType];
-              if (newType) obj[newType] = (obj[newType] || 0) + moved;
-            }
-          }
-          r.otherType = newType;
-          if (newType && r.otherCount > 0) obj[newType] = r.otherCount;
-          r.rejects = JSON.stringify(obj);
-        });
-      }),
-    );
-
-  // Other count input
-  app.querySelectorAll<HTMLInputElement>('input[data-row="othercount"]').forEach((inp) =>
-    inp.addEventListener('change', () => {
-      const slot = Number(inp.dataset.slot);
-      const qty = Math.max(0, Math.floor(Number(inp.value) || 0));
-      void upsertSlot(slot, (r) => {
-        r.otherCount = qty;
-        const obj = parseRejects(r);
-        if (r.otherType) {
-          if (qty > 0) obj[r.otherType] = qty;
-          else delete obj[r.otherType];
-          r.rejects = JSON.stringify(obj);
-        }
-      });
-    }),
-  );
-
   // Buttons
   app.querySelector('[data-refresh]')?.addEventListener('click', () => void refreshAll());
   app.querySelector('[data-saveclear]')?.addEventListener('click', () => openSaveSignoffModal());
@@ -969,7 +882,7 @@ function openSaveSignoffModal(): void {
     toast('Count End must be ≥ Count Start', 'err');
     return;
   }
-  const totalRej = jobTotals().rej;
+  const totalRej = jobTotals();
   const good = Math.max(0, ce - cs - totalRej);
   const o = selectedOrder();
 
@@ -1208,15 +1121,13 @@ async function doSignoffSave(): Promise<void> {
   }
 }
 
-function jobTotals(): { rej: number; other: number } {
+function jobTotals(): number {
   let rej = 0;
-  let other = 0;
   for (const r of S!.prod.filter((x) => x.jobNumber === S!.selJob)) {
     const obj = parseRejects(r);
     rej += Object.values(obj).reduce((a, v) => a + (Number(v) || 0), 0);
-    other += Number(r.otherCount) || 0;
   }
-  return { rej, other };
+  return rej;
 }
 
 export async function renderOperator(
@@ -1245,8 +1156,7 @@ export async function renderOperator(
     machines,
     operators: operators.map((o) => o.operatorName),
     supervisors: supervisors.map((s) => s.operatorName),
-    namedRej: rcats.filter((r) => r.kind === 'named'),
-    otherRej: rcats.filter((r) => r.kind === 'other'),
+    rejCats: rcats,
     selOperator: '',
     selSupervisor: '',
     viewLevel: 1,

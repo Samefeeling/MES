@@ -167,8 +167,6 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 
 .rej-input{width:100%;height:60px;border:0;background:transparent;text-align:right;font-size:18px;padding:0 8px;font-weight:600;color:var(--tx)}
 .rej-input:focus{outline:3px solid var(--theme-dark);outline-offset:-3px}
-.other-type-sel{width:100%;height:60px;border:0;background:transparent;font-size:13px;padding:0 4px;appearance:none;-webkit-appearance:none;color:var(--tx)}
-.other-type-sel:focus{outline:3px solid var(--theme-dark);outline-offset:-3px}
 
 .now-line{position:absolute;top:44px;bottom:0;width:3px;background:var(--rd);z-index:3;pointer-events:none;box-shadow:0 0 8px rgba(220,38,38,.7)}
 .now-line::before{content:"NOW";position:absolute;top:-18px;left:-18px;background:var(--rd);color:#fff;font-size:10px;font-weight:800;padding:2px 6px;border-radius:4px;letter-spacing:.6px}
@@ -185,7 +183,6 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .op-side .sk-pair-cell{display:flex;align-items:center;gap:6px;flex:1}
 .op-side .sk-pair-cell label{font-size:11px}
 .op-side .sk-pair-cell input{width:90px}
-.op-side .other-line{font-size:12px;color:var(--mu);text-transform:none;letter-spacing:0;font-weight:500;font-style:italic}
 
 /* §6 — Handover / Journey: 2x2 grid of textareas for People / Plant / Machine / Material. */
 .handover{display:flex;flex-direction:column;gap:8px;margin-top:4px;border-top:2px solid var(--theme-accent);padding-top:10px}

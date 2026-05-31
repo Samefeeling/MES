@@ -65,8 +65,6 @@ export function applyLock(
       countEnd: null,
       rejectCount: 0,
       rejects: '{}',
-      otherType: '',
-      otherCount: 0,
       purgeKg: null,
       operator,
       supervisor,
