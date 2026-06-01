@@ -101,6 +101,9 @@ const DEFAULT_FIELDS = {
   },
   production: {
     machine: 'Title',
+    // Mirror of the machine code (this tenant has a separate MachineCode
+    // column alongside Title). Empty = skip-write.
+    machineCodeAlt: 'MachineCode',
     date: 'SlotStart_x003a_', // display "Date", actually the DateTime "SlotStart:"
     shift: 'ShiftId',
     // Status column was deleted from this tenant — the 16-char timeline
@@ -714,6 +717,11 @@ export class SharePointDataLayer implements PmdDataLayer {
       // recorded as having been signed off.
       myTuples.push([]);
     }
+    // Single planning lookup (per machine) so we can populate JobHead_PartNum
+    // on PMD_BreakDownlog and PMD_Production rows from the matching order.
+    const orders = await this.listPlanning({ machineCode });
+    const partNumOf = (job: string): string =>
+      orders.find((o) => o.jobNumber === job)?.partNumber ?? '';
     for (const slots of myTuples) {
       const job =
         slots[0]?.jobNumber ?? '';
@@ -744,7 +752,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           date,
           shift,
           jobNumber: job,
-          partNumber: slots[0]?.handoverNote ? '' : '',
+          partNumber: partNumOf(job),
           timeline: agg.timeline,
           hours: agg.hours,
           bdCode: agg.bdCode,
@@ -826,6 +834,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (slotStartIso) body[F.date] = slotStartIso;
     // Optional columns: only write if the field map has a non-empty name,
     // otherwise SP rejects the whole POST with "property X does not exist".
+    if (F.machineCodeAlt) body[F.machineCodeAlt] = h.machineCode;
     if (F.timeline) body[F.timeline] = h.timeline;
     if (F.downTime) body[F.downTime] = h.downTime;
     if (F.runTime) body[F.runTime] = h.runTime;

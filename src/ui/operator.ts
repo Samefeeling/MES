@@ -151,6 +151,15 @@ async function upsertSlot(
     /* keep 0 */
   }
   rec.rejectCount = total;
+  // Sync-update local state so concurrent upsertSlot() calls don't race on a
+  // stale S!.prod — without this, typing CountStart then immediately tabbing
+  // to CountEnd would have CountEnd's upsert clone the pre-CountStart record
+  // and overwrite it on flush.
+  const idx = S!.prod.findIndex(
+    (r) => r.jobNumber === S!.selJob && r.slotIndex === slot,
+  );
+  if (idx >= 0) S!.prod[idx] = rec;
+  else S!.prod.push(rec);
   try {
     await dalRef.upsertProductionRecord(rec);
     await reload();
@@ -750,7 +759,9 @@ function onMetaChange(el: HTMLElement): void {
     case 'hand-machine':
     case 'hand-material': {
       const field = key.slice('hand-'.length) as 'people' | 'plant' | 'machine' | 'material';
-      void upsertSlot(0, (r) => {
+      // Skip reload: a full re-render would destroy the textarea the operator
+      // just tabbed into, losing whatever they're typing there.
+      void upsertSlotNoReload(0, (r) => {
         const obj = parseHandover(r);
         obj[field] = val;
         r.handoverNote = JSON.stringify(obj);
@@ -1030,6 +1041,14 @@ async function upsertSlotNoReload(
     /* keep 0 */
   }
   rec.rejectCount = total;
+  // Same sync-update as upsertSlot — keeps S!.prod consistent for the next
+  // hand-* event without triggering a render() that would destroy the
+  // textarea the operator is currently typing into.
+  const idx = S!.prod.findIndex(
+    (r) => r.jobNumber === S!.selJob && r.slotIndex === slot,
+  );
+  if (idx >= 0) S!.prod[idx] = rec;
+  else S!.prod.push(rec);
   await dalRef.upsertProductionRecord(rec);
 }
 
