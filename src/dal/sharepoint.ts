@@ -265,7 +265,25 @@ export class SharePointDataLayer implements PmdDataLayer {
       },
       body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(`POST ${url} → ${res.status} ${await res.text()}`);
+    if (!res.ok) {
+      const body = await res.text();
+      // Try to surface SharePoint's actual "this column doesn't exist" /
+      // "wrong type" message — the verbose envelope is hard to read raw.
+      let msg = body;
+      try {
+        const j = JSON.parse(body) as {
+          error?: { message?: string | { value?: string }; code?: string };
+        };
+        const m = j.error?.message;
+        if (typeof m === 'string') msg = m;
+        else if (m && typeof m.value === 'string') msg = m.value;
+        if (j.error?.code) msg = `${msg} [${j.error.code}]`;
+      } catch {
+        /* not JSON, keep raw body */
+      }
+      console.error('[sp] POST failed', { url, status: res.status, body });
+      throw new Error(`POST ${res.status} ${msg}`);
+    }
     return res;
   }
 
@@ -898,10 +916,14 @@ export class SharePointDataLayer implements PmdDataLayer {
       .then((j) => j.id);
     const drivePath = this.planningFilePath.replace(/^Shared Documents\//, '');
     const sheet = encodeURIComponent('Planning');
+    // Graph's `usedRange` walks the whole sheet which times out (504
+    // MaxRequestDurationExceeded) when the workbook has lots of empty-but-
+    // formatted cells. A bounded `range(address='A1:R5000')` is consistent
+    // and fast — 5000 rows is plenty of headroom for production planning.
     const rangeUrl =
       `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${encodeURI(
         drivePath,
-      )}:/workbook/worksheets('${sheet}')/usedRange(valuesOnly=true)?$select=values`;
+      )}:/workbook/worksheets('${sheet}')/range(address='A1:R5000')?$select=values`;
     const rangeRes = await fetch(rangeUrl, { headers });
     if (!rangeRes.ok)
       throw new Error(`Graph workbook fetch failed: ${rangeRes.status} ${await rangeRes.text()}`);
