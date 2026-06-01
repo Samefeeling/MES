@@ -198,6 +198,14 @@ export class SharePointDataLayer implements PmdDataLayer {
   private editCache = new Map<string, ProductionRecord[]>();
   /** Hydrated headers: same key, value = the synthesised slot 0 record. */
   private hydratedKeys = new Set<string>();
+  /**
+   * Cache of `ListItemEntityTypeFullName` per list title. Encoding a list
+   * title to that string by hand (`SP.Data.${encoded}ListItem`) is unreliable
+   * — when a list has been renamed since creation, the entity type still
+   * reflects the original title and SP rejects POSTs with "type … could not
+   * be resolved by the model". One round-trip to read it cures that.
+   */
+  private entityTypeCache = new Map<string, string>();
 
   constructor(opts: SharePointOptions | string) {
     const o = typeof opts === 'string' ? { siteUrl: opts } : opts;
@@ -308,10 +316,32 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (!res.ok) throw new Error(`DELETE ${url} → ${res.status}`);
   }
 
-  private static itemType(list: string): string {
-    // SharePoint mangles underscores to _x005f_ in the SP.Data entity type.
+  /**
+   * Look up the real ListItemEntityTypeFullName from SP and cache it. Cheap
+   * (one extra GET on the first POST per list per page load) and resilient
+   * to list renames / unusual title characters.
+   */
+  private async itemType(list: string): Promise<string> {
+    const cached = this.entityTypeCache.get(list);
+    if (cached) return cached;
+    try {
+      const res = await this.getJson<{ d: { ListItemEntityTypeFullName: string } }>(
+        `${this.listUrl(list)}?$select=ListItemEntityTypeFullName`,
+      );
+      const name = res.d?.ListItemEntityTypeFullName;
+      if (name) {
+        this.entityTypeCache.set(list, name);
+        return name;
+      }
+    } catch {
+      /* fall through to the encoded guess */
+    }
+    // Fallback: encode underscores/non-alphanumerics ourselves. Works for
+    // lists whose title hasn't drifted from creation.
     const safe = list.replace(/[^A-Za-z0-9]/g, (c) => `_x${c.charCodeAt(0).toString(16).padStart(4, '0')}_`);
-    return `SP.Data.${safe}ListItem`;
+    const guess = `SP.Data.${safe}ListItem`;
+    this.entityTypeCache.set(list, guess);
+    return guess;
   }
 
   // ---- reference lists ------------------------------------------------
@@ -426,7 +456,7 @@ export class SharePointDataLayer implements PmdDataLayer {
   async upsertPlanningOrder(order: PlanningOrder): Promise<PlanningOrder> {
     const F = this.F.planning;
     const body: Record<string, unknown> = {
-      __metadata: { type: SharePointDataLayer.itemType(LISTS.planning) },
+      __metadata: { type: await this.itemType(LISTS.planning) },
       // F.machine → Title (machine code lives in Title, e.g. "1600T")
       [F.machine]: order.machineCode,
       [F.startDateTime]: order.plannedStart,
@@ -783,7 +813,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     const b = shiftBounds(`${h.date}-${h.shift}`);
     const slotStartIso = b?.start.toISOString();
     const body: Record<string, unknown> = {
-      __metadata: { type: SharePointDataLayer.itemType(LISTS.production) },
+      __metadata: { type: await this.itemType(LISTS.production) },
       [F.machine]: h.machineCode,
       [F.shift]: h.shift,
       [F.jobNumber]: h.jobNumber,
@@ -831,7 +861,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     const sb = shiftBounds(`${h.date}-${h.shift}`);
     const slotStartIso = sb?.start.toISOString();
     const body: Record<string, unknown> = {
-      __metadata: { type: SharePointDataLayer.itemType(LISTS.breakdown) },
+      __metadata: { type: await this.itemType(LISTS.breakdown) },
       [F.machine]: h.machineCode,
       [F.shift]: h.shift,
       [F.jobNum]: h.jobNumber,
@@ -884,7 +914,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     );
     for (const ev of events) {
       const body: Record<string, unknown> = {
-        __metadata: { type: SharePointDataLayer.itemType(LISTS.rejects) },
+        __metadata: { type: await this.itemType(LISTS.rejects) },
         // F.machine is mapped to Title; setting it populates Title with the
         // machine code. No separate Machine column exists.
         [F.machine]: key.machineCode,
