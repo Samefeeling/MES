@@ -12,7 +12,7 @@
 // Requires: a successful `npm run build` first (the `deploy` npm script
 // chains it) and the m365 CLI on PATH and logged in.
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -41,9 +41,17 @@ const FILES = [
 ];
 
 function m365(args) {
-  // Use cmd-friendly invocation on Windows (m365 is a .cmd shim).
-  const bin = process.platform === 'win32' ? 'm365.cmd' : 'm365';
-  return execFileSync(bin, args, { stdio: 'inherit' });
+  // m365 on Windows is a .cmd shim. Node 18+ refuses to spawnSync a .cmd
+  // directly without shell:true (CVE-2024-27980 hardening), which surfaces
+  // as `spawnSync m365.cmd EINVAL`. Go through cmd.exe on Windows and quote
+  // any args containing spaces or quotes.
+  if (process.platform === 'win32') {
+    const quoted = args
+      .map((a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a))
+      .join(' ');
+    return execSync(`m365.cmd ${quoted}`, { stdio: 'inherit' });
+  }
+  return execFileSync('m365', args, { stdio: 'inherit' });
 }
 
 console.log(`[deploy] site = ${site}`);
