@@ -103,15 +103,18 @@ const DEFAULT_FIELDS = {
     machine: 'Title',
     date: 'SlotStart_x003a_', // display "Date", actually the DateTime "SlotStart:"
     shift: 'ShiftId',
-    timeline: 'Status', // internal Status; display has flipped between "Timeline"/"RunTime"
+    // Status column was deleted from this tenant — the 16-char timeline
+    // string is still persisted via PMD_BreakDownlog.StatusTimeline, so the
+    // operator view + trace can still rebuild per-slot status on reload.
+    // Set this to a real column name (e.g. 'StatusTimeline') if you ever
+    // add it back to PMD_Production.
+    timeline: '',
     jobNumber: 'JobNumber',
     countStart: 'CountStart',
     countEnd: 'CountEnd',
     reject: 'Reject',
     operator: 'Operator',
     supervisor: 'Supervisor',
-    // Excel→Planning RunTime column re-enabled (Plan B): user will create a
-    // clean column with internal name 'RunTime', type Number.
     runTime: 'RunTime',
     downTime: 'Downtime',
     handover: 'Handover',
@@ -784,7 +787,6 @@ export class SharePointDataLayer implements PmdDataLayer {
       [F.machine]: h.machineCode,
       [F.shift]: h.shift,
       [F.jobNumber]: h.jobNumber,
-      [F.timeline]: h.timeline,
       [F.countStart]: h.countStart ?? null,
       [F.countEnd]: h.countEnd ?? null,
       [F.reject]: h.reject,
@@ -794,6 +796,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (slotStartIso) body[F.date] = slotStartIso;
     // Optional columns: only write if the field map has a non-empty name,
     // otherwise SP rejects the whole POST with "property X does not exist".
+    if (F.timeline) body[F.timeline] = h.timeline;
     if (F.downTime) body[F.downTime] = h.downTime;
     if (F.runTime) body[F.runTime] = h.runTime;
     if (F.handover) body[F.handover] = formatHandover(h.handover);
