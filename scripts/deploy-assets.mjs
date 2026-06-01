@@ -27,6 +27,19 @@ function readEnvLocal() {
   return out;
 }
 
+// m365 CLI requires Node 20+. Bail with a clear message instead of
+// letting the yargs-parser stack trace appear on every file.
+const major = Number(process.versions.node.split('.')[0]);
+if (major < 20) {
+  console.error(
+    `[deploy] Node ${process.versions.node} is too old — m365 CLI needs Node 20+.\n` +
+    `         Run: nvm install 20.18.1 && nvm use 20.18.1\n` +
+    `         Then: npm i -g @pnp/cli-microsoft365 && m365 login\n` +
+    `         (Global packages must be reinstalled under the new Node version.)`,
+  );
+  process.exit(1);
+}
+
 const env = { ...readEnvLocal(), ...process.env };
 const site =
   env.VITE_SITE_URL ||
