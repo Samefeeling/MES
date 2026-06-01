@@ -14,6 +14,7 @@ import {
   buildShiftId,
   currentShift,
   currentSlotIndex,
+  dateKey,
   shiftBounds,
   slotClock,
 } from '../core/shifts';
@@ -221,7 +222,7 @@ function selOpts(values: string[], selected: string, placeholder: string): strin
 }
 
 function buildActionBar(): string {
-  const dateIso = S!.viewDate.toISOString().slice(0, 10);
+  const dateIso = dateKey(S!.viewDate);
   const tabs = SHIFTS.map(
     (s) =>
       `<button class="shift-btn${s.code === S!.shiftCode ? ' a' : ''}" data-shift="${s.code}">${escapeHtml(
@@ -555,7 +556,7 @@ async function rebuildSummary(): Promise<void> {
     for (let i = days - 1; i >= 0; i--) {
       const d = new Date(today);
       d.setDate(d.getDate() - i);
-      const datePart = d.toISOString().slice(0, 10);
+      const datePart = dateKey(d);
       const dayRows = rows.filter((r) => r.shiftId.startsWith(`${datePart}-`));
       const label = d.toLocaleDateString('en-AU', {
         weekday: 'short',
