@@ -50,6 +50,19 @@ function setStatus(text: string): void {
   if (el) el.textContent = text;
 }
 
+// The top-nav links are baked into the SPFx shell's static HTML (in the
+// .sppkg), so a shell packaged before a view was added (e.g. KPIs) won't
+// show its link. Re-render the nav from the app on boot so new views are
+// reachable after `npm run deploy` alone — no .sppkg rebuild / IT needed.
+function ensureNav(): void {
+  const nav = document.querySelector('.top-nav');
+  if (!nav) return;
+  nav.innerHTML =
+    '<a href="#/" data-nav>Operator</a>' +
+    '<a href="#/trace" data-nav>\u{1F50D} Trace</a>' +
+    '<a href="#/kpi" data-nav>\u{1F4CA} KPIs</a>';
+}
+
 async function route(): Promise<void> {
   if (pollTimer) {
     clearInterval(pollTimer);
@@ -110,5 +123,6 @@ async function autoSyncPlanningIfStale(): Promise<void> {
 window.addEventListener('hashchange', () => void route());
 document.getElementById('refreshBtn')?.addEventListener('click', () => void route());
 
+ensureNav();
 void route();
 void autoSyncPlanningIfStale();
