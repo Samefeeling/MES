@@ -100,8 +100,6 @@ const DEFAULT_FIELDS = {
     dc: 'DIEChange',
   },
   production: {
-    // Schema from ?$top=1 response. RunTime confirmed present by user
-    // (it was just absent from the sample row's data); re-enabled.
     machine: 'Title',
     date: 'SlotStart_x003a_', // display "Date", actually the DateTime "SlotStart:"
     shift: 'ShiftId',
@@ -112,11 +110,10 @@ const DEFAULT_FIELDS = {
     reject: 'Reject',
     operator: 'Operator',
     supervisor: 'Supervisor',
-    runTime: 'RunTime',
+    // Empty = column doesn't exist yet → skip the write. Set to the actual
+    // internal name (or override via fieldMap) once the column is added.
+    runTime: '',
     downTime: 'Downtime',
-    // Supervisor handover/journey notes. Empty = column doesn't exist yet →
-    // skip the write. Add a multi-line "Handover" column to PMD_Production
-    // then set this to 'Handover' (or override via fieldMap).
     handover: '',
   },
   rejects: {
@@ -782,9 +779,11 @@ export class SharePointDataLayer implements PmdDataLayer {
       [F.reject]: h.reject,
       [F.operator]: h.operator,
       [F.supervisor]: h.supervisor,
-      [F.downTime]: h.downTime,
     };
     if (slotStartIso) body[F.date] = slotStartIso;
+    // Optional columns: only write if the field map has a non-empty name,
+    // otherwise SP rejects the whole POST with "property X does not exist".
+    if (F.downTime) body[F.downTime] = h.downTime;
     if (F.runTime) body[F.runTime] = h.runTime;
     if (F.handover) body[F.handover] = formatHandover(h.handover);
     // Find existing by composite key; MERGE if found, else POST.
