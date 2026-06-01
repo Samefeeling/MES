@@ -915,18 +915,62 @@ export class SharePointDataLayer implements PmdDataLayer {
       .then((j) => j.id);
     const drivePath = this.planningFilePath.replace(/^Shared Documents\//, '');
     const sheet = encodeURIComponent('Planning');
-    // Graph's `usedRange` walks the whole sheet which times out (504
-    // MaxRequestDurationExceeded) when the workbook has lots of empty-but-
-    // formatted cells. A bounded `range(address='A1:R5000')` is consistent
-    // and fast — 5000 rows is plenty of headroom for production planning.
-    const rangeUrl =
-      `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${encodeURI(
-        drivePath,
-      )}:/workbook/worksheets('${sheet}')/range(address='A1:R5000')?$select=values`;
-    const rangeRes = await fetch(rangeUrl, { headers });
-    if (!rangeRes.ok)
-      throw new Error(`Graph workbook fetch failed: ${rangeRes.status} ${await rangeRes.text()}`);
-    const { values } = (await rangeRes.json()) as { values: unknown[][] };
+    const wbBase = `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${encodeURI(drivePath)}:/workbook`;
+
+    // Heavy .xlsm with formulas/external links times out on every direct
+    // /range call because Graph re-opens + recalculates each time. Open a
+    // read-only workbook session first (persistChanges=false), pass the
+    // session-id on subsequent calls — Graph reuses the already-loaded
+    // workbook and skips recalc, dropping the latency from "504 timeout"
+    // territory to a few seconds.
+    let sessionId = '';
+    try {
+      const sRes = await fetch(`${wbBase}/createSession`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ persistChanges: false }),
+      });
+      if (sRes.ok) {
+        sessionId = ((await sRes.json()) as { id: string }).id ?? '';
+      }
+    } catch {
+      /* session is an optimisation, fall back to direct calls */
+    }
+    const wbHeaders: Record<string, string> = sessionId
+      ? { ...headers, 'workbook-session-id': sessionId }
+      : headers;
+
+    // Read rows in chunks so even a slow file completes — and stop as soon
+    // as we hit a blank row (the planning sheet is contiguous from row 2).
+    const CHUNK = 500;
+    const MAX_CHUNKS = 10; // 5000-row ceiling
+    const values: unknown[][] = [];
+    for (let i = 0; i < MAX_CHUNKS; i++) {
+      const fromRow = i * CHUNK + 1;
+      const toRow = fromRow + CHUNK - 1;
+      const rangeUrl = `${wbBase}/worksheets('${sheet}')/range(address='A${fromRow}:R${toRow}')?$select=values`;
+      const rangeRes = await fetch(rangeUrl, { headers: wbHeaders });
+      if (!rangeRes.ok) {
+        if (sessionId) {
+          // Best-effort close so the workbook lock releases sooner.
+          void fetch(`${wbBase}/closeSession`, { method: 'POST', headers: wbHeaders });
+        }
+        throw new Error(
+          `Graph workbook fetch failed: ${rangeRes.status} ${await rangeRes.text()}`,
+        );
+      }
+      const chunk = ((await rangeRes.json()) as { values: unknown[][] }).values ?? [];
+      // Trim trailing blank rows in this chunk; stop if we hit them.
+      let lastNonBlank = chunk.length - 1;
+      while (lastNonBlank >= 0 && chunk[lastNonBlank].every((c) => c == null || c === '')) {
+        lastNonBlank--;
+      }
+      values.push(...chunk.slice(0, lastNonBlank + 1));
+      if (lastNonBlank < chunk.length - 1) break; // hit blank tail → done
+    }
+    if (sessionId) {
+      void fetch(`${wbBase}/closeSession`, { method: 'POST', headers: wbHeaders });
+    }
     if (!values || values.length < 2) return { inserted: 0, skipped: 0 };
 
     const col = (letter: string): number => letter.charCodeAt(0) - 'A'.charCodeAt(0);
