@@ -110,11 +110,13 @@ const DEFAULT_FIELDS = {
     reject: 'Reject',
     operator: 'Operator',
     supervisor: 'Supervisor',
-    // Empty = column doesn't exist yet → skip the write. Set to the actual
-    // internal name (or override via fieldMap) once the column is added.
-    runTime: '',
+    // Weird but real: the column that displays as "RunTime" has internal
+    // name "MachineCode" on this tenant (left over from an earlier rename).
+    // The internal name is what we POST.
+    runTime: 'MachineCode',
     downTime: 'Downtime',
-    handover: '',
+    handover: 'Handover',
+    totalGood: 'TotalGood',
   },
   rejects: {
     // Title = Machine; Date is a DateTime (not date-only).
@@ -786,6 +788,12 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (F.downTime) body[F.downTime] = h.downTime;
     if (F.runTime) body[F.runTime] = h.runTime;
     if (F.handover) body[F.handover] = formatHandover(h.handover);
+    if (F.totalGood) {
+      const cs = h.countStart;
+      const ce = h.countEnd;
+      const good = cs != null && ce != null ? Math.max(0, ce - cs - h.reject) : 0;
+      body[F.totalGood] = good;
+    }
     // Find existing by composite key; MERGE if found, else POST.
     const dateClause = slotStartIso
       ? `${F.date} eq datetime'${slotStartIso}'`
