@@ -103,17 +103,17 @@ const DEFAULT_FIELDS = {
     machine: 'Title',
     date: 'SlotStart_x003a_', // display "Date", actually the DateTime "SlotStart:"
     shift: 'ShiftId',
-    timeline: 'Status', // display "Timeline"
+    timeline: 'Status', // internal Status; display has flipped between "Timeline"/"RunTime"
     jobNumber: 'JobNumber',
     countStart: 'CountStart',
     countEnd: 'CountEnd',
     reject: 'Reject',
     operator: 'Operator',
     supervisor: 'Supervisor',
-    // Weird but real: the column that displays as "RunTime" has internal
-    // name "MachineCode" on this tenant (left over from an earlier rename).
-    // The internal name is what we POST.
-    runTime: 'MachineCode',
+    // RunTime/MachineCode column naming has bounced around on this tenant
+    // (display has been renamed both ways). Skip the write to avoid 400s
+    // until the schema is stable; override via fieldMap when ready.
+    runTime: '',
     downTime: 'Downtime',
     handover: 'Handover',
     totalGood: 'TotalGood',
