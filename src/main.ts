@@ -1,4 +1,4 @@
-import { canSyncPlanning, createDataLayer, type PmdDataLayer } from './dal';
+import { createDataLayer, type PmdDataLayer } from './dal';
 import { renderOperator, operatorPollTick } from './ui/operator';
 import { renderTrace } from './ui/trace';
 import { renderKpi } from './ui/kpi';
@@ -23,13 +23,6 @@ console.info(
 
 const POLL_MS = 60_000; // §6.2 — active shift refresh
 let pollTimer: ReturnType<typeof setInterval> | undefined;
-
-// Daily auto-sync: every operator who opens the app triggers a fresh
-// Excel → PMD_Planning pull if the last one was more than this old.
-// 6 h means even mid-shift edits to the workbook land within one shift.
-// The manual ⟳ Refresh button still works for "I just edited it, pull now."
-const AUTO_SYNC_AFTER_MS = 6 * 60 * 60 * 1000;
-const LAST_SYNC_KEY = 'pmd:lastPlanningSync';
 
 interface Route {
   view: 'operator' | 'trace' | 'kpi';
@@ -95,34 +88,14 @@ async function route(): Promise<void> {
   }
 }
 
-/**
- * In-browser fallback for the daily Excel → PMD_Planning refresh.
- * Triggered on first load of each operator's browser, gated by a 6 h
- * localStorage cookie so we don't hammer Graph on every navigation.
- * The proper scheduled job lives outside the app (Power Automate flow,
- * see docs/DEPLOYMENT.md).
- */
-async function autoSyncPlanningIfStale(): Promise<void> {
-  if (!canSyncPlanning(dal)) return; // memory backend / adapter without Graph
-  const last = Number(localStorage.getItem(LAST_SYNC_KEY) ?? 0);
-  if (last && Date.now() - last < AUTO_SYNC_AFTER_MS) return;
-  try {
-    setStatus('☁ syncing planning…');
-    const { inserted, skipped } = await dal.syncPlanningFromExcel();
-    localStorage.setItem(LAST_SYNC_KEY, String(Date.now()));
-    console.info(`[planning] auto-sync ok · ${inserted} in, ${skipped} skipped`);
-    // Re-render so the freshly-pulled orders show up in the Job# dropdown.
-    await route();
-  } catch (e) {
-    // Don't surface a red toast — the operator may not have a Graph token
-    // yet (e.g. MSAL still resolving), and the Refresh button is right there.
-    console.warn('[planning] auto-sync skipped:', (e as Error).message);
-  }
-}
+// Excel→Planning sync runs server-side via Power Automate now —
+// PMD_Schedule_master is too heavy for in-browser Graph reads
+// (10MB+, VLOOKUPs, macros → 504 every time). The flow keeps
+// PMD_Planning fresh on a schedule; the app just reads it.
+// See docs/DEPLOYMENT.md § C.
 
 window.addEventListener('hashchange', () => void route());
 document.getElementById('refreshBtn')?.addEventListener('click', () => void route());
 
 ensureNav();
 void route();
-void autoSyncPlanningIfStale();

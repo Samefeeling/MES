@@ -1,5 +1,4 @@
 import type { PmdDataLayer } from '../dal';
-import { canSyncPlanning } from '../dal';
 import type {
   Machine,
   PlanningOrder,
@@ -792,23 +791,14 @@ function parseHandover(r: ProductionRecord | undefined): Handover {
 }
 
 /**
- * Refresh (§7): pull the latest planning from the data source (real
- * backend = SharePoint Schedule master via the DAL) and re-fetch this
- * shift's production records + the cross-shift Good total used by Job Left.
+ * Refresh (§7): re-read PMD_Planning from SharePoint and recompute the
+ * cross-shift Good total. The Excel→Planning sync itself is handled by
+ * a Power Automate flow on the server (see docs/DEPLOYMENT.md § C) —
+ * the in-browser Graph path can't reliably read PMD_Schedule_master
+ * (10MB+ workbook with VLOOKUPs/macros times out at 504), so we don't
+ * even try.
  */
 async function refreshAll(): Promise<void> {
-  // Real backend (§7.1): pull the Excel "Planning" sheet from the SP site,
-  // clear PMD_Planning, repopulate. Mock backend: skip the sync, just reload.
-  if (canSyncPlanning(dalRef)) {
-    try {
-      toast('Syncing planning from Excel…', 'warn');
-      const { inserted, skipped } = await dalRef.syncPlanningFromExcel();
-      toast(`Planning synced · ${inserted} rows in, ${skipped} skipped`, 'ok');
-    } catch (e) {
-      console.error(e);
-      toast(`Excel sync failed: ${(e as Error).message}`, 'err');
-    }
-  }
   S!.planning = await dalRef.listPlanning({});
   summaryCache = null;
   await reload();

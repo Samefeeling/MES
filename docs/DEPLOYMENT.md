@@ -295,11 +295,15 @@ works. No CORS extension, no localhost.
 
 ---
 
-## C. Power Automate scheduled refresh (30 min)
+## C. Power Automate scheduled refresh (the only path now)
 
-The browser-side auto-sync (in `src/main.ts`) only runs when an
-operator opens the app. To guarantee PMD_Planning is current every
-morning regardless of who's logged in, add a scheduled flow.
+The in-browser Graph sync was removed. The Planning workbook
+(`PMD Schedule_master_epicor 300424.xlsm`) is >10 MB with VLOOKUPs +
+macros, which makes every Graph `/workbook/.../range` call 504 at
+`MaxRequestDurationExceeded`. Office Scripts runs server-side inside
+Excel itself with no such timeout, so the keep-PMD_Planning-fresh job
+lives there now. The in-app **⟳ Refresh** button just re-reads
+PMD_Planning — it never touches Graph.
 
 ### C.1 Create the flow
 
@@ -308,47 +312,60 @@ morning regardless of who's logged in, add a scheduled flow.
 2. **+ Create → Scheduled cloud flow**.
 3. Name: `PMD Daily Planning Sync`.
 4. Starts: pick `06:00` Sydney time.
-5. Repeat every `1 Day`.
+5. Repeat every `1 Day` (or 30 min if planning is edited mid-day).
 
 ### C.2 Add the steps
 
-**Step 1 — Run script** (Office Scripts). Reads the .xlsm and
-returns the rows.
+**Step 1 — Run script** (Office Scripts). Reads the .xlsm and returns
+the rows. Column letters match the live workbook (A,B,C,D,E,F,G,H,O,Q,R):
 
 - Action: **Excel Online (Business) → Run script**
-- File: `/General/Planning/PMD/PMD Schedule_master_epicor 300424.xlsm`
+- File: `Shared Documents/General/Planning/PMD/PMD Schedule_master_epicor 300424.xlsm`
 - Script (paste into Office Scripts editor first, save as
   `read-pmd-planning`):
 
 ```ts
+// Excel column layout (matches src/dal/sharepoint.ts:syncPlanningFromExcel):
+//   A=Machine  B=StartDateTime  C=QtyPerHour  D=Due_Date
+//   E=JobHead_JobNum  F=JobHead_PartNum  G=JobHead_PartDescription
+//   H=Calculated_RemainingQty  O=DIENumber  Q=Duration  R=DIEChange
 function main(workbook: ExcelScript.Workbook): Row[] {
   const sheet = workbook.getWorksheet('Planning');
   const used = sheet.getUsedRange();
+  if (!used) return [];
   const values = used.getValues();
   const out: Row[] = [];
   for (let i = 1; i < values.length; i++) {
     const r = values[i];
-    if (!r[16] /* col Q = StartDateTime */) continue;
+    if (!r[1] /* B = StartDateTime */) continue;
     out.push({
-      machine: String(r[1] ?? ''),       // B
-      jobNumber: String(r[2] ?? ''),     // C
-      partNumber: String(r[3] ?? ''),    // D
-      partDescription: String(r[4] ?? ''), // E
-      jobRequired: Number(r[5] ?? 0),    // F
-      qtyPerHr: Number(r[6] ?? 0),       // G
-      duration: Number(r[7] ?? 0),       // H
-      originalMachine: String(r[14] ?? ''), // O
-      startDateTime: r[16] as string,    // Q
-      dueDate: r[17] as string,          // R
+      machine: String(r[0] ?? ''),                  // A
+      startDateTime: String(r[1] ?? ''),            // B
+      qtyPerHour: Number(r[2] ?? 0),                // C
+      dueDate: String(r[3] ?? ''),                  // D
+      jobNumber: String(r[4] ?? ''),                // E
+      partNumber: String(r[5] ?? ''),               // F
+      partDescription: String(r[6] ?? ''),          // G
+      remainingQty: String(r[7] ?? ''),             // H — list column is Text
+      dieNumber: String(r[14] ?? ''),               // O
+      duration: Number(r[16] ?? 0),                 // Q
+      dieChange: String(r[17] ?? ''),               // R
     });
   }
   return out;
 }
 interface Row {
-  machine: string; jobNumber: string; partNumber: string;
-  partDescription: string; jobRequired: number; qtyPerHr: number;
-  duration: number; originalMachine: string;
-  startDateTime: string; dueDate: string;
+  machine: string;
+  startDateTime: string;
+  qtyPerHour: number;
+  dueDate: string;
+  jobNumber: string;
+  partNumber: string;
+  partDescription: string;
+  remainingQty: string;
+  dieNumber: string;
+  duration: number;
+  dieChange: string;
 }
 ```
 
@@ -360,38 +377,38 @@ interface Row {
 - (no filter — pull all)
 - Then **Apply to each** item → **Delete item**.
 
-**Step 3 — Insert rows**:
+**Step 3 — Insert rows**. Field names below match the live
+PMD_Planning schema:
 
 - **Apply to each** on `outputs('Run_script')?['result']`
 - Inside, **SharePoint → Create item**
 - Site: same
 - List: `PMD_Planning`
-- Fields:
+- Fields (internal names):
   - `Title` = `items('Apply_to_each_2')?['machine']`
+  - `StartDateTime` = `items('Apply_to_each_2')?['startDateTime']`
+  - `QTYperHour` = `items('Apply_to_each_2')?['qtyPerHour']`
+  - `DueDate` = `items('Apply_to_each_2')?['dueDate']`
   - `JobHead_JobNum` = `items('Apply_to_each_2')?['jobNumber']`
   - `JobHead_PartNum` = `items('Apply_to_each_2')?['partNumber']`
   - `JobHead_PartDescription` = `items('Apply_to_each_2')?['partDescription']`
-  - `Calculated_RemainingQty` = `string(items('Apply_to_each_2')?['jobRequired'])`
-  - `Qty_x002f_Hour` = `items('Apply_to_each_2')?['qtyPerHr']`
+  - `Calculated_RemainingQty` = `items('Apply_to_each_2')?['remainingQty']`
+  - `DIENumber` = `items('Apply_to_each_2')?['dieNumber']`
   - `Duration` = `items('Apply_to_each_2')?['duration']`
-  - `Machine` = `items('Apply_to_each_2')?['originalMachine']` (this is the column that displays as "DieNumber" — leave it for the original ERP machine code)
-  - `StartDateTime` = `items('Apply_to_each_2')?['startDateTime']`
-  - `DueDate` = `items('Apply_to_each_2')?['dueDate']`
+  - `DIEChange` = `items('Apply_to_each_2')?['dieChange']`
 
 **Step 4 — Save & test**. Use the **Test** button → Manually → Run.
 Watch the run history; if rows appear in PMD_Planning, you're done.
 
-### C.3 What about the in-app Refresh button?
+### C.3 Refresh button in the app
 
-It still works. The operator hits ⟳ Refresh → `syncPlanningFromExcel()`
-fires immediately (uses Graph) → bypasses the flow. So:
+The in-app **⟳ Refresh** now just re-reads PMD_Planning (which the
+flow keeps fresh). Operators hit it after the planning team says "the
+new orders are in" without waiting for the next scheduled run.
 
-- **Power Automate** guarantees a fresh PMD_Planning every morning.
-- **Browser auto-sync** (every 6 h per operator) catches mid-day edits.
-- **Refresh button** is the manual override when planning team
-  just dropped an emergency change.
-
-All three write to the same PMD_Planning list. Last-write-wins.
+If you ever need to test the Office Scripts piece manually without
+waiting for the schedule, use the flow's **Run** button or call the
+script straight from Excel Online → Automate.
 
 ---
 

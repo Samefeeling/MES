@@ -747,16 +747,17 @@ export class SharePointDataLayer implements PmdDataLayer {
         throw new Error(`PMD_Production write failed (${tag}): ${(e as Error).message}`);
       }
       try {
-        await this.upsertBreakdownAnalytic({
-          machineCode,
-          date,
-          shift,
-          jobNumber: job,
-          partNumber: partNumOf(job),
-          timeline: agg.timeline,
-          hours: agg.hours,
-          bdCode: agg.bdCode,
-        });
+        await this.replaceBreakdownEvents(
+          {
+            machineCode,
+            date,
+            shift,
+            jobNumber: job,
+            partNumber: partNumOf(job),
+            timeline: agg.timeline,
+          },
+          slots,
+        );
       } catch (e) {
         throw new Error(`PMD_BreakDownlog write failed (${tag}): ${(e as Error).message}`);
       }
@@ -863,44 +864,80 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
   }
 
-  private async upsertBreakdownAnalytic(h: BreakdownInput): Promise<void> {
+  /**
+   * Per-event PMD_BreakDownlog write — one row per filled slot, modelled
+   * after PMD_Rejects so operators can see *when* a breakdown happened
+   * without decoding the 16-char timeline string. Sum the R/B/C/D/I/M/O/P/S
+   * columns across rows (same Date + Shift + Job) to get shift totals.
+   */
+  private async replaceBreakdownEvents(
+    key: {
+      machineCode: string;
+      date: string;
+      shift: string;
+      jobNumber: string;
+      partNumber: string;
+      timeline: string;
+    },
+    slots: ProductionRecord[],
+  ): Promise<void> {
     const F = this.F.breakdown;
-    // F.machine → Title (no separate Machine column on PMD_BreakDown).
-    // F.date → DateTime; write the shift's start instant.
-    const sb = shiftBounds(`${h.date}-${h.shift}`);
+    const shiftId = `${key.date}-${key.shift}`;
+    const sb = shiftBounds(shiftId);
     const slotStartIso = sb?.start.toISOString();
-    const body: Record<string, unknown> = {
-      __metadata: { type: await this.itemType(LISTS.breakdown) },
-      [F.machine]: h.machineCode,
-      [F.shift]: h.shift,
-      [F.jobNum]: h.jobNumber,
-      [F.partNum]: h.partNumber,
-      [F.statusTimeline]: h.timeline,
-      [F.bdCode]: h.bdCode,
-      [F.r]: h.hours.R,
-      [F.b]: h.hours.B,
-      [F.c]: h.hours.C,
-      [F.d]: h.hours.D,
-      [F.i]: h.hours.I,
-      [F.m]: h.hours.M,
-      [F.o]: h.hours.O,
-      [F.p]: h.hours.P,
-      [F.s]: h.hours.S,
-    };
-    if (slotStartIso) body[F.date] = slotStartIso;
     const dateClause = slotStartIso
       ? `${F.date} eq datetime'${slotStartIso}'`
       : `${F.date} eq null`;
-    const qs =
-      '$filter=' +
-      encodeURIComponent(
-        `${F.machine} eq '${h.machineCode}' and ${dateClause} and ${F.shift} eq '${h.shift}' and ${F.jobNum} eq '${h.jobNumber}'`,
-      );
-    const existing = await this.getAllItems<{ ID?: number; Id?: number }>(LISTS.breakdown, qs);
-    if (existing.length > 0) {
-      const id = existing[0].ID ?? existing[0].Id;
-      await this.post(`${this.listUrl(LISTS.breakdown)}/items(${id})`, body, '*');
-    } else {
+    await this.deleteByFilter(
+      LISTS.breakdown,
+      `${F.machine} eq '${key.machineCode}' and ${dateClause} and ${F.shift} eq '${key.shift}' and ${F.jobNum} eq '${key.jobNumber}'`,
+    );
+    const type = await this.itemType(LISTS.breakdown);
+    // Only emit rows for slots the operator actually touched. If none, fall
+    // through to a single summary row so the shift is still attested.
+    const filled = slots.filter(
+      (r) => r.statusCode && r.slotIndex >= 0 && r.slotIndex < 16,
+    );
+    if (filled.length === 0) {
+      const body: Record<string, unknown> = {
+        __metadata: { type },
+        [F.machine]: key.machineCode,
+        [F.shift]: key.shift,
+        [F.jobNum]: key.jobNumber,
+        [F.partNum]: key.partNumber,
+        [F.statusTimeline]: key.timeline,
+        [F.bdCode]: '',
+        [F.r]: 0, [F.b]: 0, [F.c]: 0, [F.d]: 0,
+        [F.i]: 0, [F.m]: 0, [F.o]: 0, [F.p]: 0, [F.s]: 0,
+      };
+      if (slotStartIso) body[F.date] = slotStartIso;
+      await this.post(`${this.listUrl(LISTS.breakdown)}/items`, body);
+      return;
+    }
+    for (const r of filled) {
+      const code = r.statusCode as keyof StatusHours;
+      const body: Record<string, unknown> = {
+        __metadata: { type },
+        [F.machine]: key.machineCode,
+        [F.shift]: key.shift,
+        [F.jobNum]: key.jobNumber,
+        [F.partNum]: key.partNumber,
+        // Per-row time range, e.g. "11:00–11:30" — this is the "WHEN"
+        // operators need at a glance. Falls back to slot index if shift
+        // bounds couldn't be resolved.
+        [F.statusTimeline]: slotClock(shiftId, r.slotIndex) || String(r.slotIndex),
+        [F.bdCode]: r.statusCode === 'B' ? r.bdIssue : '',
+        [F.r]: code === 'R' ? 0.5 : 0,
+        [F.b]: code === 'B' ? 0.5 : 0,
+        [F.c]: code === 'C' ? 0.5 : 0,
+        [F.d]: code === 'D' ? 0.5 : 0,
+        [F.i]: code === 'I' ? 0.5 : 0,
+        [F.m]: code === 'M' ? 0.5 : 0,
+        [F.o]: code === 'O' ? 0.5 : 0,
+        [F.p]: code === 'P' ? 0.5 : 0,
+        [F.s]: code === 'S' ? 0.5 : 0,
+      };
+      if (slotStartIso) body[F.date] = slotStartIso;
       await this.post(`${this.listUrl(LISTS.breakdown)}/items`, body);
     }
   }
@@ -1252,18 +1289,6 @@ interface HeaderInput {
   runTime: number;
   downTime: number;
   handover: string; // JSON {people,plant,machine,material} from the canonical slot
-}
-
-interface BreakdownInput {
-  machineCode: string;
-  date: string;
-  shift: string;
-  jobNumber: string;
-  partNumber: string;
-  timeline: string;
-  hours: StatusHours;
-  /** Dominant breakdown code on this shift (PMD_BreakDownlog.BDCode). Empty if no B slots. */
-  bdCode: string;
 }
 
 interface StatusHours {
