@@ -96,15 +96,13 @@ function blankRecord(slot: number): ProductionRecord {
 }
 
 function shiftOrders(): PlanningOrder[] {
-  const b = shiftBounds(sid());
-  if (!b) return [];
+  // Show every released order for the selected machine, regardless of whether
+  // its planned window overlaps the viewed shift — in real production jobs
+  // slip early or late, so the operator must be able to pick yesterday's
+  // overrun job or tomorrow's job that started early. Sorted by plannedStart
+  // so the closest-to-now one floats to the top.
   return S!.planning
     .filter((o) => o.machineCode === S!.mc && o.released)
-    .filter((o) => {
-      const ps = new Date(o.plannedStart).getTime();
-      const pe = new Date(o.plannedEnd).getTime();
-      return pe > b.start.getTime() && ps < b.end.getTime();
-    })
     .sort(
       (a, b2) =>
         new Date(a.plannedStart).getTime() - new Date(b2.plannedStart).getTime(),
@@ -239,11 +237,6 @@ function buildActionBar(): string {
     </div>
     <div class="ab-shifts">${tabs}</div>
     <div class="ab-right">
-      <div class="zoom" title="+ = zoom in to single-shift detail · − = zoom out to today / week / month">
-        <button data-zoom="1" ${S!.viewLevel >= 4 ? 'disabled' : ''} title="Zoom out">−</button>
-        <span>${escapeHtml(VIEW_LEVELS[S!.viewLevel - 1]?.label ?? 'Shift')}</span>
-        <button data-zoom="-1" ${S!.viewLevel <= 1 ? 'disabled' : ''} title="Zoom in">+</button>
-      </div>
       <button class="btn-multi${S!.multiSel ? ' a' : ''}" data-multisel title="Tap or drag status cells to select a range, then pick one code">🖌 Multi-fill${S!.multiSel ? ` (${S!.selSet.size})` : ''}</button>
       <button class="btn-load" data-refresh title="Re-pull planning from SharePoint &amp; recompute Job Left">⟳ Refresh</button>
       <button class="btn-save" data-saveclear>✅ Sign off &amp; Save</button>
@@ -263,12 +256,15 @@ function buildMeta(): string {
   const orders = shiftOrders();
   const jobOpts = [`<option value="">—</option>`]
     .concat(
-      orders.map(
-        (o) =>
-          `<option value="${escapeHtml(o.jobNumber)}"${
-            o.jobNumber === S!.selJob ? ' selected' : ''
-          }>${o.isDieChange ? '🔧 ' : ''}${escapeHtml(o.jobNumber)}</option>`,
-      ),
+      orders.map((o) => {
+        const d = new Date(o.plannedStart);
+        const when = isFinite(d.getTime())
+          ? ` · ${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`
+          : '';
+        return `<option value="${escapeHtml(o.jobNumber)}"${
+          o.jobNumber === S!.selJob ? ' selected' : ''
+        }>${o.isDieChange ? '🔧 ' : ''}${escapeHtml(o.jobNumber)}${when}</option>`;
+      }),
     )
     .join('');
   const o = selectedOrder();
@@ -277,7 +273,7 @@ function buildMeta(): string {
     <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
     <label class="m-job">Job# <select data-meta="job">${jobOpts}</select></label>
     <label class="m-part">Part# <input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
-    <label class="m-desc wide">Product Description <input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
+    <label class="m-desc">Product Description <input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
     <label class="m-op">Operator <select data-meta="operator">${selOpts(
       S!.operators,
       S!.selOperator,
@@ -659,17 +655,6 @@ function wire(): void {
     }),
   );
 
-  // View level (+/-): shift → today → week → month (§9 — read-only summary above level 1).
-  app.querySelectorAll<HTMLButtonElement>('[data-zoom]').forEach((b) =>
-    b.addEventListener('click', () => {
-      const dz = Number(b.dataset.zoom);
-      const next = Math.max(1, Math.min(4, S!.viewLevel + dz));
-      if (next === S!.viewLevel) return;
-      S!.viewLevel = next;
-      summaryCache = null; // force fresh fetch for the new level
-      render();
-    }),
-  );
   // Drill from a summary row back into single-shift detail.
   app.querySelectorAll<HTMLElement>('[data-jump-shift]').forEach((row) =>
     row.addEventListener('click', () => {
@@ -990,7 +975,9 @@ function paintFillBar(): void {
     bar = document.createElement('div');
     bar.id = 'multifill-bar';
     bar.className = 'multifill-bar';
-    document.body.appendChild(bar);
+    // Append inside the SPFx full-screen host (z-index 2147483000) when
+    // present, so the bar isn't trapped behind the overlay. Otherwise body.
+    (document.getElementById('pmd-fullscreen-host') ?? document.body).appendChild(bar);
   }
   bar.innerHTML = `
     <span class="mf-count">${S!.selSet.size} slot${S!.selSet.size === 1 ? '' : 's'} selected</span>

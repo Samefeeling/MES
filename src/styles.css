@@ -110,10 +110,8 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .op-meta .m-date input{width:160px}
 .op-meta .m-mc select{width:120px}
 .op-meta .m-job select{width:170px}
-.op-meta .m-part input{width:160px}
+.op-meta .m-part input,.op-meta .m-desc input{width:160px}
 .op-meta .m-op select,.op-meta .m-sup select{width:200px}
-.op-meta .wide{flex:1 1 260px;min-width:240px}
-.op-meta .wide input{width:100%}
 
 .dnav-btn,.today-btn{padding:10px 14px;border:2px solid var(--bd);background:#fff;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;min-height:52px;min-width:52px;color:var(--tx)}
 .today-btn{background:var(--theme-dark);color:var(--theme-on-dark);border-color:var(--theme-dark);padding:10px 18px}
