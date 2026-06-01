@@ -110,10 +110,9 @@ const DEFAULT_FIELDS = {
     reject: 'Reject',
     operator: 'Operator',
     supervisor: 'Supervisor',
-    // RunTime/MachineCode column naming has bounced around on this tenant
-    // (display has been renamed both ways). Skip the write to avoid 400s
-    // until the schema is stable; override via fieldMap when ready.
-    runTime: '',
+    // Excel→Planning RunTime column re-enabled (Plan B): user will create a
+    // clean column with internal name 'RunTime', type Number.
+    runTime: 'RunTime',
     downTime: 'Downtime',
     handover: 'Handover',
     totalGood: 'TotalGood',
@@ -1009,16 +1008,18 @@ export class SharePointDataLayer implements PmdDataLayer {
         skipped++;
         continue;
       }
-      const ps = excelDate(start) ?? new Date(String(start));
-      if (!isFinite(ps.getTime())) {
+      // Use excelDate strictly — its native `new Date(string)` fallback would
+      // re-introduce the UTC-bug for ISO strings ending in Z.
+      const ps = excelDate(start);
+      if (!ps || !isFinite(ps.getTime())) {
         skipped++;
         continue;
       }
       const dur = Number(r[C.duration]) || 0;
-      let pe = excelDate(r[C.plannedEnd]) ?? new Date(String(r[C.plannedEnd] ?? ''));
-      if (!isFinite(pe.getTime())) {
-        // Due_Date blank → derive from start + Duration hours so the order is
-        // still pickable in the operator sheet's time-window UI.
+      let pe = excelDate(r[C.plannedEnd]);
+      if (!pe || !isFinite(pe.getTime())) {
+        // Due_Date blank or unparseable → derive from start + Duration hours
+        // so the order is still pickable in the operator sheet's UI.
         pe = new Date(ps.getTime() + dur * 3600_000);
       }
       const machineCode = String(r[C.machine] ?? '').trim();
@@ -1332,23 +1333,62 @@ function formatHandover(json: string): string {
 }
 
 function excelDate(v: unknown): Date | null {
-  const n = typeof v === 'number' ? v : Number(v);
-  if (!Number.isFinite(n) || n <= 0 || n > 200000) return null;
-  // Excel has no timezone — a cell that reads "25/05/2026 12:00" means
-  // 12:00 wall-clock wherever the workbook is used. Decompose the serial as
-  // if it were UTC to recover those Y/M/D h/m components, then rebuild the
-  // Date in local time so Sydney users get 12:00 local instead of 12:00 UTC
-  // (which would surface as 22:00 local — the "10 hours late" bug).
-  const utcMs = (n - 25569) * 86400 * 1000;
-  const u = new Date(utcMs);
-  return new Date(
-    u.getUTCFullYear(),
-    u.getUTCMonth(),
-    u.getUTCDate(),
-    u.getUTCHours(),
-    u.getUTCMinutes(),
-    u.getUTCSeconds(),
-  );
+  if (v == null || v === '') return null;
+
+  // Excel serial — happens when Graph is asked with valuesOnly=true or for
+  // workbook ranges where the cell type is numeric DateTime. Decompose the
+  // serial as UTC to extract the wall-clock components Excel intended, then
+  // rebuild via the local Date constructor so a Sydney user gets 12:00
+  // local for a cell that reads "12:00", not 12:00 UTC (= 22:00 Sydney).
+  if (typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= 200000) {
+    const utcMs = (v - 25569) * 86400 * 1000;
+    const u = new Date(utcMs);
+    return new Date(
+      u.getUTCFullYear(),
+      u.getUTCMonth(),
+      u.getUTCDate(),
+      u.getUTCHours(),
+      u.getUTCMinutes(),
+      u.getUTCSeconds(),
+    );
+  }
+
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  if (!s) return null;
+
+  // Graph routinely returns ISO 8601 strings like "2026-05-25T12:00:00.000Z"
+  // for DateTime cells. Excel has no timezone — the "12:00" the user typed
+  // is wall-clock, not UTC. Parsing via `new Date()` would treat the Z as
+  // UTC and shift everything by the local offset (Sydney AEST: 10 hours,
+  // which is the "10:00 PM" symptom reported). Extract the components and
+  // anchor them to local time instead.
+  const iso = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?Z?$/i.exec(s);
+  if (iso) {
+    return new Date(
+      +iso[1], +iso[2] - 1, +iso[3],
+      +iso[4], +iso[5], iso[6] ? +iso[6] : 0,
+    );
+  }
+
+  // AU date with optional time, e.g. "25/05/2026", "25/05/2026 14:00",
+  // or "25/05/2026 2:00:00 PM". JS's native parser is unreliable here
+  // because en-US engines flip to MM/DD interpretation.
+  const au = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(am|pm))?)?$/i.exec(s);
+  if (au) {
+    let hour = au[4] ? parseInt(au[4], 10) : 0;
+    if (au[7]) {
+      const isPm = au[7].toLowerCase() === 'pm';
+      if (isPm && hour < 12) hour += 12;
+      if (!isPm && hour === 12) hour = 0;
+    }
+    return new Date(
+      +au[3], +au[2] - 1, +au[1],
+      hour, au[5] ? +au[5] : 0, au[6] ? +au[6] : 0,
+    );
+  }
+
+  return null;
 }
 
 function bdFallback(): BdCode[] {
