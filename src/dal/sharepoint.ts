@@ -85,20 +85,19 @@ const DEFAULT_FIELDS = {
     cost: 'field_6',
   },
   planning: {
-    // Title = machine code (e.g. "1600T"). The column with internal
-    // name `Machine` actually displays as "DieNumber" — don't confuse
-    // them. JobHead/Calculated/D_C use the names below verbatim.
+    // Title = machine code (e.g. "1600T"). LinkTitle is just the computed
+    // "make it a hyperlink" rendering of Title; the real data lives in Title.
     machine: 'Title',
     startDateTime: 'StartDateTime',
-    qtyHour: 'Qty_x002f_Hour',
+    qtyHour: 'QTYperHour',
     dueDate: 'DueDate',
     jobNum: 'JobHead_JobNum',
     partNum: 'JobHead_PartNum',
     partDesc: 'JobHead_PartDescription',
     remaining: 'Calculated_RemainingQty',
     duration: 'Duration',
-    dieNumber: 'Machine', // weird but real — internal Machine = DieNumber
-    dc: 'D_x002f_C',
+    dieNumber: 'DIENumber',
+    dc: 'DIEChange',
   },
   production: {
     // Schema from ?$top=1 response. RunTime confirmed present by user
