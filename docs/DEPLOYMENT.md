@@ -193,15 +193,13 @@ export default class PmdOperatorSheetWebPart
     this.host = host;
 
     const base = this.context.pageContext.web.absoluteUrl + ASSET_FOLDER;
+    // top-nav is left empty on purpose — the app fills it (ensureNav() in
+    // src/main.ts) so adding a view never needs an .sppkg rebuild.
     host.innerHTML = `
       <div class="top">
         <img class="brand-logo" src="${base}/resero-logo.svg" alt="Resero" />
         <h1 id="pt">PMD Operator Sheet</h1>
-        <span class="top-nav">
-          <a href="#/">Operator</a>
-          <a href="#/trace">&#128269; Trace</a>
-          <a href="#/kpi">&#128202; KPIs</a>
-        </span>
+        <span class="top-nav"></span>
         <span class="st" id="ss">&#9729; ready</span>
       </div>
       <div class="vw" id="app"></div>
