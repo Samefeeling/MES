@@ -896,19 +896,22 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (!values || values.length < 2) return { inserted: 0, skipped: 0 };
 
     const col = (letter: string): number => letter.charCodeAt(0) - 'A'.charCodeAt(0);
-    // Columns per spec: A,B,C,D,E,F,G,H,O,Q,R (mapped to PMD_Planning).
+    // Column letters per the actual workbook (calibrated 2026-06-01):
+    //   A=Machine  B=StartDateTime  C=QtyPerHour  D=Due_Date
+    //   E=JobHead_JobNum  F=JobHead_PartNum  G=JobHead_PartDescription
+    //   H=Calculated_RemainingQty  O=DIENumber  Q=Duration  R=DIEChange
     const C = {
-      jobDate: col('A'),
-      machine: col('B'),
-      jobNumber: col('C'),
-      partNumber: col('D'),
-      partDesc: col('E'),
-      jobRequired: col('F'),
-      qtyPerHr: col('G'),
-      duration: col('H'),
-      originalMachine: col('O'),
-      plannedStart: col('Q'),
-      plannedEnd: col('R'),
+      machine: col('A'),
+      plannedStart: col('B'),
+      qtyPerHr: col('C'),
+      plannedEnd: col('D'),
+      jobNumber: col('E'),
+      partNumber: col('F'),
+      partDesc: col('G'),
+      jobRequired: col('H'),
+      dieNumber: col('O'),
+      duration: col('Q'),
+      dieChange: col('R'),
     };
 
     let inserted = 0;
@@ -925,21 +928,29 @@ export class SharePointDataLayer implements PmdDataLayer {
         skipped++;
         continue;
       }
-      const pe = excelDate(r[C.plannedEnd]) ?? new Date(String(r[C.plannedEnd]));
+      const dur = Number(r[C.duration]) || 0;
+      let pe = excelDate(r[C.plannedEnd]) ?? new Date(String(r[C.plannedEnd] ?? ''));
+      if (!isFinite(pe.getTime())) {
+        // Due_Date blank → derive from start + Duration hours so the order is
+        // still pickable in the operator sheet's time-window UI.
+        pe = new Date(ps.getTime() + dur * 3600_000);
+      }
+      const machineCode = String(r[C.machine] ?? '').trim();
       fresh.push({
         id: 0,
         jobNumber: String(r[C.jobNumber] ?? '').trim(),
-        machineCode: String(r[C.machine] ?? '').trim(),
-        originalMachine: String(r[C.originalMachine] ?? '').trim(),
+        machineCode,
+        originalMachine: machineCode,
         partNumber: String(r[C.partNumber] ?? '').trim(),
         partDescription: String(r[C.partDesc] ?? '').trim(),
         plannedStart: ps.toISOString(),
         plannedEnd: pe.toISOString(),
         jobRequired: Number(r[C.jobRequired]) || 0,
         qtyPerHr: Number(r[C.qtyPerHr]) || 0,
-        duration: Number(r[C.duration]) || 0,
+        duration: dur,
         released: true,
-        isDieChange: false,
+        // R = DIEChange column; 'D' / 'Y' / 'TRUE' all count as die-change.
+        isDieChange: /^(D|Y|TRUE)$/i.test(String(r[C.dieChange] ?? '').trim()),
         manuallyAdded: false,
         source: 'ERP',
       });
@@ -1237,8 +1248,21 @@ function formatHandover(json: string): string {
 function excelDate(v: unknown): Date | null {
   const n = typeof v === 'number' ? v : Number(v);
   if (!Number.isFinite(n) || n <= 0 || n > 200000) return null;
-  const ms = (n - 25569) * 86400 * 1000;
-  return new Date(ms);
+  // Excel has no timezone — a cell that reads "25/05/2026 12:00" means
+  // 12:00 wall-clock wherever the workbook is used. Decompose the serial as
+  // if it were UTC to recover those Y/M/D h/m components, then rebuild the
+  // Date in local time so Sydney users get 12:00 local instead of 12:00 UTC
+  // (which would surface as 22:00 local — the "10 hours late" bug).
+  const utcMs = (n - 25569) * 86400 * 1000;
+  const u = new Date(utcMs);
+  return new Date(
+    u.getUTCFullYear(),
+    u.getUTCMonth(),
+    u.getUTCDate(),
+    u.getUTCHours(),
+    u.getUTCMinutes(),
+    u.getUTCSeconds(),
+  );
 }
 
 function bdFallback(): BdCode[] {
