@@ -659,35 +659,48 @@ export class SharePointDataLayer implements PmdDataLayer {
       const job =
         slots[0]?.jobNumber ?? '';
       const agg = aggregateSlots(slots);
-      await this.upsertProductionHeader({
-        machineCode,
-        date,
-        shift,
-        jobNumber: job,
-        timeline: agg.timeline,
-        countStart: agg.countStart,
-        countEnd: agg.countEnd,
-        reject: agg.reject,
-        operator: operator || agg.operator,
-        supervisor,
-        runTime: agg.runTime,
-        downTime: agg.downTime,
-        handover: agg.handover,
-      });
-      await this.upsertBreakdownAnalytic({
-        machineCode,
-        date,
-        shift,
-        jobNumber: job,
-        partNumber: slots[0]?.handoverNote ? '' : '',
-        timeline: agg.timeline,
-        hours: agg.hours,
-        bdCode: agg.bdCode,
-      });
-      await this.replaceRejectEvents(
-        { machineCode, date, shift, jobNumber: job },
-        agg.rejectEvents,
-      );
+      const tag = `${machineCode}|${shiftId}|${job}`;
+      try {
+        await this.upsertProductionHeader({
+          machineCode,
+          date,
+          shift,
+          jobNumber: job,
+          timeline: agg.timeline,
+          countStart: agg.countStart,
+          countEnd: agg.countEnd,
+          reject: agg.reject,
+          operator: operator || agg.operator,
+          supervisor,
+          runTime: agg.runTime,
+          downTime: agg.downTime,
+          handover: agg.handover,
+        });
+      } catch (e) {
+        throw new Error(`PMD_Production write failed (${tag}): ${(e as Error).message}`);
+      }
+      try {
+        await this.upsertBreakdownAnalytic({
+          machineCode,
+          date,
+          shift,
+          jobNumber: job,
+          partNumber: slots[0]?.handoverNote ? '' : '',
+          timeline: agg.timeline,
+          hours: agg.hours,
+          bdCode: agg.bdCode,
+        });
+      } catch (e) {
+        throw new Error(`PMD_BreakDownlog write failed (${tag}): ${(e as Error).message}`);
+      }
+      try {
+        await this.replaceRejectEvents(
+          { machineCode, date, shift, jobNumber: job },
+          agg.rejectEvents,
+        );
+      } catch (e) {
+        throw new Error(`PMD_Rejects write failed (${tag}): ${(e as Error).message}`);
+      }
       this.editCache.delete(ownKey(job));
     }
   }

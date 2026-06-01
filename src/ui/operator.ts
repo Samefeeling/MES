@@ -47,8 +47,7 @@ interface OpState {
   viewLevel: number;
   /** Sum of Good across all shifts of selJob — drives the cross-shift Job Left. */
   jobTotalGood: number;
-  /** Multi-fill mode: tap/drag status cells to build a range, then pick one code. */
-  multiSel: boolean;
+  /** Slots currently highlighted for status entry (tap or hold-and-drag). */
   selSet: Set<number>;
 }
 
@@ -238,7 +237,6 @@ function buildActionBar(): string {
     </div>
     <div class="ab-shifts">${tabs}</div>
     <div class="ab-right">
-      <button class="btn-multi${S!.multiSel ? ' a' : ''}" data-multisel title="Tap or drag status cells to select a range, then pick one code">🖌 Multi-fill${S!.multiSel ? ` (${S!.selSet.size})` : ''}</button>
       <button class="btn-load" data-refresh title="Re-pull planning from SharePoint &amp; recompute Job Left">⟳ Refresh</button>
       <button class="btn-save" data-saveclear>✅ Sign off &amp; Save</button>
     </div>
@@ -294,14 +292,6 @@ function statusCellHtml(
   bdIssue: string,
   isNow: boolean,
 ): string {
-  const opts = [`<option value="">·</option>`]
-    .concat(
-      STATUSES.map(
-        (s) =>
-          `<option value="${s.code}"${s.code === code ? ' selected' : ''}>${s.code}</option>`,
-      ),
-    )
-    .join('');
   const def = code ? STATUS_MAP[code] : undefined;
   const style = def
     ? `background:${def.color};color:${def.text};border-color:${def.border}`
@@ -313,13 +303,10 @@ function statusCellHtml(
       ? `<span class="bd-tag">${escapeHtml(bdIssue.split('-')[0])}</span>`
       : '';
   let cls = `status-cell${isNow ? ' is-now' : ''}`;
-  if (S!.multiSel && S!.selSet.has(slot)) cls += ' multisel';
-  // Multi-fill mode: render a button (no native select); single-tap toggles
-  // selection, drag across cells extends it (handled in wire()).
-  if (S!.multiSel) {
-    return `<td class="${cls}"${tip}><button type="button" class="slot-cell" style="${style}" data-slot="${slot}" data-row="status">${code || '·'}</button>${tag}</td>`;
-  }
-  return `<td class="${cls}"${tip}><select class="slot-status" style="${style}" data-slot="${slot}" data-row="status">${opts}</select>${tag}</td>`;
+  if (S!.selSet.has(slot)) cls += ' multisel';
+  // Unified status entry — single-tap selects this slot, hold-and-drag across
+  // cells selects a range; the picker opens automatically on finger-up.
+  return `<td class="${cls}"${tip}><button type="button" class="slot-cell" style="${style}" data-slot="${slot}" data-row="status">${code || '·'}</button>${tag}</td>`;
 }
 
 function buildGrid(): string {
@@ -680,35 +667,8 @@ function wire(): void {
     .querySelector<HTMLTextAreaElement>('textarea[data-meta="comments"]')
     ?.addEventListener('blur', (e) => onMetaChange(e.target as HTMLElement));
 
-  // Status cells — picking B triggers the breakdown cascade.
-  app.querySelectorAll<HTMLSelectElement>('.slot-status').forEach((sel) =>
-    sel.addEventListener('change', () => {
-      const slot = Number(sel.dataset.slot);
-      const newCode = sel.value as StatusCode | '';
-      const cur = slotRec(slot);
-      const prev = (cur?.statusCode ?? '') as StatusCode | '';
-      if (newCode === 'B') {
-        // Revert visual until the cascade confirms — render() restores it on save.
-        sel.value = prev;
-        const lbl = `Slot ${slot + 1}/${SLOTS_PER_SHIFT} · ${slotClock(sid(), slot)}`;
-        openBreakdownCascade(lbl, cur?.bdIssue ?? '', (pick) => {
-          void upsertSlot(slot, (r) => {
-            r.statusCode = 'B';
-            r.bdIssue = pick.code;
-            if (pick.note) r.mangoTicket = pick.note;
-          });
-        });
-        return;
-      }
-      // TS narrowed newCode away from 'B' above; clearing BD context is
-      // always safe here since this branch is the non-B path.
-      void upsertSlot(slot, (r) => {
-        r.statusCode = newCode;
-        r.bdIssue = '';
-        r.mangoTicket = '';
-      });
-    }),
-  );
+  // Status cells are picked via the unified hold-and-drag picker — see
+  // wireStatusPicker() at the bottom of wire().
 
   // Named reject inputs
   app.querySelectorAll<HTMLInputElement>('input[data-row="named"]').forEach((inp) =>
@@ -728,12 +688,7 @@ function wire(): void {
   // Buttons
   app.querySelector('[data-refresh]')?.addEventListener('click', () => void refreshAll());
   app.querySelector('[data-saveclear]')?.addEventListener('click', () => openSaveSignoffModal());
-  app.querySelector('[data-multisel]')?.addEventListener('click', () => {
-    S!.multiSel = !S!.multiSel;
-    S!.selSet.clear();
-    render();
-  });
-  wireMultiFillDrag();
+  wireStatusPicker();
 }
 
 function onMetaChange(el: HTMLElement): void {
@@ -896,14 +851,14 @@ function openSaveSignoffModal(): void {
   });
 }
 
-// ---------- Multi-fill (drag-to-select + same-as-previous) ----------
+// ---------- Unified status picker (tap or hold-and-drag) ----------
 
-function wireMultiFillDrag(): void {
-  if (!S!.multiSel) return;
+function wireStatusPicker(): void {
   const wrap = document.querySelector<HTMLElement>('.op-grid-wrap');
   if (!wrap) return;
 
   let anchor: number | null = null;
+  let dragged = false;
 
   const slotAt = (clientX: number, clientY: number): number | null => {
     const el = document
@@ -925,16 +880,9 @@ function wireMultiFillDrag(): void {
     const slot = slotAt(e.clientX, e.clientY);
     if (slot == null) return;
     anchor = slot;
-    if (e.shiftKey && S!.selSet.size > 0) {
-      // Shift-click extends from the lowest currently-selected slot.
-      const lo = Math.min(...S!.selSet);
-      setRange(lo, slot);
-    } else {
-      // Toggle on plain tap; drag will overwrite the set.
-      if (S!.selSet.has(slot)) S!.selSet.delete(slot);
-      else S!.selSet.add(slot);
-      paintSelection();
-    }
+    dragged = false;
+    S!.selSet = new Set<number>([slot]);
+    paintSelection();
     (e.target as Element).setPointerCapture?.(e.pointerId);
     e.preventDefault();
   });
@@ -943,16 +891,19 @@ function wireMultiFillDrag(): void {
     if (anchor == null || e.pressure === 0) return;
     const slot = slotAt(e.clientX, e.clientY);
     if (slot == null || slot === anchor) return;
+    dragged = true;
     setRange(anchor, slot);
   });
 
   wrap.addEventListener('pointerup', () => {
+    if (anchor == null) return;
     anchor = null;
-    paintFillBar();
+    // Open picker for both single-tap (selSet.size==1) and drag-range cases —
+    // single tap is the most common path so it shouldn't need an extra click.
+    if (S!.selSet.size > 0) openStatusPicker(dragged);
   });
 
   paintSelection();
-  paintFillBar();
 }
 
 function paintSelection(): void {
@@ -963,33 +914,6 @@ function paintSelection(): void {
     if (S!.selSet.has(slot)) td.classList.add('multisel');
     else td.classList.remove('multisel');
   });
-  paintFillBar();
-}
-
-function paintFillBar(): void {
-  let bar = document.getElementById('multifill-bar');
-  if (S!.selSet.size === 0) {
-    if (bar) bar.remove();
-    return;
-  }
-  if (!bar) {
-    bar = document.createElement('div');
-    bar.id = 'multifill-bar';
-    bar.className = 'multifill-bar';
-    // Append inside the SPFx full-screen host (z-index 2147483000) when
-    // present, so the bar isn't trapped behind the overlay. Otherwise body.
-    (document.getElementById('pmd-fullscreen-host') ?? document.body).appendChild(bar);
-  }
-  bar.innerHTML = `
-    <span class="mf-count">${S!.selSet.size} slot${S!.selSet.size === 1 ? '' : 's'} selected</span>
-    <button class="btn-ghost-big" data-mf-clear>Clear</button>
-    <button class="btn-primary-big" data-mf-fill>Fill with…</button>
-  `;
-  bar.querySelector('[data-mf-clear]')?.addEventListener('click', () => {
-    S!.selSet.clear();
-    paintSelection();
-  });
-  bar.querySelector('[data-mf-fill]')?.addEventListener('click', openMultiFillPicker);
 }
 
 /** Find the most recent filled slot with index < min(selSet). */
@@ -1001,10 +925,12 @@ function previousFilled(beforeSlot: number): ProductionRecord | undefined {
   return undefined;
 }
 
-function openMultiFillPicker(): void {
+function openStatusPicker(isRange: boolean): void {
   if (S!.selSet.size === 0) return;
   if (!S!.selJob) {
     toast('Pick a Job# first', 'warn');
+    S!.selSet.clear();
+    paintSelection();
     return;
   }
   const slots = [...S!.selSet].sort((a, b) => a - b);
@@ -1024,17 +950,28 @@ function openMultiFillPicker(): void {
       </button>`;
     })
     .join('');
+  const title = isRange || slots.length > 1
+    ? `🖌 Set status — ${slots.length} slots`
+    : `Set status — slot ${slots[0] + 1}/${SLOTS_PER_SHIFT} (${slotClock(sid(), slots[0])})`;
+  const slotsLine = slots.length > 1
+    ? `<p class="bd-sub">Slots: ${slots.map((s) => `${s + 1}`).join(', ')}</p>`
+    : '';
 
   const mc = openModal(`<div class="bd-modal">
-    <h2 class="bd-title">🖌 Fill ${slots.length} slot${slots.length === 1 ? '' : 's'}</h2>
-    <p class="bd-sub">Slots: ${slots.map((s) => `${s + 1}`).join(', ')}</p>
+    <h2 class="bd-title">${title}</h2>
+    ${slotsLine}
     ${sameAsPrev ? `<div class="bd-cause-list">${sameAsPrev}</div>` : ''}
     <div class="ab-grid">${pills}</div>
     <div class="bd-actions">
       <button class="btn-ghost-big" data-cancel>Cancel</button>
     </div>
   </div>`);
-  mc.querySelector('[data-cancel]')?.addEventListener('click', closeModal);
+  const cancel = (): void => {
+    closeModal();
+    S!.selSet.clear();
+    paintSelection();
+  };
+  mc.querySelector('[data-cancel]')?.addEventListener('click', cancel);
   mc.querySelector('[data-pick-same]')?.addEventListener('click', () => {
     closeModal();
     void multiFillApply(slots, prev!.statusCode as StatusCode, prev!.bdIssue, prev!.mangoTicket);
@@ -1070,7 +1007,6 @@ async function multiFillApply(
     });
   }
   S!.selSet.clear();
-  S!.multiSel = false; // exit mode after fill
   toast(`Filled ${slots.length} slot${slots.length === 1 ? '' : 's'} with ${code}`, 'ok');
   await reload();
 }
@@ -1104,8 +1040,12 @@ async function doSignoffSave(): Promise<void> {
     toast(`Signed off · ${S!.selJob || 'shift'} saved to Master`, 'ok');
     S!.selJob = '';
     await reload();
-  } catch {
-    toast('Cannot save — check network', 'err');
+  } catch (e) {
+    // Surface the actual SP/Graph failure so we don't blindly blame "network".
+    // The full stack is in console; toast shows the first line for triage.
+    console.error('[signoff] lockShift failed:', e);
+    const msg = (e as Error)?.message ?? String(e);
+    toast(`Save failed: ${msg.slice(0, 140)}`, 'err');
   }
 }
 
@@ -1149,7 +1089,6 @@ export async function renderOperator(
     selSupervisor: '',
     viewLevel: 1,
     jobTotalGood: 0,
-    multiSel: false,
     selSet: new Set<number>(),
   };
   if (nowTimer) clearInterval(nowTimer);
