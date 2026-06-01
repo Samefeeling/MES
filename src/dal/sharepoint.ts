@@ -264,12 +264,12 @@ export class SharePointDataLayer implements PmdDataLayer {
       body: JSON.stringify(body),
     });
     if (!res.ok) {
-      const body = await res.text();
+      const respBody = await res.text();
       // Try to surface SharePoint's actual "this column doesn't exist" /
       // "wrong type" message — the verbose envelope is hard to read raw.
-      let msg = body;
+      let msg = respBody;
       try {
-        const j = JSON.parse(body) as {
+        const j = JSON.parse(respBody) as {
           error?: { message?: string | { value?: string }; code?: string };
         };
         const m = j.error?.message;
@@ -279,7 +279,17 @@ export class SharePointDataLayer implements PmdDataLayer {
       } catch {
         /* not JSON, keep raw body */
       }
-      console.error('[sp] POST failed', { url, status: res.status, body });
+      // Dump everything to console — request body included — so a 400 tells
+      // us which field's value/type SP didn't like, not just the message.
+      console.error('[sp] POST failed', {
+        url,
+        status: res.status,
+        sent: body,
+        sentTypes: Object.fromEntries(
+          Object.entries(body as Record<string, unknown>).map(([k, v]) => [k, typeof v]),
+        ),
+        respBody,
+      });
       throw new Error(`POST ${res.status} ${msg}`);
     }
     return res;
