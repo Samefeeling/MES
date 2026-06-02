@@ -21,6 +21,14 @@ const PERIODS: Array<{ key: PeriodKey; label: string }> = [
 
 const SHIFT_ORDER: ShiftCode[] = SHIFTS.map((s) => s.code);
 
+interface HandoverEntry {
+  jobNumber: string;
+  people: string;
+  plant: string;
+  machine: string;
+  material: string;
+}
+
 interface ShiftAgg {
   output: number;
   reject: number;
@@ -29,6 +37,7 @@ interface ShiftAgg {
   downHrs: number;
   setupHrs: number;
   oee: number | null;
+  handovers: HandoverEntry[];
 }
 
 interface KpiRow {
@@ -44,6 +53,8 @@ interface KpiState {
   loading: boolean;
   rows: KpiRow[];
   chartBuckets: ChartBucket[];
+  /** Machine codes whose shift sub-rows are hidden. */
+  collapsed: Set<string>;
 }
 
 interface ChartBucket {
@@ -119,7 +130,35 @@ function plannedInRange(order: PlanningOrder, from: Date, to: Date): boolean {
   return t >= from && t <= new Date(to.getTime() + 86400_000 - 1);
 }
 
-function toAgg(k: Kpi): ShiftAgg {
+function parseHandover(note: string): Omit<HandoverEntry, 'jobNumber'> {
+  const blank = { people: '', plant: '', machine: '', material: '' };
+  if (!note) return blank;
+  try {
+    const j = JSON.parse(note) as Partial<typeof blank>;
+    return { ...blank, ...j };
+  } catch {
+    return { ...blank, people: note };
+  }
+}
+
+function collectHandovers(records: ProductionRecord[]): HandoverEntry[] {
+  // Handover lives on slotIndex 0 per (machine, shift, job). De-dup by
+  // jobNumber so multiple jobs in a shift produce one row each.
+  const seen = new Set<string>();
+  const out: HandoverEntry[] = [];
+  for (const r of records) {
+    if (r.slotIndex !== 0) continue;
+    if (!r.handoverNote) continue;
+    if (seen.has(r.jobNumber)) continue;
+    seen.add(r.jobNumber);
+    const h = parseHandover(r.handoverNote);
+    if (!h.people && !h.plant && !h.machine && !h.material) continue;
+    out.push({ jobNumber: r.jobNumber, ...h });
+  }
+  return out;
+}
+
+function toAgg(k: Kpi, records: ProductionRecord[]): ShiftAgg {
   const good = k.output;
   const reject = k.scrap;
   const yieldPct = good + reject > 0 ? (good / (good + reject)) * 100 : 100;
@@ -131,11 +170,12 @@ function toAgg(k: Kpi): ShiftAgg {
     downHrs: k.downtimeHrs,
     setupHrs: k.setupHrs,
     oee: k.oee,
+    handovers: collectHandovers(records),
   };
 }
 
 function emptyAgg(): ShiftAgg {
-  return { output: 0, reject: 0, yieldPct: 100, runHrs: 0, downHrs: 0, setupHrs: 0, oee: null };
+  return { output: 0, reject: 0, yieldPct: 100, runHrs: 0, downHrs: 0, setupHrs: 0, oee: null, handovers: [] };
 }
 
 function emptyChartShift(): ChartBucket['byShift'][ShiftCode] {
@@ -210,9 +250,9 @@ async function compute(now = new Date()): Promise<void> {
         cell.setupHrs += k.setupHrs;
         charts.set(dateKey, cb);
       }
-      byShift[code] = toAgg(aggregate(flat));
+      byShift[code] = toAgg(aggregate(flat), flat);
     }
-    const total = toAgg(aggregate(all));
+    const total = toAgg(aggregate(all), all);
 
     const planned =
       S!.period === 'last3'
@@ -239,6 +279,33 @@ function colourClass(v: number | null, green: number, amber: number): string {
   return 'red';
 }
 
+function formatHandoverCell(handovers: HandoverEntry[]): string {
+  if (handovers.length === 0) return '<td class="kpi-ho-cell muted">—</td>';
+  // Compact: one row per job, four emoji-prefixed segments; whitespace
+  // collapsed. Full text available via `title=` tooltip.
+  const compact = handovers
+    .map((h) => {
+      const parts: string[] = [];
+      if (h.people) parts.push(`👥 ${h.people.replace(/\s+/g, ' ').trim()}`);
+      if (h.plant) parts.push(`🏭 ${h.plant.replace(/\s+/g, ' ').trim()}`);
+      if (h.machine) parts.push(`🛠 ${h.machine.replace(/\s+/g, ' ').trim()}`);
+      if (h.material) parts.push(`📦 ${h.material.replace(/\s+/g, ' ').trim()}`);
+      return parts.join(' · ');
+    })
+    .join(' || ');
+  const full = handovers
+    .map((h) => {
+      const lines: string[] = [`Job ${h.jobNumber || '—'}`];
+      if (h.people) lines.push(`  👥 ${h.people}`);
+      if (h.plant) lines.push(`  🏭 ${h.plant}`);
+      if (h.machine) lines.push(`  🛠 ${h.machine}`);
+      if (h.material) lines.push(`  📦 ${h.material}`);
+      return lines.join('\n');
+    })
+    .join('\n\n');
+  return `<td class="kpi-ho-cell" title="${escapeHtml(full)}">${escapeHtml(compact)}</td>`;
+}
+
 function aggCells(a: ShiftAgg, includeSched: number | null = null, oeeAndSched = true): string {
   const yc = colourClass(a.yieldPct, 98, 95);
   const oc = colourClass(a.oee, 85, 70);
@@ -253,7 +320,8 @@ function aggCells(a: ShiftAgg, includeSched: number | null = null, oeeAndSched =
     <td class="num ${oeeAndSched ? oc : ''}">${a.oee == null ? '—' : a.oee + '%'}</td>
     <td class="num ${oeeAndSched ? sc : ''}">${
       includeSched == null ? '—' : includeSched + '%'
-    }</td>`;
+    }</td>
+    ${formatHandoverCell(a.handovers)}`;
 }
 
 function render(): void {
@@ -284,14 +352,21 @@ function render(): void {
 
   let body: string;
   if (S!.loading) {
-    body = `<tr><td colspan="9" class="muted">Loading…</td></tr>`;
+    body = `<tr><td colspan="10" class="muted">Loading…</td></tr>`;
   } else {
     body = S!.rows
       .map((r) => {
+        const isCollapsed = S!.collapsed.has(r.machineCode);
+        const toggle = `<button type="button" class="kpi-toggle" data-toggle="${escapeHtml(
+          r.machineCode,
+        )}" aria-label="${isCollapsed ? 'Expand' : 'Collapse'} ${escapeHtml(r.machineCode)}">${
+          isCollapsed ? '+' : '–'
+        }</button>`;
         const headRow = `<tr class="kpi-machine">
-          <th>${escapeHtml(r.machineCode)}</th>
+          <th>${toggle}<span class="kpi-mc-name">${escapeHtml(r.machineCode)}</span></th>
           ${aggCells(r.total, r.schedAdh)}
         </tr>`;
+        if (isCollapsed) return headRow;
         const shiftRows = SHIFT_ORDER.map((code) => {
           const a = r.byShift[code];
           return `<tr class="kpi-shift">
@@ -342,27 +417,31 @@ function render(): void {
         <h2>📊 Production KPIs — ${escapeHtml(rangeLabel)}</h2>
         <div class="shift-tabs">${tabs}</div>
       </div>
-      <table class="summary-table kpi-table">
-        <thead><tr>
-          <th>Machine</th><th>Output</th><th>Reject</th><th>Yield%</th>
-          <th>Run h</th><th>Down h</th><th>Setup h</th><th>OEE*</th><th>Sched. Adh.</th>
-        </tr></thead>
-        <tbody>${body}</tbody>
-        ${
-          S!.loading
-            ? ''
-            : `<tfoot><tr class="kpi-total">
-                <th>TOTAL</th>
-                <td class="num">${tot.output}</td>
-                <td class="num r">${tot.reject}</td>
-                <td class="num">${totYield}%</td>
-                <td class="num">${tot.runHrs.toFixed(1)}</td>
-                <td class="num">${tot.downHrs.toFixed(1)}</td>
-                <td class="num">${tot.setupHrs.toFixed(1)}</td>
-                <td class="num">—</td><td class="num">—</td>
-              </tr></tfoot>`
-        }
-      </table>
+      <div class="kpi-table-wrap">
+        <table class="summary-table kpi-table">
+          <thead><tr>
+            <th>Machine</th><th>Output</th><th>Reject</th><th>Yield%</th>
+            <th>Run h</th><th>Down h</th><th>Setup h</th><th>OEE*</th><th>Sched. Adh.</th>
+            <th class="kpi-ho-head">Handover</th>
+          </tr></thead>
+          <tbody>${body}</tbody>
+          ${
+            S!.loading
+              ? ''
+              : `<tfoot><tr class="kpi-total">
+                  <th>TOTAL</th>
+                  <td class="num">${tot.output}</td>
+                  <td class="num r">${tot.reject}</td>
+                  <td class="num">${totYield}%</td>
+                  <td class="num">${tot.runHrs.toFixed(1)}</td>
+                  <td class="num">${tot.downHrs.toFixed(1)}</td>
+                  <td class="num">${tot.setupHrs.toFixed(1)}</td>
+                  <td class="num">—</td><td class="num">—</td>
+                  <td class="kpi-ho-cell muted">—</td>
+                </tr></tfoot>`
+          }
+        </table>
+      </div>
       ${charts}
       <p class="bd-sub">OEE* = run-slot share of all filled slots. Schedule Adherence = good qty ÷ planned qty for jobs starting in the period (suppressed in Last-24h). Shift sub-rows show each shift's contribution to the period total.</p>
     </div>`;
@@ -375,13 +454,28 @@ function render(): void {
       void compute();
     }),
   );
+  app.querySelectorAll<HTMLButtonElement>('[data-toggle]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const mc = b.dataset.toggle!;
+      if (S!.collapsed.has(mc)) S!.collapsed.delete(mc);
+      else S!.collapsed.add(mc);
+      render();
+    }),
+  );
 }
 
 export async function renderKpi(dal: PmdDataLayer): Promise<void> {
   dalRef = dal;
   document.body.className = 'shift-day';
   const machines = (await dal.listMachines()).sort((a, b) => a.sequence - b.sequence);
-  S = { period: 'last3', machines, loading: true, rows: [], chartBuckets: [] };
+  S = {
+    period: 'last3',
+    machines,
+    loading: true,
+    rows: [],
+    chartBuckets: [],
+    collapsed: new Set(),
+  };
   render();
   await compute();
 }

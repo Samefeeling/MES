@@ -52,13 +52,27 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi{display:flex;flex-direction:column;gap:14px}
 .kpi-head{background:#fff;border:1px solid var(--bd);border-radius:12px;padding:14px;display:flex;flex-wrap:wrap;align-items:center;gap:14px;justify-content:space-between}
 .kpi-head h2{margin:0;font-size:22px;font-weight:800;color:#0c4a6e}
-.kpi-table{background:#fff;border:1px solid var(--bd);border-radius:12px;overflow:hidden;font-variant-numeric:tabular-nums}
+.kpi-table-wrap{background:#fff;border:1px solid var(--bd);border-radius:12px;overflow:auto;max-height:70vh;position:relative}
+.kpi-table{background:#fff;font-variant-numeric:tabular-nums;border:0;border-radius:0;overflow:visible}
 .kpi-table td.num,.kpi-table th{white-space:nowrap}
 .kpi-table td.green{color:#15803d;font-weight:800}
 .kpi-table td.amber{color:#b45309;font-weight:800}
 .kpi-table td.red{color:#b91c1c;font-weight:800}
 .kpi-table td.gray{color:var(--mu)}
 .kpi-total th,.kpi-total td{border-top:2px solid var(--theme-dark);font-weight:800;background:#f8fafc}
+/* Sticky header — stays pinned while the table body scrolls inside .kpi-table-wrap. */
+.kpi-table thead th{position:sticky;top:0;z-index:3;box-shadow:0 1px 0 #cbd5e1}
+.kpi-table tfoot th,.kpi-table tfoot td{position:sticky;bottom:0;z-index:2;background:#f8fafc}
+/* Collapse toggle on each machine row. */
+.kpi-toggle{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border:1px solid var(--bd);background:#fff;color:var(--theme-dark);border-radius:6px;font-weight:800;font-size:16px;cursor:pointer;margin-right:8px;line-height:1;padding:0}
+.kpi-toggle:hover{background:#eff6ff;border-color:var(--theme-dark)}
+.kpi-mc-name{vertical-align:middle}
+/* Handover column — single-line truncate, tooltip carries the full text. */
+.kpi-ho-head{min-width:240px}
+.kpi-ho-cell{max-width:360px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;color:#475569}
+@media (max-width:1100px){
+  .kpi-ho-cell{max-width:200px}
+}
 
 /* Trace / search view */
 .trace{display:flex;flex-direction:column;gap:14px}
