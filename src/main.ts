@@ -2,6 +2,7 @@ import { createDataLayer, type PmdDataLayer } from './dal';
 import { renderOperator, operatorPollTick } from './ui/operator';
 import { renderTrace } from './ui/trace';
 import { renderKpi } from './ui/kpi';
+import { maybeAutoStartTutorial, startTutorial } from './ui/tutorial';
 
 const dal: PmdDataLayer = createDataLayer(import.meta.env as Record<string, string>);
 
@@ -53,7 +54,11 @@ function ensureNav(): void {
   nav.innerHTML =
     '<a href="#/" data-nav>Operator</a>' +
     '<a href="#/trace" data-nav>\u{1F50D} Trace</a>' +
-    '<a href="#/kpi" data-nav>\u{1F4CA} KPIs</a>';
+    '<a href="#/kpi" data-nav>\u{1F4CA} KPIs</a>' +
+    '<button type="button" class="tut-launch" data-tut title="Walk me through the operator sheet">❓ Tutorial</button>';
+  nav
+    .querySelector('[data-tut]')
+    ?.addEventListener('click', () => startTutorial());
 }
 
 async function route(): Promise<void> {
@@ -98,4 +103,4 @@ window.addEventListener('hashchange', () => void route());
 document.getElementById('refreshBtn')?.addEventListener('click', () => void route());
 
 ensureNav();
-void route();
+void route().then(() => maybeAutoStartTutorial());

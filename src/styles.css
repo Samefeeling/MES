@@ -236,6 +236,30 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .btn-primary-big:hover{filter:brightness(.92)}
 .bd-note{width:100%;min-height:120px;border:2px solid var(--bd);border-radius:10px;padding:12px;font-size:17px;font-family:inherit;background:#fef9c3}
 
+/* ===== built-in tutorial ===== */
+.tut-launch{background:rgba(255,255,255,.14);color:var(--theme-on-dark);border:1px solid rgba(255,255,255,.25);padding:7px 14px;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;margin-left:4px}
+.tut-launch:hover{background:rgba(255,255,255,.24)}
+.tut-host{position:fixed;inset:0;z-index:400;display:none;pointer-events:none}
+.tut-host.open{display:block}
+.tut-spotlight{position:absolute;border-radius:10px;box-shadow:0 0 0 9999px rgba(15,23,42,.65);outline:3px solid #f59e0b;outline-offset:0;pointer-events:none;transition:top .2s,left .2s,width .2s,height .2s}
+.tut-card{position:absolute;width:440px;max-width:92vw;background:#fff;border-radius:14px;padding:22px 22px 18px;box-shadow:0 20px 40px rgba(0,0,0,.35);pointer-events:auto;z-index:401}
+.tut-progress{font-size:12px;font-weight:800;color:#f59e0b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+.tut-title{margin:0 0 12px;font-size:22px;font-weight:800;color:#1e293b;line-height:1.2}
+.tut-narration{margin:0 0 12px;font-size:17px;line-height:1.5;color:#475569}
+.tut-hint{margin:0 0 16px;font-size:14px;font-style:italic;color:#b45309;font-weight:600}
+.tut-actions{display:flex;gap:10px;align-items:center}
+.tut-actions button{padding:12px 18px;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;border:2px solid;min-height:48px}
+.tut-skip{background:#fff;border-color:#cbd5e1;color:#64748b}
+.tut-skip:hover{background:#f1f5f9}
+.tut-prev{background:#fff;border-color:#94a3b8;color:#475569}
+.tut-prev:hover:not(:disabled){background:#f1f5f9}
+.tut-prev:disabled{opacity:.35;cursor:default}
+.tut-next{background:#f59e0b;border-color:#f59e0b;color:#fff;margin-left:auto}
+.tut-next:hover{background:#d97706;border-color:#d97706}
+@media (max-width:900px){
+  .tut-card{width:92vw;left:4vw !important;right:4vw !important;margin-left:0 !important}
+}
+
 /* ===== KPI machine + shift rows ===== */
 .kpi-machine th{font-size:16px;font-weight:800;color:var(--tx);background:#f1f5f9}
 .kpi-machine td{font-weight:800}
