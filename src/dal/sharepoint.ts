@@ -476,12 +476,23 @@ export class SharePointDataLayer implements PmdDataLayer {
     });
   }
 
-  private async loadPlanningCsv(serverRelativePath: string): Promise<PlanningOrder[]> {
-    // Bust SP's edge cache so we always get the freshest sync output.
+  private async loadPlanningCsv(rawPath: string): Promise<PlanningOrder[]> {
+    // Be lenient with what the env var contains — accept a full
+    // https://…/sites/…/file.csv URL, or a server-relative path with or
+    // without percent-encoded spaces. Normalise once, encode once.
+    const serverRelative = toServerRelativePath(rawPath);
+    // Encode each path segment so spaces / other reserved chars get %xx,
+    // but leave the / separators alone. Then double single quotes per the
+    // OData getFileByServerRelativeUrl convention.
+    const encodedPath = serverRelative
+      .split('/')
+      .map((seg) => encodeURIComponent(seg))
+      .join('/')
+      .replace(/'/g, "''");
     const cacheBust = `?_t=${Date.now()}`;
     const url =
       `${this.siteUrl}/_api/web/getFileByServerRelativeUrl('` +
-      encodeURIComponent(serverRelativePath) +
+      encodedPath +
       `')/$value` +
       cacheBust;
     const res = await fetch(url, {
@@ -490,7 +501,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     });
     if (!res.ok) {
       throw new Error(
-        `Planning CSV fetch failed (${res.status}) for ${serverRelativePath}`,
+        `Planning CSV fetch failed (${res.status}) for ${serverRelative}`,
       );
     }
     const text = await res.text();
@@ -1652,4 +1663,36 @@ function csvDateToIso(s: string): string {
     ).toISOString();
   }
   return '';
+}
+
+/**
+ * Take whatever the operator put in VITE_PLANNING_CSV_PATH and reduce it
+ * to a clean server-relative path (`/sites/…/file.csv`, spaces unencoded).
+ * Tolerates: a full URL, a leading-slash path, a no-leading-slash path,
+ * already %-encoded characters, and trailing slashes.
+ */
+export function toServerRelativePath(input: string): string {
+  let p = (input ?? '').trim();
+  if (!p) return p;
+  // Full URL → take the pathname.
+  if (/^https?:\/\//i.test(p)) {
+    try {
+      p = new URL(p).pathname;
+    } catch {
+      // fall through to the raw value
+    }
+  }
+  // Strip any query / fragment if the operator left them in.
+  const q = p.indexOf('?');
+  if (q >= 0) p = p.slice(0, q);
+  const h = p.indexOf('#');
+  if (h >= 0) p = p.slice(0, h);
+  // Decode %20 etc. so we re-encode uniformly downstream.
+  try {
+    p = decodeURIComponent(p);
+  } catch {
+    // input wasn't percent-encoded — leave as is.
+  }
+  if (!p.startsWith('/')) p = '/' + p;
+  return p;
 }

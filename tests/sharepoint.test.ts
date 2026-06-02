@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { canSyncPlanning, parsePlanningCsv, SharePointDataLayer } from '../src/dal/sharepoint';
+import {
+  canSyncPlanning,
+  parsePlanningCsv,
+  SharePointDataLayer,
+  toServerRelativePath,
+} from '../src/dal/sharepoint';
 import { MemoryDataLayer } from '../src/dal/memory';
 
 describe('SharePoint DAL surface', () => {
@@ -59,5 +64,39 @@ describe('parsePlanningCsv', () => {
     expect(out[0].jobNumber).toBe('J300');
     // Parsed as local 2026-06-02 07:00 → ISO with local offset
     expect(out[0].plannedStart).toMatch(/2026-06-0[12]T/);
+  });
+});
+
+describe('toServerRelativePath', () => {
+  it('passes a clean server-relative path through unchanged', () => {
+    expect(toServerRelativePath('/sites/X/Shared Documents/A.csv')).toBe(
+      '/sites/X/Shared Documents/A.csv',
+    );
+  });
+  it('decodes %20 to spaces', () => {
+    expect(
+      toServerRelativePath('/sites/X/Shared%20Documents/General/Data/A.csv'),
+    ).toBe('/sites/X/Shared Documents/General/Data/A.csv');
+  });
+  it('extracts the path from a full https URL', () => {
+    expect(
+      toServerRelativePath(
+        'https://tenant.sharepoint.com/sites/X/Shared%20Documents/A.csv',
+      ),
+    ).toBe('/sites/X/Shared Documents/A.csv');
+  });
+  it('strips query strings (e.g. ?d=… from SP web links)', () => {
+    expect(
+      toServerRelativePath(
+        'https://tenant.sharepoint.com/sites/X/Shared%20Documents/A.csv?d=abc',
+      ),
+    ).toBe('/sites/X/Shared Documents/A.csv');
+  });
+  it('adds a leading slash if missing', () => {
+    expect(toServerRelativePath('sites/X/Y.csv')).toBe('/sites/X/Y.csv');
+  });
+  it('returns empty when given empty', () => {
+    expect(toServerRelativePath('')).toBe('');
+    expect(toServerRelativePath('   ')).toBe('');
   });
 });
