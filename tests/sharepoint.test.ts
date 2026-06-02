@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   canSyncPlanning,
+  dateOnly,
   parsePlanningCsv,
   SharePointDataLayer,
   toServerRelativePath,
@@ -98,5 +99,34 @@ describe('toServerRelativePath', () => {
   it('returns empty when given empty', () => {
     expect(toServerRelativePath('')).toBe('');
     expect(toServerRelativePath('   ')).toBe('');
+  });
+});
+
+describe('dateOnly (shiftId UTC→local round-trip)', () => {
+  // Without converting UTC→local first, a Day shift that begins 07:00 in
+  // a positive-offset timezone (e.g. Sydney +10) gets dateOnly'd from a
+  // UTC string anchored on the previous calendar day — the shiftId is
+  // off by one day, the operator filter / KPI shiftIds set / rejects map
+  // all miss, and the page renders empty. Verify the round-trip works
+  // regardless of which local timezone the test runner sits in.
+  function roundTrip(year: number, month0: number, day: number, hour: number): string {
+    return dateOnly(new Date(year, month0, day, hour, 0, 0, 0).toISOString());
+  }
+  it('matches the local calendar date for Day shift start (07:00 local)', () => {
+    expect(roundTrip(2026, 5, 2, 7)).toBe('2026-06-02');
+  });
+  it('matches the local calendar date for Afternoon shift start (15:00 local)', () => {
+    expect(roundTrip(2026, 5, 2, 15)).toBe('2026-06-02');
+  });
+  it('matches the local calendar date for Night shift start (23:00 local)', () => {
+    expect(roundTrip(2026, 5, 2, 23)).toBe('2026-06-02');
+  });
+  it('handles month boundaries (last day of month, midday shift)', () => {
+    expect(roundTrip(2026, 5, 30, 15)).toBe('2026-06-30');
+  });
+  it('falls back to slice when the value is not a parseable date', () => {
+    expect(dateOnly('not-a-date')).toBe('not-a-date');
+    expect(dateOnly('')).toBe('');
+    expect(dateOnly(null)).toBe('');
   });
 });

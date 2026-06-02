@@ -242,6 +242,44 @@ async function refreshJobTotal(): Promise<void> {
   S!.jobTotalGood = total;
 }
 
+/**
+ * Live-update the Total Good / Total Reject / Job Left cells without a
+ * re-render. Used by the canonical-slot edits (Count Start / End / Purge)
+ * that now go through upsertSlotNoReload so the focused input is not
+ * destroyed mid-typing.
+ */
+async function refreshJobTotalAndPaintSide(): Promise<void> {
+  await refreshJobTotal();
+  const c = canonical();
+  const cs = Number(c?.countStart ?? 0);
+  const ce = Number(c?.countEnd ?? 0);
+  const gross = Math.max(0, ce - cs);
+  const totalReject = jobTotals();
+  const good = Math.max(0, gross - totalReject);
+  const o = selectedOrder();
+  const jobLeft =
+    o && !o.isDieChange
+      ? Math.max(0, o.jobRequired - (S!.jobTotalGood + good))
+      : null;
+  const side = document.querySelector<HTMLElement>('.op-side');
+  if (!side) return;
+  // .sk b is the label-and-value pair; identify by adjacent label text.
+  const sks = side.querySelectorAll<HTMLElement>('.sk');
+  sks.forEach((sk) => {
+    const lbl = sk.querySelector('label')?.textContent?.trim();
+    const b = sk.querySelector('b');
+    if (!b) return;
+    if (lbl === 'Job left' && jobLeft != null) b.textContent = String(jobLeft);
+    else if (lbl === 'Total Good') b.textContent = String(good);
+  });
+  // Pair cell: Total Reject lives in the .sk-pair next to Purge.
+  side.querySelectorAll<HTMLElement>('.sk-pair-cell').forEach((cell) => {
+    const lbl = cell.querySelector('label')?.textContent?.trim();
+    const b = cell.querySelector('b');
+    if (b && lbl === 'Total Reject') b.textContent = String(totalReject);
+  });
+}
+
 function selOpts(values: string[], selected: string, placeholder: string): string {
   return [`<option value="">— ${escapeHtml(placeholder)} —</option>`]
     .concat(
@@ -797,20 +835,28 @@ function onMetaChange(el: HTMLElement): void {
       });
       break;
     case 'purge':
-      void upsertSlot(0, (r) => {
-        r.purgeKg = val === '' ? null : Number(val);
-      });
-      break;
     case 'cstart':
-      void upsertSlot(0, (r) => {
-        r.countStart = val === '' ? null : Number(val);
+    case 'cend': {
+      // Same race-protection as the handover textareas — a full reload
+      // after each blur destroys the focused input the operator is
+      // typing into next, e.g. tabbing from Count Start straight into
+      // Count End would lose the second number when the first reload
+      // re-rendered. upsertSlotNoReload keeps S!.prod in sync without
+      // triggering render().
+      const field = key as 'purge' | 'cstart' | 'cend';
+      void upsertSlotNoReload(0, (r) => {
+        const v = val === '' ? null : Number(val);
+        if (field === 'purge') r.purgeKg = v;
+        else if (field === 'cstart') r.countStart = v;
+        else r.countEnd = v;
       });
+      // Job Left / Total Good in the side panel depend on these numbers
+      // but won't refresh without a render. Recompute the job total and
+      // touch the visible cells directly so the operator still sees a
+      // live total without losing focus.
+      void refreshJobTotalAndPaintSide();
       break;
-    case 'cend':
-      void upsertSlot(0, (r) => {
-        r.countEnd = val === '' ? null : Number(val);
-      });
-      break;
+    }
     case 'hand-people':
     case 'hand-plant':
     case 'hand-machine':

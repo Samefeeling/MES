@@ -146,14 +146,24 @@ async function compute(now = new Date()): Promise<void> {
   const { from, to, shiftIds } = periodRange(S!.period, now);
   // listPlanning and the per-machine production reads have no
   // dependencies on each other — parallelise so the screen render
-  // isn't pinned to N×latency.
+  // isn't pinned to N×latency. Per-machine errors don't abort the whole
+  // page: a single 1600T fetch failure used to take down the entire KPI
+  // table (Promise.all rejects on the first failure); now each machine
+  // that errors just shows up as zeros and the rest still render.
   const [planning, perMachineProd] = await Promise.all([
-    dalRef.listPlanning({}),
+    dalRef.listPlanning({}).catch((err) => {
+      console.error('[kpi] listPlanning failed:', err);
+      return [] as PlanningOrder[];
+    }),
     Promise.all(
       S!.machines.map((m) =>
         dalRef
           .listProduction({ machineCode: m.machineCode })
-          .then((p) => p.filter((r) => inRange(r, from, to, shiftIds))),
+          .then((p) => p.filter((r) => inRange(r, from, to, shiftIds)))
+          .catch((err) => {
+            console.error(`[kpi] listProduction(${m.machineCode}) failed:`, err);
+            return [] as ProductionRecord[];
+          }),
       ),
     ),
   ]);

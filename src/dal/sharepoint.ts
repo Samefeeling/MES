@@ -548,15 +548,32 @@ export class SharePointDataLayer implements PmdDataLayer {
       for (const r of list) if (productionMatches(r, filter)) cached.push(r);
     }
     // 2) Hydrate header rows from PMD_Production for the same filter,
-    //    skipping any (mc,sid,job) we already have in cache.
+    //    skipping any (mc,sid,job) we already have in cache. Three parallel
+    //    queries: PMD_Production (header), PMD_Rejects (per-event), and
+    //    PMD_BreakDownlog (StatusTimeline) — the last is the real source of
+    //    the 16-char status pattern; PMD_Production.Status was deleted from
+    //    this tenant so headers come back with an empty timeline field.
     const seen = new Set(cached.map((r) => this.cacheKey(r.machineCode, r.shiftId, r.jobNumber)));
-    const headers = await this.fetchProductionHeaders(filter);
-    const rejectsByKey = await this.fetchRejectsByKey(filter);
+    const [headers, rejectsByKey, timelinesByKey] = await Promise.all([
+      this.fetchProductionHeaders(filter),
+      this.fetchRejectsByKey(filter),
+      this.fetchBreakdownTimelines(filter),
+    ]);
     for (const h of headers) {
       const hShiftId = `${h.date}-${h.shift}`;
       const key = this.cacheKey(h.machineCode, hShiftId, h.jobNumber);
       if (seen.has(key)) continue;
-      cached.push(...this.expandHeaderToSlots(h, rejectsByKey.get(key) ?? []));
+      // Splice the breakdown-side timeline onto the header so
+      // expandHeaderToSlots can decode it. Without this, every signed-off
+      // shift comes back with an empty timeline → no Machine Status row,
+      // and every reject collapses into the canonical slot 0 (07:00–07:30
+      // for Day shift).
+      const hWithTimeline: HeaderRow = h.timeline
+        ? h
+        : { ...h, timeline: timelinesByKey.get(key) ?? '' };
+      cached.push(
+        ...this.expandHeaderToSlots(hWithTimeline, rejectsByKey.get(key) ?? []),
+      );
       this.hydratedKeys.add(key);
     }
     return cached;
@@ -600,6 +617,57 @@ export class SharePointDataLayer implements PmdDataLayer {
       runTime: F.runTime ? num(r[F.runTime]) : 0,
       downTime: num(r[F.downTime]),
     }));
+  }
+
+  /**
+   * Pull StatusTimeline strings keyed by (machine|shiftId|jobNumber) from
+   * PMD_BreakDownlog so listProduction can splice them onto the header
+   * rows that come back from PMD_Production. PMD_Production no longer
+   * carries the timeline directly (Status column was deleted from the
+   * tenant) — without this fetch, every signed-off shift would come back
+   * with no Machine Status row and rejects collapsed to slot 0.
+   */
+  private async fetchBreakdownTimelines(
+    filter: ProductionFilter,
+  ): Promise<Map<string, string>> {
+    const F = this.F.breakdown;
+    if (!F.statusTimeline) return new Map();
+    const parts: string[] = [];
+    if (filter.machineCode) parts.push(`${F.machine} eq '${filter.machineCode}'`);
+    if (filter.jobNumber) parts.push(`${F.jobNum} eq '${filter.jobNumber}'`);
+    if (filter.shiftId) {
+      const { shift } = parseShiftIdLoose(filter.shiftId);
+      const b = shiftBounds(filter.shiftId);
+      if (b) parts.push(`${F.date} eq datetime'${b.start.toISOString()}'`);
+      if (shift) parts.push(`${F.shift} eq '${shift}'`);
+    }
+    if (filter.shiftIdFrom) {
+      const b = shiftBounds(filter.shiftIdFrom);
+      if (b) parts.push(`${F.date} ge datetime'${b.start.toISOString()}'`);
+    }
+    if (filter.shiftIdTo) {
+      const b = shiftBounds(filter.shiftIdTo);
+      if (b) parts.push(`${F.date} le datetime'${b.end.toISOString()}'`);
+    }
+    const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
+    let rows: Record<string, unknown>[] = [];
+    try {
+      rows = await this.getAllItems(LISTS.breakdown, qs);
+    } catch {
+      return new Map();
+    }
+    const out = new Map<string, string>();
+    for (const r of rows) {
+      const mc = str(r[F.machine]);
+      const date = dateOnly(r[F.date]);
+      const shift = str(r[F.shift]);
+      const job = str(r[F.jobNum]);
+      const sid = `${date}-${shift}`;
+      const key = this.cacheKey(mc, sid, job);
+      const tl = str(r[F.statusTimeline]);
+      if (tl) out.set(key, tl);
+    }
+    return out;
   }
 
   private async fetchRejectsByKey(
@@ -1247,9 +1315,18 @@ function bool(v: unknown): boolean | undefined {
   return undefined;
 }
 
-function dateOnly(v: unknown): string {
-  if (typeof v !== 'string') return '';
-  return v.slice(0, 10);
+export function dateOnly(v: unknown): string {
+  if (typeof v !== 'string' || !v) return '';
+  // SP DateTime is stored UTC. A Sydney Day shift starts 07:00 AEST =
+  // 21:00 UTC previous calendar day, so slicing the first 10 chars of
+  // the ISO string would shift the shiftId back one day and break every
+  // downstream match (KPI shiftIds set, operator sid() comparison,
+  // rejects-by-key lookup). Convert UTC back to local, then format the
+  // local calendar date — Afternoon and Night sit safely within a single
+  // UTC day so this also makes the three shifts symmetric.
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return v.slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function isoDate(v: unknown): string {
