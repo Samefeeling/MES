@@ -85,19 +85,23 @@ const DEFAULT_FIELDS = {
     cost: 'field_6',
   },
   planning: {
-    // Title = machine code (e.g. "1600T"). LinkTitle is just the computed
-    // "make it a hyperlink" rendering of Title; the real data lives in Title.
-    machine: 'Title',
+    // Source of truth is now Epicor REST — scripts/sync-epicor-to-sp.ps1
+    // (running on the always-on on-prem PC, every 15 min) pulls the BAQ
+    // and upserts here. Epicor has no machine assignment for PMD orders,
+    // so Title is filled with JobNum (acts as natural key) and the app
+    // never reads it back — machineCode below is sourced as empty and
+    // the operator dropdown lists all PMD-released orders.
+    machine: '', // skip read/write — no machine in Epicor source
     startDateTime: 'StartDateTime',
     qtyHour: 'QTYperHour',
-    dueDate: 'DueDate',
+    dueDate: 'Due_Date',
     jobNum: 'JobHead_JobNum',
     partNum: 'JobHead_PartNum',
     partDesc: 'JobHead_PartDescription',
     remaining: 'Calculated_RemainingQty',
     duration: 'Duration',
-    dieNumber: 'DIENumber',
-    dc: 'DIEChange',
+    dieNumber: '', // no source
+    dc: '', // no source
   },
   production: {
     machine: 'Title',
@@ -424,23 +428,22 @@ export class SharePointDataLayer implements PmdDataLayer {
 
   // ---- planning -------------------------------------------------------
 
-  async listPlanning(filter: PlanningFilter): Promise<PlanningOrder[]> {
+  async listPlanning(_filter: PlanningFilter): Promise<PlanningOrder[]> {
+    // Filter.machineCode is ignored: Epicor source has no machine
+    // assignment, so caller gets all PMD-released orders and decides
+    // which to show.
     const F = this.F.planning;
-    const parts: string[] = [];
-    if (filter.machineCode) parts.push(`${F.machine} eq '${filter.machineCode}'`);
-    const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
-    const rows = await this.getAllItems(LISTS.planning, qs);
+    const rows = await this.getAllItems(LISTS.planning, '');
     return rows.map((r) => {
       const start = isoDate(r[F.startDateTime]);
       const due = isoDate(r[F.dueDate]);
       const dur = num(r[F.duration]) || 0;
-      // Approximate end if not stored: start + duration hours.
       const end = dur > 0 ? new Date(new Date(start).getTime() + dur * 3600_000).toISOString() : due;
       return {
         id: getId(r),
         jobNumber: str(r[F.jobNum]),
-        machineCode: str(r[F.machine]),
-        originalMachine: str(r[F.machine]),
+        machineCode: '',
+        originalMachine: '',
         partNumber: str(r[F.partNum]),
         partDescription: str(r[F.partDesc]),
         plannedStart: start,
@@ -449,7 +452,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         qtyPerHr: num(r[F.qtyHour]) || 0,
         duration: dur,
         released: true,
-        isDieChange: str(r[F.dc]).toUpperCase() === 'D',
+        isDieChange: false,
         manuallyAdded: false,
         source: 'ERP',
       };
@@ -460,8 +463,6 @@ export class SharePointDataLayer implements PmdDataLayer {
     const F = this.F.planning;
     const body: Record<string, unknown> = {
       __metadata: { type: await this.itemType(LISTS.planning) },
-      // F.machine → Title (machine code lives in Title, e.g. "1600T")
-      [F.machine]: order.machineCode,
       [F.startDateTime]: order.plannedStart,
       [F.qtyHour]: order.qtyPerHr,
       [F.dueDate]: order.plannedEnd,
@@ -470,8 +471,12 @@ export class SharePointDataLayer implements PmdDataLayer {
       [F.partDesc]: order.partDescription,
       [F.remaining]: order.jobRequired,
       [F.duration]: order.duration,
-      [F.dc]: order.isDieChange ? 'D' : '',
     };
+    // Optional/legacy columns — only include when the field map has a real
+    // SP internal name. Title is now populated by the Epicor sync job
+    // directly (set to JobNum) so the app never needs to write it here.
+    if (F.machine) body[F.machine] = order.machineCode;
+    if (F.dc) body[F.dc] = order.isDieChange ? 'D' : '';
     if (order.id > 0) {
       await this.post(`${this.listUrl(LISTS.planning)}/items(${order.id})`, body, '*');
       return order;

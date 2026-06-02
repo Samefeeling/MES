@@ -31,11 +31,11 @@ test before going to production.
 |---|---|---|---|
 | **A. Local dev** | Today — first end-to-end validation against the real lists | 15 min | Just you, in your browser |
 | **B. SPFx web part** | Production rollout for operators on the floor | 1-2 h first time | Anyone on the site, including iPads |
-| **C. Power Automate daily sync** | Belt-and-braces server-side refresh of PMD_Planning | 30 min | Runs unattended |
+| **D. Epicor → PMD_Planning sync** | Keep Planning fresh from Epicor REST every 15 min | 30 min | Runs unattended on shop-floor PC |
 
-A and B are about hosting the **app**. C is about keeping
-PMD_Planning **fresh from the Excel file** even when nobody opens
-the app. You probably want B + C.
+A and B are about hosting the **app**. D is about keeping
+PMD_Planning **fresh from Epicor**, server-side, with credentials kept
+out of the browser. You want B + D.
 
 ---
 
@@ -295,120 +295,155 @@ works. No CORS extension, no localhost.
 
 ---
 
-## C. Power Automate scheduled refresh (the only path now)
+## D. Epicor → PMD_Planning sync (PowerShell on shop-floor PC)
 
-The in-browser Graph sync was removed. The Planning workbook
-(`PMD Schedule_master_epicor 300424.xlsm`) is >10 MB with VLOOKUPs +
-macros, which makes every Graph `/workbook/.../range` call 504 at
-`MaxRequestDurationExceeded`. Office Scripts runs server-side inside
-Excel itself with no such timeout, so the keep-PMD_Planning-fresh job
-lives there now. The in-app **⟳ Refresh** button just re-reads
-PMD_Planning — it never touches Graph.
+Planning data now comes straight from Epicor REST (BAQ) instead of the
+.xlsm workbook. A small PowerShell script (`scripts/sync-epicor-to-sp.ps1`)
+runs on the always-on PC at the PMD shop floor every 15 minutes via
+Task Scheduler, pulls released PMD orders, and upserts them to
+PMD_Planning. The in-app **⟳ Refresh** button just re-reads
+PMD_Planning — no API or Graph calls from the browser, so credentials
+never touch the front end.
 
-### C.1 Create the flow
+### D.1 One-time PC setup
 
-1. Open `https://make.powerautomate.com` → sign in with the same
-   account that has Edit on ReseroOperationsAU.
-2. **+ Create → Scheduled cloud flow**.
-3. Name: `PMD Daily Planning Sync`.
-4. Starts: pick `06:00` Sydney time.
-5. Repeat every `1 Day` (or 30 min if planning is edited mid-day).
+```powershell
+# 1. PowerShell 5.1 ships with Windows. Install the two modules.
+Install-Module PnP.PowerShell    -Scope CurrentUser -Force
+Install-Module CredentialManager -Scope CurrentUser -Force
 
-### C.2 Add the steps
+# 2. Make a folder for config + logs (outside the git repo).
+New-Item -ItemType Directory C:\PMDSync -Force | Out-Null
+```
 
-**Step 1 — Run script** (Office Scripts). Reads the .xlsm and returns
-the rows. Column letters match the live workbook (A,B,C,D,E,F,G,H,O,Q,R):
+### D.2 Register an Entra ID app for SharePoint writes
 
-- Action: **Excel Online (Business) → Run script**
-- File: `Shared Documents/General/Planning/PMD/PMD Schedule_master_epicor 300424.xlsm`
-- Script (paste into Office Scripts editor first, save as
-  `read-pmd-planning`):
+You need an app-only identity so the scheduled task can write to
+PMD_Planning without an interactive logon. Cert-based, no client
+secrets — uses Microsoft's recommended modern auth.
 
-```ts
-// Excel column layout (matches src/dal/sharepoint.ts:syncPlanningFromExcel):
-//   A=Machine  B=StartDateTime  C=QtyPerHour  D=Due_Date
-//   E=JobHead_JobNum  F=JobHead_PartNum  G=JobHead_PartDescription
-//   H=Calculated_RemainingQty  O=DIENumber  Q=Duration  R=DIEChange
-function main(workbook: ExcelScript.Workbook): Row[] {
-  const sheet = workbook.getWorksheet('Planning');
-  const used = sheet.getUsedRange();
-  if (!used) return [];
-  const values = used.getValues();
-  const out: Row[] = [];
-  for (let i = 1; i < values.length; i++) {
-    const r = values[i];
-    if (!r[1] /* B = StartDateTime */) continue;
-    out.push({
-      machine: String(r[0] ?? ''),                  // A
-      startDateTime: String(r[1] ?? ''),            // B
-      qtyPerHour: Number(r[2] ?? 0),                // C
-      dueDate: String(r[3] ?? ''),                  // D
-      jobNumber: String(r[4] ?? ''),                // E
-      partNumber: String(r[5] ?? ''),               // F
-      partDescription: String(r[6] ?? ''),          // G
-      remainingQty: String(r[7] ?? ''),             // H — list column is Text
-      dieNumber: String(r[14] ?? ''),               // O
-      duration: Number(r[16] ?? 0),                 // Q
-      dieChange: String(r[17] ?? ''),               // R
-    });
-  }
-  return out;
-}
-interface Row {
-  machine: string;
-  startDateTime: string;
-  qtyPerHour: number;
-  dueDate: string;
-  jobNumber: string;
-  partNumber: string;
-  partDescription: string;
-  remainingQty: string;
-  dieNumber: string;
-  duration: number;
-  dieChange: string;
+```powershell
+# Pick a 10-year cert lifetime and store it in CurrentUser\My.
+# Tenant + Username = a global admin (one-time, only to register the app).
+Register-PnPEntraIDAppForInteractiveLogin `
+  -ApplicationName "PMD-Planning-Sync" `
+  -Tenant "<tenant>.onmicrosoft.com" `
+  -Interactive `
+  -ValidYears 10
+```
+
+That command:
+- Creates the app registration in Entra ID
+- Issues a self-signed certificate, installs it in `CurrentUser\My`
+- Prints the **ClientId** and **Thumbprint** — note them down.
+
+Then in Entra ID admin → API permissions: grant `Sites.Selected`
+(Application). Then run **one** elevated PowerShell to allow this
+single site:
+
+```powershell
+# Replace <site> with the PMD site URL, <ClientId> with the app id.
+Connect-PnPOnline -Url "https://<tenant>-admin.sharepoint.com" -Interactive
+Grant-PnPAzureADAppSitePermission `
+  -AppId "<ClientId>" `
+  -DisplayName "PMD-Planning-Sync" `
+  -Site "https://<tenant>.sharepoint.com/sites/<PMDsite>" `
+  -Permissions Write
+```
+
+### D.3 Store the Epicor credential
+
+```powershell
+# Open cmd.exe (cmdkey doesn't work in PS 7+ window):
+cmdkey /generic:PMDSync.Epicor /user:<EpicorUser> /pass:<EpicorPassword>
+```
+
+`PMDSync.Epicor` is the credential name the script reads. The user
+field is the Basic-auth username, the password field is whatever Epicor
+wants in the Basic header (most Kinetic deployments accept the user
+password; some use an API token in its place).
+
+If your Epicor also requires an `X-API-Key` header (Kinetic 2021+),
+put that *key* (which is an identifier, not a secret per se) in
+`config.json` below.
+
+### D.4 Drop the non-secret config in place
+
+Copy `scripts/sync-epicor-to-sp.config.example.json` to
+`C:\PMDSync\config.json` and fill in:
+
+```json
+{
+  "EpicorUrl":         "https://<epicor-host>/<EnvName>/api/v2/odata/<Company>/BaqSvc/<BaqId>_BaqId/",
+  "EpicorApiKey":      "<paste-X-API-Key-here-or-leave-empty>",
+  "SharePointUrl":     "https://<tenant>.sharepoint.com/sites/<PMDsite>",
+  "PlanningListTitle": "PMD_Planning",
+  "SPClientId":        "<ClientId-from-step-D2>",
+  "SPTenantId":        "<your-tenant-guid>",
+  "SPCertThumbprint":  "<Thumbprint-from-step-D2>"
 }
 ```
 
-**Step 2 — Clear PMD_Planning** (so we replace, not append):
+The repo never sees this file — it's ignored by `.gitignore` even if
+someone drops a copy under `scripts/`.
 
-- Action: **SharePoint → Get items**
-- Site: `https://reseroglobal.sharepoint.com/sites/ReseroOperationsAU`
-- List: `PMD_Planning`
-- (no filter — pull all)
-- Then **Apply to each** item → **Delete item**.
+### D.5 Smoke-test once
 
-**Step 3 — Insert rows**. Field names below match the live
-PMD_Planning schema:
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File C:\PMDSync\sync-epicor-to-sp.ps1
+```
 
-- **Apply to each** on `outputs('Run_script')?['result']`
-- Inside, **SharePoint → Create item**
-- Site: same
-- List: `PMD_Planning`
-- Fields (internal names):
-  - `Title` = `items('Apply_to_each_2')?['machine']`
-  - `StartDateTime` = `items('Apply_to_each_2')?['startDateTime']`
-  - `QTYperHour` = `items('Apply_to_each_2')?['qtyPerHour']`
-  - `DueDate` = `items('Apply_to_each_2')?['dueDate']`
-  - `JobHead_JobNum` = `items('Apply_to_each_2')?['jobNumber']`
-  - `JobHead_PartNum` = `items('Apply_to_each_2')?['partNumber']`
-  - `JobHead_PartDescription` = `items('Apply_to_each_2')?['partDescription']`
-  - `Calculated_RemainingQty` = `items('Apply_to_each_2')?['remainingQty']`
-  - `DIENumber` = `items('Apply_to_each_2')?['dieNumber']`
-  - `Duration` = `items('Apply_to_each_2')?['duration']`
-  - `DIEChange` = `items('Apply_to_each_2')?['dieChange']`
+You should see something like:
 
-**Step 4 — Save & test**. Use the **Test** button → Manually → Run.
-Watch the run history; if rows appear in PMD_Planning, you're done.
+```
+[2026-06-02 14:00:01] GET https://...BaqSvc/...
+[2026-06-02 14:00:03]   Epicor returned 423 rows
+[2026-06-02 14:00:03]   Kept 38 after PMD/Released filter
+[2026-06-02 14:00:11] Done: +6 (added)  ~31 (updated)  -2 (removed)  0 errors
+```
 
-### C.3 Refresh button in the app
+Then refresh PMD_Planning in SharePoint and confirm rows are correct.
 
-The in-app **⟳ Refresh** now just re-reads PMD_Planning (which the
-flow keeps fresh). Operators hit it after the planning team says "the
-new orders are in" without waiting for the next scheduled run.
+### D.6 Schedule it
 
-If you ever need to test the Office Scripts piece manually without
-waiting for the schedule, use the flow's **Run** button or call the
-script straight from Excel Online → Automate.
+Open **Task Scheduler** → **Create Task**:
+
+- **General** tab
+  - Name: `PMD Planning Sync`
+  - "Run whether user is logged on or not"
+  - "Run with highest privileges" (only if your account requires it)
+- **Triggers** tab → New
+  - Daily, recur every `1 day`
+  - "Repeat task every `15 minutes` for a duration of `1 day`"
+- **Actions** tab → New
+  - Program: `powershell.exe`
+  - Arguments: `-NoProfile -ExecutionPolicy Bypass -File "C:\PMDSync\sync-epicor-to-sp.ps1" *>> "C:\PMDSync\sync.log"`
+- **Settings**: tick "Allow task to be run on demand", "If the task fails, restart every 5 min, attempt 3 times".
+
+Tail `C:\PMDSync\sync.log` for run history.
+
+### D.7 What the script writes to PMD_Planning
+
+Field mapping (left = Epicor BAQ field, right = SharePoint internal name):
+
+| Epicor | SharePoint | Note |
+|---|---|---|
+| `JobHead_JobNum` | `Title` | natural key + display |
+| `JobHead_JobNum` | `JobHead_JobNum` | queryable copy |
+| `JobHead_PartNum` | `JobHead_PartNum` | |
+| `JobHead_PartDescription` | `JobHead_PartDescription` | |
+| `Calculated_RemainingQty` | `Calculated_RemainingQty` | |
+| `JobHead_StartDate` | `StartDateTime` | |
+| `JobHead_ReqDueDate` | `Due_Date` | |
+| `Calculated_RemaingLaborHrs` | `Duration` | hours |
+| `JobOper_ProdStandard` | `QTYperHour` | |
+
+Filter:
+`JobHead_JobReleased = true AND JobHead_PersonID = 'PMD' AND NOT JobHead_JobClosed AND NOT JobHead_JobComplete`
+
+Orphans (jobs that disappear from the Epicor result set) are deleted
+from PMD_Planning, so the list always reflects the latest active PMD
+workload.
 
 ---
 
@@ -421,7 +456,9 @@ script straight from Excel Online → Automate.
 | `403` from any list GET | Operator doesn't have Edit on that list | SharePoint Site Settings → Permissions → ensure they're in `PMD-Members` (or whatever Edit group you used) |
 | Sign off & Save writes nothing | No supervisor selected, or count end < count start | Toast tells you; check console |
 | Smoke test fails on `lockShift` 500 | One of the 3 production lists' column missing or required | Check the failed list's settings → which column was required? |
-| Daily Power Automate run shows 429 | Throttling on bulk delete | Add a 30 s Delay step between Get items and Apply-to-each-Delete |
+| `sync.log` shows `Missing Credential Manager entry 'PMDSync.Epicor'` | Cred was created under a different Windows user | Re-run `cmdkey` as the user the scheduled task runs as |
+| `sync.log` shows 401 from Epicor | Wrong user/password or missing X-API-Key | Check `cmdkey /list:PMDSync.Epicor`; set `EpicorApiKey` in config.json |
+| `sync.log` shows 403 from SharePoint | App permission not granted on that site | Re-run `Grant-PnPAzureADAppSitePermission` (§ D.2) with `Write` |
 
 ---
 
@@ -430,5 +467,5 @@ script straight from Excel Online → Automate.
 Every step is reversible:
 
 - **SPFx**: in App Catalog, delete the `.sppkg` → web part disappears from pages.
-- **Power Automate**: turn off the flow (top-right toggle).
+- **Epicor sync**: Task Scheduler → disable `PMD Planning Sync`. PMD_Planning will go stale but the app keeps working with the last-synced values.
 - **Lists**: data lives on. If you need to start clean: Site Contents → List Settings → Delete this list.

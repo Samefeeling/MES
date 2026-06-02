@@ -108,10 +108,10 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .op-meta input,.op-meta select{padding:10px 12px;border:2px solid var(--bd);border-radius:8px;font-size:17px;background:#fff;min-height:52px;color:var(--tx);width:auto}
 .op-meta input[disabled]{background:#f1f5f9;color:var(--mu)}
 .op-meta .m-date input{width:160px}
-.op-meta .m-mc select{width:120px}
-.op-meta .m-job select{width:170px}
+.op-meta .m-mc select{width:88px}
+.op-meta .m-job input{width:170px}
 .op-meta .m-part input,.op-meta .m-desc input{width:160px}
-.op-meta .m-op select,.op-meta .m-sup select{width:200px}
+.op-meta .m-op select,.op-meta .m-sup select{width:140px}
 
 .dnav-btn,.today-btn{padding:10px 14px;border:2px solid var(--bd);background:#fff;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;min-height:52px;min-width:52px;color:var(--tx)}
 .today-btn{background:var(--theme-dark);color:var(--theme-on-dark);border-color:var(--theme-dark);padding:10px 18px}
@@ -235,6 +235,30 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .btn-primary-big{padding:14px 22px;background:var(--theme-dark);color:var(--theme-on-dark);border:0;border-radius:10px;font-weight:800;font-size:17px;cursor:pointer;min-height:56px}
 .btn-primary-big:hover{filter:brightness(.92)}
 .bd-note{width:100%;min-height:120px;border:2px solid var(--bd);border-radius:10px;padding:12px;font-size:17px;font-family:inherit;background:#fef9c3}
+
+/* ===== KPI machine drill ===== */
+.kpi-table tr[data-drill]{cursor:pointer}
+.kpi-table tr[data-drill]:hover{background:#eff6ff}
+.drill-body{display:flex;flex-direction:column;gap:14px;max-height:70vh;overflow:auto}
+.drill-shift{border:2px solid var(--bd);border-radius:12px;padding:14px;background:#f8fafc}
+.drill-shift h4{margin:0 0 10px;font-size:18px;font-weight:800;color:var(--theme-dark)}
+.drill-kpis{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin-bottom:10px}
+.drill-kpis>div{display:flex;flex-direction:column;background:#fff;border:1px solid var(--bd);border-radius:8px;padding:6px 8px;text-align:center}
+.drill-kpis label{font-size:11px;font-weight:700;color:var(--mu);text-transform:uppercase}
+.drill-kpis b{font-size:18px;font-weight:800;color:var(--tx)}
+.drill-kpis b.r{color:var(--rd)}
+.drill-jobs{font-size:14px;color:var(--mu);margin-bottom:8px}
+.drill-jobs label{font-weight:700;color:var(--tx)}
+.ho-job{border-top:1px dashed var(--bd);padding-top:8px;margin-top:8px}
+.ho-job-head{font-size:13px;font-weight:700;color:var(--theme-dark);margin-bottom:6px}
+.ho-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
+.ho-cell{background:#fff;border:1px solid var(--bd);border-radius:8px;padding:6px 8px;font-size:13px;display:flex;flex-direction:column;gap:2px}
+.ho-cell b{font-size:12px;color:var(--mu);font-weight:700}
+.ho-cell span{color:var(--tx);white-space:pre-wrap}
+@media (max-width:900px){
+  .drill-kpis{grid-template-columns:repeat(4,1fr)}
+  .ho-grid{grid-template-columns:1fr}
+}
 
 /* ===== toast ===== */
 .toast{position:fixed;top:18px;right:18px;background:#1e293b;color:#fff;padding:14px 22px;border-radius:10px;font-size:16px;font-weight:700;z-index:300;opacity:0;transform:translateY(-10px);transition:.2s;pointer-events:none;max-width:80vw;box-shadow:0 4px 16px rgba(0,0,0,.25)}

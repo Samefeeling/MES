@@ -95,17 +95,50 @@ function blankRecord(slot: number): ProductionRecord {
 }
 
 function shiftOrders(): PlanningOrder[] {
-  // Show every released order for the selected machine, regardless of whether
-  // its planned window overlaps the viewed shift — in real production jobs
-  // slip early or late, so the operator must be able to pick yesterday's
-  // overrun job or tomorrow's job that started early. Sorted by plannedStart
-  // so the closest-to-now one floats to the top.
-  return S!.planning
-    .filter((o) => o.machineCode === S!.mc && o.released)
-    .sort(
-      (a, b2) =>
-        new Date(a.plannedStart).getTime() - new Date(b2.plannedStart).getTime(),
-    );
+  // Epicor doesn't carry a machine assignment, so the operator picks the
+  // machine separately and gets every PMD-released order in the dropdown
+  // (sorted by plannedStart, closest-to-now first). When viewing a past
+  // shift, we also surface any JobNum that appears in PMD_Production for
+  // this shift but is no longer in Planning (e.g. Epicor closed the job
+  // and the sync removed it) — without this, historical signed-off shifts
+  // would have a blank dropdown and operators couldn't review them.
+  const planned = S!.planning.slice().sort(
+    (a, b2) =>
+      new Date(a.plannedStart).getTime() - new Date(b2.plannedStart).getTime(),
+  );
+  const knownIds = new Set(planned.map((o) => o.jobNumber));
+  const historicalIds = Array.from(
+    new Set(
+      S!.prod
+        .map((r) => r.jobNumber)
+        .filter((j) => !!j && !knownIds.has(j)),
+    ),
+  );
+  const historical: PlanningOrder[] = historicalIds.map((j) => {
+    // Carry the part number from the saved production row if we have it,
+    // so the disabled Part# field still shows something useful on review.
+    const sample = S!.prod.find((r) => r.jobNumber === j);
+    return {
+      id: 0,
+      jobNumber: j,
+      machineCode: '',
+      originalMachine: '',
+      partNumber: '',
+      partDescription: '(not in Planning — closed/removed)',
+      plannedStart: '',
+      plannedEnd: '',
+      jobRequired: 0,
+      qtyPerHr: 0,
+      duration: 0,
+      released: false,
+      isDieChange: false,
+      manuallyAdded: true,
+      source: 'Manual',
+      // Use sample only for guarding against undefined branches in future
+      ...(sample ? {} : {}),
+    } satisfies PlanningOrder;
+  });
+  return [...planned, ...historical];
 }
 
 function selectedOrder(): PlanningOrder | undefined {
@@ -171,10 +204,9 @@ async function reload(): Promise<void> {
   const id = sid();
   S!.prod = await dalRef.listProduction({ machineCode: S!.mc, shiftId: id });
   const orders = shiftOrders();
-  const haveJob = (j: string): boolean =>
-    orders.some((o) => o.jobNumber === j) ||
-    S!.prod.some((r) => r.jobNumber === j);
-  if (S!.selJob && !haveJob(S!.selJob)) S!.selJob = '';
+  // Don't clear a manually-typed JobNum just because it isn't in Planning
+  // yet — the operator may be entering an order that was released in Epicor
+  // after the most recent sync.
   if (!S!.selJob && orders.length) S!.selJob = orders[0].jobNumber;
   const c = canonical();
   if (c) {
@@ -261,24 +293,26 @@ function buildMeta(): string {
     )
     .join('');
   const orders = shiftOrders();
-  const jobOpts = [`<option value="">—</option>`]
-    .concat(
-      orders.map((o) => {
-        const d = new Date(o.plannedStart);
-        const when = isFinite(d.getTime())
-          ? ` · ${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`
-          : '';
-        return `<option value="${escapeHtml(o.jobNumber)}"${
-          o.jobNumber === S!.selJob ? ' selected' : ''
-        }>${o.isDieChange ? '🔧 ' : ''}${escapeHtml(o.jobNumber)}${when}</option>`;
-      }),
-    )
+  // datalist + text input — operators can pick a Released order from the
+  // list (autocomplete) OR type a JobNum manually for the case where the
+  // order was just released in Epicor and the 15-min sync hasn't run yet.
+  const dataOpts = orders
+    .map((o) => {
+      const d = new Date(o.plannedStart);
+      const when = isFinite(d.getTime())
+        ? ` · ${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`
+        : '';
+      const tag = o.manuallyAdded ? ' (history)' : '';
+      const label = `${o.jobNumber}${when}${tag}`;
+      return `<option value="${escapeHtml(o.jobNumber)}">${escapeHtml(label)}</option>`;
+    })
     .join('');
   const o = selectedOrder();
-  // Date moved into the action bar — meta is now strictly "who/what is running".
   return `<div class="op-meta">
     <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
-    <label class="m-job">Job# <select data-meta="job">${jobOpts}</select></label>
+    <label class="m-job">Job# <input type="text" list="op-job-list" data-meta="job" value="${escapeHtml(
+      S!.selJob,
+    )}" placeholder="pick or type"><datalist id="op-job-list">${dataOpts}</datalist></label>
     <label class="m-part">Part# <input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
     <label class="m-desc">Product Description <input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
     <label class="m-op">Operator <select data-meta="operator">${selOpts(

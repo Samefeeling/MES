@@ -3,3 +3,7 @@ dist/
 *.local
 .DS_Store
 coverage/
+# defensive: never commit the real Epicor sync config or any cert/key file
+scripts/sync-epicor-to-sp.config.json
+scripts/*.pfx
+scripts/*.pem
