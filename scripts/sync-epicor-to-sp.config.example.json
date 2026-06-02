@@ -1,13 +1,16 @@
 {
-  "_comment_layout": "Copy this file to C:\\PMDSync\\config.json on the shop-floor PC and fill in real values. Never commit the real file to git. Secrets (Epicor password / API key) live in Windows Credential Manager — see docs/DEPLOYMENT.md section D.",
+  "_comment_layout": "Copy this file to C:\\PMDSync\\config.json on the PC that runs the sync, and fill in real values. Never commit the real file to git. Secrets (Epicor password / API key) live in Windows Credential Manager — see docs/DEPLOYMENT.md section D.",
 
-  "EpicorUrl":          "https://<epicor-host>/<EnvName>/api/v2/odata/<Company>/BaqSvc/<BaqId>_BaqId/",
+  "EpicorUrl":          "https://<epicor-host>/<EnvName>/api/v1/BaqSvc/<BaqId>(<Param>)/",
   "EpicorApiKey":       "",
 
   "SharePointUrl":      "https://<tenant>.sharepoint.com/sites/<PMDsite>",
   "PlanningListTitle":  "PMD_Planning",
 
-  "SPClientId":         "<entra-app-client-id>",
-  "SPTenantId":         "<tenant-id-guid>",
-  "SPCertThumbprint":   "<sha1-thumbprint-of-the-cert-in-CurrentUser\\My>"
+  "_comment_auth":      "Two SharePoint auth modes. Pick ONE. For temporary dev use on your own PC, use Interactive (no Entra app needed). For production unattended on the shop-floor PC, use Certificate.",
+  "SPAuthMode":         "Interactive",
+
+  "SPClientId":         "",
+  "SPTenantId":         "",
+  "SPCertThumbprint":   ""
 }

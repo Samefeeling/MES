@@ -23,8 +23,18 @@ if (-not (Test-Path $cfgPath)) {
   throw "Missing config file at $cfgPath. Copy scripts/sync-epicor-to-sp.config.example.json there and fill in values."
 }
 $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
-foreach ($key in 'EpicorUrl','SharePointUrl','PlanningListTitle','SPClientId','SPTenantId','SPCertThumbprint') {
+foreach ($key in 'EpicorUrl','SharePointUrl','PlanningListTitle') {
   if (-not $cfg.$key) { throw "Config $cfgPath missing required key: $key" }
+}
+# SharePoint auth mode: 'Certificate' for production (unattended on the
+# shop-floor PC), 'Interactive' for dev/temp use on a developer PC where
+# the token can cache against the signed-in user.
+$spAuth = if ($cfg.PSObject.Properties.Match('SPAuthMode').Count -and $cfg.SPAuthMode) {
+  [string]$cfg.SPAuthMode
+} elseif ($cfg.PSObject.Properties.Match('SPCertThumbprint').Count -and $cfg.SPCertThumbprint) {
+  'Certificate'
+} else {
+  'Interactive'
 }
 
 # ---- 2. load secrets from Windows Credential Manager -------------------
@@ -63,14 +73,30 @@ $keep = $rows | Where-Object {
 }
 LogMsg "  Kept $($keep.Count) after PMD/Released filter"
 
-# ---- 5. connect SharePoint via cert (app-only) -------------------------
+# ---- 5. connect SharePoint --------------------------------------------
 Import-Module PnP.PowerShell -ErrorAction Stop
-Connect-PnPOnline `
-  -Url $cfg.SharePointUrl `
-  -ClientId $cfg.SPClientId `
-  -Tenant $cfg.SPTenantId `
-  -Thumbprint $cfg.SPCertThumbprint `
-  -WarningAction SilentlyContinue
+if ($spAuth -eq 'Certificate') {
+  foreach ($k in 'SPClientId','SPTenantId','SPCertThumbprint') {
+    if (-not $cfg.$k) { throw "SPAuthMode=Certificate requires $k in config.json" }
+  }
+  Connect-PnPOnline `
+    -Url $cfg.SharePointUrl `
+    -ClientId $cfg.SPClientId `
+    -Tenant $cfg.SPTenantId `
+    -Thumbprint $cfg.SPCertThumbprint `
+    -WarningAction SilentlyContinue
+} else {
+  # Interactive: pops a browser the first time, caches the token under
+  # the current user; subsequent scheduled runs reuse the cache until the
+  # refresh token expires (~90 days). Use this only on a dev PC.
+  $clientId = if ($cfg.PSObject.Properties.Match('SPClientId').Count -and $cfg.SPClientId) { $cfg.SPClientId } else { $null }
+  if ($clientId) {
+    Connect-PnPOnline -Url $cfg.SharePointUrl -Interactive -ClientId $clientId -WarningAction SilentlyContinue
+  } else {
+    # Uses PnP.PowerShell's bundled multi-tenant app — no Entra setup needed.
+    Connect-PnPOnline -Url $cfg.SharePointUrl -Interactive -WarningAction SilentlyContinue
+  }
+}
 try {
   # ---- 6. diff against existing list -----------------------------------
   $existing = Get-PnPListItem -List $cfg.PlanningListTitle -PageSize 1000 -Fields @('ID','JobHead_JobNum')
