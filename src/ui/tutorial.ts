@@ -14,9 +14,11 @@ interface TutorialStep {
   hint?: string;
 }
 
+export type TutorialTrack = 'operator' | 'supervisor';
+
 const TUTORIAL_KEY = 'pmd_tutorial_seen';
 
-const STEPS: TutorialStep[] = [
+const OPERATOR_STEPS: TutorialStep[] = [
   {
     id: 'welcome',
     title: 'Welcome',
@@ -104,13 +106,61 @@ const STEPS: TutorialStep[] = [
     id: 'done',
     title: 'You are done',
     narration:
-      'That is the whole shift, every shift, the same steps. The ❓ Tutorial button at the top is always here if you forget. Have a good shift.',
+      'That is the whole shift, every shift, the same steps. The ❓ Operator button at the top is always here if you forget. Have a good shift.',
     hint: 'Tap Finish to close.',
   },
 ];
 
+const SUPERVISOR_STEPS: TutorialStep[] = [
+  {
+    id: 'sv-welcome',
+    title: 'Supervisor: how to unlock a signed-off shift',
+    narration:
+      'Sometimes you need to fix something on a shift after it was signed off. This short walkthrough shows the four taps that get you there. The whole thing takes one minute.',
+    hint: 'Tap Next to start.',
+  },
+  {
+    id: 'sv-banner',
+    title: 'Step 1 — Find the orange banner',
+    narration:
+      'When a shift has been signed off, an orange banner appears at the top of the operator sheet. It tells you who signed off and when. If you do not see a banner right now, that just means the shift you are looking at has not been signed off yet — open a past shift to see one.',
+    target: '.lock-banner',
+    hint: 'No banner here? Use the ◀ arrow at the top to step back to a past shift.',
+  },
+  {
+    id: 'sv-button',
+    title: 'Step 2 — Tap the Unlock button',
+    narration:
+      'On the right side of the orange banner is an Unlock button. Tap it. A confirmation dialog opens — nothing is changed yet.',
+    target: '.lock-unlock-btn',
+  },
+  {
+    id: 'sv-confirm',
+    title: 'Step 3 — Read and confirm',
+    narration:
+      'The dialog shows who signed off, when, and reminds you that the shift will need to be signed off a second time afterwards. If that is okay, tap the orange Unlock button to confirm. The banner disappears and the operator can edit again.',
+  },
+  {
+    id: 'sv-after',
+    title: 'Step 4 — After the fix is done',
+    narration:
+      'Once the operator has fixed what was wrong, they tap ✅ Sign off & Save again. Your name as supervisor is recorded on the new signature. The numbers in the master roll-up are updated.',
+    hint: 'Tap Finish to close.',
+  },
+];
+
+const TRACKS: Record<TutorialTrack, TutorialStep[]> = {
+  operator: OPERATOR_STEPS,
+  supervisor: SUPERVISOR_STEPS,
+};
+
 let host: HTMLElement | null = null;
 let idx = 0;
+let track: TutorialTrack = 'operator';
+
+function steps(): TutorialStep[] {
+  return TRACKS[track];
+}
 
 function ensureHost(): HTMLElement {
   if (host) return host;
@@ -190,13 +240,14 @@ function showStep(i: number): void {
     requestAnimationFrame(() => requestAnimationFrame(() => showStep(i)));
     return;
   }
-  if (i < 0 || i >= STEPS.length) return close();
-  const step = STEPS[i];
+  const all = steps();
+  if (i < 0 || i >= all.length) return close();
+  const step = all[i];
   const el = ensureHost();
   el.classList.add('open');
   idx = i;
   (el.querySelector('.tut-progress') as HTMLElement).textContent =
-    `Step ${i + 1} of ${STEPS.length}`;
+    `Step ${i + 1} of ${all.length}`;
   (el.querySelector('.tut-title') as HTMLElement).textContent = step.title;
   (el.querySelector('.tut-narration') as HTMLElement).textContent = step.narration;
   const hintEl = el.querySelector('.tut-hint') as HTMLElement;
@@ -204,12 +255,12 @@ function showStep(i: number): void {
   hintEl.style.display = step.hint ? '' : 'none';
   (el.querySelector('.tut-prev') as HTMLButtonElement).disabled = i === 0;
   (el.querySelector('.tut-next') as HTMLButtonElement).textContent =
-    i === STEPS.length - 1 ? 'Finish ✓' : 'Next ▶';
+    i === all.length - 1 ? 'Finish ✓' : 'Next ▶';
   positionFor(step);
 }
 
 function next(): void {
-  if (idx >= STEPS.length - 1) return close();
+  if (idx >= steps().length - 1) return close();
   showStep(idx + 1);
 }
 
@@ -229,11 +280,12 @@ function close(): void {
 }
 
 /** Open the tutorial at step 0 — call from a UI button. */
-export function startTutorial(): void {
+export function startTutorial(which: TutorialTrack = 'operator'): void {
+  track = which;
   showStep(0);
 }
 
-/** First-visit auto-launch. No-op if the user has dismissed it before. */
+/** First-visit auto-launch (operator track). No-op if dismissed before. */
 export function maybeAutoStartTutorial(): void {
   try {
     if (localStorage.getItem(TUTORIAL_KEY)) return;
@@ -241,5 +293,5 @@ export function maybeAutoStartTutorial(): void {
     return; // storage blocked — don't pester
   }
   // Wait for the initial route to render so target elements exist.
-  setTimeout(startTutorial, 800);
+  setTimeout(() => startTutorial('operator'), 800);
 }

@@ -339,6 +339,82 @@ B instead.
 
 ---
 
+# Part 3 — Supervisors: Unlocking a Signed-off Shift
+
+> Goal: a supervisor can re-open a shift that was already saved so the
+> operator can fix something. Four taps, one minute.
+
+## Scene 13 — Find the orange banner
+
+**SHOW**: An operator sheet for a past shift, with the orange "🔒
+Signed off" banner visible at the top.
+
+**NARRATION**
+> When a shift has been signed off, an orange banner appears at the
+> top of the operator sheet. It tells you who signed off and when.
+> If you do not see a banner, the shift has not been signed off yet,
+> or you are looking at the wrong day. Use the back arrow next to
+> the date to step back to the right shift.
+
+**ON-SCREEN TEXT**
+> Locked shift → orange banner at the top
+
+**PAUSE 4 seconds**
+
+---
+
+## Scene 14 — Tap Unlock
+
+**SHOW**: Finger lands on the orange Unlock button on the right side
+of the banner. A confirmation dialog opens.
+
+**NARRATION**
+> On the right side of the orange banner is an **Unlock** button.
+> Tap it. A dialog opens. Nothing has changed yet — the shift is
+> still locked until you confirm.
+
+**ON-SCREEN TEXT**
+> Tap **🔓 Unlock** on the banner
+
+**PAUSE 3 seconds**
+
+---
+
+## Scene 15 — Confirm
+
+**SHOW**: The unlock dialog with the orange Unlock confirm button.
+Trainer taps it. The banner disappears.
+
+**NARRATION**
+> Read the dialog. It shows who signed off and when, and reminds you
+> that the shift will need to be signed off again afterwards. If you
+> agree, tap the orange **Unlock** button. The banner disappears.
+> The operator can now edit the shift.
+
+**ON-SCREEN TEXT**
+> Read → tap **🔓 Unlock** → banner gone
+
+**PAUSE 4 seconds**
+
+---
+
+## Scene 16 — After the fix
+
+**SHOW**: Operator edits a slot. Then taps the green Sign Off & Save
+button. The signoff dialog confirms.
+
+**NARRATION**
+> The operator fixes what was wrong. Then they tap the green **Sign
+> Off and Save** button again. Your name is recorded on the new
+> signature. The master roll-up is updated with the new numbers.
+
+**ON-SCREEN TEXT**
+> After the fix → operator signs off again
+
+**PAUSE 4 seconds**
+
+---
+
 # Closing
 
 **SHOW**: The full filled-in sheet for a complete shift. Then a fade
@@ -386,6 +462,24 @@ to the quick reference card (next section).
 │   13.  Tap green button: SIGN OFF & SAVE → Confirm      │
 │                                                         │
 │   PROBLEM?  Call the supervisor before tapping Save.    │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                                                         │
+│     SUPERVISOR — UNLOCKING A SIGNED-OFF SHIFT           │
+│                                                         │
+│    1.  Open the operator sheet for the right shift      │
+│        (use ◀ next to the date to step back)            │
+│    2.  Look for the orange 🔒 SIGNED OFF banner at top  │
+│    3.  Tap the orange 🔓 UNLOCK button on the banner    │
+│    4.  Read the dialog → tap 🔓 UNLOCK to confirm       │
+│    5.  Operator fixes what was wrong                    │
+│    6.  Operator taps SIGN OFF & SAVE again              │
+│                                                         │
+│   The master roll-up now reflects the fix.              │
 │                                                         │
 └─────────────────────────────────────────────────────────┘
 ```

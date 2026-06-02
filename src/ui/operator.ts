@@ -607,6 +607,35 @@ function applyShiftTheme(): void {
   if (document.body.className !== cls) document.body.className = cls;
 }
 
+function lockInfo(): { lockedBy: string; lockedAt: string } | null {
+  // A shift is "signed off" when any of its production records carries
+  // the locked flag (PMD_Production.locked = true after lockShift). All
+  // records in a shift share the same lockedBy/lockedAt by construction,
+  // so the first one we find is canonical.
+  for (const r of S!.prod) {
+    if (r.locked) return { lockedBy: r.lockedBy, lockedAt: r.lockedAt };
+  }
+  return null;
+}
+
+function buildLockBanner(): string {
+  const info = lockInfo();
+  if (!info) return '';
+  const when = info.lockedAt
+    ? new Date(info.lockedAt).toLocaleString('en-AU', {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      })
+    : '';
+  return `<div class="lock-banner">
+    <div class="lock-text">
+      <b>🔒 Signed off</b>
+      <span>by ${escapeHtml(info.lockedBy || '—')}${when ? ' · ' + escapeHtml(when) : ''}</span>
+    </div>
+    <button type="button" class="lock-unlock-btn" data-unlock>🔓 Unlock</button>
+  </div>`;
+}
+
 function render(): void {
   applyShiftTheme();
   const app = document.getElementById('app')!;
@@ -616,6 +645,7 @@ function render(): void {
       : buildSummary();
   app.innerHTML = `<div class="op-sheet">
     ${buildActionBar()}
+    ${buildLockBanner()}
     ${buildMeta()}
     ${detail}
   </div>`;
@@ -723,6 +753,7 @@ function wire(): void {
   // Buttons
   app.querySelector('[data-refresh]')?.addEventListener('click', () => void refreshAll());
   app.querySelector('[data-saveclear]')?.addEventListener('click', () => openSaveSignoffModal());
+  app.querySelector('[data-unlock]')?.addEventListener('click', () => openUnlockModal());
   wireStatusPicker();
 }
 
@@ -1082,6 +1113,45 @@ async function doSignoffSave(): Promise<void> {
     console.error('[signoff] lockShift failed:', e);
     const msg = (e as Error)?.message ?? String(e);
     toast(`Save failed: ${msg.slice(0, 140)}`, 'err');
+  }
+}
+
+function openUnlockModal(): void {
+  const info = lockInfo();
+  if (!info) return;
+  const when = info.lockedAt
+    ? new Date(info.lockedAt).toLocaleString('en-AU', {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      })
+    : '';
+  openModal(`<div class="bd-modal">
+    <h3 class="bd-title">🔓 Unlock this shift?</h3>
+    <p class="bd-sub">
+      Signed off by <b>${escapeHtml(info.lockedBy || '—')}</b>${when ? ' at ' + escapeHtml(when) : ''}.
+      Unlocking lets operators edit the shift again. Someone must sign it off
+      a second time once the changes are done — otherwise the master roll-up
+      won't include the new numbers.
+    </p>
+    <div class="bd-actions">
+      <button type="button" class="btn-ghost-big" data-mod="cancel">Cancel</button>
+      <button type="button" class="btn-primary-big" data-mod="confirm">🔓 Unlock</button>
+    </div>
+  </div>`);
+  document.querySelector('[data-mod="cancel"]')?.addEventListener('click', () => closeModal());
+  document.querySelector('[data-mod="confirm"]')?.addEventListener('click', () => void doUnlock());
+}
+
+async function doUnlock(): Promise<void> {
+  try {
+    await dalRef.unlockShift(S!.mc, sid());
+    closeModal();
+    toast('Shift unlocked. Make your fixes, then sign off again.', 'ok');
+    await reload();
+  } catch (e) {
+    console.error('[unlock] failed', e);
+    const msg = (e as Error)?.message ?? String(e);
+    toast(`Unlock failed: ${msg.slice(0, 140)}`, 'err');
   }
 }
 

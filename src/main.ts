@@ -55,10 +55,13 @@ function ensureNav(): void {
     '<a href="#/" data-nav>Operator</a>' +
     '<a href="#/trace" data-nav>\u{1F50D} Trace</a>' +
     '<a href="#/kpi" data-nav>\u{1F4CA} KPIs</a>' +
-    '<button type="button" class="tut-launch" data-tut title="Walk me through the operator sheet">❓ Tutorial</button>';
-  nav
-    .querySelector('[data-tut]')
-    ?.addEventListener('click', () => startTutorial());
+    '<button type="button" class="tut-launch" data-tut="operator" title="Walk me through the operator sheet">❔ Operator</button>' +
+    '<button type="button" class="tut-launch" data-tut="supervisor" title="Walk me through unlocking a signed-off shift">\u{1F513} Supervisor</button>';
+  nav.querySelectorAll<HTMLButtonElement>('[data-tut]').forEach((b) =>
+    b.addEventListener('click', () =>
+      startTutorial(b.dataset.tut as 'operator' | 'supervisor'),
+    ),
+  );
 }
 
 async function route(): Promise<void> {
