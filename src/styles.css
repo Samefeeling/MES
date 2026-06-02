@@ -257,6 +257,16 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .lock-text span{font-size:13px;color:#92400e}
 .lock-unlock-btn{padding:10px 18px;border-radius:8px;background:#f59e0b;color:#fff;border:0;font-size:15px;font-weight:800;cursor:pointer;min-height:44px}
 .lock-unlock-btn:hover{background:#d97706}
+.lock-no-perm{font-size:13px;color:#92400e;font-style:italic;background:rgba(255,255,255,.5);padding:6px 10px;border-radius:6px}
+
+/* ===== supervisor mode toggle in the top nav ===== */
+.sv-toggle.on{background:#dcfce7 !important;color:#166534 !important;border:1px solid #86efac !important}
+.sv-toggle.on:hover{background:#bbf7d0 !important}
+
+/* ===== supervisor login modal ===== */
+.sv-login{display:flex;flex-direction:column;gap:14px}
+.sv-pwd-input{width:100%;font-size:18px;padding:14px 16px;border:2px solid var(--bd);border-radius:10px;font-family:inherit;background:#fff;box-sizing:border-box}
+.sv-pwd-input:focus{outline:none;border-color:var(--theme-dark);box-shadow:0 0 0 3px rgba(14,165,233,.18)}
 
 /* ===== built-in tutorial ===== */
 .tut-launch{background:rgba(255,255,255,.14);color:var(--theme-on-dark);border:1px solid rgba(255,255,255,.25);padding:7px 14px;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;margin-left:4px}

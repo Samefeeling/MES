@@ -133,12 +133,30 @@ function plannedInRange(order: PlanningOrder, from: Date, to: Date): boolean {
 function parseHandover(note: string): Omit<HandoverEntry, 'jobNumber'> {
   const blank = { people: '', plant: '', machine: '', material: '' };
   if (!note) return blank;
-  try {
-    const j = JSON.parse(note) as Partial<typeof blank>;
-    return { ...blank, ...j };
-  } catch {
-    return { ...blank, people: note };
+  // Live edits are stored as JSON. PMD_Production.Handover gets a
+  // formatHandover()'d "People: …\nPlant: …\nMachine: …\nMaterial: …"
+  // text blob. Parse both shapes so the cell renders the four
+  // categories instead of dumping the whole text into 👥.
+  const trimmed = note.trim();
+  if (trimmed.startsWith('{')) {
+    try {
+      const j = JSON.parse(trimmed) as Partial<typeof blank>;
+      return { ...blank, ...j };
+    } catch {
+      // fall through to the labelled-text parser
+    }
   }
+  const labelled: typeof blank = { ...blank };
+  const re = /(People|Plant|Machine|Material)\s*:\s*([^\n\r]*)/gi;
+  let m: RegExpExecArray | null;
+  let matched = false;
+  while ((m = re.exec(trimmed)) !== null) {
+    const key = m[1].toLowerCase() as keyof typeof blank;
+    labelled[key] = (m[2] ?? '').trim();
+    matched = true;
+  }
+  if (matched) return labelled;
+  return { ...blank, people: trimmed };
 }
 
 function collectHandovers(records: ProductionRecord[]): HandoverEntry[] {

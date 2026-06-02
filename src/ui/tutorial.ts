@@ -232,14 +232,13 @@ function positionFor(step: TutorialStep): void {
 }
 
 function showStep(i: number): void {
-  // The walkthrough targets operator-view DOM; switch to it first if the
-  // user kicked the tutorial off from Trace or KPIs.
-  const h = window.location.hash;
-  if (!h.startsWith('#/op') && h !== '' && h !== '#/' && h !== '#') {
-    window.location.hash = '#/';
-    requestAnimationFrame(() => requestAnimationFrame(() => showStep(i)));
-    return;
-  }
+  // We intentionally do NOT re-route here: changing the hash would call
+  // renderOperator() which wipes viewDate / shiftCode / selJob back to
+  // today's defaults, making the operator lose whatever past shift they
+  // were reviewing. If a step's target lives on a different view, the
+  // spotlight just hides itself and the card centres so the narration
+  // still reads — the operator can navigate manually if they want to
+  // practise on the live UI.
   const all = steps();
   if (i < 0 || i >= all.length) return close();
   const step = all[i];

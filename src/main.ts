@@ -2,6 +2,14 @@ import { createDataLayer, type PmdDataLayer } from './dal';
 import { renderOperator, operatorPollTick } from './ui/operator';
 import { renderTrace } from './ui/trace';
 import { renderKpi } from './ui/kpi';
+import { closeModal, openModal } from './ui/modal';
+import {
+  clearSupervisor,
+  isSupervisor,
+  onSupervisorChange,
+  tryEnterSupervisor,
+} from './ui/supervisor-auth';
+import { toast } from './ui/toast';
 import { maybeAutoStartTutorial, startTutorial } from './ui/tutorial';
 
 const dal: PmdDataLayer = createDataLayer(import.meta.env as Record<string, string>);
@@ -51,18 +59,82 @@ function setStatus(text: string): void {
 function ensureNav(): void {
   const nav = document.querySelector('.top-nav');
   if (!nav) return;
+  const sv = isSupervisor();
   nav.innerHTML =
     '<a href="#/" data-nav>Operator</a>' +
     '<a href="#/trace" data-nav>\u{1F50D} Trace</a>' +
     '<a href="#/kpi" data-nav>\u{1F4CA} KPIs</a>' +
     '<button type="button" class="tut-launch" data-tut="operator" title="Walk me through the operator sheet">❔ Operator</button>' +
-    '<button type="button" class="tut-launch" data-tut="supervisor" title="Walk me through unlocking a signed-off shift">\u{1F513} Supervisor</button>';
+    `<button type="button" class="tut-launch sv-toggle${sv ? ' on' : ''}" data-supervisor title="${
+      sv ? 'Supervisor mode is on — tap to sign out' : 'Sign in as supervisor to unlock signed-off shifts'
+    }">${sv ? '🔒 Supervisor (on)' : '🔓 Supervisor'}</button>`;
   nav.querySelectorAll<HTMLButtonElement>('[data-tut]').forEach((b) =>
     b.addEventListener('click', () =>
       startTutorial(b.dataset.tut as 'operator' | 'supervisor'),
     ),
   );
+  nav
+    .querySelector<HTMLButtonElement>('[data-supervisor]')
+    ?.addEventListener('click', onSupervisorClick);
 }
+
+function onSupervisorClick(): void {
+  if (isSupervisor()) {
+    // Already signed in — confirm sign-out (cheap one-liner, no full modal).
+    if (window.confirm('Sign out of Supervisor mode?')) {
+      clearSupervisor();
+      toast('Signed out of Supervisor mode', 'ok');
+    }
+    return;
+  }
+  promptSupervisorPassword((pwd) => {
+    if (tryEnterSupervisor(pwd)) {
+      toast('Supervisor mode on. Walking you through unlock…', 'ok');
+      // The supervisor walkthrough is the natural follow-on action after
+      // sign-in, so launch it inline. They can dismiss with Skip.
+      startTutorial('supervisor');
+    } else {
+      toast('Wrong password', 'err');
+    }
+  });
+}
+
+function promptSupervisorPassword(cb: (password: string) => void): void {
+  openModal(`<div class="bd-modal sv-login">
+    <h3 class="bd-title">🔒 Supervisor sign-in</h3>
+    <p class="bd-sub">Enter the supervisor password to enable Unlock and other supervisor actions for this session. You will be signed out automatically after the next Sign Off &amp; Save.</p>
+    <input type="password" data-pwd class="sv-pwd-input" placeholder="Password" autofocus autocomplete="off">
+    <div class="bd-actions">
+      <button type="button" class="btn-ghost-big" data-mod="cancel">Cancel</button>
+      <button type="button" class="btn-primary-big" data-mod="ok">Sign in</button>
+    </div>
+  </div>`);
+  const inp = document.querySelector<HTMLInputElement>('[data-pwd]')!;
+  const submit = (): void => {
+    const value = inp.value;
+    closeModal();
+    cb(value);
+  };
+  document
+    .querySelector<HTMLButtonElement>('[data-mod="cancel"]')!
+    .addEventListener('click', () => closeModal());
+  document
+    .querySelector<HTMLButtonElement>('[data-mod="ok"]')!
+    .addEventListener('click', submit);
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submit();
+  });
+}
+
+// Re-render the nav (and any operator-view chrome that depends on the
+// mode flag) whenever supervisor mode toggles, so the button label and
+// the lock-banner Unlock visibility stay in sync.
+onSupervisorChange(() => {
+  ensureNav();
+  // The lock banner inside the operator view caches its render decision
+  // on the supervisor state too. Re-route to re-render the active view.
+  void route();
+});
 
 async function route(): Promise<void> {
   if (pollTimer) {

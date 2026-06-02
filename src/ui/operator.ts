@@ -23,6 +23,7 @@ import { openBreakdownCascade } from './breakdown';
 import { toast } from './toast';
 import { closeModal, escapeHtml, openModal } from './modal';
 import { renderOutputRejectChart } from './charts';
+import { clearSupervisor, isSupervisor } from './supervisor-auth';
 
 // PMD Operator Production Sheet — Excel-style rebuild of modPMDOperator.bas.
 // One machine + one shift + one job at a time. 16 half-hour slots horizontally;
@@ -665,12 +666,18 @@ function buildLockBanner(): string {
         timeStyle: 'short',
       })
     : '';
+  // The Unlock button only shows in supervisor mode — operators see an
+  // explanatory note instead so they know who can re-open the shift and
+  // why nothing happens when they tap.
+  const action = isSupervisor()
+    ? `<button type="button" class="lock-unlock-btn" data-unlock>🔓 Unlock</button>`
+    : `<span class="lock-no-perm" title="Sign in via 🔓 Supervisor in the top nav to enable Unlock">Supervisor sign-in required</span>`;
   return `<div class="lock-banner">
     <div class="lock-text">
       <b>🔒 Signed off</b>
       <span>by ${escapeHtml(info.lockedBy || '—')}${when ? ' · ' + escapeHtml(when) : ''}</span>
     </div>
-    <button type="button" class="lock-unlock-btn" data-unlock>🔓 Unlock</button>
+    ${action}
   </div>`;
 }
 
@@ -1152,6 +1159,11 @@ async function doSignoffSave(): Promise<void> {
     closeModal();
     toast(`Signed off · ${S!.selJob || 'shift'} saved to Master`, 'ok');
     S!.selJob = '';
+    // Supervisor sign-in is intentionally per-action: once a shift is
+    // signed off and saved, the supervisor's elevated permission ends
+    // automatically. They need to sign in again from the top nav for
+    // the next unlock.
+    if (isSupervisor()) clearSupervisor();
     await reload();
   } catch (e) {
     // Surface the actual SP/Graph failure so we don't blindly blame "network".

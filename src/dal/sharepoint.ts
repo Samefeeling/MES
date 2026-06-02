@@ -616,6 +616,10 @@ export class SharePointDataLayer implements PmdDataLayer {
       supervisor: str(r[F.supervisor]),
       runTime: F.runTime ? num(r[F.runTime]) : 0,
       downTime: num(r[F.downTime]),
+      // Handover is the JSON {people,plant,machine,material} blob, stored
+      // when the shift was signed off. Used by the operator side-panel
+      // textareas and the KPI Handover column.
+      handover: F.handover ? str(r[F.handover]) : '',
     }));
   }
 
@@ -736,7 +740,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         supervisor: i === 0 ? h.supervisor : '',
         bdIssue: '',
         mangoTicket: '',
-        handoverNote: '',
+        handoverNote: i === 0 ? h.handover : '',
         locked: true, // headers are persisted = signed off
         lockedBy: h.supervisor,
         lockedAt: stamp,
@@ -762,13 +766,17 @@ export class SharePointDataLayer implements PmdDataLayer {
         supervisor: h.supervisor,
         bdIssue: '',
         mangoTicket: '',
-        handoverNote: '',
+        handoverNote: h.handover,
         locked: true,
         lockedBy: h.supervisor,
         lockedAt: stamp,
         createdAt: stamp,
         updatedAt: stamp,
       });
+    } else {
+      // slots[0] already exists from the timeline loop — patch its
+      // handover note in place so the canonical slot carries it.
+      slots[0].handoverNote = h.handover;
     }
     // Merge rejects into the canonical slot 0's `rejects` JSON, and per-slot
     // events into slot records when the Timeline cell matches.
@@ -1384,6 +1392,7 @@ interface HeaderRow {
   supervisor: string;
   runTime: number;
   downTime: number;
+  handover: string;
 }
 
 interface HeaderInput {
