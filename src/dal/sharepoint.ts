@@ -186,6 +186,13 @@ export interface SharePointOptions {
   graphToken?: () => Promise<string>;
   /** Path inside the site to the planning workbook. */
   planningFilePath?: string;
+  /**
+   * Server-relative path to a CSV holding planning data (preferred over
+   * reading PMD_Planning list when set). Example:
+   *   "/sites/PMD/Shared Documents/PMD/Planning.csv"
+   * Produced by scripts/sync-epicor-to-sp.ps1 + OneDrive sync.
+   */
+  planningCsvPath?: string;
   /** Override any list/field internal name without editing this file. */
   fieldMap?: PartialFieldMap;
 }
@@ -195,6 +202,7 @@ export class SharePointDataLayer implements PmdDataLayer {
   private readonly siteUrl: string;
   private readonly graphToken?: () => Promise<string>;
   private readonly planningFilePath?: string;
+  private readonly planningCsvPath?: string;
   private readonly F: SharePointFieldMap;
 
   /**
@@ -220,6 +228,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     this.siteUrl = o.siteUrl.replace(/\/$/, '');
     this.graphToken = o.graphToken;
     this.planningFilePath = o.planningFilePath;
+    this.planningCsvPath = o.planningCsvPath;
     // Merge user overrides into the defaults.
     this.F = mergeFieldMap(DEFAULT_FIELDS, o.fieldMap);
   }
@@ -430,9 +439,16 @@ export class SharePointDataLayer implements PmdDataLayer {
   // ---- planning -------------------------------------------------------
 
   async listPlanning(_filter: PlanningFilter): Promise<PlanningOrder[]> {
-    // Filter.machineCode is ignored: Epicor source has no machine
-    // assignment, so caller gets all PMD-released orders and decides
-    // which to show.
+    // Two sources, picked by config:
+    //  1. CSV file in a doc library (PREFERRED) — written by PowerShell on
+    //     the shop-floor PC and uploaded via OneDrive sync. No SP write
+    //     credentials needed anywhere; the script just touches the local
+    //     synced folder. App reads via SP file REST.
+    //  2. PMD_Planning list (legacy) — kept for tenants that haven't moved
+    //     to the CSV pipeline yet.
+    if (this.planningCsvPath) {
+      return this.loadPlanningCsv(this.planningCsvPath);
+    }
     const F = this.F.planning;
     const rows = await this.getAllItems(LISTS.planning, '');
     return rows.map((r) => {
@@ -458,6 +474,27 @@ export class SharePointDataLayer implements PmdDataLayer {
         source: 'ERP',
       };
     });
+  }
+
+  private async loadPlanningCsv(serverRelativePath: string): Promise<PlanningOrder[]> {
+    // Bust SP's edge cache so we always get the freshest sync output.
+    const cacheBust = `?_t=${Date.now()}`;
+    const url =
+      `${this.siteUrl}/_api/web/getFileByServerRelativeUrl('` +
+      encodeURIComponent(serverRelativePath) +
+      `')/$value` +
+      cacheBust;
+    const res = await fetch(url, {
+      credentials: 'include',
+      headers: { Accept: 'text/csv,text/plain,*/*' },
+    });
+    if (!res.ok) {
+      throw new Error(
+        `Planning CSV fetch failed (${res.status}) for ${serverRelativePath}`,
+      );
+    }
+    const text = await res.text();
+    return parsePlanningCsv(text);
   }
 
   async upsertPlanningOrder(order: PlanningOrder): Promise<PlanningOrder> {
@@ -1482,4 +1519,137 @@ export function canSyncPlanning(
   dal: unknown,
 ): dal is { syncPlanningFromExcel: () => Promise<{ inserted: number; skipped: number }> } {
   return typeof (dal as { syncPlanningFromExcel?: unknown })?.syncPlanningFromExcel === 'function';
+}
+
+// ---------------------------------------------------------------------------
+// CSV parsing for the Epicor → CSV → SharePoint file → app pipeline.
+// Tiny single-purpose parser: handles quoted fields with embedded commas
+// and double-double-quote escapes; ignores BOM and CRLF/LF line endings.
+// ---------------------------------------------------------------------------
+
+export function parsePlanningCsv(text: string): PlanningOrder[] {
+  const rows = parseCsv(text.replace(/^﻿/, ''));
+  if (rows.length === 0) return [];
+  const header = rows[0].map((c) => c.trim());
+  const idx = (name: string): number => header.indexOf(name);
+  const iJob = idx('JobHead_JobNum');
+  const iPart = idx('JobHead_PartNum');
+  const iDesc = idx('JobHead_PartDescription');
+  const iRem = idx('Calculated_RemainingQty');
+  const iStart = idx('JobHead_StartDate');
+  const iDue = idx('JobHead_ReqDueDate');
+  const iDur = idx('Calculated_RemaingLaborHrs');
+  const iQty = idx('JobOper_ProdStandard');
+  const out: PlanningOrder[] = [];
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (row.length === 0 || (row.length === 1 && row[0] === '')) continue;
+    const job = row[iJob] ?? '';
+    if (!job) continue;
+    const startIso = csvDateToIso(row[iStart] ?? '');
+    const dueIso = csvDateToIso(row[iDue] ?? '');
+    const dur = parseFloat(row[iDur] ?? '0') || 0;
+    const end = startIso && dur > 0
+      ? new Date(new Date(startIso).getTime() + dur * 3600_000).toISOString()
+      : dueIso;
+    out.push({
+      id: 0,
+      jobNumber: job,
+      machineCode: '',
+      originalMachine: '',
+      partNumber: row[iPart] ?? '',
+      partDescription: row[iDesc] ?? '',
+      plannedStart: startIso,
+      plannedEnd: end,
+      jobRequired: parseFloat(row[iRem] ?? '0') || 0,
+      qtyPerHr: parseFloat(row[iQty] ?? '0') || 0,
+      duration: dur,
+      released: true,
+      isDieChange: false,
+      manuallyAdded: false,
+      source: 'ERP',
+    });
+  }
+  return out;
+}
+
+function parseCsv(text: string): string[][] {
+  const out: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += c;
+      }
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ',') {
+      row.push(field);
+      field = '';
+    } else if (c === '\r') {
+      // skip — \n handles the row break
+    } else if (c === '\n') {
+      row.push(field);
+      out.push(row);
+      row = [];
+      field = '';
+    } else {
+      field += c;
+    }
+  }
+  if (field !== '' || row.length > 0) {
+    row.push(field);
+    out.push(row);
+  }
+  return out;
+}
+
+function csvDateToIso(s: string): string {
+  const t = s.trim();
+  if (!t) return '';
+  // PowerShell Export-Csv default for [datetime] is the local culture format.
+  // Accept ISO 8601 (with or without Z) and en-AU "dd/MM/yyyy [HH:mm[:ss] [am/pm]]".
+  const iso = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?Z?/i.exec(t);
+  if (iso) {
+    return new Date(
+      +iso[1],
+      +iso[2] - 1,
+      +iso[3],
+      +iso[4],
+      +iso[5],
+      iso[6] ? +iso[6] : 0,
+    ).toISOString();
+  }
+  const isoDateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
+  if (isoDateOnly) {
+    return new Date(+isoDateOnly[1], +isoDateOnly[2] - 1, +isoDateOnly[3]).toISOString();
+  }
+  const au = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(am|pm))?)?$/i.exec(t);
+  if (au) {
+    let hr = au[4] ? parseInt(au[4], 10) : 0;
+    if (au[7]) {
+      const pm = au[7].toLowerCase() === 'pm';
+      if (pm && hr < 12) hr += 12;
+      if (!pm && hr === 12) hr = 0;
+    }
+    return new Date(
+      +au[3],
+      +au[2] - 1,
+      +au[1],
+      hr,
+      au[5] ? +au[5] : 0,
+      au[6] ? +au[6] : 0,
+    ).toISOString();
+  }
+  return '';
 }

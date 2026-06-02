@@ -31,10 +31,10 @@ test before going to production.
 |---|---|---|---|
 | **A. Local dev** | Today — first end-to-end validation against the real lists | 15 min | Just you, in your browser |
 | **B. SPFx web part** | Production rollout for operators on the floor | 1-2 h first time | Anyone on the site, including iPads |
-| **D. Epicor → PMD_Planning sync** | Keep Planning fresh from Epicor REST every 15 min | 30 min | Runs unattended on shop-floor PC |
+| **D. Epicor → CSV → SharePoint** | Keep planning fresh from Epicor REST every 15 min | 30 min | Runs unattended on shop-floor PC |
 
-A and B are about hosting the **app**. D is about keeping
-PMD_Planning **fresh from Epicor**, server-side, with credentials kept
+A and B are about hosting the **app**. D is about keeping planning data
+**fresh from Epicor**, server-side, with credentials kept
 out of the browser. You want B + D.
 
 ---
@@ -295,157 +295,159 @@ works. No CORS extension, no localhost.
 
 ---
 
-## D. Epicor → PMD_Planning sync (PowerShell on shop-floor PC)
+## D. Epicor → CSV → SharePoint (PowerShell + OneDrive sync)
 
-Planning data now comes straight from Epicor REST (BAQ) instead of the
-.xlsm workbook. A small PowerShell script (`scripts/sync-epicor-to-sp.ps1`)
-runs on the always-on PC at the PMD shop floor every 15 minutes via
-Task Scheduler, pulls released PMD orders, and upserts them to
-PMD_Planning. The in-app **⟳ Refresh** button just re-reads
-PMD_Planning — no API or Graph calls from the browser, so credentials
-never touch the front end.
+Planning data flows from Epicor REST into a single CSV file that lives
+in a SharePoint document library. The MES app fetches the CSV directly.
+No SP write credentials, no Entra app, no list upsert loop.
+
+```
+[ Epicor BAQ ]            (Basic auth, password in Credential Manager)
+        │ Invoke-RestMethod
+        ▼
+[ scripts/sync-epicor-to-sp.ps1 ]    runs every 15 min via Task Scheduler
+        │ Export-Csv (atomic: .tmp → rename)
+        ▼
+[ C:\Users\you\…\PMD - Documents\PMD\Planning.csv ]  (OneDrive-synced)
+        │ OneDrive client
+        ▼
+[ SharePoint: /sites/PMD/Shared Documents/PMD/Planning.csv ]
+        │ GET …/_api/web/getFileByServerRelativeUrl(...)/$value
+        ▼
+[ MES app — SharePointDataLayer.listPlanning() ]
+```
 
 ### D.1 One-time PC setup
 
 ```powershell
-# 1. PowerShell 5.1 ships with Windows. Install the two modules.
-Install-Module PnP.PowerShell    -Scope CurrentUser -Force
+# CredentialManager is the only module needed now — PnP/Entra are gone.
 Install-Module CredentialManager -Scope CurrentUser -Force
 
-# 2. Make a folder for config + logs (outside the git repo).
+# Folder for config + log.
 New-Item -ItemType Directory C:\PMDSync -Force | Out-Null
 ```
 
-### D.2 Register an Entra ID app for SharePoint writes
+### D.2 Store the Epicor credential
 
-You need an app-only identity so the scheduled task can write to
-PMD_Planning without an interactive logon. Cert-based, no client
-secrets — uses Microsoft's recommended modern auth.
-
-```powershell
-# Pick a 10-year cert lifetime and store it in CurrentUser\My.
-# Tenant + Username = a global admin (one-time, only to register the app).
-Register-PnPEntraIDAppForInteractiveLogin `
-  -ApplicationName "PMD-Planning-Sync" `
-  -Tenant "<tenant>.onmicrosoft.com" `
-  -Interactive `
-  -ValidYears 10
-```
-
-That command:
-- Creates the app registration in Entra ID
-- Issues a self-signed certificate, installs it in `CurrentUser\My`
-- Prints the **ClientId** and **Thumbprint** — note them down.
-
-Then in Entra ID admin → API permissions: grant `Sites.Selected`
-(Application). Then run **one** elevated PowerShell to allow this
-single site:
-
-```powershell
-# Replace <site> with the PMD site URL, <ClientId> with the app id.
-Connect-PnPOnline -Url "https://<tenant>-admin.sharepoint.com" -Interactive
-Grant-PnPAzureADAppSitePermission `
-  -AppId "<ClientId>" `
-  -DisplayName "PMD-Planning-Sync" `
-  -Site "https://<tenant>.sharepoint.com/sites/<PMDsite>" `
-  -Permissions Write
-```
-
-### D.3 Store the Epicor credential
-
-```powershell
-# Open cmd.exe (cmdkey doesn't work in PS 7+ window):
+```cmd
+:: Use cmd.exe (cmdkey expects native quoting). User = Epicor user name,
+:: password = whatever Epicor wants in the Basic header.
 cmdkey /generic:PMDSync.Epicor /user:<EpicorUser> /pass:<EpicorPassword>
 ```
 
-`PMDSync.Epicor` is the credential name the script reads. The user
-field is the Basic-auth username, the password field is whatever Epicor
-wants in the Basic header (most Kinetic deployments accept the user
-password; some use an API token in its place).
+Verify:
 
-If your Epicor also requires an `X-API-Key` header (Kinetic 2021+),
-put that *key* (which is an identifier, not a secret per se) in
-`config.json` below.
+```cmd
+cmdkey /list:PMDSync.Epicor
+```
 
-### D.4 Drop the non-secret config in place
+If your Epicor instance requires an X-API-Key header (Kinetic 2021+),
+put that header value in `config.json` (it's a non-secret API identifier
+that's fine to keep in config).
 
-Copy `scripts/sync-epicor-to-sp.config.example.json` to
-`C:\PMDSync\config.json` and fill in:
+### D.3 Sync the PMD library to your PC
+
+Open SharePoint → PMD site → the document library where the CSV will
+live (e.g. **Documents**). Click **Sync** in the toolbar. OneDrive opens
+and registers the library as a folder under `C:\Users\<you>\<Tenant>\`.
+
+After sync completes you'll have a path like:
+
+```
+C:\Users\<you>\<Tenant>\PMD - Documents\
+```
+
+Create a `PMD\` subfolder inside it — that's where the CSV will land.
+
+### D.4 Drop the script + non-secret config in place
+
+Copy these two files into `C:\PMDSync\`:
+
+- `scripts/sync-epicor-to-sp.ps1` → `C:\PMDSync\sync.ps1`
+- `scripts/sync-epicor-to-sp.config.example.json` → `C:\PMDSync\config.json` (rename, drop the `.example`)
+
+Edit `C:\PMDSync\config.json`:
 
 ```json
 {
-  "EpicorUrl":         "https://<epicor-host>/<EnvName>/api/v2/odata/<Company>/BaqSvc/<BaqId>_BaqId/",
-  "EpicorApiKey":      "<paste-X-API-Key-here-or-leave-empty>",
-  "SharePointUrl":     "https://<tenant>.sharepoint.com/sites/<PMDsite>",
-  "PlanningListTitle": "PMD_Planning",
-  "SPClientId":        "<ClientId-from-step-D2>",
-  "SPTenantId":        "<your-tenant-guid>",
-  "SPCertThumbprint":  "<Thumbprint-from-step-D2>"
+  "EpicorUrl":     "https://<epicor-host>/<EnvName>/api/v1/BaqSvc/<BaqId>(<Param>)/",
+  "EpicorApiKey":  "",
+  "OutputCsvPath": "C:\\Users\\<you>\\<Tenant>\\PMD - Documents\\PMD\\Planning.csv"
 }
 ```
 
-The repo never sees this file — it's ignored by `.gitignore` even if
-someone drops a copy under `scripts/`.
+`.gitignore` blocks `scripts/sync-epicor-to-sp.config.json` defensively
+in case a copy ever lands inside the repo.
 
-### D.5 Smoke-test once
+### D.5 Smoke-test
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File C:\PMDSync\sync-epicor-to-sp.ps1
+powershell.exe -ExecutionPolicy Bypass -File C:\PMDSync\sync.ps1
 ```
 
-You should see something like:
+Expected output:
 
 ```
 [2026-06-02 14:00:01] GET https://...BaqSvc/...
-[2026-06-02 14:00:03]   Epicor returned 423 rows
-[2026-06-02 14:00:03]   Kept 38 after PMD/Released filter
-[2026-06-02 14:00:11] Done: +6 (added)  ~31 (updated)  -2 (removed)  0 errors
+[2026-06-02 14:00:03]   Epicor returned 580 rows
+[2026-06-02 14:00:03]   Kept 27 after PMD/Released filter
+[2026-06-02 14:00:03] Wrote 27 rows to C:\Users\…\PMD - Documents\PMD\Planning.csv
 ```
 
-Then refresh PMD_Planning in SharePoint and confirm rows are correct.
+Watch the OneDrive icon in the system tray — within a few seconds it
+should report the file as uploaded. Confirm in the browser: PMD site →
+Documents → PMD → `Planning.csv`.
 
-### D.6 Schedule it
+### D.6 Point the MES app at the CSV
 
-Open **Task Scheduler** → **Create Task**:
+Add this env var when building the app:
 
-- **General** tab
-  - Name: `PMD Planning Sync`
-  - "Run whether user is logged on or not"
-  - "Run with highest privileges" (only if your account requires it)
-- **Triggers** tab → New
-  - Daily, recur every `1 day`
-  - "Repeat task every `15 minutes` for a duration of `1 day`"
-- **Actions** tab → New
+```
+VITE_PLANNING_CSV_PATH=/sites/<PMDsite>/Shared Documents/PMD/Planning.csv
+```
+
+(`/Shared Documents/` is the SP server-relative form of the "Documents"
+library; SP rewrites the display name automatically.)
+
+Rebuild + re-upload `dist/` to SiteAssets. App will now read planning
+from the CSV instead of PMD_Planning list. The list can be left empty
+or deleted.
+
+### D.7 Schedule it
+
+Task Scheduler → **Create Task**:
+
+- **General**: name `PMD Planning Sync`. "Run only when user is logged on" is fine — OneDrive needs the user logged in to keep syncing anyway.
+- **Triggers** → New: daily, repeat every `15 minutes` for `1 day`.
+- **Actions** → New:
   - Program: `powershell.exe`
-  - Arguments: `-NoProfile -ExecutionPolicy Bypass -File "C:\PMDSync\sync-epicor-to-sp.ps1" *>> "C:\PMDSync\sync.log"`
-- **Settings**: tick "Allow task to be run on demand", "If the task fails, restart every 5 min, attempt 3 times".
+  - Arguments: `-NoProfile -ExecutionPolicy Bypass -File "C:\PMDSync\sync.ps1" *>> "C:\PMDSync\sync.log"`
+- **Settings**: "Allow task to be run on demand"; "If the task fails, restart every 5 min, attempt 3 times".
 
 Tail `C:\PMDSync\sync.log` for run history.
 
-### D.7 What the script writes to PMD_Planning
+### D.8 CSV column contract
 
-Field mapping (left = Epicor BAQ field, right = SharePoint internal name):
+The app's CSV parser (`parsePlanningCsv` in `src/dal/sharepoint.ts`)
+looks up columns by header name, not position. If you ever change the
+columns, both ends have to move together.
 
-| Epicor | SharePoint | Note |
+| CSV column | App field | Notes |
 |---|---|---|
-| `JobHead_JobNum` | `Title` | natural key + display |
-| `JobHead_JobNum` | `JobHead_JobNum` | queryable copy |
-| `JobHead_PartNum` | `JobHead_PartNum` | |
-| `JobHead_PartDescription` | `JobHead_PartDescription` | |
-| `Calculated_RemainingQty` | `Calculated_RemainingQty` | |
-| `JobHead_StartDate` | `StartDateTime` | |
-| `JobHead_ReqDueDate` | `Due_Date` | |
-| `Calculated_RemaingLaborHrs` | `Duration` | hours |
-| `JobOper_ProdStandard` | `QTYperHour` | |
+| `JobHead_JobNum` | jobNumber | required, natural key |
+| `JobHead_PartNum` | partNumber | |
+| `JobHead_PartDescription` | partDescription | |
+| `Calculated_RemainingQty` | jobRequired | |
+| `JobHead_StartDate` | plannedStart | ISO 8601 preferred; AU dd/mm/yyyy also accepted |
+| `JobHead_ReqDueDate` | plannedEnd (fallback if no duration) | same date formats |
+| `Calculated_RemaingLaborHrs` | duration (hours) | |
+| `JobOper_ProdStandard` | qtyPerHr | |
 
-Filter:
-`JobHead_JobReleased = true AND JobHead_PersonID = 'PMD' AND NOT JobHead_JobClosed AND NOT JobHead_JobComplete`
-
-Orphans (jobs that disappear from the Epicor result set) are deleted
-from PMD_Planning, so the list always reflects the latest active PMD
-workload.
+Filter applied by the PowerShell script before write:
+`JobHead_JobReleased = true AND JobHead_PersonID = 'PMD' AND NOT JobHead_JobClosed AND NOT JobHead_JobComplete`.
 
 ---
+
 
 ## Troubleshooting checklist
 
@@ -458,7 +460,8 @@ workload.
 | Smoke test fails on `lockShift` 500 | One of the 3 production lists' column missing or required | Check the failed list's settings → which column was required? |
 | `sync.log` shows `Missing Credential Manager entry 'PMDSync.Epicor'` | Cred was created under a different Windows user | Re-run `cmdkey` as the user the scheduled task runs as |
 | `sync.log` shows 401 from Epicor | Wrong user/password or missing X-API-Key | Check `cmdkey /list:PMDSync.Epicor`; set `EpicorApiKey` in config.json |
-| `sync.log` shows 403 from SharePoint | App permission not granted on that site | Re-run `Grant-PnPAzureADAppSitePermission` (§ D.2) with `Write` |
+| Planning button in app shows "Planning CSV fetch failed (404)" | CSV path env var doesn't match the real SharePoint path | Confirm the file is in the library and `VITE_PLANNING_CSV_PATH` is the server-relative path (starts with `/sites/...`) |
+| OneDrive icon says "Sign in to sync" | Sync stalled | Click OneDrive tray icon → sign in. Until then `Planning.csv` won't reach SP, app keeps reading the last-uploaded copy |
 
 ---
 

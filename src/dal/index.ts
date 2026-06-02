@@ -27,6 +27,7 @@ export function createDataLayer(env: Record<string, string | undefined> = {}): P
       return new SharePointDataLayer({
         siteUrl: env.VITE_SITE_URL ?? '',
         planningFilePath: env.VITE_PLANNING_PATH,
+        planningCsvPath: env.VITE_PLANNING_CSV_PATH,
         graphToken:
           typeof window !== 'undefined' ? window.__pmdGraphToken : undefined,
       });
