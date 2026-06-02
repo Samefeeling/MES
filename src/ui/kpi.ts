@@ -319,8 +319,10 @@ async function openMachineDrill(machineCode: string): Promise<void> {
     arr.push(r);
     byShift.set(r.shiftId, arr);
   }
-  const blocks = shiftIds
+  // Render the 3 shifts as 3 rows of a single comparison table.
+  const tableRows = shiftIds
     .map((sid) => {
+      const p = parseShiftId(sid)!;
       const rows = byShift.get(sid) ?? [];
       const k = aggregate(rows);
       const logged = k.runHrs + k.downtimeHrs + k.setupHrs;
@@ -329,41 +331,59 @@ async function openMachineDrill(machineCode: string): Promise<void> {
         k.output + k.scrap > 0
           ? ((k.output / (k.output + k.scrap)) * 100).toFixed(1)
           : '100.0';
-      // Handover is canonical on slotIndex=0 per job. Show one per job that
-      // has any content — operators may run multiple jobs in a shift.
-      const canon = rows.filter((r) => r.slotIndex === 0);
-      const notes = canon
+      const datePart = `${String(p.day).padStart(2, '0')}/${String(p.month).padStart(2, '0')}`;
+      return `<tr>
+        <th class="drill-shift-cell">
+          <div class="ds-code">${escapeHtml(p.code)}</div>
+          <div class="ds-date muted">${datePart}</div>
+        </th>
+        <td class="num">${k.output}</td>
+        <td class="num r">${k.scrap}</td>
+        <td class="num">${yieldPct}%</td>
+        <td class="num">${k.runHrs.toFixed(1)}</td>
+        <td class="num">${k.downtimeHrs.toFixed(1)}</td>
+        <td class="num">${k.setupHrs.toFixed(1)}</td>
+        <td class="num">${avail == null ? '—' : avail + '%'}</td>
+      </tr>`;
+    })
+    .join('');
+  // Handover notes pulled together below the table, grouped by shift so the
+  // reader can still tie each note to a row.
+  const notesBlocks = shiftIds
+    .map((sid) => {
+      const p = parseShiftId(sid)!;
+      const canon = (byShift.get(sid) ?? []).filter((r) => r.slotIndex === 0);
+      const noted = canon
         .map((c) => {
           const h = parseHandover(c.handoverNote);
-          if (!handoverHasContent(h) && !c.bdIssue) return '';
+          if (!handoverHasContent(h)) return '';
           return `<div class="ho-job">
-            <div class="ho-job-head">Job ${escapeHtml(c.jobNumber || '—')} · op ${escapeHtml(c.operator || '—')} · sup ${escapeHtml(c.supervisor || '—')}</div>
+            <div class="ho-job-head">${escapeHtml(p.code)} · Job ${escapeHtml(c.jobNumber || '—')} · op ${escapeHtml(c.operator || '—')} · sup ${escapeHtml(c.supervisor || '—')}</div>
             ${fmtHandover(h)}
           </div>`;
         })
         .filter(Boolean)
         .join('');
-      const jobLine = canon.length
-        ? canon.map((c) => escapeHtml(c.jobNumber || '—')).join(', ')
-        : '<span class="muted">no production logged</span>';
-      return `<section class="drill-shift">
-        <h4>${escapeHtml(sid)}</h4>
-        <div class="drill-kpis">
-          <div><label>Good</label><b>${k.output}</b></div>
-          <div><label>Reject</label><b class="r">${k.scrap}</b></div>
-          <div><label>Yield</label><b>${yieldPct}%</b></div>
-          <div><label>Run h</label><b>${k.runHrs.toFixed(1)}</b></div>
-          <div><label>Down h</label><b>${k.downtimeHrs.toFixed(1)}</b></div>
-          <div><label>Setup h</label><b>${k.setupHrs.toFixed(1)}</b></div>
-          <div><label>Avail.</label><b>${avail == null ? '—' : avail + '%'}</b></div>
-        </div>
-        <div class="drill-jobs"><label>Jobs</label> ${jobLine}</div>
-        ${notes || '<div class="muted">No Handover notes recorded.</div>'}
-      </section>`;
+      return noted;
     })
+    .filter(Boolean)
     .join('');
+  const html = `<table class="summary-table drill-table">
+    <thead><tr>
+      <th>Shift</th><th>Good</th><th>Reject</th><th>Yield</th>
+      <th>Run h</th><th>Down h</th><th>Setup h</th><th>Avail.</th>
+    </tr></thead>
+    <tbody>${tableRows}</tbody>
+  </table>
+  <div class="drill-notes">
+    <h4>Handover notes</h4>
+    ${notesBlocks || '<div class="muted">No Handover notes recorded across these shifts.</div>'}
+  </div>`;
   const body = document.querySelector('.drill-body');
-  if (body) body.innerHTML = blocks;
+  if (body) {
+    body.classList.remove('muted');
+    body.innerHTML = html;
+  }
 }
 
 export async function renderKpi(dal: PmdDataLayer): Promise<void> {

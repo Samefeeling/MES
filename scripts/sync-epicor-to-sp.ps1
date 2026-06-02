@@ -89,13 +89,16 @@ if ($spAuth -eq 'Certificate') {
   # Interactive: pops a browser the first time, caches the token under
   # the current user; subsequent scheduled runs reuse the cache until the
   # refresh token expires (~90 days). Use this only on a dev PC.
+  #
+  # PnP.PowerShell v2 removed the bundled multi-tenant app, so -Interactive
+  # now REQUIRES a -ClientId. Register one once with:
+  #   Register-PnPEntraIDAppForInteractiveLogin -ApplicationName "PMD-Planning-Sync-Dev" -Tenant <tenant>.onmicrosoft.com -Interactive
+  # then put the printed ClientId in config.json -> SPClientId.
   $clientId = if ($cfg.PSObject.Properties.Match('SPClientId').Count -and $cfg.SPClientId) { $cfg.SPClientId } else { $null }
-  if ($clientId) {
-    Connect-PnPOnline -Url $cfg.SharePointUrl -Interactive -ClientId $clientId -WarningAction SilentlyContinue
-  } else {
-    # Uses PnP.PowerShell's bundled multi-tenant app — no Entra setup needed.
-    Connect-PnPOnline -Url $cfg.SharePointUrl -Interactive -WarningAction SilentlyContinue
+  if (-not $clientId) {
+    throw "SPAuthMode=Interactive requires SPClientId in config.json. See docs/DEPLOYMENT.md section D.2 — register an Entra app once with Register-PnPEntraIDAppForInteractiveLogin, then paste the printed ClientId into config.json."
   }
+  Connect-PnPOnline -Url $cfg.SharePointUrl -Interactive -ClientId $clientId -WarningAction SilentlyContinue
 }
 try {
   # ---- 6. diff against existing list -----------------------------------

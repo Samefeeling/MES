@@ -8,6 +8,7 @@ import type {
   ProductionFilter,
   ProductionRecord,
   RejectCategory,
+  StatusCode,
   Supervisor,
   UserContext,
 } from '../types';
@@ -870,10 +871,12 @@ export class SharePointDataLayer implements PmdDataLayer {
   }
 
   /**
-   * Per-event PMD_BreakDownlog write — one row per filled slot, modelled
-   * after PMD_Rejects so operators can see *when* a breakdown happened
-   * without decoding the 16-char timeline string. Sum the R/B/C/D/I/M/O/P/S
-   * columns across rows (same Date + Shift + Job) to get shift totals.
+   * Per-shift PMD_BreakDownlog write — one row per (machine, shift, job).
+   * StatusTimeline is the 16-char string ("RRRBBBCCCRRRRRRR") so the whole
+   * shift's status pattern is recoverable from a single row. R/B/C/D/I/M/
+   * O/P/S columns are the per-status hour totals (slot count × 0.5h).
+   * BDCode = the most frequent breakdown code among the B slots (the
+   * dominant cause). Row count stays tiny — one per signed-off shift+job.
    */
   private async replaceBreakdownEvents(
     key: {
@@ -898,53 +901,39 @@ export class SharePointDataLayer implements PmdDataLayer {
       `${F.machine} eq '${key.machineCode}' and ${dateClause} and ${F.shift} eq '${key.shift}' and ${F.jobNum} eq '${key.jobNumber}'`,
     );
     const type = await this.itemType(LISTS.breakdown);
-    // Only emit rows for slots the operator actually touched. If none, fall
-    // through to a single summary row so the shift is still attested.
-    const filled = slots.filter(
-      (r) => r.statusCode && r.slotIndex >= 0 && r.slotIndex < 16,
-    );
-    if (filled.length === 0) {
-      const body: Record<string, unknown> = {
-        __metadata: { type },
-        [F.machine]: key.machineCode,
-        [F.shift]: key.shift,
-        [F.jobNum]: key.jobNumber,
-        [F.partNum]: key.partNumber,
-        [F.statusTimeline]: key.timeline,
-        [F.bdCode]: '',
-        [F.r]: 0, [F.b]: 0, [F.c]: 0, [F.d]: 0,
-        [F.i]: 0, [F.m]: 0, [F.o]: 0, [F.p]: 0, [F.s]: 0,
-      };
-      if (slotStartIso) body[F.date] = slotStartIso;
-      await this.post(`${this.listUrl(LISTS.breakdown)}/items`, body);
-      return;
+    // Count per-status slots across the whole shift; each slot = 0.5h.
+    const counts: Record<StatusCode, number> = {
+      R: 0, B: 0, C: 0, D: 0, I: 0, M: 0, O: 0, P: 0, S: 0,
+    };
+    const bdTally: Record<string, number> = {};
+    for (const r of slots) {
+      const c = r.statusCode as StatusCode | '';
+      if (c && c in counts) counts[c as StatusCode] += 1;
+      if (c === 'B' && r.bdIssue) bdTally[r.bdIssue] = (bdTally[r.bdIssue] ?? 0) + 1;
     }
-    for (const r of filled) {
-      const code = r.statusCode as keyof StatusHours;
-      const body: Record<string, unknown> = {
-        __metadata: { type },
-        [F.machine]: key.machineCode,
-        [F.shift]: key.shift,
-        [F.jobNum]: key.jobNumber,
-        [F.partNum]: key.partNumber,
-        // Per-row time range, e.g. "11:00–11:30" — this is the "WHEN"
-        // operators need at a glance. Falls back to slot index if shift
-        // bounds couldn't be resolved.
-        [F.statusTimeline]: slotClock(shiftId, r.slotIndex) || String(r.slotIndex),
-        [F.bdCode]: r.statusCode === 'B' ? r.bdIssue : '',
-        [F.r]: code === 'R' ? 0.5 : 0,
-        [F.b]: code === 'B' ? 0.5 : 0,
-        [F.c]: code === 'C' ? 0.5 : 0,
-        [F.d]: code === 'D' ? 0.5 : 0,
-        [F.i]: code === 'I' ? 0.5 : 0,
-        [F.m]: code === 'M' ? 0.5 : 0,
-        [F.o]: code === 'O' ? 0.5 : 0,
-        [F.p]: code === 'P' ? 0.5 : 0,
-        [F.s]: code === 'S' ? 0.5 : 0,
-      };
-      if (slotStartIso) body[F.date] = slotStartIso;
-      await this.post(`${this.listUrl(LISTS.breakdown)}/items`, body);
-    }
+    const dominantBd = Object.keys(bdTally).sort(
+      (a, b2) => bdTally[b2] - bdTally[a],
+    )[0] ?? '';
+    const body: Record<string, unknown> = {
+      __metadata: { type },
+      [F.machine]: key.machineCode,
+      [F.shift]: key.shift,
+      [F.jobNum]: key.jobNumber,
+      [F.partNum]: key.partNumber,
+      [F.statusTimeline]: key.timeline,
+      [F.bdCode]: dominantBd,
+      [F.r]: counts.R * 0.5,
+      [F.b]: counts.B * 0.5,
+      [F.c]: counts.C * 0.5,
+      [F.d]: counts.D * 0.5,
+      [F.i]: counts.I * 0.5,
+      [F.m]: counts.M * 0.5,
+      [F.o]: counts.O * 0.5,
+      [F.p]: counts.P * 0.5,
+      [F.s]: counts.S * 0.5,
+    };
+    if (slotStartIso) body[F.date] = slotStartIso;
+    await this.post(`${this.listUrl(LISTS.breakdown)}/items`, body);
   }
 
   private async replaceRejectEvents(
