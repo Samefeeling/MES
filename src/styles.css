@@ -236,23 +236,17 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .btn-primary-big:hover{filter:brightness(.92)}
 .bd-note{width:100%;min-height:120px;border:2px solid var(--bd);border-radius:10px;padding:12px;font-size:17px;font-family:inherit;background:#fef9c3}
 
-/* ===== KPI machine drill ===== */
-.kpi-table tr[data-drill]{cursor:pointer}
-.kpi-table tr[data-drill]:hover{background:#eff6ff}
-.drill-body{display:flex;flex-direction:column;gap:16px;max-height:70vh;overflow:auto}
-.drill-table th,.drill-table td{padding:10px 12px;font-size:16px}
-.drill-shift-cell{text-align:left;background:#f1f5f9}
-.ds-code{font-size:16px;font-weight:800;color:var(--theme-dark)}
-.ds-date{font-size:12px;font-weight:600}
-.drill-notes h4{margin:0 0 8px;font-size:16px;font-weight:800;color:var(--theme-dark)}
-.ho-job{border:1px solid var(--bd);border-radius:8px;padding:10px;margin-bottom:8px;background:#fafafa}
-.ho-job-head{font-size:13px;font-weight:700;color:var(--theme-dark);margin-bottom:6px}
-.ho-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
-.ho-cell{background:#fff;border:1px solid var(--bd);border-radius:8px;padding:6px 8px;font-size:13px;display:flex;flex-direction:column;gap:2px}
-.ho-cell b{font-size:12px;color:var(--mu);font-weight:700}
-.ho-cell span{color:var(--tx);white-space:pre-wrap}
-@media (max-width:900px){
-  .ho-grid{grid-template-columns:1fr}
+/* ===== KPI machine + shift rows ===== */
+.kpi-machine th{font-size:16px;font-weight:800;color:var(--tx);background:#f1f5f9}
+.kpi-machine td{font-weight:800}
+.kpi-shift{background:#fdfdfd}
+.kpi-shift th,.kpi-shift td{border-top:1px dashed #cbd5e1;border-bottom:1px dashed #cbd5e1;font-size:13px;font-weight:600;color:#475569}
+.kpi-shift-name{padding-left:32px !important;font-style:italic}
+.kpi-charts{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+.kpi-chart{background:#fff;border:1px solid var(--bd);border-radius:10px;padding:10px}
+.kpi-chart h4{margin:0 0 6px;font-size:14px;font-weight:700;color:var(--theme-dark)}
+@media (max-width:1100px){
+  .kpi-charts{grid-template-columns:1fr}
 }
 
 /* ===== toast ===== */
