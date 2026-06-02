@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildShiftId,
   parseShiftId,
+  previousShift,
   shiftBounds,
   slotTimeRange,
   slotClock,
@@ -81,5 +82,21 @@ describe('current shift (§2.3)', () => {
     expect(currentSlotIndex('2026-05-15-Day', new Date(2026, 4, 15, 7, 15))).toBe(0);
     expect(currentSlotIndex('2026-05-15-Day', new Date(2026, 4, 15, 9, 0))).toBe(4);
     expect(currentSlotIndex('2026-05-15-Day', new Date(2026, 4, 15, 18, 0))).toBeNull();
+  });
+});
+
+describe('previousShift', () => {
+  it('walks Night → Afternoon → Day within one date', () => {
+    expect(previousShift('2026-06-02-Night')).toBe('2026-06-02-Afternoon');
+    expect(previousShift('2026-06-02-Afternoon')).toBe('2026-06-02-Day');
+  });
+  it('wraps Day to previous date Night', () => {
+    expect(previousShift('2026-06-02-Day')).toBe('2026-06-01-Night');
+  });
+  it('crosses month boundary correctly', () => {
+    expect(previousShift('2026-07-01-Day')).toBe('2026-06-30-Night');
+  });
+  it('returns null on garbage input', () => {
+    expect(previousShift('not-a-shift')).toBeNull();
   });
 });

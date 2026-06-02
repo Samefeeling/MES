@@ -111,3 +111,20 @@ export function currentSlotIndex(shiftId: string, now: Date = new Date()): numbe
   const idx = Math.floor((now.getTime() - b.start.getTime()) / (SLOT_MINUTES * 60_000));
   return idx >= 0 && idx < SLOTS_PER_SHIFT ? idx : null;
 }
+
+/**
+ * The shift immediately before `shiftId` in chronological order, wrapping
+ * across midnight (Day → previous Night dated yesterday, Afternoon → Day
+ * same date, Night → Afternoon same date). Returns null if shiftId is
+ * malformed.
+ */
+export function previousShift(shiftId: string): string | null {
+  const p = parseShiftId(shiftId);
+  if (!p) return null;
+  const codes = SHIFTS.map((s) => s.code);
+  const idx = codes.indexOf(p.code);
+  if (idx > 0) return buildShiftId(new Date(p.year, p.month - 1, p.day), codes[idx - 1]);
+  const prev = new Date(p.year, p.month - 1, p.day);
+  prev.setDate(prev.getDate() - 1);
+  return buildShiftId(prev, codes[codes.length - 1]);
+}

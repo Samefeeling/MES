@@ -24,14 +24,10 @@ $cfgPath = if ($env:PMD_SYNC_CONFIG) { $env:PMD_SYNC_CONFIG } else { 'C:\PMDSync
 if (-not (Test-Path $cfgPath)) {
   throw "Missing config file at $cfgPath. Copy scripts/sync-epicor-to-sp.config.example.json there and fill in values."
 }
-# Strip any UTF-8 BOM the editor may have left at the start of the file —
-# Windows PowerShell 5.1's ConvertFrom-Json chokes on it with
-# "Invalid JSON primitive: â" (the BOM bytes rendered as Latin-1).
-$cfgText = Get-Content $cfgPath -Raw
-if ($cfgText.Length -gt 0 -and [int][char]$cfgText[0] -eq 0xFEFF) {
-  $cfgText = $cfgText.Substring(1)
-}
-$cfg = $cfgText | ConvertFrom-Json
+# TrimStart the UTF-8 BOM — Windows PowerShell 5.1's ConvertFrom-Json
+# chokes on it with "Invalid JSON primitive: â" (BOM bytes shown as
+# Latin-1). PS 7's parser is fine but the trim is harmless either way.
+$cfg = (Get-Content $cfgPath -Raw).TrimStart([char]0xFEFF) | ConvertFrom-Json
 foreach ($key in 'EpicorUrl','OutputCsvPath') {
   if (-not $cfg.$key) { throw "Config $cfgPath missing required key: $key" }
 }

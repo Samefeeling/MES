@@ -477,24 +477,17 @@ export class SharePointDataLayer implements PmdDataLayer {
   }
 
   private async loadPlanningCsv(rawPath: string): Promise<PlanningOrder[]> {
-    // Be lenient with what the env var contains — accept a full
-    // https://…/sites/…/file.csv URL, or a server-relative path with or
-    // without percent-encoded spaces. Normalise once, encode once.
+    // Accept a full https://…/sites/…/file.csv URL or a server-relative
+    // path with or without percent-encoded spaces — normalise once,
+    // encode per segment so '/' separators survive, double single quotes
+    // for OData. Cache-bust per request so OneDrive uploads show up.
     const serverRelative = toServerRelativePath(rawPath);
-    // Encode each path segment so spaces / other reserved chars get %xx,
-    // but leave the / separators alone. Then double single quotes per the
-    // OData getFileByServerRelativeUrl convention.
     const encodedPath = serverRelative
       .split('/')
       .map((seg) => encodeURIComponent(seg))
       .join('/')
       .replace(/'/g, "''");
-    const cacheBust = `?_t=${Date.now()}`;
-    const url =
-      `${this.siteUrl}/_api/web/getFileByServerRelativeUrl('` +
-      encodedPath +
-      `')/$value` +
-      cacheBust;
+    const url = `${this.siteUrl}/_api/web/getFileByServerRelativeUrl('${encodedPath}')/$value?_t=${Date.now()}`;
     const res = await fetch(url, {
       credentials: 'include',
       headers: { Accept: 'text/csv,text/plain,*/*' },
@@ -504,8 +497,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         `Planning CSV fetch failed (${res.status}) for ${serverRelative}`,
       );
     }
-    const text = await res.text();
-    return parsePlanningCsv(text);
+    return parsePlanningCsv(await res.text());
   }
 
   async upsertPlanningOrder(order: PlanningOrder): Promise<PlanningOrder> {
@@ -1481,12 +1473,18 @@ function excelDate(v: unknown): Date | null {
   // is wall-clock, not UTC. Parsing via `new Date()` would treat the Z as
   // UTC and shift everything by the local offset (Sydney AEST: 10 hours,
   // which is the "10:00 PM" symptom reported). Extract the components and
-  // anchor them to local time instead.
-  const iso = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?Z?$/i.exec(s);
+  // anchor them to local time instead. The time portion is optional so
+  // bare "2026-05-25" from a CSV with date-only columns is accepted too.
+  const iso =
+    /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?Z?)?$/i.exec(
+      s,
+    );
   if (iso) {
     return new Date(
       +iso[1], +iso[2] - 1, +iso[3],
-      +iso[4], +iso[5], iso[6] ? +iso[6] : 0,
+      iso[4] ? +iso[4] : 0,
+      iso[5] ? +iso[5] : 0,
+      iso[6] ? +iso[6] : 0,
     );
   }
 
@@ -1626,43 +1624,11 @@ function parseCsv(text: string): string[][] {
 }
 
 function csvDateToIso(s: string): string {
-  const t = s.trim();
-  if (!t) return '';
-  // PowerShell Export-Csv default for [datetime] is the local culture format.
-  // Accept ISO 8601 (with or without Z) and en-AU "dd/MM/yyyy [HH:mm[:ss] [am/pm]]".
-  const iso = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?Z?/i.exec(t);
-  if (iso) {
-    return new Date(
-      +iso[1],
-      +iso[2] - 1,
-      +iso[3],
-      +iso[4],
-      +iso[5],
-      iso[6] ? +iso[6] : 0,
-    ).toISOString();
-  }
-  const isoDateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
-  if (isoDateOnly) {
-    return new Date(+isoDateOnly[1], +isoDateOnly[2] - 1, +isoDateOnly[3]).toISOString();
-  }
-  const au = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(am|pm))?)?$/i.exec(t);
-  if (au) {
-    let hr = au[4] ? parseInt(au[4], 10) : 0;
-    if (au[7]) {
-      const pm = au[7].toLowerCase() === 'pm';
-      if (pm && hr < 12) hr += 12;
-      if (!pm && hr === 12) hr = 0;
-    }
-    return new Date(
-      +au[3],
-      +au[2] - 1,
-      +au[1],
-      hr,
-      au[5] ? +au[5] : 0,
-      au[6] ? +au[6] : 0,
-    ).toISOString();
-  }
-  return '';
+  // PowerShell emits ISO; manually-edited CSVs sometimes carry en-AU
+  // dd/mm/yyyy [HH:mm[:ss] [am/pm]] or bare dates. excelDate already
+  // handles all three, including the wall-clock-as-local rule needed
+  // to keep Sydney-typed times from shifting by the UTC offset.
+  return excelDate(s)?.toISOString() ?? '';
 }
 
 /**
@@ -1674,24 +1640,24 @@ function csvDateToIso(s: string): string {
 export function toServerRelativePath(input: string): string {
   let p = (input ?? '').trim();
   if (!p) return p;
-  // Full URL → take the pathname.
+  // Full URL → take the pathname (URL.pathname drops query/fragment but
+  // does NOT decode percent-encoding, so the decode below still applies).
   if (/^https?:\/\//i.test(p)) {
     try {
       p = new URL(p).pathname;
     } catch {
-      // fall through to the raw value
+      // malformed URL — fall through and treat as a raw path
     }
+  } else {
+    const q = p.indexOf('?');
+    if (q >= 0) p = p.slice(0, q);
+    const h = p.indexOf('#');
+    if (h >= 0) p = p.slice(0, h);
   }
-  // Strip any query / fragment if the operator left them in.
-  const q = p.indexOf('?');
-  if (q >= 0) p = p.slice(0, q);
-  const h = p.indexOf('#');
-  if (h >= 0) p = p.slice(0, h);
-  // Decode %20 etc. so we re-encode uniformly downstream.
   try {
     p = decodeURIComponent(p);
   } catch {
-    // input wasn't percent-encoded — leave as is.
+    // input wasn't percent-encoded — leave as is
   }
   if (!p.startsWith('/')) p = '/' + p;
   return p;

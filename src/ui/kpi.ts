@@ -1,7 +1,7 @@
 import type { PmdDataLayer } from '../dal';
 import type { Machine, PlanningOrder, ProductionRecord, ShiftCode } from '../types';
 import { aggregate, type Kpi } from '../core/metrics';
-import { buildShiftId, currentShift, dateKey, parseShiftId } from '../core/shifts';
+import { currentShift, dateKey, parseShiftId, previousShift, SHIFTS } from '../core/shifts';
 import { escapeHtml } from './modal';
 import { renderHoursOeeChart, renderOutputByShiftChart } from './charts';
 
@@ -19,7 +19,7 @@ const PERIODS: Array<{ key: PeriodKey; label: string }> = [
   { key: 'lastMonth', label: 'Last month' },
 ];
 
-const SHIFT_ORDER: ShiftCode[] = ['Day', 'Afternoon', 'Night'];
+const SHIFT_ORDER: ShiftCode[] = SHIFTS.map((s) => s.code);
 
 interface ShiftAgg {
   output: number;
@@ -56,19 +56,11 @@ let dalRef: PmdDataLayer;
 
 /** The 3 most-recently-ENDED shifts as of `now`, oldest → newest. */
 function lastThreeShifts(now: Date): string[] {
-  const cs = currentShift(now);
-  const p = parseShiftId(cs.shiftId)!;
-  let d = new Date(p.year, p.month - 1, p.day);
-  let idx = SHIFT_ORDER.indexOf(p.code);
   const out: string[] = [];
-  for (let i = 0; i < 3; i++) {
-    idx -= 1;
-    if (idx < 0) {
-      idx = SHIFT_ORDER.length - 1;
-      d = new Date(d);
-      d.setDate(d.getDate() - 1);
-    }
-    out.unshift(buildShiftId(d, SHIFT_ORDER[idx]));
+  let sid: string | null = currentShift(now).shiftId;
+  for (let i = 0; i < 3 && sid; i++) {
+    sid = previousShift(sid);
+    if (sid) out.unshift(sid);
   }
   return out;
 }
@@ -146,80 +138,81 @@ function emptyAgg(): ShiftAgg {
   return { output: 0, reject: 0, yieldPct: 100, runHrs: 0, downHrs: 0, setupHrs: 0, oee: null };
 }
 
+function emptyChartShift(): ChartBucket['byShift'][ShiftCode] {
+  return { good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, oee: null };
+}
+
 async function compute(now = new Date()): Promise<void> {
   const { from, to, shiftIds } = periodRange(S!.period, now);
-  const planning = await dalRef.listPlanning({});
-  const rows: KpiRow[] = [];
+  // listPlanning and the per-machine production reads have no
+  // dependencies on each other — parallelise so the screen render
+  // isn't pinned to N×latency.
+  const [planning, perMachineProd] = await Promise.all([
+    dalRef.listPlanning({}),
+    Promise.all(
+      S!.machines.map((m) =>
+        dalRef
+          .listProduction({ machineCode: m.machineCode })
+          .then((p) => p.filter((r) => inRange(r, from, to, shiftIds))),
+      ),
+    ),
+  ]);
 
-  // Accumulator for the date-bucketed charts. Last24 → 3 shift buckets;
-  // week/month → one bucket per day.
-  const dateBucketKey = (sid: string): string => {
-    // For Last 24h, group all 3 shifts into a single date bucket so each
-    // shift segment is the whole shift's contribution (not split across days).
-    const p = parseShiftId(sid);
-    return p ? `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}` : '';
-  };
   const charts = new Map<string, ChartBucket>();
+  const rows: KpiRow[] = S!.machines.map((m, i) => {
+    const all = perMachineProd[i];
+    // Single pass per machine: partition into byShift × byDateBucket, then
+    // aggregate each slice once at the end. Avoids re-filtering `all` 3×
+    // and re-walking each shift slice to bucket by date.
+    const buckets = new Map<ShiftCode, Map<string, ProductionRecord[]>>();
+    for (const code of SHIFT_ORDER) buckets.set(code, new Map());
+    for (const r of all) {
+      const p = parseShiftId(r.shiftId);
+      if (!p) continue;
+      const dateKey = r.shiftId.slice(0, 10);
+      const m2 = buckets.get(p.code);
+      if (!m2) continue;
+      const arr = m2.get(dateKey) ?? [];
+      arr.push(r);
+      m2.set(dateKey, arr);
+    }
 
-  for (const m of S!.machines) {
-    const all = (await dalRef.listProduction({ machineCode: m.machineCode })).filter((r) =>
-      inRange(r, from, to, shiftIds),
-    );
-    const total = toAgg(aggregate(all));
     const byShift: Record<ShiftCode, ShiftAgg> = {
       Day: emptyAgg(),
       Afternoon: emptyAgg(),
       Night: emptyAgg(),
     };
     for (const code of SHIFT_ORDER) {
-      const subset = all.filter((r) => r.shiftId.endsWith(`-${code}`));
-      byShift[code] = toAgg(aggregate(subset));
-      // Fold this machine's per-(date,shift) numbers into the chart bucket
-      // for that date.
-      for (const r of subset) {
-        const key = dateBucketKey(r.shiftId);
-        if (!key) continue;
-        if (!charts.has(key)) {
-          charts.set(key, {
-            label: key.slice(5), // MM-DD
-            byShift: {
-              Day: { good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, oee: null },
-              Afternoon: { good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, oee: null },
-              Night: { good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, oee: null },
-            },
-          });
-        }
-      }
-      // Aggregate per-(date,shift) into chart buckets — one pass per shift.
-      const byDate = new Map<string, ProductionRecord[]>();
-      for (const r of subset) {
-        const key = dateBucketKey(r.shiftId);
-        if (!key) continue;
-        const arr = byDate.get(key) ?? [];
-        arr.push(r);
-        byDate.set(key, arr);
-      }
-      for (const [key, recs] of byDate) {
+      const shiftBuckets = buckets.get(code)!;
+      const flat: ProductionRecord[] = [];
+      for (const [dateKey, recs] of shiftBuckets) {
+        flat.push(...recs);
         const k = aggregate(recs);
-        const bucket = charts.get(key)!.byShift[code];
-        bucket.good += k.output;
-        bucket.reject += k.scrap;
-        bucket.runHrs += k.runHrs;
-        bucket.downHrs += k.downtimeHrs;
-        bucket.setupHrs += k.setupHrs;
+        const cb = charts.get(dateKey) ?? {
+          label: dateKey.slice(5), // MM-DD
+          byShift: { Day: emptyChartShift(), Afternoon: emptyChartShift(), Night: emptyChartShift() },
+        };
+        const cell = cb.byShift[code];
+        cell.good += k.output;
+        cell.reject += k.scrap;
+        cell.runHrs += k.runHrs;
+        cell.downHrs += k.downtimeHrs;
+        cell.setupHrs += k.setupHrs;
+        charts.set(dateKey, cb);
       }
+      byShift[code] = toAgg(aggregate(flat));
     }
+    const total = toAgg(aggregate(all));
 
     const planned =
       S!.period === 'last3'
         ? 0
         : planning
-            .filter((o) => !o.isDieChange)
-            .filter((o) => plannedInRange(o, from, to))
+            .filter((o) => !o.isDieChange && plannedInRange(o, from, to))
             .reduce((a, o) => a + (o.jobRequired || 0), 0);
     const schedAdh = planned > 0 ? Math.round((total.output / planned) * 100) : null;
-    rows.push({ machineCode: m.machineCode, total, byShift, schedAdh });
-  }
+    return { machineCode: m.machineCode, total, byShift, schedAdh };
+  });
 
   S!.rows = rows;
   S!.chartBuckets = Array.from(charts.entries())

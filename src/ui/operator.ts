@@ -114,30 +114,23 @@ function shiftOrders(): PlanningOrder[] {
         .filter((j) => !!j && !knownIds.has(j)),
     ),
   );
-  const historical: PlanningOrder[] = historicalIds.map((j) => {
-    // Carry the part number from the saved production row if we have it,
-    // so the disabled Part# field still shows something useful on review.
-    const sample = S!.prod.find((r) => r.jobNumber === j);
-    return {
-      id: 0,
-      jobNumber: j,
-      machineCode: '',
-      originalMachine: '',
-      partNumber: '',
-      partDescription: '(not in Planning — closed/removed)',
-      plannedStart: '',
-      plannedEnd: '',
-      jobRequired: 0,
-      qtyPerHr: 0,
-      duration: 0,
-      released: false,
-      isDieChange: false,
-      manuallyAdded: true,
-      source: 'Manual',
-      // Use sample only for guarding against undefined branches in future
-      ...(sample ? {} : {}),
-    } satisfies PlanningOrder;
-  });
+  const historical: PlanningOrder[] = historicalIds.map((j) => ({
+    id: 0,
+    jobNumber: j,
+    machineCode: '',
+    originalMachine: '',
+    partNumber: '',
+    partDescription: '(not in Planning — closed/removed)',
+    plannedStart: '',
+    plannedEnd: '',
+    jobRequired: 0,
+    qtyPerHr: 0,
+    duration: 0,
+    released: false,
+    isDieChange: false,
+    manuallyAdded: true,
+    source: 'Manual',
+  }));
   return [...planned, ...historical];
 }
 
