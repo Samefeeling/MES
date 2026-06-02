@@ -1,9 +1,9 @@
 {
-  "_comment_layout": "Copy this file to C:\\PMDSync\\config.json on the PC that runs the sync, fill in real values, and never commit it. Secrets (Epicor user/password) live in Windows Credential Manager — see docs/DEPLOYMENT.md section D.",
+  "_comment_layout": "Copy this file to C:/PMDSync/config.json on the PC that runs the sync, fill in real values, and never commit it. Secrets (Epicor user/password) live in Windows Credential Manager - see docs/DEPLOYMENT.md section D.",
+  "_comment_paths": "Use forward slashes in paths to dodge JSON's backslash-escape rule. PowerShell accepts forward slashes on Windows. If you must use backslashes, write them doubled, e.g. C:\\\\Users\\\\you.",
 
   "EpicorUrl":     "https://<epicor-host>/<EnvName>/api/v1/BaqSvc/<BaqId>(<Param>)/",
   "EpicorApiKey":  "",
 
-  "_comment_output": "Set OutputCsvPath to the OneDrive-synced PMD library so the CSV ends up in SharePoint automatically. Example for a synced 'PMD Documents' library: C:\\Users\\<you>\\<Tenant>\\<PMD site> - Documents\\PMD\\Planning.csv",
-  "OutputCsvPath": "C:\\Users\\<you>\\<Tenant>\\<PMD site> - Documents\\PMD\\Planning.csv"
+  "OutputCsvPath": "C:/Users/<you>/<Tenant>/<PMD library folder>/Planning.csv"
 }
