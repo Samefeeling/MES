@@ -46,7 +46,68 @@ interface ShiftAgg {
 interface JobAgg {
   jobNumber: string;
   partDescShort: string;
+  color: ColorTag;
   agg: ShiftAgg;
+}
+
+interface ColorTag {
+  name: string;
+  /** CSS colour for the swatch; '' = let CSS pick the neutral. */
+  hex: string;
+  neutral: boolean;
+}
+
+/**
+ * Match a colour word in a part description so the KPIs can show a swatch
+ * + label per job. Order matters — compound names (e.g. "Navy", "Charcoal")
+ * must come before their generic root ("Blue", "Black") otherwise the
+ * generic eats the match. Hex values pick legible-on-white swatches.
+ */
+const COLOR_KEYWORDS: Array<{ kw: RegExp; name: string; hex: string }> = [
+  { kw: /\bcharcoal\b/i, name: 'Charcoal', hex: '#374151' },
+  { kw: /\bgraphite\b/i, name: 'Graphite', hex: '#4b5563' },
+  { kw: /\bivory\b/i, name: 'Ivory', hex: '#f5e7c4' },
+  { kw: /\bcream\b/i, name: 'Cream', hex: '#fff4d6' },
+  { kw: /\bbeige\b/i, name: 'Beige', hex: '#e6d3a3' },
+  { kw: /\btan\b/i, name: 'Tan', hex: '#d2b48c' },
+  { kw: /\bnavy\b/i, name: 'Navy', hex: '#14467c' },
+  { kw: /\bsky\b/i, name: 'Sky', hex: '#7dd3fc' },
+  { kw: /\bturquoise\b/i, name: 'Turquoise', hex: '#06b6d4' },
+  { kw: /\bteal\b/i, name: 'Teal', hex: '#0d9488' },
+  { kw: /\bcyan\b/i, name: 'Cyan', hex: '#22d3ee' },
+  { kw: /\bblue\b/i, name: 'Blue', hex: '#2563eb' },
+  { kw: /\bmaroon\b/i, name: 'Maroon', hex: '#7f1d1d' },
+  { kw: /\bburgundy\b/i, name: 'Burgundy', hex: '#9b1c31' },
+  { kw: /\bcrimson\b/i, name: 'Crimson', hex: '#dc2626' },
+  { kw: /\bscarlet\b/i, name: 'Scarlet', hex: '#ef4444' },
+  { kw: /\bred\b/i, name: 'Red', hex: '#dc2626' },
+  { kw: /\borange\b/i, name: 'Orange', hex: '#f97316' },
+  { kw: /\bamber\b/i, name: 'Amber', hex: '#f59e0b' },
+  { kw: /\byellow\b/i, name: 'Yellow', hex: '#eab308' },
+  { kw: /\blime\b/i, name: 'Lime', hex: '#84cc16' },
+  { kw: /\bolive\b/i, name: 'Olive', hex: '#65a30d' },
+  { kw: /\bgreen\b/i, name: 'Green', hex: '#16a34a' },
+  { kw: /\bmagenta\b/i, name: 'Magenta', hex: '#d946ef' },
+  { kw: /\bviolet\b/i, name: 'Violet', hex: '#7c3aed' },
+  { kw: /\bpurple\b/i, name: 'Purple', hex: '#9333ea' },
+  { kw: /\bindigo\b/i, name: 'Indigo', hex: '#4338ca' },
+  { kw: /\bpink\b/i, name: 'Pink', hex: '#ec4899' },
+  { kw: /\bbrown\b/i, name: 'Brown', hex: '#92400e' },
+  { kw: /\bchocolate\b/i, name: 'Chocolate', hex: '#7c2d12' },
+  { kw: /\bblack\b/i, name: 'Black', hex: '#111827' },
+  { kw: /\bwhite\b/i, name: 'White', hex: '#f9fafb' },
+  { kw: /\bsilver\b/i, name: 'Silver', hex: '#cbd5e1' },
+  { kw: /\bgold\b/i, name: 'Gold', hex: '#d4af37' },
+  { kw: /\b(grey|gray)\b/i, name: 'Grey', hex: '#6b7280' },
+];
+
+function detectColor(desc: string): ColorTag {
+  if (desc) {
+    for (const c of COLOR_KEYWORDS) {
+      if (c.kw.test(desc)) return { name: c.name, hex: c.hex, neutral: false };
+    }
+  }
+  return { name: 'neutral', hex: '', neutral: true };
 }
 
 interface KpiRow {
@@ -329,11 +390,15 @@ async function compute(now = new Date()): Promise<void> {
         byJob.set(r.jobNumber, arr);
       }
       jobsByShift[code] = Array.from(byJob.entries())
-        .map(([jobNumber, recs]) => ({
-          jobNumber,
-          partDescShort: firstTwoWords(partDescByJob.get(jobNumber) ?? ''),
-          agg: toAgg(aggregate(recs), recs),
-        }))
+        .map(([jobNumber, recs]) => {
+          const desc = partDescByJob.get(jobNumber) ?? '';
+          return {
+            jobNumber,
+            partDescShort: firstTwoWords(desc),
+            color: detectColor(desc),
+            agg: toAgg(aggregate(recs), recs),
+          };
+        })
         .sort((a, b2) => b2.agg.output - a.agg.output);
     }
     const total = toAgg(aggregate(all), all);
@@ -388,6 +453,23 @@ function formatHandoverCell(handovers: HandoverEntry[]): string {
     })
     .join('\n\n');
   return `<td class="kpi-ho-cell" title="${escapeHtml(full)}">${escapeHtml(compact)}</td>`;
+}
+
+/** Empty Color cell — used on rolled-up rows (machine, shift, total)
+ *  where there is no single colour to point at. */
+function colorCellBlank(): string {
+  return `<td class="kpi-color-cell muted">—</td>`;
+}
+
+/** Job-row Color cell: swatch + label (or "neutral" if no colour word
+ *  was found in the part description). */
+function colorCellFor(c: ColorTag): string {
+  if (c.neutral) {
+    return `<td class="kpi-color-cell"><span class="kpi-swatch is-neutral" aria-hidden="true"></span><span class="kpi-color-name muted">neutral</span></td>`;
+  }
+  return `<td class="kpi-color-cell"><span class="kpi-swatch" style="background:${c.hex}" aria-hidden="true"></span><span class="kpi-color-name">${escapeHtml(
+    c.name,
+  )}</span></td>`;
 }
 
 function aggCells(a: ShiftAgg, includeSched: number | null = null, oeeAndSched = true): string {
@@ -450,7 +532,7 @@ function render(): void {
 
   let body: string;
   if (S!.loading) {
-    body = `<tr><td colspan="12" class="muted">Loading…</td></tr>`;
+    body = `<tr><td colspan="13" class="muted">Loading…</td></tr>`;
   } else {
     body = S!.rows
       .map((r) => {
@@ -462,6 +544,7 @@ function render(): void {
         }</button>`;
         const headRow = `<tr class="kpi-machine">
           <th>${toggle}<span class="kpi-mc-name">${escapeHtml(r.machineCode)}</span></th>
+          ${colorCellBlank()}
           ${aggCells(r.total, r.schedAdh)}
         </tr>`;
         if (isCollapsed) return headRow;
@@ -480,6 +563,7 @@ function render(): void {
             : '<span class="kpi-job-toggle ph"></span>';
           const shiftRow = `<tr class="kpi-shift">
             <th class="kpi-shift-name">${chev}${escapeHtml(code)}</th>
+            ${colorCellBlank()}
             ${aggCells(a, null, false)}
           </tr>`;
           if (!jobsOpen) return shiftRow;
@@ -492,6 +576,7 @@ function render(): void {
                 <th class="kpi-job-name" title="${escapeHtml(fullDesc)}">${escapeHtml(
                   j.jobNumber,
                 )}<span class="kpi-job-part">${escapeHtml(j.partDescShort)}</span></th>
+                ${colorCellFor(j.color)}
                 ${aggCells(j.agg, null, false)}
               </tr>`;
             })
@@ -544,7 +629,8 @@ function render(): void {
       <div class="kpi-table-wrap">
         <table class="summary-table kpi-table">
           <thead><tr>
-            <th>Machine</th><th>Output</th><th>Reject</th><th>Yield%</th>
+            <th>Machine</th><th class="kpi-color-head">Color</th>
+            <th>Output</th><th>Reject</th><th>Yield%</th>
             <th>Run h</th><th>Down h</th>
             <th title="D — Die change">Die h</th>
             <th title="C — Colour change">Colour h</th>
@@ -558,6 +644,7 @@ function render(): void {
               ? ''
               : `<tfoot><tr class="kpi-total">
                   <th>TOTAL</th>
+                  ${colorCellBlank()}
                   <td class="num">${tot.output}</td>
                   <td class="num r">${tot.reject}</td>
                   <td class="num">${totYield}%</td>
