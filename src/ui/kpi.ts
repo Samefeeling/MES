@@ -36,6 +36,9 @@ interface ShiftAgg {
   runHrs: number;
   downHrs: number;
   setupHrs: number;
+  dieHrs: number;
+  colorHrs: number;
+  insertHrs: number;
   oee: number | null;
   handovers: HandoverEntry[];
 }
@@ -199,13 +202,28 @@ function toAgg(k: Kpi, records: ProductionRecord[]): ShiftAgg {
     runHrs: k.runHrs,
     downHrs: k.downtimeHrs,
     setupHrs: k.setupHrs,
+    dieHrs: k.dieHrs,
+    colorHrs: k.colorHrs,
+    insertHrs: k.insertHrs,
     oee: k.oee,
     handovers: collectHandovers(records),
   };
 }
 
 function emptyAgg(): ShiftAgg {
-  return { output: 0, reject: 0, yieldPct: 100, runHrs: 0, downHrs: 0, setupHrs: 0, oee: null, handovers: [] };
+  return {
+    output: 0,
+    reject: 0,
+    yieldPct: 100,
+    runHrs: 0,
+    downHrs: 0,
+    setupHrs: 0,
+    dieHrs: 0,
+    colorHrs: 0,
+    insertHrs: 0,
+    oee: null,
+    handovers: [],
+  };
 }
 
 function emptyChartShift(): ChartBucket['byShift'][ShiftCode] {
@@ -382,7 +400,9 @@ function aggCells(a: ShiftAgg, includeSched: number | null = null, oeeAndSched =
     <td class="num ${yc}">${a.yieldPct}%</td>
     <td class="num">${a.runHrs.toFixed(1)}</td>
     <td class="num">${a.downHrs.toFixed(1)}</td>
-    <td class="num">${a.setupHrs.toFixed(1)}</td>
+    <td class="num">${a.dieHrs.toFixed(1)}</td>
+    <td class="num">${a.colorHrs.toFixed(1)}</td>
+    <td class="num">${a.insertHrs.toFixed(1)}</td>
     <td class="num ${oeeAndSched ? oc : ''}">${a.oee == null ? '—' : a.oee + '%'}</td>
     <td class="num ${oeeAndSched ? sc : ''}">${
       includeSched == null ? '—' : includeSched + '%'
@@ -407,9 +427,21 @@ function render(): void {
       a.runHrs += r.total.runHrs;
       a.downHrs += r.total.downHrs;
       a.setupHrs += r.total.setupHrs;
+      a.dieHrs += r.total.dieHrs;
+      a.colorHrs += r.total.colorHrs;
+      a.insertHrs += r.total.insertHrs;
       return a;
     },
-    { output: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0 },
+    {
+      output: 0,
+      reject: 0,
+      runHrs: 0,
+      downHrs: 0,
+      setupHrs: 0,
+      dieHrs: 0,
+      colorHrs: 0,
+      insertHrs: 0,
+    },
   );
   const totYield =
     tot.output + tot.reject > 0
@@ -418,7 +450,7 @@ function render(): void {
 
   let body: string;
   if (S!.loading) {
-    body = `<tr><td colspan="10" class="muted">Loading…</td></tr>`;
+    body = `<tr><td colspan="12" class="muted">Loading…</td></tr>`;
   } else {
     body = S!.rows
       .map((r) => {
@@ -513,7 +545,11 @@ function render(): void {
         <table class="summary-table kpi-table">
           <thead><tr>
             <th>Machine</th><th>Output</th><th>Reject</th><th>Yield%</th>
-            <th>Run h</th><th>Down h</th><th>Setup h</th><th>OEE*</th><th>Sched. Adh.</th>
+            <th>Run h</th><th>Down h</th>
+            <th title="D — Die change">Die h</th>
+            <th title="C — Colour change">Colour h</th>
+            <th title="I — Insert change">Insert h</th>
+            <th>OEE*</th><th>Sched. Adh.</th>
             <th class="kpi-ho-head">Handover</th>
           </tr></thead>
           <tbody>${body}</tbody>
@@ -527,7 +563,9 @@ function render(): void {
                   <td class="num">${totYield}%</td>
                   <td class="num">${tot.runHrs.toFixed(1)}</td>
                   <td class="num">${tot.downHrs.toFixed(1)}</td>
-                  <td class="num">${tot.setupHrs.toFixed(1)}</td>
+                  <td class="num">${tot.dieHrs.toFixed(1)}</td>
+                  <td class="num">${tot.colorHrs.toFixed(1)}</td>
+                  <td class="num">${tot.insertHrs.toFixed(1)}</td>
                   <td class="num">—</td><td class="num">—</td>
                   <td class="kpi-ho-cell muted">—</td>
                 </tr></tfoot>`

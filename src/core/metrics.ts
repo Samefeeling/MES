@@ -11,6 +11,12 @@ export interface Kpi {
   scrapPct: number; // %
   downtimeHrs: number; // B + M
   setupHrs: number; // D + C + I (§4.1)
+  /** Slots × 0.5h, broken out so the KPI grid can show the changeover
+   *  mix instead of a single Setup H roll-up. Sum of the three equals
+   *  setupHrs by construction. */
+  dieHrs: number;
+  colorHrs: number;
+  insertHrs: number;
   runHrs: number;
   dieChanges: number; // D event count
   colorChanges: number; // C event count
@@ -43,6 +49,9 @@ export function aggregate(records: ProductionRecord[]): Kpi {
   let run = 0;
   let downSlots = 0;
   let setupSlots = 0;
+  let dieSlots = 0;
+  let colorSlots = 0;
+  let insertSlots = 0;
 
   for (const r of records) {
     if (!r.statusCode) continue;
@@ -51,7 +60,16 @@ export function aggregate(records: ProductionRecord[]): Kpi {
     if (!def) continue;
     if (def.kind === 'production') run++;
     else if (def.kind === 'downtime') downSlots++;
-    if (r.statusCode === 'D' || r.statusCode === 'C' || r.statusCode === 'I') setupSlots++;
+    if (r.statusCode === 'D') {
+      setupSlots++;
+      dieSlots++;
+    } else if (r.statusCode === 'C') {
+      setupSlots++;
+      colorSlots++;
+    } else if (r.statusCode === 'I') {
+      setupSlots++;
+      insertSlots++;
+    }
   }
 
   // Output / scrap grouped by (jobNumber, shiftId).
@@ -84,6 +102,9 @@ export function aggregate(records: ProductionRecord[]): Kpi {
     scrapPct: gross > 0 ? +((scrap / gross) * 100).toFixed(1) : 0,
     downtimeHrs: +(downSlots * SLOT_HOURS).toFixed(1),
     setupHrs: +(setupSlots * SLOT_HOURS).toFixed(1),
+    dieHrs: +(dieSlots * SLOT_HOURS).toFixed(1),
+    colorHrs: +(colorSlots * SLOT_HOURS).toFixed(1),
+    insertHrs: +(insertSlots * SLOT_HOURS).toFixed(1),
     runHrs: +(run * SLOT_HOURS).toFixed(1),
     ...countSetupEvents(records),
     filledSlots: filled,

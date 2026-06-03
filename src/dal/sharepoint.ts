@@ -111,13 +111,16 @@ const DEFAULT_FIELDS = {
     machineCodeAlt: 'MachineCode',
     date: 'SlotStart_x003a_', // display "Date", actually the DateTime "SlotStart:"
     shift: 'ShiftId',
-    // Status column was deleted from this tenant — the 16-char timeline
-    // string is still persisted via PMD_BreakDownlog.StatusTimeline, so the
-    // operator view + trace can still rebuild per-slot status on reload.
-    // Set this to a real column name (e.g. 'StatusTimeline') if you ever
-    // add it back to PMD_Production.
-    timeline: '',
+    // Status column was re-added to this tenant as `StatusTimeline` — the
+    // 16-char string ("RRRBBBCCCRRRRRRR" etc) goes here so an operator
+    // reload doesn't have to round-trip PMD_BreakDownlog to rebuild per-
+    // slot status. Falling back to the breakdown read still works if this
+    // column ever disappears again (see fetchBreakdownTimelines).
+    timeline: 'StatusTimeline',
     jobNumber: 'JobNumber',
+    // Cached so the SP list is readable without joining to PMD_Planning —
+    // requested by the supervisor reviewing signed-off shifts.
+    partDesc: 'JobHead_PartDescription',
     countStart: 'CountStart',
     countEnd: 'CountEnd',
     reject: 'Reject',
@@ -883,10 +886,14 @@ export class SharePointDataLayer implements PmdDataLayer {
       myTuples.push([]);
     }
     // Single planning lookup (per machine) so we can populate JobHead_PartNum
-    // on PMD_BreakDownlog and PMD_Production rows from the matching order.
+    // and JobHead_PartDescription on PMD_BreakDownlog and PMD_Production
+    // rows from the matching order — supervisors review the SP list and
+    // didn't want to join to PMD_Planning to read what part was running.
     const orders = await this.listPlanning({ machineCode });
     const partNumOf = (job: string): string =>
       orders.find((o) => o.jobNumber === job)?.partNumber ?? '';
+    const partDescOf = (job: string): string =>
+      orders.find((o) => o.jobNumber === job)?.partDescription ?? '';
     for (const slots of myTuples) {
       const job =
         slots[0]?.jobNumber ?? '';
@@ -898,6 +905,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           date,
           shift,
           jobNumber: job,
+          partDescription: partDescOf(job),
           timeline: agg.timeline,
           countStart: agg.countStart,
           countEnd: agg.countEnd,
@@ -996,6 +1004,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     // otherwise SP rejects the whole POST with "property X does not exist".
     if (F.machineCodeAlt) body[F.machineCodeAlt] = h.machineCode;
     if (F.timeline) body[F.timeline] = h.timeline;
+    if (F.partDesc) body[F.partDesc] = h.partDescription;
     if (F.downTime) body[F.downTime] = h.downTime;
     if (F.runTime) body[F.runTime] = h.runTime;
     if (F.handover) body[F.handover] = formatHandover(h.handover);
@@ -1458,6 +1467,7 @@ interface HeaderInput {
   date: string;
   shift: string;
   jobNumber: string;
+  partDescription: string;
   timeline: string;
   countStart: number | null;
   countEnd: number | null;

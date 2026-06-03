@@ -296,22 +296,23 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
   .tut-card{width:92vw;left:4vw !important;right:4vw !important;margin-left:0 !important}
 }
 
-/* ===== KPI machine + shift rows ===== */
+/* ===== KPI machine + shift + job rows ===== */
+/* Uniform row height across the three indent levels so the table reads
+   as a clean grid (operator complained about wobble where shift rows
+   were 28px and job rows 22px). Pin line-height + padding identically;
+   only background colour, font-weight and the leading indent change to
+   convey hierarchy. */
+.kpi-table th,.kpi-table td{line-height:20px;height:32px;vertical-align:middle}
 .kpi-machine th{font-size:16px;font-weight:800;color:var(--tx);background:#f1f5f9}
 .kpi-machine td{font-weight:800;background:#f1f5f9}
-/* Shift sub-rows: identifiable as one visual block belonging to the
-   machine above them. Fill all cells with the same gray as the machine
-   header so each machine reads as a unit; reduce padding + font so the
-   row footprint is ~80% of the machine row (operator-requested density).*/
-.kpi-shift th,.kpi-shift td{background:#eef2f7;border-top:1px dashed #cbd5e1;border-bottom:1px dashed #cbd5e1;font-size:12.5px;font-weight:600;color:#475569;padding:4px 8px}
+.kpi-shift th,.kpi-shift td{background:#eef2f7;border-top:1px dashed #cbd5e1;border-bottom:1px dashed #cbd5e1;font-size:13px;font-weight:600;color:#475569;padding:6px 8px}
 .kpi-shift-name{padding-left:32px !important;font-style:italic}
 .kpi-job-toggle{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-right:6px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;font-size:11px;line-height:1;color:#475569;cursor:pointer;padding:0;vertical-align:middle}
 .kpi-job-toggle.ph{visibility:hidden;border-color:transparent;background:transparent}
 .kpi-job-toggle:hover{background:#dbeafe;border-color:var(--theme-dark)}
-/* 3rd level: per-Job # + Part. Indented further than Shift, lighter
-   weight + slightly smaller font so the visual hierarchy reads
-   machine → shift → job at a glance. */
-.kpi-job th,.kpi-job td{background:#f8fafc;border-top:1px dotted #e2e8f0;font-size:12px;font-weight:500;color:#64748b;padding:3px 8px}
+/* 3rd level: per-Job # + Part. Lighter weight + lighter background; same
+   row geometry as Shift so the table doesn't get jagged. */
+.kpi-job th,.kpi-job td{background:#f8fafc;border-top:1px dotted #e2e8f0;font-size:13px;font-weight:500;color:#64748b;padding:6px 8px}
 .kpi-job-name{padding-left:56px !important}
 .kpi-job-part{margin-left:8px;color:#94a3b8;font-style:italic;font-weight:400}
 .kpi-charts{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}

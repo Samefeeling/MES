@@ -257,8 +257,18 @@ async function reload(): Promise<void> {
   if (!S!.selJob && orders.length) S!.selJob = orders[0].jobNumber;
   const c = canonical();
   if (c) {
-    if (!S!.selOperator) S!.selOperator = c.operator;
-    if (!S!.selSupervisor) S!.selSupervisor = c.supervisor;
+    // For a signed-off shift the canonical row carries the authoritative
+    // operator/supervisor pair from the moment Sign Off & Save fired;
+    // overwrite any leftover selection from the previous shift so the UI
+    // shows those names instead of whatever was last touched. Live shifts
+    // keep the existing behaviour — fill empty selections only.
+    if (c.locked) {
+      S!.selOperator = c.operator;
+      S!.selSupervisor = c.supervisor;
+    } else {
+      if (!S!.selOperator) S!.selOperator = c.operator;
+      if (!S!.selSupervisor) S!.selSupervisor = c.supervisor;
+    }
   }
   await refreshJobTotal();
   saveView();
@@ -418,21 +428,27 @@ function buildMeta(): string {
       S!.selJob,
     )}" placeholder="pick or type"><datalist id="op-job-list">${dataOpts}</datalist>`;
   }
+  // Signed-off shifts: operator & supervisor are frozen to the values that
+  // were recorded at sign-off. Without this an iPad tap on the dropdown
+  // changes the canonical slot's operator/supervisor, but the rest of the
+  // signed-off record stays — you end up looking at "the right numbers
+  // signed off by the wrong name". Supervisor mode reveals the select
+  // again so a correction can be made and re-signed off.
+  const signedOff = lockInfo() !== null;
+  const opSupLocked = signedOff && !isSupervisor();
+  const opField = opSupLocked
+    ? `<input type="text" disabled value="${escapeHtml(S!.selOperator || '—')}" title="Signed off — sign in as supervisor to change">`
+    : `<select data-meta="operator">${selOpts(S!.operators, S!.selOperator, 'operator')}</select>`;
+  const supField = opSupLocked
+    ? `<input type="text" disabled value="${escapeHtml(S!.selSupervisor || '—')}" title="Signed off — sign in as supervisor to change">`
+    : `<select data-meta="supervisor">${selOpts(S!.supervisors, S!.selSupervisor, 'supervisor')}</select>`;
   return `<div class="op-meta">
     <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
     <label class="m-job">Job# ${jobField}</label>
     <label class="m-part">Part# <input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
     <label class="m-desc">Product Description <input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
-    <label class="m-op">Operator <select data-meta="operator">${selOpts(
-      S!.operators,
-      S!.selOperator,
-      'operator',
-    )}</select></label>
-    <label class="m-sup">Supervisor <select data-meta="supervisor">${selOpts(
-      S!.supervisors,
-      S!.selSupervisor,
-      'supervisor',
-    )}</select></label>
+    <label class="m-op">Operator ${opField}</label>
+    <label class="m-sup">Supervisor ${supField}</label>
   </div>`;
 }
 
