@@ -299,18 +299,38 @@ function positionFor(step: TutorialStep): void {
     spot.style.left = rect.left - 8 + 'px';
     spot.style.width = rect.width + 16 + 'px';
     spot.style.height = rect.height + 16 + 'px';
-    // Place card under the target if room below, else above.
+
+    // Card position. Tall targets like .op-side or .handover used to push
+    // the card past the bottom of the viewport because we always offset
+    // by rect.bottom + 20 — on an iPad with a 768-px viewport and a
+    // 600-px side panel the Next button ended up below the chrome and
+    // unreachable. Strategy now: try below → else above → else pin to
+    // the bottom edge of the viewport so Next/Back stay tappable. The
+    // spotlight on the target stays visible regardless because we use
+    // a click-through dark overlay rather than blocking the page.
     card.style.transform = 'none';
     card.style.left = '50%';
     card.style.marginLeft = '-220px'; // half of 440px card width
-    const below = rect.top < window.innerHeight / 2;
-    if (below) {
-      card.style.top = rect.bottom + 20 + 'px';
-      card.style.bottom = '';
+    card.style.bottom = '';
+
+    const margin = 16;
+    const vpH = window.innerHeight;
+    // Measure after applying the horizontal styles so the natural
+    // height reflects the actual content + wrap.
+    const cardH = card.offsetHeight || 280;
+
+    let top: number;
+    if (rect.bottom + 20 + cardH + margin <= vpH) {
+      top = rect.bottom + 20;
+    } else if (rect.top - 20 - cardH - margin >= 0) {
+      top = rect.top - 20 - cardH;
     } else {
-      card.style.top = '';
-      card.style.bottom = window.innerHeight - rect.top + 20 + 'px';
+      // No room either side — pin near the bottom so Next/Back are
+      // always one tap away.
+      top = vpH - cardH - margin;
     }
+    top = Math.max(margin, Math.min(top, vpH - cardH - margin));
+    card.style.top = top + 'px';
   }, 220);
 }
 
