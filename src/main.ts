@@ -64,7 +64,7 @@ function ensureNav(): void {
     '<a href="#/" data-nav>Operator</a>' +
     '<a href="#/trace" data-nav>\u{1F50D} Trace</a>' +
     '<a href="#/kpi" data-nav>\u{1F4CA} KPIs</a>' +
-    '<button type="button" class="tut-launch" data-tut="operator" title="Walk me through the operator sheet">❔ Operator</button>' +
+    '<button type="button" class="tut-launch" data-tut="operator" title="Walk me through filling a shift from start to Sign Off">\u{1F4D8} Tutorial</button>' +
     `<button type="button" class="tut-launch sv-toggle${sv ? ' on' : ''}" data-supervisor title="${
       sv ? 'Supervisor mode is on — tap to sign out' : 'Sign in as supervisor to unlock signed-off shifts'
     }">${sv ? '🔒 Supervisor (on)' : '🔓 Supervisor'}</button>`;

@@ -1,8 +1,11 @@
-// Built-in tutorial mode: walks an operator through the daily flow with
-// a spotlight on the relevant UI element and a tooltip card. Auto-launches
-// once per browser on first visit; always reachable from the top-nav ❓
-// button. Content mirrors docs/TRAINING_OPERATOR.md so the two stay in
-// sync (printable card for the wall, in-app tour for the screen).
+// Built-in tutorial mode: walks an operator through a complete order
+// from clock-in to Sign Off & Save with a spotlight on the relevant UI
+// element and a tooltip card. Auto-launches once per browser on first
+// visit; always reachable from the top-nav 📘 Tutorial button. Content
+// mirrors docs/TRAINING_OPERATOR.md so the two stay in sync (printable
+// card for the wall, in-app tour for the screen). Designed for the
+// 10-inch iPad — every gesture description is "tap" / "tap and drag",
+// every navigation button is a 48-px touch target.
 
 interface TutorialStep {
   id: string;
@@ -21,92 +24,158 @@ const TUTORIAL_KEY = 'pmd_tutorial_seen';
 const OPERATOR_STEPS: TutorialStep[] = [
   {
     id: 'welcome',
-    title: 'Welcome',
+    title: 'Welcome — one order, start to Sign Off',
     narration:
-      'This is a short walkthrough of the operator sheet. It takes about two minutes. We will point to each box so you know what to fill in during your shift. You can stop any time with Skip.',
+      'This walkthrough takes you through a complete order on the iPad, from clocking in to signing off the shift. It runs about three minutes. Tap Next to advance, Back to revisit a step, or Skip to leave at any time.',
     hint: 'Tap Next to start.',
+  },
+  {
+    id: 'date-shift',
+    title: 'Check the date and shift',
+    narration:
+      'The top bar shows today\'s date and three shift tabs — Day, Afternoon, Night. The active shift is highlighted. The arrows on either side step the date back or forward; the Now button jumps to the live shift.',
+    target: '.op-actionbar',
+    hint: 'Most of the time you start on the live shift — no action needed here.',
   },
   {
     id: 'machine',
     title: 'Pick your machine',
     narration:
-      'At the top of the page is a row of boxes. The first one says Machine. Tap it and pick your machine from the list.',
+      'Below the date row, the first field is Machine. Tap it and choose the press you are running. The page colour changes with the shift so you can tell at a glance which one you are on.',
     target: '.m-mc',
   },
   {
     id: 'job',
-    title: 'Pick your Job number',
+    title: 'Pick the Job number',
     narration:
-      'Next box is Job number. This is your order. Tap to pick from the list. If your job is not in the list yet, you can also type the number directly.',
+      'Tap the Job# field. The list shows every PMD order released in Epicor, sorted by the closest start time. If the order you have just been given is not in the list yet — the sync runs every 15 minutes — type the JobNum straight in.',
     target: '.m-job',
+    hint: 'Past shifts show only the jobs that actually ran, so you can review history without scrolling through hundreds of orders.',
+  },
+  {
+    id: 'part-desc',
+    title: 'Part # and Description auto-fill',
+    narration:
+      'Once you pick a Job#, Part# and Product Description fill themselves from the planning sync. You cannot type into them — they are read-only on purpose, so the values always match what was released in Epicor.',
+    target: '.m-part',
   },
   {
     id: 'operator',
-    title: 'Pick your name',
+    title: 'Pick your name (Operator)',
     narration:
-      'Find the Operator box and pick your own name. This stays for the whole shift.',
+      'Tap the Operator field and choose your own name. It stays for the rest of the shift unless you change it. After Sign Off & Save the field becomes read-only so it cannot be touched by accident.',
     target: '.m-op',
   },
   {
     id: 'supervisor',
-    title: 'Pick your Supervisor',
-    narration: 'Pick the supervisor on shift with you in the Supervisor box.',
+    title: 'Pick your supervisor',
+    narration:
+      'Pick the supervisor on shift with you. The same name will be recorded on the Sign Off when you finish. They can also unlock and edit a signed-off shift later if something needs fixing.',
     target: '.m-sup',
   },
   {
-    id: 'cstart',
-    title: 'Type the starting counter',
+    id: 'order-qty',
+    title: 'Order Qty and Job Left',
     narration:
-      'On the right side, find Count Start. Type the counter reading on your machine at clock-in.',
-    target: '[data-meta="cstart"]',
+      'The side panel on the right shows the order total and what is left. Order Qty is the JobRequired from planning. Job Left counts down as Good pieces are produced across every shift on this job — not just yours — so two shifts running the same job see the same number drop together.',
+    target: '.op-side',
   },
   {
-    id: 'status',
-    title: 'Fill the Machine Status row',
+    id: 'cstart',
+    title: 'Type the Count Start',
     narration:
-      'The big grid in the middle has one cell for every half hour. Tap a cell and pick a letter. R = Running, B = Breakdown, plus seven more letters you can read on the legend.',
+      'Read the counter on the press at the start of your shift and tap it into Count Start. This is the only number you need to type before you can start logging — everything else is built up slot by slot through the shift.',
+    target: '[data-meta="cstart"]',
+    hint: 'The counter on the press is the single most important number — get this one right.',
+  },
+  {
+    id: 'status-tap',
+    title: 'Machine Status — tap one half hour',
+    narration:
+      'The grid in the middle has sixteen columns, one per half hour, eight hours of shift. Tap a single cell to pick a status. A picker opens showing R, B, C, D, I, M, O, P, S — see the legend at the bottom.',
     target: '.row-status',
-    hint: 'Tip: press and hold, then drag across many cells to fill them all at once.',
+  },
+  {
+    id: 'status-drag',
+    title: 'Machine Status — drag for many slots',
+    narration:
+      'For a run of slots all the same status (a long Running stretch, a Breakdown that lasts two hours), put your finger on the first slot, hold, and drag across to the last one. Release and the picker opens once for the whole range.',
+    target: '.row-status',
+    hint: 'Tip: the highlighted cells turn orange while you drag.',
+  },
+  {
+    id: 'status-clear',
+    title: 'Cleared a slot by mistake?',
+    narration:
+      'The status picker has a "↺ Clear (back to blank)" button at the bottom — tap a wrongly-set cell, pick Clear, and it goes back to a blank dot. No need to choose another letter just to undo.',
   },
   {
     id: 'breakdown',
-    title: 'If you pick B (Breakdown)',
+    title: 'When you pick B — Breakdown cascade',
     narration:
-      'When you tap B, a second panel opens. Pick the category — Mechanical, Electrical, Hydraulic, and so on — then pick the specific cause. This helps the engineers know what to fix.',
+      'B opens a second panel where you pick the breakdown category — Mechanical, Electrical, Hydraulic, Mould, Robot — then the specific cause underneath. The cause shows up in the cell as a tag so engineers can read what to fix without opening Mango.',
+  },
+  {
+    id: 'now-line',
+    title: 'The live "now" marker',
+    narration:
+      'The vertical orange line on the grid is the live wall clock, drawn over the slot you are inside right now. The column it sits in is tinted, so it is hard to fill the wrong half hour by accident.',
+    target: '.row-status',
   },
   {
     id: 'rejects',
-    title: 'Log rejects',
+    title: 'Log the rejects',
     narration:
-      'Under the status row, each row is a defect category. Tap the cell at the right time and type the number of pieces scrapped.',
+      'Each row below Machine Status is a defect code. When something goes in the scrap bin, tap the cell under the right half hour and type the piece count. The Total Reject on the right adds them up automatically.',
     target: '.row-named',
+    hint: 'Use the same time slot the piece was actually rejected in, not the one you log it in.',
   },
   {
     id: 'handover',
-    title: 'Hand-over notes',
+    title: 'Handover notes for the next shift',
     narration:
-      'Near the end of the shift, write short notes for the next shift in People, Plant, Machine, and Material.',
+      'Towards the end of the shift, fill in the four handover boxes. People — staffing changes. Plant — air, water, dryer issues. Machine — press state, mould condition, anything to watch. Material — lot, regrind, masterbatch. The next shift sees this on KPIs.',
     target: '.handover',
   },
   {
     id: 'cend',
-    title: 'Type the ending counter',
+    title: 'Type the Count End',
     narration:
-      'At the end of your shift, type the final counter into Count End. Total Good appears automatically — it is Count End minus Count Start minus rejects.',
+      'Read the counter at the end of your shift and tap it into Count End. Total Good appears immediately — it is Count End minus Count Start minus Total Reject. Job Left updates at the same time.',
     target: '[data-meta="cend"]',
   },
   {
-    id: 'signoff',
+    id: 'signoff-open',
     title: 'Sign Off and Save',
     narration:
-      'Tap the green Sign Off and Save button at the top right. A summary opens. Check the numbers. If they look right, tap Confirm. Your shift is saved.',
+      'When everything looks right, tap the green Sign Off & Save button at the top right. A confirmation opens with the numbers you are about to commit — Count Start, Count End, Good, Reject, Operator, Supervisor.',
     target: '[data-saveclear]',
   },
   {
-    id: 'done',
-    title: 'You are done',
+    id: 'signoff-confirm',
+    title: 'Confirm and you are done',
     narration:
-      'That is the whole shift, every shift, the same steps. The ❓ Operator button at the top is always here if you forget. Have a good shift.',
+      'Read the summary one more time. If it is correct, tap "Sign off as [your supervisor]". The shift is written to PMD_Production, PMD_BreakDownlog, and PMD_Rejects on SharePoint. A 🔒 orange banner appears at the top so everyone knows the shift is locked.',
+  },
+  {
+    id: 'after-signoff',
+    title: 'After Sign Off — what changes',
+    narration:
+      'The Operator and Supervisor fields become read-only and show the names you just signed off with. To fix anything you need to ask a supervisor to use 🔓 Supervisor at the top right and unlock the shift. The Job# carries forward to the next shift so the same job continues seamlessly — no need to re-pick.',
+    target: '.op-meta',
+  },
+  {
+    id: 'kpis',
+    title: 'See your numbers on KPIs',
+    narration:
+      'The 📊 KPIs button at the top opens a roll-up: per machine, per shift, per job, with output, reject, yield, hours, OEE and your handover notes. Use it for the daily morning meeting — the team can drill from the period down to the exact order.',
+    target: 'a[href="#/kpi"]',
+  },
+  {
+    id: 'done',
+    title: 'That is the whole shift',
+    narration:
+      'You have just walked through a complete order on the iPad. The 📘 Tutorial button at the top is always here — tap it any time you want to refresh a step. Have a good shift.',
     hint: 'Tap Finish to close.',
   },
 ];
