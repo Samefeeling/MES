@@ -187,11 +187,15 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .op-side .sk-pair-cell input{width:90px}
 
 /* §6 — Handover / Journey: 2x2 grid of textareas for People / Plant / Machine / Material. */
-.handover{display:flex;flex-direction:column;gap:8px;margin-top:4px;border-top:2px solid var(--theme-accent);padding-top:10px}
+.handover{display:flex;flex-direction:column;gap:8px;margin-top:4px;border-top:2px solid var(--theme-accent);padding-top:10px;flex:1 1 auto;min-height:0}
 .handover-title{font-size:13px;font-weight:800;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.5px}
-.handover-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.handover-grid label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:700;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.4px}
-.handover-grid textarea{width:100%;min-height:64px;resize:vertical;border:2px solid var(--bd);border-radius:8px;padding:8px;font-family:inherit;font-size:14px;background:#fef9c3}
+/* Fill the remaining space in the side panel so all four textboxes
+   stretch to the bottom of the frame instead of staying a short fixed
+   height. Each label becomes a flex column with the textarea consuming
+   any extra room (operators were running out of typing space). */
+.handover-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:1 1 auto;min-height:240px}
+.handover-grid label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:700;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.4px;min-height:0}
+.handover-grid textarea{width:100%;flex:1 1 auto;min-height:110px;resize:vertical;border:2px solid var(--bd);border-radius:8px;padding:8px;font-family:inherit;font-size:14px;background:#fef9c3}
 
 /* §9 — Summary view shown when zoom is at Today / Week / Month. Read-only. */
 .summary-wrap{background:#fff;border-radius:10px;border:2px solid var(--theme-accent);padding:14px}
@@ -294,9 +298,12 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 
 /* ===== KPI machine + shift rows ===== */
 .kpi-machine th{font-size:16px;font-weight:800;color:var(--tx);background:#f1f5f9}
-.kpi-machine td{font-weight:800}
-.kpi-shift{background:#fdfdfd}
-.kpi-shift th,.kpi-shift td{border-top:1px dashed #cbd5e1;border-bottom:1px dashed #cbd5e1;font-size:13px;font-weight:600;color:#475569}
+.kpi-machine td{font-weight:800;background:#f1f5f9}
+/* Shift sub-rows: identifiable as one visual block belonging to the
+   machine above them. Fill all cells with the same gray as the machine
+   header so each machine reads as a unit; reduce padding + font so the
+   row footprint is ~80% of the machine row (operator-requested density).*/
+.kpi-shift th,.kpi-shift td{background:#eef2f7;border-top:1px dashed #cbd5e1;border-bottom:1px dashed #cbd5e1;font-size:12.5px;font-weight:600;color:#475569;padding:4px 8px}
 .kpi-shift-name{padding-left:32px !important;font-style:italic}
 .kpi-charts{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
 .kpi-chart{background:#fff;border:1px solid var(--bd);border-radius:10px;padding:10px}

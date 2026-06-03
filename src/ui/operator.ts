@@ -55,6 +55,42 @@ let S: OpState | null = null;
 let dalRef: PmdDataLayer;
 let nowTimer: ReturnType<typeof setInterval> | undefined;
 
+// Per-tab persistence of which shift the operator was last looking at.
+// Without this, switching to KPIs and back resets viewDate / shiftCode to
+// today's live shift — and an iPad operator who'd been reviewing 02/06
+// loses their place every time they tap a top-nav link by accident.
+const UI_KEY = 'pmd_op_view_v1';
+interface PersistedView {
+  mc: string;
+  viewDateIso: string;
+  shiftCode: ShiftCode;
+  selJob: string;
+}
+function loadView(): PersistedView | null {
+  try {
+    const raw = sessionStorage.getItem(UI_KEY);
+    return raw ? (JSON.parse(raw) as PersistedView) : null;
+  } catch {
+    return null;
+  }
+}
+function saveView(): void {
+  if (!S) return;
+  try {
+    sessionStorage.setItem(
+      UI_KEY,
+      JSON.stringify({
+        mc: S.mc,
+        viewDateIso: S.viewDate.toISOString(),
+        shiftCode: S.shiftCode,
+        selJob: S.selJob,
+      }),
+    );
+  } catch {
+    /* storage blocked — best effort */
+  }
+}
+
 const SLOT_PX = 64; // touch target for the half-hour status cell on 10" iPad
 
 const VIEW_LEVELS: Array<{ level: number; label: string }> = [
@@ -95,33 +131,33 @@ function blankRecord(slot: number): ProductionRecord {
   };
 }
 
+function isPastShift(): boolean {
+  // A shift is "past" if its calendar date is strictly before today, OR
+  // if it's today but earlier than the live shift. The Job# dropdown for
+  // past shifts is restricted to jobs that were actually worked on, since
+  // the planning list only reflects the current Epicor state.
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (S!.viewDate < today) return true;
+  if (S!.viewDate > today) return false;
+  const liveShiftId = currentShift(new Date()).shiftId;
+  return sid() !== liveShiftId;
+}
+
 function shiftOrders(): PlanningOrder[] {
-  // Epicor doesn't carry a machine assignment, so the operator picks the
-  // machine separately and gets every PMD-released order in the dropdown
-  // (sorted by plannedStart, closest-to-now first). When viewing a past
-  // shift, we also surface any JobNum that appears in PMD_Production for
-  // this shift but is no longer in Planning (e.g. Epicor closed the job
-  // and the sync removed it) — without this, historical signed-off shifts
-  // would have a blank dropdown and operators couldn't review them.
-  const planned = S!.planning.slice().sort(
-    (a, b2) =>
-      new Date(a.plannedStart).getTime() - new Date(b2.plannedStart).getTime(),
-  );
-  const knownIds = new Set(planned.map((o) => o.jobNumber));
+  // Historical jobs — every JobNum that appears on PMD_Production rows for
+  // the currently-viewed shift. Always derived from S!.prod so it works for
+  // both signed-off shifts and unsaved edits.
   const historicalIds = Array.from(
-    new Set(
-      S!.prod
-        .map((r) => r.jobNumber)
-        .filter((j) => !!j && !knownIds.has(j)),
-    ),
+    new Set(S!.prod.map((r) => r.jobNumber).filter((j) => !!j)),
   );
-  const historical: PlanningOrder[] = historicalIds.map((j) => ({
+  const historicalOrder = (j: string): PlanningOrder => ({
     id: 0,
     jobNumber: j,
     machineCode: '',
     originalMachine: '',
     partNumber: '',
-    partDescription: '(not in Planning — closed/removed)',
+    partDescription: '(historical)',
     plannedStart: '',
     plannedEnd: '',
     jobRequired: 0,
@@ -131,8 +167,25 @@ function shiftOrders(): PlanningOrder[] {
     isDieChange: false,
     manuallyAdded: true,
     source: 'Manual',
-  }));
-  return [...planned, ...historical];
+  });
+
+  // Past shifts: only show the jobs actually worked on — the planning list
+  // reflects current Epicor state and would otherwise drown the dropdown
+  // with unrelated active orders.
+  if (isPastShift()) {
+    return historicalIds.map(historicalOrder);
+  }
+
+  // Active / future shift: all PMD-released orders (sorted plannedStart,
+  // closest-to-now first), plus any historical id not in planning (e.g.
+  // a job that just got closed in Epicor).
+  const planned = S!.planning.slice().sort(
+    (a, b2) =>
+      new Date(a.plannedStart).getTime() - new Date(b2.plannedStart).getTime(),
+  );
+  const knownIds = new Set(planned.map((o) => o.jobNumber));
+  const extras = historicalIds.filter((j) => !knownIds.has(j)).map(historicalOrder);
+  return [...planned, ...extras];
 }
 
 function selectedOrder(): PlanningOrder | undefined {
@@ -208,6 +261,7 @@ async function reload(): Promise<void> {
     if (!S!.selSupervisor) S!.selSupervisor = c.supervisor;
   }
   await refreshJobTotal();
+  saveView();
   render();
 }
 
@@ -340,11 +394,33 @@ function buildMeta(): string {
     })
     .join('');
   const o = selectedOrder();
+  // Past shifts (and non-supervisors) get a constrained <select> so they can
+  // still switch between the jobs that were actually run on that shift, but
+  // can't type a new JobNum and pollute historical data. Supervisors and
+  // current/future shifts keep the free-text input + datalist autocomplete.
+  const pastLocked = isPastShift() && !isSupervisor();
+  let jobField: string;
+  if (pastLocked) {
+    const historical = orders;
+    const selectOpts = historical.length
+      ? historical
+          .map(
+            (h) =>
+              `<option value="${escapeHtml(h.jobNumber)}"${
+                h.jobNumber === S!.selJob ? ' selected' : ''
+              }>${escapeHtml(h.jobNumber)}</option>`,
+          )
+          .join('')
+      : '<option value="">— no records —</option>';
+    jobField = `<select data-meta="job" title="Past shift — sign in as supervisor to edit">${selectOpts}</select>`;
+  } else {
+    jobField = `<input type="text" list="op-job-list" data-meta="job" value="${escapeHtml(
+      S!.selJob,
+    )}" placeholder="pick or type"><datalist id="op-job-list">${dataOpts}</datalist>`;
+  }
   return `<div class="op-meta">
     <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
-    <label class="m-job">Job# <input type="text" list="op-job-list" data-meta="job" value="${escapeHtml(
-      S!.selJob,
-    )}" placeholder="pick or type"><datalist id="op-job-list">${dataOpts}</datalist></label>
+    <label class="m-job">Job# ${jobField}</label>
     <label class="m-part">Part# <input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
     <label class="m-desc">Product Description <input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
     <label class="m-op">Operator <select data-meta="operator">${selOpts(
@@ -726,12 +802,14 @@ function renderNowLine(): void {
 function wire(): void {
   const app = document.getElementById('app')!;
 
-  // Date navigation
+  // Date navigation — keep selJob across day moves: operators commonly
+  // carry the same job from Day → Afternoon → Night and shouldn't have to
+  // re-pick it. If the new shift has no rows for that job, the grid will
+  // just show empty cells.
   app.querySelectorAll<HTMLButtonElement>('[data-day]').forEach((b) =>
     b.addEventListener('click', () => {
       S!.viewDate = new Date(S!.viewDate);
       S!.viewDate.setDate(S!.viewDate.getDate() + Number(b.dataset.day));
-      S!.selJob = '';
       void reload();
     }),
   );
@@ -740,15 +818,13 @@ function wire(): void {
     S!.viewDate = new Date();
     S!.viewDate.setHours(0, 0, 0, 0);
     S!.shiftCode = cs.code;
-    S!.selJob = '';
     void reload();
   });
 
-  // Shift tabs
+  // Shift tabs — keep selJob (see comment above).
   app.querySelectorAll<HTMLButtonElement>('[data-shift]').forEach((b) =>
     b.addEventListener('click', () => {
       S!.shiftCode = b.dataset.shift as ShiftCode;
-      S!.selJob = '';
       void reload();
     }),
   );
@@ -763,7 +839,6 @@ function wire(): void {
       S!.shiftCode = m[4] as ShiftCode;
       S!.viewLevel = 1;
       summaryCache = null;
-      S!.selJob = '';
       void reload();
     }),
   );
@@ -814,13 +889,15 @@ function onMetaChange(el: HTMLElement): void {
       if (!isNaN(d.getTime())) {
         d.setHours(0, 0, 0, 0);
         S!.viewDate = d;
-        S!.selJob = '';
         void reload();
       }
       break;
     }
     case 'machine':
       S!.mc = val;
+      // Machine change does clear selJob: a different press generally runs
+      // a different order, and carrying the previous job number across
+      // machines tends to mask the empty grid rather than help.
       S!.selJob = '';
       summaryCache = null; // cache is per-machine
       void reload();
@@ -969,7 +1046,14 @@ function wireStatusPicker(): void {
   const wrap = document.querySelector<HTMLElement>('.op-grid-wrap');
   if (!wrap) return;
 
+  // iPad Safari does not always report e.pressure > 0 during a finger
+  // drag — guarding pointermove on pressure caused multi-select to fail
+  // silently on the very devices we ship to. Use an explicit isDown flag
+  // (set on pointerdown, cleared on pointerup / cancel / lostcapture)
+  // and rely on the browser's pointer-capture to keep the events arriving
+  // even when the finger drifts outside the original cell.
   let anchor: number | null = null;
+  let isDown = false;
   let dragged = false;
 
   const slotAt = (clientX: number, clientY: number): number | null => {
@@ -988,31 +1072,61 @@ function wireStatusPicker(): void {
     paintSelection();
   };
 
+  const release = (e?: PointerEvent): void => {
+    if (e) {
+      try {
+        (e.target as Element).releasePointerCapture?.(e.pointerId);
+      } catch {
+        /* not captured by this target — fine */
+      }
+    }
+    isDown = false;
+  };
+
   wrap.addEventListener('pointerdown', (e) => {
     const slot = slotAt(e.clientX, e.clientY);
     if (slot == null) return;
     anchor = slot;
+    isDown = true;
     dragged = false;
     S!.selSet = new Set<number>([slot]);
     paintSelection();
-    (e.target as Element).setPointerCapture?.(e.pointerId);
+    try {
+      (e.target as Element).setPointerCapture?.(e.pointerId);
+    } catch {
+      /* capture optional */
+    }
     e.preventDefault();
   });
 
   wrap.addEventListener('pointermove', (e) => {
-    if (anchor == null || e.pressure === 0) return;
+    if (!isDown || anchor == null) return;
     const slot = slotAt(e.clientX, e.clientY);
     if (slot == null || slot === anchor) return;
     dragged = true;
     setRange(anchor, slot);
   });
 
-  wrap.addEventListener('pointerup', () => {
-    if (anchor == null) return;
+  const finish = (e: PointerEvent): void => {
+    if (anchor == null) {
+      release(e);
+      return;
+    }
+    release(e);
     anchor = null;
     // Open picker for both single-tap (selSet.size==1) and drag-range cases —
     // single tap is the most common path so it shouldn't need an extra click.
     if (S!.selSet.size > 0) openStatusPicker(dragged);
+  };
+  wrap.addEventListener('pointerup', finish);
+  wrap.addEventListener('pointercancel', (e) => {
+    release(e);
+    anchor = null;
+    S!.selSet.clear();
+    paintSelection();
+  });
+  wrap.addEventListener('lostpointercapture', () => {
+    isDown = false;
   });
 
   paintSelection();
@@ -1075,6 +1189,7 @@ function openStatusPicker(isRange: boolean): void {
     ${sameAsPrev ? `<div class="bd-cause-list">${sameAsPrev}</div>` : ''}
     <div class="ab-grid">${pills}</div>
     <div class="bd-actions">
+      <button class="btn-ghost-big" data-clear>↺ Clear (back to blank)</button>
       <button class="btn-ghost-big" data-cancel>Cancel</button>
     </div>
   </div>`);
@@ -1084,6 +1199,10 @@ function openStatusPicker(isRange: boolean): void {
     paintSelection();
   };
   mc.querySelector('[data-cancel]')?.addEventListener('click', cancel);
+  mc.querySelector('[data-clear]')?.addEventListener('click', () => {
+    closeModal();
+    void multiFillApply(slots, '' as StatusCode, '', '');
+  });
   mc.querySelector('[data-pick-same]')?.addEventListener('click', () => {
     closeModal();
     void multiFillApply(slots, prev!.statusCode as StatusCode, prev!.bdIssue, prev!.mangoTicket);
@@ -1158,7 +1277,9 @@ async function doSignoffSave(): Promise<void> {
     await dalRef.lockShift(S!.mc, sid(), S!.selSupervisor, S!.selOperator);
     closeModal();
     toast(`Signed off · ${S!.selJob || 'shift'} saved to Master`, 'ok');
-    S!.selJob = '';
+    // Keep selJob: the next shift on the same job continues seamlessly
+    // (operator keeps clicking ▶ to advance). Matches how Machine sticks
+    // across shift navigation.
     // Supervisor sign-in is intentionally per-action: once a shift is
     // signed off and saved, the supervisor's elevated permission ends
     // automatically. They need to sign in again from the top nav for
@@ -1238,11 +1359,31 @@ export async function renderOperator(
   const cs = currentShift(now);
   const vd = new Date(now);
   vd.setHours(0, 0, 0, 0);
+
+  // Resume the last per-tab view if the URL machine matches it. The route's
+  // machineCode wins (operator deep-linked to a specific press), but date
+  // / shift / selJob come back from sessionStorage so an inadvertent tap on
+  // KPIs and back doesn't reset their context.
+  const saved = loadView();
+  const startMc = machineCode || saved?.mc || machines[0]?.machineCode || '';
+  let viewDate = vd;
+  let shiftCode = cs.code;
+  let selJob = '';
+  if (saved && saved.mc === startMc) {
+    const d = new Date(saved.viewDateIso);
+    if (!isNaN(d.getTime())) {
+      d.setHours(0, 0, 0, 0);
+      viewDate = d;
+    }
+    if (saved.shiftCode) shiftCode = saved.shiftCode;
+    if (saved.selJob) selJob = saved.selJob;
+  }
+
   S = {
-    mc: machineCode || machines[0]?.machineCode || '',
-    viewDate: vd,
-    shiftCode: cs.code,
-    selJob: '',
+    mc: startMc,
+    viewDate,
+    shiftCode,
+    selJob,
     prod: [],
     planning,
     machines,

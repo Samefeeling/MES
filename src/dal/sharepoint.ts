@@ -14,7 +14,7 @@ import type {
 } from '../types';
 import type { PmdDataLayer } from './types';
 import { bdCategoryOf, bdLabelFor, BD_TAXONOMY } from '../core/breakdown';
-import { shiftBounds, slotClock } from '../core/shifts';
+import { slotClock } from '../core/shifts';
 
 // =====================================================================
 // SharePointDataLayer — Resero Operations AU site.
@@ -206,12 +206,15 @@ export class SharePointDataLayer implements PmdDataLayer {
   private readonly F: SharePointFieldMap;
 
   /**
-   * In-memory cache of slot records for shifts the operator is currently
+   * Cache of unsaved slot records for shifts the operator is currently
    * editing. Key = `${machineCode}|${shiftId}|${jobNumber}`. Flushed to
-   * the three production lists on lockShift; survives reloads only within
-   * the same browser tab.
+   * the three production lists on lockShift. Mirrored to localStorage on
+   * every change so that an accidental nav (back/forward, top-nav tap)
+   * or a page refresh does not wipe a half-filled shift — the operator's
+   * data is preserved until sign-off explicitly clears it.
    */
   private editCache = new Map<string, ProductionRecord[]>();
+  private static readonly EDIT_CACHE_KEY = 'pmd_edit_cache_v1';
   /** Hydrated headers: same key, value = the synthesised slot 0 record. */
   private hydratedKeys = new Set<string>();
   /**
@@ -231,6 +234,31 @@ export class SharePointDataLayer implements PmdDataLayer {
     this.planningCsvPath = o.planningCsvPath;
     // Merge user overrides into the defaults.
     this.F = mergeFieldMap(DEFAULT_FIELDS, o.fieldMap);
+    this.rehydrateEditCache();
+  }
+
+  private rehydrateEditCache(): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      const raw = localStorage.getItem(SharePointDataLayer.EDIT_CACHE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Array<[string, ProductionRecord[]]>;
+      for (const [k, v] of parsed) this.editCache.set(k, v);
+    } catch (e) {
+      console.warn('[pmd] could not rehydrate edit cache:', e);
+    }
+  }
+
+  private persistEditCache(): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      const payload = JSON.stringify(Array.from(this.editCache.entries()));
+      localStorage.setItem(SharePointDataLayer.EDIT_CACHE_KEY, payload);
+    } catch (e) {
+      // Quota exceeded or private mode — caller will still get an in-memory
+      // copy, we just won't survive a refresh.
+      console.warn('[pmd] could not persist edit cache:', e);
+    }
   }
 
   // ---- low-level helpers ----------------------------------------------
@@ -588,17 +616,22 @@ export class SharePointDataLayer implements PmdDataLayer {
     // and combine with ShiftId for an exact-shift match.
     if (filter.shiftId) {
       const { shift } = parseShiftIdLoose(filter.shiftId);
-      const b = shiftBounds(filter.shiftId);
-      if (b) parts.push(`${F.date} eq datetime'${b.start.toISOString()}'`);
+      parts.push(`(${shiftDateRange(filter.shiftId, F.date)})`);
       if (shift) parts.push(`${F.shift} eq '${shift}'`);
     }
     if (filter.shiftIdFrom) {
-      const b = shiftBounds(filter.shiftIdFrom);
-      if (b) parts.push(`${F.date} ge datetime'${b.start.toISOString()}'`);
+      const lo = new Date(
+        new Date(`${filter.shiftIdFrom.slice(0, 10)}T00:00:00.000Z`).getTime() -
+          86_400_000,
+      ).toISOString();
+      parts.push(`${F.date} ge datetime'${lo}'`);
     }
     if (filter.shiftIdTo) {
-      const b = shiftBounds(filter.shiftIdTo);
-      if (b) parts.push(`${F.date} le datetime'${b.end.toISOString()}'`);
+      const hi = new Date(
+        new Date(`${filter.shiftIdTo.slice(0, 10)}T00:00:00.000Z`).getTime() +
+          2 * 86_400_000,
+      ).toISOString();
+      parts.push(`${F.date} le datetime'${hi}'`);
     }
     const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
     const rows = await this.getAllItems(LISTS.production, qs);
@@ -641,17 +674,22 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (filter.jobNumber) parts.push(`${F.jobNum} eq '${filter.jobNumber}'`);
     if (filter.shiftId) {
       const { shift } = parseShiftIdLoose(filter.shiftId);
-      const b = shiftBounds(filter.shiftId);
-      if (b) parts.push(`${F.date} eq datetime'${b.start.toISOString()}'`);
+      parts.push(`(${shiftDateRange(filter.shiftId, F.date)})`);
       if (shift) parts.push(`${F.shift} eq '${shift}'`);
     }
     if (filter.shiftIdFrom) {
-      const b = shiftBounds(filter.shiftIdFrom);
-      if (b) parts.push(`${F.date} ge datetime'${b.start.toISOString()}'`);
+      const lo = new Date(
+        new Date(`${filter.shiftIdFrom.slice(0, 10)}T00:00:00.000Z`).getTime() -
+          86_400_000,
+      ).toISOString();
+      parts.push(`${F.date} ge datetime'${lo}'`);
     }
     if (filter.shiftIdTo) {
-      const b = shiftBounds(filter.shiftIdTo);
-      if (b) parts.push(`${F.date} le datetime'${b.end.toISOString()}'`);
+      const hi = new Date(
+        new Date(`${filter.shiftIdTo.slice(0, 10)}T00:00:00.000Z`).getTime() +
+          2 * 86_400_000,
+      ).toISOString();
+      parts.push(`${F.date} le datetime'${hi}'`);
     }
     const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
     let rows: Record<string, unknown>[] = [];
@@ -681,12 +719,11 @@ export class SharePointDataLayer implements PmdDataLayer {
     const parts: string[] = [];
     if (filter.machineCode) parts.push(`${F.machine} eq '${filter.machineCode}'`);
     if (filter.jobNumber) parts.push(`${F.jobNum} eq '${filter.jobNumber}'`);
-    // PMD_Rejects.Date is DateTime — filter by the shift's start instant,
-    // computed from shiftBounds(shiftId) to match what we wrote on save.
+    // PMD_Rejects.Date is DateTime — use a ±1d window around the shift's
+    // date so both new (noon-UTC marker) and legacy (local-start) rows match.
     if (filter.shiftId) {
       const { shift } = parseShiftIdLoose(filter.shiftId);
-      const b = shiftBounds(filter.shiftId);
-      if (b) parts.push(`${F.date} eq datetime'${b.start.toISOString()}'`);
+      parts.push(`(${shiftDateRange(filter.shiftId, F.date)})`);
       if (shift) parts.push(`${F.shift} eq '${shift}'`);
     }
     const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
@@ -805,15 +842,21 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (idx >= 0) list[idx] = stored;
     else list.push(stored);
     this.editCache.set(key, list);
+    this.persistEditCache();
     return stored;
   }
 
   async deleteProductionRecord(id: number): Promise<void> {
     // Remove from cache. Persisted rows are deleted only via shift unlock.
+    let mutated = false;
     for (const [key, list] of this.editCache) {
       const filtered = list.filter((r) => r.id !== id);
-      if (filtered.length !== list.length) this.editCache.set(key, filtered);
+      if (filtered.length !== list.length) {
+        this.editCache.set(key, filtered);
+        mutated = true;
+      }
     }
+    if (mutated) this.persistEditCache();
   }
 
   /**
@@ -893,6 +936,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       }
       this.editCache.delete(ownKey(job));
     }
+    this.persistEditCache();
   }
 
   async unlockShift(machineCode: string, shiftId: string): Promise<void> {
@@ -900,49 +944,42 @@ export class SharePointDataLayer implements PmdDataLayer {
     // delete their corresponding analytic + reject rows so the operator can
     // refile.
     const F = this.F.production;
-    const date = shiftId.slice(0, 10);
     const shift = shiftId.slice(11);
-    const b = shiftBounds(shiftId);
-    const dateClause = b
-      ? `${F.date} eq datetime'${b.start.toISOString()}'`
-      : `${F.date} eq null`;
+    const dateRangeProd = shiftDateRange(shiftId, F.date);
     const qs =
       '$filter=' +
       encodeURIComponent(
-        `${F.machine} eq '${machineCode}' and ${dateClause} and ${F.shift} eq '${shift}'`,
+        `${F.machine} eq '${machineCode}' and (${dateRangeProd}) and ${F.shift} eq '${shift}'`,
       );
     const rows = await this.getAllItems<{ ID?: number; Id?: number }>(LISTS.production, qs);
     for (const r of rows) await this.del(`${this.listUrl(LISTS.production)}/items(${r.ID ?? r.Id})`);
     // Best-effort matching deletion in PMD_BreakDown and PMD_Rejects.
-    // Their Date columns are DateTime; use the shift's start instant.
-    const isoStart = b?.start.toISOString();
-    if (isoStart) {
-      const Fb = this.F.breakdown;
-      await this.deleteByFilter(
-        LISTS.breakdown,
-        `${Fb.machine} eq '${machineCode}' and ${Fb.date} eq datetime'${isoStart}' and ${Fb.shift} eq '${shift}'`,
-      );
-      const Fr = this.F.rejects;
-      await this.deleteByFilter(
-        LISTS.rejects,
-        `${Fr.machine} eq '${machineCode}' and ${Fr.date} eq datetime'${isoStart}' and ${Fr.shift} eq '${shift}'`,
-      );
-    }
+    // Same ±1d window so legacy rows also get cleaned up.
+    const Fb = this.F.breakdown;
+    await this.deleteByFilter(
+      LISTS.breakdown,
+      `${Fb.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, Fb.date)}) and ${Fb.shift} eq '${shift}'`,
+    );
+    const Fr = this.F.rejects;
+    await this.deleteByFilter(
+      LISTS.rejects,
+      `${Fr.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, Fr.date)}) and ${Fr.shift} eq '${shift}'`,
+    );
     // Drop hydrated cache for this shift so a re-read pulls fresh.
     this.hydratedKeys.forEach((k) => {
       if (k.startsWith(`${machineCode}|${shiftId}|`)) this.hydratedKeys.delete(k);
     });
-    void date; // kept for future per-list `date`-only deletes
   }
 
   private async upsertProductionHeader(h: HeaderInput): Promise<void> {
     const F = this.F.production;
-    // The date column is a DateTime (SlotStart:); store the shift's wall-clock
-    // start instant. F.machine is mapped to Title, so writing [F.machine]
-    // populates Title with the machine code (e.g. "Batt1") — no separate
-    // Machine column exists.
-    const b = shiftBounds(`${h.date}-${h.shift}`);
-    const slotStartIso = b?.start.toISOString();
+    // F.date is a DateTime column. Stamp noon UTC of the shift's calendar
+    // date so the SP list displays the right date in every regional setting
+    // (see shiftDateMarker for why local-clock start was a bad anchor).
+    // F.machine is mapped to Title, so writing [F.machine] populates Title
+    // with the machine code (e.g. "Batt1") — no separate Machine column.
+    const shiftId = `${h.date}-${h.shift}`;
+    const slotStartIso = shiftDateMarker(shiftId);
     const body: Record<string, unknown> = {
       __metadata: { type: await this.itemType(LISTS.production) },
       [F.machine]: h.machineCode,
@@ -968,14 +1005,13 @@ export class SharePointDataLayer implements PmdDataLayer {
       const good = cs != null && ce != null ? Math.max(0, ce - cs - h.reject) : 0;
       body[F.totalGood] = good;
     }
-    // Find existing by composite key; MERGE if found, else POST.
-    const dateClause = slotStartIso
-      ? `${F.date} eq datetime'${slotStartIso}'`
-      : `${F.date} eq null`;
+    // Find existing by composite key; MERGE if found, else POST. Use a ±1d
+    // window so legacy rows (written with local-start UTC) are MERGE'd in
+    // place rather than ending up as duplicates next to the new noon-UTC row.
     const qs =
       '$filter=' +
       encodeURIComponent(
-        `${F.machine} eq '${h.machineCode}' and ${dateClause} and ${F.shift} eq '${h.shift}' and ${F.jobNumber} eq '${h.jobNumber}'`,
+        `${F.machine} eq '${h.machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${h.shift}' and ${F.jobNumber} eq '${h.jobNumber}'`,
       );
     const existing = await this.getAllItems<{ ID?: number; Id?: number }>(LISTS.production, qs);
     if (existing.length > 0) {
@@ -1007,14 +1043,10 @@ export class SharePointDataLayer implements PmdDataLayer {
   ): Promise<void> {
     const F = this.F.breakdown;
     const shiftId = `${key.date}-${key.shift}`;
-    const sb = shiftBounds(shiftId);
-    const slotStartIso = sb?.start.toISOString();
-    const dateClause = slotStartIso
-      ? `${F.date} eq datetime'${slotStartIso}'`
-      : `${F.date} eq null`;
+    const slotStartIso = shiftDateMarker(shiftId);
     await this.deleteByFilter(
       LISTS.breakdown,
-      `${F.machine} eq '${key.machineCode}' and ${dateClause} and ${F.shift} eq '${key.shift}' and ${F.jobNum} eq '${key.jobNumber}'`,
+      `${F.machine} eq '${key.machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${key.shift}' and ${F.jobNum} eq '${key.jobNumber}'`,
     );
     const type = await this.itemType(LISTS.breakdown);
     // Count per-status slots across the whole shift; each slot = 0.5h.
@@ -1057,16 +1089,11 @@ export class SharePointDataLayer implements PmdDataLayer {
     events: RejectEvent[],
   ): Promise<void> {
     const F = this.F.rejects;
-    // PMD_Rejects.Date is DateTime — derive the shift's start instant the
-    // same way the write does so the wipe matches what we'll insert.
-    const sb = shiftBounds(`${key.date}-${key.shift}`);
-    const slotStartIso = sb?.start.toISOString();
-    const dateClause = slotStartIso
-      ? `${F.date} eq datetime'${slotStartIso}'`
-      : `${F.date} eq null`;
+    const shiftId = `${key.date}-${key.shift}`;
+    const slotStartIso = shiftDateMarker(shiftId);
     await this.deleteByFilter(
       LISTS.rejects,
-      `${F.machine} eq '${key.machineCode}' and ${dateClause} and ${F.shift} eq '${key.shift}' and ${F.jobNum} eq '${key.jobNumber}'`,
+      `${F.machine} eq '${key.machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${key.shift}' and ${F.jobNum} eq '${key.jobNumber}'`,
     );
     for (const ev of events) {
       const body: Record<string, unknown> = {
@@ -1346,6 +1373,37 @@ function parseShiftIdLoose(sid: string): { date: string; shift: string } {
   const m = /^(\d{4}-\d{2}-\d{2})(?:-([A-Za-z]+))?/.exec(sid);
   if (!m) return { date: '', shift: '' };
   return { date: m[1], shift: m[2] ?? '' };
+}
+
+/**
+ * The instant we stamp PMD_Production / PMD_BreakDownlog / PMD_Rejects rows
+ * with for a given shift. Always noon UTC of the shift's calendar date —
+ * deliberately *not* the shift's local-clock start, because:
+ *   1. Day shifts start 07:00 local = 21:00 UTC the previous calendar day
+ *      under Sydney +10, which makes the SP list display the wrong date
+ *      in any timezone that renders dates from UTC midnight.
+ *   2. Night shifts start 23:00 local = 13:00 UTC same day, which then
+ *      renders as the *next* day in any positive-offset SP regional
+ *      (the symptom the operator reported: Night 3/6 → SP shows 4/6).
+ * Noon UTC keeps the displayed calendar date equal to the shift's date in
+ * every regional setting between UTC-11 and UTC+11, which covers AU+NZ.
+ * `dateOnly()` continues to recover the local date from this marker, so
+ * reads work the same. The list filters in this file use a ±1-day window
+ * around the marker so they also match older rows that were written with
+ * the legacy local-start timestamp — no migration required.
+ */
+function shiftDateMarker(shiftId: string): string {
+  return `${shiftId.slice(0, 10)}T12:00:00.000Z`;
+}
+
+/** Returns OData "F.date ge … and F.date le …" covering the shift's date
+ *  plus 24 h on either side, so both the new noon-UTC marker and any
+ *  legacy local-start timestamps land inside the window. */
+function shiftDateRange(shiftId: string, fDate: string): string {
+  const base = new Date(`${shiftId.slice(0, 10)}T00:00:00.000Z`).getTime();
+  const lo = new Date(base - 86_400_000).toISOString();
+  const hi = new Date(base + 2 * 86_400_000).toISOString();
+  return `${fDate} ge datetime'${lo}' and ${fDate} le datetime'${hi}'`;
 }
 
 function productionMatches(r: ProductionRecord, f: ProductionFilter): boolean {
