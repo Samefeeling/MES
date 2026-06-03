@@ -305,6 +305,15 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    row footprint is ~80% of the machine row (operator-requested density).*/
 .kpi-shift th,.kpi-shift td{background:#eef2f7;border-top:1px dashed #cbd5e1;border-bottom:1px dashed #cbd5e1;font-size:12.5px;font-weight:600;color:#475569;padding:4px 8px}
 .kpi-shift-name{padding-left:32px !important;font-style:italic}
+.kpi-job-toggle{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-right:6px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;font-size:11px;line-height:1;color:#475569;cursor:pointer;padding:0;vertical-align:middle}
+.kpi-job-toggle.ph{visibility:hidden;border-color:transparent;background:transparent}
+.kpi-job-toggle:hover{background:#dbeafe;border-color:var(--theme-dark)}
+/* 3rd level: per-Job # + Part. Indented further than Shift, lighter
+   weight + slightly smaller font so the visual hierarchy reads
+   machine → shift → job at a glance. */
+.kpi-job th,.kpi-job td{background:#f8fafc;border-top:1px dotted #e2e8f0;font-size:12px;font-weight:500;color:#64748b;padding:3px 8px}
+.kpi-job-name{padding-left:56px !important}
+.kpi-job-part{margin-left:8px;color:#94a3b8;font-style:italic;font-weight:400}
 .kpi-charts{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
 .kpi-chart{background:#fff;border:1px solid var(--bd);border-radius:10px;padding:10px}
 .kpi-chart h4{margin:0 0 6px;font-size:14px;font-weight:700;color:var(--theme-dark)}

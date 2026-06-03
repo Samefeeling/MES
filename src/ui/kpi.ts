@@ -40,10 +40,18 @@ interface ShiftAgg {
   handovers: HandoverEntry[];
 }
 
+interface JobAgg {
+  jobNumber: string;
+  partDescShort: string;
+  agg: ShiftAgg;
+}
+
 interface KpiRow {
   machineCode: string;
   total: ShiftAgg;
   byShift: Record<ShiftCode, ShiftAgg>;
+  /** Per (shift, job) breakdown for the 3rd-level expansion. */
+  jobsByShift: Record<ShiftCode, JobAgg[]>;
   schedAdh: number | null;
 }
 
@@ -55,6 +63,10 @@ interface KpiState {
   chartBuckets: ChartBucket[];
   /** Machine codes whose shift sub-rows are hidden. */
   collapsed: Set<string>;
+  /** "${mc}|${shiftCode}" pairs whose Job#+Part rows are revealed. Default
+   *  collapsed so the table stays compact; the operator clicks the row's
+   *  ▸ chevron to drill into the per-job split. */
+  jobsExpanded: Set<string>;
 }
 
 interface ChartBucket {
@@ -200,6 +212,15 @@ function emptyChartShift(): ChartBucket['byShift'][ShiftCode] {
   return { good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, oee: null };
 }
 
+/** First two words of a part description — keeps the per-job row narrow
+ *  enough to read on a 10" iPad while still distinguishing "Battery Tray
+ *  Black" from "Battery Lid Grey". Caller still sets a full-text title. */
+function firstTwoWords(s: string): string {
+  if (!s) return '';
+  const words = s.trim().split(/\s+/);
+  return words.slice(0, 2).join(' ');
+}
+
 async function compute(now = new Date()): Promise<void> {
   const { from, to, shiftIds } = periodRange(S!.period, now);
   // listPlanning and the per-machine production reads have no
@@ -226,6 +247,12 @@ async function compute(now = new Date()): Promise<void> {
     ),
   ]);
 
+  // Build a JobNum → partDescription lookup once, used by the per-job
+  // breakdown rows (3rd indent level). Falls back to empty string for jobs
+  // not in the planning list (closed in Epicor since the shift ran).
+  const partDescByJob = new Map<string, string>();
+  for (const o of planning) partDescByJob.set(o.jobNumber, o.partDescription);
+
   const charts = new Map<string, ChartBucket>();
   const rows: KpiRow[] = S!.machines.map((m, i) => {
     const all = perMachineProd[i];
@@ -250,6 +277,11 @@ async function compute(now = new Date()): Promise<void> {
       Afternoon: emptyAgg(),
       Night: emptyAgg(),
     };
+    const jobsByShift: Record<ShiftCode, JobAgg[]> = {
+      Day: [],
+      Afternoon: [],
+      Night: [],
+    };
     for (const code of SHIFT_ORDER) {
       const shiftBuckets = buckets.get(code)!;
       const flat: ProductionRecord[] = [];
@@ -269,6 +301,22 @@ async function compute(now = new Date()): Promise<void> {
         charts.set(dateKey, cb);
       }
       byShift[code] = toAgg(aggregate(flat), flat);
+
+      // 3rd-level breakdown: group this shift's records by JobNum,
+      // aggregate each, attach the part description (first two words).
+      const byJob = new Map<string, ProductionRecord[]>();
+      for (const r of flat) {
+        const arr = byJob.get(r.jobNumber) ?? [];
+        arr.push(r);
+        byJob.set(r.jobNumber, arr);
+      }
+      jobsByShift[code] = Array.from(byJob.entries())
+        .map(([jobNumber, recs]) => ({
+          jobNumber,
+          partDescShort: firstTwoWords(partDescByJob.get(jobNumber) ?? ''),
+          agg: toAgg(aggregate(recs), recs),
+        }))
+        .sort((a, b2) => b2.agg.output - a.agg.output);
     }
     const total = toAgg(aggregate(all), all);
 
@@ -279,7 +327,7 @@ async function compute(now = new Date()): Promise<void> {
             .filter((o) => !o.isDieChange && plannedInRange(o, from, to))
             .reduce((a, o) => a + (o.jobRequired || 0), 0);
     const schedAdh = planned > 0 ? Math.round((total.output / planned) * 100) : null;
-    return { machineCode: m.machineCode, total, byShift, schedAdh };
+    return { machineCode: m.machineCode, total, byShift, jobsByShift, schedAdh };
   });
 
   S!.rows = rows;
@@ -387,10 +435,36 @@ function render(): void {
         if (isCollapsed) return headRow;
         const shiftRows = SHIFT_ORDER.map((code) => {
           const a = r.byShift[code];
-          return `<tr class="kpi-shift">
-            <th class="kpi-shift-name">${escapeHtml(code)}</th>
+          const jobs = r.jobsByShift[code];
+          const expandKey = `${r.machineCode}|${code}`;
+          const jobsOpen = S!.jobsExpanded.has(expandKey);
+          // ▸ when collapsed, ▾ when open. Hide the chevron entirely if the
+          // shift has no per-job split (no records logged), to avoid an
+          // un-actionable click target.
+          const chev = jobs.length
+            ? `<button type="button" class="kpi-job-toggle" data-jobs="${escapeHtml(expandKey)}" aria-label="${
+                jobsOpen ? 'Hide' : 'Show'
+              } jobs for ${escapeHtml(code)}">${jobsOpen ? '▾' : '▸'}</button>`
+            : '<span class="kpi-job-toggle ph"></span>';
+          const shiftRow = `<tr class="kpi-shift">
+            <th class="kpi-shift-name">${chev}${escapeHtml(code)}</th>
             ${aggCells(a, null, false)}
           </tr>`;
+          if (!jobsOpen) return shiftRow;
+          const jobRows = jobs
+            .map((j) => {
+              const fullDesc = `${j.jobNumber}${
+                j.partDescShort ? ' — ' + j.partDescShort : ''
+              }`;
+              return `<tr class="kpi-job">
+                <th class="kpi-job-name" title="${escapeHtml(fullDesc)}">${escapeHtml(
+                  j.jobNumber,
+                )}<span class="kpi-job-part">${escapeHtml(j.partDescShort)}</span></th>
+                ${aggCells(j.agg, null, false)}
+              </tr>`;
+            })
+            .join('');
+          return shiftRow + jobRows;
         }).join('');
         return headRow + shiftRows;
       })
@@ -480,6 +554,14 @@ function render(): void {
       render();
     }),
   );
+  app.querySelectorAll<HTMLButtonElement>('[data-jobs]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const key = b.dataset.jobs!;
+      if (S!.jobsExpanded.has(key)) S!.jobsExpanded.delete(key);
+      else S!.jobsExpanded.add(key);
+      render();
+    }),
+  );
 }
 
 export async function renderKpi(dal: PmdDataLayer): Promise<void> {
@@ -493,6 +575,7 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     rows: [],
     chartBuckets: [],
     collapsed: new Set(),
+    jobsExpanded: new Set(),
   };
   render();
   await compute();

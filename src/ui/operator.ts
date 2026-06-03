@@ -528,7 +528,12 @@ function buildSide(): string {
       : '—';
   const purge = c?.purgeKg ?? '';
   const h = parseHandover(c);
+  // Order Qty = JobRequired from planning (the operator's target for the
+  // whole job, not just this shift). Shown above Job Left so the operator
+  // can read "target → remaining" at a glance.
+  const orderQty = o && !o.isDieChange ? o.jobRequired : '—';
   return `<aside class="op-side">
+    <div class="sk"><label>Order Qty</label><b>${orderQty}</b></div>
     <div class="sk"><label>Job left</label><b>${jobLeft}</b></div>
     <div class="sk"><label>Count Start</label><input type="number" data-meta="cstart" value="${cs}"></div>
     <div class="sk"><label>Count End</label><input type="number" data-meta="cend" value="${ce}"></div>
