@@ -14,11 +14,13 @@ import {
   currentShift,
   currentSlotIndex,
   dateKey,
+  previousShift,
   shiftBounds,
   slotClock,
 } from '../core/shifts';
 import { STATUSES, STATUS_MAP } from '../core/status';
 import { bdLabelFor } from '../core/breakdown';
+import { countSetupEvents } from '../core/metrics';
 import { openBreakdownCascade } from './breakdown';
 import { toast } from './toast';
 import { closeModal, escapeHtml, openModal } from './modal';
@@ -270,9 +272,90 @@ async function reload(): Promise<void> {
       if (!S!.selSupervisor) S!.selSupervisor = c.supervisor;
     }
   }
+  // Count Start auto-carry: a same-machine/same-job continuation from
+  // the previous shift starts where the previous shift's counter ended
+  // — Day 14000 → Afternoon 14000 (Count Start) → Afternoon 28000 (End)
+  // → Night 28000 (Count Start). Only fires when the operator hasn't
+  // typed anything yet (count Start null on the live shift) and we
+  // have a non-null Count End from the immediately-preceding shift on
+  // the same machine + job.
+  await maybeCarryCountStart();
   await refreshJobTotal();
   saveView();
   render();
+}
+
+/**
+ * Walk back through previous shifts (Day → Night yesterday, Afternoon →
+ * Day same date, Night → Afternoon same date) looking for the most
+ * recent canonical row on this (machine, job) that has a Count End.
+ * Returns null if no antecedent is found within a week (an arbitrary
+ * but reasonable bound — gaps longer than that are almost certainly a
+ * brand-new run starting fresh, not a continuation).
+ */
+async function prevShiftCountEnd(): Promise<number | null> {
+  if (!S!.selJob) return null;
+  let sid: string | null = previousShift(buildShiftId(S!.viewDate, S!.shiftCode));
+  for (let hops = 0; hops < 21 && sid; hops++) {
+    const recs = await dalRef.listProduction({
+      machineCode: S!.mc,
+      shiftId: sid,
+      jobNumber: S!.selJob,
+    });
+    const canon = recs.find((r) => r.slotIndex === 0);
+    if (canon && canon.countEnd != null) return Number(canon.countEnd);
+    sid = previousShift(sid);
+  }
+  return null;
+}
+
+async function maybeCarryCountStart(): Promise<void> {
+  if (!S!.selJob) return;
+  const c = canonical();
+  // Don't touch signed-off shifts or shifts where the operator already
+  // typed a Count Start (the existing value wins).
+  if (c?.locked) return;
+  if (c?.countStart != null) return;
+  const prev = await prevShiftCountEnd();
+  if (prev == null) return;
+  console.info(
+    `[pmd] auto-carry Count Start ← ${prev} (prev shift's Count End on ${S!.mc}/${S!.selJob})`,
+  );
+  // Use no-reload upsert so we don't recurse via reload().
+  await upsertSlotNoReload(0, (r) => {
+    r.countStart = prev;
+  });
+}
+
+/**
+ * Available production hours this shift = 8h base, minus the time eaten
+ * by changeovers logged on the Machine Status row (operator-stated rule):
+ *   - each Die change event: -4h
+ *   - each Colour change event: -0.5h
+ *   - each Insert change event: -0.5h
+ * Events are counted as consecutive runs of D / C / I slots (see
+ * countSetupEvents()); a single D block of any length counts once.
+ * Clamped to [0, 8].
+ */
+function availableHoursThisShift(): number {
+  const recs = S!.prod.filter((r) => r.jobNumber === S!.selJob);
+  const ev = countSetupEvents(recs);
+  const lost = ev.dieChanges * 4 + ev.colorChanges * 0.5 + ev.insertChanges * 0.5;
+  return Math.max(0, Math.min(8, 8 - lost));
+}
+
+/**
+ * Shift Target pieces = Available Time / Cycle Time. Planning carries
+ * JobOper_ProdStandard as a pieces-per-hour rate (`qtyPerHr`), so the
+ * mathematically equivalent form here is hours × pieces/hour, which
+ * avoids dividing by zero when the standard is missing. Returns null
+ * when no planning rate is available (operator has no fair target).
+ */
+function targetThisShift(): number | null {
+  const o = selectedOrder();
+  if (!o || !o.qtyPerHr || o.qtyPerHr <= 0) return null;
+  const hrs = availableHoursThisShift();
+  return Math.round(hrs * o.qtyPerHr);
 }
 
 /**
@@ -548,9 +631,19 @@ function buildSide(): string {
   // whole job, not just this shift). Shown above Job Left so the operator
   // can read "target → remaining" at a glance.
   const orderQty = o && !o.isDieChange ? o.jobRequired : '—';
+  // Shift Target = Available Time × pieces/hour. Updates live as the
+  // operator fills D / C / I slots — every die change knocks 4h off the
+  // budgeted available time, every colour or insert change 30 min.
+  const tgt = targetThisShift();
+  const avail = availableHoursThisShift();
+  const targetDisplay = tgt == null ? '—' : String(tgt);
+  const targetTitle = tgt == null
+    ? 'No JobOper_ProdStandard on the planning row for this job — Target cannot be computed.'
+    : `Target = ${avail.toFixed(1)} available h × ${o!.qtyPerHr} per h (8h shift minus die/colour/insert changes recorded on the status row).`;
   return `<aside class="op-side">
     <div class="sk"><label>Order Qty</label><b>${orderQty}</b></div>
     <div class="sk"><label>Job left</label><b>${jobLeft}</b></div>
+    <div class="sk"><label title="${escapeHtml(targetTitle)}">Target</label><b title="${escapeHtml(targetTitle)}">${targetDisplay}</b></div>
     <div class="sk"><label>Count Start</label><input type="number" data-meta="cstart" value="${cs}"></div>
     <div class="sk"><label>Count End</label><input type="number" data-meta="cend" value="${ce}"></div>
     <div class="sk"><label>Total Good</label><b class="g">${good}</b></div>
