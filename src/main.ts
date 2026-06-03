@@ -69,9 +69,13 @@ function ensureNav(): void {
       sv ? 'Supervisor mode is on — tap to sign out' : 'Sign in as supervisor to unlock signed-off shifts'
     }">${sv ? '🔒 Supervisor (on)' : '🔓 Supervisor'}</button>`;
   nav.querySelectorAll<HTMLButtonElement>('[data-tut]').forEach((b) =>
-    b.addEventListener('click', () =>
-      startTutorial(b.dataset.tut as 'operator' | 'supervisor'),
-    ),
+    b.addEventListener('click', (e) => {
+      // Log so an operator can confirm the click is reaching JS even on
+      // an iPad without DevTools (Safari macOS → Develop → iPad shows it).
+      console.info('[pmd] Tutorial click', b.dataset.tut);
+      e.preventDefault();
+      startTutorial(b.dataset.tut as 'operator' | 'supervisor');
+    }),
   );
   nav
     .querySelector<HTMLButtonElement>('[data-supervisor]')

@@ -232,12 +232,26 @@ function steps(): TutorialStep[] {
 }
 
 function ensureHost(): HTMLElement {
-  if (host) return host;
+  // Recreate the host if the variable points at a detached node. SPFx
+  // page navigations or a host re-render can yank the original out of
+  // body without our knowing; without this guard we'd keep mutating an
+  // orphan div and the user would see nothing on Tutorial click.
+  if (host && document.body.contains(host)) return host;
   host = document.createElement('div');
   host.className = 'tut-host';
+  // Inline the baseline visibility rules so the tutorial still works
+  // on a page whose stylesheet didn't load the .tut-host class (an
+  // older cached bundle on a SharePoint CDN, a customer who CSP-blocks
+  // our css, etc). The CSS file still overrides these with the nicer
+  // animations and positioning.
+  host.style.position = 'fixed';
+  host.style.inset = '0';
+  host.style.zIndex = '2147483000'; // top of stack — beat SP chrome
+  host.style.display = 'none';
+  host.style.pointerEvents = 'none';
   host.innerHTML = `
     <div class="tut-spotlight" aria-hidden="true"></div>
-    <div class="tut-card" role="dialog" aria-modal="true" aria-labelledby="tut-title">
+    <div class="tut-card" role="dialog" aria-modal="true" aria-labelledby="tut-title" style="position:absolute;width:440px;max-width:92vw;background:#fff;border-radius:14px;padding:22px;box-shadow:0 20px 40px rgba(0,0,0,.35);pointer-events:auto">
       <div class="tut-progress"></div>
       <h3 class="tut-title" id="tut-title"></h3>
       <p class="tut-narration"></p>
@@ -312,8 +326,14 @@ function showStep(i: number): void {
   if (i < 0 || i >= all.length) return close();
   const step = all[i];
   const el = ensureHost();
+  // Both the .open class (so the bundled stylesheet's transitions
+  // apply when available) and inline display: a SharePoint deploy
+  // that's serving an older cached CSS missing the .open rule would
+  // otherwise leave the host stuck at display:none. Belt-and-braces.
   el.classList.add('open');
+  el.style.display = 'block';
   idx = i;
+  console.info(`[pmd] tutorial step ${i + 1}/${all.length} — ${step.id}`);
   (el.querySelector('.tut-progress') as HTMLElement).textContent =
     `Step ${i + 1} of ${all.length}`;
   (el.querySelector('.tut-title') as HTMLElement).textContent = step.title;
@@ -338,7 +358,10 @@ function prev(): void {
 }
 
 function close(): void {
-  if (host) host.classList.remove('open');
+  if (host) {
+    host.classList.remove('open');
+    host.style.display = 'none';
+  }
   try {
     localStorage.setItem(TUTORIAL_KEY, '1');
   } catch {
@@ -349,6 +372,7 @@ function close(): void {
 
 /** Open the tutorial at step 0 — call from a UI button. */
 export function startTutorial(which: TutorialTrack = 'operator'): void {
+  console.info(`[pmd] startTutorial(${which})`);
   track = which;
   showStep(0);
 }
