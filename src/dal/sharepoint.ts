@@ -106,17 +106,19 @@ const DEFAULT_FIELDS = {
   },
   production: {
     machine: 'Title',
-    // Mirror of the machine code (this tenant has a separate MachineCode
-    // column alongside Title). Empty = skip-write.
+    // The `MachineCode` column on this tenant has been repurposed to hold
+    // the 16-char status timeline string — same value as PMD_BreakDownlog.
+    // StatusTimeline — so the SP list is self-readable without joining.
+    // `machineCodeAlt` is therefore a misnomer kept for backwards-compat
+    // of the field map; see upsertProductionHeader for what actually gets
+    // written here.
     machineCodeAlt: 'MachineCode',
     date: 'SlotStart_x003a_', // display "Date", actually the DateTime "SlotStart:"
     shift: 'ShiftId',
-    // Status column was re-added to this tenant as `StatusTimeline` — the
-    // 16-char string ("RRRBBBCCCRRRRRRR" etc) goes here so an operator
-    // reload doesn't have to round-trip PMD_BreakDownlog to rebuild per-
-    // slot status. Falling back to the breakdown read still works if this
-    // column ever disappears again (see fetchBreakdownTimelines).
-    timeline: 'StatusTimeline',
+    // The dedicated StatusTimeline column was never re-added to
+    // PMD_Production — the timeline lives in MachineCode (see above) and
+    // PMD_BreakDownlog.StatusTimeline. Leave blank so the writer skips it.
+    timeline: '',
     jobNumber: 'JobNumber',
     // Cached so the SP list is readable without joining to PMD_Planning —
     // requested by the supervisor reviewing signed-off shifts.
@@ -644,7 +646,14 @@ export class SharePointDataLayer implements PmdDataLayer {
       date: dateOnly(r[F.date]),
       shift: str(r[F.shift]),
       jobNumber: str(r[F.jobNumber]),
-      timeline: str(r[F.timeline]),
+      // The 16-char status timeline lives in the MachineCode column on
+      // this tenant; prefer it over the (empty / fallback) F.timeline
+      // entry so listProduction can rebuild per-slot status without a
+      // round-trip to PMD_BreakDownlog.
+      timeline:
+        (F.machineCodeAlt && str(r[F.machineCodeAlt])) ||
+        (F.timeline && str(r[F.timeline])) ||
+        '',
       countStart: nullOrNum(r[F.countStart]),
       countEnd: nullOrNum(r[F.countEnd]),
       reject: num(r[F.reject]),
@@ -1002,7 +1011,9 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (slotStartIso) body[F.date] = slotStartIso;
     // Optional columns: only write if the field map has a non-empty name,
     // otherwise SP rejects the whole POST with "property X does not exist".
-    if (F.machineCodeAlt) body[F.machineCodeAlt] = h.machineCode;
+    // The `MachineCode` column is repurposed to carry the 16-char status
+    // timeline string — see DEFAULT_FIELDS.production for context.
+    if (F.machineCodeAlt) body[F.machineCodeAlt] = h.timeline;
     if (F.timeline) body[F.timeline] = h.timeline;
     if (F.partDesc) body[F.partDesc] = h.partDescription;
     if (F.downTime) body[F.downTime] = h.downTime;
