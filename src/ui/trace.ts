@@ -45,10 +45,11 @@ interface TraceRow {
 
 /**
  * Live Status renders one card per press in the floor's physical
- * order (the layout the supervisor walks past), not the SP list
- * sequence. Anything not in this list is appended in whatever order
- * listMachines returned, so a new press automatically shows up at the
- * end instead of being silently dropped.
+ * order (the layout the supervisor walks past), used as a tie-break
+ * after the "active first" sort. Anything not in this list is
+ * appended in whatever order listMachines returned, so a new press
+ * automatically shows up at the end instead of being silently
+ * dropped.
  */
 const FLOOR_ORDER: string[] = [
   '1600T',
@@ -65,30 +66,6 @@ const FLOOR_ORDER: string[] = [
 function floorIndex(code: string): number {
   const i = FLOOR_ORDER.indexOf(code);
   return i === -1 ? FLOOR_ORDER.length : i;
-}
-
-function sortByFloor<T extends { machineCode: string }>(rows: T[]): T[] {
-  return rows.slice().sort((a, b) => floorIndex(a.machineCode) - floorIndex(b.machineCode));
-}
-
-/** Tailwind-ish stripe colour per press, used on the machine name chip
- *  so a supervisor can pick the line they want at a glance. The card
- *  rail itself is driven by current activity (see ACTIVITY_COLOURS).
- *  Unknowns fall through to a neutral slate. */
-const MACHINE_COLOURS: Record<string, string> = {
-  '1600T': '#2563eb',
-  '1300T': '#0ea5e9',
-  Batt1: '#0d9488',
-  Batt2: '#65a30d',
-  '850C': '#f59e0b',
-  '550C': '#f97316',
-  '320C': '#dc2626',
-  '125T': '#9333ea',
-  HS: '#475569',
-};
-
-function machineColour(code: string): string {
-  return MACHINE_COLOURS[code] ?? '#475569';
 }
 
 type Activity = 'running' | 'changeover' | 'breakdown' | 'idle';
@@ -174,7 +151,7 @@ function render(): void {
 function renderLiveBody(): string {
   const head = `
     <div class="trace-search">
-      <h2>📡 Live Status — every press right now</h2>
+      <h2>📡 Live Status — every Moulding machine right now</h2>
       <p class="bd-sub">What each machine is on this shift. Tap <b>🔍 Job Number Search</b> above to look up a past order.</p>
     </div>`;
   if (S!.loading) {
@@ -268,25 +245,23 @@ function renderCard(r: TraceRow): string {
         .join('')}</ul></div>`
     : '';
 
-  // Live view: press chip on the left for identity, activity badge
-  // on the right so the supervisor can scan the floor and see at a
-  // glance which line is running, which is in changeover, which is
-  // down. Card rail switches from the machine colour to the activity
-  // colour because the activity is the action signal — knowing
-  // 1600T's colour matters less than knowing it's red right now.
+  // Live view: machine name in plain text on the left for identity,
+  // activity badge on the right so the supervisor can scan the floor
+  // and see at a glance which line is running, which is in
+  // changeover, which is down. The rail + tint carry the colour
+  // signal — a dedicated machine swatch was distracting on top.
   // Search view keeps the older job-first layout.
   const isLive = S!.view === 'live';
-  const machineCol = machineColour(r.machineCode);
   const activity = activityFor(r);
   const activityCol = ACTIVITY_COLOURS[activity];
-  const machineTag = `<span class="trace-machine-tag" style="background:${machineCol}">${escapeHtml(r.machineCode)}</span>`;
+  const machineName = `<b class="trace-machine">${escapeHtml(r.machineCode)}</b>`;
   const activityBadge = isLive
     ? `<span class="trace-activity" style="background:${activityCol}">${escapeHtml(ACTIVITY_LABELS[activity])}</span>`
     : r.idle
       ? `<span class="trace-idle">Idle</span>`
       : '';
   const headline = isLive
-    ? `${machineTag}<b class="trace-job">${escapeHtml(r.jobNumber || '(no job)')}</b>${activityBadge}<span class="trace-meta">${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`
+    ? `${machineName}<span class="trace-job">${escapeHtml(r.jobNumber || '(no job)')}</span>${activityBadge}<span class="trace-meta">${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`
     : `<b>${escapeHtml(r.jobNumber || '(no job)')}</b>${activityBadge}<span class="trace-meta">${escapeHtml(r.machineCode)} · ${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`;
 
   return `<div class="trace-card${r.idle ? ' is-idle' : ''}${isLive ? ' is-live' : ''} act-${activity}" style="${isLive ? `--mc:${activityCol}` : ''}">
@@ -358,8 +333,19 @@ async function loadLive(): Promise<void> {
     arr.push(r);
     byMachine.set(r.machineCode, arr);
   }
+  // Sort: machines currently running an order come first (the press
+  // the supervisor wants to glance at), idle presses fall to the
+  // bottom. Within each bucket, keep the physical floor order as a
+  // stable tie-break so the same line doesn't jump positions when
+  // an order ends.
+  const sortedMachines = S!.machines.slice().sort((a, b) => {
+    const aActive = (byMachine.get(a.machineCode) ?? []).length > 0 ? 0 : 1;
+    const bActive = (byMachine.get(b.machineCode) ?? []).length > 0 ? 0 : 1;
+    if (aActive !== bActive) return aActive - bActive;
+    return floorIndex(a.machineCode) - floorIndex(b.machineCode);
+  });
   const out: TraceRow[] = [];
-  for (const m of sortByFloor(S!.machines)) {
+  for (const m of sortedMachines) {
     const recs = byMachine.get(m.machineCode) ?? [];
     if (recs.length === 0) {
       out.push(idlePlaceholder(m.machineCode, live.shiftId));

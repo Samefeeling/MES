@@ -117,6 +117,9 @@ interface KpiRow {
   byShift: Record<ShiftCode, ShiftAgg>;
   /** Per (shift, job) breakdown for the 3rd-level expansion. */
   jobsByShift: Record<ShiftCode, JobAgg[]>;
+  /** Per-Job# rollup across every shift in the selected period — drives
+   *  the "> Orders" toggle on the machine row. Sorted by output desc. */
+  byJobTotal: JobAgg[];
   schedAdh: number | null;
 }
 
@@ -132,6 +135,10 @@ interface KpiState {
    *  collapsed so the table stays compact; the operator clicks the row's
    *  ▸ chevron to drill into the per-job split. */
   jobsExpanded: Set<string>;
+  /** Machine codes whose per-Job# (across shifts) rollup is revealed —
+   *  toggled by the > chevron on the machine row, independent of the
+   *  shift breakdown. */
+  ordersExpanded: Set<string>;
 }
 
 interface ChartBucket {
@@ -379,6 +386,28 @@ async function compute(now = new Date()): Promise<void> {
     }
     const total = toAgg(aggregate(all), all);
 
+    // Per-Job# rollup across every shift in the period. The supervisor
+    // uses this to answer "how is each order doing on 1600T over the
+    // week?" without scanning three shift sub-tables.
+    const allByJob = new Map<string, ProductionRecord[]>();
+    for (const r of all) {
+      if (!r.jobNumber) continue;
+      const arr = allByJob.get(r.jobNumber) ?? [];
+      arr.push(r);
+      allByJob.set(r.jobNumber, arr);
+    }
+    const byJobTotal: JobAgg[] = Array.from(allByJob.entries())
+      .map(([jobNumber, recs]) => {
+        const desc = partDescByJob.get(jobNumber) ?? '';
+        return {
+          jobNumber,
+          partDescShort: firstTwoWords(desc),
+          color: detectColor(desc),
+          agg: toAgg(aggregate(recs), recs),
+        };
+      })
+      .sort((a, b2) => b2.agg.output - a.agg.output);
+
     const planned =
       S!.period === 'last3'
         ? 0
@@ -386,7 +415,7 @@ async function compute(now = new Date()): Promise<void> {
             .filter((o) => !o.isDieChange && plannedInRange(o, from, to))
             .reduce((a, o) => a + (o.jobRequired || 0), 0);
     const schedAdh = planned > 0 ? Math.round((total.output / planned) * 100) : null;
-    return { machineCode: m.machineCode, total, byShift, jobsByShift, schedAdh };
+    return { machineCode: m.machineCode, total, byShift, jobsByShift, byJobTotal, schedAdh };
   });
 
   S!.rows = rows;
@@ -510,17 +539,41 @@ function render(): void {
     body = S!.rows
       .map((r) => {
         const isCollapsed = S!.collapsed.has(r.machineCode);
+        const ordersOpen = S!.ordersExpanded.has(r.machineCode);
         const toggle = `<button type="button" class="kpi-toggle" data-toggle="${escapeHtml(
           r.machineCode,
-        )}" aria-label="${isCollapsed ? 'Expand' : 'Collapse'} ${escapeHtml(r.machineCode)}">${
+        )}" aria-label="${isCollapsed ? 'Show shift breakdown' : 'Hide shift breakdown'} for ${escapeHtml(r.machineCode)}" title="Toggle Day / Afternoon / Night breakdown">${
           isCollapsed ? '+' : '–'
         }</button>`;
+        const ordersToggle = r.byJobTotal.length
+          ? `<button type="button" class="kpi-toggle kpi-orders-toggle" data-orders="${escapeHtml(
+              r.machineCode,
+            )}" aria-label="${ordersOpen ? 'Hide' : 'Show'} per-order rollup for ${escapeHtml(r.machineCode)}" title="Toggle per-Job# rollup across all shifts in this period">${
+              ordersOpen ? '⌄' : '›'
+            }</button>`
+          : '';
         const headRow = `<tr class="kpi-machine">
-          <th>${toggle}<span class="kpi-mc-name">${escapeHtml(r.machineCode)}</span></th>
+          <th>${toggle}${ordersToggle}<span class="kpi-mc-name">${escapeHtml(r.machineCode)}</span></th>
           ${colorCell()}
           ${aggCells(r.total, r.schedAdh)}
         </tr>`;
-        if (isCollapsed) return headRow;
+        const orderRows = ordersOpen
+          ? r.byJobTotal
+              .map((j) => {
+                const fullDesc = `${j.jobNumber}${
+                  j.partDescShort ? ' — ' + j.partDescShort : ''
+                } (period total)`;
+                return `<tr class="kpi-job kpi-order-total">
+                  <th class="kpi-job-name" title="${escapeHtml(fullDesc)}">${escapeHtml(
+                    j.jobNumber,
+                  )}<span class="kpi-job-part">${escapeHtml(j.partDescShort)}</span></th>
+                  ${colorCell(j.color)}
+                  ${aggCells(j.agg, null, false)}
+                </tr>`;
+              })
+              .join('')
+          : '';
+        if (isCollapsed) return headRow + orderRows;
         const shiftRows = SHIFT_ORDER.map((code) => {
           const a = r.byShift[code];
           const jobs = r.jobsByShift[code];
@@ -556,7 +609,7 @@ function render(): void {
             .join('');
           return shiftRow + jobRows;
         }).join('');
-        return headRow + shiftRows;
+        return headRow + orderRows + shiftRows;
       })
       .join('');
   }
@@ -660,6 +713,14 @@ function render(): void {
       render();
     }),
   );
+  app.querySelectorAll<HTMLButtonElement>('[data-orders]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const mc = b.dataset.orders!;
+      if (S!.ordersExpanded.has(mc)) S!.ordersExpanded.delete(mc);
+      else S!.ordersExpanded.add(mc);
+      render();
+    }),
+  );
 }
 
 export async function renderKpi(dal: PmdDataLayer): Promise<void> {
@@ -674,6 +735,7 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     chartBuckets: [],
     collapsed: new Set(),
     jobsExpanded: new Set(),
+    ordersExpanded: new Set(),
   };
   render();
   await compute();
