@@ -662,8 +662,8 @@ function buildSide(): string {
     <div class="sk"><label title="${escapeHtml(targetTitle)}">Shift Target</label><b title="${escapeHtml(targetTitle)}">${targetDisplay}</b></div>
     <div class="sk"><label>Count Start</label><input type="number" inputmode="numeric" pattern="[0-9]*" data-meta="cstart" value="${cs}"></div>
     <div class="sk"><label>Count End</label><input type="number" inputmode="numeric" pattern="[0-9]*" data-meta="cend" value="${ce}"></div>
-    <div class="sk"><label>Total Good</label><b class="g" data-live="totalGood">${good}</b></div>
     <div class="sk"><label>Total Reject</label><b class="r" data-live="totalReject">${totalReject}</b></div>
+    <div class="sk"><label>Total Good</label><b class="g" data-live="totalGood">${good}</b></div>
     <div class="sk"><label>Purge (kg)</label><input type="number" inputmode="decimal" step="0.1" data-meta="purge" value="${purge}"></div>
     <div class="handover">
       <div class="handover-title">Handover / Journey — supervisor notes</div>
@@ -1367,7 +1367,15 @@ async function multiFillApply(
   }
   S!.selSet.clear();
   toast(`Filled ${slots.length} slot${slots.length === 1 ? '' : 's'} with ${code}`, 'ok');
-  await reload();
+  // Skip reload() here. upsertSlotNoReload already mutated S!.prod in
+  // memory, and a status edit cannot change anything reload() would
+  // re-fetch — Job Left / Total Good are driven by Count Start/End and
+  // Rejects, not by status; maybeCarryCountStart is a no-op once it's
+  // already been carried; refreshJobTotal sums canonical countEnd
+  // across shifts which a status edit doesn't touch. Skipping the SP
+  // round-trip turns the iPad lag on "fill a status cell" from
+  // 600-800 ms (REST + render) down to a single render.
+  render();
 }
 
 /** Like upsertSlot but doesn't call reload — caller batches the final render. */

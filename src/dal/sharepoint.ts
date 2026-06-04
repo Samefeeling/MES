@@ -430,13 +430,22 @@ export class SharePointDataLayer implements PmdDataLayer {
   }
 
   async listSupervisors(): Promise<Supervisor[]> {
-    const F = this.F.supervisor;
-    const rows = await this.getAllItems(LISTS.supervisor);
-    return rows.map((r) => ({
-      id: getId(r),
-      operatorName: str(r[F.name]) || str(r[F.title]),
-      active: true,
-    }));
+    // Supervisors are now derived from the distinct Supervisor_1 column
+    // on PMD_Operator (a free-text field on each operator's row), not
+    // from the separate PMD_Supervisor list. Drops the Lookup column
+    // and the second REST round-trip on every boot — listOperators
+    // already brings these rows back, so in practice this is free.
+    const F = this.F.operator;
+    const rows = await this.getAllItems(LISTS.operator);
+    const seen = new Set<string>();
+    const out: Supervisor[] = [];
+    for (const r of rows) {
+      const name = str(r[F.supervisor1]).trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      out.push({ id: out.length + 1, operatorName: name, active: true });
+    }
+    return out;
   }
 
   async listProducts(): Promise<Product[]> {
