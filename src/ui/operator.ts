@@ -20,7 +20,6 @@ import {
 } from '../core/shifts';
 import { STATUSES, STATUS_MAP } from '../core/status';
 import { bdLabelFor } from '../core/breakdown';
-import { countSetupEvents } from '../core/metrics';
 import { openBreakdownCascade } from './breakdown';
 import { toast } from './toast';
 import { closeModal, escapeHtml, openModal } from './modal';
@@ -328,34 +327,45 @@ async function maybeCarryCountStart(): Promise<void> {
 }
 
 /**
- * Available production hours this shift = 8h base, minus the time eaten
- * by changeovers logged on the Machine Status row (operator-stated rule):
- *   - each Die change event: -4h
- *   - each Colour change event: -0.5h
- *   - each Insert change event: -0.5h
- * Events are counted as consecutive runs of D / C / I slots (see
- * countSetupEvents()); a single D block of any length counts once.
- * Clamped to [0, 8].
+ * Pieces still needed across every shift on this job, after subtracting
+ * the canonical Good count we've already accumulated. Returns null for
+ * die-change jobs (no piece target) and when there's no planning row.
  */
-function availableHoursThisShift(): number {
-  const recs = S!.prod.filter((r) => r.jobNumber === S!.selJob);
-  const ev = countSetupEvents(recs);
-  const lost = ev.dieChanges * 4 + ev.colorChanges * 0.5 + ev.insertChanges * 0.5;
-  return Math.max(0, Math.min(8, 8 - lost));
+function jobLeftPieces(): number | null {
+  const o = selectedOrder();
+  if (!o || o.isDieChange) return null;
+  const c = canonical();
+  const cs = Number(c?.countStart ?? 0);
+  const ce = Number(c?.countEnd ?? 0);
+  const grossThis = Math.max(0, ce - cs);
+  const goodThis = Math.max(0, grossThis - jobTotals());
+  return Math.max(0, o.jobRequired - (S!.jobTotalGood + goodThis));
 }
 
 /**
- * Shift Target pieces = Available Time / Cycle Time. Planning carries
- * JobOper_ProdStandard as a pieces-per-hour rate (`qtyPerHr`), so the
- * mathematically equivalent form here is hours × pieces/hour, which
- * avoids dividing by zero when the standard is missing. Returns null
- * when no planning rate is available (operator has no fair target).
+ * Shift Target = pieces the operator should aim for this shift.
+ *
+ * The planning row's `qtyPerHr` field is sourced from Epicor's
+ * `JobOper_ProdStandard` column, which on this tenant is expressed as
+ * *hours per piece* (cycle time) — that's why the old "× pieces/hour"
+ * formula was rounding to zero for every job, the value is in the
+ * ~0.005 range.
+ *
+ * Operator-stated rule:
+ *   if  JobLeft × CT  ≥  8h   →  target = floor(8 / CT)   (full shift)
+ *   else                       →  target = JobLeft        (job will finish)
+ *
+ * Returns null when no planning rate is available.
  */
-function targetThisShift(): number | null {
+function shiftTarget(): number | null {
   const o = selectedOrder();
   if (!o || !o.qtyPerHr || o.qtyPerHr <= 0) return null;
-  const hrs = availableHoursThisShift();
-  return Math.round(hrs * o.qtyPerHr);
+  const ct = o.qtyPerHr; // hours per piece
+  const jl = jobLeftPieces();
+  if (jl == null) return null;
+  const hoursNeeded = jl * ct;
+  if (hoursNeeded >= 8) return Math.floor(8 / ct);
+  return jl;
 }
 
 /**
@@ -525,9 +535,14 @@ function buildMeta(): string {
   const supField = opSupLocked
     ? `<input type="text" disabled value="${escapeHtml(S!.selSupervisor || '—')}" title="Signed off — sign in as supervisor to change">`
     : `<select data-meta="supervisor">${selOpts(S!.supervisors, S!.selSupervisor, 'supervisor')}</select>`;
+  // Order Qty = JobRequired from planning. Shown in the meta row so the
+  // operator reads it next to the Job# / Part# (which is the natural eye
+  // path) rather than tucked away in the right side panel.
+  const orderQty = o && !o.isDieChange ? o.jobRequired : '—';
   return `<div class="op-meta">
     <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
     <label class="m-job">Job# ${jobField}</label>
+    <label class="m-orderqty">Order Qty <input type="text" disabled value="${escapeHtml(String(orderQty))}"></label>
     <label class="m-part">Part# <input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
     <label class="m-desc">Product Description <input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
     <label class="m-op">Operator ${opField}</label>
@@ -627,23 +642,17 @@ function buildSide(): string {
       : '—';
   const purge = c?.purgeKg ?? '';
   const h = parseHandover(c);
-  // Order Qty = JobRequired from planning (the operator's target for the
-  // whole job, not just this shift). Shown above Job Left so the operator
-  // can read "target → remaining" at a glance.
-  const orderQty = o && !o.isDieChange ? o.jobRequired : '—';
-  // Shift Target = Available Time × pieces/hour. Updates live as the
-  // operator fills D / C / I slots — every die change knocks 4h off the
-  // budgeted available time, every colour or insert change 30 min.
-  const tgt = targetThisShift();
-  const avail = availableHoursThisShift();
+  // Shift Target: pieces the operator should aim for this shift. See
+  // shiftTarget() for the rule — either a full 8h run at cycle time, or
+  // just the remainder of the job if it'll finish in under 8h.
+  const tgt = shiftTarget();
   const targetDisplay = tgt == null ? '—' : String(tgt);
   const targetTitle = tgt == null
-    ? 'No JobOper_ProdStandard on the planning row for this job — Target cannot be computed.'
-    : `Target = ${avail.toFixed(1)} available h × ${o!.qtyPerHr} per h (8h shift minus die/colour/insert changes recorded on the status row).`;
+    ? 'No JobOper_ProdStandard on the planning row — Shift Target cannot be computed.'
+    : `Shift Target = if Job Left × ${o!.qtyPerHr} h/piece ≥ 8h then 8 ÷ ${o!.qtyPerHr}, else Job Left.`;
   return `<aside class="op-side">
-    <div class="sk"><label>Order Qty</label><b>${orderQty}</b></div>
     <div class="sk"><label>Job left</label><b>${jobLeft}</b></div>
-    <div class="sk"><label title="${escapeHtml(targetTitle)}">Target</label><b title="${escapeHtml(targetTitle)}">${targetDisplay}</b></div>
+    <div class="sk"><label title="${escapeHtml(targetTitle)}">Shift Target</label><b title="${escapeHtml(targetTitle)}">${targetDisplay}</b></div>
     <div class="sk"><label>Count Start</label><input type="number" data-meta="cstart" value="${cs}"></div>
     <div class="sk"><label>Count End</label><input type="number" data-meta="cend" value="${ce}"></div>
     <div class="sk"><label>Total Good</label><b class="g">${good}</b></div>
