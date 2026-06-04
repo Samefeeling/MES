@@ -610,7 +610,7 @@ function buildGrid(): string {
         .map((r, i) => {
           const v = parseRejects(r)[cat.code] ?? 0;
           const now = nowSlot === i ? ' is-now-col' : '';
-          return `<td class="num-cell${now}"><input type="number" min="0" step="1" class="rej-input" data-row="named" data-code="${escapeHtml(
+          return `<td class="num-cell${now}"><input type="number" inputmode="numeric" pattern="[0-9]*" min="0" step="1" class="rej-input" data-row="named" data-code="${escapeHtml(
             cat.code,
           )}" data-slot="${i}" value="${v || ''}"></td>`;
         })
@@ -660,12 +660,12 @@ function buildSide(): string {
   return `<aside class="op-side">
     <div class="sk"><label>Job left</label><b data-live="jobLeft">${jobLeft}</b></div>
     <div class="sk"><label title="${escapeHtml(targetTitle)}">Shift Target</label><b title="${escapeHtml(targetTitle)}">${targetDisplay}</b></div>
-    <div class="sk"><label>Count Start</label><input type="number" data-meta="cstart" value="${cs}"></div>
-    <div class="sk"><label>Count End</label><input type="number" data-meta="cend" value="${ce}"></div>
+    <div class="sk"><label>Count Start</label><input type="number" inputmode="numeric" pattern="[0-9]*" data-meta="cstart" value="${cs}"></div>
+    <div class="sk"><label>Count End</label><input type="number" inputmode="numeric" pattern="[0-9]*" data-meta="cend" value="${ce}"></div>
     <div class="sk"><label>Total Good</label><b class="g" data-live="totalGood">${good}</b></div>
     <div class="sk sk-pair">
       <span class="sk-pair-cell"><label>Total Reject</label><b class="r" data-live="totalReject">${totalReject}</b></span>
-      <span class="sk-pair-cell"><label>Purge(kg)</label><input type="number" step="0.1" data-meta="purge" value="${purge}"></span>
+      <span class="sk-pair-cell"><label>Purge(kg)</label><input type="number" inputmode="decimal" step="0.1" data-meta="purge" value="${purge}"></span>
     </div>
     <div class="handover">
       <div class="handover-title">Handover / Journey — supervisor notes</div>
@@ -889,6 +889,15 @@ function buildLockBanner(): string {
 
 function render(): void {
   applyShiftTheme();
+  // Preserve the half-hour grid's horizontal scroll position across a
+  // re-render — without this, filling slot 12 with R via the status
+  // picker re-rendered the operator sheet and snapped the grid back
+  // to slot 0, forcing the operator to scroll right again every time
+  // on the 10" iPad.
+  const prevWrap = document.querySelector<HTMLElement>('.op-grid-wrap');
+  const prevScrollLeft = prevWrap?.scrollLeft ?? 0;
+  const prevScrollTop = prevWrap?.scrollTop ?? 0;
+
   const app = document.getElementById('app')!;
   const detail =
     S!.viewLevel === 1
@@ -901,7 +910,14 @@ function render(): void {
     ${detail}
   </div>`;
   wire();
-  if (S!.viewLevel === 1) renderNowLine();
+  if (S!.viewLevel === 1) {
+    const wrap = document.querySelector<HTMLElement>('.op-grid-wrap');
+    if (wrap) {
+      wrap.scrollLeft = prevScrollLeft;
+      wrap.scrollTop = prevScrollTop;
+    }
+    renderNowLine();
+  }
 }
 
 function renderNowLine(): void {
