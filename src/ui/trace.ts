@@ -1,7 +1,7 @@
 import type { PmdDataLayer } from '../dal';
 import type { Machine, PlanningOrder, ProductionRecord } from '../types';
 import { STATUS_MAP } from '../core/status';
-import { SLOTS_PER_SHIFT, currentShift, slotClock } from '../core/shifts';
+import { SLOTS_PER_SHIFT, currentShift, currentSlotIndex, slotClock } from '../core/shifts';
 import { bdLabelFor } from '../core/breakdown';
 import { escapeHtml } from './modal';
 
@@ -71,8 +71,9 @@ function sortByFloor<T extends { machineCode: string }>(rows: T[]): T[] {
   return rows.slice().sort((a, b) => floorIndex(a.machineCode) - floorIndex(b.machineCode));
 }
 
-/** Tailwind-ish stripe colour per press, used as the left rail on the
- *  Live card so a supervisor can pick the line they want at a glance.
+/** Tailwind-ish stripe colour per press, used on the machine name chip
+ *  so a supervisor can pick the line they want at a glance. The card
+ *  rail itself is driven by current activity (see ACTIVITY_COLOURS).
  *  Unknowns fall through to a neutral slate. */
 const MACHINE_COLOURS: Record<string, string> = {
   '1600T': '#2563eb',
@@ -88,6 +89,54 @@ const MACHINE_COLOURS: Record<string, string> = {
 
 function machineColour(code: string): string {
   return MACHINE_COLOURS[code] ?? '#475569';
+}
+
+type Activity = 'running' | 'changeover' | 'breakdown' | 'idle';
+
+const ACTIVITY_COLOURS: Record<Activity, string> = {
+  running: '#16a34a',   // green — R
+  changeover: '#f97316', // orange — D / C / I
+  breakdown: '#dc2626',  // red — B
+  idle: '#94a3b8',       // slate — nothing logged or M/O/P/S
+};
+
+const ACTIVITY_LABELS: Record<Activity, string> = {
+  running: 'Running',
+  changeover: 'Changeover',
+  breakdown: 'Breakdown',
+  idle: 'Idle',
+};
+
+/**
+ * Pick the status code that represents what the press is doing **right
+ * now** on this row. Prefer the slot covering the live wall clock; if
+ * that slot is blank or the row isn't the live shift, fall back to the
+ * last filled slot in the timeline. The four-bucket mapping lives in
+ * activityFor below.
+ */
+function currentTimelineCode(timeline: string, shiftId: string): string {
+  const live = currentShift(new Date());
+  if (shiftId === live.shiftId) {
+    const idx = currentSlotIndex(shiftId, new Date());
+    if (idx != null) {
+      const ch = timeline[idx];
+      if (ch && ch !== '·') return ch;
+    }
+  }
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const ch = timeline[i];
+    if (ch && ch !== '·') return ch;
+  }
+  return '';
+}
+
+function activityFor(r: TraceRow): Activity {
+  if (r.idle) return 'idle';
+  const code = currentTimelineCode(r.timeline, r.shiftId);
+  if (code === 'R') return 'running';
+  if (code === 'D' || code === 'C' || code === 'I') return 'changeover';
+  if (code === 'B') return 'breakdown';
+  return 'idle';
 }
 
 let S: TraceState | null = null;
@@ -219,19 +268,28 @@ function renderCard(r: TraceRow): string {
         .join('')}</ul></div>`
     : '';
 
-  const idleBadge = r.idle ? `<span class="trace-idle">Idle</span>` : '';
-  // Live view: the press tag is the visual headline on the left (a
-  // big colour-coded chip), with the job tucked alongside as the
-  // secondary line. Search view keeps the older job-first layout
-  // because the operator is already looking up a specific JobNum.
+  // Live view: press chip on the left for identity, activity badge
+  // on the right so the supervisor can scan the floor and see at a
+  // glance which line is running, which is in changeover, which is
+  // down. Card rail switches from the machine colour to the activity
+  // colour because the activity is the action signal — knowing
+  // 1600T's colour matters less than knowing it's red right now.
+  // Search view keeps the older job-first layout.
   const isLive = S!.view === 'live';
-  const accent = machineColour(r.machineCode);
-  const machineTag = `<span class="trace-machine-tag" style="background:${accent}">${escapeHtml(r.machineCode)}</span>`;
+  const machineCol = machineColour(r.machineCode);
+  const activity = activityFor(r);
+  const activityCol = ACTIVITY_COLOURS[activity];
+  const machineTag = `<span class="trace-machine-tag" style="background:${machineCol}">${escapeHtml(r.machineCode)}</span>`;
+  const activityBadge = isLive
+    ? `<span class="trace-activity" style="background:${activityCol}">${escapeHtml(ACTIVITY_LABELS[activity])}</span>`
+    : r.idle
+      ? `<span class="trace-idle">Idle</span>`
+      : '';
   const headline = isLive
-    ? `${machineTag}<b class="trace-job">${escapeHtml(r.jobNumber || '(no job)')}</b>${idleBadge}<span class="trace-meta">${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`
-    : `<b>${escapeHtml(r.jobNumber || '(no job)')}</b>${idleBadge}<span class="trace-meta">${escapeHtml(r.machineCode)} · ${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`;
+    ? `${machineTag}<b class="trace-job">${escapeHtml(r.jobNumber || '(no job)')}</b>${activityBadge}<span class="trace-meta">${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`
+    : `<b>${escapeHtml(r.jobNumber || '(no job)')}</b>${activityBadge}<span class="trace-meta">${escapeHtml(r.machineCode)} · ${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`;
 
-  return `<div class="trace-card${r.idle ? ' is-idle' : ''}${isLive ? ' is-live' : ''}" style="${isLive ? `--mc:${accent}` : ''}">
+  return `<div class="trace-card${r.idle ? ' is-idle' : ''}${isLive ? ' is-live' : ''} act-${activity}" style="${isLive ? `--mc:${activityCol}` : ''}">
     <div class="trace-card-head">
       ${headline}
       <span class="trace-meta">${escapeHtml(r.partNumber)}${r.partDescription ? ' — ' + escapeHtml(r.partDescription) : ''}</span>

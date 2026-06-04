@@ -614,6 +614,18 @@ export class SharePointDataLayer implements PmdDataLayer {
     ]);
     for (const h of headers) {
       const hShiftId = `${h.date}-${h.shift}`;
+      // Defensive re-filter. shiftDateRange is intentionally loose (±1d
+      // either side) to catch legacy noon-UTC / local-start timestamps,
+      // but combined with the F.shift clause it also catches the same
+      // shift code on adjacent calendar dates — yesterday's Day shift
+      // leaks into a "today's Day shift" query, which the live trace
+      // surfaces as "1600T running yesterday's order". Drop anything
+      // whose decoded shiftId doesn't match the original request.
+      if (filter.shiftId && hShiftId !== filter.shiftId) continue;
+      if (filter.shiftIdFrom && hShiftId < filter.shiftIdFrom) continue;
+      if (filter.shiftIdTo && hShiftId > filter.shiftIdTo) continue;
+      if (filter.machineCode && h.machineCode !== filter.machineCode) continue;
+      if (filter.jobNumber && h.jobNumber !== filter.jobNumber) continue;
       const key = this.cacheKey(h.machineCode, hShiftId, h.jobNumber);
       if (seen.has(key)) continue;
       // Splice the breakdown-side timeline onto the header so
