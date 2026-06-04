@@ -51,6 +51,12 @@ interface OpState {
   jobTotalGood: number;
   /** Slots currently highlighted for status entry (tap or hold-and-drag). */
   selSet: Set<number>;
+  /** JobNumber → set of machine codes that have already logged signed-off
+   *  work on this job in the last 30 days. Drives the cross-machine
+   *  dropdown filter — a job claimed on 1600T should not appear in
+   *  Batt1's dropdown. Built from the SP listProduction batch on boot
+   *  and refreshed on Refresh tap. */
+  jobMachineMap: Map<string, Set<string>>;
 }
 
 let S: OpState | null = null;
@@ -180,11 +186,23 @@ function shiftOrders(): PlanningOrder[] {
 
   // Active / future shift: all PMD-released orders (sorted plannedStart,
   // closest-to-now first), plus any historical id not in planning (e.g.
-  // a job that just got closed in Epicor).
-  const planned = S!.planning.slice().sort(
-    (a, b2) =>
-      new Date(a.plannedStart).getTime() - new Date(b2.plannedStart).getTime(),
-  );
+  // a job that just got closed in Epicor). Skip any job that has been
+  // claimed on another machine — one order runs on one press at a time,
+  // and we don't want the dropdown to suggest a job somebody else is
+  // already running.
+  const claimedElsewhere = (jobNumber: string): boolean => {
+    const machines = S!.jobMachineMap.get(jobNumber);
+    if (!machines || machines.size === 0) return false;
+    if (machines.has(S!.mc)) return false; // our own — keep so we can resume
+    return true;
+  };
+  const planned = S!.planning
+    .slice()
+    .filter((o) => !claimedElsewhere(o.jobNumber))
+    .sort(
+      (a, b2) =>
+        new Date(a.plannedStart).getTime() - new Date(b2.plannedStart).getTime(),
+    );
   const knownIds = new Set(planned.map((o) => o.jobNumber));
   const extras = historicalIds.filter((j) => !knownIds.has(j)).map(historicalOrder);
   return [...planned, ...extras];
@@ -1115,7 +1133,12 @@ function parseHandover(r: ProductionRecord | undefined): Handover {
  * even try.
  */
 async function refreshAll(): Promise<void> {
-  S!.planning = await dalRef.listPlanning({});
+  const [planning, jobMachineMap] = await Promise.all([
+    dalRef.listPlanning({}),
+    loadJobMachineMap(dalRef, new Date()),
+  ]);
+  S!.planning = planning;
+  S!.jobMachineMap = jobMachineMap;
   summaryCache = null;
   await reload();
   toast(`Refreshed · ${shiftOrders().length} job(s) for this shift`, 'ok');
@@ -1479,18 +1502,56 @@ function jobTotals(): number {
   return rej;
 }
 
+/**
+ * Build a JobNumber → Set<machineCode> map by scanning the last 30 days
+ * of canonical PMD_Production rows. Used to hide jobs already claimed
+ * on another machine from the Job# dropdown — once 1600T signs off on
+ * SFM507017, Batt1's operator should not be able to start it.
+ *
+ * Only canonical (slotIndex 0) rows with actual work (a count or a
+ * status code) count as "claimed"; an empty placeholder row left over
+ * from a tapped-and-cancelled selection does not.
+ */
+async function loadJobMachineMap(
+  dal: PmdDataLayer,
+  today: Date,
+): Promise<Map<string, Set<string>>> {
+  const from = new Date(today);
+  from.setDate(from.getDate() - 30);
+  const rows = await dal
+    .listProduction({ shiftIdFrom: dateKey(from), shiftIdTo: dateKey(today) })
+    .catch((err) => {
+      console.warn('[pmd] loadJobMachineMap failed (filter disabled):', err);
+      return [] as ProductionRecord[];
+    });
+  const out = new Map<string, Set<string>>();
+  for (const r of rows) {
+    if (r.slotIndex !== 0) continue;
+    if (!r.jobNumber || !r.machineCode) continue;
+    if (r.countStart == null && r.countEnd == null && !r.statusCode) continue;
+    let set = out.get(r.jobNumber);
+    if (!set) {
+      set = new Set<string>();
+      out.set(r.jobNumber, set);
+    }
+    set.add(r.machineCode);
+  }
+  return out;
+}
+
 export async function renderOperator(
   dal: PmdDataLayer,
   machineCode: string,
   now: Date = new Date(),
 ): Promise<void> {
   dalRef = dal;
-  const [machines, planning, operators, supervisors, rcats] = await Promise.all([
+  const [machines, planning, operators, supervisors, rcats, jobMachineMap] = await Promise.all([
     dal.listMachines(),
     dal.listPlanning({}),
     dal.listOperators(),
     dal.listSupervisors(),
     dal.listRejectCategories(),
+    loadJobMachineMap(dal, now),
   ]);
   const cs = currentShift(now);
   const vd = new Date(now);
@@ -1531,6 +1592,7 @@ export async function renderOperator(
     viewLevel: 1,
     jobTotalGood: 0,
     selSet: new Set<number>(),
+    jobMachineMap,
   };
   if (nowTimer) clearInterval(nowTimer);
   nowTimer = setInterval(renderNowLine, 30_000);
