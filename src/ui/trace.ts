@@ -43,6 +43,53 @@ interface TraceRow {
   idle?: boolean;
 }
 
+/**
+ * Live Status renders one card per press in the floor's physical
+ * order (the layout the supervisor walks past), not the SP list
+ * sequence. Anything not in this list is appended in whatever order
+ * listMachines returned, so a new press automatically shows up at the
+ * end instead of being silently dropped.
+ */
+const FLOOR_ORDER: string[] = [
+  '1600T',
+  '1300T',
+  'Batt1',
+  'Batt2',
+  '850C',
+  '550C',
+  '320C',
+  '125T',
+  'HS',
+];
+
+function floorIndex(code: string): number {
+  const i = FLOOR_ORDER.indexOf(code);
+  return i === -1 ? FLOOR_ORDER.length : i;
+}
+
+function sortByFloor<T extends { machineCode: string }>(rows: T[]): T[] {
+  return rows.slice().sort((a, b) => floorIndex(a.machineCode) - floorIndex(b.machineCode));
+}
+
+/** Tailwind-ish stripe colour per press, used as the left rail on the
+ *  Live card so a supervisor can pick the line they want at a glance.
+ *  Unknowns fall through to a neutral slate. */
+const MACHINE_COLOURS: Record<string, string> = {
+  '1600T': '#2563eb',
+  '1300T': '#0ea5e9',
+  Batt1: '#0d9488',
+  Batt2: '#65a30d',
+  '850C': '#f59e0b',
+  '550C': '#f97316',
+  '320C': '#dc2626',
+  '125T': '#9333ea',
+  HS: '#475569',
+};
+
+function machineColour(code: string): string {
+  return MACHINE_COLOURS[code] ?? '#475569';
+}
+
 let S: TraceState | null = null;
 let dalRef: PmdDataLayer;
 
@@ -173,12 +220,20 @@ function renderCard(r: TraceRow): string {
     : '';
 
   const idleBadge = r.idle ? `<span class="trace-idle">Idle</span>` : '';
+  // Live view: the press tag is the visual headline on the left (a
+  // big colour-coded chip), with the job tucked alongside as the
+  // secondary line. Search view keeps the older job-first layout
+  // because the operator is already looking up a specific JobNum.
+  const isLive = S!.view === 'live';
+  const accent = machineColour(r.machineCode);
+  const machineTag = `<span class="trace-machine-tag" style="background:${accent}">${escapeHtml(r.machineCode)}</span>`;
+  const headline = isLive
+    ? `${machineTag}<b class="trace-job">${escapeHtml(r.jobNumber || '(no job)')}</b>${idleBadge}<span class="trace-meta">${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`
+    : `<b>${escapeHtml(r.jobNumber || '(no job)')}</b>${idleBadge}<span class="trace-meta">${escapeHtml(r.machineCode)} · ${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`;
 
-  return `<div class="trace-card${r.idle ? ' is-idle' : ''}">
+  return `<div class="trace-card${r.idle ? ' is-idle' : ''}${isLive ? ' is-live' : ''}" style="${isLive ? `--mc:${accent}` : ''}">
     <div class="trace-card-head">
-      <b>${escapeHtml(r.jobNumber || '(no job)')}</b>
-      ${idleBadge}
-      <span class="trace-meta">${escapeHtml(r.machineCode)} · ${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>
+      ${headline}
       <span class="trace-meta">${escapeHtml(r.partNumber)}${r.partDescription ? ' — ' + escapeHtml(r.partDescription) : ''}</span>
     </div>
     <div class="trace-card-people">
@@ -246,7 +301,7 @@ async function loadLive(): Promise<void> {
     byMachine.set(r.machineCode, arr);
   }
   const out: TraceRow[] = [];
-  for (const m of S!.machines) {
+  for (const m of sortByFloor(S!.machines)) {
     const recs = byMachine.get(m.machineCode) ?? [];
     if (recs.length === 0) {
       out.push(idlePlaceholder(m.machineCode, live.shiftId));
