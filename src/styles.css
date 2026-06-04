@@ -182,10 +182,6 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .op-side .sk b.r{color:var(--rd)}
 .op-side .sk b.g{color:var(--gn)}
 .op-side .sk input{width:120px;padding:10px;border:2px solid var(--bd);border-radius:8px;font-size:18px;text-align:right;min-height:48px;font-weight:700}
-.op-side .sk.sk-pair{gap:6px}
-.op-side .sk-pair-cell{display:flex;align-items:center;gap:6px;flex:1}
-.op-side .sk-pair-cell label{font-size:11px}
-.op-side .sk-pair-cell input{width:90px}
 
 /* §6 — Handover / Journey: 2x2 grid of textareas for People / Plant / Machine / Material. */
 .handover{display:flex;flex-direction:column;gap:8px;margin-top:4px;border-top:2px solid var(--theme-accent);padding-top:10px;flex:1 1 auto;min-height:0}

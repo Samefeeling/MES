@@ -663,10 +663,8 @@ function buildSide(): string {
     <div class="sk"><label>Count Start</label><input type="number" inputmode="numeric" pattern="[0-9]*" data-meta="cstart" value="${cs}"></div>
     <div class="sk"><label>Count End</label><input type="number" inputmode="numeric" pattern="[0-9]*" data-meta="cend" value="${ce}"></div>
     <div class="sk"><label>Total Good</label><b class="g" data-live="totalGood">${good}</b></div>
-    <div class="sk sk-pair">
-      <span class="sk-pair-cell"><label>Total Reject</label><b class="r" data-live="totalReject">${totalReject}</b></span>
-      <span class="sk-pair-cell"><label>Purge(kg)</label><input type="number" inputmode="decimal" step="0.1" data-meta="purge" value="${purge}"></span>
-    </div>
+    <div class="sk"><label>Total Reject</label><b class="r" data-live="totalReject">${totalReject}</b></div>
+    <div class="sk"><label>Purge (kg)</label><input type="number" inputmode="decimal" step="0.1" data-meta="purge" value="${purge}"></div>
     <div class="handover">
       <div class="handover-title">Handover / Journey — supervisor notes</div>
       <div class="handover-grid">
