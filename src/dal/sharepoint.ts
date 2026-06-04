@@ -1397,23 +1397,28 @@ function parseShiftIdLoose(sid: string): { date: string; shift: string } {
 
 /**
  * The instant we stamp PMD_Production / PMD_BreakDownlog / PMD_Rejects rows
- * with for a given shift. Always noon UTC of the shift's calendar date —
- * deliberately *not* the shift's local-clock start, because:
- *   1. Day shifts start 07:00 local = 21:00 UTC the previous calendar day
- *      under Sydney +10, which makes the SP list display the wrong date
- *      in any timezone that renders dates from UTC midnight.
- *   2. Night shifts start 23:00 local = 13:00 UTC same day, which then
- *      renders as the *next* day in any positive-offset SP regional
- *      (the symptom the operator reported: Night 3/6 → SP shows 4/6).
- * Noon UTC keeps the displayed calendar date equal to the shift's date in
- * every regional setting between UTC-11 and UTC+11, which covers AU+NZ.
- * `dateOnly()` continues to recover the local date from this marker, so
- * reads work the same. The list filters in this file use a ±1-day window
- * around the marker so they also match older rows that were written with
- * the legacy local-start timestamp — no migration required.
+ * with for a given shift. Midnight UTC of the shift's calendar date.
+ *
+ * The SP tenant we ship to has its regional setting at Auckland (UTC+12 /
+ * +13 NZDT) even though the plant is in Sydney (UTC+10 / +11 AEDT). The
+ * earlier choice of noon UTC kept the date stable for negative-offset
+ * tenants but slipped a day forward when SP rendered the value in
+ * Auckland — the operator reported PMD_Production showing 6/06 in the
+ * tooltip while they were working the Sydney 5/06 night shift.
+ *
+ * Midnight UTC of the shift date works the other way: in any positive
+ * regional setting (which is every place this plant could realistically
+ * be administered from, +0 through +14) the displayed date is the
+ * shift's date, because we add hours to midnight rather than crossing
+ * into the next day. Date-Only SP columns also store this correctly —
+ * they pick up the date portion of the UTC value as-is.
+ *
+ * Filters in this file use a ±1-day window so older rows written with
+ * the legacy noon-UTC or local-start timestamps still match — no
+ * migration required.
  */
 function shiftDateMarker(shiftId: string): string {
-  return `${shiftId.slice(0, 10)}T12:00:00.000Z`;
+  return `${shiftId.slice(0, 10)}T00:00:00.000Z`;
 }
 
 /** Returns OData "F.date ge … and F.date le …" covering the shift's date
