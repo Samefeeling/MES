@@ -851,11 +851,16 @@ function applyShiftTheme(): void {
 }
 
 function lockInfo(): { lockedBy: string; lockedAt: string } | null {
-  // A shift is "signed off" when any of its production records carries
-  // the locked flag (PMD_Production.locked = true after lockShift). All
-  // records in a shift share the same lockedBy/lockedAt by construction,
-  // so the first one we find is canonical.
+  // Lock is scoped to (machine, shift, **job**). A signed-off SFM507017
+  // does not lock SFM507018 — the press still has half a shift of run
+  // time available and the operator needs to start the next order on
+  // the remaining slots. Without the selJob filter the lock banner +
+  // every gated edit (Operator/Supervisor fields, status grid via
+  // pastLocked) would freeze the whole UI as soon as one job on this
+  // shift got signed off.
+  if (!S!.selJob) return null;
   for (const r of S!.prod) {
+    if (r.jobNumber !== S!.selJob) continue;
     if (r.locked) return { lockedBy: r.lockedBy, lockedAt: r.lockedAt };
   }
   return null;
@@ -1459,9 +1464,17 @@ function openUnlockModal(): void {
 
 async function doUnlock(): Promise<void> {
   try {
-    await dalRef.unlockShift(S!.mc, sid());
+    // Scope the unlock to the currently-viewed job so other signed-off
+    // orders on the same shift stay locked — supervisor is unlocking
+    // the order they're looking at, not the whole press.
+    await dalRef.unlockShift(S!.mc, sid(), S!.selJob || undefined);
     closeModal();
-    toast('Shift unlocked. Make your fixes, then sign off again.', 'ok');
+    toast(
+      S!.selJob
+        ? `Unlocked ${S!.selJob}. Make your fixes, then sign off again.`
+        : 'Shift unlocked. Make your fixes, then sign off again.',
+      'ok',
+    );
     await reload();
   } catch (e) {
     console.error('[unlock] failed', e);

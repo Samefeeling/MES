@@ -77,7 +77,11 @@ export class SqlDataLayer implements PmdDataLayer {
   ): Promise<void> {
     return this.notImpl('lockShift');
   }
-  async unlockShift(_machineCode: string, _shiftId: string): Promise<void> {
+  async unlockShift(
+    _machineCode: string,
+    _shiftId: string,
+    _jobNumber?: string,
+  ): Promise<void> {
     return this.notImpl('unlockShift');
   }
   async whoAmI(): Promise<UserContext> {

@@ -200,15 +200,19 @@ export class MemoryDataLayer implements PmdDataLayer {
     }
   }
 
-  async unlockShift(machineCode: string, shiftId: string): Promise<void> {
+  async unlockShift(
+    machineCode: string,
+    shiftId: string,
+    jobNumber?: string,
+  ): Promise<void> {
     const now = new Date().toISOString();
     for (const r of this.production) {
-      if (r.machineCode === machineCode && r.shiftId === shiftId) {
-        r.locked = false;
-        r.lockedBy = '';
-        r.lockedAt = '';
-        r.updatedAt = now;
-      }
+      if (r.machineCode !== machineCode || r.shiftId !== shiftId) continue;
+      if (jobNumber && r.jobNumber !== jobNumber) continue;
+      r.locked = false;
+      r.lockedBy = '';
+      r.lockedAt = '';
+      r.updatedAt = now;
     }
   }
 

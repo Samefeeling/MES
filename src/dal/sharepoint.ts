@@ -952,35 +952,44 @@ export class SharePointDataLayer implements PmdDataLayer {
     this.persistEditCache();
   }
 
-  async unlockShift(machineCode: string, shiftId: string): Promise<void> {
+  async unlockShift(
+    machineCode: string,
+    shiftId: string,
+    jobNumber?: string,
+  ): Promise<void> {
     // Find PMD_Production rows for this (Machine, SlotStart:, Shift) and
-    // delete their corresponding analytic + reject rows so the operator can
-    // refile.
+    // delete their corresponding analytic + reject rows so the operator
+    // can refile. When jobNumber is provided, scope all three deletes to
+    // that job — a shift can hold several orders and unlocking one
+    // mustn't wipe the others' signed-off records.
     const F = this.F.production;
     const shift = shiftId.slice(11);
-    const dateRangeProd = shiftDateRange(shiftId, F.date);
+    const jobClause = (fJob: string): string =>
+      jobNumber ? ` and ${fJob} eq '${jobNumber}'` : '';
     const qs =
       '$filter=' +
       encodeURIComponent(
-        `${F.machine} eq '${machineCode}' and (${dateRangeProd}) and ${F.shift} eq '${shift}'`,
+        `${F.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${shift}'${jobClause(F.jobNumber)}`,
       );
     const rows = await this.getAllItems<{ ID?: number; Id?: number }>(LISTS.production, qs);
     for (const r of rows) await this.del(`${this.listUrl(LISTS.production)}/items(${r.ID ?? r.Id})`);
-    // Best-effort matching deletion in PMD_BreakDown and PMD_Rejects.
-    // Same ±1d window so legacy rows also get cleaned up.
     const Fb = this.F.breakdown;
     await this.deleteByFilter(
       LISTS.breakdown,
-      `${Fb.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, Fb.date)}) and ${Fb.shift} eq '${shift}'`,
+      `${Fb.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, Fb.date)}) and ${Fb.shift} eq '${shift}'${jobClause(Fb.jobNum)}`,
     );
     const Fr = this.F.rejects;
     await this.deleteByFilter(
       LISTS.rejects,
-      `${Fr.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, Fr.date)}) and ${Fr.shift} eq '${shift}'`,
+      `${Fr.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, Fr.date)}) and ${Fr.shift} eq '${shift}'${jobClause(Fr.jobNum)}`,
     );
-    // Drop hydrated cache for this shift so a re-read pulls fresh.
+    // Drop hydrated cache so a re-read pulls fresh. Scope to the job
+    // when one was supplied, otherwise drop the whole shift's keys.
+    const prefix = jobNumber
+      ? `${machineCode}|${shiftId}|${jobNumber}`
+      : `${machineCode}|${shiftId}|`;
     this.hydratedKeys.forEach((k) => {
-      if (k.startsWith(`${machineCode}|${shiftId}|`)) this.hydratedKeys.delete(k);
+      if (k.startsWith(prefix)) this.hydratedKeys.delete(k);
     });
   }
 

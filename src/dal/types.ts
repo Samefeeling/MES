@@ -33,7 +33,11 @@ export interface PmdDataLayer {
   upsertProductionRecord(record: ProductionRecord): Promise<ProductionRecord>;
   deleteProductionRecord(id: number): Promise<void>;
   lockShift(machineCode: string, shiftId: string, supervisor: string, operator: string): Promise<void>;
-  unlockShift(machineCode: string, shiftId: string): Promise<void>;
+  /** Unlocks signed-off records for a (machine, shift). When jobNumber
+   *  is supplied, only that job's rows are unlocked; otherwise the
+   *  whole shift is unlocked. Per-job is the common path (one order
+   *  signed off by mistake on a shift that holds several orders). */
+  unlockShift(machineCode: string, shiftId: string, jobNumber?: string): Promise<void>;
 
   // Identity
   whoAmI(): Promise<UserContext>;
