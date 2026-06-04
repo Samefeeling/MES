@@ -254,16 +254,27 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
   }
 
+  /**
+   * Mark the cache dirty and write it to localStorage in the next
+   * microtask. Callers can fire this on every keystroke / per-slot
+   * upsert without paying for 10× full-cache stringifies during a
+   * drag-fill — the coalesced write happens once per event-loop turn.
+   */
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private persistEditCache(): void {
     if (typeof localStorage === 'undefined') return;
-    try {
-      const payload = JSON.stringify(Array.from(this.editCache.entries()));
-      localStorage.setItem(SharePointDataLayer.EDIT_CACHE_KEY, payload);
-    } catch (e) {
-      // Quota exceeded or private mode — caller will still get an in-memory
-      // copy, we just won't survive a refresh.
-      console.warn('[pmd] could not persist edit cache:', e);
-    }
+    if (this.persistTimer != null) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      try {
+        const payload = JSON.stringify(Array.from(this.editCache.entries()));
+        localStorage.setItem(SharePointDataLayer.EDIT_CACHE_KEY, payload);
+      } catch (e) {
+        // Quota exceeded or private mode — caller will still get an
+        // in-memory copy, we just won't survive a refresh.
+        console.warn('[pmd] could not persist edit cache:', e);
+      }
+    }, 0);
   }
 
   // ---- low-level helpers ----------------------------------------------
@@ -624,20 +635,8 @@ export class SharePointDataLayer implements PmdDataLayer {
       parts.push(`(${shiftDateRange(filter.shiftId, F.date)})`);
       if (shift) parts.push(`${F.shift} eq '${shift}'`);
     }
-    if (filter.shiftIdFrom) {
-      const lo = new Date(
-        new Date(`${filter.shiftIdFrom.slice(0, 10)}T00:00:00.000Z`).getTime() -
-          86_400_000,
-      ).toISOString();
-      parts.push(`${F.date} ge datetime'${lo}'`);
-    }
-    if (filter.shiftIdTo) {
-      const hi = new Date(
-        new Date(`${filter.shiftIdTo.slice(0, 10)}T00:00:00.000Z`).getTime() +
-          2 * 86_400_000,
-      ).toISOString();
-      parts.push(`${F.date} le datetime'${hi}'`);
-    }
+    const fromTo = shiftDateRangeFromTo(filter.shiftIdFrom, filter.shiftIdTo, F.date);
+    if (fromTo) parts.push(fromTo);
     const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
     const rows = await this.getAllItems(LISTS.production, qs);
     return rows.map((r) => ({
@@ -689,20 +688,8 @@ export class SharePointDataLayer implements PmdDataLayer {
       parts.push(`(${shiftDateRange(filter.shiftId, F.date)})`);
       if (shift) parts.push(`${F.shift} eq '${shift}'`);
     }
-    if (filter.shiftIdFrom) {
-      const lo = new Date(
-        new Date(`${filter.shiftIdFrom.slice(0, 10)}T00:00:00.000Z`).getTime() -
-          86_400_000,
-      ).toISOString();
-      parts.push(`${F.date} ge datetime'${lo}'`);
-    }
-    if (filter.shiftIdTo) {
-      const hi = new Date(
-        new Date(`${filter.shiftIdTo.slice(0, 10)}T00:00:00.000Z`).getTime() +
-          2 * 86_400_000,
-      ).toISOString();
-      parts.push(`${F.date} le datetime'${hi}'`);
-    }
+    const fromTo = shiftDateRangeFromTo(filter.shiftIdFrom, filter.shiftIdTo, F.date);
+    if (fromTo) parts.push(fromTo);
     const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
     let rows: Record<string, unknown>[] = [];
     try {
@@ -1421,14 +1408,39 @@ function shiftDateMarker(shiftId: string): string {
   return `${shiftId.slice(0, 10)}T00:00:00.000Z`;
 }
 
-/** Returns OData "F.date ge … and F.date le …" covering the shift's date
- *  plus 24 h on either side, so both the new noon-UTC marker and any
- *  legacy local-start timestamps land inside the window. */
-function shiftDateRange(shiftId: string, fDate: string): string {
-  const base = new Date(`${shiftId.slice(0, 10)}T00:00:00.000Z`).getTime();
-  const lo = new Date(base - 86_400_000).toISOString();
-  const hi = new Date(base + 2 * 86_400_000).toISOString();
+/** UTC instant for the start (inclusive) and end (inclusive) of a
+ *  date-only window padded by 1 day on either side, so both the new
+ *  midnight-UTC marker and any legacy local-start timestamps land inside.
+ *  `to` defaults to `from` for single-shift queries. */
+function shiftDateRange(fromShiftId: string, fDate: string, toShiftId = fromShiftId): string {
+  const from = new Date(`${fromShiftId.slice(0, 10)}T00:00:00.000Z`).getTime();
+  const to = new Date(`${toShiftId.slice(0, 10)}T00:00:00.000Z`).getTime();
+  const lo = new Date(from - 86_400_000).toISOString();
+  const hi = new Date(to + 2 * 86_400_000).toISOString();
   return `${fDate} ge datetime'${lo}' and ${fDate} le datetime'${hi}'`;
+}
+
+/** Convenience for filters with optional `from` / `to` shiftIds —
+ *  returns an empty string when neither bound is set so the caller can
+ *  just include it in an `and`-chain. */
+function shiftDateRangeFromTo(
+  from: string | undefined,
+  to: string | undefined,
+  fDate: string,
+): string {
+  if (!from && !to) return '';
+  if (from && to) return shiftDateRange(from, fDate, to);
+  if (from) {
+    const lo = new Date(
+      new Date(`${from.slice(0, 10)}T00:00:00.000Z`).getTime() - 86_400_000,
+    ).toISOString();
+    return `${fDate} ge datetime'${lo}'`;
+  }
+  // to-only
+  const hi = new Date(
+    new Date(`${to!.slice(0, 10)}T00:00:00.000Z`).getTime() + 2 * 86_400_000,
+  ).toISOString();
+  return `${fDate} le datetime'${hi}'`;
 }
 
 function productionMatches(r: ProductionRecord, f: ProductionFilter): boolean {

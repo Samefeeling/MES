@@ -4,6 +4,7 @@ import { aggregate, type Kpi } from '../core/metrics';
 import { currentShift, dateKey, parseShiftId, previousShift, SHIFTS } from '../core/shifts';
 import { escapeHtml } from './modal';
 import { renderHoursOeeChart, renderOutputByShiftChart } from './charts';
+import { parseHandover } from '../core/handover';
 
 // Management KPI view (`#/kpi`) for daily / weekly / monthly meetings.
 // Per-machine OEE, output, reject, run/down/setup hours, plus a per-shift
@@ -206,34 +207,9 @@ function plannedInRange(order: PlanningOrder, from: Date, to: Date): boolean {
   return t >= from && t <= new Date(to.getTime() + 86400_000 - 1);
 }
 
-function parseHandover(note: string): Omit<HandoverEntry, 'jobNumber'> {
-  const blank = { people: '', plant: '', machine: '', material: '' };
-  if (!note) return blank;
-  // Live edits are stored as JSON. PMD_Production.Handover gets a
-  // formatHandover()'d "People: …\nPlant: …\nMachine: …\nMaterial: …"
-  // text blob. Parse both shapes so the cell renders the four
-  // categories instead of dumping the whole text into 👥.
-  const trimmed = note.trim();
-  if (trimmed.startsWith('{')) {
-    try {
-      const j = JSON.parse(trimmed) as Partial<typeof blank>;
-      return { ...blank, ...j };
-    } catch {
-      // fall through to the labelled-text parser
-    }
-  }
-  const labelled: typeof blank = { ...blank };
-  const re = /(People|Plant|Machine|Material)\s*:\s*([^\n\r]*)/gi;
-  let m: RegExpExecArray | null;
-  let matched = false;
-  while ((m = re.exec(trimmed)) !== null) {
-    const key = m[1].toLowerCase() as keyof typeof blank;
-    labelled[key] = (m[2] ?? '').trim();
-    matched = true;
-  }
-  if (matched) return labelled;
-  return { ...blank, people: trimmed };
-}
+// Handover parsing lives in core/handover.ts so the operator side-panel
+// and the KPIs cell agree on every shape (JSON, "People: x\n…", legacy
+// plain text) without each file maintaining its own parser copy.
 
 function collectHandovers(records: ProductionRecord[]): HandoverEntry[] {
   // Handover lives on slotIndex 0 per (machine, shift, job). De-dup by
@@ -455,15 +431,12 @@ function formatHandoverCell(handovers: HandoverEntry[]): string {
   return `<td class="kpi-ho-cell" title="${escapeHtml(full)}">${escapeHtml(compact)}</td>`;
 }
 
-/** Empty Color cell — used on rolled-up rows (machine, shift, total)
- *  where there is no single colour to point at. */
-function colorCellBlank(): string {
-  return `<td class="kpi-color-cell muted">—</td>`;
-}
-
-/** Job-row Color cell: swatch + label (or "neutral" if no colour word
+/** Color cell. Pass `undefined` for rolled-up rows (machine / shift /
+ *  total) where there is no single colour to point at; pass a ColorTag
+ *  on a job row to render swatch + label ("neutral" when no colour word
  *  was found in the part description). */
-function colorCellFor(c: ColorTag): string {
+function colorCell(c?: ColorTag): string {
+  if (!c) return `<td class="kpi-color-cell muted">—</td>`;
   if (c.neutral) {
     return `<td class="kpi-color-cell"><span class="kpi-swatch is-neutral" aria-hidden="true"></span><span class="kpi-color-name muted">neutral</span></td>`;
   }
@@ -544,7 +517,7 @@ function render(): void {
         }</button>`;
         const headRow = `<tr class="kpi-machine">
           <th>${toggle}<span class="kpi-mc-name">${escapeHtml(r.machineCode)}</span></th>
-          ${colorCellBlank()}
+          ${colorCell()}
           ${aggCells(r.total, r.schedAdh)}
         </tr>`;
         if (isCollapsed) return headRow;
@@ -563,7 +536,7 @@ function render(): void {
             : '<span class="kpi-job-toggle ph"></span>';
           const shiftRow = `<tr class="kpi-shift">
             <th class="kpi-shift-name">${chev}${escapeHtml(code)}</th>
-            ${colorCellBlank()}
+            ${colorCell()}
             ${aggCells(a, null, false)}
           </tr>`;
           if (!jobsOpen) return shiftRow;
@@ -576,7 +549,7 @@ function render(): void {
                 <th class="kpi-job-name" title="${escapeHtml(fullDesc)}">${escapeHtml(
                   j.jobNumber,
                 )}<span class="kpi-job-part">${escapeHtml(j.partDescShort)}</span></th>
-                ${colorCellFor(j.color)}
+                ${colorCell(j.color)}
                 ${aggCells(j.agg, null, false)}
               </tr>`;
             })
@@ -644,7 +617,7 @@ function render(): void {
               ? ''
               : `<tfoot><tr class="kpi-total">
                   <th>TOTAL</th>
-                  ${colorCellBlank()}
+                  ${colorCell()}
                   <td class="num">${tot.output}</td>
                   <td class="num r">${tot.reject}</td>
                   <td class="num">${totYield}%</td>

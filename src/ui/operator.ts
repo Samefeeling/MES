@@ -20,6 +20,7 @@ import {
 } from '../core/shifts';
 import { STATUSES, STATUS_MAP } from '../core/status';
 import { bdLabelFor } from '../core/breakdown';
+import { type Handover, parseHandover as sharedParseHandover } from '../core/handover';
 import { openBreakdownCascade } from './breakdown';
 import { toast } from './toast';
 import { closeModal, escapeHtml, openModal } from './modal';
@@ -285,24 +286,39 @@ async function reload(): Promise<void> {
 }
 
 /**
- * Walk back through previous shifts (Day → Night yesterday, Afternoon →
- * Day same date, Night → Afternoon same date) looking for the most
- * recent canonical row on this (machine, job) that has a Count End.
- * Returns null if no antecedent is found within a week (an arbitrary
- * but reasonable bound — gaps longer than that are almost certainly a
- * brand-new run starting fresh, not a continuation).
+ * Most recent canonical Count End for this (machine, job) on a shift
+ * strictly before the one currently being viewed, looking back 7 days
+ * (an arbitrary but reasonable bound — gaps longer than that are
+ * almost certainly a brand-new run, not a continuation).
+ *
+ * One ranged listProduction instead of up to 21 sequential by-shiftId
+ * round-trips — on iPad/SP that turns a 2-3 s "switch to a fresh
+ * shift" lag into a single sub-200 ms call.
  */
 async function prevShiftCountEnd(): Promise<number | null> {
   if (!S!.selJob) return null;
-  let sid: string | null = previousShift(buildShiftId(S!.viewDate, S!.shiftCode));
+  const currentSid = buildShiftId(S!.viewDate, S!.shiftCode);
+  const sevenDaysAgo = new Date(S!.viewDate);
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  const rows = await dalRef.listProduction({
+    machineCode: S!.mc,
+    jobNumber: S!.selJob,
+    shiftIdFrom: dateKey(sevenDaysAgo),
+    shiftIdTo: dateKey(S!.viewDate),
+  });
+  // Pick the canonical row whose shiftId is the largest one strictly
+  // before the current shift. Lex-sort works because shiftIds are
+  // `YYYY-MM-DD-<code>` and the codes sort Afternoon < Day < Night —
+  // chronologically wrong, so we compute the previous shiftId via
+  // previousShift() and walk a tiny in-memory list.
+  let sid: string | null = previousShift(currentSid);
+  const byShift = new Map<string, ProductionRecord>();
+  for (const r of rows) {
+    if (r.slotIndex === 0 && r.countEnd != null) byShift.set(r.shiftId, r);
+  }
   for (let hops = 0; hops < 21 && sid; hops++) {
-    const recs = await dalRef.listProduction({
-      machineCode: S!.mc,
-      shiftId: sid,
-      jobNumber: S!.selJob,
-    });
-    const canon = recs.find((r) => r.slotIndex === 0);
-    if (canon && canon.countEnd != null) return Number(canon.countEnd);
+    const canon = byShift.get(sid);
+    if (canon) return Number(canon.countEnd);
     sid = previousShift(sid);
   }
   return null;
@@ -363,9 +379,7 @@ function shiftTarget(): number | null {
   const ct = o.qtyPerHr; // hours per piece
   const jl = jobLeftPieces();
   if (jl == null) return null;
-  const hoursNeeded = jl * ct;
-  if (hoursNeeded >= 8) return Math.floor(8 / ct);
-  return jl;
+  return jl * ct >= 8 ? Math.floor(8 / ct) : jl;
 }
 
 /**
@@ -419,23 +433,17 @@ async function refreshJobTotalAndPaintSide(): Promise<void> {
     o && !o.isDieChange
       ? Math.max(0, o.jobRequired - (S!.jobTotalGood + good))
       : null;
-  const side = document.querySelector<HTMLElement>('.op-side');
-  if (!side) return;
-  // .sk b is the label-and-value pair; identify by adjacent label text.
-  const sks = side.querySelectorAll<HTMLElement>('.sk');
-  sks.forEach((sk) => {
-    const lbl = sk.querySelector('label')?.textContent?.trim();
-    const b = sk.querySelector('b');
-    if (!b) return;
-    if (lbl === 'Job left' && jobLeft != null) b.textContent = String(jobLeft);
-    else if (lbl === 'Total Good') b.textContent = String(good);
-  });
-  // Pair cell: Total Reject lives in the .sk-pair next to Purge.
-  side.querySelectorAll<HTMLElement>('.sk-pair-cell').forEach((cell) => {
-    const lbl = cell.querySelector('label')?.textContent?.trim();
-    const b = cell.querySelector('b');
-    if (b && lbl === 'Total Reject') b.textContent = String(totalReject);
-  });
+  // Patch by data-live tag — text-content matching used to live here,
+  // but renaming a label silently broke the live update. Tags are set
+  // in buildSide() on each <b> so this stays in sync with the layout.
+  const set = (tag: string, v: string | null): void => {
+    if (v == null) return;
+    const el = document.querySelector<HTMLElement>(`.op-side [data-live="${tag}"]`);
+    if (el) el.textContent = v;
+  };
+  set('jobLeft', jobLeft == null ? null : String(jobLeft));
+  set('totalGood', String(good));
+  set('totalReject', String(totalReject));
 }
 
 function selOpts(values: string[], selected: string, placeholder: string): string {
@@ -527,14 +535,13 @@ function buildMeta(): string {
   // signed-off record stays — you end up looking at "the right numbers
   // signed off by the wrong name". Supervisor mode reveals the select
   // again so a correction can be made and re-signed off.
-  const signedOff = lockInfo() !== null;
-  const opSupLocked = signedOff && !isSupervisor();
-  const opField = opSupLocked
-    ? `<input type="text" disabled value="${escapeHtml(S!.selOperator || '—')}" title="Signed off — sign in as supervisor to change">`
-    : `<select data-meta="operator">${selOpts(S!.operators, S!.selOperator, 'operator')}</select>`;
-  const supField = opSupLocked
-    ? `<input type="text" disabled value="${escapeHtml(S!.selSupervisor || '—')}" title="Signed off — sign in as supervisor to change">`
-    : `<select data-meta="supervisor">${selOpts(S!.supervisors, S!.selSupervisor, 'supervisor')}</select>`;
+  const opSupLocked = lockInfo() !== null && !isSupervisor();
+  const lockedOrSelect = (meta: 'operator' | 'supervisor', list: string[], value: string): string =>
+    opSupLocked
+      ? `<input type="text" disabled value="${escapeHtml(value || '—')}" title="Signed off — sign in as supervisor to change">`
+      : `<select data-meta="${meta}">${selOpts(list, value, meta)}</select>`;
+  const opField = lockedOrSelect('operator', S!.operators, S!.selOperator);
+  const supField = lockedOrSelect('supervisor', S!.supervisors, S!.selSupervisor);
   // Order Qty = JobRequired from planning. Shown in the meta row so the
   // operator reads it next to the Job# / Part# (which is the natural eye
   // path) rather than tucked away in the right side panel.
@@ -651,13 +658,13 @@ function buildSide(): string {
     ? 'No JobOper_ProdStandard on the planning row — Shift Target cannot be computed.'
     : `Shift Target = if Job Left × ${o!.qtyPerHr} h/piece ≥ 8h then 8 ÷ ${o!.qtyPerHr}, else Job Left.`;
   return `<aside class="op-side">
-    <div class="sk"><label>Job left</label><b>${jobLeft}</b></div>
+    <div class="sk"><label>Job left</label><b data-live="jobLeft">${jobLeft}</b></div>
     <div class="sk"><label title="${escapeHtml(targetTitle)}">Shift Target</label><b title="${escapeHtml(targetTitle)}">${targetDisplay}</b></div>
     <div class="sk"><label>Count Start</label><input type="number" data-meta="cstart" value="${cs}"></div>
     <div class="sk"><label>Count End</label><input type="number" data-meta="cend" value="${ce}"></div>
-    <div class="sk"><label>Total Good</label><b class="g">${good}</b></div>
+    <div class="sk"><label>Total Good</label><b class="g" data-live="totalGood">${good}</b></div>
     <div class="sk sk-pair">
-      <span class="sk-pair-cell"><label>Total Reject</label><b class="r">${totalReject}</b></span>
+      <span class="sk-pair-cell"><label>Total Reject</label><b class="r" data-live="totalReject">${totalReject}</b></span>
       <span class="sk-pair-cell"><label>Purge(kg)</label><input type="number" step="0.1" data-meta="purge" value="${purge}"></span>
     </div>
     <div class="handover">
@@ -1081,24 +1088,8 @@ function onMetaChange(el: HTMLElement): void {
   }
 }
 
-interface Handover {
-  people: string;
-  plant: string;
-  machine: string;
-  material: string;
-}
-
 function parseHandover(r: ProductionRecord | undefined): Handover {
-  const blank: Handover = { people: '', plant: '', machine: '', material: '' };
-  if (!r || !r.handoverNote) return blank;
-  // New shape: JSON {people,plant,machine,material}.
-  // Legacy: plain string — surface it under "people" so nothing is lost.
-  try {
-    const j = JSON.parse(r.handoverNote) as Partial<Handover>;
-    return { ...blank, ...j };
-  } catch {
-    return { ...blank, people: r.handoverNote };
-  }
+  return sharedParseHandover(r?.handoverNote);
 }
 
 /**
