@@ -5,6 +5,7 @@ import type {
   PlanningFilter,
   PlanningOrder,
   Product,
+  ProductDieColor,
   ProductionFilter,
   ProductionRecord,
   RejectCategory,
@@ -46,6 +47,7 @@ const LISTS = {
   breakdown: 'PMD_BreakDownlog',
   rejectCategories: 'PMD_RejectCategories',
   breakdownMaster: 'PMD_BreakdownMaster',
+  productDieColor: 'PMD_ProductDieColor',
   rdoRoster: 'RDO Roster 2026-2030',
 } as const;
 
@@ -182,6 +184,14 @@ const DEFAULT_FIELDS = {
     category: 'Category',
     cause: 'Title',
     likelyOwner: 'LikelyOwner',
+  },
+  productDieColor: {
+    // Title = Part # (the natural key); HexColor = "#RRGGBB"; ColorName
+    // is the friendly label (e.g. "Navy"). Override per-tenant if the
+    // columns were created with different internal names.
+    partNum: 'Title',
+    hex: 'HexColor',
+    name: 'ColorName',
   },
 } as const;
 
@@ -491,6 +501,25 @@ export class SharePointDataLayer implements PmdDataLayer {
       // If the list is empty / unreadable, fall back to the hard-coded
       // taxonomy so the cascade UI keeps working.
       return bdFallback();
+    }
+  }
+
+  async listProductDieColors(): Promise<ProductDieColor[]> {
+    const F = this.F.productDieColor;
+    try {
+      const rows = await this.getAllItems(LISTS.productDieColor);
+      return rows
+        .map((r) => ({
+          partNumber: str(r[F.partNum]).trim(),
+          hex: normaliseHex(str(r[F.hex])),
+          name: str(r[F.name]).trim(),
+        }))
+        .filter((c) => c.partNumber && c.hex);
+    } catch (e) {
+      // Tenant without PMD_ProductDieColor → no swatch is fine; the
+      // existing keyword-derived colour on KPIs takes over.
+      console.warn('[pmd] PMD_ProductDieColor unavailable, swatches disabled:', e);
+      return [];
     }
   }
 
@@ -1511,6 +1540,16 @@ function getId(r: Record<string, unknown>): number {
 function str(v: unknown): string {
   if (v == null) return '';
   return typeof v === 'string' ? v : String(v);
+}
+
+/** Coerce a SP "HexColor" cell into a CSS-ready string. Accepts
+ *  "#1e3a8a", "1e3a8a", "1E3A8A"; rejects anything that doesn't look
+ *  like a 6-digit (or 3-digit) hex so a typo can't pollute inline
+ *  styles. Returns '' when invalid. */
+function normaliseHex(raw: string): string {
+  const s = raw.trim().replace(/^#/, '');
+  if (/^[0-9a-fA-F]{3}$|^[0-9a-fA-F]{6}$/.test(s)) return `#${s}`;
+  return '';
 }
 
 function num(v: unknown): number {

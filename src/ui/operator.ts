@@ -51,6 +51,10 @@ interface OpState {
   jobTotalGood: number;
   /** Slots currently highlighted for status entry (tap or hold-and-drag). */
   selSet: Set<number>;
+  /** Part # → die / paint hex colour, read from PMD_ProductDieColor on
+   *  boot. Drives the swatch shown on the Product Description meta cell
+   *  so the operator can see the colour they're meant to be running. */
+  dieColors: Map<string, { hex: string; name: string }>;
 }
 
 let S: OpState | null = null;
@@ -546,12 +550,19 @@ function buildMeta(): string {
   // operator reads it next to the Job# / Part# (which is the natural eye
   // path) rather than tucked away in the right side panel.
   const orderQty = o && !o.isDieChange ? o.jobRequired : '—';
+  // Die / paint colour swatch from PMD_ProductDieColor, looked up by
+  // the selected job's Part #. Nothing rendered when the lookup misses
+  // so the layout stays the same for products with no colour record.
+  const die = o?.partNumber ? S!.dieColors.get(o.partNumber) : undefined;
+  const swatch = die?.hex
+    ? `<span class="m-die-swatch" style="background:${die.hex}" title="${escapeHtml(die.name || die.hex)}"></span>`
+    : '';
   return `<div class="op-meta">
     <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
     <label class="m-job">Job# ${jobField}</label>
     <label class="m-orderqty">Order Qty <input type="text" disabled value="${escapeHtml(String(orderQty))}"></label>
     <label class="m-part">Part# <input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
-    <label class="m-desc">Product Description <input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
+    <label class="m-desc">Product Description <span class="m-desc-row">${swatch}<input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></span></label>
     <label class="m-op">Operator ${opField}</label>
     <label class="m-sup">Supervisor ${supField}</label>
   </div>`;
@@ -1501,13 +1512,17 @@ export async function renderOperator(
   now: Date = new Date(),
 ): Promise<void> {
   dalRef = dal;
-  const [machines, planning, operators, supervisors, rcats] = await Promise.all([
+  const [machines, planning, operators, supervisors, rcats, dieColorList] = await Promise.all([
     dal.listMachines(),
     dal.listPlanning({}),
     dal.listOperators(),
     dal.listSupervisors(),
     dal.listRejectCategories(),
+    dal.listProductDieColors ? dal.listProductDieColors() : Promise.resolve([]),
   ]);
+  const dieColors = new Map(
+    dieColorList.map((c) => [c.partNumber, { hex: c.hex, name: c.name }]),
+  );
   const cs = currentShift(now);
   const vd = new Date(now);
   vd.setHours(0, 0, 0, 0);
@@ -1547,6 +1562,7 @@ export async function renderOperator(
     viewLevel: 1,
     jobTotalGood: 0,
     selSet: new Set<number>(),
+    dieColors,
   };
   if (nowTimer) clearInterval(nowTimer);
   nowTimer = setInterval(renderNowLine, 30_000);

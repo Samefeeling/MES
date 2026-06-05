@@ -5,6 +5,7 @@ import type {
   PlanningFilter,
   PlanningOrder,
   Product,
+  ProductDieColor,
   ProductionFilter,
   ProductionRecord,
   RejectCategory,
@@ -22,6 +23,10 @@ export interface PmdDataLayer {
   listProducts(): Promise<Product[]>;
   listRejectCategories(): Promise<RejectCategory[]>;
   listBdCodes(): Promise<BdCode[]>;
+  /** Die / paint colour per Part #. Used by the operator's Product
+   *  Description swatch and the KPIs Color column. Optional — a tenant
+   *  without PMD_ProductDieColor returns an empty list. */
+  listProductDieColors?(): Promise<ProductDieColor[]>;
 
   // Planning (read-mostly)
   listPlanning(filter: PlanningFilter): Promise<PlanningOrder[]>;

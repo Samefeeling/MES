@@ -111,6 +111,25 @@ function detectColor(desc: string): ColorTag {
   return { name: 'neutral', hex: '', neutral: true };
 }
 
+/**
+ * PMD_ProductDieColor (per-Part # die / paint hex) wins over the
+ * keyword scan above. The list captures the authoritative shop-floor
+ * colour where the description text might be ambiguous ("Postura
+ * Standard" doesn't say what colour it is). Keyword fallback covers
+ * parts that aren't in the list yet.
+ */
+function colorForJob(
+  partNumber: string,
+  desc: string,
+  dieColors: Map<string, { hex: string; name: string }>,
+): ColorTag {
+  const direct = dieColors.get(partNumber);
+  if (direct?.hex) {
+    return { name: direct.name || direct.hex, hex: direct.hex, neutral: false };
+  }
+  return detectColor(desc);
+}
+
 interface KpiRow {
   machineCode: string;
   total: ShiftAgg;
@@ -291,7 +310,7 @@ async function compute(now = new Date()): Promise<void> {
   // page: a single 1600T fetch failure used to take down the entire KPI
   // table (Promise.all rejects on the first failure); now each machine
   // that errors just shows up as zeros and the rest still render.
-  const [planning, perMachineProd] = await Promise.all([
+  const [planning, perMachineProd, dieColorList] = await Promise.all([
     dalRef.listPlanning({}).catch((err) => {
       console.error('[kpi] listPlanning failed:', err);
       return [] as PlanningOrder[];
@@ -307,7 +326,17 @@ async function compute(now = new Date()): Promise<void> {
           }),
       ),
     ),
+    dalRef.listProductDieColors
+      ? dalRef.listProductDieColors().catch(() => [])
+      : Promise.resolve([]),
   ]);
+  const dieColors = new Map(
+    dieColorList.map((c) => [c.partNumber, { hex: c.hex, name: c.name }]),
+  );
+  // Part # per Job for the die-colour lookup (the keyword-scan
+  // fallback still uses the description).
+  const partNumByJob = new Map<string, string>();
+  for (const o of planning) partNumByJob.set(o.jobNumber, o.partNumber);
 
   // Build a JobNum → partDescription lookup once, used by the per-job
   // breakdown rows (3rd indent level). Falls back to empty string for jobs
@@ -378,7 +407,7 @@ async function compute(now = new Date()): Promise<void> {
           return {
             jobNumber,
             partDescShort: firstTwoWords(desc),
-            color: detectColor(desc),
+            color: colorForJob(partNumByJob.get(jobNumber) ?? '', desc, dieColors),
             agg: toAgg(aggregate(recs), recs),
           };
         })
@@ -402,7 +431,7 @@ async function compute(now = new Date()): Promise<void> {
         return {
           jobNumber,
           partDescShort: firstTwoWords(desc),
-          color: detectColor(desc),
+          color: colorForJob(partNumByJob.get(jobNumber) ?? '', desc, dieColors),
           agg: toAgg(aggregate(recs), recs),
         };
       })

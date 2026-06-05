@@ -43,6 +43,18 @@ export interface RejectCategory {
   sequence: number;
 }
 
+/** A single row of PMD_ProductDieColor: the die / paint colour tied
+ *  to a Part #. Drives the swatch on the operator's Product
+ *  Description field and the Color column on KPIs. */
+export interface ProductDieColor {
+  /** Epicor Part # (e.g. "SF-1234-A"). Matches PlanningOrder.partNumber. */
+  partNumber: string;
+  /** CSS-ready hex value (e.g. "#1e3a8a"). Empty string when unknown. */
+  hex: string;
+  /** Friendly name (e.g. "Navy"). Empty string when not recorded. */
+  name: string;
+}
+
 export interface BdCode {
   code: string;
   label: string;
