@@ -990,6 +990,15 @@ export class SharePointDataLayer implements PmdDataLayer {
     const tasks: Promise<void>[] = [];
     for (const [key, slots] of this.editCache) {
       if (slots.length === 0) continue;
+      // Skip cache entries that hold nothing but a freshly-picked
+      // operator / supervisor name with no actual production data.
+      // Without this every "operator picked the wrong job, switched"
+      // moment would deposit an empty row in PMD_Production that the
+      // Live view would surface as a phantom card. See
+      // hasMeaningfulProgress() for the inclusion rule — anything the
+      // operator has actually filled in (status code, counter
+      // reading, reject, purge, handover) counts.
+      if (!hasMeaningfulProgress(slots)) continue;
       const canon = slots.find((s) => s.slotIndex === 0) ?? slots[0];
       if (!canon) continue;
       const [machineCode, shiftId, jobNumber] = key.split('|');
@@ -1635,6 +1644,30 @@ interface RejectEvent {
   code: string;
   category: string;
   qty: number;
+}
+
+/**
+ * True if the operator has filled in something worth surfacing on
+ * other iPads — a status code on any slot, a counter reading, a
+ * reject quantity, a purge weight, or a handover note. Picking a
+ * Job# / Operator / Supervisor on its own does *not* count: the
+ * editCache row gets created from the very first upsert (typically
+ * the Operator select), and pushing that to SP would spam Live
+ * Status with empty cards every time someone changed their mind
+ * about which order to start.
+ */
+function hasMeaningfulProgress(slots: ProductionRecord[]): boolean {
+  for (const r of slots) {
+    if (r.statusCode) return true;
+    if (r.countStart != null) return true;
+    if (r.countEnd != null) return true;
+    if (r.purgeKg != null) return true;
+    if (r.rejectCount > 0) return true;
+    if (r.rejects && r.rejects !== '{}') return true;
+    const note = (r.handoverNote ?? '').trim();
+    if (note && note !== '{}') return true;
+  }
+  return false;
 }
 
 function aggregateSlots(slots: ProductionRecord[]): {
