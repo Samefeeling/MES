@@ -37,6 +37,11 @@ const LISTS = {
   products: 'PMD_Products',
   planning: 'PMD_Planning',
   production: 'PMD_Production',
+  /** Transient "in-progress" mirror of PMD_Production. pushLiveSnapshot
+   *  writes here every poll tick; Sign Off & Save copies the row into
+   *  PMD_Production and deletes it from here. Same column schema as
+   *  PMD_Production by design — see the production field map. */
+  liveStatus: 'PMD_LiveStatus',
   rejects: 'PMD_Rejects',
   breakdown: 'PMD_BreakDownlog',
   rejectCategories: 'PMD_RejectCategories',
@@ -600,51 +605,74 @@ export class SharePointDataLayer implements PmdDataLayer {
     for (const list of this.editCache.values()) {
       for (const r of list) if (productionMatches(r, filter)) cached.push(r);
     }
-    // 2) Hydrate header rows from PMD_Production for the same filter,
-    //    skipping any (mc,sid,job) we already have in cache. Three parallel
-    //    queries: PMD_Production (header), PMD_Rejects (per-event), and
-    //    PMD_BreakDownlog (StatusTimeline) — the last is the real source of
-    //    the 16-char status pattern; PMD_Production.Status was deleted from
-    //    this tenant so headers come back with an empty timeline field.
+    // 2) Hydrate header rows from PMD_Production (signed-off) AND
+    //    PMD_LiveStatus (in-progress mirror). Signed wins for any
+    //    overlapping tuple — lockShift copies the row across and
+    //    deletes the live source, so an overlap only ever appears in
+    //    the brief window between those two writes.
     const seen = new Set(cached.map((r) => this.cacheKey(r.machineCode, r.shiftId, r.jobNumber)));
-    const [headers, rejectsByKey, timelinesByKey] = await Promise.all([
-      this.fetchProductionHeaders(filter),
+    const [prodHeaders, liveHeaders, rejectsByKey, timelinesByKey] = await Promise.all([
+      this.fetchHeaders(LISTS.production, filter),
+      this.fetchHeaders(LISTS.liveStatus, filter).catch((e) => {
+        // The live list may not exist yet on a fresh tenant — fall
+        // back to "no live rows" so the rest of the page still loads.
+        console.warn('[pmd] PMD_LiveStatus read failed (treating as empty):', e);
+        return [] as HeaderRow[];
+      }),
       this.fetchRejectsByKey(filter),
       this.fetchBreakdownTimelines(filter),
     ]);
-    for (const h of headers) {
+
+    const matchesFilter = (h: HeaderRow): boolean => {
+      // Defensive re-filter. shiftDateRange is intentionally loose
+      // (±1 d) to catch legacy noon-UTC / local-start timestamps; with
+      // the F.shift clause it also catches the same shift code on
+      // adjacent calendar dates — yesterday's Day shift would leak
+      // into a "today's Day shift" query.
       const hShiftId = `${h.date}-${h.shift}`;
-      // Defensive re-filter. shiftDateRange is intentionally loose (±1d
-      // either side) to catch legacy noon-UTC / local-start timestamps,
-      // but combined with the F.shift clause it also catches the same
-      // shift code on adjacent calendar dates — yesterday's Day shift
-      // leaks into a "today's Day shift" query, which the live trace
-      // surfaces as "1600T running yesterday's order". Drop anything
-      // whose decoded shiftId doesn't match the original request.
-      if (filter.shiftId && hShiftId !== filter.shiftId) continue;
-      if (filter.shiftIdFrom && hShiftId < filter.shiftIdFrom) continue;
-      if (filter.shiftIdTo && hShiftId > filter.shiftIdTo) continue;
-      if (filter.machineCode && h.machineCode !== filter.machineCode) continue;
-      if (filter.jobNumber && h.jobNumber !== filter.jobNumber) continue;
+      if (filter.shiftId && hShiftId !== filter.shiftId) return false;
+      if (filter.shiftIdFrom && hShiftId < filter.shiftIdFrom) return false;
+      if (filter.shiftIdTo && hShiftId > filter.shiftIdTo) return false;
+      if (filter.machineCode && h.machineCode !== filter.machineCode) return false;
+      if (filter.jobNumber && h.jobNumber !== filter.jobNumber) return false;
+      return true;
+    };
+
+    const ingest = (h: HeaderRow, isSignedOff: boolean): void => {
+      if (!matchesFilter(h)) return;
+      const hShiftId = `${h.date}-${h.shift}`;
       const key = this.cacheKey(h.machineCode, hShiftId, h.jobNumber);
-      if (seen.has(key)) continue;
+      if (seen.has(key)) return;
+      seen.add(key);
       // Splice the breakdown-side timeline onto the header so
-      // expandHeaderToSlots can decode it. Without this, every signed-off
-      // shift comes back with an empty timeline → no Machine Status row,
-      // and every reject collapses into the canonical slot 0 (07:00–07:30
-      // for Day shift).
+      // expandHeaderToSlots can decode it. Without this, every
+      // signed-off shift comes back with an empty timeline → no
+      // Machine Status row, and every reject collapses into the
+      // canonical slot 0 (07:00–07:30 for Day shift).
       const hWithTimeline: HeaderRow = h.timeline
         ? h
         : { ...h, timeline: timelinesByKey.get(key) ?? '' };
       cached.push(
-        ...this.expandHeaderToSlots(hWithTimeline, rejectsByKey.get(key) ?? []),
+        ...this.expandHeaderToSlots(hWithTimeline, rejectsByKey.get(key) ?? [], isSignedOff),
       );
       this.hydratedKeys.add(key);
-    }
+    };
+
+    // Signed-off first so it wins any (rare) overlap with a not-yet-
+    // deleted live row.
+    for (const h of prodHeaders) ingest(h, true);
+    for (const h of liveHeaders) ingest(h, false);
     return cached;
   }
 
-  private async fetchProductionHeaders(filter: ProductionFilter): Promise<HeaderRow[]> {
+  /**
+   * Read header rows from PMD_Production OR PMD_LiveStatus. Both
+   * share the production field map by design — PMD_LiveStatus is a
+   * column-for-column mirror of PMD_Production, holding the same
+   * tuple until Sign Off & Save copies it across and deletes it
+   * here.
+   */
+  private async fetchHeaders(list: string, filter: ProductionFilter): Promise<HeaderRow[]> {
     const F = this.F.production;
     const parts: string[] = [];
     if (filter.machineCode) parts.push(`${F.machine} eq '${filter.machineCode}'`);
@@ -659,7 +687,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     const fromTo = shiftDateRangeFromTo(filter.shiftIdFrom, filter.shiftIdTo, F.date);
     if (fromTo) parts.push(fromTo);
     const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
-    const rows = await this.getAllItems(LISTS.production, qs);
+    const rows = await this.getAllItems(list, qs);
     return rows.map((r) => ({
       id: getId(r),
       machineCode: str(r[F.machine]),
@@ -773,16 +801,18 @@ export class SharePointDataLayer implements PmdDataLayer {
     return out;
   }
 
-  private expandHeaderToSlots(h: HeaderRow, rejects: RejectRow[]): ProductionRecord[] {
+  private expandHeaderToSlots(
+    h: HeaderRow,
+    rejects: RejectRow[],
+    /** True for rows from PMD_Production (signed off); false for rows
+     *  from PMD_LiveStatus (in progress). The caller knows which list
+     *  the header came from — no need to infer from supervisor. */
+    isSignedOff: boolean,
+  ): ProductionRecord[] {
     const shiftId = `${h.date}-${h.shift}`;
     const slots: ProductionRecord[] = [];
     const timeline = (h.timeline || '').padEnd(16, '·').slice(0, 16);
     const stamp = new Date().toISOString();
-    // Empty supervisor = the row is a live snapshot pushed by another
-    // iPad (pushLiveSnapshot), not a signed-off record. Treat as
-    // unlocked so a viewing UI doesn't mistakenly show the orange
-    // lock banner for an in-progress order.
-    const isSignedOff = !!h.supervisor;
     for (let i = 0; i < 16; i++) {
       const ch = timeline[i];
       if (ch === '·' || ch === ' ') continue;
@@ -964,26 +994,31 @@ export class SharePointDataLayer implements PmdDataLayer {
       } catch (e) {
         throw new Error(`PMD_Rejects write failed (${tag}): ${(e as Error).message}`);
       }
+      // Sweep the in-progress mirror so other iPads' Live Status drops
+      // this row in favour of the new signed-off Production record on
+      // their next poll. Best-effort — pushLiveSnapshot won't re-create
+      // the row because lockShift also clears editCache below.
+      await this.deleteLiveRow(machineCode, shiftId, job);
       this.editCache.delete(ownKey(job));
     }
     this.persistEditCache();
   }
 
   /**
-   * Push every unsigned editCache entry to PMD_Production as a "live
-   * snapshot" — a header row with `supervisor` left blank so the
-   * reader knows the shift is still in progress. Other iPads' Live
-   * Status reads PMD_Production normally and picks up these snapshots
-   * via the same listProduction path that returns signed-off rows.
+   * Push every unsigned editCache entry to **PMD_LiveStatus** as an
+   * in-progress snapshot. Other iPads' Live Status reads PMD_LiveStatus
+   * (alongside PMD_Production for signed-off rows) so the floor view
+   * shows what's happening on every press without waiting for Sign
+   * Off & Save.
    *
-   * Called from the operator poll tick (every 60 s). Fire-and-forget;
-   * a failure just means the live view is up-to-60-s stale until the
-   * next tick succeeds.
+   * PMD_LiveStatus mirrors PMD_Production's column schema; lockShift
+   * copies the row across and deletes it from here, so the two lists
+   * never hold the same tuple simultaneously beyond a brief window.
    *
-   * The preserveSignoff guard on upsertProductionHeader prevents a
-   * snapshot from ever overwriting a row that's already been signed
-   * off — the canonical sign-off path is the only writer that sets
-   * supervisor.
+   * Called from the operator poll tick (every 60 s) and right after
+   * multiFillApply so the new status pattern shows up immediately.
+   * Fire-and-forget; a failure just means the live view is up-to-60-s
+   * stale until the next tick succeeds.
    */
   async pushLiveSnapshot(): Promise<void> {
     if (this.editCache.size === 0) return;
@@ -991,13 +1026,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     for (const [key, slots] of this.editCache) {
       if (slots.length === 0) continue;
       // Skip cache entries that hold nothing but a freshly-picked
-      // operator / supervisor name with no actual production data.
-      // Without this every "operator picked the wrong job, switched"
-      // moment would deposit an empty row in PMD_Production that the
-      // Live view would surface as a phantom card. See
-      // hasMeaningfulProgress() for the inclusion rule — anything the
-      // operator has actually filled in (status code, counter
-      // reading, reject, purge, handover) counts.
+      // operator / supervisor name with no actual production data —
+      // see hasMeaningfulProgress(). Avoids littering the broker with
+      // empty rows every time someone picked the wrong job and
+      // switched.
       if (!hasMeaningfulProgress(slots)) continue;
       const canon = slots.find((s) => s.slotIndex === 0) ?? slots[0];
       if (!canon) continue;
@@ -1007,27 +1039,22 @@ export class SharePointDataLayer implements PmdDataLayer {
       const shift = shiftId.slice(11);
       const agg = aggregateSlots(slots);
       tasks.push(
-        this.upsertProductionHeader(
-          {
-            machineCode,
-            date,
-            shift,
-            jobNumber,
-            partDescription: '',
-            timeline: agg.timeline,
-            countStart: agg.countStart,
-            countEnd: agg.countEnd,
-            reject: agg.reject,
-            operator: canon.operator,
-            // Empty supervisor is the live-snapshot signal — see
-            // expandHeaderToSlots' isSignedOff check.
-            supervisor: '',
-            runTime: agg.runTime,
-            downTime: agg.downTime,
-            handover: agg.handover,
-          },
-          /* preserveSignoff */ true,
-        ).catch((e) => {
+        this.upsertHeaderInto(LISTS.liveStatus, {
+          machineCode,
+          date,
+          shift,
+          jobNumber,
+          partDescription: '',
+          timeline: agg.timeline,
+          countStart: agg.countStart,
+          countEnd: agg.countEnd,
+          reject: agg.reject,
+          operator: canon.operator,
+          supervisor: canon.supervisor,
+          runTime: agg.runTime,
+          downTime: agg.downTime,
+          handover: agg.handover,
+        }).catch((e) => {
           // Snapshot push is best-effort; never propagate.
           console.warn('[pmd] live snapshot push failed for', key, e);
         }),
@@ -1067,6 +1094,17 @@ export class SharePointDataLayer implements PmdDataLayer {
       LISTS.rejects,
       `${Fr.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, Fr.date)}) and ${Fr.shift} eq '${shift}'${jobClause(Fr.jobNum)}`,
     );
+    // Also clear any leftover PMD_LiveStatus mirror for this tuple so
+    // the next listProduction doesn't re-hydrate a stale snapshot
+    // alongside the (now-deleted) signed-off rows.
+    try {
+      await this.deleteByFilter(
+        LISTS.liveStatus,
+        `${F.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${shift}'${jobClause(F.jobNumber)}`,
+      );
+    } catch (e) {
+      console.warn('[pmd] unlock: live mirror cleanup failed', e);
+    }
     // Drop hydrated cache so a re-read pulls fresh. Scope to the job
     // when one was supplied, otherwise drop the whole shift's keys.
     const prefix = jobNumber
@@ -1077,9 +1115,13 @@ export class SharePointDataLayer implements PmdDataLayer {
     });
   }
 
-  private async upsertProductionHeader(
+  private async upsertProductionHeader(h: HeaderInput): Promise<void> {
+    await this.upsertHeaderInto(LISTS.production, h);
+  }
+
+  private async upsertHeaderInto(
+    list: string,
     h: HeaderInput,
-    preserveSignoff = false,
   ): Promise<void> {
     const F = this.F.production;
     // F.date is a DateTime column. Stamp noon UTC of the shift's calendar
@@ -1090,7 +1132,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     const shiftId = `${h.date}-${h.shift}`;
     const slotStartIso = shiftDateMarker(shiftId);
     const body: Record<string, unknown> = {
-      __metadata: { type: await this.itemType(LISTS.production) },
+      __metadata: { type: await this.itemType(list) },
       [F.machine]: h.machineCode,
       [F.shift]: h.shift,
       [F.jobNumber]: h.jobNumber,
@@ -1125,19 +1167,39 @@ export class SharePointDataLayer implements PmdDataLayer {
       encodeURIComponent(
         `${F.machine} eq '${h.machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${h.shift}' and ${F.jobNumber} eq '${h.jobNumber}'`,
       );
-    const existing = await this.getAllItems<Record<string, unknown>>(LISTS.production, qs);
+    const existing = await this.getAllItems<Record<string, unknown>>(list, qs);
     if (existing.length > 0) {
-      // preserveSignoff is the live-snapshot push path: it must never
-      // overwrite a row that's already been signed off (supervisor
-      // populated). Without this guard, a periodic snapshot push could
-      // un-sign a row by stamping it with an empty supervisor.
-      if (preserveSignoff && str(existing[0][F.supervisor])) return;
       const id =
         (existing[0] as { ID?: number; Id?: number }).ID ??
         (existing[0] as { ID?: number; Id?: number }).Id;
-      await this.post(`${this.listUrl(LISTS.production)}/items(${id})`, body, '*');
+      await this.post(`${this.listUrl(list)}/items(${id})`, body, '*');
     } else {
-      await this.post(`${this.listUrl(LISTS.production)}/items`, body);
+      await this.post(`${this.listUrl(list)}/items`, body);
+    }
+  }
+
+  /**
+   * Delete every PMD_LiveStatus row matching this (machine, shift,
+   * job) tuple. Called at the end of lockShift so the just-signed-off
+   * tuple no longer haunts every iPad's Live Status view as an
+   * "in-progress" snapshot. Best-effort: a failure leaves a stale row
+   * which the next pushLiveSnapshot from anywhere would just refresh,
+   * so we surface but don't throw.
+   */
+  private async deleteLiveRow(
+    machineCode: string,
+    shiftId: string,
+    jobNumber: string,
+  ): Promise<void> {
+    const F = this.F.production;
+    const shift = shiftId.slice(11);
+    try {
+      await this.deleteByFilter(
+        LISTS.liveStatus,
+        `${F.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${shift}' and ${F.jobNumber} eq '${jobNumber}'`,
+      );
+    } catch (e) {
+      console.warn('[pmd] live row cleanup failed for', { machineCode, shiftId, jobNumber }, e);
     }
   }
 
