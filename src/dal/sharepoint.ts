@@ -186,11 +186,12 @@ const DEFAULT_FIELDS = {
     likelyOwner: 'LikelyOwner',
   },
   productDieColor: {
-    // Title = Part # (the natural key); HexColor = "#RRGGBB"; ColorName
-    // is the friendly label (e.g. "Navy"). Override per-tenant if the
-    // columns were created with different internal names.
-    partNum: 'Title',
-    hex: 'HexColor',
+    // PartNum is the natural key, matching Planning.csv's
+    // JobHead_PartNum (= PlanningOrder.partNumber). ColorHex stores
+    // "#RRGGBB". ColorName is the friendly label (e.g. "Navy") —
+    // optional; the tooltip falls back to the hex itself if blank.
+    partNum: 'PartNum',
+    hex: 'ColorHex',
     name: 'ColorName',
   },
 } as const;
