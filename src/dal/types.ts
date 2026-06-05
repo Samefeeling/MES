@@ -38,6 +38,12 @@ export interface PmdDataLayer {
    *  whole shift is unlocked. Per-job is the common path (one order
    *  signed off by mistake on a shift that holds several orders). */
   unlockShift(machineCode: string, shiftId: string, jobNumber?: string): Promise<void>;
+  /** Flush every unsigned editCache entry to the backing store as a
+   *  "live snapshot" so other clients can see this iPad's in-progress
+   *  work without waiting for Sign Off & Save. Fire-and-forget; the
+   *  operator poll calls this every 60 s. No-op for stores that
+   *  share state in-process (memory DAL). */
+  pushLiveSnapshot?(): Promise<void>;
 
   // Identity
   whoAmI(): Promise<UserContext>;

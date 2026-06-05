@@ -149,18 +149,16 @@ function render(): void {
 }
 
 function renderLiveBody(): string {
-  const head = `
-    <div class="trace-search">
-      <h2>📡 Live Status — every Moulding machine right now</h2>
-      <p class="bd-sub">What each machine is on this shift. Tap <b>🔍 Job Number Search</b> above to look up a past order.</p>
-    </div>`;
+  // No standalone heading on Live — the 📡 Live Status tab at the top
+  // already names the view, and supervisors kept asking to remove the
+  // descriptive block as visual noise. Cards go straight under the tabs.
   if (S!.loading) {
-    return head + `<div class="trace-empty">Loading live status…</div>`;
+    return `<div class="trace-empty">Loading live status…</div>`;
   }
   if (S!.liveRows.length === 0) {
-    return head + `<div class="trace-empty">No machines configured.</div>`;
+    return `<div class="trace-empty">No machines configured.</div>`;
   }
-  return head + `<div class="trace-results">${S!.liveRows.map(renderCard).join('')}</div>`;
+  return `<div class="trace-results">${S!.liveRows.map(renderCard).join('')}</div>`;
 }
 
 function renderSearchBody(): string {

@@ -610,7 +610,7 @@ function buildGrid(): string {
         .map((r, i) => {
           const v = parseRejects(r)[cat.code] ?? 0;
           const now = nowSlot === i ? ' is-now-col' : '';
-          return `<td class="num-cell${now}"><input type="number" inputmode="numeric" pattern="[0-9]*" min="0" step="1" class="rej-input" data-row="named" data-code="${escapeHtml(
+          return `<td class="num-cell${now}"><input type="text" inputmode="numeric" pattern="[0-9]*" class="rej-input" data-row="named" data-code="${escapeHtml(
             cat.code,
           )}" data-slot="${i}" value="${v || ''}"></td>`;
         })
@@ -660,11 +660,11 @@ function buildSide(): string {
   return `<aside class="op-side">
     <div class="sk"><label>Job left</label><b data-live="jobLeft">${jobLeft}</b></div>
     <div class="sk"><label title="${escapeHtml(targetTitle)}">Shift Target</label><b title="${escapeHtml(targetTitle)}">${targetDisplay}</b></div>
-    <div class="sk"><label>Count Start</label><input type="number" inputmode="numeric" pattern="[0-9]*" data-meta="cstart" value="${cs}"></div>
-    <div class="sk"><label>Count End</label><input type="number" inputmode="numeric" pattern="[0-9]*" data-meta="cend" value="${ce}"></div>
+    <div class="sk"><label>Count Start</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cstart" value="${cs}"></div>
+    <div class="sk"><label>Count End</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cend" value="${ce}"></div>
     <div class="sk"><label>Total Reject</label><b class="r" data-live="totalReject">${totalReject}</b></div>
     <div class="sk"><label>Total Good</label><b class="g" data-live="totalGood">${good}</b></div>
-    <div class="sk"><label>Purge (kg)</label><input type="number" inputmode="decimal" step="0.1" data-meta="purge" value="${purge}"></div>
+    <div class="sk"><label>Purge (kg)</label><input type="text" inputmode="decimal" data-meta="purge" value="${purge}"></div>
     <div class="handover">
       <div class="handover-title">Handover / Journey — supervisor notes</div>
       <div class="handover-grid">
@@ -1381,6 +1381,9 @@ async function multiFillApply(
   // round-trip turns the iPad lag on "fill a status cell" from
   // 600-800 ms (REST + render) down to a single render.
   render();
+  // Kick a live snapshot push so other iPads see the new status pattern
+  // without waiting up to 60 s for the next poll tick. Fire-and-forget.
+  if (dalRef.pushLiveSnapshot) void dalRef.pushLiveSnapshot();
 }
 
 /** Like upsertSlot but doesn't call reload — caller batches the final render. */
@@ -1551,5 +1554,15 @@ export async function renderOperator(
 }
 
 export function operatorPollTick(): void {
-  if (S) renderNowLine();
+  if (!S) return;
+  renderNowLine();
+  // Best-effort cross-iPad visibility: push this iPad's editCache to
+  // PMD_Production as a "live snapshot" so the Live Status view on
+  // every other iPad picks up what we're doing right now. The DAL
+  // call is fire-and-forget and won't slow the now-line refresh.
+  if (dalRef.pushLiveSnapshot) {
+    void dalRef.pushLiveSnapshot().catch(() => {
+      /* logged inside the DAL; never propagate to the poll loop */
+    });
+  }
 }

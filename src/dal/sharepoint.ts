@@ -778,6 +778,11 @@ export class SharePointDataLayer implements PmdDataLayer {
     const slots: ProductionRecord[] = [];
     const timeline = (h.timeline || '').padEnd(16, '·').slice(0, 16);
     const stamp = new Date().toISOString();
+    // Empty supervisor = the row is a live snapshot pushed by another
+    // iPad (pushLiveSnapshot), not a signed-off record. Treat as
+    // unlocked so a viewing UI doesn't mistakenly show the orange
+    // lock banner for an in-progress order.
+    const isSignedOff = !!h.supervisor;
     for (let i = 0; i < 16; i++) {
       const ch = timeline[i];
       if (ch === '·' || ch === ' ') continue;
@@ -798,7 +803,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         bdIssue: '',
         mangoTicket: '',
         handoverNote: i === 0 ? h.handover : '',
-        locked: true, // headers are persisted = signed off
+        locked: isSignedOff,
         lockedBy: h.supervisor,
         lockedAt: stamp,
         createdAt: stamp,
@@ -824,7 +829,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         bdIssue: '',
         mangoTicket: '',
         handoverNote: h.handover,
-        locked: true,
+        locked: isSignedOff,
         lockedBy: h.supervisor,
         lockedAt: stamp,
         createdAt: stamp,
@@ -964,6 +969,64 @@ export class SharePointDataLayer implements PmdDataLayer {
     this.persistEditCache();
   }
 
+  /**
+   * Push every unsigned editCache entry to PMD_Production as a "live
+   * snapshot" — a header row with `supervisor` left blank so the
+   * reader knows the shift is still in progress. Other iPads' Live
+   * Status reads PMD_Production normally and picks up these snapshots
+   * via the same listProduction path that returns signed-off rows.
+   *
+   * Called from the operator poll tick (every 60 s). Fire-and-forget;
+   * a failure just means the live view is up-to-60-s stale until the
+   * next tick succeeds.
+   *
+   * The preserveSignoff guard on upsertProductionHeader prevents a
+   * snapshot from ever overwriting a row that's already been signed
+   * off — the canonical sign-off path is the only writer that sets
+   * supervisor.
+   */
+  async pushLiveSnapshot(): Promise<void> {
+    if (this.editCache.size === 0) return;
+    const tasks: Promise<void>[] = [];
+    for (const [key, slots] of this.editCache) {
+      if (slots.length === 0) continue;
+      const canon = slots.find((s) => s.slotIndex === 0) ?? slots[0];
+      if (!canon) continue;
+      const [machineCode, shiftId, jobNumber] = key.split('|');
+      if (!machineCode || !shiftId || !jobNumber) continue;
+      const date = shiftId.slice(0, 10);
+      const shift = shiftId.slice(11);
+      const agg = aggregateSlots(slots);
+      tasks.push(
+        this.upsertProductionHeader(
+          {
+            machineCode,
+            date,
+            shift,
+            jobNumber,
+            partDescription: '',
+            timeline: agg.timeline,
+            countStart: agg.countStart,
+            countEnd: agg.countEnd,
+            reject: agg.reject,
+            operator: canon.operator,
+            // Empty supervisor is the live-snapshot signal — see
+            // expandHeaderToSlots' isSignedOff check.
+            supervisor: '',
+            runTime: agg.runTime,
+            downTime: agg.downTime,
+            handover: agg.handover,
+          },
+          /* preserveSignoff */ true,
+        ).catch((e) => {
+          // Snapshot push is best-effort; never propagate.
+          console.warn('[pmd] live snapshot push failed for', key, e);
+        }),
+      );
+    }
+    await Promise.all(tasks);
+  }
+
   async unlockShift(
     machineCode: string,
     shiftId: string,
@@ -1005,7 +1068,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     });
   }
 
-  private async upsertProductionHeader(h: HeaderInput): Promise<void> {
+  private async upsertProductionHeader(
+    h: HeaderInput,
+    preserveSignoff = false,
+  ): Promise<void> {
     const F = this.F.production;
     // F.date is a DateTime column. Stamp noon UTC of the shift's calendar
     // date so the SP list displays the right date in every regional setting
@@ -1050,9 +1116,16 @@ export class SharePointDataLayer implements PmdDataLayer {
       encodeURIComponent(
         `${F.machine} eq '${h.machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${h.shift}' and ${F.jobNumber} eq '${h.jobNumber}'`,
       );
-    const existing = await this.getAllItems<{ ID?: number; Id?: number }>(LISTS.production, qs);
+    const existing = await this.getAllItems<Record<string, unknown>>(LISTS.production, qs);
     if (existing.length > 0) {
-      const id = existing[0].ID ?? existing[0].Id;
+      // preserveSignoff is the live-snapshot push path: it must never
+      // overwrite a row that's already been signed off (supervisor
+      // populated). Without this guard, a periodic snapshot push could
+      // un-sign a row by stamping it with an empty supervisor.
+      if (preserveSignoff && str(existing[0][F.supervisor])) return;
+      const id =
+        (existing[0] as { ID?: number; Id?: number }).ID ??
+        (existing[0] as { ID?: number; Id?: number }).Id;
       await this.post(`${this.listUrl(LISTS.production)}/items(${id})`, body, '*');
     } else {
       await this.post(`${this.listUrl(LISTS.production)}/items`, body);
