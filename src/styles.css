@@ -52,6 +52,9 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi{display:flex;flex-direction:column;gap:14px}
 .kpi-head{background:#fff;border:1px solid var(--bd);border-radius:12px;padding:14px;display:flex;flex-wrap:wrap;align-items:center;gap:14px;justify-content:space-between}
 .kpi-head h2{margin:0;font-size:16px;font-weight:700;color:#0c4a6e;line-height:1.3}
+.kpi-expand-all{appearance:none;border:1px solid var(--theme-dark);background:#fff;color:var(--theme-dark);border-radius:8px;padding:6px 12px;font-size:13px;font-weight:700;cursor:pointer;line-height:1.2}
+.kpi-expand-all:hover{background:#dbeafe}
+.kpi-expand-all:active{background:var(--theme-dark);color:#fff}
 .kpi-table-wrap{background:#fff;border:1px solid var(--bd);border-radius:12px;overflow:auto;max-height:70vh;position:relative}
 .kpi-table{background:#fff;font-variant-numeric:tabular-nums;border:0;border-radius:0;overflow:visible}
 .kpi-table td.num,.kpi-table th{white-space:nowrap}
@@ -321,7 +324,8 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    were 28px and job rows 22px). Pin line-height + padding identically;
    only background colour, font-weight and the leading indent change to
    convey hierarchy. */
-.kpi-table th,.kpi-table td{line-height:20px;height:32px;vertical-align:middle}
+.kpi-table tr{height:36px}
+.kpi-table th,.kpi-table td{line-height:20px;height:36px;vertical-align:middle;overflow:hidden}
 .kpi-machine th{font-size:16px;font-weight:800;color:var(--tx);background:#f1f5f9}
 .kpi-machine td{font-weight:800;background:#f1f5f9}
 .kpi-shift th,.kpi-shift td{background:#eef2f7;border-top:1px dashed #cbd5e1;border-bottom:1px dashed #cbd5e1;font-size:13px;font-weight:600;color:#475569;padding:6px 8px}

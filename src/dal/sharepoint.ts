@@ -508,14 +508,41 @@ export class SharePointDataLayer implements PmdDataLayer {
   async listProductDieColors(): Promise<ProductDieColor[]> {
     const F = this.F.productDieColor;
     try {
-      const rows = await this.getAllItems(LISTS.productDieColor);
-      return rows
+      const rows = await this.getAllItems<Record<string, unknown>>(LISTS.productDieColor);
+      // SP internal column names can drift from display names (spaces
+      // become _x0020_, renamed columns keep their original internal
+      // name, etc.). Try the configured names first, then fall back to
+      // a case-insensitive scan over common variants so a tenant that
+      // typed "Part Num" or "HexColor" still resolves.
+      const partCandidates = [F.partNum, 'PartNum', 'Part_x0020_Num', 'PartNumber', 'Title'];
+      const hexCandidates = [F.hex, 'ColorHex', 'Color_x0020_Hex', 'HexColor', 'Hex'];
+      const nameCandidates = [F.name, 'ColorName', 'Color_x0020_Name', 'Name'];
+      if (rows.length > 0) {
+        // Log the first row's columns once so a missing-column problem
+        // is obvious from the console without needing F12 → Network.
+        console.info(
+          '[pmd] PMD_ProductDieColor sample row keys:',
+          Object.keys(rows[0]).filter((k) => !k.startsWith('_') && k !== '__metadata'),
+        );
+      }
+      const out = rows
         .map((r) => ({
-          partNumber: str(r[F.partNum]).trim(),
-          hex: normaliseHex(str(r[F.hex])),
-          name: str(r[F.name]).trim(),
+          partNumber: str(pickField(r, partCandidates)).trim(),
+          hex: normaliseHex(str(pickField(r, hexCandidates))),
+          name: str(pickField(r, nameCandidates)).trim(),
         }))
         .filter((c) => c.partNumber && c.hex);
+      if (rows.length > 0 && out.length === 0) {
+        console.warn(
+          '[pmd] PMD_ProductDieColor loaded',
+          rows.length,
+          'row(s) but none had a usable PartNum + ColorHex pair. Check the column internal names against',
+          { partNum: F.partNum, hex: F.hex, name: F.name },
+        );
+      } else {
+        console.info('[pmd] PMD_ProductDieColor mapped', out.length, 'of', rows.length, 'rows');
+      }
+      return out;
     } catch (e) {
       // Tenant without PMD_ProductDieColor → no swatch is fine; the
       // existing keyword-derived colour on KPIs takes over.
@@ -1541,6 +1568,27 @@ function getId(r: Record<string, unknown>): number {
 function str(v: unknown): string {
   if (v == null) return '';
   return typeof v === 'string' ? v : String(v);
+}
+
+/** Read a value from a SharePoint REST row using the first candidate
+ *  internal name that produces a non-empty value. Falls back to a
+ *  case-insensitive key scan so a column named "PartNum" still resolves
+ *  if the tenant's SP returned it as "partnum" or "Part_x0020_Num". */
+function pickField(row: Record<string, unknown>, candidates: string[]): unknown {
+  for (const c of candidates) {
+    const v = row[c];
+    if (v != null && v !== '') return v;
+  }
+  const lower: Record<string, string> = {};
+  for (const k of Object.keys(row)) lower[k.toLowerCase()] = k;
+  for (const c of candidates) {
+    const k = lower[c.toLowerCase()];
+    if (k != null) {
+      const v = row[k];
+      if (v != null && v !== '') return v;
+    }
+  }
+  return undefined;
 }
 
 /** Coerce a SP "HexColor" cell into a CSS-ready string. Accepts

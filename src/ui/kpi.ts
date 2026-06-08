@@ -532,6 +532,13 @@ function render(): void {
       )}</button>`,
   ).join('');
   const rangeLabel = periodRange(S!.period, new Date()).label;
+  // Global expand/collapse — "fully expanded" means every machine has its
+  // shift breakdown visible (collapsed=∅) AND its per-order rollup open
+  // (ordersExpanded covers every machine). One click flips the whole
+  // table instead of N clicks per drill.
+  const allExpanded =
+    S!.collapsed.size === 0 && S!.ordersExpanded.size === S!.machines.length;
+  const expandAllLabel = allExpanded ? '⊟ Collapse all' : '⊞ Expand all';
 
   const tot = S!.rows.reduce(
     (a, r) => {
@@ -680,6 +687,7 @@ function render(): void {
       <div class="kpi-head">
         <h2>📊 Production KPIs — ${escapeHtml(rangeLabel)}</h2>
         <div class="shift-tabs">${tabs}</div>
+        <button type="button" class="kpi-expand-all" data-expand-all title="Toggle the + (shift breakdown) and › (per-order rollup) on every machine at once">${expandAllLabel}</button>
       </div>
       <div class="kpi-table-wrap">
         <table class="summary-table kpi-table">
@@ -750,6 +758,23 @@ function render(): void {
       render();
     }),
   );
+  const expandAllBtn = app.querySelector<HTMLButtonElement>('[data-expand-all]');
+  if (expandAllBtn) {
+    expandAllBtn.addEventListener('click', () => {
+      const fullyOpen =
+        S!.collapsed.size === 0 && S!.ordersExpanded.size === S!.machines.length;
+      if (fullyOpen) {
+        S!.collapsed = new Set(S!.machines.map((m) => m.machineCode));
+        S!.ordersExpanded = new Set();
+      } else {
+        S!.collapsed = new Set();
+        S!.ordersExpanded = new Set(
+          S!.rows.filter((r) => r.byJobTotal.length > 0).map((r) => r.machineCode),
+        );
+      }
+      render();
+    });
+  }
 }
 
 export async function renderKpi(dal: PmdDataLayer): Promise<void> {
