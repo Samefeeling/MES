@@ -509,39 +509,122 @@ export class SharePointDataLayer implements PmdDataLayer {
     const F = this.F.productDieColor;
     try {
       const rows = await this.getAllItems<Record<string, unknown>>(LISTS.productDieColor);
-      // SP internal column names can drift from display names (spaces
-      // become _x0020_, renamed columns keep their original internal
-      // name, etc.). Try the configured names first, then fall back to
-      // a case-insensitive scan over common variants so a tenant that
-      // typed "Part Num" or "HexColor" still resolves.
-      const partCandidates = [F.partNum, 'PartNum', 'Part_x0020_Num', 'PartNumber', 'Title'];
-      const hexCandidates = [F.hex, 'ColorHex', 'Color_x0020_Hex', 'HexColor', 'Hex'];
-      const nameCandidates = [F.name, 'ColorName', 'Color_x0020_Name', 'Name'];
-      if (rows.length > 0) {
-        // Log the first row's columns once so a missing-column problem
-        // is obvious from the console without needing F12 → Network.
-        console.info(
-          '[pmd] PMD_ProductDieColor sample row keys:',
-          Object.keys(rows[0]).filter((k) => !k.startsWith('_') && k !== '__metadata'),
-        );
+      if (rows.length === 0) return [];
+
+      // PMD_ProductDieColor was created via the SP modern UI, which
+      // auto-names extra columns `field_1, field_2, …` regardless of
+      // the display labels the user typed (same pattern as PMD_Products
+      // — see §65 above). Don't trust the configured names; auto-detect
+      // from the data:
+      //  • Part #: prefer `Title` (Excel-import convention), else any
+      //    configured candidate
+      //  • Hex:    the first column whose value shape matches #RRGGBB
+      //    (or RRGGBB / RGB) across one of the probe rows
+      //  • Name:   first remaining text column with content
+      const isHexShape = (v: unknown): boolean =>
+        /^#?[0-9a-fA-F]{6}$|^#?[0-9a-fA-F]{3}$/.test(str(v).trim());
+
+      const probeRows = rows.slice(0, Math.min(rows.length, 50));
+      const sample = rows[0];
+      const sysKeys = new Set([
+        '__metadata',
+        'FirstUniqueAncestorSecurableObject',
+        'RoleAssignments',
+        'AttachmentFiles',
+        'ContentType',
+        'GetDlpPolicyTip',
+        'FieldValuesAsHtml',
+        'FieldValuesAsText',
+        'FieldValuesForEdit',
+        'File',
+        'Folder',
+        'LikedByInformation',
+        'ParentList',
+        'Properties',
+        'Versions',
+        'FileSystemObjectType',
+        'Id',
+        'ServerRedirectedEmbedUri',
+        'ServerRedirectedEmbedUrl',
+        'ContentTypeId',
+        'ComplianceAssetId',
+        'ID',
+        'Modified',
+        'Created',
+        'AuthorId',
+        'EditorId',
+        'Attachments',
+        'GUID',
+        'OData__UIVersionString',
+        'OData__ColorTag',
+      ]);
+      const userKeys = Object.keys(sample).filter(
+        (k) => !sysKeys.has(k) && !k.startsWith('OData__'),
+      );
+
+      // Hex column: walk userKeys, pick the first that produces a hex
+      // value in any probe row.
+      let hexKey: string | undefined;
+      const hexCandidates = [F.hex, 'ColorHex', 'HexColor', 'Hex', ...userKeys];
+      for (const c of hexCandidates) {
+        if (probeRows.some((r) => isHexShape(r[c]))) {
+          hexKey = c;
+          break;
+        }
       }
+
+      // Part column: prefer Title (matches Products import pattern),
+      // then configured / common variants.
+      let partKey: string | undefined;
+      const partCandidates = ['Title', F.partNum, 'PartNum', 'Part_x0020_Num', 'PartNumber'];
+      for (const c of partCandidates) {
+        if (probeRows.some((r) => str(r[c]).trim().length > 0)) {
+          partKey = c;
+          break;
+        }
+      }
+
+      // Name column: first text field that isn't part or hex and has content.
+      let nameKey: string | undefined;
+      const nameCandidates = [F.name, 'ColorName', 'Name', ...userKeys];
+      for (const c of nameCandidates) {
+        if (c === partKey || c === hexKey) continue;
+        if (probeRows.some((r) => str(r[c]).trim().length > 0 && !isHexShape(r[c]))) {
+          nameKey = c;
+          break;
+        }
+      }
+
+      console.info('[pmd] PMD_ProductDieColor resolved columns:', {
+        partKey,
+        hexKey,
+        nameKey,
+        userKeys,
+      });
+
+      if (!hexKey || !partKey) {
+        console.warn(
+          '[pmd] PMD_ProductDieColor: could not auto-detect part / hex columns. Sample row:',
+          sample,
+        );
+        return [];
+      }
+
       const out = rows
         .map((r) => ({
-          partNumber: str(pickField(r, partCandidates)).trim(),
-          hex: normaliseHex(str(pickField(r, hexCandidates))),
-          name: str(pickField(r, nameCandidates)).trim(),
+          partNumber: str(r[partKey!]).trim(),
+          hex: normaliseHex(str(r[hexKey!])),
+          name: nameKey ? str(r[nameKey]).trim() : '',
         }))
         .filter((c) => c.partNumber && c.hex);
-      if (rows.length > 0 && out.length === 0) {
-        console.warn(
-          '[pmd] PMD_ProductDieColor loaded',
-          rows.length,
-          'row(s) but none had a usable PartNum + ColorHex pair. Check the column internal names against',
-          { partNum: F.partNum, hex: F.hex, name: F.name },
-        );
-      } else {
-        console.info('[pmd] PMD_ProductDieColor mapped', out.length, 'of', rows.length, 'rows');
-      }
+
+      console.info(
+        '[pmd] PMD_ProductDieColor mapped',
+        out.length,
+        'of',
+        rows.length,
+        'rows',
+      );
       return out;
     } catch (e) {
       // Tenant without PMD_ProductDieColor → no swatch is fine; the
@@ -1568,27 +1651,6 @@ function getId(r: Record<string, unknown>): number {
 function str(v: unknown): string {
   if (v == null) return '';
   return typeof v === 'string' ? v : String(v);
-}
-
-/** Read a value from a SharePoint REST row using the first candidate
- *  internal name that produces a non-empty value. Falls back to a
- *  case-insensitive key scan so a column named "PartNum" still resolves
- *  if the tenant's SP returned it as "partnum" or "Part_x0020_Num". */
-function pickField(row: Record<string, unknown>, candidates: string[]): unknown {
-  for (const c of candidates) {
-    const v = row[c];
-    if (v != null && v !== '') return v;
-  }
-  const lower: Record<string, string> = {};
-  for (const k of Object.keys(row)) lower[k.toLowerCase()] = k;
-  for (const c of candidates) {
-    const k = lower[c.toLowerCase()];
-    if (k != null) {
-      const v = row[k];
-      if (v != null && v !== '') return v;
-    }
-  }
-  return undefined;
 }
 
 /** Coerce a SP "HexColor" cell into a CSS-ready string. Accepts

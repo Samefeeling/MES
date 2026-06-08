@@ -532,13 +532,16 @@ function render(): void {
       )}</button>`,
   ).join('');
   const rangeLabel = periodRange(S!.period, new Date()).label;
-  // Global expand/collapse — "fully expanded" means every machine has its
-  // shift breakdown visible (collapsed=∅) AND its per-order rollup open
-  // (ordersExpanded covers every machine). One click flips the whole
-  // table instead of N clicks per drill.
-  const allExpanded =
-    S!.collapsed.size === 0 && S!.ordersExpanded.size === S!.machines.length;
-  const expandAllLabel = allExpanded ? '⊟ Collapse all' : '⊞ Expand all';
+  // Global toggles live in the Machine column header — one click flips
+  // every machine instead of N clicks per row.
+  //  • "+" mirrors the per-row + / – (shift breakdown)
+  //  • ">" mirrors the per-row › / ⌄ (per-order rollup)
+  const anyShiftsCollapsed = S!.collapsed.size > 0;
+  const anyOrdersHidden =
+    S!.ordersExpanded.size <
+    S!.rows.filter((r) => r.byJobTotal.length > 0).length;
+  const allShiftsGlyph = anyShiftsCollapsed ? '+' : '–';
+  const allOrdersGlyph = anyOrdersHidden ? '›' : '⌄';
 
   const tot = S!.rows.reduce(
     (a, r) => {
@@ -687,12 +690,14 @@ function render(): void {
       <div class="kpi-head">
         <h2>📊 Production KPIs — ${escapeHtml(rangeLabel)}</h2>
         <div class="shift-tabs">${tabs}</div>
-        <button type="button" class="kpi-expand-all" data-expand-all title="Toggle the + (shift breakdown) and › (per-order rollup) on every machine at once">${expandAllLabel}</button>
       </div>
       <div class="kpi-table-wrap">
         <table class="summary-table kpi-table">
           <thead><tr>
-            <th>Machine</th><th class="kpi-color-head">Color</th>
+            <th class="kpi-machine-head">Machine
+              <button type="button" class="kpi-toggle kpi-toggle-all" data-toggle-all-shifts title="Toggle shift breakdown on every machine">${allShiftsGlyph}</button>
+              <button type="button" class="kpi-toggle kpi-toggle-all kpi-orders-toggle" data-toggle-all-orders title="Toggle per-order rollup on every machine">${allOrdersGlyph}</button>
+            </th><th class="kpi-color-head">Color</th>
             <th>Output</th><th>Reject</th><th>Yield%</th>
             <th>Run h</th><th>Down h</th>
             <th title="D — Die change">Die h</th>
@@ -758,20 +763,20 @@ function render(): void {
       render();
     }),
   );
-  const expandAllBtn = app.querySelector<HTMLButtonElement>('[data-expand-all]');
-  if (expandAllBtn) {
-    expandAllBtn.addEventListener('click', () => {
-      const fullyOpen =
-        S!.collapsed.size === 0 && S!.ordersExpanded.size === S!.machines.length;
-      if (fullyOpen) {
-        S!.collapsed = new Set(S!.machines.map((m) => m.machineCode));
-        S!.ordersExpanded = new Set();
-      } else {
-        S!.collapsed = new Set();
-        S!.ordersExpanded = new Set(
-          S!.rows.filter((r) => r.byJobTotal.length > 0).map((r) => r.machineCode),
-        );
-      }
+  const allShiftsBtn = app.querySelector<HTMLButtonElement>('[data-toggle-all-shifts]');
+  if (allShiftsBtn) {
+    allShiftsBtn.addEventListener('click', () => {
+      if (S!.collapsed.size > 0) S!.collapsed = new Set();
+      else S!.collapsed = new Set(S!.machines.map((m) => m.machineCode));
+      render();
+    });
+  }
+  const allOrdersBtn = app.querySelector<HTMLButtonElement>('[data-toggle-all-orders]');
+  if (allOrdersBtn) {
+    allOrdersBtn.addEventListener('click', () => {
+      const targets = S!.rows.filter((r) => r.byJobTotal.length > 0).map((r) => r.machineCode);
+      if (S!.ordersExpanded.size < targets.length) S!.ordersExpanded = new Set(targets);
+      else S!.ordersExpanded = new Set();
       render();
     });
   }
