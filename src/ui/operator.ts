@@ -512,9 +512,7 @@ function buildActionBar(): string {
   // "Sign off" buys the ~80px needed for the bar to fit on one row.
   return `<div class="op-actionbar">
     <div class="ab-date">
-      <button class="dnav-btn" data-day="-1" title="Previous day">◀</button>
       <input type="date" class="ab-date-input" data-meta="date" value="${dateIso}">
-      <button class="dnav-btn" data-day="1" title="Next day">▶</button>
     </div>
     <div class="ab-shifts">${tabs}</div>
     <div class="ab-right">
@@ -1005,18 +1003,12 @@ function renderNowLine(): void {
 function wire(): void {
   const app = document.getElementById('app')!;
 
-  // Date navigation — keep selJob across day moves: operators commonly
+  // Shift tabs — keep selJob across shift moves: operators commonly
   // carry the same job from Day → Afternoon → Night and shouldn't have to
   // re-pick it. If the new shift has no rows for that job, the grid will
-  // just show empty cells.
-  app.querySelectorAll<HTMLButtonElement>('[data-day]').forEach((b) =>
-    b.addEventListener('click', () => {
-      S!.viewDate = new Date(S!.viewDate);
-      S!.viewDate.setDate(S!.viewDate.getDate() + Number(b.dataset.day));
-      void reload();
-    }),
-  );
-  // Shift tabs — keep selJob (see comment above).
+  // just show empty cells. (Day arrows are gone — the date input shows
+  // today by default; past days are still reachable via the picker for
+  // supervisors reviewing history.)
   app.querySelectorAll<HTMLButtonElement>('[data-shift]').forEach((b) =>
     b.addEventListener('click', () => {
       S!.shiftCode = b.dataset.shift as ShiftCode;
