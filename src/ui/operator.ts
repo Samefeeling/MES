@@ -272,7 +272,32 @@ async function reload(): Promise<void> {
   // Don't clear a manually-typed JobNum just because it isn't in Planning
   // yet — the operator may be entering an order that was released in Epicor
   // after the most recent sync.
-  if (!S!.selJob && orders.length) S!.selJob = orders[0].jobNumber;
+  if (!S!.selJob) {
+    // Prefer the job already showing live activity on this press —
+    // PMD_LiveStatus rows surface in S!.prod as unsigned (locked=false)
+    // slot records with a non-empty statusCode. The job whose latest
+    // filled slot is furthest along the shift is what the press is
+    // running right now, so default to that when the operator switches
+    // machines. They can still re-pick a different order from the
+    // datalist if needed.
+    const lastSlotByJob = new Map<string, number>();
+    for (const r of S!.prod) {
+      if (!r.locked && r.statusCode && r.jobNumber) {
+        const cur = lastSlotByJob.get(r.jobNumber) ?? -1;
+        if (r.slotIndex > cur) lastSlotByJob.set(r.jobNumber, r.slotIndex);
+      }
+    }
+    let bestJob = '';
+    let bestSlot = -1;
+    for (const [j, s] of lastSlotByJob) {
+      if (s > bestSlot) {
+        bestSlot = s;
+        bestJob = j;
+      }
+    }
+    if (bestJob) S!.selJob = bestJob;
+    else if (orders.length) S!.selJob = orders[0].jobNumber;
+  }
   const c = canonical();
   if (c) {
     // For a signed-off shift the canonical row carries the authoritative

@@ -322,7 +322,12 @@ async function compute(now = new Date()): Promise<void> {
       S!.machines.map((m) =>
         dalRef
           .listProduction({ machineCode: m.machineCode })
-          .then((p) => p.filter((r) => inRange(r, from, to, shiftIds)))
+          // KPIs are a management view of *finished* shift work: only
+          // signed-off rows count. Excluding unsigned PMD_LiveStatus
+          // rows keeps in-progress (and frequently mis-typed) jobs
+          // out of the OEE / output / reject totals until the
+          // supervisor has reviewed and signed them off.
+          .then((p) => p.filter((r) => r.locked && inRange(r, from, to, shiftIds)))
           .catch((err) => {
             console.error(`[kpi] listProduction(${m.machineCode}) failed:`, err);
             return [] as ProductionRecord[];
