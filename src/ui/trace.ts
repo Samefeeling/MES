@@ -1,7 +1,13 @@
 import type { PmdDataLayer } from '../dal';
 import type { Machine, PlanningOrder, ProductionRecord } from '../types';
 import { STATUS_MAP } from '../core/status';
-import { SLOTS_PER_SHIFT, currentShift, currentSlotIndex, slotClock } from '../core/shifts';
+import {
+  SLOTS_PER_SHIFT,
+  currentShift,
+  currentSlotIndex,
+  shiftBounds,
+  slotClock,
+} from '../core/shifts';
 import { bdLabelFor } from '../core/breakdown';
 import { escapeHtml } from './modal';
 
@@ -118,9 +124,19 @@ function activityFor(r: TraceRow): Activity {
 
 let S: TraceState | null = null;
 let dalRef: PmdDataLayer;
+/** Auto-refresh + now-line ticker. Cleared on renderTrace re-entry and
+ *  whenever the user switches to the search tab so we don't leak
+ *  fetches when no one is looking. */
+let livePollTimer: ReturnType<typeof setInterval> | undefined;
+let nowLineTimer: ReturnType<typeof setInterval> | undefined;
+/** How often Live Status re-pulls from PMD_LiveStatus / PMD_Production.
+ *  20 s feels live to the eye without hammering SP — three pulls per
+ *  poll tick of the operator (60 s) is plenty for a status board. */
+const LIVE_POLL_MS = 20_000;
 
 export async function renderTrace(dal: PmdDataLayer): Promise<void> {
   dalRef = dal;
+  stopLivePoll();
   const machines = await dal.listMachines();
   S = {
     view: 'live',
@@ -134,6 +150,38 @@ export async function renderTrace(dal: PmdDataLayer): Promise<void> {
   document.body.className = 'shift-day'; // neutral theme on trace page
   render();
   await loadLive();
+  startLivePoll();
+}
+
+function startLivePoll(): void {
+  stopLivePoll();
+  livePollTimer = setInterval(() => {
+    // Bail (and self-cancel) when the user has routed away from
+    // trace — renderOperator / renderKpi blow away the `.trace`
+    // container, so its absence is a reliable navigation signal.
+    if (!document.querySelector('.trace')) {
+      stopLivePoll();
+      return;
+    }
+    if (!S || S.view !== 'live') return;
+    void loadLive({ silent: true });
+  }, LIVE_POLL_MS);
+  // Refresh the now-line every 30 s so the red line walks across the
+  // timeline in real time even when no new data has arrived.
+  nowLineTimer = setInterval(() => {
+    if (!document.querySelector('.trace')) {
+      stopLivePoll();
+      return;
+    }
+    drawNowLines();
+  }, 30_000);
+}
+
+function stopLivePoll(): void {
+  if (livePollTimer) clearInterval(livePollTimer);
+  if (nowLineTimer) clearInterval(nowLineTimer);
+  livePollTimer = undefined;
+  nowLineTimer = undefined;
 }
 
 function render(): void {
@@ -290,7 +338,13 @@ function wire(): void {
       if (v === S!.view) return;
       S!.view = v;
       render();
-      if (v === 'live' && S!.liveRows.length === 0) void loadLive();
+      if (v === 'live') {
+        if (S!.liveRows.length === 0) void loadLive();
+        else drawNowLines();
+        startLivePoll();
+      } else {
+        stopLivePoll();
+      }
     }),
   );
   app.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-q]').forEach((el) =>
@@ -313,9 +367,11 @@ function wire(): void {
  * dashboard reads "we have these N presses, here's what they're doing
  * right now" rather than just listing what already exists.
  */
-async function loadLive(): Promise<void> {
-  S!.loading = true;
-  render();
+async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
+  if (!opts.silent) {
+    S!.loading = true;
+    render();
+  }
   const live = currentShift(new Date());
   const [rows, planning] = await Promise.all([
     dalRef.listProduction({ shiftId: live.shiftId }).catch((err) => {
@@ -354,6 +410,39 @@ async function loadLive(): Promise<void> {
   S!.liveRows = out;
   S!.loading = false;
   render();
+  drawNowLines();
+}
+
+/**
+ * Position a half-transparent red vertical line on every Live Status
+ * card's 16-slot timeline at the current wall-clock fraction of the
+ * shift. Mirrors the operator grid's "NOW" indicator so a supervisor
+ * glancing at the cards can immediately see where the press should be
+ * along its 8-hour run.
+ */
+function drawNowLines(): void {
+  if (!S || S.view !== 'live') return;
+  const live = currentShift(new Date());
+  const b = shiftBounds(live.shiftId);
+  if (!b) return;
+  const frac = Math.max(
+    0,
+    Math.min(1, (Date.now() - b.start.getTime()) / (b.end.getTime() - b.start.getTime())),
+  );
+  const pct = (frac * 100).toFixed(2);
+  document.querySelectorAll<HTMLElement>('.trace-card.is-live .trace-timeline').forEach((tl) => {
+    let line = tl.querySelector<HTMLElement>('.trace-now-line');
+    if (!line) {
+      line = document.createElement('div');
+      line.className = 'trace-now-line';
+      tl.appendChild(line);
+    }
+    line.style.left = `${pct}%`;
+    line.title = `Now: ${new Date().toLocaleTimeString('en-AU', {
+      hour: '2-digit',
+      minute: '2-digit',
+    })}`;
+  });
 }
 
 function idlePlaceholder(machineCode: string, shiftId: string): TraceRow {

@@ -118,8 +118,9 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .trace-card-totals b{font-size:18px;color:var(--tx);margin-left:6px;font-weight:800}
 .trace-card-totals .g b{color:var(--gn)}
 .trace-card-totals .r b{color:var(--rd)}
-.trace-timeline{display:grid;grid-template-columns:repeat(16,1fr);gap:2px;margin:6px 0}
+.trace-timeline{display:grid;grid-template-columns:repeat(16,1fr);gap:2px;margin:6px 0;position:relative}
 .trace-slot{height:36px;border:1px solid var(--bd);border-radius:4px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.trace-now-line{position:absolute;top:-2px;bottom:-2px;width:2px;background:rgba(220,38,38,.55);box-shadow:0 0 6px rgba(220,38,38,.5);pointer-events:none;z-index:2;transform:translateX(-1px)}
 .trace-section{margin-top:6px;font-size:13px}
 .trace-section b{display:block;margin-bottom:4px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--mu)}
 .trace-section ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:3px}

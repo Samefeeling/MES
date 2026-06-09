@@ -569,18 +569,6 @@ function buildMeta(): string {
   // and Planning.csv still resolves.
   const partKey = (o?.partNumber ?? '').trim().toUpperCase();
   const die = partKey ? S!.dieColors.get(partKey) : undefined;
-  // Diagnostic: log misses with the looked-up key and a sample of map
-  // keys so we can tell whether the row is missing from the colour list
-  // or the key normalisation drifted.
-  if (S!.selJob && partKey && !die) {
-    console.warn('[pmd] swatch miss', {
-      job: S!.selJob,
-      partKey,
-      mapSize: S!.dieColors.size,
-      hasKey: S!.dieColors.has(partKey),
-      sampleKeys: Array.from(S!.dieColors.keys()).slice(0, 5),
-    });
-  }
   const swatch = die?.hex
     ? `<span class="m-die-swatch" style="background:${die.hex}" title="${escapeHtml(die.name || die.hex)}"></span>`
     : '';

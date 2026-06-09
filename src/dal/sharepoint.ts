@@ -250,6 +250,14 @@ export class SharePointDataLayer implements PmdDataLayer {
    * be resolved by the model". One round-trip to read it cures that.
    */
   private entityTypeCache = new Map<string, string>();
+  /**
+   * Module-lived cache of PMD_ProductDieColor — the list is small (a
+   * few thousand rows) and effectively read-only at runtime, but every
+   * view (Operator / KPI / Trace) was re-fetching it on first render,
+   * which is a 2-3 s round trip against the live tenant. Cache once,
+   * reuse forever; the user can hard-refresh to repopulate.
+   */
+  private dieColorCache: ProductDieColor[] | null = null;
 
   constructor(opts: SharePointOptions | string) {
     const o = typeof opts === 'string' ? { siteUrl: opts } : opts;
@@ -510,10 +518,18 @@ export class SharePointDataLayer implements PmdDataLayer {
   }
 
   async listProductDieColors(): Promise<ProductDieColor[]> {
+    // Cached after the first successful read — the list is small and
+    // read-only at runtime; refetching it on every nav was a 2-3 s
+    // round-trip per view. Operators hard-reload the page to pick up
+    // colour list edits, which is the established workflow anyway.
+    if (this.dieColorCache) return this.dieColorCache;
     const F = this.F.productDieColor;
     try {
       const rows = await this.getAllItems<Record<string, unknown>>(LISTS.productDieColor);
-      if (rows.length === 0) return [];
+      if (rows.length === 0) {
+        this.dieColorCache = [];
+        return this.dieColorCache;
+      }
       // Direct field reads — works when SP kept the typed column names.
       const direct = rows
         .map((r) => ({
@@ -523,27 +539,15 @@ export class SharePointDataLayer implements PmdDataLayer {
         }))
         .filter((c) => c.partNumber && c.hex);
       if (direct.length > 0) {
-        // Echo back a few specific Part #s the user has flagged as
-        // missing from the swatch UI — easier than scanning 1000+ rows
-        // by eye to confirm they actually came back from SP.
-        const probe = ['LMBL00004', 'G08770030', 'CSCH00104'];
-        const probeHits: Record<string, { hex: string; name: string } | 'missing'> = {};
-        const byKey = new Map(direct.map((c) => [c.partNumber.trim().toUpperCase(), c]));
-        for (const p of probe) {
-          const hit = byKey.get(p);
-          probeHits[p] = hit ? { hex: hit.hex, name: hit.name } : 'missing';
-        }
         console.info(
-          '[pmd] PMD_ProductDieColor:',
+          '[pmd] PMD_ProductDieColor cached:',
           direct.length,
           'of',
           rows.length,
-          'rows; first 3:',
-          direct.slice(0, 3),
-          '· probe:',
-          probeHits,
+          'rows',
         );
-        return direct;
+        this.dieColorCache = direct;
+        return this.dieColorCache;
       }
       // SP modern UI sometimes auto-renames new columns to `field_N`.
       // Probe the first row: the hex column is whichever one carries a
@@ -566,17 +570,23 @@ export class SharePointDataLayer implements PmdDataLayer {
         'first row:',
         r0,
       );
-      if (!partKey || !hexKey) return [];
-      return rows
+      if (!partKey || !hexKey) {
+        this.dieColorCache = [];
+        return this.dieColorCache;
+      }
+      const auto = rows
         .map((r) => ({
           partNumber: str(r[partKey]).trim(),
           hex: normaliseHex(str(r[hexKey])),
           name: nameKey ? str(r[nameKey]).trim() : '',
         }))
         .filter((c) => c.partNumber && c.hex);
+      this.dieColorCache = auto;
+      return this.dieColorCache;
     } catch (e) {
       // Tenant without PMD_ProductDieColor → no swatch is fine; the
       // existing keyword-derived colour on KPIs takes over.
+      // Do NOT cache the failure — the next call retries.
       console.warn('[pmd] PMD_ProductDieColor unavailable, swatches disabled:', e);
       return [];
     }
@@ -749,18 +759,18 @@ export class SharePointDataLayer implements PmdDataLayer {
     // Signed-off first so it wins any (rare) overlap with a not-yet-
     // deleted live row.
     for (const h of prodHeaders) ingest(h, true);
-    // Dedup LiveStatus per (machine, job): a machine running the same
-    // order across multiple shifts should collapse to its latest state
-    // (the current shift's row), but two different orders on the same
-    // machine must both stay — they each represent live activity.
-    // Highest SP ID wins as the proxy for "most recently written".
-    const latestLiveByMachineJob = new Map<string, HeaderRow>();
+    // Dedup LiveStatus to one row per machine — the highest SP ID
+    // wins as the proxy for "most recently written" (each iPad's poll
+    // tick re-upserts the row, but stale snapshots from an earlier
+    // shift / job that never got cleaned up linger in PMD_LiveStatus
+    // and would otherwise overlay the current activity). Result: at
+    // most 9 cards in the Live Status view, one per press.
+    const latestLiveByMachine = new Map<string, HeaderRow>();
     for (const h of liveHeaders) {
-      const k = `${h.machineCode}|${h.jobNumber}`;
-      const prev = latestLiveByMachineJob.get(k);
-      if (!prev || h.id > prev.id) latestLiveByMachineJob.set(k, h);
+      const prev = latestLiveByMachine.get(h.machineCode);
+      if (!prev || h.id > prev.id) latestLiveByMachine.set(h.machineCode, h);
     }
-    for (const h of latestLiveByMachineJob.values()) ingest(h, false);
+    for (const h of latestLiveByMachine.values()) ingest(h, false);
     return cached;
   }
 
