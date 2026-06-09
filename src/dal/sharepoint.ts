@@ -530,6 +530,26 @@ export class SharePointDataLayer implements PmdDataLayer {
         this.dieColorCache = [];
         return this.dieColorCache;
       }
+      // Decisive diagnostic: dump the RAW SP row(s) for the Part #s the
+      // user reports as missing a swatch. This reveals the actual column
+      // internal names + values SP returned for that exact part, so we
+      // can tell whether PartNum/ColorHex are empty, mis-named, or in a
+      // different column than the field map expects.
+      for (const probe of ['LMBL00004', 'G08770030']) {
+        const raw = rows.find((r) =>
+          Object.values(r).some((v) => str(v).trim().toUpperCase() === probe),
+        );
+        console.info(
+          `[pmd] ProductDieColor RAW row for ${probe}:`,
+          raw
+            ? Object.fromEntries(
+                Object.entries(raw).filter(
+                  ([k]) => !k.startsWith('__') && !/^odata|^Metadata/i.test(k),
+                ),
+              )
+            : 'NOT FOUND in any column',
+        );
+      }
       // Direct field reads — works when SP kept the typed column names.
       const direct = rows
         .map((r) => ({
@@ -759,18 +779,11 @@ export class SharePointDataLayer implements PmdDataLayer {
     // Signed-off first so it wins any (rare) overlap with a not-yet-
     // deleted live row.
     for (const h of prodHeaders) ingest(h, true);
-    // Dedup LiveStatus to one row per machine — the highest SP ID
-    // wins as the proxy for "most recently written" (each iPad's poll
-    // tick re-upserts the row, but stale snapshots from an earlier
-    // shift / job that never got cleaned up linger in PMD_LiveStatus
-    // and would otherwise overlay the current activity). Result: at
-    // most 9 cards in the Live Status view, one per press.
-    const latestLiveByMachine = new Map<string, HeaderRow>();
-    for (const h of liveHeaders) {
-      const prev = latestLiveByMachine.get(h.machineCode);
-      if (!prev || h.id > prev.id) latestLiveByMachine.set(h.machineCode, h);
-    }
-    for (const h of latestLiveByMachine.values()) ingest(h, false);
+    // NOTE: no per-machine dedup here — listProduction must return every
+    // (machine, shift, job) tuple so the Operator and KPI views see all
+    // jobs a press ran. The "one card per machine, latest only" collapse
+    // for the Live Status board lives in trace.ts loadLive() instead.
+    for (const h of liveHeaders) ingest(h, false);
     return cached;
   }
 

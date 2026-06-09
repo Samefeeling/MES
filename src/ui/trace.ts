@@ -113,6 +113,34 @@ function currentTimelineCode(timeline: string, shiftId: string): string {
   return '';
 }
 
+/** Index of the last filled (non-'·') slot in a 16-char timeline, or
+ *  -1 when the row has logged nothing yet. Proxy for "how recently did
+ *  this job have activity" when collapsing a machine's several jobs to
+ *  one Live Status card. */
+function lastFilledSlot(timeline: string): number {
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const ch = timeline[i];
+    if (ch && ch !== '·') return i;
+  }
+  return -1;
+}
+
+/**
+ * Pick the single most-current TraceRow for a machine from its per-job
+ * rows. The row whose timeline reaches furthest along the shift is the
+ * one the press is running now (or ran most recently); ties break on
+ * the higher count (more pieces = the substantive job, not a stray
+ * mis-tap). Used by the Live Status board to show one card per press.
+ */
+function latestRow(rows: TraceRow[]): TraceRow {
+  return rows.reduce((best, r) => {
+    const bSlot = lastFilledSlot(best.timeline);
+    const rSlot = lastFilledSlot(r.timeline);
+    if (rSlot !== bSlot) return rSlot > bSlot ? r : best;
+    return (r.countEnd ?? 0) > (best.countEnd ?? 0) ? r : best;
+  });
+}
+
 function activityFor(r: TraceRow): Activity {
   if (r.idle) return 'idle';
   const code = currentTimelineCode(r.timeline, r.shiftId);
@@ -405,7 +433,13 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
       out.push(idlePlaceholder(m.machineCode, live.shiftId));
       continue;
     }
-    out.push(...buildTraceRowsFor(recs, planByJob));
+    // One card per machine: a press can carry several jobs in the same
+    // shift (a job finished, the next started). The Live Status board
+    // shows ONLY what the press is doing now / most recently — collapse
+    // the per-job rows to the single most-current one. Without this,
+    // 1600T showed three cards (one per job logged this shift).
+    const machineRows = buildTraceRowsFor(recs, planByJob);
+    out.push(latestRow(machineRows));
   }
   S!.liveRows = out;
   S!.loading = false;
