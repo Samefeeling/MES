@@ -276,6 +276,7 @@ export function seedProduction(now: Date, planning: PlanningOrder[]): Production
           machineCode,
           shiftId,
           jobNumber: order.jobNumber,
+          partNumber: order.partNumber,
           slotIndex: slot,
           statusCode: status,
           countStart: onSlot0 ? 0 : null,

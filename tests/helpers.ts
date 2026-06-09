@@ -11,6 +11,7 @@ export function rec(
     id: 0,
     machineCode: '125T',
     shiftId: '2026-05-15-Day',
+    partNumber: '',
     countStart: null,
     countEnd: null,
     rejectCount: 0,

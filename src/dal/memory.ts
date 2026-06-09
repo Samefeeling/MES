@@ -170,6 +170,7 @@ export class MemoryDataLayer implements PmdDataLayer {
         machineCode,
         shiftId,
         jobNumber: '',
+        partNumber: '',
         slotIndex: 0,
         statusCode: '',
         countStart: null,

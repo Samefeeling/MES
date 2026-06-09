@@ -112,11 +112,16 @@ function sid(): string {
 
 function blankRecord(slot: number): ProductionRecord {
   const iso = new Date().toISOString();
+  // Resolve the planning order for the selected job once so the slot
+  // carries JobHead_PartNum — PMD_Production / PMD_LiveStatus persist
+  // the colour-lookup key per row instead of relying on a planning join.
+  const order = S!.planning.find((o) => o.jobNumber === S!.selJob);
   return {
     id: 0,
     machineCode: S!.mc,
     shiftId: sid(),
     jobNumber: S!.selJob,
+    partNumber: order?.partNumber ?? '',
     slotIndex: slot,
     statusCode: '',
     countStart: null,

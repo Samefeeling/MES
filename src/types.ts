@@ -86,6 +86,10 @@ export interface ProductionRecord {
   machineCode: string;
   shiftId: string; // YYYY-MM-DD-<Day|Afternoon|Night>
   jobNumber: string;
+  /** Epicor Part # for the job — denormalised onto every slot so the
+   *  KPIs / colour swatch / supervisor list views can read PMD_Production
+   *  without joining back to PMD_Planning (orders roll off over time). */
+  partNumber: string;
   slotIndex: number; // 0..15
   statusCode: StatusCode | '';
   countStart: number | null;

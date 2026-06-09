@@ -128,7 +128,10 @@ const DEFAULT_FIELDS = {
     timeline: '',
     jobNumber: 'JobNumber',
     // Cached so the SP list is readable without joining to PMD_Planning —
-    // requested by the supervisor reviewing signed-off shifts.
+    // requested by the supervisor reviewing signed-off shifts. Part # is
+    // also denormalised so KPIs can resolve PMD_ProductDieColor by
+    // record.partNumber directly.
+    partNum: 'JobHead_PartNum',
     partDesc: 'JobHead_PartDescription',
     countStart: 'CountStart',
     countEnd: 'CountEnd',
@@ -510,117 +513,13 @@ export class SharePointDataLayer implements PmdDataLayer {
     const F = this.F.productDieColor;
     try {
       const rows = await this.getAllItems<Record<string, unknown>>(LISTS.productDieColor);
-      if (rows.length === 0) return [];
-
-      // Direct path: clean list shape (PartNum / ColorHex / ActualColor
-      // with matching internal names).
-      const direct = rows
+      return rows
         .map((r) => ({
           partNumber: str(r[F.partNum]).trim(),
           hex: normaliseHex(str(r[F.hex])),
           name: str(r[F.name]).trim(),
         }))
         .filter((c) => c.partNumber && c.hex);
-      if (direct.length > 0) {
-        console.info(
-          '[pmd] PMD_ProductDieColor mapped',
-          direct.length,
-          'of',
-          rows.length,
-          'rows (direct)',
-          direct.slice(0, 3),
-        );
-        return direct;
-      }
-
-      // Fallback: SP auto-named columns (field_1, field_2, …) — detect
-      // by value shape. Same logic we used the first time around, kept
-      // here so a future list re-import that loses the configured names
-      // still produces swatches.
-      const isHex = (v: unknown): boolean =>
-        /^#?[0-9a-fA-F]{6}$|^#?[0-9a-fA-F]{3}$/.test(str(v).trim());
-      const sysKeys = new Set([
-        '__metadata',
-        'FirstUniqueAncestorSecurableObject',
-        'RoleAssignments',
-        'AttachmentFiles',
-        'ContentType',
-        'GetDlpPolicyTip',
-        'FieldValuesAsHtml',
-        'FieldValuesAsText',
-        'FieldValuesForEdit',
-        'File',
-        'Folder',
-        'LikedByInformation',
-        'ParentList',
-        'Properties',
-        'Versions',
-        'FileSystemObjectType',
-        'Id',
-        'ServerRedirectedEmbedUri',
-        'ServerRedirectedEmbedUrl',
-        'ContentTypeId',
-        'ComplianceAssetId',
-        'ID',
-        'Modified',
-        'Created',
-        'AuthorId',
-        'EditorId',
-        'Attachments',
-        'GUID',
-        'OData__UIVersionString',
-        'OData__ColorTag',
-      ]);
-      const userKeys = Object.keys(rows[0]).filter(
-        (k) => !sysKeys.has(k) && !k.startsWith('OData__'),
-      );
-      const probe = rows.slice(0, Math.min(rows.length, 50));
-      let hexKey: string | undefined;
-      for (const k of userKeys) {
-        if (probe.some((r) => isHex(r[k]))) {
-          hexKey = k;
-          break;
-        }
-      }
-      let partKey: string | undefined;
-      for (const c of ['Title', F.partNum, 'PartNum', ...userKeys]) {
-        if (c === hexKey) continue;
-        if (probe.some((r) => str(r[c]).trim().length > 0 && !isHex(r[c]))) {
-          partKey = c;
-          break;
-        }
-      }
-      let nameKey: string | undefined;
-      for (const k of userKeys) {
-        if (k === partKey || k === hexKey) continue;
-        if (probe.some((r) => str(r[k]).trim().length > 0 && !isHex(r[k]))) {
-          nameKey = k;
-          break;
-        }
-      }
-      console.warn(
-        '[pmd] PMD_ProductDieColor: direct field reads matched 0 rows; auto-detected',
-        { partKey, hexKey, nameKey, userKeys },
-        'sample row:',
-        rows[0],
-      );
-      if (!partKey || !hexKey) return [];
-      const auto = rows
-        .map((r) => ({
-          partNumber: str(r[partKey!]).trim(),
-          hex: normaliseHex(str(r[hexKey!])),
-          name: nameKey ? str(r[nameKey]).trim() : '',
-        }))
-        .filter((c) => c.partNumber && c.hex);
-      console.info(
-        '[pmd] PMD_ProductDieColor mapped',
-        auto.length,
-        'of',
-        rows.length,
-        'rows (auto)',
-        auto.slice(0, 3),
-      );
-      return auto;
     } catch (e) {
       // Tenant without PMD_ProductDieColor → no swatch is fine; the
       // existing keyword-derived colour on KPIs takes over.
@@ -829,6 +728,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       date: dateOnly(r[F.date]),
       shift: str(r[F.shift]),
       jobNumber: str(r[F.jobNumber]),
+      partNumber: F.partNum ? str(r[F.partNum]).trim() : '',
       // The 16-char status timeline lives in the MachineCode column on
       // this tenant; prefer it over the (empty / fallback) F.timeline
       // entry so listProduction can rebuild per-slot status without a
@@ -956,6 +856,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         machineCode: h.machineCode,
         shiftId,
         jobNumber: h.jobNumber,
+        partNumber: h.partNumber,
         slotIndex: i,
         statusCode: ch as ProductionRecord['statusCode'],
         countStart: i === 0 ? h.countStart : null,
@@ -982,6 +883,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         machineCode: h.machineCode,
         shiftId,
         jobNumber: h.jobNumber,
+        partNumber: h.partNumber,
         slotIndex: 0,
         statusCode: '',
         countStart: h.countStart,
@@ -1092,6 +994,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           date,
           shift,
           jobNumber: job,
+          partNumber: partNumOf(job),
           partDescription: partDescOf(job),
           timeline: agg.timeline,
           countStart: agg.countStart,
@@ -1157,6 +1060,12 @@ export class SharePointDataLayer implements PmdDataLayer {
    */
   async pushLiveSnapshot(): Promise<void> {
     if (this.editCache.size === 0) return;
+    // One planning fetch so every live row can carry JobHead_PartNum —
+    // KPIs and the colour swatch resolve PMD_ProductDieColor on the
+    // record's partNumber, not by joining back to planning.
+    const planning = await this.listPlanning({}).catch(() => [] as PlanningOrder[]);
+    const partNumByJob = new Map<string, string>();
+    for (const o of planning) partNumByJob.set(o.jobNumber, o.partNumber);
     const tasks: Promise<void>[] = [];
     for (const [key, slots] of this.editCache) {
       if (slots.length === 0) continue;
@@ -1179,6 +1088,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           date,
           shift,
           jobNumber,
+          partNumber: partNumByJob.get(jobNumber) ?? '',
           partDescription: '',
           timeline: agg.timeline,
           countStart: agg.countStart,
@@ -1284,6 +1194,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     // timeline string — see DEFAULT_FIELDS.production for context.
     if (F.machineCodeAlt) body[F.machineCodeAlt] = h.timeline;
     if (F.timeline) body[F.timeline] = h.timeline;
+    if (F.partNum) body[F.partNum] = h.partNumber;
     if (F.partDesc) body[F.partDesc] = h.partDescription;
     if (F.downTime) body[F.downTime] = h.downTime;
     if (F.runTime) body[F.runTime] = h.runTime;
@@ -1798,6 +1709,7 @@ interface HeaderRow {
   date: string;
   shift: string;
   jobNumber: string;
+  partNumber: string;
   timeline: string;
   countStart: number | null;
   countEnd: number | null;
@@ -1814,6 +1726,7 @@ interface HeaderInput {
   date: string;
   shift: string;
   jobNumber: string;
+  partNumber: string;
   partDescription: string;
   timeline: string;
   countStart: number | null;

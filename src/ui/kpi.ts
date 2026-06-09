@@ -333,8 +333,10 @@ async function compute(now = new Date()): Promise<void> {
   const dieColors = new Map(
     dieColorList.map((c) => [c.partNumber, { hex: c.hex, name: c.name }]),
   );
-  // Part # per Job for the die-colour lookup (the keyword-scan
-  // fallback still uses the description).
+  // Part # per Job — populated below from every PMD_Production record
+  // (which now carries JobHead_PartNum), falling back to planning when
+  // the job has no production rows yet. Records win because planning
+  // orders roll off Epicor while signed-off production stays.
   const partNumByJob = new Map<string, string>();
   for (const o of planning) partNumByJob.set(o.jobNumber, o.partNumber);
 
@@ -347,6 +349,13 @@ async function compute(now = new Date()): Promise<void> {
   const charts = new Map<string, ChartBucket>();
   const rows: KpiRow[] = S!.machines.map((m, i) => {
     const all = perMachineProd[i];
+    // PMD_Production / PMD_LiveStatus now carry JobHead_PartNum on
+    // every row. Use it as the authoritative source — overrides the
+    // planning fallback so a job whose order has rolled off Epicor
+    // still resolves a swatch.
+    for (const r of all) {
+      if (r.partNumber) partNumByJob.set(r.jobNumber, r.partNumber);
+    }
     // Single pass per machine: partition into byShift × byDateBucket, then
     // aggregate each slice once at the end. Avoids re-filtering `all` 3×
     // and re-walking each shift slice to bucket by date.

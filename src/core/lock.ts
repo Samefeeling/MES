@@ -59,6 +59,7 @@ export function applyLock(
       machineCode,
       shiftId,
       jobNumber: '',
+      partNumber: '',
       slotIndex: 0,
       statusCode: '',
       countStart: null,
