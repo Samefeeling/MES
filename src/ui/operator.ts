@@ -563,16 +563,24 @@ function buildMeta(): string {
   // path) rather than tucked away in the right side panel.
   const orderQty = o && !o.isDieChange ? o.jobRequired : '—';
   // Die / paint colour swatch from PMD_ProductDieColor, looked up by
-  // the selected job's Part #. Fall back to partNumber carried on the
-  // production records themselves (denormalised at write time) so the
-  // swatch still resolves for historical jobs whose planning entry has
-  // been removed or never carried a partNumber.
-  const planPart = o?.partNumber ?? '';
-  const prodPart = !planPart && S!.selJob
-    ? (S!.prod.find((r) => r.jobNumber === S!.selJob && r.partNumber)?.partNumber ?? '')
-    : '';
-  const dieKey = (planPart || prodPart).trim().toUpperCase();
-  const die = dieKey ? S!.dieColors.get(dieKey) : undefined;
+  // the selected job's Part #. Planning.csv always carries
+  // JobHead_PartNum, so the key comes from there directly. Upper-trim
+  // both sides so any case / whitespace drift between PMD_ProductDieColor
+  // and Planning.csv still resolves.
+  const partKey = (o?.partNumber ?? '').trim().toUpperCase();
+  const die = partKey ? S!.dieColors.get(partKey) : undefined;
+  // Diagnostic: log misses with the looked-up key and a sample of map
+  // keys so we can tell whether the row is missing from the colour list
+  // or the key normalisation drifted.
+  if (S!.selJob && partKey && !die) {
+    console.warn('[pmd] swatch miss', {
+      job: S!.selJob,
+      partKey,
+      mapSize: S!.dieColors.size,
+      hasKey: S!.dieColors.has(partKey),
+      sampleKeys: Array.from(S!.dieColors.keys()).slice(0, 5),
+    });
+  }
   const swatch = die?.hex
     ? `<span class="m-die-swatch" style="background:${die.hex}" title="${escapeHtml(die.name || die.hex)}"></span>`
     : '';
@@ -580,7 +588,7 @@ function buildMeta(): string {
     <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
     <label class="m-job">Job# ${jobField}</label>
     <label class="m-orderqty">Order Qty <input type="text" disabled value="${escapeHtml(String(orderQty))}"></label>
-    <label class="m-part">Part# <input type="text" disabled value="${escapeHtml(planPart || prodPart)}"></label>
+    <label class="m-part">Part# <input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
     <label class="m-desc">Product Description <span class="m-desc-row">${swatch}<input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></span></label>
     <label class="m-op">Operator ${opField}</label>
     <label class="m-sup">Supervisor ${supField}</label>
@@ -1188,7 +1196,7 @@ function openSaveSignoffModal(): void {
     <div class="signoff-summary">
       <div><span>Operator</span><b>${escapeHtml(S!.selOperator || '—')}</b></div>
       <div><span>Supervisor</span><b>${escapeHtml(S!.selSupervisor)}</b></div>
-      <div><span>Part</span><b>${escapeHtml(o?.partNumber || S!.prod.find((r) => r.jobNumber === S!.selJob && r.partNumber)?.partNumber || '—')}</b></div>
+      <div><span>Part</span><b>${escapeHtml(o?.partNumber ?? '—')}</b></div>
       <div><span>Required</span><b>${o && !o.isDieChange ? o.jobRequired : '—'}</b></div>
       <div><span>Count Start → End</span><b>${cs} → ${ce}</b></div>
       <div><span>Good (this shift)</span><b class="g">${good}</b></div>

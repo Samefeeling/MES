@@ -523,6 +523,16 @@ export class SharePointDataLayer implements PmdDataLayer {
         }))
         .filter((c) => c.partNumber && c.hex);
       if (direct.length > 0) {
+        // Echo back a few specific Part #s the user has flagged as
+        // missing from the swatch UI — easier than scanning 1000+ rows
+        // by eye to confirm they actually came back from SP.
+        const probe = ['LMBL00004', 'G08770030', 'CSCH00104'];
+        const probeHits: Record<string, { hex: string; name: string } | 'missing'> = {};
+        const byKey = new Map(direct.map((c) => [c.partNumber.trim().toUpperCase(), c]));
+        for (const p of probe) {
+          const hit = byKey.get(p);
+          probeHits[p] = hit ? { hex: hit.hex, name: hit.name } : 'missing';
+        }
         console.info(
           '[pmd] PMD_ProductDieColor:',
           direct.length,
@@ -530,6 +540,8 @@ export class SharePointDataLayer implements PmdDataLayer {
           rows.length,
           'rows; first 3:',
           direct.slice(0, 3),
+          '· probe:',
+          probeHits,
         );
         return direct;
       }
@@ -737,16 +749,18 @@ export class SharePointDataLayer implements PmdDataLayer {
     // Signed-off first so it wins any (rare) overlap with a not-yet-
     // deleted live row.
     for (const h of prodHeaders) ingest(h, true);
-    // Dedup LiveStatus: when the same machine has multiple rows on the
-    // same day (stale snapshots from earlier shifts/jobs that weren't
-    // cleaned up, or multi-job shifts), keep only the row with the
-    // highest SP ID per machine — that's the latest activity.
-    const latestLiveByMachine = new Map<string, HeaderRow>();
+    // Dedup LiveStatus per (machine, job): a machine running the same
+    // order across multiple shifts should collapse to its latest state
+    // (the current shift's row), but two different orders on the same
+    // machine must both stay — they each represent live activity.
+    // Highest SP ID wins as the proxy for "most recently written".
+    const latestLiveByMachineJob = new Map<string, HeaderRow>();
     for (const h of liveHeaders) {
-      const prev = latestLiveByMachine.get(h.machineCode);
-      if (!prev || h.id > prev.id) latestLiveByMachine.set(h.machineCode, h);
+      const k = `${h.machineCode}|${h.jobNumber}`;
+      const prev = latestLiveByMachineJob.get(k);
+      if (!prev || h.id > prev.id) latestLiveByMachineJob.set(k, h);
     }
-    for (const h of latestLiveByMachine.values()) ingest(h, false);
+    for (const h of latestLiveByMachineJob.values()) ingest(h, false);
     return cached;
   }
 
