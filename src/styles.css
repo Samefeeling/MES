@@ -335,6 +335,11 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    because they inherited browser default padding while shift/job had
    explicit 6px). */
 .kpi-table tr{height:30px}
+/* `.summary-table tbody tr` sets min-height:56px and min-height DOES
+   apply to table rows (used row height = max(height, min-height,
+   content)) — so `height:30px` above was silently losing and every
+   row rendered at 56px+. Zero it out inside the KPI table. */
+.kpi-table tbody tr{min-height:0}
 .kpi-table th,.kpi-table td{height:30px;line-height:18px;padding:0 8px;vertical-align:middle;box-sizing:border-box;overflow:hidden}
 /* `.summary-table .muted` (0,2,0) sets padding:30px + center, which
    out-specifies `.kpi-table td` (0,1,1) and blew muted Color / Handover
