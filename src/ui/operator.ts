@@ -71,14 +71,19 @@ interface PersistedView {
   viewDateIso: string;
   shiftCode: ShiftCode;
   selJob: string;
+  selOperator: string;
+  selSupervisor: string;
 }
-function loadView(): PersistedView | null {
+export function loadSavedOperatorView(): PersistedView | null {
   try {
     const raw = sessionStorage.getItem(UI_KEY);
     return raw ? (JSON.parse(raw) as PersistedView) : null;
   } catch {
     return null;
   }
+}
+function loadView(): PersistedView | null {
+  return loadSavedOperatorView();
 }
 function saveView(): void {
   if (!S) return;
@@ -90,6 +95,8 @@ function saveView(): void {
         viewDateIso: S.viewDate.toISOString(),
         shiftCode: S.shiftCode,
         selJob: S.selJob,
+        selOperator: S.selOperator,
+        selSupervisor: S.selSupervisor,
       }),
     );
   } catch {
@@ -1073,12 +1080,14 @@ function onMetaChange(el: HTMLElement): void {
       break;
     case 'operator':
       S!.selOperator = val;
+      saveView();
       void upsertSlot(0, (r) => {
         r.operator = val;
       });
       break;
     case 'supervisor':
       S!.selSupervisor = val;
+      saveView();
       void upsertSlot(0, (r) => {
         r.supervisor = val;
       });
@@ -1534,13 +1543,16 @@ export async function renderOperator(
 
   // Resume the last per-tab view if the URL machine matches it. The route's
   // machineCode wins (operator deep-linked to a specific press), but date
-  // / shift / selJob come back from sessionStorage so an inadvertent tap on
-  // KPIs and back doesn't reset their context.
+  // / shift / selJob / selected operator+supervisor come back from
+  // sessionStorage so an inadvertent tap on KPIs and back doesn't reset
+  // their context.
   const saved = loadView();
   const startMc = machineCode || saved?.mc || machines[0]?.machineCode || '';
   let viewDate = vd;
   let shiftCode = cs.code;
   let selJob = '';
+  let selOperator = '';
+  let selSupervisor = '';
   if (saved && saved.mc === startMc) {
     const d = new Date(saved.viewDateIso);
     if (!isNaN(d.getTime())) {
@@ -1549,6 +1561,8 @@ export async function renderOperator(
     }
     if (saved.shiftCode) shiftCode = saved.shiftCode;
     if (saved.selJob) selJob = saved.selJob;
+    if (saved.selOperator) selOperator = saved.selOperator;
+    if (saved.selSupervisor) selSupervisor = saved.selSupervisor;
   }
 
   S = {
@@ -1562,8 +1576,8 @@ export async function renderOperator(
     operators: operators.map((o) => o.operatorName),
     supervisors: supervisors.map((s) => s.operatorName),
     rejCats: rcats,
-    selOperator: '',
-    selSupervisor: '',
+    selOperator,
+    selSupervisor,
     viewLevel: 1,
     jobTotalGood: 0,
     selSet: new Set<number>(),

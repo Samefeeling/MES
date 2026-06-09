@@ -1,5 +1,5 @@
 import { createDataLayer, type PmdDataLayer } from './dal';
-import { renderOperator, operatorPollTick } from './ui/operator';
+import { renderOperator, operatorPollTick, loadSavedOperatorView } from './ui/operator';
 import { renderTrace } from './ui/trace';
 import { renderKpi } from './ui/kpi';
 import { closeModal, openModal } from './ui/modal';
@@ -155,8 +155,15 @@ async function route(): Promise<void> {
     } else {
       let mc = r.machineCode ?? '';
       if (!mc) {
+        // Operator nav link is bare `#/`. Prefer the machine the user
+        // was on last (from sessionStorage) so a KPI→Operator round-trip
+        // doesn't drop them on machines[0]. Falls back to the first
+        // machine when there's no saved state (fresh tab).
+        const saved = loadSavedOperatorView();
         const machines = await dal.listMachines();
-        mc = machines[0]?.machineCode ?? '';
+        const savedStillValid =
+          saved?.mc && machines.some((m) => m.machineCode === saved.mc);
+        mc = savedStillValid ? saved!.mc : machines[0]?.machineCode ?? '';
         if (mc) {
           window.location.hash = `#/op/${encodeURIComponent(mc)}`;
           return; // hashchange re-enters route()

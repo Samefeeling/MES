@@ -513,11 +513,46 @@ export class SharePointDataLayer implements PmdDataLayer {
     const F = this.F.productDieColor;
     try {
       const rows = await this.getAllItems<Record<string, unknown>>(LISTS.productDieColor);
-      return rows
+      if (rows.length === 0) return [];
+      // Direct field reads — works when SP kept the typed column names.
+      const direct = rows
         .map((r) => ({
           partNumber: str(r[F.partNum]).trim(),
           hex: normaliseHex(str(r[F.hex])),
           name: str(r[F.name]).trim(),
+        }))
+        .filter((c) => c.partNumber && c.hex);
+      if (direct.length > 0) {
+        console.info('[pmd] PMD_ProductDieColor:', direct.length, 'of', rows.length, 'rows');
+        return direct;
+      }
+      // SP modern UI sometimes auto-renames new columns to `field_N`.
+      // Probe the first row: the hex column is whichever one carries a
+      // #RRGGBB value; Title is the part number; the remaining text
+      // field is the colour name.
+      const r0 = rows[0];
+      const isHex = (v: unknown) => /^#?[0-9a-fA-F]{6}$/.test(str(v).trim());
+      const hexKey = Object.keys(r0).find((k) => isHex(r0[k]));
+      const partKey = str(r0.Title).trim() ? 'Title' : Object.keys(r0).find((k) => k !== hexKey && /^[A-Za-z0-9_-]+$/.test(str(r0[k])));
+      const nameKey = Object.keys(r0).find(
+        (k) =>
+          k !== hexKey &&
+          k !== partKey &&
+          /^field_\d|Title|Name|Color/.test(k) &&
+          str(r0[k]).trim().length > 0,
+      );
+      console.warn(
+        '[pmd] PMD_ProductDieColor direct read found 0 mappings; auto-detected',
+        { partKey, hexKey, nameKey },
+        'first row:',
+        r0,
+      );
+      if (!partKey || !hexKey) return [];
+      return rows
+        .map((r) => ({
+          partNumber: str(r[partKey]).trim(),
+          hex: normaliseHex(str(r[hexKey])),
+          name: nameKey ? str(r[nameKey]).trim() : '',
         }))
         .filter((c) => c.partNumber && c.hex);
     } catch (e) {
