@@ -123,7 +123,10 @@ function colorForJob(
   desc: string,
   dieColors: Map<string, { hex: string; name: string }>,
 ): ColorTag {
-  const direct = dieColors.get(partNumber);
+  // Lookup is keyed by upper-trim Part # so case / whitespace drift
+  // between PMD_ProductDieColor and the production / planning sources
+  // can't drop the match.
+  const direct = partNumber ? dieColors.get(partNumber.trim().toUpperCase()) : undefined;
   if (direct?.hex) {
     return { name: direct.name || direct.hex, hex: direct.hex, neutral: false };
   }
@@ -331,7 +334,10 @@ async function compute(now = new Date()): Promise<void> {
       : Promise.resolve([]),
   ]);
   const dieColors = new Map(
-    dieColorList.map((c) => [c.partNumber, { hex: c.hex, name: c.name }]),
+    dieColorList.map((c) => [
+      c.partNumber.trim().toUpperCase(),
+      { hex: c.hex, name: c.name },
+    ]),
   );
   // Part # per Job — populated below from every PMD_Production record
   // (which now carries JobHead_PartNum), falling back to planning when

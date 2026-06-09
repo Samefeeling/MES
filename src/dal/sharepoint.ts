@@ -523,7 +523,14 @@ export class SharePointDataLayer implements PmdDataLayer {
         }))
         .filter((c) => c.partNumber && c.hex);
       if (direct.length > 0) {
-        console.info('[pmd] PMD_ProductDieColor:', direct.length, 'of', rows.length, 'rows');
+        console.info(
+          '[pmd] PMD_ProductDieColor:',
+          direct.length,
+          'of',
+          rows.length,
+          'rows; first 3:',
+          direct.slice(0, 3),
+        );
         return direct;
       }
       // SP modern UI sometimes auto-renames new columns to `field_N`.
@@ -1240,6 +1247,11 @@ export class SharePointDataLayer implements PmdDataLayer {
       const good = cs != null && ce != null ? Math.max(0, ce - cs - h.reject) : 0;
       body[F.totalGood] = good;
     }
+    // PMD_LiveStatus was rebuilt by the user to mirror PMD_Production's
+    // schema, but they may not have added every column yet (e.g.
+    // JobHead_PartNum). Strip any fields previously rejected by SP for
+    // this list so the rest of the row still lands.
+    this.stripRejectedFields(list, body);
     // Find existing by composite key; MERGE if found, else POST. Use a ±1d
     // window so legacy rows (written with local-start UTC) are MERGE'd in
     // place rather than ending up as duplicates next to the new noon-UTC row.
@@ -1249,13 +1261,56 @@ export class SharePointDataLayer implements PmdDataLayer {
         `${F.machine} eq '${h.machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${h.shift}' and ${F.jobNumber} eq '${h.jobNumber}'`,
       );
     const existing = await this.getAllItems<Record<string, unknown>>(list, qs);
-    if (existing.length > 0) {
-      const id =
-        (existing[0] as { ID?: number; Id?: number }).ID ??
-        (existing[0] as { ID?: number; Id?: number }).Id;
-      await this.post(`${this.listUrl(list)}/items(${id})`, body, '*');
-    } else {
-      await this.post(`${this.listUrl(list)}/items`, body);
+    const target =
+      existing.length > 0
+        ? `${this.listUrl(list)}/items(${(existing[0] as { ID?: number; Id?: number }).ID ?? (existing[0] as { ID?: number; Id?: number }).Id})`
+        : `${this.listUrl(list)}/items`;
+    const ifMatch = existing.length > 0 ? '*' : undefined;
+    await this.postWithFieldRetry(list, target, body, ifMatch);
+  }
+
+  /** Per-list cache of column internal names that SP has already
+   *  rejected with "property X does not exist". upsertHeaderInto strips
+   *  these before posting so a missing column on the broker list
+   *  doesn't doom every snapshot. */
+  private rejectedFields = new Map<string, Set<string>>();
+
+  private stripRejectedFields(list: string, body: Record<string, unknown>): void {
+    const banned = this.rejectedFields.get(list);
+    if (!banned) return;
+    for (const k of banned) delete body[k];
+  }
+
+  /** POST that retries once after a "property X does not exist" error,
+   *  remembering the offending column so future writes to this list
+   *  skip it. The first failed write surfaces a console.warn so the
+   *  operator knows which SP column needs adding. */
+  private async postWithFieldRetry(
+    list: string,
+    url: string,
+    body: Record<string, unknown>,
+    ifMatch?: string,
+  ): Promise<void> {
+    try {
+      await this.post(url, body, ifMatch);
+    } catch (e) {
+      const msg = (e as Error).message || '';
+      const m = /property\s+'?([A-Za-z0-9_]+)'?\s+does not exist/i.exec(msg);
+      if (!m) throw e;
+      const field = m[1];
+      const banned = this.rejectedFields.get(list) ?? new Set<string>();
+      banned.add(field);
+      this.rejectedFields.set(list, banned);
+      console.warn(
+        '[pmd] SP rejected column',
+        field,
+        'on',
+        list,
+        '— stripping it from future writes. Add the column in SharePoint to persist this value.',
+      );
+      const retry = { ...body };
+      delete retry[field];
+      await this.post(url, retry, ifMatch);
     }
   }
 

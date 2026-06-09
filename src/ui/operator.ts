@@ -563,9 +563,12 @@ function buildMeta(): string {
   // path) rather than tucked away in the right side panel.
   const orderQty = o && !o.isDieChange ? o.jobRequired : '—';
   // Die / paint colour swatch from PMD_ProductDieColor, looked up by
-  // the selected job's Part #. Nothing rendered when the lookup misses
+  // the selected job's Part #. Normalise to upper-trim on both sides so
+  // a stray case / whitespace mismatch between Planning.csv and the
+  // colour list still resolves. Nothing rendered when the lookup misses
   // so the layout stays the same for products with no colour record.
-  const die = o?.partNumber ? S!.dieColors.get(o.partNumber) : undefined;
+  const dieKey = o?.partNumber ? o.partNumber.trim().toUpperCase() : '';
+  const die = dieKey ? S!.dieColors.get(dieKey) : undefined;
   const swatch = die?.hex
     ? `<span class="m-die-swatch" style="background:${die.hex}" title="${escapeHtml(die.name || die.hex)}"></span>`
     : '';
@@ -1076,6 +1079,7 @@ function onMetaChange(el: HTMLElement): void {
       break;
     case 'job':
       S!.selJob = val;
+      saveView();
       render();
       break;
     case 'operator':
@@ -1534,8 +1538,14 @@ export async function renderOperator(
     dal.listRejectCategories(),
     dal.listProductDieColors ? dal.listProductDieColors() : Promise.resolve([]),
   ]);
+  // Key by upper-trimmed Part # so the swatch lookup is tolerant of
+  // case / whitespace drift between PMD_ProductDieColor and
+  // Planning.csv's JobHead_PartNum.
   const dieColors = new Map(
-    dieColorList.map((c) => [c.partNumber, { hex: c.hex, name: c.name }]),
+    dieColorList.map((c) => [
+      c.partNumber.trim().toUpperCase(),
+      { hex: c.hex, name: c.name },
+    ]),
   );
   const cs = currentShift(now);
   const vd = new Date(now);
