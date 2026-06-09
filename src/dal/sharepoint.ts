@@ -186,13 +186,14 @@ const DEFAULT_FIELDS = {
     likelyOwner: 'LikelyOwner',
   },
   productDieColor: {
-    // PartNum is the natural key, matching Planning.csv's
-    // JobHead_PartNum (= PlanningOrder.partNumber). ColorHex stores
-    // "#RRGGBB". ColorName is the friendly label (e.g. "Navy") —
-    // optional; the tooltip falls back to the hex itself if blank.
+    // Per-Part # die / paint colour. PartNum is the natural key, matching
+    // Planning.csv's JobHead_PartNum (= PlanningOrder.partNumber).
+    // ColorHex stores "#RRGGBB"; ActualColor is the friendly label
+    // (e.g. "Grey Green") used for the swatch tooltip and the KPIs Color
+    // column label.
     partNum: 'PartNum',
     hex: 'ColorHex',
-    name: 'ColorName',
+    name: 'ActualColor',
   },
 } as const;
 
@@ -509,122 +510,28 @@ export class SharePointDataLayer implements PmdDataLayer {
     const F = this.F.productDieColor;
     try {
       const rows = await this.getAllItems<Record<string, unknown>>(LISTS.productDieColor);
-      if (rows.length === 0) return [];
-
-      // PMD_ProductDieColor was created via the SP modern UI, which
-      // auto-names extra columns `field_1, field_2, …` regardless of
-      // the display labels the user typed (same pattern as PMD_Products
-      // — see §65 above). Don't trust the configured names; auto-detect
-      // from the data:
-      //  • Part #: prefer `Title` (Excel-import convention), else any
-      //    configured candidate
-      //  • Hex:    the first column whose value shape matches #RRGGBB
-      //    (or RRGGBB / RGB) across one of the probe rows
-      //  • Name:   first remaining text column with content
-      const isHexShape = (v: unknown): boolean =>
-        /^#?[0-9a-fA-F]{6}$|^#?[0-9a-fA-F]{3}$/.test(str(v).trim());
-
-      const probeRows = rows.slice(0, Math.min(rows.length, 50));
-      const sample = rows[0];
-      const sysKeys = new Set([
-        '__metadata',
-        'FirstUniqueAncestorSecurableObject',
-        'RoleAssignments',
-        'AttachmentFiles',
-        'ContentType',
-        'GetDlpPolicyTip',
-        'FieldValuesAsHtml',
-        'FieldValuesAsText',
-        'FieldValuesForEdit',
-        'File',
-        'Folder',
-        'LikedByInformation',
-        'ParentList',
-        'Properties',
-        'Versions',
-        'FileSystemObjectType',
-        'Id',
-        'ServerRedirectedEmbedUri',
-        'ServerRedirectedEmbedUrl',
-        'ContentTypeId',
-        'ComplianceAssetId',
-        'ID',
-        'Modified',
-        'Created',
-        'AuthorId',
-        'EditorId',
-        'Attachments',
-        'GUID',
-        'OData__UIVersionString',
-        'OData__ColorTag',
-      ]);
-      const userKeys = Object.keys(sample).filter(
-        (k) => !sysKeys.has(k) && !k.startsWith('OData__'),
-      );
-
-      // Hex column: walk userKeys, pick the first that produces a hex
-      // value in any probe row.
-      let hexKey: string | undefined;
-      const hexCandidates = [F.hex, 'ColorHex', 'HexColor', 'Hex', ...userKeys];
-      for (const c of hexCandidates) {
-        if (probeRows.some((r) => isHexShape(r[c]))) {
-          hexKey = c;
-          break;
-        }
-      }
-
-      // Part column: prefer Title (matches Products import pattern),
-      // then configured / common variants.
-      let partKey: string | undefined;
-      const partCandidates = ['Title', F.partNum, 'PartNum', 'Part_x0020_Num', 'PartNumber'];
-      for (const c of partCandidates) {
-        if (probeRows.some((r) => str(r[c]).trim().length > 0)) {
-          partKey = c;
-          break;
-        }
-      }
-
-      // Name column: first text field that isn't part or hex and has content.
-      let nameKey: string | undefined;
-      const nameCandidates = [F.name, 'ColorName', 'Name', ...userKeys];
-      for (const c of nameCandidates) {
-        if (c === partKey || c === hexKey) continue;
-        if (probeRows.some((r) => str(r[c]).trim().length > 0 && !isHexShape(r[c]))) {
-          nameKey = c;
-          break;
-        }
-      }
-
-      console.info('[pmd] PMD_ProductDieColor resolved columns:', {
-        partKey,
-        hexKey,
-        nameKey,
-        userKeys,
-      });
-
-      if (!hexKey || !partKey) {
-        console.warn(
-          '[pmd] PMD_ProductDieColor: could not auto-detect part / hex columns. Sample row:',
-          sample,
-        );
-        return [];
-      }
-
       const out = rows
         .map((r) => ({
-          partNumber: str(r[partKey!]).trim(),
-          hex: normaliseHex(str(r[hexKey!])),
-          name: nameKey ? str(r[nameKey]).trim() : '',
+          partNumber: str(r[F.partNum]).trim(),
+          hex: normaliseHex(str(r[F.hex])),
+          name: str(r[F.name]).trim(),
         }))
         .filter((c) => c.partNumber && c.hex);
-
-      console.info(
-        '[pmd] PMD_ProductDieColor mapped',
-        out.length,
-        'of',
-        rows.length,
-        'rows',
-      );
+      // If the list has rows but none mapped, log the first row's keys so
+      // a future column rename surfaces in the console instead of silently
+      // falling back to "neutral".
+      if (rows.length > 0 && out.length === 0) {
+        console.warn(
+          '[pmd] PMD_ProductDieColor returned',
+          rows.length,
+          'row(s) but none had a usable',
+          F.partNum,
+          '+',
+          F.hex,
+          'pair. Sample row keys:',
+          Object.keys(rows[0]).filter((k) => !k.startsWith('OData__') && k !== '__metadata'),
+        );
+      }
       return out;
     } catch (e) {
       // Tenant without PMD_ProductDieColor → no swatch is fine; the
