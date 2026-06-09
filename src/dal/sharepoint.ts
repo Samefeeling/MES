@@ -737,7 +737,16 @@ export class SharePointDataLayer implements PmdDataLayer {
     // Signed-off first so it wins any (rare) overlap with a not-yet-
     // deleted live row.
     for (const h of prodHeaders) ingest(h, true);
-    for (const h of liveHeaders) ingest(h, false);
+    // Dedup LiveStatus: when the same machine has multiple rows on the
+    // same day (stale snapshots from earlier shifts/jobs that weren't
+    // cleaned up, or multi-job shifts), keep only the row with the
+    // highest SP ID per machine — that's the latest activity.
+    const latestLiveByMachine = new Map<string, HeaderRow>();
+    for (const h of liveHeaders) {
+      const prev = latestLiveByMachine.get(h.machineCode);
+      if (!prev || h.id > prev.id) latestLiveByMachine.set(h.machineCode, h);
+    }
+    for (const h of latestLiveByMachine.values()) ingest(h, false);
     return cached;
   }
 

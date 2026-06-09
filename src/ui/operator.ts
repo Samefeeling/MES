@@ -174,7 +174,7 @@ function shiftOrders(): PlanningOrder[] {
     jobNumber: j,
     machineCode: '',
     originalMachine: '',
-    partNumber: '',
+    partNumber: S!.prod.find((r) => r.jobNumber === j && r.partNumber)?.partNumber ?? '',
     partDescription: '(historical)',
     plannedStart: '',
     plannedEnd: '',
@@ -563,11 +563,15 @@ function buildMeta(): string {
   // path) rather than tucked away in the right side panel.
   const orderQty = o && !o.isDieChange ? o.jobRequired : '—';
   // Die / paint colour swatch from PMD_ProductDieColor, looked up by
-  // the selected job's Part #. Normalise to upper-trim on both sides so
-  // a stray case / whitespace mismatch between Planning.csv and the
-  // colour list still resolves. Nothing rendered when the lookup misses
-  // so the layout stays the same for products with no colour record.
-  const dieKey = o?.partNumber ? o.partNumber.trim().toUpperCase() : '';
+  // the selected job's Part #. Fall back to partNumber carried on the
+  // production records themselves (denormalised at write time) so the
+  // swatch still resolves for historical jobs whose planning entry has
+  // been removed or never carried a partNumber.
+  const planPart = o?.partNumber ?? '';
+  const prodPart = !planPart && S!.selJob
+    ? (S!.prod.find((r) => r.jobNumber === S!.selJob && r.partNumber)?.partNumber ?? '')
+    : '';
+  const dieKey = (planPart || prodPart).trim().toUpperCase();
   const die = dieKey ? S!.dieColors.get(dieKey) : undefined;
   const swatch = die?.hex
     ? `<span class="m-die-swatch" style="background:${die.hex}" title="${escapeHtml(die.name || die.hex)}"></span>`
@@ -576,7 +580,7 @@ function buildMeta(): string {
     <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
     <label class="m-job">Job# ${jobField}</label>
     <label class="m-orderqty">Order Qty <input type="text" disabled value="${escapeHtml(String(orderQty))}"></label>
-    <label class="m-part">Part# <input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
+    <label class="m-part">Part# <input type="text" disabled value="${escapeHtml(planPart || prodPart)}"></label>
     <label class="m-desc">Product Description <span class="m-desc-row">${swatch}<input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></span></label>
     <label class="m-op">Operator ${opField}</label>
     <label class="m-sup">Supervisor ${supField}</label>
@@ -1184,7 +1188,7 @@ function openSaveSignoffModal(): void {
     <div class="signoff-summary">
       <div><span>Operator</span><b>${escapeHtml(S!.selOperator || '—')}</b></div>
       <div><span>Supervisor</span><b>${escapeHtml(S!.selSupervisor)}</b></div>
-      <div><span>Part</span><b>${escapeHtml(o?.partNumber ?? '—')}</b></div>
+      <div><span>Part</span><b>${escapeHtml(o?.partNumber || S!.prod.find((r) => r.jobNumber === S!.selJob && r.partNumber)?.partNumber || '—')}</b></div>
       <div><span>Required</span><b>${o && !o.isDieChange ? o.jobRequired : '—'}</b></div>
       <div><span>Count Start → End</span><b>${cs} → ${ce}</b></div>
       <div><span>Good (this shift)</span><b class="g">${good}</b></div>
