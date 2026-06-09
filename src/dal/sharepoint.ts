@@ -510,29 +510,117 @@ export class SharePointDataLayer implements PmdDataLayer {
     const F = this.F.productDieColor;
     try {
       const rows = await this.getAllItems<Record<string, unknown>>(LISTS.productDieColor);
-      const out = rows
+      if (rows.length === 0) return [];
+
+      // Direct path: clean list shape (PartNum / ColorHex / ActualColor
+      // with matching internal names).
+      const direct = rows
         .map((r) => ({
           partNumber: str(r[F.partNum]).trim(),
           hex: normaliseHex(str(r[F.hex])),
           name: str(r[F.name]).trim(),
         }))
         .filter((c) => c.partNumber && c.hex);
-      // If the list has rows but none mapped, log the first row's keys so
-      // a future column rename surfaces in the console instead of silently
-      // falling back to "neutral".
-      if (rows.length > 0 && out.length === 0) {
-        console.warn(
-          '[pmd] PMD_ProductDieColor returned',
+      if (direct.length > 0) {
+        console.info(
+          '[pmd] PMD_ProductDieColor mapped',
+          direct.length,
+          'of',
           rows.length,
-          'row(s) but none had a usable',
-          F.partNum,
-          '+',
-          F.hex,
-          'pair. Sample row keys:',
-          Object.keys(rows[0]).filter((k) => !k.startsWith('OData__') && k !== '__metadata'),
+          'rows (direct)',
+          direct.slice(0, 3),
         );
+        return direct;
       }
-      return out;
+
+      // Fallback: SP auto-named columns (field_1, field_2, …) — detect
+      // by value shape. Same logic we used the first time around, kept
+      // here so a future list re-import that loses the configured names
+      // still produces swatches.
+      const isHex = (v: unknown): boolean =>
+        /^#?[0-9a-fA-F]{6}$|^#?[0-9a-fA-F]{3}$/.test(str(v).trim());
+      const sysKeys = new Set([
+        '__metadata',
+        'FirstUniqueAncestorSecurableObject',
+        'RoleAssignments',
+        'AttachmentFiles',
+        'ContentType',
+        'GetDlpPolicyTip',
+        'FieldValuesAsHtml',
+        'FieldValuesAsText',
+        'FieldValuesForEdit',
+        'File',
+        'Folder',
+        'LikedByInformation',
+        'ParentList',
+        'Properties',
+        'Versions',
+        'FileSystemObjectType',
+        'Id',
+        'ServerRedirectedEmbedUri',
+        'ServerRedirectedEmbedUrl',
+        'ContentTypeId',
+        'ComplianceAssetId',
+        'ID',
+        'Modified',
+        'Created',
+        'AuthorId',
+        'EditorId',
+        'Attachments',
+        'GUID',
+        'OData__UIVersionString',
+        'OData__ColorTag',
+      ]);
+      const userKeys = Object.keys(rows[0]).filter(
+        (k) => !sysKeys.has(k) && !k.startsWith('OData__'),
+      );
+      const probe = rows.slice(0, Math.min(rows.length, 50));
+      let hexKey: string | undefined;
+      for (const k of userKeys) {
+        if (probe.some((r) => isHex(r[k]))) {
+          hexKey = k;
+          break;
+        }
+      }
+      let partKey: string | undefined;
+      for (const c of ['Title', F.partNum, 'PartNum', ...userKeys]) {
+        if (c === hexKey) continue;
+        if (probe.some((r) => str(r[c]).trim().length > 0 && !isHex(r[c]))) {
+          partKey = c;
+          break;
+        }
+      }
+      let nameKey: string | undefined;
+      for (const k of userKeys) {
+        if (k === partKey || k === hexKey) continue;
+        if (probe.some((r) => str(r[k]).trim().length > 0 && !isHex(r[k]))) {
+          nameKey = k;
+          break;
+        }
+      }
+      console.warn(
+        '[pmd] PMD_ProductDieColor: direct field reads matched 0 rows; auto-detected',
+        { partKey, hexKey, nameKey, userKeys },
+        'sample row:',
+        rows[0],
+      );
+      if (!partKey || !hexKey) return [];
+      const auto = rows
+        .map((r) => ({
+          partNumber: str(r[partKey!]).trim(),
+          hex: normaliseHex(str(r[hexKey!])),
+          name: nameKey ? str(r[nameKey]).trim() : '',
+        }))
+        .filter((c) => c.partNumber && c.hex);
+      console.info(
+        '[pmd] PMD_ProductDieColor mapped',
+        auto.length,
+        'of',
+        rows.length,
+        'rows (auto)',
+        auto.slice(0, 3),
+      );
+      return auto;
     } catch (e) {
       // Tenant without PMD_ProductDieColor → no swatch is fine; the
       // existing keyword-derived colour on KPIs takes over.
@@ -2003,7 +2091,10 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
       jobNumber: job,
       machineCode: '',
       originalMachine: '',
-      partNumber: row[iPart] ?? '',
+      // Trim Part # so a stray trailing space in the Excel cell can't
+      // break the PMD_ProductDieColor Map lookup (operator swatch +
+      // KPIs colour column both key on this).
+      partNumber: (row[iPart] ?? '').trim(),
       partDescription: row[iDesc] ?? '',
       plannedStart: startIso,
       plannedEnd: end,
