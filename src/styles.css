@@ -149,9 +149,17 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .op-meta input[disabled]{background:#f1f5f9;color:var(--mu)}
 .op-meta .m-date input{width:160px}
 .op-meta .m-mc select{width:88px}
-.op-meta .m-job input{width:170px}
-.op-meta .m-part input,.op-meta .m-desc input{width:160px}
-.op-meta .m-orderqty input{width:110px;text-align:right;font-weight:700}
+/* Job# / Part# match the Operator / Supervisor select width (140px) so
+   the meta row reads as a single flush set of equal-sized fields
+   instead of three differently-sized text inputs. Order Qty and
+   Product Description share the same 140px box; Order Qty is no
+   longer right-aligned so its digits sit under the label like every
+   other field. The shared height already comes from min-height:52px
+   on every .op-meta input/select. */
+.op-meta .m-job input{width:140px}
+.op-meta .m-part input{width:140px}
+.op-meta .m-desc input{width:140px}
+.op-meta .m-orderqty input{width:140px;font-weight:700}
 .op-meta .m-desc-row{display:flex;align-items:center;gap:6px}
 .m-die-swatch{display:inline-block;width:28px;height:28px;border-radius:6px;border:1px solid rgba(0,0,0,.2);flex-shrink:0;box-shadow:inset 0 0 0 1px rgba(255,255,255,.25)}
 .op-meta .m-op select,.op-meta .m-sup select{width:140px}
@@ -177,6 +185,16 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .op-grid tbody tr{height:64px}
 .op-grid tbody td{background:#fff;position:relative}
 .op-grid tbody td.num-cell,.op-grid tbody td.status-cell{padding:2px}
+/* Machine Status sits at the top of the grid and drives the colour of
+   every column underneath; visually separate it from the D01-D10 reject
+   rows so operators don't read it as just another defect tally. Tint the
+   row-header strip with the theme accent, bump its label to bold, and
+   close the row off with a thick bottom border so the defect grid below
+   reads as a distinct block. */
+.op-grid tr.row-status th.rh{background:var(--theme-accent);color:var(--theme-on-dark);font-weight:800;font-size:16px;letter-spacing:.3px;text-transform:uppercase}
+.op-grid tr.row-status td{border-bottom:3px solid var(--theme-dark);background:#f8fafc}
+.op-grid tr.row-named th.rh{background:#fafafa;font-size:13px;color:#475569;font-weight:600}
+.op-grid tr.row-named:first-of-type td{border-top:0}
 
 /* §2 — live slot highlight: thick frame + soft pulse so operators see it at a glance. */
 .op-grid td.is-now{box-shadow:inset 0 0 0 3px var(--rd);animation:nowPulse 1.6s ease-in-out infinite}

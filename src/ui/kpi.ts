@@ -527,15 +527,22 @@ function aggCells(a: ShiftAgg, includeSched: number | null = null, oeeAndSched =
   const yc = colourClass(a.yieldPct, 98, 95);
   const oc = colourClass(a.oee, 85, 70);
   const sc = colourClass(includeSched, 95, 80);
+  // Empty cells render an em-dash instead of "0" / "0.0%" — a literal
+  // zero in an OEE / output column reads as a real measurement (the
+  // press ran but made nothing), where what we actually mean is "no
+  // data for this slice". The dash makes that distinction visible.
+  const n = (v: number): string => (v ? String(v) : '—');
+  const h = (v: number): string => (v ? v.toFixed(1) : '—');
+  const pct = (v: number): string => (v ? `${v}%` : '—');
   return `
-    <td class="num">${a.output}</td>
-    <td class="num r">${a.reject}</td>
-    <td class="num ${yc}">${a.yieldPct}%</td>
-    <td class="num">${a.runHrs.toFixed(1)}</td>
-    <td class="num">${a.downHrs.toFixed(1)}</td>
-    <td class="num">${a.dieHrs.toFixed(1)}</td>
-    <td class="num">${a.colorHrs.toFixed(1)}</td>
-    <td class="num">${a.insertHrs.toFixed(1)}</td>
+    <td class="num">${n(a.output)}</td>
+    <td class="num r">${n(a.reject)}</td>
+    <td class="num ${yc}">${pct(a.yieldPct)}</td>
+    <td class="num">${h(a.runHrs)}</td>
+    <td class="num">${h(a.downHrs)}</td>
+    <td class="num">${h(a.dieHrs)}</td>
+    <td class="num">${h(a.colorHrs)}</td>
+    <td class="num">${h(a.insertHrs)}</td>
     <td class="num ${oeeAndSched ? oc : ''}">${a.oee == null ? '—' : a.oee + '%'}</td>
     <td class="num ${oeeAndSched ? sc : ''}">${
       includeSched == null ? '—' : includeSched + '%'
@@ -730,20 +737,24 @@ function render(): void {
           ${
             S!.loading
               ? ''
-              : `<tfoot><tr class="kpi-total">
-                  <th>TOTAL</th>
-                  ${colorCell()}
-                  <td class="num">${tot.output}</td>
-                  <td class="num r">${tot.reject}</td>
-                  <td class="num">${totYield}%</td>
-                  <td class="num">${tot.runHrs.toFixed(1)}</td>
-                  <td class="num">${tot.downHrs.toFixed(1)}</td>
-                  <td class="num">${tot.dieHrs.toFixed(1)}</td>
-                  <td class="num">${tot.colorHrs.toFixed(1)}</td>
-                  <td class="num">${tot.insertHrs.toFixed(1)}</td>
-                  <td class="num">—</td><td class="num">—</td>
-                  <td class="kpi-ho-cell muted">—</td>
-                </tr></tfoot>`
+              : (() => {
+                  const tn = (v: number): string => (v ? String(v) : '—');
+                  const th = (v: number): string => (v ? v.toFixed(1) : '—');
+                  return `<tfoot><tr class="kpi-total">
+                    <th>TOTAL</th>
+                    ${colorCell()}
+                    <td class="num">${tn(tot.output)}</td>
+                    <td class="num r">${tn(tot.reject)}</td>
+                    <td class="num">${totYield ? totYield + '%' : '—'}</td>
+                    <td class="num">${th(tot.runHrs)}</td>
+                    <td class="num">${th(tot.downHrs)}</td>
+                    <td class="num">${th(tot.dieHrs)}</td>
+                    <td class="num">${th(tot.colorHrs)}</td>
+                    <td class="num">${th(tot.insertHrs)}</td>
+                    <td class="num">—</td><td class="num">—</td>
+                    <td class="kpi-ho-cell muted">—</td>
+                  </tr></tfoot>`;
+                })()
           }
         </table>
       </div>

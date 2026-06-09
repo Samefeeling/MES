@@ -506,17 +506,20 @@ function buildActionBar(): string {
         s.label,
       )}</button>`,
   ).join('');
+  // Action bar trimmed for iPad portrait (≈810px wide): the explicit
+  // "Now" button is redundant — tapping today on the date picker drops
+  // you on the live shift anyway — and shortening the save label to
+  // "Sign off" buys the ~80px needed for the bar to fit on one row.
   return `<div class="op-actionbar">
     <div class="ab-date">
       <button class="dnav-btn" data-day="-1" title="Previous day">◀</button>
       <input type="date" class="ab-date-input" data-meta="date" value="${dateIso}">
       <button class="dnav-btn" data-day="1" title="Next day">▶</button>
-      <button class="today-btn" data-today>Now</button>
     </div>
     <div class="ab-shifts">${tabs}</div>
     <div class="ab-right">
       <button class="btn-load" data-refresh title="Re-pull planning from SharePoint &amp; recompute Job Left">⟳ Refresh</button>
-      <button class="btn-save" data-saveclear>✅ Sign off &amp; Save</button>
+      <button class="btn-save" data-saveclear>✅ Sign off</button>
     </div>
   </div>`;
 }
@@ -1013,14 +1016,6 @@ function wire(): void {
       void reload();
     }),
   );
-  app.querySelector('[data-today]')?.addEventListener('click', () => {
-    const cs = currentShift(new Date());
-    S!.viewDate = new Date();
-    S!.viewDate.setHours(0, 0, 0, 0);
-    S!.shiftCode = cs.code;
-    void reload();
-  });
-
   // Shift tabs — keep selJob (see comment above).
   app.querySelectorAll<HTMLButtonElement>('[data-shift]').forEach((b) =>
     b.addEventListener('click', () => {
