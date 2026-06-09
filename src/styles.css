@@ -334,8 +334,14 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    the table reads as a clean grid (previously machine rows ran ~44px
    because they inherited browser default padding while shift/job had
    explicit 6px). */
-.kpi-table tr{height:36px}
-.kpi-table th,.kpi-table td{height:36px;line-height:20px;padding:0 8px;vertical-align:middle;box-sizing:border-box;overflow:hidden}
+.kpi-table tr{height:30px}
+.kpi-table th,.kpi-table td{height:30px;line-height:18px;padding:0 8px;vertical-align:middle;box-sizing:border-box;overflow:hidden}
+/* `.summary-table .muted` (0,2,0) sets padding:30px + center, which
+   out-specifies `.kpi-table td` (0,1,1) and blew muted Color / Handover
+   cells (the "—" placeholders) up to ~76px while data rows stayed ~36px.
+   Re-pin padding on muted cells inside the KPI table so every row is a
+   uniform 30px regardless of whether a cell is a placeholder. */
+.kpi-table .muted{padding:0 8px}
 .kpi-machine th{font-size:16px;font-weight:800;color:var(--tx);background:#f1f5f9}
 .kpi-machine td{font-weight:800;background:#f1f5f9}
 .kpi-shift th,.kpi-shift td{background:#eef2f7;border-top:1px dashed #cbd5e1;border-bottom:1px dashed #cbd5e1;font-size:13px;font-weight:600;color:#475569}
