@@ -53,6 +53,9 @@ export interface ProductDieColor {
   hex: string;
   /** Friendly name (e.g. "Navy"). Empty string when not recorded. */
   name: string;
+  /** Product category (e.g. "Battens") — groups the KPI TOTAL row into
+   *  per-category subtotals. Empty string when not recorded. */
+  category: string;
 }
 
 export interface BdCode {

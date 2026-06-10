@@ -197,6 +197,9 @@ const DEFAULT_FIELDS = {
     partNum: 'PartNum',
     hex: 'ColorHex',
     name: 'ActualColor',
+    // Product category (e.g. "Battens") — groups the KPI TOTAL row
+    // into per-category subtotals.
+    category: 'Category',
   },
 } as const;
 
@@ -551,13 +554,17 @@ export class SharePointDataLayer implements PmdDataLayer {
         );
       }
       // Direct field reads — works when SP kept the typed column names.
+      // Keep rows that carry a category even when the hex is missing /
+      // invalid: they can't drive a swatch but still bucket their part
+      // into the right KPI category subtotal.
       const direct = rows
         .map((r) => ({
           partNumber: str(r[F.partNum]).trim(),
           hex: normaliseHex(str(r[F.hex])),
           name: str(r[F.name]).trim(),
+          category: str(r[F.category]).trim(),
         }))
-        .filter((c) => c.partNumber && c.hex);
+        .filter((c) => c.partNumber && (c.hex || c.category));
       if (direct.length > 0) {
         console.info(
           '[pmd] PMD_ProductDieColor cached:',
@@ -599,6 +606,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           partNumber: str(r[partKey]).trim(),
           hex: normaliseHex(str(r[hexKey])),
           name: nameKey ? str(r[nameKey]).trim() : '',
+          category: str(r[F.category]).trim(),
         }))
         .filter((c) => c.partNumber && c.hex);
       this.dieColorCache = auto;

@@ -161,6 +161,10 @@ interface KpiState {
    *  toggled by the > chevron on the machine row, independent of the
    *  shift breakdown. */
   ordersExpanded: Set<string>;
+  /** Floor-wide totals split by PMD_ProductDieColor.Category (e.g.
+   *  "Battens"), rendered as subtotal rows above the grand TOTAL.
+   *  Parts without a category land in "Other". */
+  catTotals: Array<{ category: string; agg: ShiftAgg }>;
 }
 
 interface ChartBucket {
@@ -468,6 +472,30 @@ async function compute(now = new Date()): Promise<void> {
   });
 
   S!.rows = rows;
+
+  // Floor-wide totals split by PMD_ProductDieColor.Category. Resolution
+  // chain per record: JobNum → Part # (partNumByJob, fully populated by
+  // the rows pass above — records win over planning) → Category. Parts
+  // with no category row land in "Other" so the subtotals always sum to
+  // the grand TOTAL.
+  const categoryByPart = new Map<string, string>();
+  for (const c of dieColorList) {
+    if (c.category) categoryByPart.set(c.partNumber.trim().toUpperCase(), c.category);
+  }
+  const byCategory = new Map<string, ProductionRecord[]>();
+  for (const recs of perMachineProd) {
+    for (const r of recs) {
+      const part = (partNumByJob.get(r.jobNumber) ?? '').trim().toUpperCase();
+      const cat = (part && categoryByPart.get(part)) || 'Other';
+      const arr = byCategory.get(cat) ?? [];
+      arr.push(r);
+      byCategory.set(cat, arr);
+    }
+  }
+  S!.catTotals = Array.from(byCategory.entries())
+    .map(([category, recs]) => ({ category, agg: toAgg(aggregate(recs), recs) }))
+    .sort((a, b2) => b2.agg.output - a.agg.output);
+
   S!.chartBuckets = Array.from(charts.entries())
     .sort(([a], [b2]) => (a < b2 ? -1 : a > b2 ? 1 : 0))
     .map(([, v]) => v);
@@ -678,6 +706,18 @@ function render(): void {
         return headRow + orderRows + shiftRows;
       })
       .join('');
+    // Category subtotals close the body, directly above the sticky
+    // grand-TOTAL footer. One row per PMD_ProductDieColor.Category that
+    // saw production this period; "Other" collects uncategorised parts.
+    body += S!.catTotals
+      .map(
+        (c, i) => `<tr class="kpi-cat-total${i === 0 ? ' kpi-cat-first' : ''}">
+          <th>${escapeHtml(c.category)}</th>
+          ${colorCell()}
+          ${aggCells(c.agg, null, false)}
+        </tr>`,
+      )
+      .join('');
   }
 
   // Charts: one bucket per date with shift segments. Output (stacked by
@@ -826,6 +866,7 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     collapsed: new Set(),
     jobsExpanded: new Set(),
     ordersExpanded: new Set(),
+    catTotals: [],
   };
   render();
   await compute();
