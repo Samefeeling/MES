@@ -716,7 +716,7 @@ function buildSide(): string {
     <div class="sk"><label>Count End</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cend" value="${ce}"></div>
     <div class="sk"><label>Total Reject</label><b class="r" data-live="totalReject">${totalReject}</b></div>
     <div class="sk"><label>Total Good</label><b class="g" data-live="totalGood">${good}</b></div>
-    <div class="sk"><label>Purge (kg)</label><input type="text" inputmode="decimal" data-meta="purge" value="${purge}"></div>
+    <div class="sk"><label>Purge (kg)</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="purge" value="${purge}"></div>
     <div class="handover">
       <div class="handover-title">Handover / Journey — supervisor notes</div>
       <div class="handover-grid">
@@ -1057,6 +1057,30 @@ function wire(): void {
     }),
   );
 
+  // Digits-only sanitiser for every numeric input on the page (D01-D10
+  // reject cells, Count Start / End, Purge). `inputmode="numeric"`
+  // only hints the on-screen keyboard — an iPad with an attached
+  // hardware keyboard, paste, or autofill can still inject '.' / ','
+  // / letters, which would land in upsertSlot as NaN. Strip on the
+  // `input` event so the value the operator sees and the value we
+  // persist always match. Caret position is restored so editing in
+  // the middle of a multi-digit count doesn't jump to the end.
+  app
+    .querySelectorAll<HTMLInputElement>('input[inputmode="numeric"]')
+    .forEach((inp) =>
+      inp.addEventListener('input', () => {
+        const cleaned = inp.value.replace(/[^0-9]/g, '');
+        if (cleaned === inp.value) return;
+        const caret = (inp.selectionStart ?? cleaned.length) - (inp.value.length - cleaned.length);
+        inp.value = cleaned;
+        try {
+          inp.setSelectionRange(caret, caret);
+        } catch {
+          /* type=number / browser rejection — caret restore is best-effort */
+        }
+      }),
+    );
+
   // Buttons
   app.querySelector('[data-refresh]')?.addEventListener('click', () => void refreshAll());
   app.querySelector('[data-saveclear]')?.addEventListener('click', () => openSaveSignoffModal());
@@ -1119,7 +1143,10 @@ function onMetaChange(el: HTMLElement): void {
       // triggering render().
       const field = key as 'purge' | 'cstart' | 'cend';
       void upsertSlotNoReload(0, (r) => {
-        const v = val === '' ? null : Number(val);
+        // Force integer storage to match the digits-only keyboard /
+        // sanitiser — Purge had been accepting decimals; the rest were
+        // already conceptually whole counts.
+        const v = val === '' ? null : Math.max(0, Math.floor(Number(val) || 0));
         if (field === 'purge') r.purgeKg = v;
         else if (field === 'cstart') r.countStart = v;
         else r.countEnd = v;
