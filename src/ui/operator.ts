@@ -22,7 +22,6 @@ import { STATUSES, STATUS_MAP } from '../core/status';
 import { bdLabelFor } from '../core/breakdown';
 import { type Handover, parseHandover as sharedParseHandover } from '../core/handover';
 import { openBreakdownCascade } from './breakdown';
-import { attachNumpad } from './numpad';
 import { toast } from './toast';
 import { closeModal, escapeHtml, openModal } from './modal';
 import { renderOutputRejectChart } from './charts';
@@ -663,7 +662,7 @@ function buildGrid(): string {
         .map((r, i) => {
           const v = parseRejects(r)[cat.code] ?? 0;
           const now = nowSlot === i ? ' is-now-col' : '';
-          return `<td class="num-cell${now}"><input type="text" inputmode="none" pattern="[0-9]*" data-numpad class="rej-input" data-row="named" data-code="${escapeHtml(
+          return `<td class="num-cell${now}"><input type="text" inputmode="numeric" pattern="[0-9]*" class="rej-input" data-row="named" data-code="${escapeHtml(
             cat.code,
           )}" data-slot="${i}" value="${v || ''}"></td>`;
         })
@@ -713,11 +712,11 @@ function buildSide(): string {
   return `<aside class="op-side">
     <div class="sk"><label>Job left</label><b data-live="jobLeft">${jobLeft}</b></div>
     <div class="sk"><label title="${escapeHtml(targetTitle)}">Shift Target</label><b title="${escapeHtml(targetTitle)}">${targetDisplay}</b></div>
-    <div class="sk"><label>Count Start</label><input type="text" inputmode="none" pattern="[0-9]*" data-numpad data-meta="cstart" value="${cs}"></div>
-    <div class="sk"><label>Count End</label><input type="text" inputmode="none" pattern="[0-9]*" data-numpad data-meta="cend" value="${ce}"></div>
+    <div class="sk"><label>Count Start</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cstart" value="${cs}"></div>
+    <div class="sk"><label>Count End</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cend" value="${ce}"></div>
     <div class="sk"><label>Total Reject</label><b class="r" data-live="totalReject">${totalReject}</b></div>
     <div class="sk"><label>Total Good</label><b class="g" data-live="totalGood">${good}</b></div>
-    <div class="sk"><label>Purge (kg)</label><input type="text" inputmode="none" pattern="[0-9]*" data-numpad data-meta="purge" value="${purge}"></div>
+    <div class="sk"><label>Purge (kg)</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="purge" value="${purge}"></div>
     <div class="handover">
       <div class="handover-title">Handover / Journey — supervisor notes</div>
       <div class="handover-grid">
@@ -1058,21 +1057,16 @@ function wire(): void {
     }),
   );
 
-  // The in-app numeric keypad drives every [data-numpad] field — the
-  // system keyboard is suppressed via inputmode="none" because iPadOS
-  // has no docked 9-grid layout (see numpad.ts).
-  attachNumpad();
-
   // Digits-only sanitiser for every numeric input on the page (D01-D10
-  // reject cells, Count Start / End, Purge). The numpad only emits
-  // digits, but an iPad with an attached hardware keyboard, paste, or
-  // autofill can still inject '.' / ',' / letters, which would land in
-  // upsertSlot as NaN. Strip on the `input` event so the value the
-  // operator sees and the value we persist always match. Caret position
-  // is restored so editing in the middle of a multi-digit count doesn't
-  // jump to the end.
+  // reject cells, Count Start / End, Purge). `inputmode="numeric"`
+  // only hints the on-screen keyboard — an iPad with an attached
+  // hardware keyboard, paste, or autofill can still inject '.' / ','
+  // / letters, which would land in upsertSlot as NaN. Strip on the
+  // `input` event so the value the operator sees and the value we
+  // persist always match. Caret position is restored so editing in
+  // the middle of a multi-digit count doesn't jump to the end.
   app
-    .querySelectorAll<HTMLInputElement>('input[data-numpad]')
+    .querySelectorAll<HTMLInputElement>('input[inputmode="numeric"]')
     .forEach((inp) =>
       inp.addEventListener('input', () => {
         const cleaned = inp.value.replace(/[^0-9]/g, '');
