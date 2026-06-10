@@ -596,14 +596,14 @@ function buildMeta(): string {
   const partKey = (o?.partNumber ?? '').trim().toUpperCase();
   const die = partKey ? S!.dieColors.get(partKey) : undefined;
   const swatch = die?.hex
-    ? `<span class="m-die-swatch" style="background:${die.hex}" title="${escapeHtml(die.name || die.hex)}"></span>`
+    ? `<span class="m-die-swatch-inline" style="background:${die.hex}" title="${escapeHtml(die.name || die.hex)}"></span>`
     : '';
   return `<div class="op-meta">
     <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
     <label class="m-job">Job# ${jobField}</label>
     <label class="m-orderqty">Order Qty <input type="text" disabled value="${escapeHtml(String(orderQty))}"></label>
-    <label class="m-part">Part# <input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
-    <label class="m-desc">Product Description <span class="m-desc-row">${swatch}<input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></span></label>
+    <label class="m-part"><span class="m-part-title">Part# ${swatch}</span><input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
+    <label class="m-desc">Product Description <input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
     <label class="m-op">Operator ${opField}</label>
     <label class="m-sup">Supervisor ${supField}</label>
   </div>`;
