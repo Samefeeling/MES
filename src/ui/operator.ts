@@ -1231,7 +1231,13 @@ async function refreshAll(): Promise<void> {
  * Sign-off + Save in one modal (§5). Replaces the separate checkbox.
  * Pre-flight = same gates as the .bas btnSaveAndClear_Click:
  *   - Supervisor selected
- *   - countEnd >= countStart (when both present)
+ *   - Machine Status has at least one filled slot (a shift with no
+ *     status timeline records nothing useful and writes an empty
+ *     header that later reads back as a blank, confusing record)
+ *   - Count Start AND Count End are both entered — explicitly. Zero
+ *     is valid data ("counter reset / no parts"); a blank field is
+ *     not, because we can't tell "no parts" from "forgot to fill in".
+ *   - countEnd >= countStart
  * Confirming locks the shift records and clears the in-form selection.
  */
 function openSaveSignoffModal(): void {
@@ -1239,10 +1245,21 @@ function openSaveSignoffModal(): void {
     toast('Pick a Supervisor before signing off', 'err');
     return;
   }
+  const hasStatus = S!.prod.some(
+    (r) => r.jobNumber === S!.selJob && r.statusCode,
+  );
+  if (!hasStatus) {
+    toast('Machine Status is empty — fill in at least one time slot before signing off', 'err');
+    return;
+  }
   const c = canonical();
-  const cs = Number(c?.countStart ?? 0);
-  const ce = Number(c?.countEnd ?? 0);
-  if (c?.countEnd != null && c?.countStart != null && ce < cs) {
+  if (c?.countStart == null || c?.countEnd == null) {
+    toast('Count Start and Count End are required — enter 0 if no parts were counted', 'err');
+    return;
+  }
+  const cs = Number(c.countStart);
+  const ce = Number(c.countEnd);
+  if (ce < cs) {
     toast('Count End must be ≥ Count Start', 'err');
     return;
   }
