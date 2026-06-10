@@ -1209,6 +1209,37 @@ export class SharePointDataLayer implements PmdDataLayer {
     shiftId: string,
     jobNumber?: string,
   ): Promise<void> {
+    // Re-hydrate editCache from the existing signed-off rows BEFORE
+    // deleting them. Without this step the next sign-off would
+    // aggregate only the slots the supervisor actually retouched —
+    // every other slot in the original 16-char timeline would come
+    // back as '·' (blank) and overwrite the signed-off record. The
+    // intent of "Unlock & edit" is "tweak this one slot", not "start
+    // over from scratch".
+    const existing = await this.listProduction({
+      machineCode,
+      shiftId,
+      ...(jobNumber ? { jobNumber } : {}),
+    });
+    for (const r of existing) {
+      // Mark unlocked so the canonical-row totals (Count Start /
+      // End / handover) come back into the editable side panel.
+      const rehydrated: ProductionRecord = {
+        ...r,
+        locked: false,
+        lockedBy: '',
+        lockedAt: '',
+      };
+      const key = this.cacheKey(r.machineCode, r.shiftId, r.jobNumber);
+      const list = this.editCache.get(key) ?? [];
+      // Don't clobber any in-flight edits that already exist in cache
+      // for the same slot — `existing` may include unsigned slots
+      // when listProduction also returns LiveStatus rows.
+      if (!list.some((s) => s.slotIndex === r.slotIndex)) list.push(rehydrated);
+      this.editCache.set(key, list);
+    }
+    this.persistEditCache();
+
     // Find PMD_Production rows for this (Machine, SlotStart:, Shift) and
     // delete their corresponding analytic + reject rows so the operator
     // can refile. When jobNumber is provided, scope all three deletes to
