@@ -409,6 +409,22 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
   .kpi-charts{grid-template-columns:1fr}
 }
 
+/* ===== in-app numeric keypad (numpad.ts) =====
+   Replaces the iPad system keyboard for digit fields — iPadOS has no
+   docked 9-grid layout, and its floating keypad can't be repositioned
+   reliably. Grip bar drags; 56px keys for gloved shop-floor taps. */
+.numpad{position:fixed;display:none;z-index:280;background:#fff;border:2px solid var(--theme-dark);border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.3);width:228px;user-select:none;-webkit-user-select:none;touch-action:none}
+.np-grip{display:flex;align-items:center;justify-content:center;gap:8px;background:var(--theme-dark);color:var(--theme-on-dark);font-size:13px;font-weight:700;letter-spacing:2px;padding:8px 0;border-radius:11px 11px 0 0;cursor:grab}
+.np-grip:active{cursor:grabbing}
+.np-grip-label{letter-spacing:4px}
+.np-keys{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:10px}
+.np-key{height:56px;border:1px solid var(--bd);border-radius:10px;background:#f8fafc;font-size:24px;font-weight:800;color:var(--tx);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.np-key:active{background:#dbeafe;border-color:var(--theme-dark)}
+.np-key.np-back{background:#fef3c7;font-size:20px}
+.np-key.np-clear{background:#fee2e2;color:#b91c1c}
+.np-done{display:block;width:calc(100% - 20px);margin:0 10px 10px;height:52px;border:0;border-radius:10px;background:#16a34a;color:#fff;font-size:18px;font-weight:800;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.np-done:active{background:#15803d}
+
 /* ===== toast ===== */
 .toast{position:fixed;top:18px;right:18px;background:#1e293b;color:#fff;padding:14px 22px;border-radius:10px;font-size:16px;font-weight:700;z-index:300;opacity:0;transform:translateY(-10px);transition:.2s;pointer-events:none;max-width:80vw;box-shadow:0 4px 16px rgba(0,0,0,.25)}
 .toast.show{opacity:1;transform:translateY(0)}
