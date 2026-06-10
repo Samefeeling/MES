@@ -726,17 +726,15 @@ export class SharePointDataLayer implements PmdDataLayer {
   }
 
   async listProduction(filter: ProductionFilter): Promise<ProductionRecord[]> {
-    // 1) Pull cached slot records that match the filter (current shift).
-    const cached: ProductionRecord[] = [];
-    for (const list of this.editCache.values()) {
-      for (const r of list) if (productionMatches(r, filter)) cached.push(r);
-    }
-    // 2) Hydrate header rows from PMD_Production (signed-off) AND
-    //    PMD_LiveStatus (in-progress mirror). Signed wins for any
-    //    overlapping tuple — lockShift copies the row across and
-    //    deletes the live source, so an overlap only ever appears in
-    //    the brief window between those two writes.
-    const seen = new Set(cached.map((r) => this.cacheKey(r.machineCode, r.shiftId, r.jobNumber)));
+    // Hydrate header rows from PMD_Production (signed-off) AND
+    // PMD_LiveStatus (in-progress mirror) first — precedence is
+    //   signed-off  >  local editCache  >  live mirror.
+    // Signed-off is the immutable record of truth: once a (machine,
+    // shift, job) has a PMD_Production header, any editCache rows for
+    // the same tuple are stale by definition (taps that slipped in
+    // around sign-off, or another iPad's pre-sign-off localStorage)
+    // and must not shadow it — that's how a signed-off order with 53
+    // goods rendered as an empty, editable timeline. Purge them.
     const [prodHeaders, liveHeaders, rejectsByKey, timelinesByKey] = await Promise.all([
       this.fetchHeaders(LISTS.production, filter),
       this.fetchHeaders(LISTS.liveStatus, filter).catch((e) => {
@@ -763,6 +761,31 @@ export class SharePointDataLayer implements PmdDataLayer {
       if (filter.jobNumber && h.jobNumber !== filter.jobNumber) return false;
       return true;
     };
+
+    // Self-heal: drop editCache entries whose tuple is already signed
+    // off. lockShift deletes the cache on the device that signed off,
+    // but other iPads (or a tap that raced the sign-off) can still
+    // hold stale rows in localStorage.
+    const signedKeys = new Set(
+      prodHeaders
+        .filter(matchesFilter)
+        .map((h) => this.cacheKey(h.machineCode, `${h.date}-${h.shift}`, h.jobNumber)),
+    );
+    let purged = false;
+    for (const k of Array.from(this.editCache.keys())) {
+      if (signedKeys.has(k)) {
+        this.editCache.delete(k);
+        purged = true;
+      }
+    }
+    if (purged) this.persistEditCache();
+
+    // Local edits for tuples that are NOT signed off.
+    const cached: ProductionRecord[] = [];
+    for (const list of this.editCache.values()) {
+      for (const r of list) if (productionMatches(r, filter)) cached.push(r);
+    }
+    const seen = new Set(cached.map((r) => this.cacheKey(r.machineCode, r.shiftId, r.jobNumber)));
 
     const ingest = (h: HeaderRow, isSignedOff: boolean): void => {
       if (!matchesFilter(h)) return;
