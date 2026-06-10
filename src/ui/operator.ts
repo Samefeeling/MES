@@ -357,7 +357,11 @@ async function prevShiftCountEnd(): Promise<number | null> {
     machineCode: S!.mc,
     jobNumber: S!.selJob,
     shiftIdFrom: dateKey(sevenDaysAgo),
-    shiftIdTo: dateKey(S!.viewDate),
+    // '-￿' suffix keeps same-day shifts inside the range: shiftIds are
+    // 'YYYY-MM-DD-<code>' and a bare 'YYYY-MM-DD' upper bound sorts
+    // BEFORE them, which silently dropped the Day shift when carrying
+    // Count Start into the same day's Afternoon / Night shift.
+    shiftIdTo: `${dateKey(S!.viewDate)}-￿`,
   });
   // Pick the canonical row whose shiftId is the largest one strictly
   // before the current shift. Lex-sort works because shiftIds are
@@ -731,6 +735,7 @@ function buildSide(): string {
     ? 'No JobOper_ProdStandard on the planning row — Shift Target cannot be computed.'
     : `Shift Target = if Job Left × ${o!.qtyPerHr} h/piece ≥ 8h then 8 ÷ ${o!.qtyPerHr}, else Job Left.`;
   return `<aside class="op-side">
+    <div class="side-title">Shift counters</div>
     <div class="sk"><label>Job left</label><b data-live="jobLeft">${jobLeft}</b></div>
     <div class="sk"><label title="${escapeHtml(targetTitle)}">Shift Target</label><b title="${escapeHtml(targetTitle)}">${targetDisplay}</b></div>
     <div class="sk"><label>Count Start</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cstart" value="${cs}" ${rdo}${rdoTitle}></div>
@@ -1065,8 +1070,7 @@ function wire(): void {
 
   // Meta fields
   app.querySelectorAll<HTMLElement>('[data-meta]').forEach((el) => {
-    const ev = el.tagName === 'INPUT' && (el as HTMLInputElement).type !== 'checkbox' ? 'change' : 'change';
-    el.addEventListener(ev, () => onMetaChange(el));
+    el.addEventListener('change', () => onMetaChange(el));
   });
   app
     .querySelector<HTMLTextAreaElement>('textarea[data-meta="comments"]')
@@ -1149,7 +1153,11 @@ function onMetaChange(el: HTMLElement): void {
     case 'job':
       S!.selJob = val;
       saveView();
-      render();
+      // Full reload, not just render(): Job Left / Total Good and the
+      // Count Start auto-carry are per-job, so switching orders with a
+      // bare re-render showed the PREVIOUS job's cross-shift total and
+      // skipped the carry for the new one.
+      void reload();
       break;
     case 'operator':
       S!.selOperator = val;

@@ -561,11 +561,14 @@ function aggCells(a: ShiftAgg, includeSched: number | null = null, oeeAndSched =
   // data for this slice". The dash makes that distinction visible.
   const n = (v: number): string => (v ? String(v) : '—');
   const h = (v: number): string => (v ? v.toFixed(1) : '—');
-  const pct = (v: number): string => (v ? `${v}%` : '—');
+  // Yield is meaningless without pieces: emptyAgg() defaults yieldPct to
+  // 100, so a slice with no output AND no reject must show '—', not a
+  // green "100%" that reads as a perfect shift.
+  const noPieces = !a.output && !a.reject;
   return `
     <td class="num">${n(a.output)}</td>
     <td class="num r">${n(a.reject)}</td>
-    <td class="num ${yc}">${pct(a.yieldPct)}</td>
+    <td class="num ${noPieces ? '' : yc}">${noPieces ? '—' : `${a.yieldPct}%`}</td>
     <td class="num">${h(a.runHrs)}</td>
     <td class="num">${h(a.downHrs)}</td>
     <td class="num">${h(a.dieHrs)}</td>
@@ -621,10 +624,13 @@ function render(): void {
       insertHrs: 0,
     },
   );
+  const totPieces = tot.output + tot.reject;
   const totYield =
-    tot.output + tot.reject > 0
-      ? ((tot.output / (tot.output + tot.reject)) * 100).toFixed(1)
-      : '100.0';
+    totPieces > 0 ? ((tot.output / totPieces) * 100).toFixed(1) : null;
+  // Floor OEE for the headline tile — run share of all logged hours,
+  // same definition as the per-row OEE* and the hours chart overlay.
+  const totLogged = tot.runHrs + tot.downHrs + tot.setupHrs;
+  const totOee = totLogged > 0 ? Math.round((tot.runHrs / totLogged) * 100) : null;
 
   let body: string;
   if (S!.loading) {
@@ -752,12 +758,35 @@ function render(): void {
         </div>
       </div>`;
 
+  // Headline stat tiles — the numbers a daily production meeting opens
+  // with, readable from the back of the room before anyone drills into
+  // the per-machine table.
+  const asAt = new Date().toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' });
+  const stat = (label: string, value: string, cls = ''): string =>
+    `<div class="kpi-stat${cls ? ' ' + cls : ''}"><span class="kpi-stat-label">${escapeHtml(
+      label,
+    )}</span><b class="kpi-stat-value">${value}</b></div>`;
+  const stats = S!.loading
+    ? ''
+    : `<div class="kpi-stats">
+        ${stat('Output', tot.output ? String(tot.output) : '—')}
+        ${stat('Reject', tot.reject ? String(tot.reject) : '—', 'is-red')}
+        ${stat('Yield', totYield != null ? totYield + '%' : '—', totYield != null ? 'is-' + colourClass(+totYield, 98, 95) : '')}
+        ${stat('Run hours', tot.runHrs ? tot.runHrs.toFixed(1) : '—', 'is-green')}
+        ${stat('Down hours', tot.downHrs ? tot.downHrs.toFixed(1) : '—', tot.downHrs ? 'is-red' : '')}
+        ${stat('OEE*', totOee != null ? totOee + '%' : '—', totOee != null ? 'is-' + colourClass(totOee, 85, 70) : '')}
+      </div>`;
+
   app.innerHTML = `
     <div class="kpi">
       <div class="kpi-head">
-        <h2>📊 Production KPIs — ${escapeHtml(rangeLabel)}</h2>
-        <div class="shift-tabs">${tabs}</div>
+        <div class="kpi-head-text">
+          <h2>📊 Production KPIs — ${escapeHtml(rangeLabel)}</h2>
+          <p class="kpi-asof">Signed-off shifts only · as at ${escapeHtml(asAt)}</p>
+        </div>
+        <div class="shift-tabs">${tabs}<button type="button" class="shift-btn" data-kpi-refresh title="Re-pull production data from SharePoint">⟳</button></div>
       </div>
+      ${stats}
       <div class="kpi-table-wrap">
         <table class="summary-table kpi-table">
           <thead><tr>
@@ -785,7 +814,7 @@ function render(): void {
                     ${colorCell()}
                     <td class="num">${tn(tot.output)}</td>
                     <td class="num r">${tn(tot.reject)}</td>
-                    <td class="num">${totYield ? totYield + '%' : '—'}</td>
+                    <td class="num">${totYield != null ? totYield + '%' : '—'}</td>
                     <td class="num">${th(tot.runHrs)}</td>
                     <td class="num">${th(tot.downHrs)}</td>
                     <td class="num">${th(tot.dieHrs)}</td>
@@ -802,6 +831,11 @@ function render(): void {
       <p class="bd-sub">OEE* = run-slot share of all filled slots. Schedule Adherence = good qty ÷ planned qty for jobs starting in the period (suppressed in Last-24h). Shift sub-rows show each shift's contribution to the period total.</p>
     </div>`;
 
+  app.querySelector<HTMLButtonElement>('[data-kpi-refresh]')?.addEventListener('click', () => {
+    S!.loading = true;
+    render();
+    void compute();
+  });
   app.querySelectorAll<HTMLButtonElement>('[data-period]').forEach((b) =>
     b.addEventListener('click', () => {
       S!.period = b.dataset.period as PeriodKey;

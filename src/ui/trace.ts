@@ -25,6 +25,9 @@ interface TraceState {
   liveRows: TraceRow[];
   searched: boolean;
   loading: boolean;
+  /** Wall-clock of the last successful live pull — shown on the Live
+   *  Status summary strip so a stalled poll is visible at a glance. */
+  lastUpdated: Date | null;
 }
 
 interface TraceRow {
@@ -174,6 +177,7 @@ export async function renderTrace(dal: PmdDataLayer): Promise<void> {
     liveRows: [],
     searched: false,
     loading: true,
+    lastUpdated: null,
   };
   document.body.className = 'shift-day'; // neutral theme on trace page
   render();
@@ -234,7 +238,22 @@ function renderLiveBody(): string {
   if (S!.liveRows.length === 0) {
     return `<div class="trace-empty">No machines configured.</div>`;
   }
-  return `<div class="trace-results">${S!.liveRows.map(renderCard).join('')}</div>`;
+  // Floor summary strip: activity counts + shift + refresh heartbeat.
+  // Mirrors a classic andon header — the supervisor reads the floor's
+  // overall state here, then scans down for the press that needs them.
+  const counts: Record<Activity, number> = { running: 0, changeover: 0, breakdown: 0, idle: 0 };
+  for (const r of S!.liveRows) counts[activityFor(r)]++;
+  const chip = (a: Activity): string =>
+    `<span class="live-chip" style="--c:${ACTIVITY_COLOURS[a]}"><i></i>${ACTIVITY_LABELS[a]} <b>${counts[a]}</b></span>`;
+  const live = currentShift(new Date());
+  const updated = S!.lastUpdated
+    ? S!.lastUpdated.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : '—';
+  const head = `<div class="live-head">
+    <div class="live-chips">${chip('running')}${chip('changeover')}${chip('breakdown')}${chip('idle')}</div>
+    <div class="live-meta">${escapeHtml(live.shiftId)} · updated ${escapeHtml(updated)} · auto-refresh ${LIVE_POLL_MS / 1000}s</div>
+  </div>`;
+  return `${head}<div class="trace-results">${S!.liveRows.map(renderCard).join('')}</div>`;
 }
 
 function renderSearchBody(): string {
@@ -442,6 +461,7 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
     out.push(latestRow(machineRows));
   }
   S!.liveRows = out;
+  S!.lastUpdated = new Date();
   S!.loading = false;
   render();
   drawNowLines();

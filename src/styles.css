@@ -52,6 +52,16 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi{display:flex;flex-direction:column;gap:14px}
 .kpi-head{background:#fff;border:1px solid var(--bd);border-radius:12px;padding:14px;display:flex;flex-wrap:wrap;align-items:center;gap:14px;justify-content:space-between}
 .kpi-head h2{margin:0;font-size:16px;font-weight:700;color:#0c4a6e;line-height:1.3}
+.kpi-asof{margin:4px 0 0;font-size:13px;color:var(--mu);font-weight:600}
+/* Headline stat tiles above the table — daily-meeting numbers readable
+   from across the room. Top border carries the traffic-light colour. */
+.kpi-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.kpi-stat{background:#fff;border:1px solid var(--bd);border-top:4px solid var(--theme-dark);border-radius:12px;padding:12px 16px;display:flex;flex-direction:column;gap:4px}
+.kpi-stat-label{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--mu)}
+.kpi-stat-value{font-size:30px;font-weight:800;color:var(--tx);font-variant-numeric:tabular-nums;line-height:1.1}
+.kpi-stat.is-green{border-top-color:var(--gn)}.kpi-stat.is-green .kpi-stat-value{color:#15803d}
+.kpi-stat.is-amber{border-top-color:var(--am)}.kpi-stat.is-amber .kpi-stat-value{color:#b45309}
+.kpi-stat.is-red{border-top-color:var(--rd)}.kpi-stat.is-red .kpi-stat-value{color:#b91c1c}
 /* Global toggles in the Machine column header. Inherit kpi-toggle for
    look but shave a few px so they sit comfortably next to the "Machine"
    label. */
@@ -97,6 +107,13 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .trace-form label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--mu);text-transform:uppercase;letter-spacing:.4px;font-weight:700}
 .trace-form input,.trace-form select{padding:10px 12px;border:2px solid var(--bd);border-radius:8px;font-size:16px;min-height:48px;min-width:180px;background:#fff;color:var(--tx)}
 .trace-empty{padding:30px;background:#fff;border:1px dashed var(--bd);border-radius:10px;text-align:center;color:var(--mu);font-weight:600}
+/* Live Status andon header: per-activity counts + shift + refresh heartbeat. */
+.live-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 16px}
+.live-chips{display:flex;gap:10px;flex-wrap:wrap}
+.live-chip{display:inline-flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;background:#f8fafc;border:1px solid var(--bd);font-size:14px;font-weight:700;color:var(--tx)}
+.live-chip i{width:12px;height:12px;border-radius:50%;background:var(--c)}
+.live-chip b{font-size:18px;font-variant-numeric:tabular-nums;color:var(--c)}
+.live-meta{font-size:13px;color:var(--mu);font-weight:600;font-variant-numeric:tabular-nums}
 .trace-tabs{display:flex;gap:8px;margin-bottom:12px}
 .trace-tabs .shift-btn{min-width:180px}
 .trace-idle{display:inline-block;padding:2px 10px;border-radius:999px;background:#e2e8f0;color:#475569;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px}
@@ -151,12 +168,15 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .btn-save:hover{background:#b91c1c}
 
 .op-meta{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;background:var(--theme-panel);padding:12px 14px;border-radius:10px}
-.op-meta label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:700;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.5px}
+.op-meta label{display:flex;flex-direction:column;gap:5px;font-size:13px;font-weight:700;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.5px}
 /* Fixed height (not min-height): selects and text inputs have different
    natural heights, so min-height alone left the Machine drop-list a few
    px shorter than the Job# input next to it. */
-.op-meta input,.op-meta select{padding:10px 12px;border:2px solid var(--bd);border-radius:8px;font-size:17px;background:#fff;height:52px;box-sizing:border-box;color:var(--tx);width:auto}
-.op-meta input[disabled]{background:#f1f5f9;color:var(--mu)}
+.op-meta input,.op-meta select{padding:10px 12px;border:2px solid var(--bd);border-radius:8px;font-size:18px;background:#fff;height:52px;box-sizing:border-box;color:var(--tx);width:auto}
+.op-meta input[disabled]{background:#f1f5f9;color:#475569}
+/* High-visibility focus ring — operators with reduced eyesight need to
+   see at a glance which field the keyboard is going into. */
+.op-meta input:focus,.op-meta select:focus,.op-side .sk input:focus,.ab-date-input:focus,.handover-grid textarea:focus{outline:3px solid var(--theme-dark);outline-offset:1px}
 .op-meta .m-date input{width:160px}
 .op-meta .m-mc select{width:88px}
 /* Job# / Part# match the Operator / Supervisor select width (140px) so
@@ -170,7 +190,11 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    isn't clipped by the datalist's drop-down chevron on Safari. */
 .op-meta .m-job input{width:150px}
 .op-meta .m-part input{width:140px}
-.op-meta .m-desc input{width:140px}
+/* Product Description takes whatever width the row has left — it's the
+   field the operator actually reads to confirm they're on the right
+   part, so don't truncate it to a fixed 140px box. */
+.op-meta .m-desc{flex:1 1 220px;min-width:200px}
+.op-meta .m-desc input{width:100%}
 .op-meta .m-orderqty input{width:80px;font-weight:700}
 /* Swatch sits inline next to the "Part#" label, not next to the
    Product Description input. Shrunk to ~12px so it sits on the
@@ -192,7 +216,7 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .op-grid{border-collapse:separate;border-spacing:0;font-size:14px;table-layout:fixed;width:auto;min-width:100%}
 .op-grid th,.op-grid td{border:1px solid #d1d5db;padding:0;margin:0;text-align:center;vertical-align:middle}
 .op-grid thead th{background:var(--theme-dark);color:var(--theme-on-dark);font-weight:700;height:44px;padding:0 4px;white-space:nowrap;font-size:13px}
-.op-grid th.slot-head{width:var(--slot-w);font-size:11px}
+.op-grid th.slot-head{width:var(--slot-w);font-size:12px}
 .op-grid th.rh{background:rgba(255,255,255,.85);color:var(--theme-on-base);width:200px;text-align:left;padding:0 12px;font-weight:700;position:sticky;left:0;z-index:2;font-size:15px}
 .op-grid thead th.corner{background:var(--theme-dark);color:var(--theme-on-dark);text-align:left;font-size:15px}
 .op-grid tbody tr{height:64px}
@@ -206,7 +230,7 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    reads as a distinct block. */
 .op-grid tr.row-status th.rh{background:var(--theme-accent);color:var(--theme-on-dark);font-weight:800;font-size:16px;letter-spacing:.3px;text-transform:uppercase}
 .op-grid tr.row-status td{border-bottom:3px solid var(--theme-dark);background:#f8fafc}
-.op-grid tr.row-named th.rh{background:#fafafa;font-size:13px;color:#475569;font-weight:600}
+.op-grid tr.row-named th.rh{background:#fafafa;font-size:14px;color:#334155;font-weight:700}
 .op-grid tr.row-named:first-of-type td{border-top:0}
 
 /* §2 — live slot highlight: thick frame + soft pulse so operators see it at a glance. */
@@ -219,28 +243,29 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .bd-tag{position:absolute;bottom:2px;right:4px;font-size:9px;font-weight:800;background:rgba(0,0,0,.55);color:#fff;padding:1px 4px;border-radius:3px;letter-spacing:.3px;pointer-events:none}
 
 /* Status cell — tap selects this slot, hold-and-drag extends the range. */
-.slot-cell{width:100%;height:60px;border:0;background:transparent;font-size:24px;font-weight:900;text-align:center;cursor:pointer;color:inherit;padding:0;touch-action:none;user-select:none;-webkit-user-select:none}
+.slot-cell{width:100%;height:60px;border:0;background:transparent;font-size:28px;font-weight:900;text-align:center;cursor:pointer;color:inherit;padding:0;touch-action:none;user-select:none;-webkit-user-select:none}
 .op-grid td.multisel{box-shadow:inset 0 0 0 3px #1e3a8a,0 0 0 2px rgba(30,58,138,.25)}
 .ab-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px}
-.ab-pill{padding:14px 8px;border-radius:12px;font-weight:800;cursor:pointer;border:2px solid;text-align:center;min-height:72px;display:flex;flex-direction:column;gap:4px;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent;transition:transform .08s}
+.ab-pill{padding:14px 8px;border-radius:12px;font-weight:800;cursor:pointer;border:2px solid;text-align:center;min-height:84px;display:flex;flex-direction:column;gap:4px;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent;transition:transform .08s}
 .ab-pill:active{transform:scale(.94)}
-.ab-cd{font-size:28px;font-weight:900;line-height:1}
-.ab-lb{font-size:12px;font-weight:600;line-height:1.1;opacity:.9}
+.ab-cd{font-size:34px;font-weight:900;line-height:1}
+.ab-lb{font-size:13px;font-weight:600;line-height:1.1;opacity:.92}
 
-.rej-input{width:100%;height:60px;border:0;background:transparent;text-align:right;font-size:18px;padding:0 8px;font-weight:600;color:var(--tx)}
+.rej-input{width:100%;height:60px;border:0;background:transparent;text-align:right;font-size:20px;padding:0 8px;font-weight:700;color:var(--tx);font-variant-numeric:tabular-nums}
 .rej-input:focus{outline:3px solid var(--theme-dark);outline-offset:-3px}
 
 .now-line{position:absolute;top:44px;bottom:0;width:3px;background:var(--rd);z-index:3;pointer-events:none;box-shadow:0 0 8px rgba(220,38,38,.7)}
 .now-line::before{content:"NOW";position:absolute;top:-18px;left:-18px;background:var(--rd);color:#fff;font-size:10px;font-weight:800;padding:2px 6px;border-radius:4px;letter-spacing:.6px}
 
 /* ===== side summary ===== */
-.op-side{width:260px;display:flex;flex-direction:column;gap:8px;background:var(--theme-panel);padding:12px;border-radius:10px;border:2px solid var(--theme-accent)}
-.op-side .sk{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--theme-on-base);font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+.op-side{width:270px;display:flex;flex-direction:column;gap:8px;background:var(--theme-panel);padding:12px;border-radius:10px;border:2px solid var(--theme-accent)}
+.side-title{font-size:14px;font-weight:800;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.6px;border-bottom:2px solid var(--theme-accent);padding-bottom:6px}
+.op-side .sk{display:flex;align-items:center;gap:10px;font-size:14px;color:var(--theme-on-base);font-weight:700;text-transform:uppercase;letter-spacing:.4px}
 .op-side .sk label{flex:1}
-.op-side .sk b{font-size:22px;color:var(--tx);font-weight:800}
+.op-side .sk b{font-size:26px;color:var(--tx);font-weight:800;font-variant-numeric:tabular-nums}
 .op-side .sk b.r{color:var(--rd)}
 .op-side .sk b.g{color:var(--gn)}
-.op-side .sk input{width:120px;padding:10px;border:2px solid var(--bd);border-radius:8px;font-size:18px;text-align:right;min-height:48px;font-weight:700}
+.op-side .sk input{width:130px;padding:10px;border:2px solid var(--bd);border-radius:8px;font-size:20px;text-align:right;min-height:48px;font-weight:700;font-variant-numeric:tabular-nums}
 
 /* §6 — Handover / Journey: 2x2 grid of textareas for People / Plant / Machine / Material. */
 .handover{display:flex;flex-direction:column;gap:8px;margin-top:4px;border-top:2px solid var(--theme-accent);padding-top:10px;flex:1 1 auto;min-height:0}
@@ -251,7 +276,7 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    any extra room (operators were running out of typing space). */
 .handover-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:1 1 auto;min-height:240px}
 .handover-grid label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:700;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.4px;min-height:0}
-.handover-grid textarea{width:100%;flex:1 1 auto;min-height:110px;resize:vertical;border:2px solid var(--bd);border-radius:8px;padding:8px;font-family:inherit;font-size:14px;background:#fef9c3}
+.handover-grid textarea{width:100%;flex:1 1 auto;min-height:110px;resize:vertical;border:2px solid var(--bd);border-radius:8px;padding:8px;font-family:inherit;font-size:15px;background:#fef9c3}
 
 /* §9 — Summary view shown when zoom is at Today / Week / Month. Read-only. */
 .summary-wrap{background:#fff;border-radius:10px;border:2px solid var(--theme-accent);padding:14px}
@@ -275,9 +300,9 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .signoff-summary b.r{color:var(--rd)}
 .signoff-summary b.g{color:var(--gn)}
 
-.op-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:14px;color:var(--theme-on-base);padding:8px 12px;background:var(--theme-panel);border-radius:8px;font-weight:600}
+.op-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:15px;color:var(--theme-on-base);padding:8px 12px;background:var(--theme-panel);border-radius:8px;font-weight:600}
 .op-legend span{display:inline-flex;align-items:center;gap:6px}
-.op-legend i{display:inline-block;width:18px;height:18px;border-radius:3px;border:2px solid}
+.op-legend i{display:inline-block;width:20px;height:20px;border-radius:3px;border:2px solid}
 
 /* ===== modal shell (shared) ===== */
 .mbg{position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:200;display:none;align-items:center;justify-content:center;padding:18px}
@@ -410,7 +435,7 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 }
 
 /* ===== toast ===== */
-.toast{position:fixed;top:18px;right:18px;background:#1e293b;color:#fff;padding:14px 22px;border-radius:10px;font-size:16px;font-weight:700;z-index:300;opacity:0;transform:translateY(-10px);transition:.2s;pointer-events:none;max-width:80vw;box-shadow:0 4px 16px rgba(0,0,0,.25)}
+.toast{position:fixed;top:18px;right:18px;background:#1e293b;color:#fff;padding:14px 22px;border-radius:10px;font-size:17px;font-weight:700;z-index:300;opacity:0;transform:translateY(-10px);transition:.2s;pointer-events:none;max-width:80vw;box-shadow:0 4px 16px rgba(0,0,0,.25)}
 .toast.show{opacity:1;transform:translateY(0)}
 .toast.ok{background:var(--gn)}.toast.err{background:var(--rd)}.toast.warn{background:var(--am)}
 
