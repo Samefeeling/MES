@@ -4,7 +4,6 @@ import type {
   Operator,
   PlanningFilter,
   PlanningOrder,
-  Product,
   ProductDieColor,
   ProductionFilter,
   ProductionRecord,
@@ -35,7 +34,6 @@ const LISTS = {
   machine: 'PMD_Machine',
   operator: 'PMD_Operator',
   supervisor: 'PMD_Supervisor',
-  products: 'PMD_Products',
   planning: 'PMD_Planning',
   production: 'PMD_Production',
   /** Transient "in-progress" mirror of PMD_Production. pushLiveSnapshot
@@ -81,16 +79,6 @@ const DEFAULT_FIELDS = {
     // Title = role title (e.g. "Day shift Supervisor"); Name = person name.
     title: 'Title',
     name: 'Name',
-  },
-  products: {
-    // Title = PartNum; other columns are auto-named field_1..field_6.
-    partNum: 'Title',
-    desc: 'field_1',
-    family: 'field_2',
-    group: 'field_3',
-    partClass: 'field_4',
-    typeCode: 'field_5',
-    cost: 'field_6',
   },
   planning: {
     // Source of truth is now Epicor REST — scripts/sync-epicor-to-sp.ps1
@@ -210,10 +198,6 @@ export type PartialFieldMap = {
 
 export interface SharePointOptions {
   siteUrl: string;
-  /** Resolves a Microsoft Graph access token. Required only for syncPlanningFromExcel. */
-  graphToken?: () => Promise<string>;
-  /** Path inside the site to the planning workbook. */
-  planningFilePath?: string;
   /**
    * Server-relative path to a CSV holding planning data (preferred over
    * reading PMD_Planning list when set). Example:
@@ -228,8 +212,6 @@ export interface SharePointOptions {
 export class SharePointDataLayer implements PmdDataLayer {
   private digest: { value: string; expires: number } | null = null;
   private readonly siteUrl: string;
-  private readonly graphToken?: () => Promise<string>;
-  private readonly planningFilePath?: string;
   private readonly planningCsvPath?: string;
   private readonly F: SharePointFieldMap;
 
@@ -243,8 +225,6 @@ export class SharePointDataLayer implements PmdDataLayer {
    */
   private editCache = new Map<string, ProductionRecord[]>();
   private static readonly EDIT_CACHE_KEY = 'pmd_edit_cache_v1';
-  /** Hydrated headers: same key, value = the synthesised slot 0 record. */
-  private hydratedKeys = new Set<string>();
   /**
    * Cache of `ListItemEntityTypeFullName` per list title. Encoding a list
    * title to that string by hand (`SP.Data.${encoded}ListItem`) is unreliable
@@ -265,8 +245,6 @@ export class SharePointDataLayer implements PmdDataLayer {
   constructor(opts: SharePointOptions | string) {
     const o = typeof opts === 'string' ? { siteUrl: opts } : opts;
     this.siteUrl = o.siteUrl.replace(/\/$/, '');
-    this.graphToken = o.graphToken;
-    this.planningFilePath = o.planningFilePath;
     this.planningCsvPath = o.planningCsvPath;
     // Merge user overrides into the defaults.
     this.F = mergeFieldMap(DEFAULT_FIELDS, o.fieldMap);
@@ -479,19 +457,6 @@ export class SharePointDataLayer implements PmdDataLayer {
     return out;
   }
 
-  async listProducts(): Promise<Product[]> {
-    const F = this.F.products;
-    const rows = await this.getAllItems(LISTS.products);
-    return rows.map((r) => ({
-      id: getId(r),
-      partNumber: str(r[F.partNum]),
-      description: str(r[F.desc]),
-      standardCycleSec: 0,
-      cavities: 1,
-      active: true,
-    }));
-  }
-
   async listRejectCategories(): Promise<RejectCategory[]> {
     const F = this.F.rejectCategories;
     const rows = await this.getAllItems(LISTS.rejectCategories);
@@ -533,30 +498,10 @@ export class SharePointDataLayer implements PmdDataLayer {
         this.dieColorCache = [];
         return this.dieColorCache;
       }
-      // Decisive diagnostic: dump the RAW SP row(s) for the Part #s the
-      // user reports as missing a swatch. This reveals the actual column
-      // internal names + values SP returned for that exact part, so we
-      // can tell whether PartNum/ColorHex are empty, mis-named, or in a
-      // different column than the field map expects.
-      for (const probe of ['LMBL00004', 'G08770030']) {
-        const raw = rows.find((r) =>
-          Object.values(r).some((v) => str(v).trim().toUpperCase() === probe),
-        );
-        console.info(
-          `[pmd] ProductDieColor RAW row for ${probe}:`,
-          raw
-            ? Object.fromEntries(
-                Object.entries(raw).filter(
-                  ([k]) => !k.startsWith('__') && !/^odata|^Metadata/i.test(k),
-                ),
-              )
-            : 'NOT FOUND in any column',
-        );
-      }
-      // Direct field reads — works when SP kept the typed column names.
-      // Keep rows that carry a category even when the hex is missing /
-      // invalid: they can't drive a swatch but still bucket their part
-      // into the right KPI category subtotal.
+      // Direct field reads against the PartNum / ColorHex / ActualColor /
+      // Category columns. Keep rows that carry a category even when the
+      // hex is missing / invalid: they can't drive a swatch but still
+      // bucket their part into the right KPI category subtotal.
       const direct = rows
         .map((r) => ({
           partNumber: str(r[F.partNum]).trim(),
@@ -565,51 +510,8 @@ export class SharePointDataLayer implements PmdDataLayer {
           category: str(r[F.category]).trim(),
         }))
         .filter((c) => c.partNumber && (c.hex || c.category));
-      if (direct.length > 0) {
-        console.info(
-          '[pmd] PMD_ProductDieColor cached:',
-          direct.length,
-          'of',
-          rows.length,
-          'rows',
-        );
-        this.dieColorCache = direct;
-        return this.dieColorCache;
-      }
-      // SP modern UI sometimes auto-renames new columns to `field_N`.
-      // Probe the first row: the hex column is whichever one carries a
-      // #RRGGBB value; Title is the part number; the remaining text
-      // field is the colour name.
-      const r0 = rows[0];
-      const isHex = (v: unknown) => /^#?[0-9a-fA-F]{6}$/.test(str(v).trim());
-      const hexKey = Object.keys(r0).find((k) => isHex(r0[k]));
-      const partKey = str(r0.Title).trim() ? 'Title' : Object.keys(r0).find((k) => k !== hexKey && /^[A-Za-z0-9_-]+$/.test(str(r0[k])));
-      const nameKey = Object.keys(r0).find(
-        (k) =>
-          k !== hexKey &&
-          k !== partKey &&
-          /^field_\d|Title|Name|Color/.test(k) &&
-          str(r0[k]).trim().length > 0,
-      );
-      console.warn(
-        '[pmd] PMD_ProductDieColor direct read found 0 mappings; auto-detected',
-        { partKey, hexKey, nameKey },
-        'first row:',
-        r0,
-      );
-      if (!partKey || !hexKey) {
-        this.dieColorCache = [];
-        return this.dieColorCache;
-      }
-      const auto = rows
-        .map((r) => ({
-          partNumber: str(r[partKey]).trim(),
-          hex: normaliseHex(str(r[hexKey])),
-          name: nameKey ? str(r[nameKey]).trim() : '',
-          category: str(r[F.category]).trim(),
-        }))
-        .filter((c) => c.partNumber && c.hex);
-      this.dieColorCache = auto;
+      console.info('[pmd] PMD_ProductDieColor cached:', direct.length, 'of', rows.length, 'rows');
+      this.dieColorCache = direct;
       return this.dieColorCache;
     } catch (e) {
       // Tenant without PMD_ProductDieColor → no swatch is fine; the
@@ -682,37 +584,6 @@ export class SharePointDataLayer implements PmdDataLayer {
       );
     }
     return parsePlanningCsv(await res.text());
-  }
-
-  async upsertPlanningOrder(order: PlanningOrder): Promise<PlanningOrder> {
-    const F = this.F.planning;
-    const body: Record<string, unknown> = {
-      __metadata: { type: await this.itemType(LISTS.planning) },
-      [F.startDateTime]: order.plannedStart,
-      [F.qtyHour]: order.qtyPerHr,
-      [F.dueDate]: order.plannedEnd,
-      [F.jobNum]: order.jobNumber,
-      [F.partNum]: order.partNumber,
-      [F.partDesc]: order.partDescription,
-      [F.remaining]: order.jobRequired,
-      [F.duration]: order.duration,
-    };
-    // Optional/legacy columns — only include when the field map has a real
-    // SP internal name. Title is now populated by the Epicor sync job
-    // directly (set to JobNum) so the app never needs to write it here.
-    if (F.machine) body[F.machine] = order.machineCode;
-    if (F.dc) body[F.dc] = order.isDieChange ? 'D' : '';
-    if (order.id > 0) {
-      await this.post(`${this.listUrl(LISTS.planning)}/items(${order.id})`, body, '*');
-      return order;
-    }
-    const res = await this.post(`${this.listUrl(LISTS.planning)}/items`, body);
-    const created = ((await res.json()) as { d: { ID: number } }).d;
-    return { ...order, id: created.ID };
-  }
-
-  async deletePlanningOrder(id: number): Promise<void> {
-    await this.del(`${this.listUrl(LISTS.planning)}/items(${id})`);
   }
 
   // ---- production (header / events) ----------------------------------
@@ -804,7 +675,6 @@ export class SharePointDataLayer implements PmdDataLayer {
       cached.push(
         ...this.expandHeaderToSlots(hWithTimeline, rejectsByKey.get(key) ?? [], isSignedOff),
       );
-      this.hydratedKeys.add(key);
     };
 
     // Signed-off first so it wins any (rare) overlap with a not-yet-
@@ -1311,14 +1181,6 @@ export class SharePointDataLayer implements PmdDataLayer {
     } catch (e) {
       console.warn('[pmd] unlock: live mirror cleanup failed', e);
     }
-    // Drop hydrated cache so a re-read pulls fresh. Scope to the job
-    // when one was supplied, otherwise drop the whole shift's keys.
-    const prefix = jobNumber
-      ? `${machineCode}|${shiftId}|${jobNumber}`
-      : `${machineCode}|${shiftId}|`;
-    this.hydratedKeys.forEach((k) => {
-      if (k.startsWith(prefix)) this.hydratedKeys.delete(k);
-    });
   }
 
   private async upsertProductionHeader(h: HeaderInput): Promise<void> {
@@ -1591,158 +1453,6 @@ export class SharePointDataLayer implements PmdDataLayer {
       d: { Title: string; Email: string; LoginName: string };
     }>(`${this.siteUrl}/_api/web/currentUser`);
     return { name: res.d.Title || res.d.Email || res.d.LoginName, role: 'operator' };
-  }
-
-  // ---- Excel → Planning sync -----------------------------------------
-
-  async syncPlanningFromExcel(): Promise<{ inserted: number; skipped: number }> {
-    if (!this.graphToken)
-      throw new Error('syncPlanningFromExcel: pass graphToken in SharePointOptions');
-    if (!this.planningFilePath)
-      throw new Error('syncPlanningFromExcel: pass planningFilePath in SharePointOptions');
-    const token = await this.graphToken();
-    const headers = { Authorization: `Bearer ${token}` };
-    const u = new URL(this.siteUrl);
-    const siteId = await fetch(
-      `https://graph.microsoft.com/v1.0/sites/${u.hostname}:${u.pathname}`,
-      { headers },
-    )
-      .then((r) => r.json() as Promise<{ id: string }>)
-      .then((j) => j.id);
-    const drivePath = this.planningFilePath.replace(/^Shared Documents\//, '');
-    const sheet = encodeURIComponent('Planning');
-    const wbBase = `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${encodeURI(drivePath)}:/workbook`;
-
-    // Heavy .xlsm with formulas/external links times out on every direct
-    // /range call because Graph re-opens + recalculates each time. Open a
-    // read-only workbook session first (persistChanges=false), pass the
-    // session-id on subsequent calls — Graph reuses the already-loaded
-    // workbook and skips recalc, dropping the latency from "504 timeout"
-    // territory to a few seconds.
-    let sessionId = '';
-    try {
-      const sRes = await fetch(`${wbBase}/createSession`, {
-        method: 'POST',
-        headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ persistChanges: false }),
-      });
-      if (sRes.ok) {
-        sessionId = ((await sRes.json()) as { id: string }).id ?? '';
-      }
-    } catch {
-      /* session is an optimisation, fall back to direct calls */
-    }
-    const wbHeaders: Record<string, string> = sessionId
-      ? { ...headers, 'workbook-session-id': sessionId }
-      : headers;
-
-    // Read rows in chunks so even a slow file completes — and stop as soon
-    // as we hit a blank row (the planning sheet is contiguous from row 2).
-    const CHUNK = 500;
-    const MAX_CHUNKS = 10; // 5000-row ceiling
-    const values: unknown[][] = [];
-    for (let i = 0; i < MAX_CHUNKS; i++) {
-      const fromRow = i * CHUNK + 1;
-      const toRow = fromRow + CHUNK - 1;
-      const rangeUrl = `${wbBase}/worksheets('${sheet}')/range(address='A${fromRow}:R${toRow}')?$select=values`;
-      const rangeRes = await fetch(rangeUrl, { headers: wbHeaders });
-      if (!rangeRes.ok) {
-        if (sessionId) {
-          // Best-effort close so the workbook lock releases sooner.
-          void fetch(`${wbBase}/closeSession`, { method: 'POST', headers: wbHeaders });
-        }
-        throw new Error(
-          `Graph workbook fetch failed: ${rangeRes.status} ${await rangeRes.text()}`,
-        );
-      }
-      const chunk = ((await rangeRes.json()) as { values: unknown[][] }).values ?? [];
-      // Trim trailing blank rows in this chunk; stop if we hit them.
-      let lastNonBlank = chunk.length - 1;
-      while (lastNonBlank >= 0 && chunk[lastNonBlank].every((c) => c == null || c === '')) {
-        lastNonBlank--;
-      }
-      values.push(...chunk.slice(0, lastNonBlank + 1));
-      if (lastNonBlank < chunk.length - 1) break; // hit blank tail → done
-    }
-    if (sessionId) {
-      void fetch(`${wbBase}/closeSession`, { method: 'POST', headers: wbHeaders });
-    }
-    if (!values || values.length < 2) return { inserted: 0, skipped: 0 };
-
-    const col = (letter: string): number => letter.charCodeAt(0) - 'A'.charCodeAt(0);
-    // Column letters per the actual workbook (calibrated 2026-06-01):
-    //   A=Machine  B=StartDateTime  C=QtyPerHour  D=Due_Date
-    //   E=JobHead_JobNum  F=JobHead_PartNum  G=JobHead_PartDescription
-    //   H=Calculated_RemainingQty  O=DIENumber  Q=Duration  R=DIEChange
-    const C = {
-      machine: col('A'),
-      plannedStart: col('B'),
-      qtyPerHr: col('C'),
-      plannedEnd: col('D'),
-      jobNumber: col('E'),
-      partNumber: col('F'),
-      partDesc: col('G'),
-      jobRequired: col('H'),
-      dieNumber: col('O'),
-      duration: col('Q'),
-      dieChange: col('R'),
-    };
-
-    let inserted = 0;
-    let skipped = 0;
-    const fresh: PlanningOrder[] = [];
-    for (const r of values.slice(1)) {
-      const start = r[C.plannedStart];
-      if (start == null || start === '') {
-        skipped++;
-        continue;
-      }
-      // Use excelDate strictly — its native `new Date(string)` fallback would
-      // re-introduce the UTC-bug for ISO strings ending in Z.
-      const ps = excelDate(start);
-      if (!ps || !isFinite(ps.getTime())) {
-        skipped++;
-        continue;
-      }
-      const dur = Number(r[C.duration]) || 0;
-      let pe = excelDate(r[C.plannedEnd]);
-      if (!pe || !isFinite(pe.getTime())) {
-        // Due_Date blank or unparseable → derive from start + Duration hours
-        // so the order is still pickable in the operator sheet's UI.
-        pe = new Date(ps.getTime() + dur * 3600_000);
-      }
-      const machineCode = String(r[C.machine] ?? '').trim();
-      fresh.push({
-        id: 0,
-        jobNumber: String(r[C.jobNumber] ?? '').trim(),
-        machineCode,
-        originalMachine: machineCode,
-        partNumber: String(r[C.partNumber] ?? '').trim(),
-        partDescription: String(r[C.partDesc] ?? '').trim(),
-        plannedStart: ps.toISOString(),
-        plannedEnd: pe.toISOString(),
-        jobRequired: Number(r[C.jobRequired]) || 0,
-        qtyPerHr: Number(r[C.qtyPerHr]) || 0,
-        duration: dur,
-        released: true,
-        // R = DIEChange column; 'D' / 'Y' / 'TRUE' all count as die-change.
-        isDieChange: /^(D|Y|TRUE)$/i.test(String(r[C.dieChange] ?? '').trim()),
-        manuallyAdded: false,
-        source: 'ERP',
-      });
-    }
-
-    // Wipe existing rows, then insert fresh ones.
-    const existing = await this.getAllItems<{ ID?: number; Id?: number }>(LISTS.planning, '$select=ID');
-    for (const it of existing) {
-      const id = it.ID ?? it.Id;
-      if (id) await this.del(`${this.listUrl(LISTS.planning)}/items(${id})`);
-    }
-    for (const row of fresh) {
-      await this.upsertPlanningOrder(row);
-      inserted++;
-    }
-    return { inserted, skipped };
   }
 
   // ---- diagnostics ---------------------------------------------------
@@ -2196,13 +1906,6 @@ function bdFallback(): BdCode[] {
 // have to dig into ../core/breakdown directly when working with codes
 // surfaced from SharePoint).
 export { bdLabelFor };
-
-/** Duck-typed check used by the UI to know if the active DAL can sync. */
-export function canSyncPlanning(
-  dal: unknown,
-): dal is { syncPlanningFromExcel: () => Promise<{ inserted: number; skipped: number }> } {
-  return typeof (dal as { syncPlanningFromExcel?: unknown })?.syncPlanningFromExcel === 'function';
-}
 
 // ---------------------------------------------------------------------------
 // CSV parsing for the Epicor → CSV → SharePoint file → app pipeline.

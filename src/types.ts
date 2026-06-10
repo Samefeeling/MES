@@ -28,15 +28,6 @@ export interface Operator {
 // PMD_Supervisors has the same shape as PMD_Operators (§3.3).
 export type Supervisor = Operator;
 
-export interface Product {
-  id: number;
-  partNumber: string;
-  description: string;
-  standardCycleSec: number;
-  cavities: number;
-  active: boolean;
-}
-
 export interface RejectCategory {
   code: string;
   label: string;

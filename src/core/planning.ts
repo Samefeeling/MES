@@ -1,57 +1,10 @@
 import type { PlanningOrder } from '../types';
-import { SLOTS_PER_SHIFT, shiftBounds, slotTimeRange } from './shifts';
 
-// In-shift planning helpers: where each order's Gantt bar sits within
-// the 16-slot grid, and auto die-change generation between consecutive
-// same-machine orders with different part numbers.
-//
-// Looking for the Excel → PMD_Planning sync? That lives in
-// `src/dal/sharepoint.ts → SharePointDataLayer.syncPlanningFromExcel()`,
-// since it depends on Microsoft Graph + SharePoint REST. The Refresh
-// button (operator.ts) and the in-app daily auto-sync (main.ts) both
-// invoke it via the duck-typed `canSyncPlanning(dal)` gate.
-//
-// §5.2 Order Bar Width — every bar spans the full 16 slots; slots outside the
-// order's ERP-planned region are dimmed (still clickable). These helpers
-// compute the in-plan region for rendering.
-
-export interface PlannedRegion {
-  /** First slot index (inclusive) inside the planned window, or -1. */
-  fromSlot: number;
-  /** Last slot index (inclusive) inside the planned window, or -1. */
-  toSlot: number;
-}
-
-export function plannedRegion(order: PlanningOrder, shiftId: string): PlannedRegion {
-  const b = shiftBounds(shiftId);
-  if (!b) return { fromSlot: -1, toSlot: -1 };
-  const ps = new Date(order.plannedStart).getTime();
-  const pe = new Date(order.plannedEnd).getTime();
-  let from = -1;
-  let to = -1;
-  for (let i = 0; i < SLOTS_PER_SHIFT; i++) {
-    const r = slotTimeRange(shiftId, i);
-    if (!r) continue;
-    const sStart = r.start.getTime();
-    const sEnd = r.end.getTime();
-    // slot overlaps the planned window
-    if (sEnd > ps && sStart < pe) {
-      if (from === -1) from = i;
-      to = i;
-    }
-  }
-  return { fromSlot: from, toSlot: to };
-}
-
-export function isSlotInPlan(
-  order: PlanningOrder,
-  shiftId: string,
-  slotIndex: number,
-): boolean {
-  const { fromSlot, toSlot } = plannedRegion(order, shiftId);
-  if (fromSlot === -1) return false;
-  return slotIndex >= fromSlot && slotIndex <= toSlot;
-}
+// Auto die-change generation between consecutive same-machine orders
+// with different part numbers (§5.3). Used by the memory DAL's seed so
+// the demo data carries realistic DC pseudo-orders; the live planning
+// pipeline (Epicor BAQ → Planning.csv → loadPlanningCsv) provides its
+// own die-change rows.
 
 const DC_MIN_HOURS = 0.5; // §5.3 — DC orders have a fixed minimum 0.5h duration
 
@@ -98,8 +51,4 @@ export function generateDieChanges(orders: PlanningOrder[]): PlanningOrder[] {
     }
   }
   return result;
-}
-
-export function manualDieChangeJobNumber(now: Date = new Date()): string {
-  return `DC_manual_${now.getTime()}`;
 }

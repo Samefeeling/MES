@@ -148,7 +148,7 @@ const OPERATOR_STEPS: TutorialStep[] = [
     id: 'signoff-open',
     title: 'Sign Off and Save',
     narration:
-      'When everything looks right, tap the green Sign Off & Save button at the top right. A confirmation opens with the numbers you are about to commit — Count Start, Count End, Good, Reject, Operator, Supervisor.',
+      'When everything looks right, tap the green Sign Off button at the top right. A confirmation opens with the numbers you are about to commit — Count Start, Count End, Good, Reject, Operator, Supervisor.',
     target: '[data-saveclear]',
   },
   {
@@ -213,7 +213,7 @@ const SUPERVISOR_STEPS: TutorialStep[] = [
     id: 'sv-after',
     title: 'Step 4 — After the fix is done',
     narration:
-      'Once the operator has fixed what was wrong, they tap ✅ Sign off & Save again. Your name as supervisor is recorded on the new signature. The numbers in the master roll-up are updated.',
+      'Once the operator has fixed what was wrong, they tap ✅ Sign off again. Your name as supervisor is recorded on the new signature. The numbers in the master roll-up are updated.',
     hint: 'Tap Finish to close.',
   },
 ];

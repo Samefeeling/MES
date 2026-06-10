@@ -4,7 +4,6 @@ import type {
   Operator,
   PlanningFilter,
   PlanningOrder,
-  Product,
   ProductionFilter,
   ProductionRecord,
   RejectCategory,
@@ -17,7 +16,6 @@ import {
   seedMachines,
   seedOperators,
   seedPlanning,
-  seedProducts,
   seedProduction,
   seedRejectCategories,
   seedSupervisors,
@@ -33,25 +31,21 @@ export class MemoryDataLayer implements PmdDataLayer {
   private machines: Machine[];
   private operators: Operator[];
   private supervisors: Supervisor[];
-  private products: Product[];
   private rejectCategories: RejectCategory[];
   private bdCodes: BdCode[];
   private planning: PlanningOrder[];
   private production: ProductionRecord[];
   private nextProdId: number;
-  private nextPlanId: number;
 
   constructor(now: Date = new Date()) {
     this.machines = seedMachines();
     this.operators = seedOperators();
     this.supervisors = seedSupervisors();
-    this.products = seedProducts();
     this.rejectCategories = seedRejectCategories();
     this.bdCodes = seedBdCodes();
     this.planning = seedPlanning(now);
     this.production = seedProduction(now, this.planning);
     this.nextProdId = Math.max(0, ...this.production.map((r) => r.id)) + 1;
-    this.nextPlanId = Math.max(0, ...this.planning.map((p) => p.id)) + 1;
   }
 
   // Deep-copy on the way out so callers can't mutate internal state.
@@ -67,9 +61,6 @@ export class MemoryDataLayer implements PmdDataLayer {
   }
   async listSupervisors(): Promise<Supervisor[]> {
     return MemoryDataLayer.clone(this.supervisors.filter((s) => s.active));
-  }
-  async listProducts(): Promise<Product[]> {
-    return MemoryDataLayer.clone(this.products.filter((p) => p.active));
   }
   async listRejectCategories(): Promise<RejectCategory[]> {
     return MemoryDataLayer.clone(
@@ -90,21 +81,6 @@ export class MemoryDataLayer implements PmdDataLayer {
         (a, b) => new Date(a.plannedStart).getTime() - new Date(b.plannedStart).getTime(),
       ),
     );
-  }
-
-  async upsertPlanningOrder(order: PlanningOrder): Promise<PlanningOrder> {
-    const idx = this.planning.findIndex((p) => p.id === order.id);
-    if (idx >= 0) {
-      this.planning[idx] = MemoryDataLayer.clone(order);
-      return MemoryDataLayer.clone(this.planning[idx]);
-    }
-    const created = MemoryDataLayer.clone({ ...order, id: this.nextPlanId++ });
-    this.planning.push(created);
-    return MemoryDataLayer.clone(created);
-  }
-
-  async deletePlanningOrder(id: number): Promise<void> {
-    this.planning = this.planning.filter((p) => p.id !== id);
   }
 
   async listProduction(filter: ProductionFilter): Promise<ProductionRecord[]> {

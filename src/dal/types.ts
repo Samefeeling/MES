@@ -4,7 +4,6 @@ import type {
   Operator,
   PlanningFilter,
   PlanningOrder,
-  Product,
   ProductDieColor,
   ProductionFilter,
   ProductionRecord,
@@ -20,7 +19,6 @@ export interface PmdDataLayer {
   listMachines(): Promise<Machine[]>;
   listOperators(): Promise<Operator[]>;
   listSupervisors(): Promise<Supervisor[]>;
-  listProducts(): Promise<Product[]>;
   listRejectCategories(): Promise<RejectCategory[]>;
   listBdCodes(): Promise<BdCode[]>;
   /** Die / paint colour per Part #. Used by the operator's Product
@@ -28,10 +26,8 @@ export interface PmdDataLayer {
    *  without PMD_ProductDieColor returns an empty list. */
   listProductDieColors?(): Promise<ProductDieColor[]>;
 
-  // Planning (read-mostly)
+  // Planning (read-only — the Epicor → Planning.csv pipeline owns writes)
   listPlanning(filter: PlanningFilter): Promise<PlanningOrder[]>;
-  upsertPlanningOrder(order: PlanningOrder): Promise<PlanningOrder>;
-  deletePlanningOrder(id: number): Promise<void>;
 
   // Production (hot path)
   listProduction(filter: ProductionFilter): Promise<ProductionRecord[]>;
@@ -59,4 +55,4 @@ export interface PmdDataLayer {
   whoAmI(): Promise<UserContext>;
 }
 
-export type BackendKind = 'memory' | 'sharepoint' | 'sql' | 'azure';
+export type BackendKind = 'memory' | 'sharepoint';

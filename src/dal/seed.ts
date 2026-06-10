@@ -3,7 +3,6 @@ import type {
   Machine,
   Operator,
   PlanningOrder,
-  Product,
   ProductionRecord,
   RejectCategory,
   StatusCode,
@@ -117,16 +116,6 @@ const PRODUCT_DEFS: Array<[string, string, number, number]> = [
   ['G08770044', 'Viva Armrest Left', 22.1, 2],
 ];
 
-export function seedProducts(): Product[] {
-  return PRODUCT_DEFS.map(([partNumber, description, standardCycleSec, cavities], i) => ({
-    id: i + 1,
-    partNumber,
-    description,
-    standardCycleSec,
-    cavities,
-    active: true,
-  }));
-}
 
 // 10 PMD defect codes (D01-D10). Each gets its own fixed row on the
 // operator sheet. The longer "Visual Signs" text is operator-training
