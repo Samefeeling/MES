@@ -235,6 +235,18 @@ async function upsertSlot(
     toast('Pick a Job# first', 'warn');
     return;
   }
+  // Defence-in-depth lock guard: a signed-off (machine, shift, job) is
+  // immutable until a supervisor reopens it via Unlock. Without this,
+  // a stray tap on a slot would put a NEW slot record into editCache,
+  // and the next pushLiveSnapshot would re-broadcast the (locked) shift
+  // as live — polluting PMD_LiveStatus and resetting the timeline. The
+  // UI already disables the inputs, but inputs can still emit events
+  // when re-enabled by devtools or a flaky disabled-attribute paint;
+  // belt-and-braces stop here.
+  if (isJobLocked()) {
+    toast('Signed off — sign in as supervisor to edit', 'warn');
+    return;
+  }
   const existing = S!.prod.find(
     (r) => r.jobNumber === S!.selJob && r.slotIndex === slot,
   );
@@ -656,6 +668,7 @@ function buildGrid(): string {
       .join('') +
     `</tr>`;
 
+  const gridRdo = isJobLocked() ? ' disabled title="Signed off — sign in as supervisor and Unlock to edit"' : '';
   const rejRows = S!.rejCats
     .map((cat) => {
       const cells = recs
@@ -664,7 +677,7 @@ function buildGrid(): string {
           const now = nowSlot === i ? ' is-now-col' : '';
           return `<td class="num-cell${now}"><input type="text" inputmode="numeric" pattern="[0-9]*" class="rej-input" data-row="named" data-code="${escapeHtml(
             cat.code,
-          )}" data-slot="${i}" value="${v || ''}"></td>`;
+          )}" data-slot="${i}" value="${v || ''}"${gridRdo}></td>`;
         })
         .join('');
       return `<tr class="row-named"><th class="rh">${escapeHtml(cat.code)} ${escapeHtml(
@@ -701,6 +714,14 @@ function buildSide(): string {
       : '—';
   const purge = c?.purgeKg ?? '';
   const h = parseHandover(c);
+  // When the (machine, shift, job) is signed off, every editable field
+  // on the side panel is rendered read-only so the operator can't
+  // accidentally type into a frozen shift — supervisor mode re-enables
+  // them via the Unlock flow. Title tooltips explain what changed.
+  const rdo = isJobLocked() ? 'disabled' : '';
+  const rdoTitle = isJobLocked()
+    ? ' title="Signed off — sign in as supervisor and Unlock to edit"'
+    : '';
   // Shift Target: pieces the operator should aim for this shift. See
   // shiftTarget() for the rule — either a full 8h run at cycle time, or
   // just the remainder of the job if it'll finish in under 8h.
@@ -712,18 +733,18 @@ function buildSide(): string {
   return `<aside class="op-side">
     <div class="sk"><label>Job left</label><b data-live="jobLeft">${jobLeft}</b></div>
     <div class="sk"><label title="${escapeHtml(targetTitle)}">Shift Target</label><b title="${escapeHtml(targetTitle)}">${targetDisplay}</b></div>
-    <div class="sk"><label>Count Start</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cstart" value="${cs}"></div>
-    <div class="sk"><label>Count End</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cend" value="${ce}"></div>
+    <div class="sk"><label>Count Start</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cstart" value="${cs}" ${rdo}${rdoTitle}></div>
+    <div class="sk"><label>Count End</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cend" value="${ce}" ${rdo}${rdoTitle}></div>
     <div class="sk"><label>Total Reject</label><b class="r" data-live="totalReject">${totalReject}</b></div>
     <div class="sk"><label>Total Good</label><b class="g" data-live="totalGood">${good}</b></div>
-    <div class="sk"><label>Purge (kg)</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="purge" value="${purge}"></div>
+    <div class="sk"><label>Purge (kg)</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="purge" value="${purge}" ${rdo}${rdoTitle}></div>
     <div class="handover">
       <div class="handover-title">Handover / Journey — supervisor notes</div>
       <div class="handover-grid">
-        <label><span>👥 People</span><textarea data-meta="hand-people" placeholder="Staffing, swaps, training, fatigue…">${escapeHtml(h.people)}</textarea></label>
-        <label><span>🏭 Plant</span><textarea data-meta="hand-plant" placeholder="Utilities, services, ambient, housekeeping…">${escapeHtml(h.plant)}</textarea></label>
-        <label><span>🛠 Machine</span><textarea data-meta="hand-machine" placeholder="Press state, mould, robot, breakdown follow-ups…">${escapeHtml(h.machine)}</textarea></label>
-        <label><span>📦 Material</span><textarea data-meta="hand-material" placeholder="Material lot, dryer, regrind, masterbatch…">${escapeHtml(h.material)}</textarea></label>
+        <label><span>👥 People</span><textarea data-meta="hand-people" placeholder="Staffing, swaps, training, fatigue…" ${rdo}${rdoTitle}>${escapeHtml(h.people)}</textarea></label>
+        <label><span>🏭 Plant</span><textarea data-meta="hand-plant" placeholder="Utilities, services, ambient, housekeeping…" ${rdo}${rdoTitle}>${escapeHtml(h.plant)}</textarea></label>
+        <label><span>🛠 Machine</span><textarea data-meta="hand-machine" placeholder="Press state, mould, robot, breakdown follow-ups…" ${rdo}${rdoTitle}>${escapeHtml(h.machine)}</textarea></label>
+        <label><span>📦 Material</span><textarea data-meta="hand-material" placeholder="Material lot, dryer, regrind, masterbatch…" ${rdo}${rdoTitle}>${escapeHtml(h.material)}</textarea></label>
       </div>
     </div>
   </aside>`;
@@ -900,6 +921,18 @@ function applyShiftTheme(): void {
   // Drives CSS variables in styles.css, including the top bar.
   const cls = `shift-${S!.shiftCode.toLowerCase()}`;
   if (document.body.className !== cls) document.body.className = cls;
+}
+
+/**
+ * True when the currently-viewed (machine, shift, job) is signed off
+ * and the operator therefore can't edit it without a supervisor
+ * Unlock. Supervisor sign-in transparently lifts the read-only state
+ * so the supervisor can re-open the order via the lock banner's Unlock
+ * button. Used to gate every input on the page (status picker, reject
+ * cells, Count Start / End, Purge, handover textareas).
+ */
+function isJobLocked(): boolean {
+  return lockInfo() !== null && !isSupervisor();
 }
 
 function lockInfo(): { lockedBy: string; lockedAt: string } | null {
@@ -1287,6 +1320,12 @@ function wireStatusPicker(): void {
   wrap.addEventListener('pointerdown', (e) => {
     const slot = slotAt(e.clientX, e.clientY);
     if (slot == null) return;
+    // Signed-off shifts: no slot picker, no drag-range, nothing —
+    // operator gets a one-shot toast explaining how to re-open it.
+    if (isJobLocked()) {
+      toast('Signed off — sign in as supervisor and Unlock to edit', 'warn');
+      return;
+    }
     anchor = slot;
     isDown = true;
     dragged = false;
@@ -1460,6 +1499,11 @@ async function upsertSlotNoReload(
   mut: (r: ProductionRecord) => void,
 ): Promise<void> {
   if (!S!.selJob) return;
+  // Same guard as upsertSlot — the side panel inputs are wired to
+  // upsertSlotNoReload (Count Start / End / Purge / handover) and
+  // must not write when the order is signed off and the user isn't
+  // a supervisor.
+  if (isJobLocked()) return;
   const existing = S!.prod.find(
     (r) => r.jobNumber === S!.selJob && r.slotIndex === slot,
   );
