@@ -1275,24 +1275,29 @@ export class SharePointDataLayer implements PmdDataLayer {
     // mustn't wipe the others' signed-off records.
     const F = this.F.production;
     const shift = shiftId.slice(11);
+    const date = shiftId.slice(0, 10);
     const jobClause = (fJob: string): string =>
       jobNumber ? ` and ${fJob} eq '${jobNumber}'` : '';
-    const qs =
-      '$filter=' +
-      encodeURIComponent(
-        `${F.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${shift}'${jobClause(F.jobNumber)}`,
-      );
-    const rows = await this.getAllItems<{ ID?: number; Id?: number }>(LISTS.production, qs);
-    for (const r of rows) await this.del(`${this.listUrl(LISTS.production)}/items(${r.ID ?? r.Id})`);
+    // Every delete is narrowed to the exact calendar date — the ±1d
+    // window in shiftDateRange also matches the same shift code on
+    // adjacent days, and without the narrowing an unlock of 10 June
+    // Day would wipe 9 and 11 June Day rows for the same job too.
+    await this.deleteByFilter(
+      LISTS.production,
+      `${F.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${shift}'${jobClause(F.jobNumber)}`,
+      { field: F.date, date },
+    );
     const Fb = this.F.breakdown;
     await this.deleteByFilter(
       LISTS.breakdown,
       `${Fb.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, Fb.date)}) and ${Fb.shift} eq '${shift}'${jobClause(Fb.jobNum)}`,
+      { field: Fb.date, date },
     );
     const Fr = this.F.rejects;
     await this.deleteByFilter(
       LISTS.rejects,
       `${Fr.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, Fr.date)}) and ${Fr.shift} eq '${shift}'${jobClause(Fr.jobNum)}`,
+      { field: Fr.date, date },
     );
     // Also clear any leftover PMD_LiveStatus mirror for this tuple so
     // the next listProduction doesn't re-hydrate a stale snapshot
@@ -1301,6 +1306,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       await this.deleteByFilter(
         LISTS.liveStatus,
         `${F.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${shift}'${jobClause(F.jobNumber)}`,
+        { field: F.date, date },
       );
     } catch (e) {
       console.warn('[pmd] unlock: live mirror cleanup failed', e);
@@ -1365,15 +1371,20 @@ export class SharePointDataLayer implements PmdDataLayer {
     // JobHead_PartNum). Strip any fields previously rejected by SP for
     // this list so the rest of the row still lands.
     this.stripRejectedFields(list, body);
-    // Find existing by composite key; MERGE if found, else POST. Use a ±1d
-    // window so legacy rows (written with local-start UTC) are MERGE'd in
-    // place rather than ending up as duplicates next to the new noon-UTC row.
+    // Find existing by composite key; MERGE if found, else POST. The
+    // fetch uses the ±1d window for legacy-timestamp tolerance, but the
+    // MERGE target must then be narrowed to the EXACT calendar date —
+    // the window also matches the same shift code on adjacent days
+    // (same job running Day shift on consecutive days is normal), and
+    // merging into yesterday's row destroys yesterday's signed-off
+    // record while leaving today unreadable.
     const qs =
       '$filter=' +
       encodeURIComponent(
         `${F.machine} eq '${h.machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${h.shift}' and ${F.jobNumber} eq '${h.jobNumber}'`,
       );
-    const existing = await this.getAllItems<Record<string, unknown>>(list, qs);
+    const windowRows = await this.getAllItems<Record<string, unknown>>(list, qs);
+    const existing = windowRows.filter((r) => dateOnly(r[F.date]) === h.date);
     const target =
       existing.length > 0
         ? `${this.listUrl(list)}/items(${(existing[0] as { ID?: number; Id?: number }).ID ?? (existing[0] as { ID?: number; Id?: number }).Id})`
@@ -1446,6 +1457,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       await this.deleteByFilter(
         LISTS.liveStatus,
         `${F.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${shift}' and ${F.jobNumber} eq '${jobNumber}'`,
+        { field: F.date, date: shiftId.slice(0, 10) },
       );
     } catch (e) {
       console.warn('[pmd] live row cleanup failed for', { machineCode, shiftId, jobNumber }, e);
@@ -1477,6 +1489,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     await this.deleteByFilter(
       LISTS.breakdown,
       `${F.machine} eq '${key.machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${key.shift}' and ${F.jobNum} eq '${key.jobNumber}'`,
+      { field: F.date, date: key.date },
     );
     const type = await this.itemType(LISTS.breakdown);
     // Count per-status slots across the whole shift; each slot = 0.5h.
@@ -1524,6 +1537,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     await this.deleteByFilter(
       LISTS.rejects,
       `${F.machine} eq '${key.machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${key.shift}' and ${F.jobNum} eq '${key.jobNumber}'`,
+      { field: F.date, date: key.date },
     );
     for (const ev of events) {
       const body: Record<string, unknown> = {
@@ -1543,13 +1557,32 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
   }
 
-  /** Delete every item matching a pre-built OData $filter clause. */
-  private async deleteByFilter(list: string, filterClause: string): Promise<void> {
-    const rows = await this.getAllItems<{ ID?: number; Id?: number }>(
+  /**
+   * Delete every item matching a pre-built OData $filter clause.
+   * `exactDate` narrows the (intentionally loose, ±1d) date-window
+   * clause to rows on one exact calendar date — without it, deletes
+   * scoped by shiftDateRange also hit the same shift code on adjacent
+   * days (e.g. unlocking 10 June Day would wipe 9 June Day for the
+   * same job). The compare runs through dateOnly so all three legacy
+   * timestamp formats (midnight-UTC, noon-UTC, local-start) resolve
+   * to their intended calendar date first.
+   */
+  private async deleteByFilter(
+    list: string,
+    filterClause: string,
+    exactDate?: { field: string; date: string },
+  ): Promise<void> {
+    const rows = await this.getAllItems<Record<string, unknown>>(
       list,
       '$filter=' + encodeURIComponent(filterClause),
     );
-    for (const r of rows) await this.del(`${this.listUrl(list)}/items(${r.ID ?? r.Id})`);
+    const targets = exactDate
+      ? rows.filter((r) => dateOnly(r[exactDate.field]) === exactDate.date)
+      : rows;
+    for (const r of targets) {
+      const id = (r as { ID?: number; Id?: number }).ID ?? (r as { ID?: number; Id?: number }).Id;
+      await this.del(`${this.listUrl(list)}/items(${id})`);
+    }
   }
 
 
