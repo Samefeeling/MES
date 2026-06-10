@@ -159,17 +159,23 @@ export class MemoryDataLayer implements PmdDataLayer {
     shiftId: string,
     supervisor: string,
     operator: string,
+    jobNumber?: string,
   ): Promise<void> {
     const now = new Date().toISOString();
+    // Per-job sign-off: other orders on the same shift stay editable
+    // (matches the SharePoint DAL — see its lockShift for rationale).
     const rows = this.production.filter(
-      (r) => r.machineCode === machineCode && r.shiftId === shiftId,
+      (r) =>
+        r.machineCode === machineCode &&
+        r.shiftId === shiftId &&
+        (!jobNumber || r.jobNumber === jobNumber),
     );
     if (rows.length === 0) {
       this.production.push({
         id: this.nextProdId++,
         machineCode,
         shiftId,
-        jobNumber: '',
+        jobNumber: jobNumber ?? '',
         partNumber: '',
         slotIndex: 0,
         statusCode: '',

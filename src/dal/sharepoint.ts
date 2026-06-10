@@ -1056,6 +1056,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     shiftId: string,
     supervisor: string,
     operator: string,
+    jobNumber?: string,
   ): Promise<void> {
     const date = shiftId.slice(0, 10);
     const shift = shiftId.slice(11);
@@ -1063,6 +1064,11 @@ export class SharePointDataLayer implements PmdDataLayer {
     const myTuples: ProductionRecord[][] = [];
     for (const [key, list] of this.editCache) {
       if (!key.startsWith(`${machineCode}|${shiftId}|`)) continue;
+      // Sign-off is per (machine, shift, JOB): when the supervisor is
+      // signing off SFM507006, an operator's in-progress SFM507057 on
+      // the same press/shift must NOT be swept up and locked with it —
+      // they're still filling the remaining timeline slots.
+      if (jobNumber && key !== ownKey(jobNumber)) continue;
       myTuples.push(list);
     }
     if (myTuples.length === 0) {
@@ -1080,8 +1086,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     const partDescOf = (job: string): string =>
       orders.find((o) => o.jobNumber === job)?.partDescription ?? '';
     for (const slots of myTuples) {
-      const job =
-        slots[0]?.jobNumber ?? '';
+      const job = slots[0]?.jobNumber ?? jobNumber ?? '';
       const agg = aggregateSlots(slots);
       const tag = `${machineCode}|${shiftId}|${job}`;
       try {

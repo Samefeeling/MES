@@ -121,6 +121,45 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
     expect(after.every((r) => !r.locked)).toBe(true);
   });
 
+  it('lockShift scoped to a job leaves other jobs on the shift editable', async () => {
+    const sid = currentShift(NOW).shiftId;
+    const base = {
+      id: 0,
+      machineCode: 'Batt1',
+      shiftId: sid,
+      partNumber: '',
+      slotIndex: 0,
+      statusCode: 'R' as const,
+      countStart: 0,
+      countEnd: 10,
+      rejectCount: 0,
+      rejects: '{}',
+      purgeKg: null,
+      operator: 'Op',
+      supervisor: '',
+      bdIssue: '',
+      mangoTicket: '',
+      handoverNote: '',
+      locked: false,
+      lockedBy: '',
+      lockedAt: '',
+      createdAt: '',
+      updatedAt: '',
+    };
+    await dal.upsertProductionRecord({ ...base, jobNumber: 'SFM507006' });
+    await dal.upsertProductionRecord({ ...base, jobNumber: 'SFM507057', slotIndex: 1 });
+    // Sign off ONLY the first order — the next order the operator
+    // already started on the remaining slots must stay live.
+    await dal.lockShift('Batt1', sid, 'Christopher King', 'Op', 'SFM507006');
+    const rows = await dal.listProduction({ machineCode: 'Batt1', shiftId: sid });
+    const signed = rows.filter((r) => r.jobNumber === 'SFM507006');
+    const live = rows.filter((r) => r.jobNumber === 'SFM507057');
+    expect(signed.length).toBeGreaterThan(0);
+    expect(signed.every((r) => r.locked && r.lockedBy === 'Christopher King')).toBe(true);
+    expect(live.length).toBeGreaterThan(0);
+    expect(live.every((r) => !r.locked)).toBe(true);
+  });
+
   it('lockShift on an empty shift creates a SlotIndex=0 placeholder (§5.5)', async () => {
     await dal.lockShift('HS', '2026-05-10-Afternoon', 'Jeff Penn', 'Tin');
     const rows = await dal.listProduction({

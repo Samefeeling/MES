@@ -1486,7 +1486,10 @@ async function upsertSlotNoReload(
 
 async function doSignoffSave(): Promise<void> {
   try {
-    await dalRef.lockShift(S!.mc, sid(), S!.selSupervisor, S!.selOperator);
+    // Scope sign-off to the order being reviewed: another job already
+    // running on this press's remaining timeline slots (operator
+    // started the next order mid-shift) must stay live and editable.
+    await dalRef.lockShift(S!.mc, sid(), S!.selSupervisor, S!.selOperator, S!.selJob || undefined);
     closeModal();
     toast(`Signed off · ${S!.selJob || 'shift'} saved to Master`, 'ok');
     // Keep selJob: the next shift on the same job continues seamlessly

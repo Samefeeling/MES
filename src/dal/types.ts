@@ -37,7 +37,12 @@ export interface PmdDataLayer {
   listProduction(filter: ProductionFilter): Promise<ProductionRecord[]>;
   upsertProductionRecord(record: ProductionRecord): Promise<ProductionRecord>;
   deleteProductionRecord(id: number): Promise<void>;
-  lockShift(machineCode: string, shiftId: string, supervisor: string, operator: string): Promise<void>;
+  /** Signs off records for a (machine, shift). When jobNumber is
+   *  supplied, ONLY that job's records are signed off — other orders
+   *  on the same shift (e.g. the next job an operator already started
+   *  on the remaining timeline slots) stay live and editable. Omit to
+   *  sign off every job on the shift (legacy whole-shift sign-off). */
+  lockShift(machineCode: string, shiftId: string, supervisor: string, operator: string, jobNumber?: string): Promise<void>;
   /** Unlocks signed-off records for a (machine, shift). When jobNumber
    *  is supplied, only that job's rows are unlocked; otherwise the
    *  whole shift is unlocked. Per-job is the common path (one order
