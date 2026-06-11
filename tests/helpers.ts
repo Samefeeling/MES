@@ -22,6 +22,7 @@ export function rec(
     bdIssue: '',
     mangoTicket: '',
     handoverNote: '',
+    qcBy: '',
     locked: false,
     lockedBy: '',
     lockedAt: '',

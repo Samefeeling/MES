@@ -228,6 +228,20 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    row-header strip with the theme accent, bump its label to bold, and
    close the row off with a thick bottom border so the defect grid below
    reads as a distinct block. */
+/* Quality Checks row — alternating operator (even) / supervisor (odd)
+   per-slot sign-off. Sits above Machine Status. Cells default to a
+   muted "—"; signed cells turn green with the picked user's initials.
+   Even / odd cells differ in tint so operators see the alternating
+   cadence at a glance. */
+.op-grid tr.row-qc th.rh{background:#0f172a;color:#fff;font-weight:800;font-size:14px;letter-spacing:.4px;text-transform:uppercase}
+.op-grid tr.row-qc td{border-bottom:2px solid var(--theme-accent);background:#f8fafc;padding:0}
+.op-grid tr.row-qc td.qc-supervisor{background:#eef2ff}
+.op-grid tr.row-qc td.is-signed{background:#dcfce7}
+.op-grid tr.row-qc td.is-signed.qc-supervisor{background:#bbf7d0}
+.qc-btn{width:100%;height:42px;border:0;background:transparent;font-size:15px;font-weight:800;color:#64748b;letter-spacing:.3px;cursor:pointer;padding:0;font-variant-numeric:tabular-nums}
+.qc-btn:focus{outline:3px solid var(--theme-dark);outline-offset:-3px}
+.row-qc td.is-signed .qc-btn{color:#166534}
+.bd-cause.is-current{border-color:var(--theme-dark);background:#eff6ff}
 .op-grid tr.row-status th.rh{background:var(--theme-accent);color:var(--theme-on-dark);font-weight:800;font-size:16px;letter-spacing:.3px;text-transform:uppercase}
 .op-grid tr.row-status td{border-bottom:3px solid var(--theme-dark);background:#f8fafc}
 .op-grid tr.row-named th.rh{background:#fafafa;font-size:14px;color:#334155;font-weight:700}

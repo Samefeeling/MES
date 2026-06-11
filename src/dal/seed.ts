@@ -281,6 +281,7 @@ export function seedProduction(now: Date, planning: PlanningOrder[]): Production
             onSlot0 && dayBack === 1
               ? 'Bearing noise on warm-up — monitored, no action taken.'
               : '',
+          qcBy: '',
           locked: dayBack > 0,
           lockedBy: dayBack > 0 ? SUPERVISOR_NAMES[dayBack % SUPERVISOR_NAMES.length] : '',
           lockedAt: dayBack > 0 ? stamp : '',

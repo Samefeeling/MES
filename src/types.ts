@@ -96,6 +96,12 @@ export interface ProductionRecord {
   bdIssue: string;
   mangoTicket: string;
   handoverNote: string; // only meaningful on slotIndex=0
+  /** Per-slot Quality Check sign-off. Even slots are signed by the
+   *  operator, odd slots by the supervisor (alternating cadence —
+   *  every 30 min one or the other physically checks the press). Empty
+   *  string when the check hasn't happened yet. Persists to the
+   *  PMD_Production.QualityChecks column as a slot→name JSON map. */
+  qcBy: string;
   locked: boolean;
   lockedBy: string;
   lockedAt: string;

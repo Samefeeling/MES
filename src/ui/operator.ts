@@ -141,6 +141,7 @@ function blankRecord(slot: number): ProductionRecord {
     bdIssue: '',
     mangoTicket: '',
     handoverNote: '',
+    qcBy: '',
     locked: false,
     lockedBy: '',
     lockedAt: '',
@@ -440,8 +441,11 @@ function shiftTarget(): number | null {
 }
 
 /**
- * Job Left = JobRequired − sum(Good) across ALL shifts of this job
- * (matches the .bas Master rollup: each shift contributes one row).
+ * Job Left = JobRequired − sum(Good) across all OTHER shifts of this job.
+ * The current (S!.mc, sid()) tuple is EXCLUDED here because jobLeftPieces()
+ * adds goodThis (this shift's good) on top of S!.jobTotalGood — counting
+ * the current shift in both places double-subtracted it from JobRequired
+ * and made Job Left collapse to 0 the moment Count End was filled in.
  */
 async function refreshJobTotal(): Promise<void> {
   if (!S!.selJob) {
@@ -450,10 +454,12 @@ async function refreshJobTotal(): Promise<void> {
   }
   const all = await dalRef.listProduction({ jobNumber: S!.selJob });
   const seen = new Set<string>();
+  const currentKey = `${S!.mc}|${sid()}`;
   let total = 0;
   for (const r of all) {
     if (r.slotIndex !== 0) continue;
     const key = `${r.machineCode}|${r.shiftId}`;
+    if (key === currentKey) continue;
     if (seen.has(key)) continue;
     seen.add(key);
     const cs = Number(r.countStart ?? 0);
@@ -625,6 +631,33 @@ function buildMeta(): string {
   </div>`;
 }
 
+/** Short two-letter initials for a "First Last" name, used as the
+ *  compact label on QC sign-off cells. Falls back to the first two
+ *  characters when the name doesn't have two whitespace-separated
+ *  words (single-word handles, codes). */
+function initials(name: string): string {
+  if (!name) return '';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  return name.trim().slice(0, 2).toUpperCase();
+}
+
+/** Whose turn is it to QC this slot — operator (even) or supervisor (odd). */
+function qcRoleFor(slot: number): 'operator' | 'supervisor' {
+  return slot % 2 === 0 ? 'operator' : 'supervisor';
+}
+
+function qcCellHtml(slot: number, name: string, isNow: boolean): string {
+  const role = qcRoleFor(slot);
+  const roleLabel = role === 'operator' ? '👷 Operator' : '👔 Supervisor';
+  const lbl = name ? `✓ ${escapeHtml(initials(name))}` : '—';
+  const cls = `qc-cell${isNow ? ' is-now-col' : ''}${name ? ' is-signed' : ''} qc-${role}`;
+  const tip = name
+    ? `${roleLabel} sign-off · ${escapeHtml(name)} · tap to change`
+    : `${roleLabel} sign-off required · tap to confirm`;
+  return `<td class="${cls}"><button type="button" class="qc-btn" data-qc-slot="${slot}" title="${tip}">${lbl}</button></td>`;
+}
+
 function statusCellHtml(
   slot: number,
   code: StatusCode | '',
@@ -663,6 +696,18 @@ function buildGrid(): string {
     return `<th class="slot-head${now}">${escapeHtml(lbl)}</th>`;
   }).join('');
 
+  // Quality Checks row sits between the time-header and Machine Status —
+  // alternating cadence: even slots want the operator's sign-off, odd
+  // slots want the supervisor's. A short initial of the picked name
+  // shows in the cell so the supervisor can scan the row and tell at a
+  // glance which slots have been checked. Tap → openQcPicker(slot).
+  const qcRow =
+    `<tr class="row-qc"><th class="rh" title="Even slots = operator check, odd slots = supervisor check">Quality Checks</th>` +
+    recs
+      .map((r, i) => qcCellHtml(i, r?.qcBy ?? '', nowSlot === i))
+      .join('') +
+    `</tr>`;
+
   const statusRow =
     `<tr class="row-status"><th class="rh">Machine Status</th>` +
     recs
@@ -696,6 +741,7 @@ function buildGrid(): string {
         <tr><th class="rh corner">Timeline</th>${headers}</tr>
       </thead>
       <tbody>
+        ${qcRow}
         ${statusRow}
         ${rejRows}
       </tbody>
@@ -1079,18 +1125,22 @@ function wire(): void {
   // Status cells are picked via the unified hold-and-drag picker — see
   // wireStatusPicker() at the bottom of wire().
 
-  // Named reject inputs
+  // Named reject inputs — use the no-reload upsert so tabbing from one
+  // cell to the next doesn't trigger a full reload() → render() cycle
+  // that destroys the input the operator just moved focus into. The
+  // refreshJobTotalAndPaintSide call keeps the side-panel totals fresh
+  // without rebuilding the grid.
   app.querySelectorAll<HTMLInputElement>('input[data-row="named"]').forEach((inp) =>
     inp.addEventListener('change', () => {
       const slot = Number(inp.dataset.slot);
       const code = inp.dataset.code!;
       const qty = Math.max(0, Math.floor(Number(inp.value) || 0));
-      void upsertSlot(slot, (r) => {
+      void upsertSlotNoReload(slot, (r) => {
         const obj = parseRejects(r);
         if (qty > 0) obj[code] = qty;
         else delete obj[code];
         r.rejects = JSON.stringify(obj);
-      });
+      }).then(() => void refreshJobTotalAndPaintSide());
     }),
   );
 
@@ -1117,6 +1167,19 @@ function wire(): void {
         }
       }),
     );
+
+  // Quality Check picker: alternating operator / supervisor cadence —
+  // even slot pops the operators list, odd slot the supervisors list.
+  // Tap-then-pick lands the chosen name on the slot record's qcBy field
+  // (no full reload — refreshes just the QC cell so a supervisor walking
+  // the floor and signing one cell after another doesn't lose focus or
+  // their place in the grid).
+  app.querySelectorAll<HTMLButtonElement>('[data-qc-slot]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const slot = Number(b.dataset.qcSlot);
+      if (Number.isFinite(slot)) openQcPicker(slot);
+    }),
+  );
 
   // Buttons
   app.querySelector('[data-refresh]')?.addEventListener('click', () => void refreshAll());
@@ -1576,6 +1639,87 @@ async function doSignoffSave(): Promise<void> {
     console.error('[signoff] lockShift failed:', e);
     const msg = (e as Error)?.message ?? String(e);
     toast(`Save failed: ${msg.slice(0, 140)}`, 'err');
+  }
+}
+
+function openQcPicker(slot: number): void {
+  if (!S!.selJob) {
+    toast('Pick a Job# first', 'warn');
+    return;
+  }
+  if (isJobLocked()) {
+    toast('Signed off — sign in as supervisor and Unlock to edit', 'warn');
+    return;
+  }
+  const role = qcRoleFor(slot);
+  const roster = role === 'operator' ? S!.operators : S!.supervisors;
+  const roleLabel = role === 'operator' ? '👷 Operator' : '👔 Supervisor';
+  const current = slotRec(slot)?.qcBy ?? '';
+  const buttons = roster
+    .map(
+      (n) =>
+        `<button class="bd-cause${n === current ? ' is-current' : ''}" data-qc-pick="${escapeHtml(n)}">
+          <span class="bd-code">${escapeHtml(initials(n))}</span>
+          <span class="bd-cause-text">${escapeHtml(n)}</span>
+        </button>`,
+    )
+    .join('');
+  const clearBtn = current
+    ? `<button class="btn-ghost-big" data-qc-clear>↺ Clear sign-off</button>`
+    : '';
+  const mc = openModal(`<div class="bd-modal">
+    <h2 class="bd-title">🔍 Quality Check — slot ${slot + 1}/${SLOTS_PER_SHIFT} (${escapeHtml(
+      slotClock(sid(), slot),
+    )})</h2>
+    <p class="bd-sub">${roleLabel} sign-off · ${escapeHtml(S!.mc)} · ${escapeHtml(S!.selJob)}${
+      current ? ` · currently signed by <b>${escapeHtml(current)}</b>` : ''
+    }</p>
+    <div class="bd-cause-list">${buttons || '<p class="bd-sub">No names available — add them on the People list.</p>'}</div>
+    <div class="bd-actions">
+      ${clearBtn}
+      <button class="btn-ghost-big" data-cancel>Cancel</button>
+    </div>
+  </div>`);
+  mc.querySelector('[data-cancel]')?.addEventListener('click', closeModal);
+  mc.querySelector('[data-qc-clear]')?.addEventListener('click', () => {
+    closeModal();
+    void applyQc(slot, '');
+  });
+  mc.querySelectorAll<HTMLButtonElement>('[data-qc-pick]').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      closeModal();
+      void applyQc(slot, btn.dataset.qcPick ?? '');
+    }),
+  );
+}
+
+async function applyQc(slot: number, name: string): Promise<void> {
+  await upsertSlotNoReload(slot, (r) => {
+    r.qcBy = name;
+  });
+  // Live snapshot push so the floor view picks up the QC sign-off
+  // without waiting for the operator poll tick.
+  if (dalRef.pushLiveSnapshot) void dalRef.pushLiveSnapshot();
+  // Repaint just the QC row so the grid scroll position + every input
+  // currently focused stays untouched.
+  repaintQcRow();
+}
+
+function repaintQcRow(): void {
+  const row = document.querySelector<HTMLElement>('.op-grid tr.row-qc');
+  if (!row) return;
+  const cells = row.querySelectorAll<HTMLElement>('td');
+  for (let i = 0; i < cells.length; i++) {
+    const rec = slotRec(i);
+    const name = rec?.qcBy ?? '';
+    const role = qcRoleFor(i);
+    const btn = cells[i].querySelector<HTMLButtonElement>('.qc-btn');
+    if (!btn) continue;
+    btn.textContent = name ? `✓ ${initials(name)}` : '—';
+    cells[i].classList.toggle('is-signed', !!name);
+    cells[i].title = name
+      ? `${role === 'operator' ? '👷 Operator' : '👔 Supervisor'} sign-off · ${name} · tap to change`
+      : `${role === 'operator' ? '👷 Operator' : '👔 Supervisor'} sign-off required · tap to confirm`;
   }
 }
 

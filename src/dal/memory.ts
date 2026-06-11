@@ -165,6 +165,7 @@ export class MemoryDataLayer implements PmdDataLayer {
         bdIssue: '',
         mangoTicket: '',
         handoverNote: '',
+        qcBy: '',
         locked: true,
         lockedBy: supervisor,
         lockedAt: now,

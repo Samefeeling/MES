@@ -130,6 +130,11 @@ const DEFAULT_FIELDS = {
     downTime: 'Downtime',
     handover: 'Handover',
     totalGood: 'TotalGood',
+    // Per-slot QC sign-off, stored as JSON {"<slotIndex>":"<name>"}.
+    // Column added to PMD_Production / PMD_LiveStatus to record
+    // alternating operator / supervisor quality checks across the
+    // shift's 16 half-hour slots.
+    qcChecks: 'QualityChecks',
   },
   rejects: {
     // Title = Machine; Date is a DateTime (not date-only).
@@ -737,6 +742,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       // when the shift was signed off. Used by the operator side-panel
       // textareas and the KPI Handover column.
       handover: F.handover ? str(r[F.handover]) : '',
+      qcChecks: F.qcChecks ? str(r[F.qcChecks]) : '',
     }));
   }
 
@@ -837,9 +843,28 @@ export class SharePointDataLayer implements PmdDataLayer {
     const slots: ProductionRecord[] = [];
     const timeline = (h.timeline || '').padEnd(16, '·').slice(0, 16);
     const stamp = new Date().toISOString();
+    // QualityChecks JSON {"<slotIndex>":"<name>"} → per-slot qcBy.
+    // Bare-string fallback so a column that pre-dates the JSON format
+    // (or has been mis-edited in SP directly) still surfaces something
+    // useful instead of swallowing the value.
+    let qcMap: Record<string, string> = {};
+    if (h.qcChecks) {
+      try {
+        const parsed = JSON.parse(h.qcChecks);
+        if (parsed && typeof parsed === 'object') {
+          qcMap = parsed as Record<string, string>;
+        }
+      } catch {
+        /* not JSON — ignore */
+      }
+    }
     for (let i = 0; i < 16; i++) {
       const ch = timeline[i];
-      if (ch === '·' || ch === ' ') continue;
+      const blank = ch === '·' || ch === ' ' || !ch;
+      // Materialise a slot record when either the status is filled OR a
+      // QC sign-off exists for this slot — otherwise a QC done before
+      // production was logged would be silently dropped on round-trip.
+      if (blank && !qcMap[String(i)]) continue;
       slots.push({
         id: 0,
         machineCode: h.machineCode,
@@ -847,7 +872,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         jobNumber: h.jobNumber,
         partNumber: h.partNumber,
         slotIndex: i,
-        statusCode: ch as ProductionRecord['statusCode'],
+        statusCode: blank ? '' : (ch as ProductionRecord['statusCode']),
         countStart: i === 0 ? h.countStart : null,
         countEnd: i === 0 ? h.countEnd : null,
         rejectCount: 0,
@@ -858,6 +883,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         bdIssue: '',
         mangoTicket: '',
         handoverNote: i === 0 ? h.handover : '',
+        qcBy: qcMap[String(i)] ?? '',
         locked: isSignedOff,
         lockedBy: h.supervisor,
         lockedAt: stamp,
@@ -885,6 +911,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         bdIssue: '',
         mangoTicket: '',
         handoverNote: h.handover,
+        qcBy: qcMap['0'] ?? '',
         locked: isSignedOff,
         lockedBy: h.supervisor,
         lockedAt: stamp,
@@ -999,6 +1026,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           runTime: agg.runTime,
           downTime: agg.downTime,
           handover: agg.handover,
+          qcChecks: agg.qcChecks,
         });
       } catch (e) {
         throw new Error(`PMD_Production write failed (${tag}): ${(e as Error).message}`);
@@ -1093,6 +1121,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           runTime: agg.runTime,
           downTime: agg.downTime,
           handover: agg.handover,
+          qcChecks: agg.qcChecks,
         }).catch((e) => {
           // Snapshot push is best-effort; never propagate.
           console.warn('[pmd] live snapshot push failed for', key, e);
@@ -1222,6 +1251,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (F.downTime) body[F.downTime] = h.downTime;
     if (F.runTime) body[F.runTime] = h.runTime;
     if (F.handover) body[F.handover] = formatHandover(h.handover);
+    if (F.qcChecks) body[F.qcChecks] = h.qcChecks;
     if (F.totalGood) {
       const cs = h.countStart;
       const ce = h.countEnd;
@@ -1665,6 +1695,7 @@ interface HeaderRow {
   runTime: number;
   downTime: number;
   handover: string;
+  qcChecks: string;
 }
 
 interface HeaderInput {
@@ -1683,6 +1714,8 @@ interface HeaderInput {
   runTime: number;
   downTime: number;
   handover: string; // JSON {people,plant,machine,material} from the canonical slot
+  /** JSON {"<slotIndex>":"<name>"} — the per-slot QC sign-off map. */
+  qcChecks: string;
 }
 
 interface StatusHours {
@@ -1748,6 +1781,7 @@ function aggregateSlots(slots: ProductionRecord[]): {
   rejectEvents: RejectEvent[];
   bdCode: string;
   handover: string;
+  qcChecks: string;
 } {
   const timelineArr = Array.from({ length: 16 }, () => '·');
   const hours: StatusHours = { R: 0, B: 0, C: 0, D: 0, I: 0, M: 0, O: 0, P: 0, S: 0 };
@@ -1797,6 +1831,13 @@ function aggregateSlots(slots: ProductionRecord[]): {
       bdCode = code;
     }
   }
+  // Quality-check sign-offs roll up into one JSON map keyed by slot
+  // index — the PMD_Production.QualityChecks column stores this verbatim
+  // so the round-trip is lossless.
+  const qcMap: Record<string, string> = {};
+  for (const r of slots) {
+    if (r.qcBy && r.slotIndex >= 0 && r.slotIndex < 16) qcMap[String(r.slotIndex)] = r.qcBy;
+  }
   return {
     timeline: timelineArr.join(''),
     countStart: canonical?.countStart ?? null,
@@ -1809,6 +1850,7 @@ function aggregateSlots(slots: ProductionRecord[]): {
     rejectEvents,
     bdCode,
     handover: canonical?.handoverNote ?? '',
+    qcChecks: Object.keys(qcMap).length ? JSON.stringify(qcMap) : '',
   };
 }
 
