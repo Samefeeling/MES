@@ -135,6 +135,14 @@ const DEFAULT_FIELDS = {
     // alternating operator / supervisor quality checks across the
     // shift's 16 half-hour slots.
     qcChecks: 'QualityChecks',
+    // Per-slot per-code reject map, JSON {"<slotIndex>":{"<code>":qty}}.
+    // PMD_Rejects (event list) is only populated on sign-off, so live
+    // shifts on PMD_LiveStatus had no path for reject breakdowns to
+    // reach other iPads — Machine Status / QC / Count Start / Count
+    // End round-tripped via dedicated columns; rejects didn't. This
+    // column closes that gap. The read path prefers PMD_Rejects events
+    // when present, falling back to this JSON for live (unsigned) rows.
+    rejectsBySlot: 'RejectsBySlot',
   },
   rejects: {
     // Title = Machine; Date is a DateTime (not date-only).
@@ -743,6 +751,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       // textareas and the KPI Handover column.
       handover: F.handover ? str(r[F.handover]) : '',
       qcChecks: F.qcChecks ? str(r[F.qcChecks]) : '',
+      rejectsBySlot: F.rejectsBySlot ? str(r[F.rejectsBySlot]) : '',
     }));
   }
 
@@ -923,6 +932,69 @@ export class SharePointDataLayer implements PmdDataLayer {
       // handover note in place so the canonical slot carries it.
       slots[0].handoverNote = h.handover;
     }
+    // PMD_Rejects events take precedence (signed-off shifts), but for
+    // live (unsigned) rows the events list is empty — fall back to the
+    // RejectsBySlot JSON column on PMD_LiveStatus so other iPads see
+    // the per-slot per-code breakdown without waiting for sign-off.
+    if (rejects.length === 0 && h.rejectsBySlot) {
+      let rbsMap: Record<string, Record<string, number>> = {};
+      try {
+        const parsed = JSON.parse(h.rejectsBySlot);
+        if (parsed && typeof parsed === 'object') {
+          rbsMap = parsed as Record<string, Record<string, number>>;
+        }
+      } catch {
+        /* not JSON — ignore */
+      }
+      for (const [slotKey, codes] of Object.entries(rbsMap)) {
+        const slotIdx = Number(slotKey);
+        if (!Number.isFinite(slotIdx) || slotIdx < 0 || slotIdx >= 16) continue;
+        let target = slots.find((s) => s.slotIndex === slotIdx);
+        if (!target) {
+          // Reject logged on a slot that has no status set yet — give it
+          // a placeholder row so the operator grid can render the count.
+          target = {
+            id: 0,
+            machineCode: h.machineCode,
+            shiftId,
+            jobNumber: h.jobNumber,
+            partNumber: h.partNumber,
+            slotIndex: slotIdx,
+            statusCode: '',
+            countStart: null,
+            countEnd: null,
+            rejectCount: 0,
+            rejects: '{}',
+            purgeKg: null,
+            operator: '',
+            supervisor: '',
+            bdIssue: '',
+            mangoTicket: '',
+            handoverNote: '',
+            qcBy: '',
+            locked: isSignedOff,
+            lockedBy: h.supervisor,
+            lockedAt: stamp,
+            createdAt: stamp,
+            updatedAt: stamp,
+          };
+          slots.push(target);
+        }
+        let obj: Record<string, number> = {};
+        try {
+          obj = JSON.parse(target.rejects || '{}') as Record<string, number>;
+        } catch {
+          /* keep {} */
+        }
+        for (const [code, qty] of Object.entries(codes)) {
+          const n = Number(qty);
+          if (!n) continue;
+          obj[code] = (obj[code] || 0) + n;
+        }
+        target.rejects = JSON.stringify(obj);
+        target.rejectCount = Object.values(obj).reduce((a, v) => a + (Number(v) || 0), 0);
+      }
+    }
     // Merge rejects into the canonical slot 0's `rejects` JSON, and per-slot
     // events into slot records when the Timeline cell matches.
     for (const ev of rejects) {
@@ -1027,6 +1099,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           downTime: agg.downTime,
           handover: agg.handover,
           qcChecks: agg.qcChecks,
+          rejectsBySlot: agg.rejectsBySlot,
         });
       } catch (e) {
         throw new Error(`PMD_Production write failed (${tag}): ${(e as Error).message}`);
@@ -1122,6 +1195,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           downTime: agg.downTime,
           handover: agg.handover,
           qcChecks: agg.qcChecks,
+          rejectsBySlot: agg.rejectsBySlot,
         }).catch((e) => {
           // Snapshot push is best-effort; never propagate.
           console.warn('[pmd] live snapshot push failed for', key, e);
@@ -1252,6 +1326,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (F.runTime) body[F.runTime] = h.runTime;
     if (F.handover) body[F.handover] = formatHandover(h.handover);
     if (F.qcChecks) body[F.qcChecks] = h.qcChecks;
+    if (F.rejectsBySlot) body[F.rejectsBySlot] = h.rejectsBySlot;
     if (F.totalGood) {
       const cs = h.countStart;
       const ce = h.countEnd;
@@ -1696,6 +1771,7 @@ interface HeaderRow {
   downTime: number;
   handover: string;
   qcChecks: string;
+  rejectsBySlot: string;
 }
 
 interface HeaderInput {
@@ -1716,6 +1792,11 @@ interface HeaderInput {
   handover: string; // JSON {people,plant,machine,material} from the canonical slot
   /** JSON {"<slotIndex>":"<name>"} — the per-slot QC sign-off map. */
   qcChecks: string;
+  /** JSON {"<slotIndex>":{"<code>":qty}} — per-slot per-code reject
+   *  breakdown. Mirrors what PMD_Rejects holds for signed-off shifts,
+   *  but written eagerly to the LiveStatus row so other iPads can read
+   *  the breakdown without waiting for sign-off. */
+  rejectsBySlot: string;
 }
 
 interface StatusHours {
@@ -1782,6 +1863,7 @@ function aggregateSlots(slots: ProductionRecord[]): {
   bdCode: string;
   handover: string;
   qcChecks: string;
+  rejectsBySlot: string;
 } {
   const timelineArr = Array.from({ length: 16 }, () => '·');
   const hours: StatusHours = { R: 0, B: 0, C: 0, D: 0, I: 0, M: 0, O: 0, P: 0, S: 0 };
@@ -1838,6 +1920,26 @@ function aggregateSlots(slots: ProductionRecord[]): {
   for (const r of slots) {
     if (r.qcBy && r.slotIndex >= 0 && r.slotIndex < 16) qcMap[String(r.slotIndex)] = r.qcBy;
   }
+  // Per-slot per-code reject map — same data PMD_Rejects holds, but
+  // serialised onto the LiveStatus header so other iPads see it during
+  // a live shift (PMD_Rejects is only written on sign-off).
+  const rejectsBySlotMap: Record<string, Record<string, number>> = {};
+  for (const r of slots) {
+    if (r.slotIndex < 0 || r.slotIndex >= 16) continue;
+    let obj: Record<string, number> = {};
+    try {
+      obj = JSON.parse(r.rejects || '{}') as Record<string, number>;
+    } catch {
+      continue;
+    }
+    const filtered: Record<string, number> = {};
+    for (const [code, qty] of Object.entries(obj)) {
+      const n = Number(qty);
+      if (!n) continue;
+      filtered[code] = n;
+    }
+    if (Object.keys(filtered).length) rejectsBySlotMap[String(r.slotIndex)] = filtered;
+  }
   return {
     timeline: timelineArr.join(''),
     countStart: canonical?.countStart ?? null,
@@ -1851,6 +1953,7 @@ function aggregateSlots(slots: ProductionRecord[]): {
     bdCode,
     handover: canonical?.handoverNote ?? '',
     qcChecks: Object.keys(qcMap).length ? JSON.stringify(qcMap) : '',
+    rejectsBySlot: Object.keys(rejectsBySlotMap).length ? JSON.stringify(rejectsBySlotMap) : '',
   };
 }
 
