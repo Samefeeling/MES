@@ -642,9 +642,22 @@ function initials(name: string): string {
   return name.trim().slice(0, 2).toUpperCase();
 }
 
-/** Whose turn is it to QC this slot — operator (even) or supervisor (odd). */
+/**
+ * Slots that require a supervisor QC sign-off rather than an operator
+ * one. Production updated the cadence: instead of alternating
+ * operator / supervisor every half-hour, supervisors check at three
+ * fixed points per shift — start (slot 1 = ~07:30 on Day), middle
+ * (slot 7 = ~10:30), and near end (slot 13 = ~13:30). The same indices
+ * map onto Afternoon (15:30 / 18:30 / 21:30) and Night (23:30 / 02:30 /
+ * 05:30) because every shift counts slots from 0 at its start.
+ * Operators still do a QC every other slot.
+ */
+const SUPERVISOR_QC_SLOTS = new Set([1, 7, 13]);
+
+/** Whose turn is it to QC this slot — supervisor at the 3 cadence slots
+ *  per shift, operator on every other slot. */
 function qcRoleFor(slot: number): 'operator' | 'supervisor' {
-  return slot % 2 === 0 ? 'operator' : 'supervisor';
+  return SUPERVISOR_QC_SLOTS.has(slot) ? 'supervisor' : 'operator';
 }
 
 function qcCellHtml(slot: number, name: string, isNow: boolean): string {
@@ -696,13 +709,14 @@ function buildGrid(): string {
     return `<th class="slot-head${now}">${escapeHtml(lbl)}</th>`;
   }).join('');
 
-  // Quality Checks row sits between the time-header and Machine Status —
-  // alternating cadence: even slots want the operator's sign-off, odd
-  // slots want the supervisor's. A short initial of the picked name
-  // shows in the cell so the supervisor can scan the row and tell at a
-  // glance which slots have been checked. Tap → openQcPicker(slot).
+  // Quality Checks row sits between the time-header and Machine Status.
+  // Operator checks every half-hour; supervisor signs off at three
+  // fixed cadence slots per shift (1 / 7 / 13 → ~07:30, ~10:30, ~13:30
+  // for Day; same offsets for Afternoon / Night). Tap a cell to pick
+  // the signing name. Signed cells show the initials of the picked
+  // user so the supervisor can scan the row at a glance.
   const qcRow =
-    `<tr class="row-qc"><th class="rh" title="Even slots = operator check, odd slots = supervisor check">Quality Checks</th>` +
+    `<tr class="row-qc"><th class="rh" title="Operator checks every 30 min; Supervisor checks at slots 1 / 7 / 13 per shift (Day: 07:30, 10:30, 13:30)">Quality Checks</th>` +
     recs
       .map((r, i) => qcCellHtml(i, r?.qcBy ?? '', nowSlot === i))
       .join('') +
