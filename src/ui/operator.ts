@@ -195,13 +195,41 @@ function shiftOrders(): PlanningOrder[] {
     return historicalIds.map(historicalOrder);
   }
 
-  // Active / future shift: all PMD-released orders (sorted plannedStart,
-  // closest-to-now first), plus any historical id not in planning (e.g.
-  // a job that just got closed in Epicor).
-  const planned = S!.planning.slice().sort(
-    (a, b2) =>
-      new Date(a.plannedStart).getTime() - new Date(b2.plannedStart).getTime(),
-  );
+  // Active / future shift: filter to the orders whose [plannedStart,
+  // plannedEnd] window overlaps a 2-day horizon starting at the
+  // viewed date (i.e. today + tomorrow on a live shift). Epicor
+  // releases far more orders than a press will touch in one shift,
+  // and operators were scrolling past dozens of irrelevant entries
+  // to find the order in front of them. With JobHead_StartTime now
+  // layered onto JobHead_StartDate, the window is precise enough
+  // that "next two days" actually means it.
+  //
+  // Orders missing a plannedStart (rare: legacy CSV row) fall
+  // through the filter so the operator can still pick them.
+  // Sorted plannedStart-ascending so the next-to-run order is at
+  // the top of the dropdown.
+  const windowStart = new Date(S!.viewDate);
+  windowStart.setHours(0, 0, 0, 0);
+  const windowEnd = new Date(windowStart);
+  windowEnd.setDate(windowEnd.getDate() + 2);
+  windowEnd.setHours(23, 59, 59, 999);
+  const ws = windowStart.getTime();
+  const we = windowEnd.getTime();
+  const planned = S!.planning
+    .slice()
+    .filter((o) => {
+      if (!o.plannedStart) return true;
+      const s = Date.parse(o.plannedStart);
+      if (!isFinite(s)) return true;
+      const e = o.plannedEnd ? Date.parse(o.plannedEnd) : s;
+      // Standard interval overlap: order is kept when its window
+      // touches the horizon at any point.
+      return s <= we && (!isFinite(e) || e >= ws);
+    })
+    .sort(
+      (a, b2) =>
+        new Date(a.plannedStart).getTime() - new Date(b2.plannedStart).getTime(),
+    );
   const knownIds = new Set(planned.map((o) => o.jobNumber));
   const extras = historicalIds.filter((j) => !knownIds.has(j)).map(historicalOrder);
   return [...planned, ...extras];

@@ -2063,6 +2063,13 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
   if (rows.length === 0) return [];
   const header = rows[0].map((c) => c.trim());
   const idx = (name: string): number => header.indexOf(name);
+  const firstIdx = (...names: string[]): number => {
+    for (const n of names) {
+      const i = idx(n);
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
   const iJob = idx('JobHead_JobNum');
   const iPart = idx('JobHead_PartNum');
   const iDesc = idx('JobHead_PartDescription');
@@ -2071,13 +2078,40 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
   const iDue = idx('JobHead_ReqDueDate');
   const iDur = idx('Calculated_RemaingLaborHrs');
   const iQty = idx('JobOper_ProdStandard');
+  // Optional last column: decimal hours-of-day for the planned start
+  // (e.g. 18.68 → 18:40:48). Epicor emits this separately from the
+  // date so JobHead_StartDate is just YYYY-MM-DD; we layer the
+  // decimal-hours value back onto that date here. The header name
+  // isn't pinned yet — `JobHead_StartTime` is the canonical guess,
+  // falling back to a few common variants so the operator doesn't
+  // have to ship a code change if the Epicor export tool renames it.
+  const iStartTime = firstIdx(
+    'JobHead_StartTime',
+    'JobHead_Start_Time',
+    'Start_Time',
+    'StartTime',
+    'Start Time',
+  );
   const out: PlanningOrder[] = [];
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
     if (row.length === 0 || (row.length === 1 && row[0] === '')) continue;
     const job = row[iJob] ?? '';
     if (!job) continue;
-    const startIso = csvDateToIso(row[iStart] ?? '');
+    let startIso = csvDateToIso(row[iStart] ?? '');
+    // Layer the start-time decimal onto the start-date when the
+    // column is present and parses as a finite non-negative number
+    // less than 24. Anything else (blank, NaN, > 24) is ignored so
+    // a missing value can't silently shift a job to midnight.
+    if (startIso && iStartTime >= 0) {
+      const raw = (row[iStartTime] ?? '').trim();
+      if (raw !== '') {
+        const decH = parseFloat(raw);
+        if (isFinite(decH) && decH >= 0 && decH < 24) {
+          startIso = applyDecimalHoursToIso(startIso, decH);
+        }
+      }
+    }
     const dueIso = csvDateToIso(row[iDue] ?? '');
     const dur = parseFloat(row[iDur] ?? '0') || 0;
     const end = startIso && dur > 0
@@ -2105,6 +2139,38 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
     });
   }
   return out;
+}
+
+/**
+ * Convert decimal hours-of-day to (hh, mm, ss). 18.68 → 18:40:48.
+ * Rounds the seconds and carries 60 → 00 + next-minute / next-hour so
+ * a value of 23.999999 doesn't materialise as 23:59:60 (which Date
+ * happily accepts but quietly rolls into the next day).
+ */
+export function decimalHoursToHms(h: number): [number, number, number] {
+  let hh = Math.floor(h);
+  const remMin = (h - hh) * 60;
+  let mm = Math.floor(remMin);
+  let ss = Math.round((remMin - mm) * 60);
+  if (ss === 60) {
+    ss = 0;
+    mm += 1;
+  }
+  if (mm === 60) {
+    mm = 0;
+    hh += 1;
+  }
+  return [hh, mm, ss];
+}
+
+/** Replace the wall-clock time of an ISO timestamp with the decimal
+ *  hours-of-day value. Keeps the original calendar date untouched. */
+function applyDecimalHoursToIso(iso: string, decimalHours: number): string {
+  const d = new Date(iso);
+  if (!isFinite(d.getTime())) return iso;
+  const [hh, mm, ss] = decimalHoursToHms(decimalHours);
+  d.setHours(hh, mm, ss, 0);
+  return d.toISOString();
 }
 
 function parseCsv(text: string): string[][] {

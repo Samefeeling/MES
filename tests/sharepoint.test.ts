@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   dateOnly,
+  decimalHoursToHms,
   parsePlanningCsv,
   SharePointDataLayer,
   toServerRelativePath,
@@ -48,6 +49,59 @@ describe('parsePlanningCsv', () => {
     expect(out[0].jobNumber).toBe('J300');
     // Parsed as local 2026-06-02 07:00 → ISO with local offset
     expect(out[0].plannedStart).toMatch(/2026-06-0[12]T/);
+  });
+
+  it('layers JobHead_StartTime decimal hours onto JobHead_StartDate', () => {
+    // 18.68 → 18:40:48 per Epicor's decimal-hours convention.
+    const csv =
+      'JobHead_JobNum,JobHead_StartDate,JobHead_ReqDueDate,Calculated_RemaingLaborHrs,JobHead_StartTime\n' +
+      'J400,2026-06-02,2026-06-05,2,18.68\n';
+    const out = parsePlanningCsv(csv);
+    const t = new Date(out[0].plannedStart);
+    expect(t.getHours()).toBe(18);
+    expect(t.getMinutes()).toBe(40);
+    expect(t.getSeconds()).toBe(48);
+    // plannedEnd should derive from the precise start + duration (2h).
+    const end = new Date(out[0].plannedEnd);
+    expect(end.getHours()).toBe(20);
+    expect(end.getMinutes()).toBe(40);
+  });
+
+  it('falls back through StartTime / Start_Time / Start Time header variants', () => {
+    for (const colName of ['Start_Time', 'StartTime', 'Start Time']) {
+      const csv =
+        `JobHead_JobNum,JobHead_StartDate,${colName}\n` + `J5,2026-06-02,7.5\n`;
+      const out = parsePlanningCsv(csv);
+      const t = new Date(out[0].plannedStart);
+      expect(t.getHours()).toBe(7);
+      expect(t.getMinutes()).toBe(30);
+    }
+  });
+
+  it('ignores a missing / blank / out-of-range start-time cell', () => {
+    const csv =
+      'JobHead_JobNum,JobHead_StartDate,JobHead_StartTime\n' +
+      'J6,2026-06-02T07:00:00,\n' + // blank → keep existing 07:00
+      'J7,2026-06-02T07:00:00,99\n'; // > 24 → ignored
+    const out = parsePlanningCsv(csv);
+    expect(new Date(out[0].plannedStart).getHours()).toBe(7);
+    expect(new Date(out[1].plannedStart).getHours()).toBe(7);
+  });
+});
+
+describe('decimalHoursToHms', () => {
+  it('converts the Epicor 18.68 example to 18:40:48', () => {
+    expect(decimalHoursToHms(18.68)).toEqual([18, 40, 48]);
+  });
+  it('carries 60-second rounding into the next minute / hour', () => {
+    // 23.999999 should not produce 23:59:60 — it must roll to 24:00:00.
+    expect(decimalHoursToHms(23.999999)).toEqual([24, 0, 0]);
+  });
+  it('handles midnight (0)', () => {
+    expect(decimalHoursToHms(0)).toEqual([0, 0, 0]);
+  });
+  it('handles fractional hours common in Epicor (7.5 → 07:30:00)', () => {
+    expect(decimalHoursToHms(7.5)).toEqual([7, 30, 0]);
   });
 });
 
