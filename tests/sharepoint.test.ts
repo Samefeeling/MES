@@ -51,10 +51,10 @@ describe('parsePlanningCsv', () => {
     expect(out[0].plannedStart).toMatch(/2026-06-0[12]T/);
   });
 
-  it('layers JobHead_StartTime decimal hours onto JobHead_StartDate', () => {
+  it('layers JobHead_StartHour decimal hours onto JobHead_StartDate', () => {
     // 18.68 → 18:40:48 per Epicor's decimal-hours convention.
     const csv =
-      'JobHead_JobNum,JobHead_StartDate,JobHead_ReqDueDate,Calculated_RemaingLaborHrs,JobHead_StartTime\n' +
+      'JobHead_JobNum,JobHead_StartDate,JobHead_ReqDueDate,Calculated_RemaingLaborHrs,JobHead_StartHour\n' +
       'J400,2026-06-02,2026-06-05,2,18.68\n';
     const out = parsePlanningCsv(csv);
     const t = new Date(out[0].plannedStart);
@@ -80,7 +80,7 @@ describe('parsePlanningCsv', () => {
 
   it('ignores a missing / blank / out-of-range start-time cell', () => {
     const csv =
-      'JobHead_JobNum,JobHead_StartDate,JobHead_StartTime\n' +
+      'JobHead_JobNum,JobHead_StartDate,JobHead_StartHour\n' +
       'J6,2026-06-02T07:00:00,\n' + // blank → keep existing 07:00
       'J7,2026-06-02T07:00:00,99\n'; // > 24 → ignored
     const out = parsePlanningCsv(csv);

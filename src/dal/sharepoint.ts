@@ -2078,14 +2078,15 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
   const iDue = idx('JobHead_ReqDueDate');
   const iDur = idx('Calculated_RemaingLaborHrs');
   const iQty = idx('JobOper_ProdStandard');
-  // Optional last column: decimal hours-of-day for the planned start
+  // Optional column: decimal hours-of-day for the planned start
   // (e.g. 18.68 → 18:40:48). Epicor emits this separately from the
   // date so JobHead_StartDate is just YYYY-MM-DD; we layer the
-  // decimal-hours value back onto that date here. The header name
-  // isn't pinned yet — `JobHead_StartTime` is the canonical guess,
-  // falling back to a few common variants so the operator doesn't
-  // have to ship a code change if the Epicor export tool renames it.
+  // decimal-hours value back onto that date here. The Epicor field
+  // is JobHead_StartHour; the remaining variants are kept as
+  // defensive fallbacks so a header rename in the export tool
+  // doesn't require a code change.
   const iStartTime = firstIdx(
+    'JobHead_StartHour',
     'JobHead_StartTime',
     'JobHead_Start_Time',
     'Start_Time',
