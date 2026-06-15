@@ -1,19 +1,20 @@
-// Shared parser for the four-field shift handover note. The note is
-// stored on PMD_Production.Handover; live edits write JSON, but the
-// SP column also accepts the legacy "People: …\nPlant: …" labelled
-// text shape (see formatHandover in dal/sharepoint.ts). Both flavours
-// reduce to the same Handover record here so the KPIs cell and the
-// operator side-panel render the same four categories.
+// Shared parser for the four-field shift handover note (the "4M":
+// Machine / Mold / Material / Method). The note is stored on
+// PMD_Production.Handover; live edits write JSON, but the SP column
+// also accepts the legacy "Machine: …\nMold: …" labelled text shape
+// (see formatHandover in dal/sharepoint.ts). Both flavours reduce to
+// the same Handover record here so the KPIs cell and the operator
+// side-panel render the same four categories.
 
 export interface Handover {
-  people: string;
-  plant: string;
   machine: string;
+  mold: string;
   material: string;
+  method: string;
 }
 
-const BLANK: Handover = { people: '', plant: '', machine: '', material: '' };
-const LABELLED_RE = /(People|Plant|Machine|Material)\s*:\s*([^\n\r]*)/gi;
+const BLANK: Handover = { machine: '', mold: '', material: '', method: '' };
+const LABELLED_RE = /(Machine|Mold|Material|Method)\s*:\s*([^\n\r]*)/gi;
 
 export function parseHandover(note: string | undefined | null): Handover {
   if (!note) return { ...BLANK };
@@ -21,7 +22,16 @@ export function parseHandover(note: string | undefined | null): Handover {
   if (trimmed.startsWith('{')) {
     try {
       const j = JSON.parse(trimmed) as Partial<Handover>;
-      return { ...BLANK, ...j };
+      // Strip any extraneous keys (e.g. the legacy people/plant fields
+      // from rows written by the pre-4M release). Spread-with-default
+      // would carry them through if we used the typed cast naively;
+      // explicit per-key copy keeps the shape clean.
+      return {
+        machine: j.machine ?? '',
+        mold: j.mold ?? '',
+        material: j.material ?? '',
+        method: j.method ?? '',
+      };
     } catch {
       // fall through to the labelled-text parser
     }
@@ -40,6 +50,6 @@ export function parseHandover(note: string | undefined | null): Handover {
     matched = true;
   }
   if (matched) return out;
-  // Legacy plain-text: surface under "people" so nothing is lost.
-  return { ...BLANK, people: trimmed };
+  // Legacy plain-text: surface under "method" so nothing is lost.
+  return { ...BLANK, method: trimmed };
 }

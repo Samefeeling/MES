@@ -746,9 +746,9 @@ export class SharePointDataLayer implements PmdDataLayer {
       supervisor: str(r[F.supervisor]),
       runTime: F.runTime ? num(r[F.runTime]) : 0,
       downTime: num(r[F.downTime]),
-      // Handover is the JSON {people,plant,machine,material} blob, stored
-      // when the shift was signed off. Used by the operator side-panel
-      // textareas and the KPI Handover column.
+      // Handover is the JSON {machine,mold,material,method} blob (the
+      // "4M"), stored when the shift was signed off. Used by the
+      // operator side-panel textareas and the KPI Handover column.
       handover: F.handover ? str(r[F.handover]) : '',
       qcChecks: F.qcChecks ? str(r[F.qcChecks]) : '',
       rejectsBySlot: F.rejectsBySlot ? str(r[F.rejectsBySlot]) : '',
@@ -1789,7 +1789,7 @@ interface HeaderInput {
   supervisor: string;
   runTime: number;
   downTime: number;
-  handover: string; // JSON {people,plant,machine,material} from the canonical slot
+  handover: string; // JSON {machine,mold,material,method} (4M) from the canonical slot
   /** JSON {"<slotIndex>":"<name>"} — the per-slot QC sign-off map. */
   qcChecks: string;
   /** JSON {"<slotIndex>":{"<code>":qty}} — per-slot per-code reject
@@ -1958,12 +1958,12 @@ function aggregateSlots(slots: ProductionRecord[]): {
 }
 
 
-/** Turn the handover JSON {people,plant,machine,material} into readable text. */
+/** Turn the handover JSON {machine,mold,material,method} into readable text. */
 function formatHandover(json: string): string {
   if (!json) return '';
   try {
     const h = JSON.parse(json) as Record<string, string>;
-    return (['people', 'plant', 'machine', 'material'] as const)
+    return (['machine', 'mold', 'material', 'method'] as const)
       .filter((k) => (h[k] ?? '').trim())
       .map((k) => `${k[0].toUpperCase()}${k.slice(1)}: ${h[k].trim()}`)
       .join('\n');

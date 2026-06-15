@@ -832,12 +832,12 @@ function buildSide(): string {
     <div class="sk"><label>Total Good</label><b class="g" data-live="totalGood">${good}</b></div>
     <div class="sk"><label>Purge (kg)</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="purge" value="${purge}" ${rdo}${rdoTitle}></div>
     <div class="handover">
-      <div class="handover-title">Handover / Journey — supervisor notes</div>
+      <div class="handover-title">Handover</div>
       <div class="handover-grid">
-        <label><span>👥 People</span><textarea data-meta="hand-people" placeholder="Staffing, swaps, training, fatigue…" ${rdo}${rdoTitle}>${escapeHtml(h.people)}</textarea></label>
-        <label><span>🏭 Plant</span><textarea data-meta="hand-plant" placeholder="Utilities, services, ambient, housekeeping…" ${rdo}${rdoTitle}>${escapeHtml(h.plant)}</textarea></label>
-        <label><span>🛠 Machine</span><textarea data-meta="hand-machine" placeholder="Press state, mould, robot, breakdown follow-ups…" ${rdo}${rdoTitle}>${escapeHtml(h.machine)}</textarea></label>
+        <label><span>🛠 Machine</span><textarea data-meta="hand-machine" placeholder="Press state, robot, hot runner, breakdown follow-ups…" ${rdo}${rdoTitle}>${escapeHtml(h.machine)}</textarea></label>
+        <label><span>🧩 Mold</span><textarea data-meta="hand-mold" placeholder="Mould condition, slides, ejector, water lines, maintenance due…" ${rdo}${rdoTitle}>${escapeHtml(h.mold)}</textarea></label>
         <label><span>📦 Material</span><textarea data-meta="hand-material" placeholder="Material lot, dryer, regrind, masterbatch…" ${rdo}${rdoTitle}>${escapeHtml(h.material)}</textarea></label>
+        <label><span>📋 Method</span><textarea data-meta="hand-method" placeholder="Cycle, settings, process changes, work instructions…" ${rdo}${rdoTitle}>${escapeHtml(h.method)}</textarea></label>
       </div>
     </div>
   </aside>`;
@@ -1304,11 +1304,11 @@ function onMetaChange(el: HTMLElement): void {
       void refreshJobTotalAndPaintSide();
       break;
     }
-    case 'hand-people':
-    case 'hand-plant':
     case 'hand-machine':
-    case 'hand-material': {
-      const field = key.slice('hand-'.length) as 'people' | 'plant' | 'machine' | 'material';
+    case 'hand-mold':
+    case 'hand-material':
+    case 'hand-method': {
+      const field = key.slice('hand-'.length) as 'machine' | 'mold' | 'material' | 'method';
       // Skip reload: a full re-render would destroy the textarea the operator
       // just tabbed into, losing whatever they're typing there.
       void upsertSlotNoReload(0, (r) => {

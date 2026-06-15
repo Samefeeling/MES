@@ -43,8 +43,10 @@ UserContext { name, role:'operator'|'supervisor'|'admin' }
 ```
 
 - `rejects` is a JSON string: `{"D01":3,"D04":1}`.
-- `handoverNote` is a JSON string: `{people,plant,machine,material}`
-  (legacy plain text is surfaced under `people`).
+- `handoverNote` is a JSON string: `{machine,mold,material,method}` (the
+  "4M"). Pre-4M rows containing `people`/`plant` keys are read but those
+  fields are discarded by the parser; legacy plain text is surfaced
+  under `method`.
 
 ## Storage model: per-slot in memory, header+events in SharePoint
 

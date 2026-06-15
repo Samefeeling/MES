@@ -132,9 +132,9 @@ const OPERATOR_STEPS: TutorialStep[] = [
   },
   {
     id: 'handover',
-    title: 'Handover notes for the next shift',
+    title: 'Handover (4M) for the next shift',
     narration:
-      'Towards the end of the shift, fill in the four handover boxes. People — staffing changes. Plant — air, water, dryer issues. Machine — press state, mould condition, anything to watch. Material — lot, regrind, masterbatch. The next shift sees this on KPIs.',
+      'Towards the end of the shift, fill in the four handover boxes — the 4M. Machine — press state, robot, hot runner, breakdown follow-ups. Mold — mould condition, slides, ejector, water lines. Material — lot, regrind, masterbatch, dryer. Method — cycle, settings, process changes, work instructions. The next shift sees this on KPIs.',
     target: '.handover',
   },
   {

@@ -24,10 +24,10 @@ const SHIFT_ORDER: ShiftCode[] = SHIFTS.map((s) => s.code);
 
 interface HandoverEntry {
   jobNumber: string;
-  people: string;
-  plant: string;
   machine: string;
+  mold: string;
   material: string;
+  method: string;
 }
 
 interface ShiftAgg {
@@ -255,7 +255,7 @@ function collectHandovers(records: ProductionRecord[]): HandoverEntry[] {
     if (seen.has(r.jobNumber)) continue;
     seen.add(r.jobNumber);
     const h = parseHandover(r.handoverNote);
-    if (!h.people && !h.plant && !h.machine && !h.material) continue;
+    if (!h.machine && !h.mold && !h.material && !h.method) continue;
     out.push({ jobNumber: r.jobNumber, ...h });
   }
   return out;
@@ -517,20 +517,20 @@ function formatHandoverCell(handovers: HandoverEntry[]): string {
   const compact = handovers
     .map((h) => {
       const parts: string[] = [];
-      if (h.people) parts.push(`👥 ${h.people.replace(/\s+/g, ' ').trim()}`);
-      if (h.plant) parts.push(`🏭 ${h.plant.replace(/\s+/g, ' ').trim()}`);
       if (h.machine) parts.push(`🛠 ${h.machine.replace(/\s+/g, ' ').trim()}`);
+      if (h.mold) parts.push(`🧩 ${h.mold.replace(/\s+/g, ' ').trim()}`);
       if (h.material) parts.push(`📦 ${h.material.replace(/\s+/g, ' ').trim()}`);
+      if (h.method) parts.push(`📋 ${h.method.replace(/\s+/g, ' ').trim()}`);
       return parts.join(' · ');
     })
     .join(' || ');
   const full = handovers
     .map((h) => {
       const lines: string[] = [`Job ${h.jobNumber || '—'}`];
-      if (h.people) lines.push(`  👥 ${h.people}`);
-      if (h.plant) lines.push(`  🏭 ${h.plant}`);
       if (h.machine) lines.push(`  🛠 ${h.machine}`);
+      if (h.mold) lines.push(`  🧩 ${h.mold}`);
       if (h.material) lines.push(`  📦 ${h.material}`);
+      if (h.method) lines.push(`  📋 ${h.method}`);
       return lines.join('\n');
     })
     .join('\n\n');
