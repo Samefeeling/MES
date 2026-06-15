@@ -481,18 +481,39 @@ async function refreshJobTotal(): Promise<void> {
     return;
   }
   const all = await dalRef.listProduction({ jobNumber: S!.selJob });
-  const seen = new Set<string>();
-  const currentKey = `${S!.mc}|${sid()}`;
-  let total = 0;
+  S!.jobTotalGood = sumOtherShiftGood(all, `${S!.mc}|${sid()}`);
+}
+
+/**
+ * Σ good across every (machine, shift) tuple of this job EXCEPT the
+ * currently-viewed one (`currentKey`), which jobLeftPieces() adds on
+ * top via goodThis.
+ *
+ * good per tuple = gross − rejects, where:
+ *   - gross (Count End − Count Start) lives ONLY on the canonical slot 0;
+ *   - rejects are recorded per half-hour slot across the whole timeline.
+ *
+ * The previous version summed rejects from slot 0 only — but reject
+ * events round-trip onto their own slot (see expandHeaderToSlots /
+ * timelineToSlot), so any reject after the first half hour was invisible
+ * here. A finished Day shift therefore handed the Afternoon shift its
+ * GROSS count as "good", and Job Left came out too low once you switched
+ * to Afternoon. Sum rejects across ALL slots of the tuple to fix that.
+ */
+export function sumOtherShiftGood(
+  all: ProductionRecord[],
+  currentKey: string,
+): number {
+  const grossByTuple = new Map<string, number>();
+  const rejByTuple = new Map<string, number>();
   for (const r of all) {
-    if (r.slotIndex !== 0) continue;
     const key = `${r.machineCode}|${r.shiftId}`;
     if (key === currentKey) continue;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const cs = Number(r.countStart ?? 0);
-    const ce = Number(r.countEnd ?? 0);
-    const gross = Math.max(0, ce - cs);
+    if (r.slotIndex === 0) {
+      const cs = Number(r.countStart ?? 0);
+      const ce = Number(r.countEnd ?? 0);
+      grossByTuple.set(key, Math.max(0, ce - cs));
+    }
     let rej = 0;
     try {
       const obj = JSON.parse(r.rejects || '{}') as Record<string, number>;
@@ -500,9 +521,13 @@ async function refreshJobTotal(): Promise<void> {
     } catch {
       rej = Number(r.rejectCount) || 0;
     }
-    total += Math.max(0, gross - rej);
+    if (rej) rejByTuple.set(key, (rejByTuple.get(key) ?? 0) + rej);
   }
-  S!.jobTotalGood = total;
+  let total = 0;
+  for (const [key, gross] of grossByTuple) {
+    total += Math.max(0, gross - (rejByTuple.get(key) ?? 0));
+  }
+  return total;
 }
 
 /**
