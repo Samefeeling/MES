@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   dateOnly,
   decimalHoursToHms,
@@ -165,5 +165,277 @@ describe('dateOnly (shiftId UTC→local round-trip)', () => {
     expect(dateOnly('not-a-date')).toBe('not-a-date');
     expect(dateOnly('')).toBe('');
     expect(dateOnly(null)).toBe('');
+  });
+});
+
+describe('listProduction backfills editCache from PMD_LiveStatus', () => {
+  // Regression for the SFM507068 14:23 incident: editCache had only
+  // slot 0 (S) and slot 9 (R), but PMD_LiveStatus had the full
+  // SSRRRRRRRR / reject 18 snapshot pushed minutes earlier. Sign-off
+  // aggregates editCache, so without the backfill the supervisor's
+  // press of "Sign off & Save" burned S·······R / reject 11 into
+  // PMD_Production and silently dropped 8 slots and 7 rejects.
+
+  // Minimal localStorage shim. Installed once for the describe block so
+  // the coalesced persistEditCache setTimeout — which fires a tick after
+  // listProduction returns — still has somewhere to write. Cleared
+  // (store.clear()) between tests so cache state doesn't leak.
+  const store = new Map<string, string>();
+  beforeAll(() => {
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string): string | null => store.get(k) ?? null,
+      setItem: (k: string, v: string): void => {
+        store.set(k, v);
+      },
+      removeItem: (k: string): void => {
+        store.delete(k);
+      },
+      clear: (): void => {
+        store.clear();
+      },
+      key: (): string | null => null,
+      length: 0,
+    };
+  });
+  afterAll(() => {
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+
+  it('merges LiveStatus slots that the local cache is missing, leaving cache slots intact', async () => {
+    store.clear();
+    {
+      const dal = new SharePointDataLayer({
+        siteUrl: 'https://example.sharepoint.com/sites/x',
+      });
+      const machineCode = 'Batt1';
+      const shiftId = '2026-06-13-Day';
+      const jobNumber = 'SFM507068';
+
+      // Seed editCache with the partial state that survived the
+      // reload: just slot 0 (S, 100 good) and slot 9 (R, 3 rejects).
+      const seed = [
+        {
+          id: -1,
+          machineCode,
+          shiftId,
+          jobNumber,
+          slotIndex: 0,
+          statusCode: 'S',
+          countStart: 100,
+          countEnd: 0,
+          rejects: '{}',
+          purge: 0,
+          bdIssue: '',
+          handoverNote: '',
+          operator: 'Joe',
+          supervisor: 'Sue',
+          locked: false,
+          lockedBy: '',
+          lockedAt: '',
+          updatedAt: '',
+          qcBy: '',
+        },
+        {
+          id: -2,
+          machineCode,
+          shiftId,
+          jobNumber,
+          slotIndex: 9,
+          statusCode: 'R',
+          countStart: 0,
+          countEnd: 0,
+          rejects: JSON.stringify({ D01: 3 }),
+          purge: 0,
+          bdIssue: '',
+          handoverNote: '',
+          operator: 'Joe',
+          supervisor: 'Sue',
+          locked: false,
+          lockedBy: '',
+          lockedAt: '',
+          updatedAt: '',
+          qcBy: '',
+        },
+      ];
+      // Inject directly into the private cache via bracket access.
+      const cache = (dal as unknown as {
+        editCache: Map<string, Array<(typeof seed)[0]>>;
+      }).editCache;
+      cache.set(`${machineCode}|${shiftId}|${jobNumber}`, seed);
+
+      // Stub the three fetchers. PMD_LiveStatus reports the full
+      // SSRRRRRRRR timeline with reject 18 — what was actually
+      // mirrored from the operator iPad before the reload.
+      const liveHeader = {
+        machineCode,
+        date: '2026-06-13',
+        shift: 'Day',
+        jobNumber,
+        partNumber: 'P1',
+        partDescription: 'Widget',
+        timeline: 'SSRRRRRRRR······',
+        countStart: 100,
+        countEnd: 200,
+        reject: 18,
+        operator: 'Joe',
+        supervisor: 'Sue',
+        runTime: 4,
+        downTime: 0,
+        handover: '',
+        qcChecks: '',
+        rejectsBySlot: JSON.stringify({
+          '2': { D01: 2 },
+          '3': { D01: 2 },
+          '4': { D01: 2 },
+          '5': { D01: 2 },
+          '6': { D01: 2 },
+          '7': { D01: 2 },
+          '8': { D01: 3 },
+          '9': { D01: 3 },
+        }),
+      };
+      const liveRejects = [
+        { timeline: '08:00', code: 'D01', category: 'R', qty: 2 },
+        { timeline: '08:30', code: 'D01', category: 'R', qty: 2 },
+        { timeline: '09:00', code: 'D01', category: 'R', qty: 2 },
+        { timeline: '09:30', code: 'D01', category: 'R', qty: 2 },
+        { timeline: '10:00', code: 'D01', category: 'R', qty: 2 },
+        { timeline: '10:30', code: 'D01', category: 'R', qty: 2 },
+        { timeline: '11:00', code: 'D01', category: 'R', qty: 3 },
+        { timeline: '11:30', code: 'D01', category: 'R', qty: 3 },
+      ];
+      const key = `${machineCode}|${shiftId}|${jobNumber}`;
+      const overrides = dal as unknown as {
+        fetchHeaders: (list: string) => Promise<unknown[]>;
+        fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+        fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+      };
+      overrides.fetchHeaders = async (list: string): Promise<unknown[]> =>
+        list === 'PMD_LiveStatus' ? [liveHeader] : [];
+      overrides.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> =>
+        new Map([[key, liveRejects]]);
+      overrides.fetchBreakdownTimelines = async (): Promise<
+        Map<string, string>
+      > => new Map();
+
+      await dal.listProduction({ machineCode, shiftId });
+
+      const merged = cache.get(key)!;
+      const bySlot = new Map(merged.map((s) => [s.slotIndex, s]));
+      // Slot 0: editCache value preserved (S, countStart 100). Must
+      // NOT be overwritten by the snapshot.
+      expect(bySlot.get(0)!.statusCode).toBe('S');
+      expect(bySlot.get(0)!.countStart).toBe(100);
+      // Slot 9: editCache value preserved (3 D01 rejects).
+      expect(JSON.parse(bySlot.get(9)!.rejects)).toEqual({ D01: 3 });
+      // Slots 1-8 backfilled from LiveStatus.
+      expect(bySlot.get(1)!.statusCode).toBe('S');
+      for (let i = 2; i <= 8; i++) {
+        expect(bySlot.get(i)!.statusCode).toBe('R');
+      }
+      // Total slots present in the merged cache covers 0..9 (the
+      // active SSRRRRRRRR window — empty trailing slots are not
+      // materialised by expandHeaderToSlots).
+      const activeSlots = [...bySlot.keys()].filter((i) => i <= 9).sort((a, b) => a - b);
+      expect(activeSlots).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+      // Reject sum across the merged cache = 18 (editCache slot 9's 3
+      // + the seven backfilled slots' 2+2+2+2+2+2+3 = 15). This is the
+      // exact number that aggregateSlots would push into
+      // PMD_Production.Reject on Sign Off & Save.
+      let total = 0;
+      for (const s of merged) {
+        const r = JSON.parse(s.rejects || '{}') as Record<string, number>;
+        for (const v of Object.values(r)) total += v;
+      }
+      expect(total).toBe(18);
+    }
+  });
+
+  it('skips backfill when the tuple is already signed off', async () => {
+    store.clear();
+    {
+      const dal = new SharePointDataLayer({
+        siteUrl: 'https://example.sharepoint.com/sites/x',
+      });
+      const machineCode = 'Batt1';
+      const shiftId = '2026-06-13-Day';
+      const jobNumber = 'SFM507068';
+      const cache = (dal as unknown as {
+        editCache: Map<string, unknown[]>;
+      }).editCache;
+      // Pre-seeded cache from a stale device — should be PURGED on
+      // read because the same tuple is signed off in PMD_Production.
+      cache.set(`${machineCode}|${shiftId}|${jobNumber}`, [
+        {
+          id: -1,
+          machineCode,
+          shiftId,
+          jobNumber,
+          slotIndex: 0,
+          statusCode: 'S',
+          countStart: 0,
+          countEnd: 0,
+          rejects: '{}',
+          purge: 0,
+          bdIssue: '',
+          handoverNote: '',
+          operator: '',
+          supervisor: '',
+          locked: false,
+          lockedBy: '',
+          lockedAt: '',
+          updatedAt: '',
+          qcBy: '',
+        },
+      ]);
+
+      const prodHeader = {
+        machineCode,
+        date: '2026-06-13',
+        shift: 'Day',
+        jobNumber,
+        partNumber: 'P1',
+        partDescription: 'Widget',
+        timeline: 'SSRRRRRRRR······',
+        countStart: 100,
+        countEnd: 200,
+        reject: 18,
+        operator: 'Joe',
+        supervisor: 'Sue',
+        runTime: 4,
+        downTime: 0,
+        handover: '',
+        qcChecks: '',
+        rejectsBySlot: '',
+      };
+      const overrides = dal as unknown as {
+        fetchHeaders: (list: string) => Promise<unknown[]>;
+        fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+        fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+      };
+      // Also return a stale PMD_LiveStatus row for the SAME tuple —
+      // simulating the brief window after sign-off but before
+      // deleteLiveRow lands (or a deleteLiveRow that failed). The
+      // backfill MUST skip this tuple: PMD_Production is canonical,
+      // and re-hydrating from a stale live mirror would re-introduce
+      // the very rows lockShift's editCache.delete just cleared.
+      const staleLive = { ...prodHeader, timeline: 'SSRRRR··········', reject: 12 };
+      overrides.fetchHeaders = async (list: string): Promise<unknown[]> => {
+        if (list === 'PMD_Production') return [prodHeader];
+        if (list === 'PMD_LiveStatus') return [staleLive];
+        return [];
+      };
+      overrides.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> =>
+        new Map();
+      overrides.fetchBreakdownTimelines = async (): Promise<
+        Map<string, string>
+      > => new Map();
+
+      await dal.listProduction({ machineCode, shiftId });
+      // editCache purged for the signed-off tuple — neither the stale
+      // local taps nor the stale LiveStatus row re-populate it. The
+      // canonical PMD_Production row stands alone.
+      expect(cache.has(`${machineCode}|${shiftId}|${jobNumber}`)).toBe(false);
+    }
   });
 });

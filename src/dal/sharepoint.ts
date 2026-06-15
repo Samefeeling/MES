@@ -664,6 +664,50 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
     if (purged) this.persistEditCache();
 
+    // Backfill editCache from PMD_LiveStatus per slot. PMD_LiveStatus
+    // is pushed every 60 s from whichever iPad is editing, and is the
+    // only durable source for in-progress slots — if localStorage is
+    // stale (page reload between snapshot pushes, fresh device, cleared
+    // cache, asset redeploy that forced a refresh) the local cache can
+    // be missing slots the broker actually has. Without this merge a
+    // subsequent Sign Off & Save aggregates only the local cache and
+    // burns a partial timeline into PMD_Production — exactly the
+    // SFM507068 14:23 incident.
+    //
+    // editCache wins per slot: its slots are strictly fresher than the
+    // 60 s mirror, and a slot the operator just blanked must not be
+    // re-filled from the older snapshot. We only ADD slots LiveStatus
+    // has that editCache lacks. Tuples that are already signed off are
+    // skipped — PMD_Production is canonical past sign-off.
+    let backfilled = false;
+    for (const h of liveHeaders) {
+      if (!matchesFilter(h)) continue;
+      const hShiftId = `${h.date}-${h.shift}`;
+      const key = this.cacheKey(h.machineCode, hShiftId, h.jobNumber);
+      if (signedKeys.has(key)) continue;
+      const hWithTimeline: HeaderRow = h.timeline
+        ? h
+        : { ...h, timeline: timelinesByKey.get(key) ?? '' };
+      const liveSlots = this.expandHeaderToSlots(
+        hWithTimeline,
+        rejectsByKey.get(key) ?? [],
+        false,
+      );
+      const existing = this.editCache.get(key) ?? [];
+      const haveSlot = new Set(existing.map((s) => s.slotIndex));
+      let added = false;
+      for (const ls of liveSlots) {
+        if (haveSlot.has(ls.slotIndex)) continue;
+        existing.push(ls);
+        added = true;
+      }
+      if (added) {
+        this.editCache.set(key, existing);
+        backfilled = true;
+      }
+    }
+    if (backfilled) this.persistEditCache();
+
     // Local edits for tuples that are NOT signed off.
     const cached: ProductionRecord[] = [];
     for (const list of this.editCache.values()) {
@@ -693,10 +737,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     // Signed-off first so it wins any (rare) overlap with a not-yet-
     // deleted live row.
     for (const h of prodHeaders) ingest(h, true);
-    // NOTE: no per-machine dedup here — listProduction must return every
-    // (machine, shift, job) tuple so the Operator and KPI views see all
-    // jobs a press ran. The "one card per machine, latest only" collapse
-    // for the Live Status board lives in trace.ts loadLive() instead.
+    // Live rows already merged into editCache above; the ingest pass
+    // still runs them to cover tuples that fall outside the editCache
+    // filter (e.g. cross-machine Live Status board reads) — the
+    // seen-set dedups any already-emitted tuple.
     for (const h of liveHeaders) ingest(h, false);
     return cached;
   }

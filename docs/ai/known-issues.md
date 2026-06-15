@@ -50,7 +50,22 @@
   zooms OUT (Today → 7d → 30d). This was reversed once; keep it this way.
 - **SharePoint backend persists only on Sign off & Save.** Mid-shift slot
   edits live in the adapter's in-memory cache; a page reload before sign-off
-  loses unsaved edits. Acceptable for v1 (mirrors the old .bas flow).
+  loses unsaved edits from the LAST 60 s, but everything before that has
+  already been pushed to PMD_LiveStatus and is recovered on the next read
+  (see editCache reconciliation below). Acceptable for v1.
+- **editCache ↔ PMD_LiveStatus reconciliation** (fix for SFM507068 14:23
+  incident, 2026-06-15): `listProduction` backfills editCache from
+  PMD_LiveStatus per slot. PMD_LiveStatus is the 60 s mirror, lags the
+  live keystrokes but reliably survives reloads / asset redeploys /
+  fresh devices. Before the fix, a reload that ended up with a partial
+  editCache (e.g. only slot 0 and slot 9 instead of 0..9) plus a
+  subsequent Sign Off & Save would aggregate only the cache and burn a
+  partial timeline into PMD_Production, silently dropping every slot
+  and reject the cache had lost. The backfill merges per-slot — cache
+  wins per slot since it's strictly fresher than the 60 s mirror — and
+  skips tuples already signed off in PMD_Production (canonical).
+  Sign-off then deletes the PMD_LiveStatus mirror (`deleteLiveRow`) so
+  the next read finds no stale snapshot.
 
 ## Build / toolchain
 
