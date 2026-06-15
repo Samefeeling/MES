@@ -438,7 +438,8 @@ columns, both ends have to move together.
 | `JobHead_PartNum` | partNumber | |
 | `JobHead_PartDescription` | partDescription | |
 | `Calculated_RemainingQty` | jobRequired | |
-| `JobHead_StartDate` | plannedStart | ISO 8601 preferred; AU dd/mm/yyyy also accepted |
+| `JobHead_StartDate` | plannedStart (date) | ISO 8601 preferred; AU dd/mm/yyyy also accepted |
+| `JobHead_StartHour` | plannedStart (time-of-day) | optional; decimal hours, e.g. `18.68` = 18:40:48. Layered onto `JobHead_StartDate`. Blank/missing = keep the date's own time. **The BAQ must include `JobHead.StartHour` in its output fields or this column will be empty.** |
 | `JobHead_ReqDueDate` | plannedEnd (fallback if no duration) | same date formats |
 | `Calculated_RemaingLaborHrs` | duration (hours) | |
 | `JobOper_ProdStandard` | qtyPerHr | |

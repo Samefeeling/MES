@@ -72,6 +72,14 @@ $projected = $keep | ForEach-Object {
     JobHead_PartDescription    = [string]$_.JobHead_PartDescription
     Calculated_RemainingQty    = [double]$_.Calculated_RemainingQty
     JobHead_StartDate          = if ($_.JobHead_StartDate)  { ([datetime]$_.JobHead_StartDate).ToString("yyyy-MM-ddTHH:mm:ss") }  else { "" }
+    # Decimal hours-of-day (e.g. 18.68 = 18:40:48). The app layers this
+    # onto JobHead_StartDate. Use an explicit null check, NOT truthiness:
+    # writing an empty cell tells the app to keep the date's own time,
+    # whereas [double]$null would emit 0 and the app would read that as a
+    # valid midnight start and shift the job to 00:00. (A genuine 0.0
+    # start hour is indistinguishable from null here and likewise yields
+    # "", which is the safe choice — the date's own time stands.)
+    JobHead_StartHour          = if ($null -ne $_.JobHead_StartHour) { [double]$_.JobHead_StartHour } else { "" }
     JobHead_ReqDueDate         = if ($_.JobHead_ReqDueDate) { ([datetime]$_.JobHead_ReqDueDate).ToString("yyyy-MM-ddTHH:mm:ss") } else { "" }
     Calculated_RemaingLaborHrs = [double]$_.Calculated_RemaingLaborHrs
     JobOper_ProdStandard       = [double]$_.JobOper_ProdStandard
