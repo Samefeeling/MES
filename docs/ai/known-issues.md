@@ -66,6 +66,21 @@
   skips tuples already signed off in PMD_Production (canonical).
   Sign-off then deletes the PMD_LiveStatus mirror (`deleteLiveRow`) so
   the next read finds no stale snapshot.
+- **Stale PMD_LiveStatus cleanup** (added 2026-06-16): operators
+  occasionally tap a machine on the wrong job / wrong shift / wrong
+  date and walk away, leaving a partial row in PMD_LiveStatus that
+  nobody ever signs off. Without cleanup these rows accumulated and
+  the editCache reconciliation absorbed them as "in-progress live
+  data", shadowing the canonical PMD_Production row when an operator
+  scrolled back to review a past shift. `listProduction` now treats
+  a PMD_LiveStatus row as junk when its shift ended more than 8 h ago
+  AND no MachineStatus letter is set on any half-hour slot — the row
+  is filtered out of the merge/display and fire-and-forget deleted
+  from PMD_LiveStatus on the next read. editCache entries matching
+  the same staleness rule are also purged so the next
+  `pushLiveSnapshot` tick doesn't recreate the row. Future-dated
+  rows (planned tap-ahead) are never touched. See
+  `isStaleLiveHeader` in `src/dal/sharepoint.ts`.
 
 ## Build / toolchain
 

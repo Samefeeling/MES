@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   dateOnly,
   decimalHoursToHms,
+  isStaleLiveHeader,
   parsePlanningCsv,
   SharePointDataLayer,
   toServerRelativePath,
@@ -437,5 +438,80 @@ describe('listProduction backfills editCache from PMD_LiveStatus', () => {
       // canonical PMD_Production row stands alone.
       expect(cache.has(`${machineCode}|${shiftId}|${jobNumber}`)).toBe(false);
     }
+  });
+});
+
+describe('isStaleLiveHeader', () => {
+  // Day shift on 2026-06-10 runs 07:00–15:00. 8h grace ends at 23:00.
+  const daySid = '2026-06-10-Day';
+  const fields = (timeline = ''): { date: string; shift: string; timeline?: string } => ({
+    date: '2026-06-10',
+    shift: 'Day',
+    timeline,
+  });
+
+  it('flags a past-shift row whose timeline has no machine status', () => {
+    // 24 h after start (2026-06-11 07:00) — well past the 8 h grace.
+    const now = new Date(2026, 5, 11, 7, 0, 0);
+    expect(isStaleLiveHeader(fields(''), now)).toBe(true);
+    expect(isStaleLiveHeader(fields('················'), now)).toBe(true);
+    expect(isStaleLiveHeader({ ...fields(), timeline: undefined }, now)).toBe(true);
+  });
+
+  it('keeps a past-shift row that has ANY machine status letter', () => {
+    const now = new Date(2026, 5, 11, 7, 0, 0);
+    // Single 'R' anywhere in the 16-slot timeline is enough to keep.
+    expect(isStaleLiveHeader(fields('R···············'), now)).toBe(false);
+    // Mid-timeline B too.
+    expect(isStaleLiveHeader(fields('·······B········'), now)).toBe(false);
+  });
+
+  it('keeps the row while the 8 h grace is still active', () => {
+    // 22:00 same day = 7h past shift end (15:00). Still within grace.
+    const now = new Date(2026, 5, 10, 22, 0, 0);
+    expect(isStaleLiveHeader(fields(''), now)).toBe(false);
+  });
+
+  it('tips into stale at the exact end of the grace window', () => {
+    // shift end = 15:00. grace ends at 23:00. At the exact equality
+    // (b.end + grace === now), the helper returns true — the row has
+    // had its full 8 h grace and nothing landed on the timeline.
+    const atBoundary = new Date(2026, 5, 10, 23, 0, 0);
+    expect(isStaleLiveHeader(fields(''), atBoundary)).toBe(true);
+    // 1 ms before the boundary → still kept.
+    const justBefore = new Date(2026, 5, 10, 22, 59, 59, 999);
+    expect(isStaleLiveHeader(fields(''), justBefore)).toBe(false);
+  });
+
+  it('keeps a row that is for a future shift (planned tap-ahead)', () => {
+    // now is BEFORE the day starts — date row is for the future.
+    const now = new Date(2026, 5, 9, 12, 0, 0);
+    expect(isStaleLiveHeader(fields(''), now)).toBe(false);
+  });
+
+  it('keeps rows with unparseable shift ids (defensive)', () => {
+    const now = new Date(2026, 5, 15, 0, 0, 0);
+    expect(
+      isStaleLiveHeader({ date: 'nope', shift: 'Day', timeline: '' }, now),
+    ).toBe(false);
+  });
+
+  it('respects a custom grace window', () => {
+    // 24 h after shift start is well past the default 8 h grace, but
+    // not past a 24 h grace.
+    const now = new Date(2026, 5, 11, 7, 0, 0);
+    expect(isStaleLiveHeader(fields(''), now, 24 * 3600_000)).toBe(false);
+  });
+
+  // Pin the shift-bounds reasoning into the test (so if shiftBounds
+  // changes, the assertions break loudly here).
+  it('matches the documented shift-end arithmetic (Day end = 15:00)', () => {
+    // 8h after 15:00 = 23:00 same day. At 22:59:59 → still active grace.
+    const safe = new Date(2026, 5, 10, 22, 59, 59);
+    // At 23:00:01 → past grace, becomes stale (empty timeline).
+    const past = new Date(2026, 5, 10, 23, 0, 1);
+    void daySid;
+    expect(isStaleLiveHeader(fields(''), safe)).toBe(false);
+    expect(isStaleLiveHeader(fields(''), past)).toBe(true);
   });
 });

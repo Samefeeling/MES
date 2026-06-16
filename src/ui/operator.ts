@@ -1584,6 +1584,7 @@ function openStatusPicker(isRange: boolean): void {
     ${sameAsPrev ? `<div class="bd-cause-list">${sameAsPrev}</div>` : ''}
     <div class="ab-grid">${pills}</div>
     <div class="bd-actions">
+      <button class="btn-ghost-big" data-comments>💬 Comments</button>
       <button class="btn-ghost-big" data-clear>↺ Clear (back to blank)</button>
       <button class="btn-ghost-big" data-cancel>Cancel</button>
     </div>
@@ -1597,6 +1598,19 @@ function openStatusPicker(isRange: boolean): void {
   mc.querySelector('[data-clear]')?.addEventListener('click', () => {
     closeModal();
     void multiFillApply(slots, '' as StatusCode, '', '');
+  });
+  mc.querySelector('[data-comments]')?.addEventListener('click', () => {
+    // Use cancel(), not closeModal(), so the slot selection clears —
+    // the comments path doesn't apply a status, and a leftover
+    // selection would confuse the next tap.
+    closeModal();
+    if (isJobLocked()) {
+      toast('Order signed off — Unlock as supervisor to add comments', 'warn');
+      S!.selSet.clear();
+      paintSelection();
+      return;
+    }
+    openCommentsModal();
   });
   mc.querySelector('[data-pick-same]')?.addEventListener('click', () => {
     closeModal();
@@ -1615,6 +1629,66 @@ function openStatusPicker(isRange: boolean): void {
       void multiFillApply(slots, code, '', '');
     }),
   );
+}
+
+/**
+ * Free-text comment popped from the Machine Status modal. The line is
+ * appended to the canonical slot's Handover Material field with a
+ * `[HH:MM]` wall-clock prefix so it shows up alongside the existing
+ * material-side handover notes the next shift reads.
+ *
+ * Material was the field the production line asked for explicitly —
+ * the comment-during-status flow is most often a quick "saw a streak
+ * in mix #4", which is material-side observation. If they want to
+ * route to a different 4M slot later it's a one-line change here.
+ *
+ * The on-screen Handover Material textarea is patched directly so the
+ * operator sees the line land without a full re-render (which would
+ * destroy any in-flight focus in the side panel).
+ */
+function openCommentsModal(): void {
+  const mc = openModal(`<div class="bd-modal">
+    <h2 class="bd-title">💬 Add comment</h2>
+    <p class="bd-sub">Appended to Handover · 📦 Material with the current time.</p>
+    <textarea class="comments-input" rows="4" placeholder="Type your note…" style="width:100%;font-family:inherit;font-size:15px;padding:8px;border:2px solid var(--bd);border-radius:8px;background:#fef9c3;resize:vertical"></textarea>
+    <div class="bd-actions">
+      <button class="btn-primary-big" data-save>Save</button>
+      <button class="btn-ghost-big" data-cancel>Cancel</button>
+    </div>
+  </div>`);
+  const ta = mc.querySelector<HTMLTextAreaElement>('.comments-input');
+  ta?.focus();
+  const close = (): void => {
+    closeModal();
+    S!.selSet.clear();
+    paintSelection();
+  };
+  mc.querySelector('[data-cancel]')?.addEventListener('click', close);
+  mc.querySelector('[data-save]')?.addEventListener('click', () => {
+    const txt = (ta?.value ?? '').trim();
+    if (!txt) {
+      close();
+      return;
+    }
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    const line = `[${hh}:${mm}] ${txt}`;
+    let nextMaterial = '';
+    void upsertSlotNoReload(0, (r) => {
+      const obj = parseHandover(r);
+      obj.material = obj.material ? `${obj.material}\n${line}` : line;
+      nextMaterial = obj.material;
+      r.handoverNote = JSON.stringify(obj);
+    });
+    // Patch the visible textarea so the operator sees the line land.
+    const live = document.querySelector<HTMLTextAreaElement>(
+      'textarea[data-meta="hand-material"]',
+    );
+    if (live) live.value = nextMaterial;
+    toast('Comment added to Handover · Material', 'ok');
+    close();
+  });
 }
 
 async function multiFillApply(

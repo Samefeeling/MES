@@ -14,7 +14,7 @@ import type {
 } from '../types';
 import type { PmdDataLayer } from './types';
 import { bdCategoryOf, bdLabelFor, BD_TAXONOMY } from '../core/breakdown';
-import { slotClock } from '../core/shifts';
+import { shiftBounds, slotClock } from '../core/shifts';
 
 // =====================================================================
 // SharePointDataLayer — Resero Operations AU site.
@@ -662,6 +662,49 @@ export class SharePointDataLayer implements PmdDataLayer {
         purged = true;
       }
     }
+
+    // Drop "junk" PMD_LiveStatus rows: shift ended > 8 h ago AND no
+    // MachineStatus letter on any slot. These accumulate when an
+    // operator taps a machine, picks a wrong job (or just lands on
+    // the wrong shift / date), maybe types a Count Start, and walks
+    // away — pushLiveSnapshot had already mirrored the partial cache
+    // and there was no path to clean it up. Without this filter, the
+    // backfill loop below absorbs them into editCache and shadows
+    // the legitimate PMD_Production row when an operator scrolls
+    // back to review a past shift. Also fire-and-forget delete the
+    // junk from PMD_LiveStatus so the SP list itself stays tidy.
+    const liveNow = new Date();
+    const liveFresh: HeaderRow[] = [];
+    const liveStale: HeaderRow[] = [];
+    for (const h of liveHeaders) {
+      if (isStaleLiveHeader(h, liveNow)) liveStale.push(h);
+      else liveFresh.push(h);
+    }
+    if (liveStale.length > 0) {
+      for (const h of liveStale) {
+        void this.deleteLiveRow(
+          h.machineCode,
+          `${h.date}-${h.shift}`,
+          h.jobNumber,
+        );
+      }
+      // Mirror the same staleness check against editCache so a tuple
+      // whose local rows are equally bare (status-empty + shift past)
+      // doesn't get re-pushed by the next pushLiveSnapshot tick.
+      for (const k of Array.from(this.editCache.keys())) {
+        const slots = this.editCache.get(k) ?? [];
+        const anyStatus = slots.some((s) => s.statusCode);
+        if (anyStatus) continue;
+        const [, sid] = k.split('|');
+        if (!sid) continue;
+        const b = shiftBounds(sid);
+        if (!b) continue;
+        if (b.end.getTime() + 8 * 3600_000 <= liveNow.getTime()) {
+          this.editCache.delete(k);
+          purged = true;
+        }
+      }
+    }
     if (purged) this.persistEditCache();
 
     // Backfill editCache from PMD_LiveStatus per slot. PMD_LiveStatus
@@ -680,7 +723,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     // has that editCache lacks. Tuples that are already signed off are
     // skipped — PMD_Production is canonical past sign-off.
     let backfilled = false;
-    for (const h of liveHeaders) {
+    for (const h of liveFresh) {
       if (!matchesFilter(h)) continue;
       const hShiftId = `${h.date}-${h.shift}`;
       const key = this.cacheKey(h.machineCode, hShiftId, h.jobNumber);
@@ -741,7 +784,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     // still runs them to cover tuples that fall outside the editCache
     // filter (e.g. cross-machine Live Status board reads) — the
     // seen-set dedups any already-emitted tuple.
-    for (const h of liveHeaders) ingest(h, false);
+    for (const h of liveFresh) ingest(h, false);
     return cached;
   }
 
@@ -1880,6 +1923,48 @@ interface RejectEvent {
  * Status with empty cards every time someone changed their mind
  * about which order to start.
  */
+/**
+ * "Junk" PMD_LiveStatus row: the shift it points to is decisively in
+ * the past (ended more than `graceMs` ago) AND nobody ever stamped a
+ * MachineStatus on any half-hour slot of it. These are produced when
+ * an operator taps a machine, picks a (wrong) job, maybe types a
+ * Count Start, then realises the mistake and walks away — the live
+ * snapshot push had already mirrored the partial cache onto
+ * PMD_LiveStatus and there was no path to clean it up.
+ *
+ * The user-facing impact was twofold:
+ *  1. PMD_LiveStatus grew an ever-longer list of orphans (one per
+ *     mis-tap per device).
+ *  2. listProduction's editCache backfill (the SFM507068 fix) would
+ *     happily absorb those orphans, shadowing the canonical
+ *     PMD_Production rows for the same (machine, shift) when an
+ *     operator scrolled back to review a past shift.
+ *
+ * Only flag rows that have ZERO machine status anywhere — countStart /
+ * countEnd / reject on their own are NOT proof of run; a finished
+ * shift always has at least one timeline letter. Future-dated rows
+ * are never flagged: they may be a deliberately scheduled tap-ahead
+ * and we don't want to silently delete planned work.
+ *
+ * `now` is injected so the helper is testable; pass `new Date()` in
+ * the live path.
+ */
+export function isStaleLiveHeader(
+  h: { date: string; shift: string; timeline?: string },
+  now: Date,
+  graceMs: number = 8 * 3600_000,
+): boolean {
+  const shiftId = `${h.date}-${h.shift}`;
+  const b = shiftBounds(shiftId);
+  if (!b) return false; // unparseable shift id — leave alone
+  if (b.end.getTime() + graceMs > now.getTime()) return false;
+  const timeline = h.timeline || '';
+  for (const ch of timeline) {
+    if (ch && ch !== '·' && ch !== ' ') return false;
+  }
+  return true;
+}
+
 function hasMeaningfulProgress(slots: ProductionRecord[]): boolean {
   for (const r of slots) {
     if (r.statusCode) return true;
