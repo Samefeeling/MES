@@ -26,7 +26,6 @@ Create `.env.local` at the repo root (Vite reads `VITE_*` vars):
 ```bash
 VITE_BACKEND=sharepoint
 VITE_SITE_URL=https://reseroglobal.sharepoint.com/sites/ReseroOperationsAU
-VITE_PLANNING_PATH=Shared Documents/General/Planning/PMD/PMD Schedule_master_epicor 300424.xlsm
 ```
 
 Start dev:
@@ -132,7 +131,7 @@ npm run dev
 - Open `http://localhost:5173/#/op/1600T`
 - Click **⟳ Refresh** → expects "Planning synced · N rows in" toast
 - Fill a slot → it caches in memory (no network on every keystroke)
-- Click **✅ Sign off & Save** → flushes one row into PMD_Production,
+- Click **✅ Sign off** → flushes one row into PMD_Production,
   one into PMD_BreakDown, N rows into PMD_Rejects
 
 ## 7. Trace view
