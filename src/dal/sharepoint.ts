@@ -239,6 +239,18 @@ export class SharePointDataLayer implements PmdDataLayer {
   private editCache = new Map<string, ProductionRecord[]>();
   private static readonly EDIT_CACHE_KEY = 'pmd_edit_cache_v1';
   /**
+   * Tuples (`machine|shiftId|jobNumber`) that the supervisor has just
+   * unlocked from a signed-off state. While a tuple is in this set,
+   * the listProduction self-heal will NOT purge its editCache entry
+   * even though PMD_Production still carries the (locked) header —
+   * those slots are the active editable copy. Cleared when lockShift
+   * commits the edits back. Persisted alongside editCache so a page
+   * reload mid-edit doesn't strand the operator with a "locked" UI
+   * over their freshly-unlocked cache.
+   */
+  private unlockedTuples = new Set<string>();
+  private static readonly UNLOCKED_TUPLES_KEY = 'pmd_unlocked_tuples_v1';
+  /**
    * Cache of `ListItemEntityTypeFullName` per list title. Encoding a list
    * title to that string by hand (`SP.Data.${encoded}ListItem`) is unreliable
    * — when a list has been renamed since creation, the entity type still
@@ -262,6 +274,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     // Merge user overrides into the defaults.
     this.F = mergeFieldMap(DEFAULT_FIELDS, o.fieldMap);
     this.rehydrateEditCache();
+    this.rehydrateUnlockedTuples();
   }
 
   private rehydrateEditCache(): void {
@@ -273,6 +286,30 @@ export class SharePointDataLayer implements PmdDataLayer {
       for (const [k, v] of parsed) this.editCache.set(k, v);
     } catch (e) {
       console.warn('[pmd] could not rehydrate edit cache:', e);
+    }
+  }
+
+  private rehydrateUnlockedTuples(): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      const raw = localStorage.getItem(SharePointDataLayer.UNLOCKED_TUPLES_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as string[];
+      for (const k of parsed) this.unlockedTuples.add(k);
+    } catch (e) {
+      console.warn('[pmd] could not rehydrate unlocked tuples:', e);
+    }
+  }
+
+  private persistUnlockedTuples(): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem(
+        SharePointDataLayer.UNLOCKED_TUPLES_KEY,
+        JSON.stringify(Array.from(this.unlockedTuples)),
+      );
+    } catch (e) {
+      console.warn('[pmd] could not persist unlocked tuples:', e);
     }
   }
 
@@ -657,10 +694,17 @@ export class SharePointDataLayer implements PmdDataLayer {
     );
     let purged = false;
     for (const k of Array.from(this.editCache.keys())) {
-      if (signedKeys.has(k)) {
-        this.editCache.delete(k);
-        purged = true;
-      }
+      if (!signedKeys.has(k)) continue;
+      // Active "unlock & edit": the supervisor unlocked this tuple
+      // and the editCache holds the rehydrated rows that the operator
+      // is currently editing. PMD_Production still carries the
+      // (locked) row because the new unlock design does NOT delete
+      // it on the SP side — that's the whole point of the redesign.
+      // Self-heal would otherwise wipe the operator's edits the next
+      // time anything reads the production list.
+      if (this.unlockedTuples.has(k)) continue;
+      this.editCache.delete(k);
+      purged = true;
     }
 
     // Drop "junk" PMD_LiveStatus rows: shift ended > 8 h ago AND no
@@ -812,6 +856,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       shift: str(r[F.shift]),
       jobNumber: str(r[F.jobNumber]),
       partNumber: F.partNum ? str(r[F.partNum]).trim() : '',
+      partDescription: F.partDesc ? str(r[F.partDesc]) : '',
       // The 16-char status timeline lives in the MachineCode column on
       // this tenant; prefer it over the (empty / fallback) F.timeline
       // entry so listProduction can rebuild per-slot status without a
@@ -961,6 +1006,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         shiftId,
         jobNumber: h.jobNumber,
         partNumber: h.partNumber,
+        partDescription: h.partDescription,
         slotIndex: i,
         statusCode: blank ? '' : (ch as ProductionRecord['statusCode']),
         countStart: i === 0 ? h.countStart : null,
@@ -989,6 +1035,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         shiftId,
         jobNumber: h.jobNumber,
         partNumber: h.partNumber,
+        partDescription: h.partDescription,
         slotIndex: 0,
         statusCode: '',
         countStart: h.countStart,
@@ -1040,6 +1087,7 @@ export class SharePointDataLayer implements PmdDataLayer {
             shiftId,
             jobNumber: h.jobNumber,
             partNumber: h.partNumber,
+            partDescription: h.partDescription,
             slotIndex: slotIdx,
             statusCode: '',
             countStart: null,
@@ -1145,31 +1193,53 @@ export class SharePointDataLayer implements PmdDataLayer {
       myTuples.push(list);
     }
     if (myTuples.length === 0) {
-      // Nothing edited — still write a placeholder header so the shift is
-      // recorded as having been signed off.
-      myTuples.push([]);
+      // Nothing in editCache for this (machine, shift[, job]) — there
+      // is literally nothing to write. Crucially, do NOT push a
+      // placeholder header here: upsertHeaderInto's MERGE-if-exists
+      // path would PATCH a real PMD_Production row with all-blank
+      // values, which is exactly the SFM507068 data-loss path we just
+      // redesigned away. If the supervisor pressed Sign Off without
+      // any local edits (e.g. on a freshly unlocked shift to confirm
+      // "yes, the existing numbers are fine"), the existing row stays
+      // as-is and the unlock flag clears below.
+      this.unlockedTuples.delete(ownKey(jobNumber ?? ''));
+      this.persistUnlockedTuples();
+      return;
     }
-    // Single planning lookup (per machine) so we can populate JobHead_PartNum
-    // and JobHead_PartDescription on PMD_BreakDownlog and PMD_Production
-    // rows from the matching order — supervisors review the SP list and
-    // didn't want to join to PMD_Planning to read what part was running.
+    // Single planning lookup (per machine) for FALLBACK only. The
+    // rehydrated editCache slots already carry the canonical
+    // partNumber / partDescription that came back from the existing
+    // signed-off row — those are the truth. Planning is consulted
+    // only when the cache lacks them (fresh in-progress order).
+    // Without this, a re-sign-off after unlock would overwrite the
+    // header with whatever the CURRENT planning CSV says, and Epicor
+    // drops completed orders from planning — blanking the
+    // PartNum / Description columns on the existing row.
     const orders = await this.listPlanning({ machineCode });
-    const partNumOf = (job: string): string =>
-      orders.find((o) => o.jobNumber === job)?.partNumber ?? '';
-    const partDescOf = (job: string): string =>
-      orders.find((o) => o.jobNumber === job)?.partDescription ?? '';
+    const partNumOf = (job: string, slots: ProductionRecord[]): string => {
+      const fromCache = slots.find((s) => s.partNumber)?.partNumber;
+      if (fromCache) return fromCache;
+      return orders.find((o) => o.jobNumber === job)?.partNumber ?? '';
+    };
+    const partDescOf = (job: string, slots: ProductionRecord[]): string => {
+      const fromCache = slots.find((s) => s.partDescription)?.partDescription;
+      if (fromCache) return fromCache;
+      return orders.find((o) => o.jobNumber === job)?.partDescription ?? '';
+    };
     for (const slots of myTuples) {
       const job = slots[0]?.jobNumber ?? jobNumber ?? '';
       const agg = aggregateSlots(slots);
       const tag = `${machineCode}|${shiftId}|${job}`;
+      const partNum = partNumOf(job, slots);
+      const partDesc = partDescOf(job, slots);
       try {
         await this.upsertProductionHeader({
           machineCode,
           date,
           shift,
           jobNumber: job,
-          partNumber: partNumOf(job),
-          partDescription: partDescOf(job),
+          partNumber: partNum,
+          partDescription: partDesc,
           timeline: agg.timeline,
           countStart: agg.countStart,
           countEnd: agg.countEnd,
@@ -1192,7 +1262,7 @@ export class SharePointDataLayer implements PmdDataLayer {
             date,
             shift,
             jobNumber: job,
-            partNumber: partNumOf(job),
+            partNumber: partNum,
             timeline: agg.timeline,
           },
           slots,
@@ -1213,9 +1283,12 @@ export class SharePointDataLayer implements PmdDataLayer {
       // their next poll. Best-effort — pushLiveSnapshot won't re-create
       // the row because lockShift also clears editCache below.
       await this.deleteLiveRow(machineCode, shiftId, job);
-      this.editCache.delete(ownKey(job));
+      const tupleKey = ownKey(job);
+      this.editCache.delete(tupleKey);
+      this.unlockedTuples.delete(tupleKey);
     }
     this.persistEditCache();
+    this.persistUnlockedTuples();
   }
 
   /**
@@ -1304,21 +1377,30 @@ export class SharePointDataLayer implements PmdDataLayer {
     shiftId: string,
     jobNumber?: string,
   ): Promise<void> {
-    // Re-hydrate editCache from the existing signed-off rows BEFORE
-    // deleting them. Without this step the next sign-off would
-    // aggregate only the slots the supervisor actually retouched —
-    // every other slot in the original 16-char timeline would come
-    // back as '·' (blank) and overwrite the signed-off record. The
-    // intent of "Unlock & edit" is "tweak this one slot", not "start
-    // over from scratch".
+    // Redesigned 2026-06-16 (SFM507068 incident): unlock is now
+    // PURELY a client-side rehydrate + mark. The signed-off
+    // PMD_Production / PMD_BreakDownlog / PMD_Rejects rows STAY on
+    // the SharePoint side untouched. lockShift's upsertHeaderInto
+    // already merges-if-exists, so the re-sign-off path PATCHes the
+    // existing row by ID rather than POSTing a fresh one — original
+    // PartNum, PartDescription, Counts, Timeline and Rejects survive
+    // any abandonment, network failure, or planning-CSV ageing
+    // (Epicor drops completed orders from planning, which the old
+    // delete-then-rewrite path then wrote back as empty PartNum).
+    //
+    // The tuple is added to `unlockedTuples` so the listProduction
+    // self-heal does not purge the editCache rows back out (PMD_
+    // Production still carries the locked header so signedKeys would
+    // otherwise match). lockShift clears the flag on successful
+    // commit. The flag is persisted alongside editCache so a page
+    // reload mid-edit doesn't strand the operator.
     const existing = await this.listProduction({
       machineCode,
       shiftId,
       ...(jobNumber ? { jobNumber } : {}),
     });
+    let touchedAnyTuple = false;
     for (const r of existing) {
-      // Mark unlocked so the canonical-row totals (Count Start /
-      // End / handover) come back into the editable side panel.
       const rehydrated: ProductionRecord = {
         ...r,
         locked: false,
@@ -1327,57 +1409,16 @@ export class SharePointDataLayer implements PmdDataLayer {
       };
       const key = this.cacheKey(r.machineCode, r.shiftId, r.jobNumber);
       const list = this.editCache.get(key) ?? [];
-      // Don't clobber any in-flight edits that already exist in cache
-      // for the same slot — `existing` may include unsigned slots
-      // when listProduction also returns LiveStatus rows.
+      // Don't clobber any in-flight edits already in cache for the
+      // same slot — `existing` may include unsigned slots when
+      // listProduction also returns LiveStatus rows.
       if (!list.some((s) => s.slotIndex === r.slotIndex)) list.push(rehydrated);
       this.editCache.set(key, list);
+      this.unlockedTuples.add(key);
+      touchedAnyTuple = true;
     }
     this.persistEditCache();
-
-    // Find PMD_Production rows for this (Machine, SlotStart:, Shift) and
-    // delete their corresponding analytic + reject rows so the operator
-    // can refile. When jobNumber is provided, scope all three deletes to
-    // that job — a shift can hold several orders and unlocking one
-    // mustn't wipe the others' signed-off records.
-    const F = this.F.production;
-    const shift = shiftId.slice(11);
-    const date = shiftId.slice(0, 10);
-    const jobClause = (fJob: string): string =>
-      jobNumber ? ` and ${fJob} eq '${jobNumber}'` : '';
-    // Every delete is narrowed to the exact calendar date — the ±1d
-    // window in shiftDateRange also matches the same shift code on
-    // adjacent days, and without the narrowing an unlock of 10 June
-    // Day would wipe 9 and 11 June Day rows for the same job too.
-    await this.deleteByFilter(
-      LISTS.production,
-      `${F.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${shift}'${jobClause(F.jobNumber)}`,
-      { field: F.date, date },
-    );
-    const Fb = this.F.breakdown;
-    await this.deleteByFilter(
-      LISTS.breakdown,
-      `${Fb.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, Fb.date)}) and ${Fb.shift} eq '${shift}'${jobClause(Fb.jobNum)}`,
-      { field: Fb.date, date },
-    );
-    const Fr = this.F.rejects;
-    await this.deleteByFilter(
-      LISTS.rejects,
-      `${Fr.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, Fr.date)}) and ${Fr.shift} eq '${shift}'${jobClause(Fr.jobNum)}`,
-      { field: Fr.date, date },
-    );
-    // Also clear any leftover PMD_LiveStatus mirror for this tuple so
-    // the next listProduction doesn't re-hydrate a stale snapshot
-    // alongside the (now-deleted) signed-off rows.
-    try {
-      await this.deleteByFilter(
-        LISTS.liveStatus,
-        `${F.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${shift}'${jobClause(F.jobNumber)}`,
-        { field: F.date, date },
-      );
-    } catch (e) {
-      console.warn('[pmd] unlock: live mirror cleanup failed', e);
-    }
+    if (touchedAnyTuple) this.persistUnlockedTuples();
   }
 
   private async upsertProductionHeader(h: HeaderInput): Promise<void> {
@@ -1855,6 +1896,7 @@ interface HeaderRow {
   shift: string;
   jobNumber: string;
   partNumber: string;
+  partDescription: string;
   timeline: string;
   countStart: number | null;
   countEnd: number | null;

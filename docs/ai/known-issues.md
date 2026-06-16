@@ -98,6 +98,30 @@
   stale server rows present). Net effect: after deploying, delete the
   old rows once more and they stay gone — the device cache no longer
   re-mirrors past shifts. See `shiftEndedLongAgo`.
+- **Unlock-and-edit redesign — append/PATCH, never delete-then-rewrite**
+  (fix 2026-06-16, SFM507068 second incident): after unlock + edit +
+  re-sign-off, the PMD_Production row was coming back with empty
+  PartNum / PartDescription / CountStart / CountEnd / Reject /
+  MachineStatus. Three root causes: (1) unlockShift deleted the
+  signed-off rows from PMD_Production / PMD_BreakDownlog / PMD_Rejects
+  up front, so any later failure / abandonment lost the data outright;
+  (2) lockShift looked up PartNum / PartDescription from the CURRENT
+  PMD_Planning CSV — Epicor drops completed orders from planning, so
+  the re-write put empty strings into both columns; (3) lockShift's
+  "nothing edited → write a placeholder header" branch PATCHed an
+  existing row with all-blank values via the MERGE path. Redesign:
+  unlockShift now leaves SP rows untouched and just rehydrates the
+  editCache + marks the tuple in `unlockedTuples` (persisted in
+  localStorage). The listProduction self-heal skips purge for any
+  tuple in this set even though PMD_Production still carries the
+  locked row. lockShift sources partNumber / partDescription
+  cache-first (the rehydrated slot 0 holds the originals) and falls
+  back to planning only when the cache is empty (a brand-new order).
+  An empty editCache for a tuple short-circuits lockShift with no
+  write — the existing row stays as-is. `ProductionRecord` gained an
+  optional `partDescription` field and `HeaderRow` reads
+  `JobHead_PartDescription`. See `unlockShift` / `lockShift` /
+  `unlockedTuples`.
 
 ## Build / toolchain
 

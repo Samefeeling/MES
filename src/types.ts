@@ -84,6 +84,12 @@ export interface ProductionRecord {
    *  KPIs / colour swatch / supervisor list views can read PMD_Production
    *  without joining back to PMD_Planning (orders roll off over time). */
   partNumber: string;
+  /** Epicor Part Description for the job — denormalised on the canonical
+   *  (slot 0) row so an unlock-then-resign-off path can preserve the
+   *  original description even when Epicor has dropped the order from
+   *  the active planning CSV. Empty on per-status slots; lockShift
+   *  reads it from whatever slot carries a non-empty value. */
+  partDescription?: string;
   slotIndex: number; // 0..15
   statusCode: StatusCode | '';
   countStart: number | null;

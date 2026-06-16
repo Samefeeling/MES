@@ -605,3 +605,255 @@ describe('pushLiveSnapshot does not re-broadcast old shifts', () => {
     expect(pushed).toContain('CUR1');
   });
 });
+
+describe('unlock → edit → re-sign-off (SFM507068 redesign)', () => {
+  // Shared shim from the pushLiveSnapshot describe block above.
+  const store = new Map<string, string>();
+  beforeAll(() => {
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string): string | null => store.get(k) ?? null,
+      setItem: (k: string, v: string): void => { store.set(k, v); },
+      removeItem: (k: string): void => { store.delete(k); },
+      clear: (): void => { store.clear(); },
+      key: (): string | null => null,
+      length: 0,
+    };
+  });
+  afterAll(() => {
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+
+  // Realistic SFM507068 row that's currently signed off in PMD_Production:
+  // partNum + description set, count 100 → 200, 8 rejects across slots 2..9,
+  // timeline SSRRRRRRRR.
+  function existingSignedRow() {
+    return {
+      machineCode: '1300T',
+      date: '2026-06-13',
+      shift: 'Day',
+      jobNumber: 'SFM507068',
+      partNumber: 'V11690',
+      partDescription: 'Ned Stool - Slate - recycled plastics',
+      timeline: 'SSRRRRRRRR······',
+      countStart: 100,
+      countEnd: 200,
+      reject: 8,
+      operator: 'Heng Ong',
+      supervisor: 'Bounpanh Wa',
+      runTime: 5,
+      downTime: 0,
+      handover: '',
+      qcChecks: '',
+      // 8 rejects distributed across slots 2..9 — mirrors what
+      // lockShift writes into RejectsBySlot on sign-off. Without this,
+      // expandHeaderToSlots has no per-slot reject info to rebuild
+      // and aggregateSlots on re-sign-off would write reject=0.
+      rejectsBySlot: JSON.stringify({
+        '2': { D01: 1 }, '3': { D01: 1 }, '4': { D01: 1 }, '5': { D01: 1 },
+        '6': { D01: 1 }, '7': { D01: 1 }, '8': { D01: 1 }, '9': { D01: 1 },
+      }),
+    };
+  }
+  // setTimeout(0) microtask flush so persistEditCache /
+  // persistUnlockedTuples land in the shim's store before we test
+  // them.
+  const flushPersist = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+
+  it('unlockShift does NOT delete PMD_Production / BreakDownlog / Rejects / LiveStatus', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const deleted: string[] = [];
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+      deleteByFilter: (list: string) => Promise<void>;
+      deleteLiveRow: (mc: string, sid: string, job: string) => Promise<void>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [existingSignedRow()] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+    o.deleteByFilter = async (list: string): Promise<void> => {
+      deleted.push(list);
+    };
+    o.deleteLiveRow = async (): Promise<void> => {
+      deleted.push('PMD_LiveStatus(via deleteLiveRow)');
+    };
+
+    await dal.unlockShift('1300T', '2026-06-13-Day', 'SFM507068');
+
+    expect(deleted).toEqual([]);
+  });
+
+  it('rehydrates editCache from the signed-off row and marks the tuple unlocked', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [existingSignedRow()] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+
+    await dal.unlockShift('1300T', '2026-06-13-Day', 'SFM507068');
+
+    const key = '1300T|2026-06-13-Day|SFM507068';
+    const cache = (dal as unknown as { editCache: Map<string, Array<{ partNumber: string; partDescription?: string; countStart: number | null; countEnd: number | null; statusCode: string; locked: boolean }>> }).editCache;
+    const slots = cache.get(key);
+    expect(slots).toBeDefined();
+    // partNum + description carried through expandHeaderToSlots → editCache.
+    const slot0 = slots!.find((s) => s.countStart != null)!;
+    expect(slot0.partNumber).toBe('V11690');
+    expect(slot0.partDescription).toBe('Ned Stool - Slate - recycled plastics');
+    expect(slot0.countStart).toBe(100);
+    expect(slot0.countEnd).toBe(200);
+    // Locked flag flipped so the side panel is editable.
+    expect(slots!.every((s) => s.locked === false)).toBe(true);
+    // Timeline letters survived: S + S + 8×R.
+    const statuses = slots!.map((s) => s.statusCode).filter(Boolean).sort();
+    expect(statuses).toEqual(['R','R','R','R','R','R','R','R','S','S']);
+    // Tuple marked unlocked.
+    const unlocked = (dal as unknown as { unlockedTuples: Set<string> }).unlockedTuples;
+    expect(unlocked.has(key)).toBe(true);
+  });
+
+  it('self-heal does NOT purge editCache for an unlocked tuple even when PMD_Production still has the locked row', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [existingSignedRow()] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+
+    await dal.unlockShift('1300T', '2026-06-13-Day', 'SFM507068');
+    const key = '1300T|2026-06-13-Day|SFM507068';
+    const cache = (dal as unknown as { editCache: Map<string, unknown[]> }).editCache;
+    const slotsBefore = cache.get(key)!.length;
+
+    // A subsequent listProduction (e.g. the reload() after unlock)
+    // would have purged the cache via the signedKeys self-heal under
+    // the old design. Under the new design, the unlockedTuples flag
+    // protects it.
+    await dal.listProduction({ machineCode: '1300T', shiftId: '2026-06-13-Day' });
+
+    expect(cache.has(key)).toBe(true);
+    expect(cache.get(key)!.length).toBe(slotsBefore);
+  });
+
+  it('lockShift after unlock PATCHes via merge: partNum/Desc come from cache even if planning lost the order', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const writes: Array<{ list: string; body: Record<string, unknown> }> = [];
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+      upsertHeaderInto: (list: string, h: Record<string, unknown>) => Promise<void>;
+      replaceBreakdownEvents: (key: Record<string, unknown>) => Promise<void>;
+      replaceRejectEvents: (key: Record<string, unknown>) => Promise<void>;
+      deleteLiveRow: () => Promise<void>;
+      listPlanning: () => Promise<unknown[]>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [existingSignedRow()] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+    o.upsertHeaderInto = async (list: string, h: Record<string, unknown>): Promise<void> => {
+      writes.push({ list, body: h });
+    };
+    o.replaceBreakdownEvents = async (): Promise<void> => { /* noop */ };
+    o.replaceRejectEvents = async (): Promise<void> => { /* noop */ };
+    o.deleteLiveRow = async (): Promise<void> => { /* noop */ };
+    // Planning has aged this order out (Epicor drops completed orders).
+    // The OLD lockShift would have written empty PartNum here.
+    o.listPlanning = async (): Promise<unknown[]> => [];
+
+    await dal.unlockShift('1300T', '2026-06-13-Day', 'SFM507068');
+    await dal.lockShift('1300T', '2026-06-13-Day', 'Bounpanh Wa', 'Heng Ong', 'SFM507068');
+
+    const prodWrite = writes.find((w) => w.list === 'PMD_Production');
+    expect(prodWrite).toBeDefined();
+    // The key win: cache-first lookup preserves the original part info.
+    expect(prodWrite!.body.partNumber).toBe('V11690');
+    expect(prodWrite!.body.partDescription).toBe('Ned Stool - Slate - recycled plastics');
+    // And the rest of the row's data survives the round-trip.
+    expect(prodWrite!.body.countStart).toBe(100);
+    expect(prodWrite!.body.countEnd).toBe(200);
+    expect(prodWrite!.body.reject).toBe(8);
+    expect(prodWrite!.body.timeline).toBe('SSRRRRRRRR······');
+    // Tuple unlock flag cleared after successful commit.
+    const unlocked = (dal as unknown as { unlockedTuples: Set<string> }).unlockedTuples;
+    expect(unlocked.has('1300T|2026-06-13-Day|SFM507068')).toBe(false);
+  });
+
+  it('lockShift with EMPTY editCache for the tuple does NOT write a blank placeholder over the existing row', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const writes: Array<{ list: string; body: Record<string, unknown> }> = [];
+    const o = dal as unknown as {
+      upsertHeaderInto: (list: string, h: Record<string, unknown>) => Promise<void>;
+      replaceBreakdownEvents: () => Promise<void>;
+      replaceRejectEvents: () => Promise<void>;
+      deleteLiveRow: () => Promise<void>;
+      listPlanning: () => Promise<unknown[]>;
+    };
+    o.upsertHeaderInto = async (list: string, h: Record<string, unknown>): Promise<void> => {
+      writes.push({ list, body: h });
+    };
+    o.replaceBreakdownEvents = async (): Promise<void> => { /* noop */ };
+    o.replaceRejectEvents = async (): Promise<void> => { /* noop */ };
+    o.deleteLiveRow = async (): Promise<void> => { /* noop */ };
+    o.listPlanning = async (): Promise<unknown[]> => [];
+
+    // editCache empty → lockShift should bail without writing anything.
+    await dal.lockShift('1300T', '2026-06-13-Day', 'Sup', 'Op', 'SFM507068');
+
+    expect(writes).toEqual([]);
+  });
+
+  it('unlockedTuples survives a page reload (persisted to localStorage)', async () => {
+    store.clear();
+    const dal1 = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const o = dal1 as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [existingSignedRow()] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+    await dal1.unlockShift('1300T', '2026-06-13-Day', 'SFM507068');
+    await flushPersist();
+
+    // Simulate page reload: brand-new DAL instance, same localStorage.
+    const dal2 = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const unlocked = (dal2 as unknown as { unlockedTuples: Set<string> }).unlockedTuples;
+    expect(unlocked.has('1300T|2026-06-13-Day|SFM507068')).toBe(true);
+    const cache = (dal2 as unknown as { editCache: Map<string, unknown[]> }).editCache;
+    expect(cache.has('1300T|2026-06-13-Day|SFM507068')).toBe(true);
+  });
+});
