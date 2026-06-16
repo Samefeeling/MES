@@ -122,6 +122,29 @@
   optional `partDescription` field and `HeaderRow` reads
   `JobHead_PartDescription`. See `unlockShift` / `lockShift` /
   `unlockedTuples`.
+- **Unlock display: Order Qty / Part# / Description / Reject preserved
+  even after Epicor drops the order** (fix 2026-06-16, follow-up to the
+  unlock redesign): the supervisor unlocked 1300T Day 507071 and the
+  header bar came back with empty Order Qty / Part# / Description, and
+  the per-slot Rejects were also missing. Two causes: (1) `selectedOrder()`
+  only looked at `S!.planning`, and Epicor drops completed orders from
+  the active CSV — so the synthetic order's partNumber / partDescription
+  / jobRequired stayed blank. (2) `JobRequired` wasn't denormalised onto
+  PMD_Production at all, so there was nothing to fall back to even when
+  the rest of the row survived. Fixes: `selectedOrder()` now falls
+  through to a synthetic built from `S!.prod` canonical (slot 0) when
+  planning has dropped the job, surfacing the denormalised partNumber /
+  partDescription / jobRequired. A new optional `JobRequired` column on
+  PMD_Production is written on every sign-off (fail-soft if the column
+  isn't added on the tenant yet — `stripRejectedFields` tolerates
+  absence; the only consequence is Order Qty showing `—`). Reject total
+  is also preserved via a new safety net in `lockShift`: when the
+  per-slot rejects map aggregates to 0 but the canonical slot 0 carries
+  a non-zero `rejectCount` (rehydrated from `PMD_Production.Reject` of
+  an existing row whose `PMD_Rejects` / `RejectsBySlot` was wiped by an
+  earlier failed unlock), the existing total wins. See `selectedOrder`
+  in `src/ui/operator.ts` and the `jobRequiredOf` / `reject` resolution
+  in `lockShift`.
 
 ## Build / toolchain
 

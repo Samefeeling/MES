@@ -450,11 +450,44 @@ Filter applied by the PowerShell script before write:
 ---
 
 
+## PMD_Production columns the app writes
+
+The list is read with the field map under `DEFAULT_FIELDS.production` in
+`src/dal/sharepoint.ts`. Most columns are required; a few are
+fail-soft (the app strips them on the first 400 and the rest of the
+row still lands). When adding the SP list on a fresh tenant, mirror
+this set:
+
+| SP column | Type | Required? | Purpose |
+|---|---|---|---|
+| `Title` | Single line | Y | Machine code (e.g. `1300T`) — Title is repurposed |
+| `MachineCode` | Single line | Y | The 16-char Machine-Status timeline (e.g. `SSRRRRRRRR······`) — column is repurposed |
+| `SlotStart_x003a_` | Date+Time | Y | Anchor date for the shift (noon UTC of the shift's calendar day) |
+| `ShiftId` | Single line | Y | `Day` / `Afternoon` / `Night` |
+| `JobNumber` | Single line | Y | Job# (e.g. `507071`) |
+| `JobHead_PartNum` | Single line | Y | Part # denormalised for KPI swatch + supervisor read |
+| `JobHead_PartDescription` | Single line | Y | Part description denormalised. **Read on unlock so the editable view shows the right part even after Epicor drops the order from planning.** |
+| `JobRequired` | Number | **N (add when ready)** | Order quantity at sign-off. New 2026-06-16 — denormalised so unlocking an Epicor-aged-out order still shows Order Qty. The app omits the field if the column is missing (fail-soft via `stripRejectedFields`); the only consequence is Order Qty showing `—` on unlocked old orders. |
+| `CountStart` / `CountEnd` | Number | Y | Header counts (slot 0) |
+| `Reject` | Number | Y | Total reject across the shift; preserved on re-sign-off |
+| `Operator` / `Supervisor` | Single line | Y | Names |
+| `RunTime` / `Downtime` | Number | Y | Hours per status family |
+| `Handover` | Multi-line | Y | 4M JSON `{machine,mold,material,method}` |
+| `QualityChecks` | Multi-line | Y | Per-slot QC sign-off JSON `{"<slotIndex>":"<name>"}` |
+| `RejectsBySlot` | Multi-line | Y | Per-slot per-code reject JSON; powers per-slot rebuild on unlock when PMD_Rejects events have been wiped |
+| `TotalGood` | Number | Y | Convenience column: `CountEnd − CountStart − Reject` |
+
+PMD_LiveStatus mirrors PMD_Production's schema (same field map). The
+list re-uses the same DEFAULT_FIELDS section.
+
+---
+
 ## Troubleshooting checklist
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `400 The field 'XYZ' is not recognised` | Field map wrong | Run `window.__pmdDal.diagnoseFields()` in DEV; patch `DEFAULT_FIELDS` in `src/dal/sharepoint.ts` |
+| Order Qty shows `—` on an unlocked old order | `JobRequired` column not added to PMD_Production yet | Add the column (Number type), then re-sign-off the order to populate it |
 | Refresh button does nothing, console says `graphToken: pass …` | MSAL/SPFx token provider not wired | In SPFx: confirm `onInit()` sets `window.__pmdGraphToken`. In dev: install MSAL per `docs/LOCAL_DEV_WITH_SHAREPOINT.md` |
 | `403` from any list GET | Operator doesn't have Edit on that list | SharePoint Site Settings → Permissions → ensure they're in `PMD-Members` (or whatever Edit group you used) |
 | Sign off & Save writes nothing | No supervisor selected, or count end < count start | Toast tells you; check console |

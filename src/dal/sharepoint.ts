@@ -121,6 +121,11 @@ const DEFAULT_FIELDS = {
     // record.partNumber directly.
     partNum: 'JobHead_PartNum',
     partDesc: 'JobHead_PartDescription',
+    /** Total job quantity at sign-off time, denormalised so the
+     *  operator UI can render Order Qty after Epicor drops a
+     *  completed order from PMD_Planning. Optional column on the
+     *  tenant; strip-rejected-fields tolerates absence. */
+    jobRequired: 'JobRequired',
     countStart: 'CountStart',
     countEnd: 'CountEnd',
     reject: 'Reject',
@@ -857,6 +862,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       jobNumber: str(r[F.jobNumber]),
       partNumber: F.partNum ? str(r[F.partNum]).trim() : '',
       partDescription: F.partDesc ? str(r[F.partDesc]) : '',
+      jobRequired: F.jobRequired ? num(r[F.jobRequired]) : 0,
       // The 16-char status timeline lives in the MachineCode column on
       // this tenant; prefer it over the (empty / fallback) F.timeline
       // entry so listProduction can rebuild per-slot status without a
@@ -1036,6 +1042,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         jobNumber: h.jobNumber,
         partNumber: h.partNumber,
         partDescription: h.partDescription,
+        jobRequired: h.jobRequired,
         slotIndex: 0,
         statusCode: '',
         countStart: h.countStart,
@@ -1059,6 +1066,15 @@ export class SharePointDataLayer implements PmdDataLayer {
       // slots[0] already exists from the timeline loop — patch its
       // handover note in place so the canonical slot carries it.
       slots[0].handoverNote = h.handover;
+      // Same for jobRequired — the per-status slot was created
+      // first with jobRequired left blank, but the canonical totals
+      // live on slot 0 by convention.
+      slots[0].jobRequired = h.jobRequired;
+      // And the reject total: the per-status loop initialises
+      // rejectCount to 0 because it doesn't know it's about to be
+      // promoted to canonical. Stamp h.reject here so re-sign-off
+      // can preserve the total when per-slot details are gone.
+      slots[0].rejectCount = h.reject;
     }
     // PMD_Rejects events take precedence (signed-off shifts), but for
     // live (unsigned) rows the events list is empty — fall back to the
@@ -1226,12 +1242,26 @@ export class SharePointDataLayer implements PmdDataLayer {
       if (fromCache) return fromCache;
       return orders.find((o) => o.jobNumber === job)?.partDescription ?? '';
     };
+    const jobRequiredOf = (job: string, slots: ProductionRecord[]): number => {
+      const fromCache = slots.find((s) => s.jobRequired && s.jobRequired > 0)?.jobRequired;
+      if (fromCache) return fromCache;
+      return orders.find((o) => o.jobNumber === job)?.jobRequired ?? 0;
+    };
     for (const slots of myTuples) {
       const job = slots[0]?.jobNumber ?? jobNumber ?? '';
       const agg = aggregateSlots(slots);
       const tag = `${machineCode}|${shiftId}|${job}`;
       const partNum = partNumOf(job, slots);
       const partDesc = partDescOf(job, slots);
+      const required = jobRequiredOf(job, slots);
+      // Preserve reject total when the per-slot rejects map is empty
+      // but the canonical slot 0 carries a known total (rehydrated
+      // from PMD_Production.Reject of an existing row that had its
+      // PMD_Rejects / RejectsBySlot details wiped by an earlier
+      // failed unlock). Without this, re-sign-off would overwrite a
+      // known total with 0.
+      const canon = slots.find((s) => s.slotIndex === 0);
+      const reject = agg.reject || (canon?.rejectCount ?? 0);
       try {
         await this.upsertProductionHeader({
           machineCode,
@@ -1240,10 +1270,11 @@ export class SharePointDataLayer implements PmdDataLayer {
           jobNumber: job,
           partNumber: partNum,
           partDescription: partDesc,
+          jobRequired: required,
           timeline: agg.timeline,
           countStart: agg.countStart,
           countEnd: agg.countEnd,
-          reject: agg.reject,
+          reject,
           operator: operator || agg.operator,
           supervisor,
           runTime: agg.runTime,
@@ -1352,6 +1383,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           jobNumber,
           partNumber: partNumByJob.get(jobNumber) ?? '',
           partDescription: '',
+          jobRequired: 0,
           timeline: agg.timeline,
           countStart: agg.countStart,
           countEnd: agg.countEnd,
@@ -1457,6 +1489,11 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (F.timeline) body[F.timeline] = h.timeline;
     if (F.partNum) body[F.partNum] = h.partNumber;
     if (F.partDesc) body[F.partDesc] = h.partDescription;
+    // Only write JobRequired when non-zero. 0 here usually means the
+    // editCache had no rehydrated value (older rows pre-denormalisation)
+    // — writing 0 over a real existing value via the MERGE path would
+    // blank it. stripRejectedFields tolerates absence of the column.
+    if (F.jobRequired && h.jobRequired > 0) body[F.jobRequired] = h.jobRequired;
     if (F.downTime) body[F.downTime] = h.downTime;
     if (F.runTime) body[F.runTime] = h.runTime;
     if (F.handover) body[F.handover] = formatHandover(h.handover);
@@ -1897,6 +1934,7 @@ interface HeaderRow {
   jobNumber: string;
   partNumber: string;
   partDescription: string;
+  jobRequired: number;
   timeline: string;
   countStart: number | null;
   countEnd: number | null;
@@ -1917,6 +1955,7 @@ interface HeaderInput {
   jobNumber: string;
   partNumber: string;
   partDescription: string;
+  jobRequired: number;
   timeline: string;
   countStart: number | null;
   countEnd: number | null;

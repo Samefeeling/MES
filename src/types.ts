@@ -90,6 +90,13 @@ export interface ProductionRecord {
    *  the active planning CSV. Empty on per-status slots; lockShift
    *  reads it from whatever slot carries a non-empty value. */
   partDescription?: string;
+  /** Total job quantity required at sign-off time. Denormalised on the
+   *  canonical (slot 0) row so the operator UI can show Order Qty for
+   *  jobs that Epicor has since dropped from PMD_Planning (the
+   *  active-planning CSV only carries IN-PROGRESS orders). Falls back
+   *  to 0 / "—" when the underlying PMD_Production column hasn't been
+   *  added on the tenant yet. */
+  jobRequired?: number;
   slotIndex: number; // 0..15
   statusCode: StatusCode | '';
   countStart: number | null;

@@ -857,3 +857,177 @@ describe('unlock → edit → re-sign-off (SFM507068 redesign)', () => {
     expect(cache.has('1300T|2026-06-13-Day|SFM507068')).toBe(true);
   });
 });
+
+describe('PMD_Production denormalisation: jobRequired + partDescription survive unlock', () => {
+  const store = new Map<string, string>();
+  beforeAll(() => {
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string): string | null => store.get(k) ?? null,
+      setItem: (k: string, v: string): void => { store.set(k, v); },
+      removeItem: (k: string): void => { store.delete(k); },
+      clear: (): void => { store.clear(); },
+      key: (): string | null => null,
+      length: 0,
+    };
+  });
+  afterAll(() => {
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+
+  // 1300T Day shift 507071 from the supervisor's screenshot:
+  // OrderQty 176, partNum V11690, "Ned Stool - Slate ..." description.
+  function existing507071() {
+    return {
+      machineCode: '1300T',
+      date: '2026-06-15',
+      shift: 'Day',
+      jobNumber: '507071',
+      partNumber: 'V11690',
+      partDescription: 'Ned Stool - Slate - recycled plastics',
+      jobRequired: 176,
+      timeline: 'R···············',
+      countStart: 61,
+      countEnd: 115,
+      reject: 8,
+      operator: 'Heng Ong',
+      supervisor: 'Bounpanh Wa',
+      runTime: 0.5,
+      downTime: 0,
+      handover: '',
+      qcChecks: '',
+      // Per-slot rejects wiped by an earlier broken unlock. Total
+      // Reject=8 lives on the header but per-slot detail is gone.
+      rejectsBySlot: '',
+    };
+  }
+
+  it('expand → rehydrate carries partDescription AND jobRequired to canonical slot 0', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [existing507071()] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+
+    await dal.unlockShift('1300T', '2026-06-15-Day', '507071');
+
+    const key = '1300T|2026-06-15-Day|507071';
+    const cache = (dal as unknown as {
+      editCache: Map<string, Array<{
+        slotIndex: number; partNumber: string; partDescription?: string;
+        jobRequired?: number; countStart: number | null; rejectCount: number;
+      }>>;
+    }).editCache;
+    const slots = cache.get(key)!;
+    const canon = slots.find((s) => s.slotIndex === 0)!;
+    expect(canon.partNumber).toBe('V11690');
+    expect(canon.partDescription).toBe('Ned Stool - Slate - recycled plastics');
+    expect(canon.jobRequired).toBe(176);
+    expect(canon.countStart).toBe(61);
+    // Reject TOTAL preserved on canonical slot even when per-slot detail
+    // is gone (broken-unlock recovery case).
+    expect(canon.rejectCount).toBe(8);
+  });
+
+  it('lockShift preserves jobRequired from cache when planning has dropped the order', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const writes: Array<{ list: string; body: Record<string, unknown> }> = [];
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+      upsertHeaderInto: (list: string, h: Record<string, unknown>) => Promise<void>;
+      replaceBreakdownEvents: () => Promise<void>;
+      replaceRejectEvents: () => Promise<void>;
+      deleteLiveRow: () => Promise<void>;
+      listPlanning: () => Promise<unknown[]>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [existing507071()] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+    o.upsertHeaderInto = async (list: string, h: Record<string, unknown>): Promise<void> => {
+      writes.push({ list, body: h });
+    };
+    o.replaceBreakdownEvents = async (): Promise<void> => { /* noop */ };
+    o.replaceRejectEvents = async (): Promise<void> => { /* noop */ };
+    o.deleteLiveRow = async (): Promise<void> => { /* noop */ };
+    o.listPlanning = async (): Promise<unknown[]> => []; // Epicor dropped it
+
+    await dal.unlockShift('1300T', '2026-06-15-Day', '507071');
+    await dal.lockShift('1300T', '2026-06-15-Day', 'Bounpanh', 'Heng', '507071');
+
+    const prod = writes.find((w) => w.list === 'PMD_Production')!;
+    // Order Qty preserved via cache-first lookup.
+    expect(prod.body.jobRequired).toBe(176);
+    expect(prod.body.partNumber).toBe('V11690');
+    expect(prod.body.partDescription).toBe('Ned Stool - Slate - recycled plastics');
+    // Reject total preserved even though per-slot rejects were missing
+    // (broken-unlock recovery): aggregateSlots returns 0, but the
+    // canonical slot 0's rejectCount=8 wins.
+    expect(prod.body.reject).toBe(8);
+    expect(prod.body.countStart).toBe(61);
+    expect(prod.body.countEnd).toBe(115);
+    expect(prod.body.timeline).toBe('R···············');
+  });
+
+  it('upsertHeaderInto does NOT write jobRequired=0 (would blank a real value via MERGE)', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    // Use the unprivate path: call upsertHeaderInto through lockShift
+    // with a tuple whose cache lacks jobRequired (so jobRequiredOf
+    // returns 0) and assert the upsert body OMITS the field.
+    const writes: Array<Record<string, unknown>> = [];
+    const o = dal as unknown as {
+      itemType: () => Promise<string>;
+      getAllItems: () => Promise<unknown[]>;
+      postWithFieldRetry: (
+        list: string,
+        url: string,
+        body: Record<string, unknown>,
+      ) => Promise<void>;
+    };
+    o.itemType = async (): Promise<string> => 'SP.Data.MockListItem';
+    o.getAllItems = async (): Promise<unknown[]> => [];
+    o.postWithFieldRetry = async (_l: string, _u: string, body: Record<string, unknown>): Promise<void> => {
+      writes.push(body);
+    };
+    // Call the private upsertHeaderInto directly.
+    await (dal as unknown as {
+      upsertHeaderInto: (list: string, h: Record<string, unknown>) => Promise<void>;
+    }).upsertHeaderInto('PMD_Production', {
+      machineCode: '1300T',
+      date: '2026-06-15',
+      shift: 'Day',
+      jobNumber: '507071',
+      partNumber: 'V11690',
+      partDescription: 'Ned Stool - Slate - recycled plastics',
+      jobRequired: 0, // 0 means "we don't know" — must not be written
+      timeline: 'R···············',
+      countStart: 61,
+      countEnd: 115,
+      reject: 8,
+      operator: 'Heng',
+      supervisor: 'Bounpanh',
+      runTime: 0.5,
+      downTime: 0,
+      handover: '',
+      qcChecks: '',
+      rejectsBySlot: '',
+    });
+    expect(writes.length).toBe(1);
+    expect('JobRequired' in writes[0]).toBe(false);
+  });
+});

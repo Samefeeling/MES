@@ -170,23 +170,33 @@ function shiftOrders(): PlanningOrder[] {
   const historicalIds = Array.from(
     new Set(S!.prod.map((r) => r.jobNumber).filter((j) => !!j)),
   );
-  const historicalOrder = (j: string): PlanningOrder => ({
-    id: 0,
-    jobNumber: j,
-    machineCode: '',
-    originalMachine: '',
-    partNumber: S!.prod.find((r) => r.jobNumber === j && r.partNumber)?.partNumber ?? '',
-    partDescription: '(historical)',
-    plannedStart: '',
-    plannedEnd: '',
-    jobRequired: 0,
-    qtyPerHr: 0,
-    duration: 0,
-    released: false,
-    isDieChange: false,
-    manuallyAdded: true,
-    source: 'Manual',
-  });
+  const historicalOrder = (j: string): PlanningOrder => {
+    // Pull every denormalised field PMD_Production carries — the
+    // canonical (slot 0) row is the truth for past shifts. Other
+    // shifts on the same job (different machine / different shift)
+    // also contribute partNumber via .find() so the dropdown still
+    // names the part even if THIS shift's slot 0 hasn't been
+    // canonical-row-ified yet.
+    const canon = S!.prod.find((r) => r.jobNumber === j && r.slotIndex === 0);
+    const anySlot = canon ?? S!.prod.find((r) => r.jobNumber === j);
+    return {
+      id: 0,
+      jobNumber: j,
+      machineCode: '',
+      originalMachine: '',
+      partNumber: anySlot?.partNumber ?? '',
+      partDescription: canon?.partDescription ?? '(historical)',
+      plannedStart: '',
+      plannedEnd: '',
+      jobRequired: canon?.jobRequired ?? 0,
+      qtyPerHr: 0,
+      duration: 0,
+      released: false,
+      isDieChange: false,
+      manuallyAdded: true,
+      source: 'Manual',
+    };
+  };
 
   // Past shifts: only show the jobs actually worked on — the planning list
   // reflects current Epicor state and would otherwise drown the dropdown
@@ -236,7 +246,42 @@ function shiftOrders(): PlanningOrder[] {
 }
 
 function selectedOrder(): PlanningOrder | undefined {
-  return S!.planning.find((o) => o.jobNumber === S!.selJob);
+  const fromPlanning = S!.planning.find((o) => o.jobNumber === S!.selJob);
+  if (fromPlanning) return fromPlanning;
+  // Fall back to a synthetic order rebuilt from PMD_Production rows
+  // already in S!.prod. This is the path for orders Epicor has dropped
+  // from active planning (completed in ERP) but that the operator /
+  // supervisor is now reviewing or unlocking — the header bar
+  // (Order Qty / Part# / Product Description) must still show the
+  // real values denormalised onto the PMD_Production row, not blanks.
+  if (!S!.selJob) return undefined;
+  const canon = S!.prod.find(
+    (r) => r.jobNumber === S!.selJob && r.slotIndex === 0,
+  );
+  const anySlot = canon ?? S!.prod.find((r) => r.jobNumber === S!.selJob);
+  if (!anySlot) return undefined;
+  return {
+    id: 0,
+    jobNumber: S!.selJob,
+    machineCode: anySlot.machineCode,
+    originalMachine: '',
+    partNumber: anySlot.partNumber ?? '',
+    // partDescription / jobRequired are denormalised on slot 0 of
+    // PMD_Production rows. Both default to '' / 0 when the tenant
+    // hasn't added the corresponding column yet — the header shows
+    // a blank / em-dash in that case, which is the same fallback
+    // behaviour an order had pre-redesign.
+    partDescription: canon?.partDescription ?? '',
+    plannedStart: '',
+    plannedEnd: '',
+    jobRequired: canon?.jobRequired ?? 0,
+    qtyPerHr: 0,
+    duration: 0,
+    released: false,
+    isDieChange: false,
+    manuallyAdded: true,
+    source: 'Manual',
+  };
 }
 
 function slotRec(slot: number): ProductionRecord | undefined {
