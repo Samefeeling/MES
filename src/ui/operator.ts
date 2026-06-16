@@ -389,9 +389,19 @@ async function reload(): Promise<void> {
     // For a signed-off shift the canonical row carries the authoritative
     // operator/supervisor pair from the moment Sign Off & Save fired;
     // overwrite any leftover selection from the previous shift so the UI
-    // shows those names instead of whatever was last touched. Live shifts
-    // keep the existing behaviour — fill empty selections only.
-    if (c.locked) {
+    // shows those names instead of whatever was last touched. The same
+    // applies to a shift that's been UNLOCKED for editing: the rehydrated
+    // canonical row now reads locked=false, but its operator/supervisor
+    // are still the authoritative PMD_Production values and MUST be
+    // loaded — otherwise a re-sign-off writes whatever stale name was
+    // left in the live selection (the reported bug). Live (never-signed)
+    // shifts keep the fill-empty-only behaviour so switching to a
+    // freshly-started job doesn't blank the press operator's selection.
+    const isUnlockedEdit =
+      !!S!.selJob &&
+      typeof dalRef.isUnlockedTuple === 'function' &&
+      dalRef.isUnlockedTuple(S!.mc, sid(), S!.selJob);
+    if (c.locked || isUnlockedEdit) {
       S!.selOperator = c.operator;
       S!.selSupervisor = c.supervisor;
     } else {

@@ -723,6 +723,10 @@ describe('unlock → edit → re-sign-off (SFM507068 redesign)', () => {
     // Tuple marked unlocked.
     const unlocked = (dal as unknown as { unlockedTuples: Set<string> }).unlockedTuples;
     expect(unlocked.has(key)).toBe(true);
+    // Public probe the operator UI uses to force-load Operator /
+    // Supervisor from the canonical PMD_Production row.
+    expect(dal.isUnlockedTuple?.('1300T', '2026-06-13-Day', 'SFM507068')).toBe(true);
+    expect(dal.isUnlockedTuple?.('1300T', '2026-06-13-Day', 'OTHER')).toBe(false);
   });
 
   it('self-heal does NOT purge editCache for an unlocked tuple even when PMD_Production still has the locked row', async () => {

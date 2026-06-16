@@ -118,9 +118,19 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
     const rows = await dal.listProduction({ machineCode: '320T', shiftId: sid });
     expect(rows.every((r) => r.locked && r.lockedBy === 'Jeff Penn')).toBe(true);
 
+    // Tuple is not flagged as unlock-edit before unlock.
+    expect(dal.isUnlockedTuple?.('320T', sid, 'JL')).toBe(false);
+
     await dal.unlockShift('320T', sid);
     const after = await dal.listProduction({ machineCode: '320T', shiftId: sid });
     expect(after.every((r) => !r.locked)).toBe(true);
+    // ...and IS flagged after unlock, so the operator UI force-loads
+    // the canonical Operator / Supervisor instead of a stale selection.
+    expect(dal.isUnlockedTuple?.('320T', sid, 'JL')).toBe(true);
+
+    // Re-sign-off clears the flag.
+    await dal.lockShift('320T', sid, 'Jeff Penn', 'Tin Maung', 'JL');
+    expect(dal.isUnlockedTuple?.('320T', sid, 'JL')).toBe(false);
   });
 
   it('lockShift scoped to a job leaves other jobs on the shift editable', async () => {

@@ -44,6 +44,14 @@ export interface PmdDataLayer {
    *  whole shift is unlocked. Per-job is the common path (one order
    *  signed off by mistake on a shift that holds several orders). */
   unlockShift(machineCode: string, shiftId: string, jobNumber?: string): Promise<void>;
+  /** True when a (machine, shift, job) tuple has been unlocked from a
+   *  signed-off state and is currently being edited (before the
+   *  re-sign-off commits). The operator UI uses this to force-load the
+   *  authoritative Operator / Supervisor (and other canonical totals)
+   *  from the rehydrated PMD_Production row rather than keeping a
+   *  leftover live selection. Optional — backends that don't model an
+   *  unlock-edit window can omit it (treated as false). */
+  isUnlockedTuple?(machineCode: string, shiftId: string, jobNumber: string): boolean;
   /** Flush every unsigned editCache entry to the backing store as a
    *  "live snapshot" so other clients can see this iPad's in-progress
    *  work without waiting for Sign Off & Save. Fire-and-forget; the

@@ -36,6 +36,9 @@ export class MemoryDataLayer implements PmdDataLayer {
   private planning: PlanningOrder[];
   private production: ProductionRecord[];
   private nextProdId: number;
+  /** Tuples currently unlocked from a signed-off state (parity with the
+   *  SharePoint DAL so the operator UI's force-load works in dev too). */
+  private unlockedTuples = new Set<string>();
 
   constructor(now: Date = new Date()) {
     this.machines = seedMachines();
@@ -181,6 +184,7 @@ export class MemoryDataLayer implements PmdDataLayer {
       r.supervisor = supervisor;
       if (operator) r.operator = operator;
       r.updatedAt = now;
+      this.unlockedTuples.delete(`${r.machineCode}|${r.shiftId}|${r.jobNumber}`);
     }
   }
 
@@ -197,7 +201,12 @@ export class MemoryDataLayer implements PmdDataLayer {
       r.lockedBy = '';
       r.lockedAt = '';
       r.updatedAt = now;
+      this.unlockedTuples.add(`${r.machineCode}|${r.shiftId}|${r.jobNumber}`);
     }
+  }
+
+  isUnlockedTuple(machineCode: string, shiftId: string, jobNumber: string): boolean {
+    return this.unlockedTuples.has(`${machineCode}|${shiftId}|${jobNumber}`);
   }
 
   async whoAmI(): Promise<UserContext> {

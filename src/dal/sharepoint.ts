@@ -1453,6 +1453,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (touchedAnyTuple) this.persistUnlockedTuples();
   }
 
+  isUnlockedTuple(machineCode: string, shiftId: string, jobNumber: string): boolean {
+    return this.unlockedTuples.has(this.cacheKey(machineCode, shiftId, jobNumber));
+  }
+
   private async upsertProductionHeader(h: HeaderInput): Promise<void> {
     await this.upsertHeaderInto(LISTS.production, h);
   }
