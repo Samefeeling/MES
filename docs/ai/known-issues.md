@@ -81,6 +81,23 @@
   `pushLiveSnapshot` tick doesn't recreate the row. Future-dated
   rows (planned tap-ahead) are never touched. See
   `isStaleLiveHeader` in `src/dal/sharepoint.ts`.
+- **Deleted PMD_LiveStatus rows reappearing** (fix 2026-06-16, same
+  day follow-up): a supervisor deleted junk from PMD_LiveStatus by
+  hand and the app re-wrote it all back — including old 03/06
+  experimental data. Two causes: (1) `pushLiveSnapshot` re-broadcast
+  EVERY editCache tuple every 60 s poll tick with no shift-age check,
+  and the editCache lives in the DEVICE's localStorage, so deleting
+  the server row never touched the cache that recreated it. (2) The
+  editCache GC added earlier that day was nested under "saw a stale
+  server row", so once the rows were deleted by hand it stopped
+  firing. Fixes: `pushLiveSnapshot` now skips any tuple whose shift
+  `shiftEndedLongAgo` (8 h past end) — this is the key defence and
+  also catches OLD rows that carry real status (e.g. the 03/06
+  experiment), which the junk filter deliberately leaves alone. The
+  listProduction editCache GC is now UNCONDITIONAL (runs even with no
+  stale server rows present). Net effect: after deploying, delete the
+  old rows once more and they stay gone — the device cache no longer
+  re-mirrors past shifts. See `shiftEndedLongAgo`.
 
 ## Build / toolchain
 

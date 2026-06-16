@@ -675,34 +675,28 @@ export class SharePointDataLayer implements PmdDataLayer {
     // junk from PMD_LiveStatus so the SP list itself stays tidy.
     const liveNow = new Date();
     const liveFresh: HeaderRow[] = [];
-    const liveStale: HeaderRow[] = [];
     for (const h of liveHeaders) {
-      if (isStaleLiveHeader(h, liveNow)) liveStale.push(h);
-      else liveFresh.push(h);
-    }
-    if (liveStale.length > 0) {
-      for (const h of liveStale) {
-        void this.deleteLiveRow(
-          h.machineCode,
-          `${h.date}-${h.shift}`,
-          h.jobNumber,
-        );
+      if (isStaleLiveHeader(h, liveNow)) {
+        void this.deleteLiveRow(h.machineCode, `${h.date}-${h.shift}`, h.jobNumber);
+      } else {
+        liveFresh.push(h);
       }
-      // Mirror the same staleness check against editCache so a tuple
-      // whose local rows are equally bare (status-empty + shift past)
-      // doesn't get re-pushed by the next pushLiveSnapshot tick.
-      for (const k of Array.from(this.editCache.keys())) {
-        const slots = this.editCache.get(k) ?? [];
-        const anyStatus = slots.some((s) => s.statusCode);
-        if (anyStatus) continue;
-        const [, sid] = k.split('|');
-        if (!sid) continue;
-        const b = shiftBounds(sid);
-        if (!b) continue;
-        if (b.end.getTime() + 8 * 3600_000 <= liveNow.getTime()) {
-          this.editCache.delete(k);
-          purged = true;
-        }
+    }
+    // GC editCache: drop any status-empty tuple whose shift ended > 8 h
+    // ago. UNCONDITIONAL — this must run even when there are no stale
+    // server rows left to react to (e.g. the supervisor already deleted
+    // the junk from PMD_LiveStatus by hand). Gating it on "saw a stale
+    // server row" was the bug that let pushLiveSnapshot keep re-mirroring
+    // the local copy straight back onto the list. Status-empty only here
+    // so we never drop real local work; OLD rows that carry status are
+    // left in the cache but pushLiveSnapshot refuses to re-broadcast them.
+    for (const k of Array.from(this.editCache.keys())) {
+      const slots = this.editCache.get(k) ?? [];
+      if (slots.some((s) => s.statusCode)) continue;
+      const sid = k.split('|')[1];
+      if (sid && shiftEndedLongAgo(sid, liveNow)) {
+        this.editCache.delete(k);
+        purged = true;
       }
     }
     if (purged) this.persistEditCache();
@@ -1249,6 +1243,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     const partNumByJob = new Map<string, string>();
     for (const o of planning) partNumByJob.set(o.jobNumber, o.partNumber);
     const tasks: Promise<void>[] = [];
+    const now = new Date();
     for (const [key, slots] of this.editCache) {
       if (slots.length === 0) continue;
       // Skip cache entries that hold nothing but a freshly-picked
@@ -1261,6 +1256,18 @@ export class SharePointDataLayer implements PmdDataLayer {
       if (!canon) continue;
       const [machineCode, shiftId, jobNumber] = key.split('|');
       if (!machineCode || !shiftId || !jobNumber) continue;
+      // Never mirror a shift that is well over. PMD_LiveStatus is an
+      // IN-PROGRESS board; an old un-signed-off tuple that is still
+      // sitting in THIS device's localStorage editCache (e.g. an
+      // abandoned 03/06 experiment, or a mis-tap from days ago) must
+      // not be re-broadcast every 60 s poll tick. That re-broadcast is
+      // exactly why rows deleted by hand from PMD_LiveStatus kept
+      // reappearing: deleting the server row never touched the device
+      // cache that recreated it. shiftEndedLongAgo also covers the
+      // no-status junk, but the key win here is that it catches OLD
+      // rows that DO carry status, which the listProduction junk
+      // filter deliberately leaves alone.
+      if (shiftEndedLongAgo(shiftId, now)) continue;
       const date = shiftId.slice(0, 10);
       const shift = shiftId.slice(11);
       const agg = aggregateSlots(slots);
@@ -1924,6 +1931,29 @@ interface RejectEvent {
  * about which order to start.
  */
 /**
+ * Grace window after a shift's end during which its rows may still be
+ * legitimately written/mirrored (late sign-off, last-minute edits).
+ * Past this, a shift can no longer be "in progress".
+ */
+export const LIVE_STALE_GRACE_MS = 8 * 3600_000;
+
+/**
+ * True when `shiftId`'s shift ended more than `graceMs` ago — i.e. it
+ * can't possibly be a live, in-progress shift any more. Unparseable
+ * shift ids return false (leave alone). Boundary equality counts as
+ * "ended" (`<=`).
+ */
+export function shiftEndedLongAgo(
+  shiftId: string,
+  now: Date,
+  graceMs: number = LIVE_STALE_GRACE_MS,
+): boolean {
+  const b = shiftBounds(shiftId);
+  if (!b) return false;
+  return b.end.getTime() + graceMs <= now.getTime();
+}
+
+/**
  * "Junk" PMD_LiveStatus row: the shift it points to is decisively in
  * the past (ended more than `graceMs` ago) AND nobody ever stamped a
  * MachineStatus on any half-hour slot of it. These are produced when
@@ -1946,18 +1976,21 @@ interface RejectEvent {
  * are never flagged: they may be a deliberately scheduled tap-ahead
  * and we don't want to silently delete planned work.
  *
+ * NOTE: an OLD row that DOES carry status (e.g. an abandoned 03/06
+ * experiment) is NOT junk by this definition — deleting real data is
+ * out of scope here. The defence against those re-appearing on the
+ * live board lives in pushLiveSnapshot, which refuses to mirror any
+ * shift that `shiftEndedLongAgo`.
+ *
  * `now` is injected so the helper is testable; pass `new Date()` in
  * the live path.
  */
 export function isStaleLiveHeader(
   h: { date: string; shift: string; timeline?: string },
   now: Date,
-  graceMs: number = 8 * 3600_000,
+  graceMs: number = LIVE_STALE_GRACE_MS,
 ): boolean {
-  const shiftId = `${h.date}-${h.shift}`;
-  const b = shiftBounds(shiftId);
-  if (!b) return false; // unparseable shift id — leave alone
-  if (b.end.getTime() + graceMs > now.getTime()) return false;
+  if (!shiftEndedLongAgo(`${h.date}-${h.shift}`, now, graceMs)) return false;
   const timeline = h.timeline || '';
   for (const ch of timeline) {
     if (ch && ch !== '·' && ch !== ' ') return false;

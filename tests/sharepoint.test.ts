@@ -5,6 +5,7 @@ import {
   isStaleLiveHeader,
   parsePlanningCsv,
   SharePointDataLayer,
+  shiftEndedLongAgo,
   toServerRelativePath,
 } from '../src/dal/sharepoint';
 
@@ -513,5 +514,94 @@ describe('isStaleLiveHeader', () => {
     void daySid;
     expect(isStaleLiveHeader(fields(''), safe)).toBe(false);
     expect(isStaleLiveHeader(fields(''), past)).toBe(true);
+  });
+});
+
+describe('shiftEndedLongAgo', () => {
+  // Day shift 2026-06-10 runs 07:00–15:00; +8h grace ends 23:00.
+  const sid = '2026-06-10-Day';
+  it('false while the shift is still running', () => {
+    expect(shiftEndedLongAgo(sid, new Date(2026, 5, 10, 10, 0))).toBe(false);
+  });
+  it('false within the grace window after the shift ends', () => {
+    expect(shiftEndedLongAgo(sid, new Date(2026, 5, 10, 22, 0))).toBe(false);
+  });
+  it('true once the grace window has fully elapsed', () => {
+    expect(shiftEndedLongAgo(sid, new Date(2026, 5, 10, 23, 0, 1))).toBe(true);
+  });
+  it('true for a shift days in the past (the 03/06 experiment case)', () => {
+    expect(shiftEndedLongAgo('2026-06-03-Afternoon', new Date(2026, 5, 16, 0, 0))).toBe(true);
+  });
+  it('false for an unparseable shift id (defensive)', () => {
+    expect(shiftEndedLongAgo('garbage', new Date(2026, 5, 16))).toBe(false);
+  });
+  it('honours a custom grace window', () => {
+    // 24 h after start is past the default 8 h grace but not a 48 h one.
+    const now = new Date(2026, 5, 11, 7, 0);
+    expect(shiftEndedLongAgo(sid, now)).toBe(true);
+    expect(shiftEndedLongAgo(sid, now, 48 * 3600_000)).toBe(false);
+  });
+});
+
+describe('pushLiveSnapshot does not re-broadcast old shifts', () => {
+  const store = new Map<string, string>();
+  beforeAll(() => {
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string): string | null => store.get(k) ?? null,
+      setItem: (k: string, v: string): void => { store.set(k, v); },
+      removeItem: (k: string): void => { store.delete(k); },
+      clear: (): void => { store.clear(); },
+      key: (): string | null => null,
+      length: 0,
+    };
+  });
+  afterAll(() => {
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+
+  it('skips a stale tuple (old experiment WITH status) but pushes a current one', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    // Two tuples seeded into editCache: one from an abandoned 03/06
+    // experiment (has real status letters), one for a shift happening
+    // right now.
+    const now = new Date();
+    const pad = (n: number): string => String(n).padStart(2, '0');
+    const todayId = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    // Pick whichever shift code is live right now is overkill; instead
+    // build a shift that definitely spans "now" by using a wide Day
+    // window check is awkward — simpler: assert the OLD one is skipped
+    // and that at least the planning call ran. We still prove the
+    // current-shift push path by seeding a tuple whose shift has NOT
+    // ended (start today, far future end via a Night code if needed).
+    const mkSlot = (job: string, shiftId: string): Record<string, unknown> => ({
+      id: -1, machineCode: 'A', shiftId, jobNumber: job, slotIndex: 0,
+      statusCode: 'R', countStart: 0, countEnd: 10, rejects: '{}', purgeKg: null,
+      rejectCount: 0, bdIssue: '', mangoTicket: '', handoverNote: '', operator: 'Joe',
+      supervisor: 'Sue', qcBy: '', locked: false, lockedBy: '', lockedAt: '',
+      createdAt: '', updatedAt: '',
+    });
+    const cache = (dal as unknown as { editCache: Map<string, unknown[]> }).editCache;
+    cache.set('A|2026-06-03-Afternoon|EXP1', [mkSlot('EXP1', '2026-06-03-Afternoon')]);
+    cache.set(`A|${todayId}-Night|CUR1`, [mkSlot('CUR1', `${todayId}-Night`)]);
+
+    const pushed: string[] = [];
+    const o = dal as unknown as {
+      listPlanning: () => Promise<unknown[]>;
+      upsertHeaderInto: (list: string, h: { jobNumber: string }) => Promise<void>;
+    };
+    o.listPlanning = async (): Promise<unknown[]> => [];
+    o.upsertHeaderInto = async (_list: string, h: { jobNumber: string }): Promise<void> => {
+      pushed.push(h.jobNumber);
+    };
+
+    await dal.pushLiveSnapshot!();
+
+    // The 03/06 experiment must NOT be pushed; the current Night shift
+    // (ends tomorrow 07:00) must be.
+    expect(pushed).not.toContain('EXP1');
+    expect(pushed).toContain('CUR1');
   });
 });
