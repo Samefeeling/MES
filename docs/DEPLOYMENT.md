@@ -437,7 +437,8 @@ columns, both ends have to move together.
 | `JobHead_JobNum` | jobNumber | required, natural key |
 | `JobHead_PartNum` | partNumber | |
 | `JobHead_PartDescription` | partDescription | |
-| `Calculated_RemainingQty` | jobRequired | |
+| `JobHead_ProdQty` | orderQty | total order quantity → **Order Qty** display. Falls back to `Calculated_RemainingQty` if the column is absent. |
+| `Calculated_RemainingQty` | jobRequired | remaining qty → **Job Left** countdown |
 | `JobHead_StartDate` | plannedStart (date) | ISO 8601 preferred; AU dd/mm/yyyy also accepted |
 | `JobHead_StartHour` | plannedStart (time-of-day) | optional; decimal hours, e.g. `18.68` = 18:40:48. Layered onto `JobHead_StartDate`. Blank/missing = keep the date's own time. **The BAQ must include `JobHead.StartHour` in its output fields or this column will be empty.** |
 | `JobHead_ReqDueDate` | plannedEnd (fallback if no duration) | same date formats |
@@ -467,7 +468,7 @@ this set:
 | `JobNumber` | Single line | Y | Job# (e.g. `507071`) |
 | `JobHead_PartNum` | Single line | Y | Part # denormalised for KPI swatch + supervisor read |
 | `JobHead_PartDescription` | Single line | Y | Part description denormalised. **Read on unlock so the editable view shows the right part even after Epicor drops the order from planning.** |
-| `JobRequired` | Number | **N (add when ready)** | Order quantity at sign-off. New 2026-06-16 — denormalised so unlocking an Epicor-aged-out order still shows Order Qty. The app omits the field if the column is missing (fail-soft via `stripRejectedFields`); the only consequence is Order Qty showing `—` on unlocked old orders. |
+| `JobRequired` | Number | **N (add when ready)** | Order quantity (total `JobHead_ProdQty`) at sign-off. New 2026-06-16 — denormalised so unlocking an Epicor-aged-out order still shows Order Qty. The app omits the field if the column is missing (fail-soft via `stripRejectedFields`); the only consequence is Order Qty showing `—` on unlocked old orders. |
 | `CountStart` / `CountEnd` | Number | Y | Header counts (slot 0) |
 | `Reject` | Number | Y | Total reject across the shift; preserved on re-sign-off |
 | `Operator` / `Supervisor` | Single line | Y | Names |

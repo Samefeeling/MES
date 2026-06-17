@@ -188,6 +188,10 @@ function shiftOrders(): PlanningOrder[] {
       partDescription: canon?.partDescription ?? '(historical)',
       plannedStart: '',
       plannedEnd: '',
+      // PMD_Production denormalises the order total into its JobRequired
+      // column (see ProductionRecord.jobRequired) — surface it as both the
+      // Order Qty total and the Job Left basis for orders Epicor has dropped.
+      orderQty: canon?.jobRequired ?? 0,
       jobRequired: canon?.jobRequired ?? 0,
       qtyPerHr: 0,
       duration: 0,
@@ -274,6 +278,7 @@ function selectedOrder(): PlanningOrder | undefined {
     partDescription: canon?.partDescription ?? '',
     plannedStart: '',
     plannedEnd: '',
+    orderQty: canon?.jobRequired ?? 0,
     jobRequired: canon?.jobRequired ?? 0,
     qtyPerHr: 0,
     duration: 0,
@@ -384,31 +389,7 @@ async function reload(): Promise<void> {
     if (bestJob) S!.selJob = bestJob;
     else if (orders.length) S!.selJob = orders[0].jobNumber;
   }
-  const c = canonical();
-  if (c) {
-    // For a signed-off shift the canonical row carries the authoritative
-    // operator/supervisor pair from the moment Sign Off & Save fired;
-    // overwrite any leftover selection from the previous shift so the UI
-    // shows those names instead of whatever was last touched. The same
-    // applies to a shift that's been UNLOCKED for editing: the rehydrated
-    // canonical row now reads locked=false, but its operator/supervisor
-    // are still the authoritative PMD_Production values and MUST be
-    // loaded — otherwise a re-sign-off writes whatever stale name was
-    // left in the live selection (the reported bug). Live (never-signed)
-    // shifts keep the fill-empty-only behaviour so switching to a
-    // freshly-started job doesn't blank the press operator's selection.
-    const isUnlockedEdit =
-      !!S!.selJob &&
-      typeof dalRef.isUnlockedTuple === 'function' &&
-      dalRef.isUnlockedTuple(S!.mc, sid(), S!.selJob);
-    if (c.locked || isUnlockedEdit) {
-      S!.selOperator = c.operator;
-      S!.selSupervisor = c.supervisor;
-    } else {
-      if (!S!.selOperator) S!.selOperator = c.operator;
-      if (!S!.selSupervisor) S!.selSupervisor = c.supervisor;
-    }
-  }
+  hydrateOperatorSupervisor();
   // Count Start auto-carry: a same-machine/same-job continuation from
   // the previous shift starts where the previous shift's counter ended
   // — Day 14000 → Afternoon 14000 (Count Start) → Afternoon 28000 (End)
@@ -420,6 +401,27 @@ async function reload(): Promise<void> {
   await refreshJobTotal();
   saveView();
   render();
+}
+
+/**
+ * Operator / Supervisor always mirror the selected (machine, shift, job)
+ * tuple's canonical slot-0 record — never a selection left over from a
+ * previously-viewed date, machine, or order. Reported bug: switching to a
+ * past shift kept the live selection, and switching back to today's order
+ * showed an edited name instead of the one already chosen for that order.
+ *
+ * When the tuple has a canonical row (signed-off, unlocked, or a live shift
+ * where someone has been picked), load its names; otherwise blank both —
+ * nobody has been assigned to this tuple yet. Picking a name in the dropdown
+ * writes slot 0 (onMetaChange), so the choice survives the reload that
+ * follows and every subsequent slot edit (upsertSlot preserves slot 0's
+ * operator/supervisor), which is why an unconditional load never wipes an
+ * active operator's own selection.
+ */
+function hydrateOperatorSupervisor(): void {
+  const c = canonical();
+  S!.selOperator = c?.operator ?? '';
+  S!.selSupervisor = c?.supervisor ?? '';
 }
 
 /**
@@ -714,10 +716,10 @@ function buildMeta(): string {
       : `<select data-meta="${meta}">${selOpts(list, value, meta)}</select>`;
   const opField = lockedOrSelect('operator', S!.operators, S!.selOperator);
   const supField = lockedOrSelect('supervisor', S!.supervisors, S!.selSupervisor);
-  // Order Qty = JobRequired from planning. Shown in the meta row so the
-  // operator reads it next to the Job# / Part# (which is the natural eye
-  // path) rather than tucked away in the right side panel.
-  const orderQty = o && !o.isDieChange ? o.jobRequired : '—';
+  // Order Qty = total order quantity (Epicor JobHead_ProdQty), shown in the
+  // meta row next to Job# / Part#. This is the whole-order size and stays
+  // fixed; Job Left (side panel) counts down off Calculated_RemainingQty.
+  const orderQty = o && !o.isDieChange ? o.orderQty : '—';
   // Die / paint colour swatch from PMD_ProductDieColor, looked up by
   // the selected job's Part #. Planning.csv always carries
   // JobHead_PartNum, so the key comes from there directly. Upper-trim
@@ -1467,7 +1469,7 @@ function openSaveSignoffModal(): void {
       <div><span>Operator</span><b>${escapeHtml(S!.selOperator || '—')}</b></div>
       <div><span>Supervisor</span><b>${escapeHtml(S!.selSupervisor)}</b></div>
       <div><span>Part</span><b>${escapeHtml(o?.partNumber ?? '—')}</b></div>
-      <div><span>Required</span><b>${o && !o.isDieChange ? o.jobRequired : '—'}</b></div>
+      <div><span>Order Qty</span><b>${o && !o.isDieChange ? o.orderQty : '—'}</b></div>
       <div><span>Count Start → End</span><b>${cs} → ${ce}</b></div>
       <div><span>Good (this shift)</span><b class="g">${good}</b></div>
       <div><span>Total Reject</span><b class="r">${totalRej}</b></div>

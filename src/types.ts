@@ -66,6 +66,10 @@ export interface PlanningOrder {
   partDescription: string;
   plannedStart: string; // ISO 8601
   plannedEnd: string; // ISO 8601
+  /** Total order quantity (Epicor JobHead_ProdQty) — drives the "Order Qty"
+   *  display. Distinct from jobRequired, which counts down as pieces ship. */
+  orderQty: number;
+  /** Remaining quantity (Epicor Calculated_RemainingQty) — drives "Job left". */
   jobRequired: number;
   qtyPerHr: number;
   duration: number; // hours

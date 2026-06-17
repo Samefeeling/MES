@@ -94,6 +94,9 @@ const DEFAULT_FIELDS = {
     jobNum: 'JobHead_JobNum',
     partNum: 'JobHead_PartNum',
     partDesc: 'JobHead_PartDescription',
+    // Total order quantity from Epicor — feeds "Order Qty".
+    prodQty: 'JobHead_ProdQty',
+    // Remaining quantity from Epicor — feeds "Job left".
     remaining: 'Calculated_RemainingQty',
     duration: 'Duration',
     dieNumber: '', // no source
@@ -606,6 +609,9 @@ export class SharePointDataLayer implements PmdDataLayer {
         partDescription: str(r[F.partDesc]),
         plannedStart: start,
         plannedEnd: end,
+        // Order Qty = total ProdQty; fall back to the remaining qty so the
+        // field is never blank on a tenant that hasn't surfaced ProdQty yet.
+        orderQty: num(r[F.prodQty]) || num(r[F.remaining]) || 0,
         jobRequired: num(r[F.remaining]) || 0,
         qtyPerHr: num(r[F.qtyHour]) || 0,
         duration: dur,
@@ -1242,10 +1248,13 @@ export class SharePointDataLayer implements PmdDataLayer {
       if (fromCache) return fromCache;
       return orders.find((o) => o.jobNumber === job)?.partDescription ?? '';
     };
+    // The denormalised PMD_Production "JobRequired" column carries the order
+    // total (Order Qty / JobHead_ProdQty), not the remaining qty — it exists
+    // so the UI can show Order Qty after Epicor drops a completed order.
     const jobRequiredOf = (job: string, slots: ProductionRecord[]): number => {
       const fromCache = slots.find((s) => s.jobRequired && s.jobRequired > 0)?.jobRequired;
       if (fromCache) return fromCache;
-      return orders.find((o) => o.jobNumber === job)?.jobRequired ?? 0;
+      return orders.find((o) => o.jobNumber === job)?.orderQty ?? 0;
     };
     for (const slots of myTuples) {
       const job = slots[0]?.jobNumber ?? jobNumber ?? '';
@@ -2320,6 +2329,7 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
   const iJob = idx('JobHead_JobNum');
   const iPart = idx('JobHead_PartNum');
   const iDesc = idx('JobHead_PartDescription');
+  const iProd = idx('JobHead_ProdQty');
   const iRem = idx('Calculated_RemainingQty');
   const iStart = idx('JobHead_StartDate');
   const iDue = idx('JobHead_ReqDueDate');
@@ -2377,6 +2387,12 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
       partDescription: row[iDesc] ?? '',
       plannedStart: startIso,
       plannedEnd: end,
+      // Order Qty = total ProdQty; Job Left = remaining. Fall back to the
+      // remaining value when the export predates the ProdQty column.
+      orderQty:
+        (iProd >= 0 ? parseFloat(row[iProd] ?? '0') : 0) ||
+        parseFloat(row[iRem] ?? '0') ||
+        0,
       jobRequired: parseFloat(row[iRem] ?? '0') || 0,
       qtyPerHr: parseFloat(row[iQty] ?? '0') || 0,
       duration: dur,

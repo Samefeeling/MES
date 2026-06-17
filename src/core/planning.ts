@@ -40,6 +40,7 @@ export function generateDieChanges(orders: PlanningOrder[]): PlanningOrder[] {
         plannedEnd: new Date(
           new Date(prev.plannedEnd).getTime() + DC_MIN_HOURS * 3600_000,
         ).toISOString(),
+        orderQty: 0,
         jobRequired: 0,
         qtyPerHr: 0,
         duration: DC_MIN_HOURS,

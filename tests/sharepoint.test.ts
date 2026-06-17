@@ -28,11 +28,22 @@ describe('parsePlanningCsv', () => {
     expect(out[0].partNumber).toBe('P1');
     expect(out[0].partDescription).toBe('Widget, large');
     expect(out[0].jobRequired).toBe(250);
+    // No JobHead_ProdQty column → Order Qty falls back to the remaining qty.
+    expect(out[0].orderQty).toBe(250);
     expect(out[0].duration).toBe(8.5);
     expect(out[0].qtyPerHr).toBe(30);
     expect(out[0].plannedStart).not.toBe('');
     expect(out[1].jobNumber).toBe('J101');
     expect(out[1].plannedStart).toBe('');
+  });
+
+  it('maps JobHead_ProdQty to Order Qty, keeping Calculated_RemainingQty for Job Left', () => {
+    const csv =
+      'JobHead_JobNum,JobHead_ProdQty,Calculated_RemainingQty\n' +
+      'J500,1000,250\n';
+    const out = parsePlanningCsv(csv);
+    expect(out[0].orderQty).toBe(1000); // total order
+    expect(out[0].jobRequired).toBe(250); // remaining → Job Left
   });
 
   it('skips empty rows and ignores a UTF-8 BOM', () => {

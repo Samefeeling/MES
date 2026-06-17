@@ -70,6 +70,9 @@ $projected = $keep | ForEach-Object {
     JobHead_JobNum             = [string]$_.JobHead_JobNum
     JobHead_PartNum            = [string]$_.JobHead_PartNum
     JobHead_PartDescription    = [string]$_.JobHead_PartDescription
+    # Total order quantity — drives "Order Qty". Distinct from the remaining
+    # qty below, which counts down as Job Left.
+    JobHead_ProdQty            = [double]$_.JobHead_ProdQty
     Calculated_RemainingQty    = [double]$_.Calculated_RemainingQty
     JobHead_StartDate          = if ($_.JobHead_StartDate)  { ([datetime]$_.JobHead_StartDate).ToString("yyyy-MM-ddTHH:mm:ss") }  else { "" }
     # Decimal hours-of-day (e.g. 18.68 = 18:40:48). The app layers this
