@@ -4,6 +4,7 @@ import {
   decimalHoursToHms,
   isStaleLiveHeader,
   parsePlanningCsv,
+  sanitizeBodyStrings,
   SharePointDataLayer,
   shiftEndedLongAgo,
   toServerRelativePath,
@@ -1044,5 +1045,30 @@ describe('PMD_Production denormalisation: jobRequired + partDescription survive 
     });
     expect(writes.length).toBe(1);
     expect('JobRequired' in writes[0]).toBe(false);
+  });
+});
+
+describe('sanitizeBodyStrings', () => {
+  it('strips C0/C1 controls (except \\t \\n \\r) and U+2028/U+2029/BOM from string values', () => {
+    const body: Record<string, unknown> = {
+      __metadata: { type: 'SP.X' },
+      // NUL inside a handover; U+2028 line separator from a Word paste.
+      Handover: 'Machine: ok \u0000\u2028\nMold: fine \u0001',
+      // BOM in the middle of a JobNumber (CSV gift from Excel export).
+      JobNumber: 'SFM\uFEFF507104',
+      Operator: 'Tony Lee',
+      // Whitespace must be preserved.
+      Notes: 'a\tb\nc\rd',
+      CountStart: 0,
+      JobRequired: 480,
+    };
+    sanitizeBodyStrings(body);
+    expect(body.Handover).toBe('Machine: ok \nMold: fine ');
+    expect(body.JobNumber).toBe('SFM507104');
+    expect(body.Operator).toBe('Tony Lee');
+    expect(body.Notes).toBe('a\tb\nc\rd');
+    expect(body.CountStart).toBe(0);
+    expect(body.JobRequired).toBe(480);
+    expect(body.__metadata).toEqual({ type: 'SP.X' });
   });
 });

@@ -1518,6 +1518,13 @@ export class SharePointDataLayer implements PmdDataLayer {
       const good = cs != null && ce != null ? Math.max(0, ce - cs - h.reject) : 0;
       body[F.totalGood] = good;
     }
+    // SharePoint rejects C0/C1 control characters (NUL, etc.) in text
+    // columns with a generic 500 "Invalid text value. A text field
+    // contains invalid data." that doesn't say WHICH column. Strip them
+    // out of every string value in the body so a stray paste from
+    // Excel/Epicor or a zero-width oddity in a handover note can't fail
+    // the whole sign-off. Whitespace (\t \n \r) is preserved.
+    sanitizeBodyStrings(body);
     // PMD_LiveStatus was rebuilt by the user to mirror PMD_Production's
     // schema, but they may not have added every column yet (e.g.
     // JobHead_PartNum). Strip any fields previously rejected by SP for
@@ -1557,10 +1564,16 @@ export class SharePointDataLayer implements PmdDataLayer {
     for (const k of banned) delete body[k];
   }
 
-  /** POST that retries once after a "property X does not exist" error,
-   *  remembering the offending column so future writes to this list
-   *  skip it. The first failed write surfaces a console.warn so the
-   *  operator knows which SP column needs adding. */
+  /** POST that retries on two SP errors we can recover from:
+   *   - 400 "property X does not exist" — column missing on tenant; remember
+   *     it so future writes to this list skip it.
+   *   - 500 "Invalid text value. A text field contains invalid data." — SP
+   *     doesn't say WHICH column. Bisect by retrying without each text
+   *     field one at a time so the next sign-off doesn't see the same
+   *     blocking failure, and log the offender so the operator can clean
+   *     up the source value (usually a stray paste into a handover note).
+   *     The retry without the offender lets the rest of the row land.
+   */
   private async postWithFieldRetry(
     list: string,
     url: string,
@@ -1571,23 +1584,64 @@ export class SharePointDataLayer implements PmdDataLayer {
       await this.post(url, body, ifMatch);
     } catch (e) {
       const msg = (e as Error).message || '';
-      const m = /property\s+'?([A-Za-z0-9_]+)'?\s+does not exist/i.exec(msg);
-      if (!m) throw e;
-      const field = m[1];
-      const banned = this.rejectedFields.get(list) ?? new Set<string>();
-      banned.add(field);
-      this.rejectedFields.set(list, banned);
-      console.warn(
-        '[pmd] SP rejected column',
-        field,
-        'on',
-        list,
-        '— stripping it from future writes. Add the column in SharePoint to persist this value.',
-      );
-      const retry = { ...body };
-      delete retry[field];
-      await this.post(url, retry, ifMatch);
+      const missing = /property\s+'?([A-Za-z0-9_]+)'?\s+does not exist/i.exec(msg);
+      if (missing) {
+        const field = missing[1];
+        const banned = this.rejectedFields.get(list) ?? new Set<string>();
+        banned.add(field);
+        this.rejectedFields.set(list, banned);
+        console.warn(
+          '[pmd] SP rejected column',
+          field,
+          'on',
+          list,
+          '— stripping it from future writes. Add the column in SharePoint to persist this value.',
+        );
+        const retry = { ...body };
+        delete retry[field];
+        await this.post(url, retry, ifMatch);
+        return;
+      }
+      if (/Invalid text value/i.test(msg)) {
+        const culprit = await this.findInvalidTextField(list, url, body, ifMatch);
+        if (culprit) return; // findInvalidTextField already wrote the body minus the offender
+      }
+      throw e;
     }
+  }
+
+  /** Bisect the string-valued fields of a SP body to find the one that
+   *  triggers "Invalid text value". Returns the offending field name and
+   *  leaves the row written (minus that field) on success — or null if
+   *  removing none of them helps (in which case the caller re-throws the
+   *  original error). Stops as soon as one removal succeeds. */
+  private async findInvalidTextField(
+    list: string,
+    url: string,
+    body: Record<string, unknown>,
+    ifMatch: string | undefined,
+  ): Promise<string | null> {
+    const textKeys = Object.keys(body).filter(
+      (k) => k !== '__metadata' && typeof body[k] === 'string' && (body[k] as string).length > 0,
+    );
+    for (const k of textKeys) {
+      const trial = { ...body };
+      delete trial[k];
+      try {
+        await this.post(url, trial, ifMatch);
+        console.warn(
+          '[pmd] SP rejected text value in column',
+          k,
+          'on',
+          list,
+          `(value=${JSON.stringify(body[k])}) — posted the row without it so the rest of the sign-off lands. Clear / retype that field to persist it.`,
+        );
+        return k;
+      } catch (e) {
+        if (!/Invalid text value/i.test((e as Error).message || '')) throw e;
+      }
+    }
+    return null;
   }
 
   /**
@@ -2215,6 +2269,28 @@ function aggregateSlots(slots: ProductionRecord[]): {
 
 
 /** Turn the handover JSON {machine,mold,material,method} into readable text. */
+/**
+ * Strip characters that SharePoint REST rejects from string values in a
+ * POST/MERGE body. The 500 "Invalid text value. A text field contains
+ * invalid data." error doesn't name the offending column, so the safer
+ * play is to scrub up front. Removes:
+ *   - C0 control characters U+0000..U+001F except \t \r \n (NUL, VT, etc.
+ *     come back from Excel paste / clipboard glitches; SP refuses them).
+ *   - C1 controls U+007F..U+009F.
+ *   - Unicode line / paragraph separators U+2028 / U+2029 (slip in from
+ *     Word and break the JSON parser SP uses for verbose envelopes).
+ *   - The BOM U+FEFF anywhere except position 0 (also a common CSV gift).
+ * Mutates the body in place. `__metadata` and non-string values are left
+ * alone.
+ */
+export function sanitizeBodyStrings(body: Record<string, unknown>): void {
+  const bad = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u2028\u2029\uFEFF]/g;
+  for (const [k, v] of Object.entries(body)) {
+    if (k === '__metadata' || typeof v !== 'string') continue;
+    if (bad.test(v)) body[k] = v.replace(bad, '');
+  }
+}
+
 function formatHandover(json: string): string {
   if (!json) return '';
   try {

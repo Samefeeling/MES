@@ -145,6 +145,22 @@
   earlier failed unlock), the existing total wins. See `selectedOrder`
   in `src/ui/operator.ts` and the `jobRequiredOf` / `reject` resolution
   in `lockShift`.
+- **Sign off fails with `POST 500 Invalid text value. A text field
+  contains invalid data. Please check.`** (fix 2026-06-17): SharePoint
+  refuses C0/C1 control characters (NUL, VT, etc.) and U+2028/U+2029
+  line separators in text columns, but the error names no column.
+  Symptom from the field: one specific (machine, shift, job) sign-off
+  fails while the same job on yesterday's shift writes cleanly — the
+  culprit is something typed / pasted into that day's sheet, usually
+  the handover textareas, with a hidden control char dropped by
+  Excel/Word copy-paste. Fixes: (1) `sanitizeBodyStrings` scrubs the
+  body just before every PMD_Production / PMD_LiveStatus write — strips
+  C0 (except `\t \n \r`), C1, U+2028, U+2029 and the BOM; (2)
+  `postWithFieldRetry` now also handles the 500 "Invalid text value"
+  case by bisecting the string fields of the body, logging which column
+  was the offender, and writing the row without it so the rest of the
+  sign-off lands. See `sanitizeBodyStrings` + `findInvalidTextField`
+  in `src/dal/sharepoint.ts`.
 
 ## Build / toolchain
 
