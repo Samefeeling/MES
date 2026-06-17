@@ -1614,27 +1614,34 @@ export class SharePointDataLayer implements PmdDataLayer {
    *  triggers "Invalid text value". Returns the offending field name and
    *  leaves the row written (minus that field) on success — or null if
    *  removing none of them helps (in which case the caller re-throws the
-   *  original error). Stops as soon as one removal succeeds. */
+   *  original error). Stops as soon as one removal succeeds. Order:
+   *  longest values first, since the most common cause is a JSON payload
+   *  (QualityChecks, RejectsBySlot) overflowing a column that was
+   *  accidentally provisioned as Single line text (255-char limit). */
   private async findInvalidTextField(
     list: string,
     url: string,
     body: Record<string, unknown>,
     ifMatch: string | undefined,
   ): Promise<string | null> {
-    const textKeys = Object.keys(body).filter(
-      (k) => k !== '__metadata' && typeof body[k] === 'string' && (body[k] as string).length > 0,
-    );
+    const textKeys = Object.keys(body)
+      .filter(
+        (k) =>
+          k !== '__metadata' && typeof body[k] === 'string' && (body[k] as string).length > 0,
+      )
+      .sort((a, b) => (body[b] as string).length - (body[a] as string).length);
     for (const k of textKeys) {
       const trial = { ...body };
       delete trial[k];
       try {
         await this.post(url, trial, ifMatch);
+        const val = body[k] as string;
+        const lengthHint =
+          val.length > 255
+            ? ` — value is ${val.length} chars, which exceeds SharePoint's Single line text 255-char limit. Change the '${k}' column to "Multiple lines of text" in SharePoint to persist this.`
+            : ` — value contains a character SharePoint refuses (control char / line separator). Clear and retype this field.`;
         console.warn(
-          '[pmd] SP rejected text value in column',
-          k,
-          'on',
-          list,
-          `(value=${JSON.stringify(body[k])}) — posted the row without it so the rest of the sign-off lands. Clear / retype that field to persist it.`,
+          `[pmd] SP rejected text value in column '${k}' on ${list}${lengthHint} Posted the row without it so the rest of the sign-off lands. value=${JSON.stringify(val)}`,
         );
         return k;
       } catch (e) {

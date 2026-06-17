@@ -147,20 +147,31 @@
   in `lockShift`.
 - **Sign off fails with `POST 500 Invalid text value. A text field
   contains invalid data. Please check.`** (fix 2026-06-17): SharePoint
-  refuses C0/C1 control characters (NUL, VT, etc.) and U+2028/U+2029
-  line separators in text columns, but the error names no column.
-  Symptom from the field: one specific (machine, shift, job) sign-off
-  fails while the same job on yesterday's shift writes cleanly — the
-  culprit is something typed / pasted into that day's sheet, usually
-  the handover textareas, with a hidden control char dropped by
-  Excel/Word copy-paste. Fixes: (1) `sanitizeBodyStrings` scrubs the
-  body just before every PMD_Production / PMD_LiveStatus write — strips
-  C0 (except `\t \n \r`), C1, U+2028, U+2029 and the BOM; (2)
-  `postWithFieldRetry` now also handles the 500 "Invalid text value"
-  case by bisecting the string fields of the body, logging which column
-  was the offender, and writing the row without it so the rest of the
-  sign-off lands. See `sanitizeBodyStrings` + `findInvalidTextField`
-  in `src/dal/sharepoint.ts`.
+  returns this when a text column receives content it refuses, and
+  the error names no column. Two distinct causes both surface as this
+  message:
+    1. **Single-line text column overflow** (most common, confirmed by
+       the field 2026-06-17). The 255-char limit silently truncates
+       Single line text, but the verbose REST API rejects the write
+       outright. `QualityChecks` and `RejectsBySlot` carry JSON maps
+       keyed by slot index and easily run 400–600 chars on a full
+       shift — both MUST be provisioned as **Multiple lines of text**
+       (plain, not rich/enhanced), see the DEPLOYMENT.md column table.
+       Symptom: the column ends up persistently blank in
+       PMD_Production while other columns on the same row save fine.
+    2. **C0/C1 controls / U+2028 / U+2029 / BOM** in a value, typically
+       dropped into a handover textarea by Excel/Word copy-paste.
+  Fixes: (1) `sanitizeBodyStrings` scrubs the body just before every
+  PMD_Production / PMD_LiveStatus write — strips C0 (except `\t \n \r`),
+  C1, U+2028, U+2029 and the BOM, killing cause 2 before it reaches SP.
+  (2) `postWithFieldRetry` handles the 500 by bisecting string fields
+  (longest first, so QC/RejectsBySlot overflow surfaces immediately),
+  logging the offender, and writing the row without it so the rest of
+  the sign-off lands. The log message distinguishes the two causes:
+  values > 255 chars are flagged as needing a column-type change in
+  SharePoint; shorter values are flagged as having a bad character.
+  See `sanitizeBodyStrings` + `findInvalidTextField` in
+  `src/dal/sharepoint.ts`.
 
 ## Build / toolchain
 
