@@ -58,17 +58,6 @@ export interface PmdDataLayer {
    *  operator poll calls this every 60 s. No-op for stores that
    *  share state in-process (memory DAL). */
   pushLiveSnapshot?(): Promise<void>;
-  /** Wipe THIS device's local edit cache (in-memory + localStorage)
-   *  for every (machine, shift, job) tuple matching jobNumber, and
-   *  best-effort delete its PMD_LiveStatus mirror so the next snapshot
-   *  push from this device doesn't recreate it. Returns the number of
-   *  tuples cleared. Surfaced as the operator's "stale cache" escape
-   *  hatch: when an operator opens an order that PMD_Production has no
-   *  record of and Job Left is wrong (e.g. an abandoned, never-signed-off
-   *  Count Start/End entry from a previous session is still adding to
-   *  the cross-shift Good total), this removes the orphan. No-op for
-   *  the memory DAL. */
-  clearLocalJobCache?(jobNumber: string): Promise<number>;
 
   // Identity
   whoAmI(): Promise<UserContext>;

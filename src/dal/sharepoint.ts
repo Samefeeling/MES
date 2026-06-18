@@ -1413,47 +1413,6 @@ export class SharePointDataLayer implements PmdDataLayer {
     await Promise.all(tasks);
   }
 
-  /**
-   * Operator escape hatch for orphaned local cache. The reported case:
-   * an earlier session typed Count Start/End for a job, never signed it
-   * off, and the partial cache (in-memory + persisted to localStorage)
-   * was being mirrored to PMD_LiveStatus every 30 s. The supervisor
-   * deleted the LiveStatus row by hand; the next pushLiveSnapshot from
-   * this device immediately recreated it because the editCache copy was
-   * still alive. Refreshing the page didn't help — rehydrateEditCache
-   * re-reads the same localStorage at startup. Wipe every tuple of this
-   * job from BOTH stores and best-effort the LiveStatus mirror so the
-   * orphan cannot resurrect itself.
-   */
-  async clearLocalJobCache(jobNumber: string): Promise<number> {
-    let cleared = 0;
-    const tuplesToScrub: Array<{ mc: string; sid: string }> = [];
-    for (const key of Array.from(this.editCache.keys())) {
-      const [mc, sid, job] = key.split('|');
-      if (job !== jobNumber) continue;
-      this.editCache.delete(key);
-      // Drop the unlock marker too so a "stale-cache reset" doesn't
-      // leave the tuple believing it's still in an unlock-edit window
-      // (which would re-resurrect the row on the next listProduction).
-      if (this.unlockedTuples.has(key)) {
-        this.unlockedTuples.delete(key);
-      }
-      tuplesToScrub.push({ mc, sid });
-      cleared++;
-    }
-    if (cleared > 0) {
-      this.persistEditCache();
-      this.persistUnlockedTuples();
-    }
-    // Fire-and-forget the LiveStatus deletes — the local cache is the
-    // authoritative source of the resurrection, so even if these fail
-    // (network blip) the local wipe alone breaks the loop.
-    for (const { mc, sid } of tuplesToScrub) {
-      void this.deleteLiveRow(mc, sid, jobNumber);
-    }
-    return cleared;
-  }
-
   async unlockShift(
     machineCode: string,
     shiftId: string,

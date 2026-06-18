@@ -173,27 +173,6 @@
   See `sanitizeBodyStrings` + `findInvalidTextField` in
   `src/dal/sharepoint.ts`.
 
-- **Job Left / Shift Target stuck at 0 with no PMD_Production row**
-  (fix 2026-06-18, SFM507096): an earlier session typed Count Start /
-  End on a job (e.g. CountEnd=110), never signed off. PMD_LiveStatus
-  carried the partial mirror; PMD_Production never got a header. The
-  supervisor deleted the PMD_LiveStatus row by hand to "clear" it, but
-  THIS device's localStorage `editCache` still held the 110, and
-  `rehydrateEditCache` on every page refresh re-loaded it. Two
-  consequences:
-    1. `listProduction({jobNumber})` returned the orphaned cache row
-       and `sumOtherShiftGood` counted it, making Job Left =
-       max(0, OrderQty − cachedGood) = 0 and Shift Target = 0.
-    2. The next 30 s `pushLiveSnapshot` rewrote the deleted
-       PMD_LiveStatus row from the same cache.
-  Fix: new `clearLocalJobCache(jobNumber)` on the SharePoint DAL wipes
-  this iPad's in-memory + localStorage editCache for every tuple of the
-  job, drops the unlock marker, and fires the LiveStatus delete so the
-  orphan can't resurrect. Exposed on the side panel as a small "🧹
-  reset local cache for this job" link under Job Left (with a confirm
-  dialog); the help text explains it only touches THIS device. Signed-
-  off PMD_Production rows are not touched.
-
 ## Build / toolchain
 
 - **Deployed app shows mock data / old P-codes = built without
