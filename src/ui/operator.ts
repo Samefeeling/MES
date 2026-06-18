@@ -765,10 +765,15 @@ function initials(name: string): string {
 const SUPERVISOR_QC_SLOTS = new Set([1, 7, 13]);
 
 /** Whose turn is it to QC this slot — supervisor at the 3 cadence slots
- *  per shift, operator on every other slot. */
-function qcRoleFor(slot: number): 'operator' | 'supervisor' {
+ *  per shift, operator on every other slot. Exported so the Trace /
+ *  management view labels each QC sign-off with the same role rule. */
+export function qcRoleFor(slot: number): 'operator' | 'supervisor' {
   return SUPERVISOR_QC_SLOTS.has(slot) ? 'supervisor' : 'operator';
 }
+
+/** The fixed per-shift slots a supervisor must QC (1 / 7 / 13). Exported
+ *  for the Trace view's "supervisor QC done x/3" indicator. */
+export const SUPERVISOR_QC_SLOT_COUNT = SUPERVISOR_QC_SLOTS.size;
 
 function qcCellHtml(slot: number, name: string, isNow: boolean): string {
   const role = qcRoleFor(slot);

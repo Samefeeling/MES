@@ -142,6 +142,13 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .trace-card-totals b{font-size:18px;color:var(--tx);margin-left:6px;font-weight:800}
 .trace-card-totals .g b{color:var(--gn)}
 .trace-card-totals .r b{color:var(--rd)}
+.trace-card-totals .qc small{font-size:11px;font-weight:700;opacity:.75;margin-left:4px}
+/* QC sign-off trail rows: role tag before the name. Supervisor cadence
+   checks (slots 1/7/13) read in the theme-dark colour so management can
+   spot them; operator checks stay muted. */
+.trace-section .qc-role{font-weight:700;font-size:12px;text-transform:none;letter-spacing:0}
+.trace-section .qc-role.qc-supervisor{color:var(--theme-dark)}
+.trace-section .qc-role.qc-operator{color:var(--mu)}
 .trace-timeline{display:grid;grid-template-columns:repeat(16,1fr);gap:2px;margin:6px 0;position:relative}
 .trace-slot{height:36px;border:1px solid var(--bd);border-radius:4px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .trace-now-line{position:absolute;top:-2px;bottom:-2px;width:2px;background:rgba(220,38,38,.55);box-shadow:0 0 6px rgba(220,38,38,.5);pointer-events:none;z-index:2;transform:translateX(-1px)}

@@ -9,6 +9,7 @@ import {
   slotClock,
 } from '../core/shifts';
 import { bdLabelFor } from '../core/breakdown';
+import { qcRoleFor, SUPERVISOR_QC_SLOT_COUNT } from './operator';
 import { escapeHtml } from './modal';
 
 type TraceView = 'live' | 'search';
@@ -44,12 +45,32 @@ interface TraceRow {
   countEnd: number | null;
   good: number;
   reject: number;
+  /** Total order quantity (Epicor JobHead_ProdQty). null for die-change
+   *  pseudo-orders or jobs with no planning row. */
+  orderQty: number | null;
+  /** Pieces still to make for the whole job = remaining qty − Σ Good
+   *  across every (machine, shift) tuple of this job. null when unknown. */
+  jobLeft: number | null;
+  /** Pieces to aim for this shift (full 8 h run at cycle time, or the
+   *  remainder if the job finishes sooner). null when no cycle-time. */
+  shiftTarget: number | null;
+  /** Quality-check sign-off roll-up for management tracking. */
+  qc: QcSummary;
   rejects: ProductionRecord[];
   bdSlots: { slot: number; code: string; ticket: string; note: string }[];
   records: ProductionRecord[];
   /** True when this row is just a placeholder for an idle machine on
    *  the live view — render the card with a muted "Idle" badge. */
   idle?: boolean;
+}
+
+export interface QcSummary {
+  /** Total slots that carry a QC sign-off (operator or supervisor). */
+  signed: number;
+  /** Of the fixed supervisor cadence slots (1 / 7 / 13), how many signed. */
+  supervisorSigned: number;
+  /** Per-signed-slot detail, sorted by slot, for the QC list section. */
+  slots: { slot: number; role: 'operator' | 'supervisor'; name: string }[];
 }
 
 /**
@@ -337,6 +358,19 @@ function renderCard(r: TraceRow): string {
         )
         .join('')}</ul></div>`
     : '';
+  // QC sign-off trail — who confirmed quality at which slot. Supervisor
+  // cadence slots (1 / 7 / 13) are tagged so management can see at a
+  // glance whether the required supervisor checks happened.
+  const qcLines = r.qc.slots.length
+    ? `<div class="trace-section"><b>Quality Checks (Sup ${r.qc.supervisorSigned}/${SUPERVISOR_QC_SLOT_COUNT})</b><ul>${r.qc.slots
+        .map(
+          (s) =>
+            `<li><span class="ts">${escapeHtml(slotClock(r.shiftId, s.slot))}</span> <span class="qc-role qc-${s.role}">${
+              s.role === 'supervisor' ? '👔 Supervisor' : '👷 Operator'
+            }</span> ${escapeHtml(s.name)}</li>`,
+        )
+        .join('')}</ul></div>`
+    : '';
 
   // Live view: machine name in plain text on the left for identity,
   // activity badge on the right so the supervisor can scan the floor
@@ -366,14 +400,17 @@ function renderCard(r: TraceRow): string {
       Operator: <b>${escapeHtml(r.operator || '—')}</b> · Supervisor: <b>${escapeHtml(r.supervisor || '—')}</b>
     </div>
     <div class="trace-card-totals">
-      <span>Count Start <b>${r.countStart ?? '—'}</b></span>
-      <span>Count End <b>${r.countEnd ?? '—'}</b></span>
+      <span>Order Qty <b>${r.orderQty ?? '—'}</b></span>
+      <span>Job Left <b>${r.jobLeft ?? '—'}</b></span>
+      <span>Shift Target <b>${r.shiftTarget ?? '—'}</b></span>
       <span class="g">Good <b>${r.good}</b></span>
       <span class="r">Reject <b>${r.reject}</b></span>
+      <span class="qc"${r.qc.supervisorSigned < SUPERVISOR_QC_SLOT_COUNT ? ' title="Supervisor QC checks outstanding"' : ''}>QC <b>${r.qc.signed}</b> <small>(Sup ${r.qc.supervisorSigned}/${SUPERVISOR_QC_SLOT_COUNT})</small></span>
     </div>
     <div class="trace-timeline">${slots}</div>
     ${rejLines}
     ${bdLines}
+    ${qcLines}
   </div>`;
 }
 
@@ -428,6 +465,11 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
     dalRef.listPlanning({}).catch(() => [] as PlanningOrder[]),
   ]);
   const planByJob = new Map(planning.map((p) => [p.jobNumber, p]));
+  // Cross-shift Good per job so Job Left / Shift Target on the live cards
+  // count the whole order, not just this shift's output.
+  const jobGoodTotals = await loadJobGoodTotals(
+    rows.map((r) => r.jobNumber).filter(Boolean),
+  );
   const byMachine = new Map<string, ProductionRecord[]>();
   for (const r of rows) {
     const arr = byMachine.get(r.machineCode) ?? [];
@@ -457,7 +499,7 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
     // shows ONLY what the press is doing now / most recently — collapse
     // the per-job rows to the single most-current one. Without this,
     // 1600T showed three cards (one per job logged this shift).
-    const machineRows = buildTraceRowsFor(recs, planByJob);
+    const machineRows = buildTraceRowsFor(recs, planByJob, jobGoodTotals);
     out.push(latestRow(machineRows));
   }
   S!.liveRows = out;
@@ -514,6 +556,10 @@ function idlePlaceholder(machineCode: string, shiftId: string): TraceRow {
     countEnd: null,
     good: 0,
     reject: 0,
+    orderQty: null,
+    jobLeft: null,
+    shiftTarget: null,
+    qc: { signed: 0, supervisorSigned: 0, slots: [] },
     rejects: [],
     bdSlots: [],
     records: [],
@@ -529,6 +575,7 @@ function idlePlaceholder(machineCode: string, shiftId: string): TraceRow {
 function buildTraceRowsFor(
   records: ProductionRecord[],
   planByJob: Map<string, PlanningOrder>,
+  jobGoodTotals: Map<string, number>,
 ): TraceRow[] {
   const groups = new Map<string, ProductionRecord[]>();
   for (const r of records) {
@@ -565,6 +612,11 @@ function buildTraceRowsFor(
         note: '',
       }));
     const plan = planByJob.get(jobNumber);
+    // Job-wide Good prefers the cross-shift total (computed from every
+    // tuple of this job); fall back to just this tuple's good if the
+    // caller couldn't supply it.
+    const jobGood = jobGoodTotals.get(jobNumber) ?? Math.max(0, ce - cs - totalRej);
+    const metrics = jobMetrics(plan, jobGood);
     out.push({
       key,
       machineCode,
@@ -579,11 +631,109 @@ function buildTraceRowsFor(
       countEnd: canonical?.countEnd ?? null,
       good: Math.max(0, ce - cs - totalRej),
       reject: totalRej,
+      orderQty: metrics.orderQty,
+      jobLeft: metrics.jobLeft,
+      shiftTarget: metrics.shiftTarget,
+      qc: qcSummary(list),
       rejects: list.filter((r) => r.rejectCount > 0 || r.rejects !== '{}'),
       bdSlots,
       records: list,
     });
   }
+  return out;
+}
+
+/**
+ * Order Qty / Job Left / Shift Target for a card, mirroring the operator
+ * sheet's side-panel maths so management sees the same numbers:
+ *   - Order Qty   = JobHead_ProdQty (the whole order).
+ *   - Job Left    = Calculated_RemainingQty − Σ Good across every shift.
+ *   - Shift Target= if JobLeft × cycle-time ≥ 8 h → a full shift's worth
+ *                   (floor(8 / CT)); else the remainder (job finishes).
+ * `qtyPerHr` on the planning row is Epicor's JobOper_ProdStandard, which
+ * on this tenant is hours-per-piece (cycle time), so Shift Target divides
+ * 8 h by it rather than multiplying. Returns nulls for die-change
+ * pseudo-orders and jobs with no planning row.
+ */
+export function jobMetrics(
+  plan: PlanningOrder | undefined,
+  jobGood: number,
+): { orderQty: number | null; jobLeft: number | null; shiftTarget: number | null } {
+  if (!plan || plan.isDieChange) {
+    return { orderQty: null, jobLeft: null, shiftTarget: null };
+  }
+  const orderQty = plan.orderQty;
+  const jobLeft = Math.max(0, plan.jobRequired - jobGood);
+  let shiftTarget: number | null = null;
+  const ct = plan.qtyPerHr; // hours per piece
+  if (ct && ct > 0) {
+    shiftTarget = jobLeft * ct >= 8 ? Math.floor(8 / ct) : jobLeft;
+  }
+  return { orderQty, jobLeft, shiftTarget };
+}
+
+/** Roll up the QC sign-offs on a tuple's slots for the management view. */
+export function qcSummary(list: ProductionRecord[]): QcSummary {
+  const slots = list
+    .filter((r) => r.qcBy)
+    .map((r) => ({ slot: r.slotIndex, role: qcRoleFor(r.slotIndex), name: r.qcBy }))
+    .sort((a, b) => a.slot - b.slot);
+  return {
+    signed: slots.length,
+    supervisorSigned: slots.filter((s) => s.role === 'supervisor').length,
+    slots,
+  };
+}
+
+/** Good across ALL (machine, shift) tuples in a flat record list — the
+ *  same gross−reject rule the operator sheet uses (gross lives on slot 0;
+ *  rejects sum across every slot). Used to total a single job's output. */
+export function goodForRecords(records: ProductionRecord[]): number {
+  const grossByTuple = new Map<string, number>();
+  const rejByTuple = new Map<string, number>();
+  for (const r of records) {
+    const tuple = `${r.machineCode}|${r.shiftId}`;
+    if (r.slotIndex === 0) {
+      const cs = Number(r.countStart ?? 0);
+      const ce = Number(r.countEnd ?? 0);
+      grossByTuple.set(tuple, Math.max(0, ce - cs));
+    }
+    let rej = 0;
+    try {
+      const obj = JSON.parse(r.rejects || '{}') as Record<string, number>;
+      rej = Object.values(obj).reduce((a, v) => a + (Number(v) || 0), 0);
+    } catch {
+      rej = Number(r.rejectCount) || 0;
+    }
+    if (rej) rejByTuple.set(tuple, (rejByTuple.get(tuple) ?? 0) + rej);
+  }
+  let total = 0;
+  for (const [tuple, gross] of grossByTuple) {
+    total += Math.max(0, gross - (rejByTuple.get(tuple) ?? 0));
+  }
+  return total;
+}
+
+/**
+ * Fetch each job's FULL production history (all shifts / machines) and
+ * total its Good, so Job Left / Shift Target reflect the whole order and
+ * not just the current shift. One query per unique job, in parallel; a
+ * failed fetch contributes 0 rather than dropping the row.
+ */
+async function loadJobGoodTotals(jobNumbers: string[]): Promise<Map<string, number>> {
+  const unique = Array.from(new Set(jobNumbers.filter(Boolean)));
+  const out = new Map<string, number>();
+  await Promise.all(
+    unique.map(async (job) => {
+      try {
+        const recs = await dalRef.listProduction({ jobNumber: job });
+        out.set(job, goodForRecords(recs));
+      } catch (e) {
+        console.warn('[pmd] job good total fetch failed for', job, e);
+        out.set(job, 0);
+      }
+    }),
+  );
   return out;
 }
 
@@ -624,7 +774,18 @@ async function doSearch(): Promise<void> {
   const planning = await dalRef.listPlanning({});
   const planByJob = new Map(planning.map((p) => [p.jobNumber, p]));
 
-  const rows = buildTraceRowsFor(filtered, planByJob);
+  // Job-wide Good totals for Job Left / Shift Target. A Job Number search
+  // already pulled that job's complete history into `all`, so total it
+  // directly; a date-range search only sees a window, so fetch each job's
+  // full history to keep the numbers job-wide rather than window-wide.
+  let jobGoodTotals: Map<string, number>;
+  if (q.jobNumber) {
+    jobGoodTotals = new Map([[q.jobNumber.trim(), goodForRecords(all)]]);
+  } else {
+    jobGoodTotals = await loadJobGoodTotals(filtered.map((r) => r.jobNumber));
+  }
+
+  const rows = buildTraceRowsFor(filtered, planByJob, jobGoodTotals);
   rows.sort((a, b) => (a.shiftId < b.shiftId ? 1 : -1));
   S!.results = rows;
   S!.searched = true;
