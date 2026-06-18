@@ -904,9 +904,21 @@ function buildSide(): string {
   const targetTitle = tgt == null
     ? 'No JobOper_ProdStandard on the planning row — Shift Target cannot be computed.'
     : `Shift Target = if Job Left × ${o!.qtyPerHr} h/piece ≥ 8h then 8 ÷ ${o!.qtyPerHr}, else Job Left.`;
+  // Escape hatch for the "stale local cache" bug pattern: an unsigned
+  // (Count Start/End only) entry from a previous session can keep
+  // contributing to jobTotalGood across page refreshes (rehydrated from
+  // localStorage) and re-mirror itself onto PMD_LiveStatus every 30 s.
+  // Only meaningful when the DAL persists a cache (SharePoint backend);
+  // hidden for in-memory backends where there's nothing to reset.
+  const canReset =
+    !!o && !o.isDieChange && typeof dalRef.clearLocalJobCache === 'function';
+  const resetLink = canReset
+    ? `<button class="reset-cache" data-reset-job title="Clear this device's saved Count Start / End / status for this job. Use when Job Left looks wrong after a never-signed-off entry was deleted from PMD_LiveStatus.">🧹 reset local cache for this job</button>`
+    : '';
   return `<aside class="op-side">
     <div class="side-title">Shift counters</div>
     <div class="sk"><label>Job left</label><b data-live="jobLeft">${jobLeft}</b></div>
+    ${resetLink}
     <div class="sk"><label title="${escapeHtml(targetTitle)}">Shift Target</label><b title="${escapeHtml(targetTitle)}">${targetDisplay}</b></div>
     <div class="sk"><label>Count Start</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cstart" value="${cs}" ${rdo}${rdoTitle}></div>
     <div class="sk"><label>Count End</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cend" value="${ce}" ${rdo}${rdoTitle}></div>
@@ -1309,7 +1321,35 @@ function wire(): void {
   app.querySelector('[data-refresh]')?.addEventListener('click', () => void refreshAll());
   app.querySelector('[data-saveclear]')?.addEventListener('click', () => openSaveSignoffModal());
   app.querySelector('[data-unlock]')?.addEventListener('click', () => openUnlockModal());
+  app.querySelector('[data-reset-job]')?.addEventListener('click', () => void resetJobCache());
   wireStatusPicker();
+}
+
+async function resetJobCache(): Promise<void> {
+  const job = S!.selJob;
+  if (!job || !dalRef.clearLocalJobCache) return;
+  const ok = window.confirm(
+    `Clear this device's local cache for ${job}?\n\n` +
+      'Use this only when Job Left looks wrong because of an old, never-signed-off ' +
+      "entry on this iPad (typically: Count Start / End was typed, the operator walked away, " +
+      "and the supervisor later deleted the PMD_LiveStatus row by hand).\n\n" +
+      "It removes this iPad's saved Count Start / End / status for the job and stops the " +
+      'next 30 s LiveStatus push from recreating the orphan row. Signed-off work on ' +
+      'PMD_Production is NOT touched.',
+  );
+  if (!ok) return;
+  try {
+    const cleared = await dalRef.clearLocalJobCache(job);
+    toast(
+      cleared > 0
+        ? `Reset ${cleared} cached tuple(s) for ${job}`
+        : `Nothing cached for ${job} on this device`,
+      'ok',
+    );
+    await reload();
+  } catch (e) {
+    toast(`Reset failed: ${(e as Error).message}`, 'err');
+  }
 }
 
 function onMetaChange(el: HTMLElement): void {

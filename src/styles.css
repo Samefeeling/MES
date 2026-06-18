@@ -285,6 +285,11 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .op-side .sk b.r{color:var(--rd)}
 .op-side .sk b.g{color:var(--gn)}
 .op-side .sk input{width:130px;padding:10px;border:2px solid var(--bd);border-radius:8px;font-size:20px;text-align:right;min-height:48px;font-weight:700;font-variant-numeric:tabular-nums}
+/* "🧹 reset local cache for this job" — quiet escape hatch under Job Left.
+   Visible but unobtrusive: small, italic, hover underlines. Not a primary
+   action. See resetJobCache() / clearLocalJobCache() in the DAL. */
+.op-side .reset-cache{align-self:flex-end;margin-top:-6px;background:none;border:none;padding:0;font-size:11px;color:var(--theme-on-base);opacity:.6;font-style:italic;cursor:pointer;text-decoration:none}
+.op-side .reset-cache:hover{opacity:1;text-decoration:underline}
 
 /* §6 — Handover / Journey: 2x2 grid of textareas for People / Plant / Machine / Material. */
 .handover{display:flex;flex-direction:column;gap:8px;margin-top:4px;border-top:2px solid var(--theme-accent);padding-top:10px;flex:1 1 auto;min-height:0}
