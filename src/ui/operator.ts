@@ -492,13 +492,28 @@ async function maybeCarryCountStart(): Promise<void> {
  */
 function jobLeftPieces(): number | null {
   const o = selectedOrder();
-  if (!o || o.isDieChange) return null;
+  if (!o) return null;
   const c = canonical();
   const cs = Number(c?.countStart ?? 0);
   const ce = Number(c?.countEnd ?? 0);
   const grossThis = Math.max(0, ce - cs);
   const goodThis = Math.max(0, grossThis - jobTotals());
-  return Math.max(0, o.jobRequired - (S!.jobTotalGood + goodThis));
+  return jobLeftPiecesFor(o, S!.jobTotalGood + goodThis);
+}
+
+/**
+ * Pure formula behind {@link jobLeftPieces} — shared with the Trace view
+ * (src/ui/trace.ts) so management sees the same number the operator does.
+ * `jobGood` is the cumulative Good across every (machine, shift) tuple
+ * of this job, including the current shift's in-flight contribution.
+ * Returns null for die-change pseudo-orders.
+ */
+export function jobLeftPiecesFor(
+  o: PlanningOrder,
+  jobGood: number,
+): number | null {
+  if (o.isDieChange) return null;
+  return Math.max(0, o.jobRequired - jobGood);
 }
 
 /**
@@ -518,11 +533,21 @@ function jobLeftPieces(): number | null {
  */
 function shiftTarget(): number | null {
   const o = selectedOrder();
-  if (!o || !o.qtyPerHr || o.qtyPerHr <= 0) return null;
-  const ct = o.qtyPerHr; // hours per piece
+  if (!o) return null;
   const jl = jobLeftPieces();
   if (jl == null) return null;
-  return jl * ct >= 8 ? Math.floor(8 / ct) : jl;
+  return shiftTargetFor(o, jl);
+}
+
+/** Pure formula behind {@link shiftTarget}; see that comment for the rule.
+ *  Shared with the Trace view so the two pages can never drift apart. */
+export function shiftTargetFor(
+  o: PlanningOrder,
+  jobLeft: number,
+): number | null {
+  if (!o.qtyPerHr || o.qtyPerHr <= 0) return null;
+  const ct = o.qtyPerHr; // hours per piece
+  return jobLeft * ct >= 8 ? Math.floor(8 / ct) : jobLeft;
 }
 
 /**
@@ -744,8 +769,9 @@ function buildMeta(): string {
 /** Short two-letter initials for a "First Last" name, used as the
  *  compact label on QC sign-off cells. Falls back to the first two
  *  characters when the name doesn't have two whitespace-separated
- *  words (single-word handles, codes). */
-function initials(name: string): string {
+ *  words (single-word handles, codes). Exported so the Trace view
+ *  labels QC cells with the same initials. */
+export function initials(name: string): string {
   if (!name) return '';
   const parts = name.trim().split(/\s+/);
   if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
@@ -765,25 +791,36 @@ function initials(name: string): string {
 const SUPERVISOR_QC_SLOTS = new Set([1, 7, 13]);
 
 /** Whose turn is it to QC this slot — supervisor at the 3 cadence slots
- *  per shift, operator on every other slot. Exported so the Trace /
- *  management view labels each QC sign-off with the same role rule. */
-export function qcRoleFor(slot: number): 'operator' | 'supervisor' {
+ *  per shift, operator on every other slot. */
+function qcRoleFor(slot: number): 'operator' | 'supervisor' {
   return SUPERVISOR_QC_SLOTS.has(slot) ? 'supervisor' : 'operator';
 }
 
-/** The fixed per-shift slots a supervisor must QC (1 / 7 / 13). Exported
- *  for the Trace view's "supervisor QC done x/3" indicator. */
-export const SUPERVISOR_QC_SLOT_COUNT = SUPERVISOR_QC_SLOTS.size;
-
-function qcCellHtml(slot: number, name: string, isNow: boolean): string {
+/**
+ * Shared QC-cell presentation — label / class / title — so the editable
+ * operator grid and the read-only Trace card render the same content.
+ * Both contexts compose this with their own wrapper element (operator: a
+ * `<td>` with a tap-to-edit `<button>`; Trace: a `<div>` row above the
+ * status timeline).
+ */
+export function qcCellPresentation(
+  slot: number,
+  name: string,
+): { role: 'operator' | 'supervisor'; signed: boolean; label: string; title: string } {
   const role = qcRoleFor(slot);
   const roleLabel = role === 'operator' ? '👷 Operator' : '👔 Supervisor';
-  const lbl = name ? `✓ ${escapeHtml(initials(name))}` : '—';
-  const cls = `qc-cell${isNow ? ' is-now-col' : ''}${name ? ' is-signed' : ''} qc-${role}`;
-  const tip = name
+  const signed = !!name;
+  const label = signed ? `✓ ${escapeHtml(initials(name))}` : '—';
+  const title = signed
     ? `${roleLabel} sign-off · ${escapeHtml(name)} · tap to change`
     : `${roleLabel} sign-off required · tap to confirm`;
-  return `<td class="${cls}"><button type="button" class="qc-btn" data-qc-slot="${slot}" title="${tip}">${lbl}</button></td>`;
+  return { role, signed, label, title };
+}
+
+function qcCellHtml(slot: number, name: string, isNow: boolean): string {
+  const p = qcCellPresentation(slot, name);
+  const cls = `qc-cell${isNow ? ' is-now-col' : ''}${p.signed ? ' is-signed' : ''} qc-${p.role}`;
+  return `<td class="${cls}"><button type="button" class="qc-btn" data-qc-slot="${slot}" title="${p.title}">${p.label}</button></td>`;
 }
 
 function statusCellHtml(

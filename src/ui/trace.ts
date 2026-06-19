@@ -9,7 +9,11 @@ import {
   slotClock,
 } from '../core/shifts';
 import { bdLabelFor } from '../core/breakdown';
-import { qcRoleFor, SUPERVISOR_QC_SLOT_COUNT } from './operator';
+import {
+  jobLeftPiecesFor,
+  qcCellPresentation,
+  shiftTargetFor,
+} from './operator';
 import { escapeHtml } from './modal';
 
 type TraceView = 'live' | 'search';
@@ -54,23 +58,16 @@ interface TraceRow {
   /** Pieces to aim for this shift (full 8 h run at cycle time, or the
    *  remainder if the job finishes sooner). null when no cycle-time. */
   shiftTarget: number | null;
-  /** Quality-check sign-off roll-up for management tracking. */
-  qc: QcSummary;
+  /** Per-slot QC sign-off name, slot index → person's full name (empty
+   *  when not yet signed). 16 entries, mirrors the operator sheet's
+   *  Quality Checks row so management sees the same per-slot status. */
+  qcBySlot: string[];
   rejects: ProductionRecord[];
   bdSlots: { slot: number; code: string; ticket: string; note: string }[];
   records: ProductionRecord[];
   /** True when this row is just a placeholder for an idle machine on
    *  the live view — render the card with a muted "Idle" badge. */
   idle?: boolean;
-}
-
-export interface QcSummary {
-  /** Total slots that carry a QC sign-off (operator or supervisor). */
-  signed: number;
-  /** Of the fixed supervisor cadence slots (1 / 7 / 13), how many signed. */
-  supervisorSigned: number;
-  /** Per-signed-slot detail, sorted by slot, for the QC list section. */
-  slots: { slot: number; role: 'operator' | 'supervisor'; name: string }[];
 }
 
 /**
@@ -182,9 +179,11 @@ let dalRef: PmdDataLayer;
 let livePollTimer: ReturnType<typeof setInterval> | undefined;
 let nowLineTimer: ReturnType<typeof setInterval> | undefined;
 /** How often Live Status re-pulls from PMD_LiveStatus / PMD_Production.
- *  20 s feels live to the eye without hammering SP — three pulls per
- *  poll tick of the operator (60 s) is plenty for a status board. */
-const LIVE_POLL_MS = 20_000;
+ *  5 min is a management-pace refresh — the per-job cross-shift Good
+ *  fetches needed by Job Left / Shift Target make a tighter poll
+ *  expensive against SharePoint, and supervisors using this view want
+ *  a stable picture, not a per-keystroke ticker. */
+const LIVE_POLL_MS = 5 * 60_000;
 
 export async function renderTrace(dal: PmdDataLayer): Promise<void> {
   dalRef = dal;
@@ -358,19 +357,14 @@ function renderCard(r: TraceRow): string {
         )
         .join('')}</ul></div>`
     : '';
-  // QC sign-off trail — who confirmed quality at which slot. Supervisor
-  // cadence slots (1 / 7 / 13) are tagged so management can see at a
-  // glance whether the required supervisor checks happened.
-  const qcLines = r.qc.slots.length
-    ? `<div class="trace-section"><b>Quality Checks (Sup ${r.qc.supervisorSigned}/${SUPERVISOR_QC_SLOT_COUNT})</b><ul>${r.qc.slots
-        .map(
-          (s) =>
-            `<li><span class="ts">${escapeHtml(slotClock(r.shiftId, s.slot))}</span> <span class="qc-role qc-${s.role}">${
-              s.role === 'supervisor' ? '👔 Supervisor' : '👷 Operator'
-            }</span> ${escapeHtml(s.name)}</li>`,
-        )
-        .join('')}</ul></div>`
-    : '';
+  // Per-slot Quality Checks row — rendered above the status timeline in
+  // a matching 16-column grid so a signed cell sits directly over the
+  // status it confirmed (e.g. `GM` above an `R` block, just like the
+  // operator sheet). Read-only here; the operator sheet owns editing.
+  const qcCells = Array.from({ length: SLOTS_PER_SHIFT }, (_, i) => {
+    const p = qcCellPresentation(i, r.qcBySlot[i] ?? '');
+    return `<div class="trace-qc-slot qc-${p.role}${p.signed ? ' is-signed' : ''}" title="${p.title}">${p.label}</div>`;
+  }).join('');
 
   // Live view: machine name in plain text on the left for identity,
   // activity badge on the right so the supervisor can scan the floor
@@ -405,12 +399,11 @@ function renderCard(r: TraceRow): string {
       <span>Shift Target <b>${r.shiftTarget ?? '—'}</b></span>
       <span class="g">Good <b>${r.good}</b></span>
       <span class="r">Reject <b>${r.reject}</b></span>
-      <span class="qc"${r.qc.supervisorSigned < SUPERVISOR_QC_SLOT_COUNT ? ' title="Supervisor QC checks outstanding"' : ''}>QC <b>${r.qc.signed}</b> <small>(Sup ${r.qc.supervisorSigned}/${SUPERVISOR_QC_SLOT_COUNT})</small></span>
     </div>
+    <div class="trace-qc-row">${qcCells}</div>
     <div class="trace-timeline">${slots}</div>
     ${rejLines}
     ${bdLines}
-    ${qcLines}
   </div>`;
 }
 
@@ -559,7 +552,7 @@ function idlePlaceholder(machineCode: string, shiftId: string): TraceRow {
     orderQty: null,
     jobLeft: null,
     shiftTarget: null,
-    qc: { signed: 0, supervisorSigned: 0, slots: [] },
+    qcBySlot: Array.from({ length: SLOTS_PER_SHIFT }, () => ''),
     rejects: [],
     bdSlots: [],
     records: [],
@@ -612,11 +605,23 @@ function buildTraceRowsFor(
         note: '',
       }));
     const plan = planByJob.get(jobNumber);
-    // Job-wide Good prefers the cross-shift total (computed from every
-    // tuple of this job); fall back to just this tuple's good if the
-    // caller couldn't supply it.
-    const jobGood = jobGoodTotals.get(jobNumber) ?? Math.max(0, ce - cs - totalRej);
-    const metrics = jobMetrics(plan, jobGood);
+    // Job-wide Good. Prefer the cross-shift total when the caller could
+    // compute one; the `has()` guard (not `??`) is deliberate — a failed
+    // history fetch stores 0 in the map, and treating that as "good"
+    // would render Job Left = full order quantity. Falling back to this
+    // tuple's own good keeps the number conservative.
+    const jobGood = jobGoodTotals.has(jobNumber)
+      ? jobGoodTotals.get(jobNumber)!
+      : Math.max(0, ce - cs - totalRej);
+    // Job Left + Shift Target come from the same pure formulas the
+    // operator side panel uses, so the two pages cannot drift apart.
+    const jobLeft = plan ? jobLeftPiecesFor(plan, jobGood) : null;
+    const shiftTargetVal =
+      plan && jobLeft != null ? shiftTargetFor(plan, jobLeft) : null;
+    const qcBySlot = Array.from({ length: SLOTS_PER_SHIFT }, (_, i) => {
+      const rec = list.find((r) => r.slotIndex === i);
+      return rec?.qcBy ?? '';
+    });
     out.push({
       key,
       machineCode,
@@ -631,58 +636,16 @@ function buildTraceRowsFor(
       countEnd: canonical?.countEnd ?? null,
       good: Math.max(0, ce - cs - totalRej),
       reject: totalRej,
-      orderQty: metrics.orderQty,
-      jobLeft: metrics.jobLeft,
-      shiftTarget: metrics.shiftTarget,
-      qc: qcSummary(list),
+      orderQty: plan && !plan.isDieChange ? plan.orderQty : null,
+      jobLeft,
+      shiftTarget: shiftTargetVal,
+      qcBySlot,
       rejects: list.filter((r) => r.rejectCount > 0 || r.rejects !== '{}'),
       bdSlots,
       records: list,
     });
   }
   return out;
-}
-
-/**
- * Order Qty / Job Left / Shift Target for a card, mirroring the operator
- * sheet's side-panel maths so management sees the same numbers:
- *   - Order Qty   = JobHead_ProdQty (the whole order).
- *   - Job Left    = Calculated_RemainingQty − Σ Good across every shift.
- *   - Shift Target= if JobLeft × cycle-time ≥ 8 h → a full shift's worth
- *                   (floor(8 / CT)); else the remainder (job finishes).
- * `qtyPerHr` on the planning row is Epicor's JobOper_ProdStandard, which
- * on this tenant is hours-per-piece (cycle time), so Shift Target divides
- * 8 h by it rather than multiplying. Returns nulls for die-change
- * pseudo-orders and jobs with no planning row.
- */
-export function jobMetrics(
-  plan: PlanningOrder | undefined,
-  jobGood: number,
-): { orderQty: number | null; jobLeft: number | null; shiftTarget: number | null } {
-  if (!plan || plan.isDieChange) {
-    return { orderQty: null, jobLeft: null, shiftTarget: null };
-  }
-  const orderQty = plan.orderQty;
-  const jobLeft = Math.max(0, plan.jobRequired - jobGood);
-  let shiftTarget: number | null = null;
-  const ct = plan.qtyPerHr; // hours per piece
-  if (ct && ct > 0) {
-    shiftTarget = jobLeft * ct >= 8 ? Math.floor(8 / ct) : jobLeft;
-  }
-  return { orderQty, jobLeft, shiftTarget };
-}
-
-/** Roll up the QC sign-offs on a tuple's slots for the management view. */
-export function qcSummary(list: ProductionRecord[]): QcSummary {
-  const slots = list
-    .filter((r) => r.qcBy)
-    .map((r) => ({ slot: r.slotIndex, role: qcRoleFor(r.slotIndex), name: r.qcBy }))
-    .sort((a, b) => a.slot - b.slot);
-  return {
-    signed: slots.length,
-    supervisorSigned: slots.filter((s) => s.role === 'supervisor').length,
-    slots,
-  };
 }
 
 /** Good across ALL (machine, shift) tuples in a flat record list — the
@@ -729,8 +692,12 @@ async function loadJobGoodTotals(jobNumbers: string[]): Promise<Map<string, numb
         const recs = await dalRef.listProduction({ jobNumber: job });
         out.set(job, goodForRecords(recs));
       } catch (e) {
+        // Deliberately leave the key absent — buildTraceRowsFor uses
+        // `has()` to detect this and falls back to the per-tuple good,
+        // which keeps Job Left conservative. Setting 0 here would
+        // render Job Left = full order quantity (see code review of
+        // commit c089da5).
         console.warn('[pmd] job good total fetch failed for', job, e);
-        out.set(job, 0);
       }
     }),
   );
