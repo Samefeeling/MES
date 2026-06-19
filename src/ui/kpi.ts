@@ -328,24 +328,42 @@ function firstTwoWords(s: string): string {
  *  the `rejects` JSON ({"D01":3,…}); falls back to the flat rejectCount
  *  under an "Unspecified" bucket when the JSON is absent/unparseable so
  *  no scrap silently vanishes from the Pareto. */
-function tallyRejects(r: ProductionRecord, into: Map<string, number>): void {
-  // Mirror core/metrics.ts sumRejects so the Pareto total always equals
-  // the Reject number shown: only fall back to the flat rejectCount when
-  // the per-code JSON is absent / '{}' / unparseable — never when it
-  // parses (even to zeros).
-  if (r.rejects && r.rejects !== '{}') {
+/**
+ * Tally per-code reject quantities for a (machine, shift, job) tuple into
+ * a running map. Strict tuple-grouping is required because the SP read
+ * stamps the whole-shift total onto slot 0's `rejectCount` AS WELL AS
+ * distributing the per-code events to their actual slot — using slot 0's
+ * flat count alongside the per-code maps would double-count the same
+ * rejects and bucket the duplicate under "Unspecified".
+ *   - If ANY slot in the tuple has per-code `rejects` JSON populated →
+ *     sum those only.
+ *   - Else (truly unaccounted scrap — slot 0's `rejectCount` > 0 with no
+ *     per-code data anywhere) → fall back to a single "—" bucket so the
+ *     missing detail is visible rather than silently dropped.
+ */
+export function tallyTupleRejects(
+  group: ProductionRecord[],
+  into: Map<string, number>,
+): void {
+  const codes: Array<[string, number]> = [];
+  for (const r of group) {
+    if (!r.rejects || r.rejects === '{}') continue;
     try {
       const parsed = JSON.parse(r.rejects) as Record<string, number>;
       for (const [code, v] of Object.entries(parsed)) {
         const q = Number(v) || 0;
-        if (q > 0) into.set(code, (into.get(code) ?? 0) + q);
+        if (q > 0) codes.push([code, q]);
       }
-      return;
     } catch {
-      /* fall through to rejectCount */
+      /* unparseable — skip */
     }
   }
-  const flat = Number(r.rejectCount) || 0;
+  if (codes.length > 0) {
+    for (const [code, q] of codes) into.set(code, (into.get(code) ?? 0) + q);
+    return;
+  }
+  const canonical = group.find((r) => r.slotIndex === 0) ?? group[0];
+  const flat = Number(canonical?.rejectCount) || 0;
   if (flat > 0) into.set('—', (into.get('—') ?? 0) + flat);
 }
 
@@ -556,12 +574,21 @@ async function compute(now = new Date()): Promise<void> {
     .sort((a, b2) => b2.agg.output - a.agg.output);
 
   // Reject quantity per defect code — floor-wide and per machine — for
-  // the Pareto chart and the click-to-drill breakdown.
+  // the Pareto chart and the click-to-drill breakdown. Strict per (job,
+  // shift) tuple grouping: see tallyTupleRejects for why slot 0's flat
+  // rejectCount must NOT be summed alongside per-slot per-code maps.
   const floorCodes = new Map<string, number>();
   const byMachineCodes = new Map<string, RejectCode[]>();
   S!.machines.forEach((m, i) => {
     const perCode = new Map<string, number>();
-    for (const r of perMachineProd[i]) tallyRejects(r, perCode);
+    const tuples = new Map<string, ProductionRecord[]>();
+    for (const r of perMachineProd[i]) {
+      const k = `${r.jobNumber}|${r.shiftId}`;
+      const arr = tuples.get(k) ?? [];
+      arr.push(r);
+      tuples.set(k, arr);
+    }
+    for (const group of tuples.values()) tallyTupleRejects(group, perCode);
     for (const [code, qty] of perCode) {
       floorCodes.set(code, (floorCodes.get(code) ?? 0) + qty);
     }
