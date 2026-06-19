@@ -2,6 +2,8 @@ import type {
   BdCode,
   Machine,
   Operator,
+  ParetoFilter,
+  ParetoSlice,
   PlanningFilter,
   PlanningOrder,
   ProductDieColor,
@@ -28,6 +30,18 @@ export interface PmdDataLayer {
 
   // Planning (read-only — the Epicor → Planning.csv pipeline owns writes)
   listPlanning(filter: PlanningFilter): Promise<PlanningOrder[]>;
+
+  /** Reject quantity per defect code over a date range, for the KPI
+   *  Reject Pareto. SharePoint reads PMD_Rejects directly (RejectCode +
+   *  RejectCategory + RejectNumber); the memory backend derives it from
+   *  its records. Each slice's `label` is the RejectCategory. Sorted
+   *  value-descending. Optional — KPI hides the chart when absent. */
+  listRejectPareto?(filter: ParetoFilter): Promise<ParetoSlice[]>;
+  /** Breakdown downtime hours per BDCode over a date range, for the KPI
+   *  Downtime Pareto. SharePoint reads PMD_BreakDownlog (BDCode +
+   *  B_BreakDown hours); `label` is the breakdown cause. Sorted
+   *  value-descending. Optional — KPI hides the chart when absent. */
+  listDowntimePareto?(filter: ParetoFilter): Promise<ParetoSlice[]>;
 
   // Production (hot path)
   listProduction(filter: ProductionFilter): Promise<ProductionRecord[]>;

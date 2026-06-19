@@ -147,3 +147,20 @@ export interface ProductionFilter {
   shiftIdTo?: string;
   jobNumber?: string;
 }
+
+/** Date-range (+ optional machine) filter for the management Pareto
+ *  aggregations. Dates are inclusive calendar days, YYYY-MM-DD. */
+export interface ParetoFilter {
+  from: string;
+  to: string;
+  machineCode?: string;
+}
+
+/** One bar of a Pareto chart: a code, a human label for the legend, and
+ *  the quantity/hours it accounts for. Reject Pareto → RejectCode +
+ *  RejectCategory; Downtime Pareto → BDCode + breakdown cause. */
+export interface ParetoSlice {
+  code: string;
+  label: string;
+  value: number;
+}

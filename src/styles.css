@@ -467,8 +467,10 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 /* Reject number → click to drill into the per-defect-code Pareto. Looks
    like the red number it replaces but underlined-on-hover to signal it's
    actionable. */
-.kpi-reject-drill{background:none;border:none;padding:0;font:inherit;color:var(--rd);font-weight:800;cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px}
-.kpi-reject-drill:hover{text-decoration:underline solid}
+.kpi-reject-drill,.kpi-downtime-drill{background:none;border:none;padding:0;font:inherit;font-weight:800;cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px}
+.kpi-reject-drill{color:var(--rd)}
+.kpi-downtime-drill{color:var(--theme-dark)}
+.kpi-reject-drill:hover,.kpi-downtime-drill:hover{text-decoration:underline solid}
 /* Pareto legend: code → defect label × qty, under the floor chart. */
 .kpi-reject-legend{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12px;color:var(--tx)}
 .kpi-reject-legend li{white-space:nowrap}

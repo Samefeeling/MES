@@ -2,6 +2,8 @@ import type {
   BdCode,
   Machine,
   Operator,
+  ParetoFilter,
+  ParetoSlice,
   PlanningFilter,
   PlanningOrder,
   ProductionFilter,
@@ -11,6 +13,7 @@ import type {
   UserContext,
 } from '../types';
 import type { PmdDataLayer } from './types';
+import { bdLabelFor } from '../core/breakdown';
 import {
   seedBdCodes,
   seedMachines,
@@ -94,6 +97,48 @@ export class MemoryDataLayer implements PmdDataLayer {
     if (filter.shiftIdFrom) rows = rows.filter((r) => r.shiftId >= filter.shiftIdFrom!);
     if (filter.shiftIdTo) rows = rows.filter((r) => r.shiftId <= filter.shiftIdTo!);
     return MemoryDataLayer.clone(rows);
+  }
+
+  /** Reject Pareto derived from the in-memory records' per-code reject
+   *  maps — the mock stand-in for PMD_Rejects. Label resolves from the
+   *  seeded RejectCategories (code → description). */
+  async listRejectPareto(filter: ParetoFilter): Promise<ParetoSlice[]> {
+    const labelByCode = new Map(this.rejectCategories.map((c) => [c.code, c.label]));
+    const qty = new Map<string, number>();
+    for (const r of this.inWindow(filter)) {
+      let obj: Record<string, number> = {};
+      try {
+        obj = r.rejects ? (JSON.parse(r.rejects) as Record<string, number>) : {};
+      } catch {
+        obj = {};
+      }
+      for (const [code, v] of Object.entries(obj)) {
+        const n = Number(v) || 0;
+        if (n > 0) qty.set(code, (qty.get(code) ?? 0) + n);
+      }
+    }
+    return paretoSlices(qty, (code) => labelByCode.get(code) ?? code);
+  }
+
+  /** Downtime Pareto derived from B-status slots' bdIssue — the mock
+   *  stand-in for PMD_BreakDownlog (BDCode + breakdown hours). Each B
+   *  slot is 0.5 h. */
+  async listDowntimePareto(filter: ParetoFilter): Promise<ParetoSlice[]> {
+    const hrs = new Map<string, number>();
+    for (const r of this.inWindow(filter)) {
+      if (r.statusCode !== 'B' || !r.bdIssue) continue;
+      hrs.set(r.bdIssue, (hrs.get(r.bdIssue) ?? 0) + 0.5);
+    }
+    return paretoSlices(hrs, (code) => bdLabelFor(code) || code);
+  }
+
+  /** Records inside a Pareto date window (+ optional machine). */
+  private inWindow(filter: ParetoFilter): ProductionRecord[] {
+    return this.production.filter((r) => {
+      if (filter.machineCode && r.machineCode !== filter.machineCode) return false;
+      const day = r.shiftId.slice(0, 10);
+      return day >= filter.from && day <= filter.to;
+    });
   }
 
   // Last-write-wins (§5.6): match on composite key, no version check.
@@ -213,4 +258,14 @@ export class MemoryDataLayer implements PmdDataLayer {
     // Mock identity. Real backends resolve this from the host platform (§2.4).
     return { name: 'Christopher King', role: 'supervisor' };
   }
+}
+
+/** Value-descending ParetoSlice[] from a code→value tally. */
+function paretoSlices(
+  tally: Map<string, number>,
+  labelFor: (code: string) => string,
+): ParetoSlice[] {
+  return Array.from(tally.entries())
+    .map(([code, value]) => ({ code, label: labelFor(code), value: +value.toFixed(2) }))
+    .sort((a, b) => b.value - a.value);
 }

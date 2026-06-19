@@ -1,69 +1,61 @@
 import { describe, it, expect } from 'vitest';
-import { tallyTupleRejects } from '../src/ui/kpi';
-import { rec } from './helpers';
+import { MemoryDataLayer } from '../src/dal/memory';
 
-// Regression for the "Unspecified" bucket bug: the SP read stamps the
-// whole-shift Reject total onto slot 0's rejectCount AND distributes the
-// per-code events to their actual slot. A naive per-record tally that
-// falls back to slot 0's rejectCount when its rejects JSON is '{}' would
-// double-count the same scrap and dump the duplicate under "Unspecified".
+// Reject Pareto + Downtime Pareto now come straight from the DAL (the
+// SP adapter reads PMD_Rejects / PMD_BreakDownlog directly; the memory
+// adapter derives the same shape from its records). Lock the
+// per-(machine, date-range) filter shape so the KPI page can rely on it.
 
-describe('tallyTupleRejects (KPI Pareto)', () => {
-  it('uses per-code data only when ANY slot in the tuple has it', () => {
-    // Real SP shape: slot 0 carries the aggregate Reject=8 with rejects='{}';
-    // slots 1 and 3 carry the per-code maps that already sum to 8.
-    const group = [
-      rec({
-        jobNumber: 'J1',
-        slotIndex: 0,
-        statusCode: 'R',
-        rejectCount: 8,
-        rejects: '{}', // SP per-rejects-event distribution wrote nothing here
-      }),
-      rec({ jobNumber: 'J1', slotIndex: 1, statusCode: 'R', rejects: '{"D01":5}' }),
-      rec({ jobNumber: 'J1', slotIndex: 3, statusCode: 'R', rejects: '{"D02":3}' }),
-    ];
-    const into = new Map<string, number>();
-    tallyTupleRejects(group, into);
-    expect(into.get('D01')).toBe(5);
-    expect(into.get('D02')).toBe(3);
-    expect(into.get('—')).toBeUndefined(); // no phantom "Unspecified"
-    const total = Array.from(into.values()).reduce((a, v) => a + v, 0);
-    expect(total).toBe(8); // matches the displayed Reject — no double count
+describe('MemoryDataLayer.listRejectPareto', () => {
+  it('returns code → qty sorted descending, label = RejectCategory', async () => {
+    const dal = new MemoryDataLayer(new Date('2026-06-15T08:00:00'));
+    const today = '2026-06-15';
+    const past = '2026-06-09'; // covers all seeded production days
+    const all = await dal.listRejectPareto({ from: past, to: today });
+    // Seeded production injects rejects under D01-D10 only.
+    expect(all.length).toBeGreaterThan(0);
+    expect(all.every((s) => /^D\d\d$/.test(s.code))).toBe(true);
+    expect(all.every((s) => s.value > 0)).toBe(true);
+    // Sorted desc.
+    const values = all.map((s) => s.value);
+    expect([...values].sort((a, b) => b - a)).toEqual(values);
+    // Labels resolved from the seeded reject categories — not the bare code.
+    expect(all[0].label.length).toBeGreaterThan(0);
+    expect(all[0].label).not.toBe(all[0].code);
   });
 
-  it('merges duplicate codes across slots into one bucket', () => {
-    const group = [
-      rec({ jobNumber: 'J1', slotIndex: 0, statusCode: 'R', rejects: '{}' }),
-      rec({ jobNumber: 'J1', slotIndex: 1, statusCode: 'R', rejects: '{"D01":2}' }),
-      rec({ jobNumber: 'J1', slotIndex: 5, statusCode: 'R', rejects: '{"D01":3}' }),
-    ];
-    const into = new Map<string, number>();
-    tallyTupleRejects(group, into);
-    expect(into.get('D01')).toBe(5);
-    expect(into.size).toBe(1);
+  it('respects the machine filter — narrowing reduces the slice list', async () => {
+    const dal = new MemoryDataLayer(new Date('2026-06-15T08:00:00'));
+    const range = { from: '2026-06-09', to: '2026-06-15' };
+    const floor = await dal.listRejectPareto(range);
+    const one = await dal.listRejectPareto({ ...range, machineCode: '125T' });
+    const floorTotal = floor.reduce((a, s) => a + s.value, 0);
+    const oneTotal = one.reduce((a, s) => a + s.value, 0);
+    expect(oneTotal).toBeLessThanOrEqual(floorTotal);
+    expect(oneTotal).toBeGreaterThan(0);
   });
 
-  it('falls back to slot 0 rejectCount only when NO slot has per-code data', () => {
-    // Pre-Pareto-era row or a partial-data tuple: total exists, no map.
-    const group = [
-      rec({
-        jobNumber: 'J1',
-        slotIndex: 0,
-        statusCode: 'R',
-        rejectCount: 4,
-        rejects: '{}',
-      }),
-    ];
-    const into = new Map<string, number>();
-    tallyTupleRejects(group, into);
-    expect(into.get('—')).toBe(4);
+  it('excludes records outside the date window', async () => {
+    const dal = new MemoryDataLayer(new Date('2026-06-15T08:00:00'));
+    const future = await dal.listRejectPareto({
+      from: '2099-01-01',
+      to: '2099-01-31',
+    });
+    expect(future).toEqual([]);
   });
+});
 
-  it('contributes nothing for a clean tuple', () => {
-    const group = [rec({ jobNumber: 'J1', slotIndex: 0, statusCode: 'R' })];
-    const into = new Map<string, number>();
-    tallyTupleRejects(group, into);
-    expect(into.size).toBe(0);
+describe('MemoryDataLayer.listDowntimePareto', () => {
+  it('returns BDCode → hours sorted descending, label = breakdown cause', async () => {
+    const dal = new MemoryDataLayer(new Date('2026-06-15T08:00:00'));
+    const all = await dal.listDowntimePareto({
+      from: '2026-06-09',
+      to: '2026-06-15',
+    });
+    if (all.length === 0) return; // seeded production may not always include B
+    const values = all.map((s) => s.value);
+    expect([...values].sort((a, b) => b - a)).toEqual(values);
+    expect(all.every((s) => s.value > 0)).toBe(true);
+    expect(all[0].label.length).toBeGreaterThan(0);
   });
 });

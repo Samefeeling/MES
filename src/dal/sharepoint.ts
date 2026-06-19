@@ -2,6 +2,8 @@ import type {
   BdCode,
   Machine,
   Operator,
+  ParetoFilter,
+  ParetoSlice,
   PlanningFilter,
   PlanningOrder,
   ProductDieColor,
@@ -652,6 +654,87 @@ export class SharePointDataLayer implements PmdDataLayer {
       );
     }
     return parsePlanningCsv(await res.text());
+  }
+
+  // ---- management Pareto aggregations --------------------------------
+
+  /**
+   * Reject Pareto straight from PMD_Rejects — no production-record JSON
+   * round-trip. Groups RejectNumber by RejectCode; each slice's label is
+   * the RejectCategory carried on the rows (the dominant one when a code
+   * spans categories). Server-side lower-bounds the DateTime so the fetch
+   * stays small, then filters the exact [from, to] day window client-side.
+   */
+  async listRejectPareto(filter: ParetoFilter): Promise<ParetoSlice[]> {
+    const F = this.F.rejects;
+    const parts: string[] = [this.dateLowerBound(F.date, filter.from)];
+    if (filter.machineCode) parts.push(`${F.machine} eq '${filter.machineCode}'`);
+    const qs = '$filter=' + encodeURIComponent(parts.join(' and '));
+    let rows: Record<string, unknown>[] = [];
+    try {
+      rows = await this.getAllItems(LISTS.rejects, qs);
+    } catch (e) {
+      console.warn('[pmd] listRejectPareto: PMD_Rejects read failed', e);
+      return [];
+    }
+    const qty = new Map<string, number>();
+    const catTally = new Map<string, Map<string, number>>();
+    for (const r of rows) {
+      const day = dateOnly(r[F.date]);
+      if (day < filter.from || day > filter.to) continue;
+      const code = str(r[F.rejectCode]).trim();
+      if (!code) continue;
+      const n = num(r[F.rejectNumber]);
+      if (n <= 0) continue;
+      qty.set(code, (qty.get(code) ?? 0) + n);
+      const cat = str(r[F.rejectCategory]).trim();
+      if (cat) {
+        const m = catTally.get(code) ?? new Map<string, number>();
+        m.set(cat, (m.get(cat) ?? 0) + n);
+        catTally.set(code, m);
+      }
+    }
+    return paretoFrom(qty, (code) => dominantKey(catTally.get(code)) || code);
+  }
+
+  /**
+   * Downtime Pareto from PMD_BreakDownlog — sums the B_BreakDown hours per
+   * BDCode (the clearest single attribution the log carries). Label is the
+   * breakdown cause from the taxonomy. Rows with a blank BDCode or zero
+   * breakdown hours contribute nothing.
+   */
+  async listDowntimePareto(filter: ParetoFilter): Promise<ParetoSlice[]> {
+    const F = this.F.breakdown;
+    const parts: string[] = [this.dateLowerBound(F.date, filter.from)];
+    if (filter.machineCode) parts.push(`${F.machine} eq '${filter.machineCode}'`);
+    const qs = '$filter=' + encodeURIComponent(parts.join(' and '));
+    let rows: Record<string, unknown>[] = [];
+    try {
+      rows = await this.getAllItems(LISTS.breakdown, qs);
+    } catch (e) {
+      console.warn('[pmd] listDowntimePareto: PMD_BreakDownlog read failed', e);
+      return [];
+    }
+    const hrs = new Map<string, number>();
+    for (const r of rows) {
+      const day = dateOnly(r[F.date]);
+      if (day < filter.from || day > filter.to) continue;
+      const code = str(r[F.bdCode]).trim();
+      if (!code) continue;
+      const h = num(r[F.b]);
+      if (h <= 0) continue;
+      hrs.set(code, (hrs.get(code) ?? 0) + h);
+    }
+    return paretoFrom(hrs, (code) => bdLabelFor(code) || code);
+  }
+
+  /** Lower-bound clause on a DateTime column, one calendar day before
+   *  `fromDate` to cushion the noon-UTC marker / legacy local-start rows.
+   *  The exact day window is then enforced client-side via dateOnly. */
+  private dateLowerBound(field: string, fromDate: string): string {
+    const d = new Date(`${fromDate}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - 1);
+    return `${field} ge datetime'${d.toISOString()}'`;
   }
 
   // ---- production (header / events) ----------------------------------
@@ -1851,6 +1934,31 @@ function mergeFieldMap(base: SharePointFieldMap, override?: PartialFieldMap): Sh
     (out[k] as Record<string, string>) = merged;
   }
   return out;
+}
+
+/** Build a value-descending ParetoSlice[] from a code→value tally. */
+function paretoFrom(
+  tally: Map<string, number>,
+  labelFor: (code: string) => string,
+): ParetoSlice[] {
+  return Array.from(tally.entries())
+    .map(([code, value]) => ({ code, label: labelFor(code), value: +value.toFixed(2) }))
+    .sort((a, b) => b.value - a.value);
+}
+
+/** The key with the largest tallied value (e.g. dominant RejectCategory
+ *  for a code), or '' when the map is empty. */
+function dominantKey(m: Map<string, number> | undefined): string {
+  if (!m) return '';
+  let best = '';
+  let bestN = -1;
+  for (const [k, n] of m) {
+    if (n > bestN) {
+      bestN = n;
+      best = k;
+    }
+  }
+  return best;
 }
 
 function getId(r: Record<string, unknown>): number {

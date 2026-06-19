@@ -1,5 +1,11 @@
 import type { PmdDataLayer } from '../dal';
-import type { Machine, PlanningOrder, ProductionRecord, ShiftCode } from '../types';
+import type {
+  Machine,
+  ParetoSlice,
+  PlanningOrder,
+  ProductionRecord,
+  ShiftCode,
+} from '../types';
 import { aggregate, type Kpi } from '../core/metrics';
 import { currentShift, dateKey, parseShiftId, previousShift, SHIFTS } from '../core/shifts';
 import { closeModal, escapeHtml, openModal } from './modal';
@@ -9,13 +15,6 @@ import {
   renderParetoChart,
 } from './charts';
 import { parseHandover } from '../core/handover';
-
-/** One defect code's contribution to scrap, for the Reject Pareto. */
-interface RejectCode {
-  code: string;
-  label: string;
-  qty: number;
-}
 
 // Management KPI view (`#/kpi`) for daily / weekly / monthly meetings.
 // Per-machine OEE, output, reject, run/down/setup hours, plus a per-shift
@@ -176,10 +175,13 @@ interface KpiState {
    *  "Battens"), rendered as subtotal rows above the grand TOTAL.
    *  Parts without a category land in "Other". */
   catTotals: Array<{ category: string; agg: ShiftAgg }>;
-  /** Reject quantity per defect code, for the Pareto chart + the
-   *  click-to-drill breakdown. `floor` is every machine summed; `byMachine`
-   *  keys on machineCode. Each list is sorted qty-descending. */
-  rejectByCode: { floor: RejectCode[]; byMachine: Map<string, RejectCode[]> };
+  /** Reject quantity per RejectCode, sliced floor-wide and per machine.
+   *  Sourced from PMD_Rejects directly (label = RejectCategory). Sorted
+   *  value-descending. Empty when the DAL can't supply the data. */
+  rejectPareto: { floor: ParetoSlice[]; byMachine: Map<string, ParetoSlice[]> };
+  /** Breakdown downtime hours per BDCode, sliced the same way. Sourced
+   *  from PMD_BreakDownlog (label = breakdown cause from the taxonomy). */
+  downtimePareto: { floor: ParetoSlice[]; byMachine: Map<string, ParetoSlice[]> };
 }
 
 interface ChartBucket {
@@ -328,59 +330,6 @@ function firstTwoWords(s: string): string {
  *  the `rejects` JSON ({"D01":3,…}); falls back to the flat rejectCount
  *  under an "Unspecified" bucket when the JSON is absent/unparseable so
  *  no scrap silently vanishes from the Pareto. */
-/**
- * Tally per-code reject quantities for a (machine, shift, job) tuple into
- * a running map. Strict tuple-grouping is required because the SP read
- * stamps the whole-shift total onto slot 0's `rejectCount` AS WELL AS
- * distributing the per-code events to their actual slot — using slot 0's
- * flat count alongside the per-code maps would double-count the same
- * rejects and bucket the duplicate under "Unspecified".
- *   - If ANY slot in the tuple has per-code `rejects` JSON populated →
- *     sum those only.
- *   - Else (truly unaccounted scrap — slot 0's `rejectCount` > 0 with no
- *     per-code data anywhere) → fall back to a single "—" bucket so the
- *     missing detail is visible rather than silently dropped.
- */
-export function tallyTupleRejects(
-  group: ProductionRecord[],
-  into: Map<string, number>,
-): void {
-  const codes: Array<[string, number]> = [];
-  for (const r of group) {
-    if (!r.rejects || r.rejects === '{}') continue;
-    try {
-      const parsed = JSON.parse(r.rejects) as Record<string, number>;
-      for (const [code, v] of Object.entries(parsed)) {
-        const q = Number(v) || 0;
-        if (q > 0) codes.push([code, q]);
-      }
-    } catch {
-      /* unparseable — skip */
-    }
-  }
-  if (codes.length > 0) {
-    for (const [code, q] of codes) into.set(code, (into.get(code) ?? 0) + q);
-    return;
-  }
-  const canonical = group.find((r) => r.slotIndex === 0) ?? group[0];
-  const flat = Number(canonical?.rejectCount) || 0;
-  if (flat > 0) into.set('—', (into.get('—') ?? 0) + flat);
-}
-
-/** Turn a code→qty tally into a label-resolved, qty-descending list. */
-function codeListFrom(
-  tally: Map<string, number>,
-  labelByCode: Map<string, string>,
-): RejectCode[] {
-  return Array.from(tally.entries())
-    .map(([code, qty]) => ({
-      code,
-      label: code === '—' ? 'Unspecified' : labelByCode.get(code) ?? code,
-      qty,
-    }))
-    .sort((a, b) => b.qty - a.qty);
-}
-
 async function compute(now = new Date()): Promise<void> {
   const { from, to, shiftIds } = periodRange(S!.period, now);
   // listPlanning and the per-machine production reads have no
@@ -389,36 +338,66 @@ async function compute(now = new Date()): Promise<void> {
   // page: a single 1600T fetch failure used to take down the entire KPI
   // table (Promise.all rejects on the first failure); now each machine
   // that errors just shows up as zeros and the rest still render.
-  const [planning, perMachineProd, dieColorList, rejectCats] = await Promise.all([
-    dalRef.listPlanning({}).catch((err) => {
-      console.error('[kpi] listPlanning failed:', err);
-      return [] as PlanningOrder[];
-    }),
-    Promise.all(
-      S!.machines.map((m) =>
-        dalRef
-          .listProduction({ machineCode: m.machineCode })
-          // KPIs are a management view of *finished* shift work: only
-          // signed-off rows count. Excluding unsigned PMD_LiveStatus
-          // rows keeps in-progress (and frequently mis-typed) jobs
-          // out of the OEE / output / reject totals until the
-          // supervisor has reviewed and signed them off.
-          .then((p) => p.filter((r) => r.locked && inRange(r, from, to, shiftIds)))
-          .catch((err) => {
-            console.error(`[kpi] listProduction(${m.machineCode}) failed:`, err);
-            return [] as ProductionRecord[];
-          }),
+  // Reject / Downtime Pareto come straight from PMD_Rejects /
+  // PMD_BreakDownlog — one round-trip each, the SP source-of-truth,
+  // and no per-record JSON aggregation in the UI. Filter by the same
+  // calendar window the table uses so the Pareto totals match what the
+  // table's Reject / Down-hour columns show. Floor + per-machine in
+  // parallel; per-machine failures contribute an empty list rather
+  // than dropping the floor chart.
+  const fromKey = dateKey(from);
+  const toKey = dateKey(to);
+  const paretoMachines = ['', ...S!.machines.map((m) => m.machineCode)];
+  const [planning, perMachineProd, dieColorList, rejectParetoBy, downtimeParetoBy] =
+    await Promise.all([
+      dalRef.listPlanning({}).catch((err) => {
+        console.error('[kpi] listPlanning failed:', err);
+        return [] as PlanningOrder[];
+      }),
+      Promise.all(
+        S!.machines.map((m) =>
+          dalRef
+            .listProduction({ machineCode: m.machineCode })
+            // KPIs are a management view of *finished* shift work: only
+            // signed-off rows count. Excluding unsigned PMD_LiveStatus
+            // rows keeps in-progress (and frequently mis-typed) jobs
+            // out of the OEE / output / reject totals until the
+            // supervisor has reviewed and signed them off.
+            .then((p) => p.filter((r) => r.locked && inRange(r, from, to, shiftIds)))
+            .catch((err) => {
+              console.error(`[kpi] listProduction(${m.machineCode}) failed:`, err);
+              return [] as ProductionRecord[];
+            }),
+        ),
       ),
-    ),
-    dalRef.listProductDieColors
-      ? dalRef.listProductDieColors().catch(() => [])
-      : Promise.resolve([]),
-    dalRef.listRejectCategories().catch((err) => {
-      console.error('[kpi] listRejectCategories failed:', err);
-      return [];
-    }),
-  ]);
-  const rejectLabelByCode = new Map(rejectCats.map((c) => [c.code, c.label]));
+      dalRef.listProductDieColors
+        ? dalRef.listProductDieColors().catch(() => [])
+        : Promise.resolve([]),
+      Promise.all(
+        paretoMachines.map((mc) =>
+          dalRef.listRejectPareto
+            ? dalRef
+                .listRejectPareto({ from: fromKey, to: toKey, machineCode: mc || undefined })
+                .catch((err) => {
+                  console.warn('[kpi] listRejectPareto failed for', mc || 'floor', err);
+                  return [] as ParetoSlice[];
+                })
+            : Promise.resolve([] as ParetoSlice[]),
+        ),
+      ),
+      Promise.all(
+        paretoMachines.map((mc) =>
+          dalRef.listDowntimePareto
+            ? dalRef
+                .listDowntimePareto({ from: fromKey, to: toKey, machineCode: mc || undefined })
+                .catch((err) => {
+                  console.warn('[kpi] listDowntimePareto failed for', mc || 'floor', err);
+                  return [] as ParetoSlice[];
+                })
+            : Promise.resolve([] as ParetoSlice[]),
+        ),
+      ),
+    ]);
   const dieColors = new Map(
     dieColorList.map((c) => [
       c.partNumber.trim().toUpperCase(),
@@ -573,30 +552,19 @@ async function compute(now = new Date()): Promise<void> {
     .map(([category, recs]) => ({ category, agg: toAgg(aggregate(recs), recs) }))
     .sort((a, b2) => b2.agg.output - a.agg.output);
 
-  // Reject quantity per defect code — floor-wide and per machine — for
-  // the Pareto chart and the click-to-drill breakdown. Strict per (job,
-  // shift) tuple grouping: see tallyTupleRejects for why slot 0's flat
-  // rejectCount must NOT be summed alongside per-slot per-code maps.
-  const floorCodes = new Map<string, number>();
-  const byMachineCodes = new Map<string, RejectCode[]>();
+  // paretoMachines = ['', ...machineCodes] above; index 0 is the floor,
+  // indices 1..N are the per-machine slices. The drill-down keys on the
+  // machine code (or 'FLOOR') to look up the right slice.
+  const rejectByMachine = new Map<string, ParetoSlice[]>();
+  const downtimeByMachine = new Map<string, ParetoSlice[]>();
   S!.machines.forEach((m, i) => {
-    const perCode = new Map<string, number>();
-    const tuples = new Map<string, ProductionRecord[]>();
-    for (const r of perMachineProd[i]) {
-      const k = `${r.jobNumber}|${r.shiftId}`;
-      const arr = tuples.get(k) ?? [];
-      arr.push(r);
-      tuples.set(k, arr);
-    }
-    for (const group of tuples.values()) tallyTupleRejects(group, perCode);
-    for (const [code, qty] of perCode) {
-      floorCodes.set(code, (floorCodes.get(code) ?? 0) + qty);
-    }
-    byMachineCodes.set(m.machineCode, codeListFrom(perCode, rejectLabelByCode));
+    rejectByMachine.set(m.machineCode, rejectParetoBy[i + 1] ?? []);
+    downtimeByMachine.set(m.machineCode, downtimeParetoBy[i + 1] ?? []);
   });
-  S!.rejectByCode = {
-    floor: codeListFrom(floorCodes, rejectLabelByCode),
-    byMachine: byMachineCodes,
+  S!.rejectPareto = { floor: rejectParetoBy[0] ?? [], byMachine: rejectByMachine };
+  S!.downtimePareto = {
+    floor: downtimeParetoBy[0] ?? [],
+    byMachine: downtimeByMachine,
   };
 
   S!.chartBuckets = Array.from(charts.entries())
@@ -654,8 +622,8 @@ function colorCell(c?: ColorTag): string {
   )}</span></td>`;
 }
 
-/** When `rejectDrillKey` is given (machine code, or 'FLOOR') and the row
- *  has scrap, the Reject number becomes a button that opens the per-code
+/** When `drillKey` is given (machine code, or 'FLOOR') and the row has
+ *  scrap, the Reject number becomes a button that opens the per-code
  *  Pareto drill-down. Sub-rows (shift / job / category) pass nothing and
  *  render a plain number. */
 function rejectCell(reject: number, drillKey?: string): string {
@@ -663,7 +631,17 @@ function rejectCell(reject: number, drillKey?: string): string {
   if (!drillKey || !reject) return `<td class="num r">${n}</td>`;
   return `<td class="num r"><button type="button" class="kpi-reject-drill" data-reject-drill="${escapeHtml(
     drillKey,
-  )}" title="Break down ${reject} rejects by defect code (Pareto)">${n}</button></td>`;
+  )}" title="Break down ${reject} rejects by RejectCode (Pareto)">${n}</button></td>`;
+}
+
+/** Same idea for Down hours: clickable on the machine head + floor TOTAL,
+ *  opens the BDCode breakdown for that scope. Sub-rows stay plain. */
+function downHrsCell(downHrs: number, drillKey?: string): string {
+  const v = downHrs ? downHrs.toFixed(1) : '—';
+  if (!drillKey || !downHrs) return `<td class="num">${v}</td>`;
+  return `<td class="num"><button type="button" class="kpi-downtime-drill" data-downtime-drill="${escapeHtml(
+    drillKey,
+  )}" title="Break down ${downHrs.toFixed(1)} h of breakdown by BDCode (Pareto)">${v}</button></td>`;
 }
 
 function aggCells(
@@ -671,6 +649,7 @@ function aggCells(
   includeSched: number | null = null,
   oeeAndSched = true,
   rejectDrillKey?: string,
+  downtimeDrillKey?: string,
 ): string {
   const yc = colourClass(a.yieldPct, 98, 95);
   const oc = colourClass(a.oee, 85, 70);
@@ -690,7 +669,7 @@ function aggCells(
     ${rejectCell(a.reject, rejectDrillKey)}
     <td class="num ${noPieces ? '' : yc}">${noPieces ? '—' : `${a.yieldPct}%`}</td>
     <td class="num">${h(a.runHrs)}</td>
-    <td class="num">${h(a.downHrs)}</td>
+    ${downHrsCell(a.downHrs, downtimeDrillKey)}
     <td class="num">${h(a.dieHrs)}</td>
     <td class="num">${h(a.colorHrs)}</td>
     <td class="num">${h(a.insertHrs)}</td>
@@ -775,7 +754,7 @@ function render(): void {
         const headRow = `<tr class="kpi-machine">
           <th>${toggle}${ordersToggle}<span class="kpi-mc-name">${escapeHtml(r.machineCode)}</span></th>
           ${colorCell()}
-          ${aggCells(r.total, r.schedAdh, true, r.machineCode)}
+          ${aggCells(r.total, r.schedAdh, true, r.machineCode, r.machineCode)}
         </tr>`;
         const orderRows = ordersOpen
           ? r.byJobTotal
@@ -865,10 +844,24 @@ function render(): void {
     const oee = logged > 0 ? Math.round((run / logged) * 100) : null;
     return { label: b.label, run, down, setup, oee };
   });
-  const paretoData = S!.rejectByCode.floor.map((c) => ({
-    label: c.code,
-    value: c.qty,
-  }));
+  // Reject Pareto from PMD_Rejects (RejectCode bars + RejectCategory
+  // legend); Downtime Pareto from PMD_BreakDownlog (BDCode bars + cause
+  // legend). Side by side in the chart strip; either one independently
+  // hides when its source list returns nothing.
+  const rejectChart = S!.rejectPareto.floor.length
+    ? `<div class="kpi-chart">
+          <h4>Reject Pareto — RejectCode (click a Reject number in the table to drill)</h4>
+          ${renderParetoChart(toParetoBuckets(S!.rejectPareto.floor))}
+          ${renderParetoLegend(S!.rejectPareto.floor)}
+        </div>`
+    : '';
+  const downtimeChart = S!.downtimePareto.floor.length
+    ? `<div class="kpi-chart">
+          <h4>Downtime Pareto — BDCode (click a Down h number in the table to drill)</h4>
+          ${renderParetoChart(toParetoBuckets(S!.downtimePareto.floor, 'h'))}
+          ${renderParetoLegend(S!.downtimePareto.floor, 'h')}
+        </div>`
+    : '';
   const charts = S!.loading || S!.chartBuckets.length === 0
     ? ''
     : `<div class="kpi-charts">
@@ -880,15 +873,8 @@ function render(): void {
           <h4>Run / Down / Setup hours (stacked) vs OEE</h4>
           ${renderHoursOeeChart(hoursChartData)}
         </div>
-        ${
-          paretoData.length
-            ? `<div class="kpi-chart">
-          <h4>Reject Pareto — defect codes (click a bar's code in the table, or any Reject number, to drill)</h4>
-          ${renderParetoChart(paretoData)}
-          ${renderRejectLegend(S!.rejectByCode.floor)}
-        </div>`
-            : ''
-        }
+        ${rejectChart}
+        ${downtimeChart}
       </div>`;
 
   // Headline stat tiles — the numbers a daily production meeting opens
@@ -949,7 +935,7 @@ function render(): void {
                     ${rejectCell(tot.reject, 'FLOOR')}
                     <td class="num">${totYield != null ? totYield + '%' : '—'}</td>
                     <td class="num">${th(tot.runHrs)}</td>
-                    <td class="num">${th(tot.downHrs)}</td>
+                    ${downHrsCell(tot.downHrs, 'FLOOR')}
                     <td class="num">${th(tot.dieHrs)}</td>
                     <td class="num">${th(tot.colorHrs)}</td>
                     <td class="num">${th(tot.insertHrs)}</td>
@@ -988,6 +974,9 @@ function render(): void {
   app.querySelectorAll<HTMLButtonElement>('[data-reject-drill]').forEach((b) =>
     b.addEventListener('click', () => openRejectDrill(b.dataset.rejectDrill!)),
   );
+  app.querySelectorAll<HTMLButtonElement>('[data-downtime-drill]').forEach((b) =>
+    b.addEventListener('click', () => openDowntimeDrill(b.dataset.downtimeDrill!)),
+  );
   app.querySelectorAll<HTMLButtonElement>('[data-jobs]').forEach((b) =>
     b.addEventListener('click', () => {
       const key = b.dataset.jobs!;
@@ -1023,63 +1012,107 @@ function render(): void {
   }
 }
 
-/** Compact code → "Dnn Label ×qty" legend under the Pareto chart, so the
- *  bars (labelled by short code) are readable without a tooltip. */
-function renderRejectLegend(codes: RejectCode[]): string {
-  if (codes.length === 0) return '';
-  const total = codes.reduce((a, c) => a + c.qty, 0) || 1;
-  const items = codes
+/** Compact code → "code label value(%)" legend under a Pareto chart, so
+ *  bars (labelled by short code on the x-axis) are readable without a
+ *  tooltip. `unit` is appended to the value ('' for counts, 'h' for hours). */
+function renderParetoLegend(slices: ParetoSlice[], unit = ''): string {
+  if (slices.length === 0) return '';
+  const total = slices.reduce((a, s) => a + s.value, 0) || 1;
+  const items = slices
     .map(
-      (c) =>
-        `<li><b>${escapeHtml(c.code)}</b> ${escapeHtml(c.label)} <span class="kpi-rej-qty">${
-          c.qty
-        }</span> <span class="muted">(${((c.qty / total) * 100).toFixed(0)}%)</span></li>`,
+      (s) =>
+        `<li><b>${escapeHtml(s.code)}</b> ${escapeHtml(s.label)} <span class="kpi-rej-qty">${formatValue(
+          s.value,
+          unit,
+        )}</span> <span class="muted">(${((s.value / total) * 100).toFixed(0)}%)</span></li>`,
     )
     .join('');
   return `<ul class="kpi-reject-legend">${items}</ul>`;
 }
 
-/** Drill-down: a defect-code Pareto for one scope (a machine, or the whole
- *  floor). Opens a modal with a ranked table (code, defect, qty, %, cum %)
- *  beside the Pareto chart — the "click the Reject number to see detail"
- *  view management asked for. */
-function openRejectDrill(key: string): void {
-  const codes =
-    key === 'FLOOR' ? S!.rejectByCode.floor : S!.rejectByCode.byMachine.get(key) ?? [];
-  const scopeLabel = key === 'FLOOR' ? 'All machines' : key;
-  const total = codes.reduce((a, c) => a + c.qty, 0);
+/** Shape slices for renderParetoChart: short code on the x-axis, value
+ *  unchanged. Unit is only used at render time, not in the chart input. */
+function toParetoBuckets(
+  slices: ParetoSlice[],
+  _unit = '',
+): Array<{ label: string; value: number }> {
+  return slices.map((s) => ({ label: s.code, value: s.value }));
+}
+
+function formatValue(v: number, unit: string): string {
+  if (unit === 'h') return `${v.toFixed(1)}h`;
+  return String(v);
+}
+
+/** Drill-down: a Pareto for one scope (a machine, or the whole floor).
+ *  Used by both Reject and Downtime drills — same table shape, only the
+ *  column headers and value unit change. */
+function openParetoDrill(opts: {
+  title: string;
+  unit: '' | 'h';
+  valueLabel: string;
+  source: { floor: ParetoSlice[]; byMachine: Map<string, ParetoSlice[]> };
+  scopeKey: string;
+}): void {
+  const slices =
+    opts.scopeKey === 'FLOOR'
+      ? opts.source.floor
+      : opts.source.byMachine.get(opts.scopeKey) ?? [];
+  const scopeLabel = opts.scopeKey === 'FLOOR' ? 'All machines' : opts.scopeKey;
+  const total = slices.reduce((a, s) => a + s.value, 0);
   if (total === 0) return;
   let cum = 0;
-  const rows = codes
-    .map((c, i) => {
-      cum += c.qty;
-      const pct = ((c.qty / total) * 100).toFixed(1);
+  const rows = slices
+    .map((s, i) => {
+      cum += s.value;
+      const pct = ((s.value / total) * 100).toFixed(1);
       const cumPct = ((cum / total) * 100).toFixed(1);
       return `<tr>
         <td class="num">${i + 1}</td>
-        <td><b>${escapeHtml(c.code)}</b></td>
-        <td>${escapeHtml(c.label)}</td>
-        <td class="num r">${c.qty}</td>
+        <td><b>${escapeHtml(s.code)}</b></td>
+        <td>${escapeHtml(s.label)}</td>
+        <td class="num r">${formatValue(s.value, opts.unit)}</td>
         <td class="num">${pct}%</td>
         <td class="num">${cumPct}%</td>
       </tr>`;
     })
     .join('');
-  const chart = renderParetoChart(codes.map((c) => ({ label: c.code, value: c.qty })));
+  const chart = renderParetoChart(toParetoBuckets(slices));
+  const totalDisplay = formatValue(+total.toFixed(2), opts.unit);
   const mc = openModal(`<div class="bd-modal kpi-drill-modal">
-    <h2 class="bd-title">🔬 Reject breakdown — ${escapeHtml(scopeLabel)}</h2>
-    <p class="bd-sub">${total} rejects across ${codes.length} defect code${
-      codes.length === 1 ? '' : 's'
+    <h2 class="bd-title">🔬 ${escapeHtml(opts.title)} — ${escapeHtml(scopeLabel)}</h2>
+    <p class="bd-sub">${totalDisplay} across ${slices.length} code${
+      slices.length === 1 ? '' : 's'
     } · ${escapeHtml(periodRange(S!.period, new Date()).label)}</p>
     <div class="kpi-drill-chart">${chart}</div>
     <table class="summary-table kpi-drill-table">
-      <thead><tr><th>#</th><th>Code</th><th>Defect</th><th>Qty</th><th>%</th><th>Cum %</th></tr></thead>
+      <thead><tr><th>#</th><th>Code</th><th>${escapeHtml(opts.valueLabel)}</th><th>Value</th><th>%</th><th>Cum %</th></tr></thead>
       <tbody>${rows}</tbody>
-      <tfoot><tr class="kpi-total"><th colspan="3">TOTAL</th><td class="num r">${total}</td><td class="num">100%</td><td class="num">—</td></tr></tfoot>
+      <tfoot><tr class="kpi-total"><th colspan="3">TOTAL</th><td class="num r">${totalDisplay}</td><td class="num">100%</td><td class="num">—</td></tr></tfoot>
     </table>
     <div class="bd-actions"><button class="btn-primary-big" data-drill-close>Close</button></div>
   </div>`);
   mc.querySelector('[data-drill-close]')?.addEventListener('click', closeModal);
+}
+
+function openRejectDrill(scopeKey: string): void {
+  openParetoDrill({
+    title: 'Reject breakdown',
+    unit: '',
+    valueLabel: 'Defect',
+    source: S!.rejectPareto,
+    scopeKey,
+  });
+}
+
+function openDowntimeDrill(scopeKey: string): void {
+  openParetoDrill({
+    title: 'Downtime breakdown',
+    unit: 'h',
+    valueLabel: 'Cause',
+    source: S!.downtimePareto,
+    scopeKey,
+  });
 }
 
 export async function renderKpi(dal: PmdDataLayer): Promise<void> {
@@ -1096,7 +1129,8 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     jobsExpanded: new Set(),
     ordersExpanded: new Set(),
     catTotals: [],
-    rejectByCode: { floor: [], byMachine: new Map() },
+    rejectPareto: { floor: [], byMachine: new Map() },
+    downtimePareto: { floor: [], byMachine: new Map() },
   };
   render();
   await compute();
