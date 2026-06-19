@@ -23,6 +23,10 @@ export interface Operator {
   employeeId?: string;
   active: boolean;
   linkedUser?: string;
+  /** Roster shift this person works (PMD_Operator.Shift), e.g. "Day".
+   *  Empty / undefined when untagged — such entries show on every shift
+   *  so a missing tag never hides a needed name. */
+  shift?: string;
 }
 
 // PMD_Supervisors has the same shape as PMD_Operators (§3.3).

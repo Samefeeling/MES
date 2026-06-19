@@ -2,9 +2,20 @@ import type { PmdDataLayer } from '../dal';
 import type { Machine, PlanningOrder, ProductionRecord, ShiftCode } from '../types';
 import { aggregate, type Kpi } from '../core/metrics';
 import { currentShift, dateKey, parseShiftId, previousShift, SHIFTS } from '../core/shifts';
-import { escapeHtml } from './modal';
-import { renderHoursOeeChart, renderOutputByShiftChart } from './charts';
+import { closeModal, escapeHtml, openModal } from './modal';
+import {
+  renderHoursOeeChart,
+  renderOutputByShiftChart,
+  renderParetoChart,
+} from './charts';
 import { parseHandover } from '../core/handover';
+
+/** One defect code's contribution to scrap, for the Reject Pareto. */
+interface RejectCode {
+  code: string;
+  label: string;
+  qty: number;
+}
 
 // Management KPI view (`#/kpi`) for daily / weekly / monthly meetings.
 // Per-machine OEE, output, reject, run/down/setup hours, plus a per-shift
@@ -165,6 +176,10 @@ interface KpiState {
    *  "Battens"), rendered as subtotal rows above the grand TOTAL.
    *  Parts without a category land in "Other". */
   catTotals: Array<{ category: string; agg: ShiftAgg }>;
+  /** Reject quantity per defect code, for the Pareto chart + the
+   *  click-to-drill breakdown. `floor` is every machine summed; `byMachine`
+   *  keys on machineCode. Each list is sorted qty-descending. */
+  rejectByCode: { floor: RejectCode[]; byMachine: Map<string, RejectCode[]> };
 }
 
 interface ChartBucket {
@@ -309,6 +324,45 @@ function firstTwoWords(s: string): string {
   return words.slice(0, 2).join(' ');
 }
 
+/** Add a record's per-code reject quantities into a running tally. Reads
+ *  the `rejects` JSON ({"D01":3,…}); falls back to the flat rejectCount
+ *  under an "Unspecified" bucket when the JSON is absent/unparseable so
+ *  no scrap silently vanishes from the Pareto. */
+function tallyRejects(r: ProductionRecord, into: Map<string, number>): void {
+  // Mirror core/metrics.ts sumRejects so the Pareto total always equals
+  // the Reject number shown: only fall back to the flat rejectCount when
+  // the per-code JSON is absent / '{}' / unparseable — never when it
+  // parses (even to zeros).
+  if (r.rejects && r.rejects !== '{}') {
+    try {
+      const parsed = JSON.parse(r.rejects) as Record<string, number>;
+      for (const [code, v] of Object.entries(parsed)) {
+        const q = Number(v) || 0;
+        if (q > 0) into.set(code, (into.get(code) ?? 0) + q);
+      }
+      return;
+    } catch {
+      /* fall through to rejectCount */
+    }
+  }
+  const flat = Number(r.rejectCount) || 0;
+  if (flat > 0) into.set('—', (into.get('—') ?? 0) + flat);
+}
+
+/** Turn a code→qty tally into a label-resolved, qty-descending list. */
+function codeListFrom(
+  tally: Map<string, number>,
+  labelByCode: Map<string, string>,
+): RejectCode[] {
+  return Array.from(tally.entries())
+    .map(([code, qty]) => ({
+      code,
+      label: code === '—' ? 'Unspecified' : labelByCode.get(code) ?? code,
+      qty,
+    }))
+    .sort((a, b) => b.qty - a.qty);
+}
+
 async function compute(now = new Date()): Promise<void> {
   const { from, to, shiftIds } = periodRange(S!.period, now);
   // listPlanning and the per-machine production reads have no
@@ -317,7 +371,7 @@ async function compute(now = new Date()): Promise<void> {
   // page: a single 1600T fetch failure used to take down the entire KPI
   // table (Promise.all rejects on the first failure); now each machine
   // that errors just shows up as zeros and the rest still render.
-  const [planning, perMachineProd, dieColorList] = await Promise.all([
+  const [planning, perMachineProd, dieColorList, rejectCats] = await Promise.all([
     dalRef.listPlanning({}).catch((err) => {
       console.error('[kpi] listPlanning failed:', err);
       return [] as PlanningOrder[];
@@ -341,7 +395,12 @@ async function compute(now = new Date()): Promise<void> {
     dalRef.listProductDieColors
       ? dalRef.listProductDieColors().catch(() => [])
       : Promise.resolve([]),
+    dalRef.listRejectCategories().catch((err) => {
+      console.error('[kpi] listRejectCategories failed:', err);
+      return [];
+    }),
   ]);
+  const rejectLabelByCode = new Map(rejectCats.map((c) => [c.code, c.label]));
   const dieColors = new Map(
     dieColorList.map((c) => [
       c.partNumber.trim().toUpperCase(),
@@ -496,6 +555,23 @@ async function compute(now = new Date()): Promise<void> {
     .map(([category, recs]) => ({ category, agg: toAgg(aggregate(recs), recs) }))
     .sort((a, b2) => b2.agg.output - a.agg.output);
 
+  // Reject quantity per defect code — floor-wide and per machine — for
+  // the Pareto chart and the click-to-drill breakdown.
+  const floorCodes = new Map<string, number>();
+  const byMachineCodes = new Map<string, RejectCode[]>();
+  S!.machines.forEach((m, i) => {
+    const perCode = new Map<string, number>();
+    for (const r of perMachineProd[i]) tallyRejects(r, perCode);
+    for (const [code, qty] of perCode) {
+      floorCodes.set(code, (floorCodes.get(code) ?? 0) + qty);
+    }
+    byMachineCodes.set(m.machineCode, codeListFrom(perCode, rejectLabelByCode));
+  });
+  S!.rejectByCode = {
+    floor: codeListFrom(floorCodes, rejectLabelByCode),
+    byMachine: byMachineCodes,
+  };
+
   S!.chartBuckets = Array.from(charts.entries())
     .sort(([a], [b2]) => (a < b2 ? -1 : a > b2 ? 1 : 0))
     .map(([, v]) => v);
@@ -551,7 +627,24 @@ function colorCell(c?: ColorTag): string {
   )}</span></td>`;
 }
 
-function aggCells(a: ShiftAgg, includeSched: number | null = null, oeeAndSched = true): string {
+/** When `rejectDrillKey` is given (machine code, or 'FLOOR') and the row
+ *  has scrap, the Reject number becomes a button that opens the per-code
+ *  Pareto drill-down. Sub-rows (shift / job / category) pass nothing and
+ *  render a plain number. */
+function rejectCell(reject: number, drillKey?: string): string {
+  const n = reject ? String(reject) : '—';
+  if (!drillKey || !reject) return `<td class="num r">${n}</td>`;
+  return `<td class="num r"><button type="button" class="kpi-reject-drill" data-reject-drill="${escapeHtml(
+    drillKey,
+  )}" title="Break down ${reject} rejects by defect code (Pareto)">${n}</button></td>`;
+}
+
+function aggCells(
+  a: ShiftAgg,
+  includeSched: number | null = null,
+  oeeAndSched = true,
+  rejectDrillKey?: string,
+): string {
   const yc = colourClass(a.yieldPct, 98, 95);
   const oc = colourClass(a.oee, 85, 70);
   const sc = colourClass(includeSched, 95, 80);
@@ -567,7 +660,7 @@ function aggCells(a: ShiftAgg, includeSched: number | null = null, oeeAndSched =
   const noPieces = !a.output && !a.reject;
   return `
     <td class="num">${n(a.output)}</td>
-    <td class="num r">${n(a.reject)}</td>
+    ${rejectCell(a.reject, rejectDrillKey)}
     <td class="num ${noPieces ? '' : yc}">${noPieces ? '—' : `${a.yieldPct}%`}</td>
     <td class="num">${h(a.runHrs)}</td>
     <td class="num">${h(a.downHrs)}</td>
@@ -655,7 +748,7 @@ function render(): void {
         const headRow = `<tr class="kpi-machine">
           <th>${toggle}${ordersToggle}<span class="kpi-mc-name">${escapeHtml(r.machineCode)}</span></th>
           ${colorCell()}
-          ${aggCells(r.total, r.schedAdh)}
+          ${aggCells(r.total, r.schedAdh, true, r.machineCode)}
         </tr>`;
         const orderRows = ordersOpen
           ? r.byJobTotal
@@ -745,6 +838,10 @@ function render(): void {
     const oee = logged > 0 ? Math.round((run / logged) * 100) : null;
     return { label: b.label, run, down, setup, oee };
   });
+  const paretoData = S!.rejectByCode.floor.map((c) => ({
+    label: c.code,
+    value: c.qty,
+  }));
   const charts = S!.loading || S!.chartBuckets.length === 0
     ? ''
     : `<div class="kpi-charts">
@@ -756,6 +853,15 @@ function render(): void {
           <h4>Run / Down / Setup hours (stacked) vs OEE</h4>
           ${renderHoursOeeChart(hoursChartData)}
         </div>
+        ${
+          paretoData.length
+            ? `<div class="kpi-chart">
+          <h4>Reject Pareto — defect codes (click a bar's code in the table, or any Reject number, to drill)</h4>
+          ${renderParetoChart(paretoData)}
+          ${renderRejectLegend(S!.rejectByCode.floor)}
+        </div>`
+            : ''
+        }
       </div>`;
 
   // Headline stat tiles — the numbers a daily production meeting opens
@@ -813,7 +919,7 @@ function render(): void {
                     <th>TOTAL</th>
                     ${colorCell()}
                     <td class="num">${tn(tot.output)}</td>
-                    <td class="num r">${tn(tot.reject)}</td>
+                    ${rejectCell(tot.reject, 'FLOOR')}
                     <td class="num">${totYield != null ? totYield + '%' : '—'}</td>
                     <td class="num">${th(tot.runHrs)}</td>
                     <td class="num">${th(tot.downHrs)}</td>
@@ -852,6 +958,9 @@ function render(): void {
       render();
     }),
   );
+  app.querySelectorAll<HTMLButtonElement>('[data-reject-drill]').forEach((b) =>
+    b.addEventListener('click', () => openRejectDrill(b.dataset.rejectDrill!)),
+  );
   app.querySelectorAll<HTMLButtonElement>('[data-jobs]').forEach((b) =>
     b.addEventListener('click', () => {
       const key = b.dataset.jobs!;
@@ -887,6 +996,65 @@ function render(): void {
   }
 }
 
+/** Compact code → "Dnn Label ×qty" legend under the Pareto chart, so the
+ *  bars (labelled by short code) are readable without a tooltip. */
+function renderRejectLegend(codes: RejectCode[]): string {
+  if (codes.length === 0) return '';
+  const total = codes.reduce((a, c) => a + c.qty, 0) || 1;
+  const items = codes
+    .map(
+      (c) =>
+        `<li><b>${escapeHtml(c.code)}</b> ${escapeHtml(c.label)} <span class="kpi-rej-qty">${
+          c.qty
+        }</span> <span class="muted">(${((c.qty / total) * 100).toFixed(0)}%)</span></li>`,
+    )
+    .join('');
+  return `<ul class="kpi-reject-legend">${items}</ul>`;
+}
+
+/** Drill-down: a defect-code Pareto for one scope (a machine, or the whole
+ *  floor). Opens a modal with a ranked table (code, defect, qty, %, cum %)
+ *  beside the Pareto chart — the "click the Reject number to see detail"
+ *  view management asked for. */
+function openRejectDrill(key: string): void {
+  const codes =
+    key === 'FLOOR' ? S!.rejectByCode.floor : S!.rejectByCode.byMachine.get(key) ?? [];
+  const scopeLabel = key === 'FLOOR' ? 'All machines' : key;
+  const total = codes.reduce((a, c) => a + c.qty, 0);
+  if (total === 0) return;
+  let cum = 0;
+  const rows = codes
+    .map((c, i) => {
+      cum += c.qty;
+      const pct = ((c.qty / total) * 100).toFixed(1);
+      const cumPct = ((cum / total) * 100).toFixed(1);
+      return `<tr>
+        <td class="num">${i + 1}</td>
+        <td><b>${escapeHtml(c.code)}</b></td>
+        <td>${escapeHtml(c.label)}</td>
+        <td class="num r">${c.qty}</td>
+        <td class="num">${pct}%</td>
+        <td class="num">${cumPct}%</td>
+      </tr>`;
+    })
+    .join('');
+  const chart = renderParetoChart(codes.map((c) => ({ label: c.code, value: c.qty })));
+  const mc = openModal(`<div class="bd-modal kpi-drill-modal">
+    <h2 class="bd-title">🔬 Reject breakdown — ${escapeHtml(scopeLabel)}</h2>
+    <p class="bd-sub">${total} rejects across ${codes.length} defect code${
+      codes.length === 1 ? '' : 's'
+    } · ${escapeHtml(periodRange(S!.period, new Date()).label)}</p>
+    <div class="kpi-drill-chart">${chart}</div>
+    <table class="summary-table kpi-drill-table">
+      <thead><tr><th>#</th><th>Code</th><th>Defect</th><th>Qty</th><th>%</th><th>Cum %</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr class="kpi-total"><th colspan="3">TOTAL</th><td class="num r">${total}</td><td class="num">100%</td><td class="num">—</td></tr></tfoot>
+    </table>
+    <div class="bd-actions"><button class="btn-primary-big" data-drill-close>Close</button></div>
+  </div>`);
+  mc.querySelector('[data-drill-close]')?.addEventListener('click', closeModal);
+}
+
 export async function renderKpi(dal: PmdDataLayer): Promise<void> {
   dalRef = dal;
   document.body.className = 'shift-day';
@@ -901,6 +1069,7 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     jobsExpanded: new Set(),
     ordersExpanded: new Set(),
     catTotals: [],
+    rejectByCode: { floor: [], byMachine: new Map() },
   };
   render();
   await compute();

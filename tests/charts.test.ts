@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderOutputRejectChart } from '../src/ui/charts';
+import { renderOutputRejectChart, renderParetoChart } from '../src/ui/charts';
 
 describe('output/reject bar chart', () => {
   it('renders an svg with bars for each bucket', () => {
@@ -17,6 +17,26 @@ describe('output/reject bar chart', () => {
   it('survives empty buckets and zero totals', () => {
     expect(renderOutputRejectChart([]).startsWith('<svg')).toBe(true);
     const svg = renderOutputRejectChart([{ label: 'x', good: 0, reject: 0 }]);
+    expect(svg).toMatch(/^<svg/);
+  });
+});
+
+describe('reject Pareto chart', () => {
+  it('renders sorted bars and a cumulative-% overlay reaching 100', () => {
+    const svg = renderParetoChart([
+      { label: 'D02', value: 3 },
+      { label: 'D01', value: 10 },
+      { label: 'D05', value: 2 },
+    ]);
+    expect(svg).toMatch(/^<svg/);
+    // 3 bars + the cumulative line endpoint at 100% (right-axis label).
+    expect((svg.match(/<rect /g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect(svg).toContain('100%'); // cumulative reaches 100
+    expect(svg).toContain('D01');
+  });
+
+  it('drops zero-value codes and survives an all-empty set', () => {
+    const svg = renderParetoChart([{ label: 'D01', value: 0 }]);
     expect(svg).toMatch(/^<svg/);
   });
 });

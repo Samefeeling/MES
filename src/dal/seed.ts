@@ -5,6 +5,7 @@ import type {
   PlanningOrder,
   ProductionRecord,
   RejectCategory,
+  ShiftCode,
   StatusCode,
   Supervisor,
 } from '../types';
@@ -64,21 +65,27 @@ const NONR_BIAS: Record<string, StatusCode[]> = {
   HS: ['S', 'O'],
 };
 
-const OPERATOR_NAMES = [
-  'Tin Maung',
-  'Tony Lee',
-  'Gabriel Mehana-Lee',
-  'John Taylor',
-  'Trong (Danny) Nguyen',
-  'Bounpanh Walakone',
-  'Heng Ong',
-  'Phong Xuan',
-  'Van Minh Ma',
-  'Joe Talamaivao',
-  'Edin Kulelija',
-  'Karl Stevens',
+// [name, roster shift] — 4 operators per shift so the operator sheet's
+// shift-filtered roster has a realistic list to narrow to.
+const OPERATOR_NAMES: Array<[string, ShiftCode]> = [
+  ['Tin Maung', 'Day'],
+  ['Tony Lee', 'Day'],
+  ['Gabriel Mehana-Lee', 'Day'],
+  ['John Taylor', 'Day'],
+  ['Trong (Danny) Nguyen', 'Afternoon'],
+  ['Bounpanh Walakone', 'Afternoon'],
+  ['Heng Ong', 'Afternoon'],
+  ['Phong Xuan', 'Afternoon'],
+  ['Van Minh Ma', 'Night'],
+  ['Joe Talamaivao', 'Night'],
+  ['Edin Kulelija', 'Night'],
+  ['Karl Stevens', 'Night'],
 ];
-const SUPERVISOR_NAMES = ['Christopher King', 'Jean-Michel Thomas', 'Jeff Penn'];
+const SUPERVISOR_NAMES: Array<[string, ShiftCode]> = [
+  ['Christopher King', 'Day'],
+  ['Jean-Michel Thomas', 'Afternoon'],
+  ['Jeff Penn', 'Night'],
+];
 
 export function seedMachines(): Machine[] {
   return MACHINE_DEFS.map(([machineCode, displayName, sequence], i) => ({
@@ -91,19 +98,21 @@ export function seedMachines(): Machine[] {
 }
 
 export function seedOperators(): Operator[] {
-  return OPERATOR_NAMES.map((operatorName, i) => ({
+  return OPERATOR_NAMES.map(([operatorName, shift], i) => ({
     id: i + 1,
     operatorName,
     employeeId: `E${String(1000 + i)}`,
     active: true,
+    shift,
   }));
 }
 
 export function seedSupervisors(): Supervisor[] {
-  return SUPERVISOR_NAMES.map((operatorName, i) => ({
+  return SUPERVISOR_NAMES.map(([operatorName, shift], i) => ({
     id: i + 1,
     operatorName,
     active: true,
+    shift,
   }));
 }
 
@@ -273,10 +282,18 @@ export function seedProduction(now: Date, planning: PlanningOrder[]): Production
           countStart: onSlot0 ? 0 : null,
           countEnd: onSlot0 ? good * (lastSlot + 1) : null,
           rejectCount: rejQty,
-          rejects: rejQty ? JSON.stringify({ D01: rejQty }) : '{}',
+          // Spread reject quantity across a couple of defect codes so the
+          // KPI Pareto has a realistic distribution to chart, not a single
+          // bar. Weighted toward the lower codes (ShortShot / Flash) the
+          // way a real floor's scrap mix skews.
+          rejects: rejQty
+            ? JSON.stringify({
+                [DEFECT_CODES[Math.floor(rng() * rng() * DEFECT_CODES.length)][0]]: rejQty,
+              })
+            : '{}',
           purgeKg: onSlot0 && rng() < 0.4 ? +(rng() * 2).toFixed(1) : null,
-          operator: OPERATOR_NAMES[(id + dayBack) % OPERATOR_NAMES.length],
-          supervisor: dayBack > 0 ? SUPERVISOR_NAMES[dayBack % SUPERVISOR_NAMES.length] : '',
+          operator: OPERATOR_NAMES[(id + dayBack) % OPERATOR_NAMES.length][0],
+          supervisor: dayBack > 0 ? SUPERVISOR_NAMES[dayBack % SUPERVISOR_NAMES.length][0] : '',
           bdIssue: status === 'B' ? 'MEC-11' : '', // Abnormal noise / vibration — generic seed
           mangoTicket: status === 'B' ? `MAN-3${String(1000 + id).slice(-4)}` : '',
           handoverNote:
@@ -285,7 +302,7 @@ export function seedProduction(now: Date, planning: PlanningOrder[]): Production
               : '',
           qcBy: '',
           locked: dayBack > 0,
-          lockedBy: dayBack > 0 ? SUPERVISOR_NAMES[dayBack % SUPERVISOR_NAMES.length] : '',
+          lockedBy: dayBack > 0 ? SUPERVISOR_NAMES[dayBack % SUPERVISOR_NAMES.length][0] : '',
           lockedAt: dayBack > 0 ? stamp : '',
           createdAt: stamp,
           updatedAt: stamp,

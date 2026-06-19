@@ -226,6 +226,35 @@ export function renderOutputByShiftChart(
   });
 }
 
+/**
+ * Pareto chart: reject quantity bars sorted descending (left axis) with a
+ * cumulative-% line (right axis, 0..100). The classic "80/20" view — the
+ * few defect codes left of where the line crosses ~80% are the ones worth
+ * chasing. Caller passes unsorted {label, value}; we sort + accumulate.
+ */
+export function renderParetoChart(
+  items: Array<{ label: string; value: number }>,
+): string {
+  const sorted = items.filter((i) => i.value > 0).sort((a, b) => b.value - a.value);
+  const total = sorted.reduce((a, i) => a + i.value, 0);
+  let cum = 0;
+  const data: StackBucket[] = sorted.map((i) => {
+    cum += i.value;
+    return {
+      label: i.label,
+      segments: [i.value],
+      overlay: total > 0 ? +((cum / total) * 100).toFixed(1) : 0,
+    };
+  });
+  return renderDualAxis(data, {
+    segmentColors: ['#dc2626'],
+    segmentLabels: ['Reject qty'],
+    overlayLabel: 'Cumulative %',
+    overlayColor: '#1d4ed8',
+    overlayAsPercent: true,
+  });
+}
+
 /** Stacked Run/Down/Setup hours + OEE % line on the right axis. */
 export function renderHoursOeeChart(
   buckets: Array<{

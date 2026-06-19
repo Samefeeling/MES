@@ -1,6 +1,7 @@
 import type { PmdDataLayer } from '../dal';
 import type {
   Machine,
+  Operator,
   PlanningOrder,
   ProductionRecord,
   RejectCategory,
@@ -39,8 +40,10 @@ interface OpState {
   prod: ProductionRecord[];
   planning: PlanningOrder[];
   machines: Machine[];
-  operators: string[];
-  supervisors: string[];
+  /** Full roster objects (carry .shift) so the dropdowns can narrow to
+   *  the selected shift's people — see rosterNames(). */
+  operators: Operator[];
+  supervisors: Operator[];
   rejCats: RejectCategory[];
   selOperator: string;
   selSupervisor: string;
@@ -644,6 +647,37 @@ async function refreshJobTotalAndPaintSide(): Promise<void> {
   set('totalReject', String(totalReject));
 }
 
+/**
+ * Names from a roster that belong to the selected shift, so the
+ * Operator / Supervisor dropdowns only list the people actually rostered
+ * on (e.g. Day) instead of the whole plant. A roster entry matches when:
+ *   - it has no shift tag (untagged data must never hide a needed name), or
+ *   - its shift and the selected shift are prefixes of one another
+ *     (tolerates "Day" vs "Day Shift" vs a single-letter "D").
+ * `alwaysInclude` (the currently-selected name) is appended even when it
+ * falls outside the shift, so switching shifts never drops the name a
+ * record already holds. De-duplicated, original order preserved.
+ */
+export function rosterNames(
+  roster: Operator[],
+  shiftCode: ShiftCode,
+  alwaysInclude: string,
+): string[] {
+  const want = shiftCode.trim().toLowerCase();
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const o of roster) {
+    const sh = (o.shift ?? '').trim().toLowerCase();
+    const match = sh === '' || sh === want || want.startsWith(sh) || sh.startsWith(want);
+    if (!match) continue;
+    if (seen.has(o.operatorName)) continue;
+    seen.add(o.operatorName);
+    names.push(o.operatorName);
+  }
+  if (alwaysInclude && !seen.has(alwaysInclude)) names.push(alwaysInclude);
+  return names;
+}
+
 function selOpts(values: string[], selected: string, placeholder: string): string {
   return [`<option value="">— ${escapeHtml(placeholder)} —</option>`]
     .concat(
@@ -739,8 +773,16 @@ function buildMeta(): string {
     opSupLocked
       ? `<input type="text" disabled value="${escapeHtml(value || '—')}" title="Signed off — sign in as supervisor to change">`
       : `<select data-meta="${meta}">${selOpts(list, value, meta)}</select>`;
-  const opField = lockedOrSelect('operator', S!.operators, S!.selOperator);
-  const supField = lockedOrSelect('supervisor', S!.supervisors, S!.selSupervisor);
+  const opField = lockedOrSelect(
+    'operator',
+    rosterNames(S!.operators, S!.shiftCode, S!.selOperator),
+    S!.selOperator,
+  );
+  const supField = lockedOrSelect(
+    'supervisor',
+    rosterNames(S!.supervisors, S!.shiftCode, S!.selSupervisor),
+    S!.selSupervisor,
+  );
   // Order Qty = total order quantity (Epicor JobHead_ProdQty), shown in the
   // meta row next to Job# / Part#. This is the whole-order size and stays
   // fixed; Job Left (side panel) counts down off Calculated_RemainingQty.
@@ -1892,9 +1934,15 @@ function openQcPicker(slot: number): void {
     return;
   }
   const role = qcRoleFor(slot);
-  const roster = role === 'operator' ? S!.operators : S!.supervisors;
-  const roleLabel = role === 'operator' ? '👷 Operator' : '👔 Supervisor';
   const current = slotRec(slot)?.qcBy ?? '';
+  // QC sign-off names are also narrowed to the shift's roster (current
+  // sign-off always kept, even if from another shift).
+  const roster = rosterNames(
+    role === 'operator' ? S!.operators : S!.supervisors,
+    S!.shiftCode,
+    current,
+  );
+  const roleLabel = role === 'operator' ? '👷 Operator' : '👔 Supervisor';
   const buttons = roster
     .map(
       (n) =>
@@ -2078,8 +2126,8 @@ export async function renderOperator(
     prod: [],
     planning,
     machines,
-    operators: operators.map((o) => o.operatorName),
-    supervisors: supervisors.map((s) => s.operatorName),
+    operators,
+    supervisors,
     rejCats: rcats,
     selOperator,
     selSupervisor,

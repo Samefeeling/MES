@@ -493,6 +493,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       id: getId(r),
       operatorName: str(r[F.name]),
       active: true,
+      shift: str(r[F.shift]).trim(),
     }));
   }
 
@@ -502,15 +503,21 @@ export class SharePointDataLayer implements PmdDataLayer {
     // from the separate PMD_Supervisor list. Drops the Lookup column
     // and the second REST round-trip on every boot — listOperators
     // already brings these rows back, so in practice this is free.
+    // A supervisor named on operator rows of more than one shift is
+    // emitted once per (name, shift) so the operator sheet's roster
+    // filter can surface them on each shift they cover.
     const F = this.F.operator;
     const rows = await this.getAllItems(LISTS.operator);
     const seen = new Set<string>();
     const out: Supervisor[] = [];
     for (const r of rows) {
       const name = str(r[F.supervisor1]).trim();
-      if (!name || seen.has(name)) continue;
-      seen.add(name);
-      out.push({ id: out.length + 1, operatorName: name, active: true });
+      if (!name) continue;
+      const shift = str(r[F.shift]).trim();
+      const key = `${name}|${shift}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ id: out.length + 1, operatorName: name, active: true, shift });
     }
     return out;
   }

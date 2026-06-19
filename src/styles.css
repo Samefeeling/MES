@@ -464,6 +464,20 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 @media (max-width:1100px){
   .kpi-charts{grid-template-columns:1fr}
 }
+/* Reject number → click to drill into the per-defect-code Pareto. Looks
+   like the red number it replaces but underlined-on-hover to signal it's
+   actionable. */
+.kpi-reject-drill{background:none;border:none;padding:0;font:inherit;color:var(--rd);font-weight:800;cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px}
+.kpi-reject-drill:hover{text-decoration:underline solid}
+/* Pareto legend: code → defect label × qty, under the floor chart. */
+.kpi-reject-legend{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12px;color:var(--tx)}
+.kpi-reject-legend li{white-space:nowrap}
+.kpi-reject-legend .kpi-rej-qty{font-weight:800;color:var(--rd);font-variant-numeric:tabular-nums}
+/* Reject drill-down modal: chart above a ranked Pareto table. */
+.kpi-drill-modal{max-width:760px}
+.kpi-drill-chart{background:#fff;border:1px solid var(--bd);border-radius:8px;padding:8px}
+.kpi-drill-table tbody tr{cursor:default}
+.kpi-drill-table th,.kpi-drill-table td{padding:7px 10px}
 
 /* ===== toast ===== */
 .toast{position:fixed;top:18px;right:18px;background:#1e293b;color:#fff;padding:14px 22px;border-radius:10px;font-size:17px;font-weight:700;z-index:300;opacity:0;transform:translateY(-10px);transition:.2s;pointer-events:none;max-width:80vw;box-shadow:0 4px 16px rgba(0,0,0,.25)}
