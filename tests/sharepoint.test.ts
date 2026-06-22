@@ -1048,6 +1048,127 @@ describe('PMD_Production denormalisation: jobRequired + partDescription survive 
   });
 });
 
+describe('PMD_Rejects is the source of truth on read (SFM507067 drift)', () => {
+  // A signed-off PMD_Production row can carry a stale Reject column total
+  // (e.g. 20) while PMD_Rejects holds the real per-code events (summing to
+  // 28). expandHeaderToSlots must surface the EVENT total, never blend the
+  // column into slot 0 — otherwise Trace / Operator / KPI show a number
+  // that disagrees with the PMD_Rejects list the floor actually trusts.
+  const store = new Map<string, string>();
+  beforeAll(() => {
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string): string | null => store.get(k) ?? null,
+      setItem: (k: string, v: string): void => { store.set(k, v); },
+      removeItem: (k: string): void => { store.delete(k); },
+      clear: (): void => { store.clear(); },
+      key: (): string | null => null,
+      length: 0,
+    };
+  });
+  afterAll(() => {
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+
+  function driftedHeader() {
+    return {
+      machineCode: '1300T',
+      date: '2026-06-19',
+      shift: 'Day',
+      jobNumber: 'SFM507067',
+      partNumber: 'V11690',
+      partDescription: 'Ned Stool',
+      timeline: 'SRRR·SRRR·SRRRRO',
+      countStart: 0,
+      countEnd: 111,
+      reject: 20, // STALE column — the floor's PMD_Rejects says 28
+      operator: 'John Taylor',
+      supervisor: 'Christopher King',
+      runTime: 5,
+      downTime: 0,
+      handover: '',
+      qcChecks: '',
+      rejectsBySlot: '',
+    };
+  }
+
+  // 28 rejects spread across real slots, exactly what PMD_Rejects holds.
+  const rejectEvents = [
+    { id: 1, timeline: '1', code: 'D01', category: 'R', qty: 3 },
+    { id: 2, timeline: '2', code: 'D09', category: 'R', qty: 1 },
+    { id: 3, timeline: '3', code: 'D01', category: 'R', qty: 1 },
+    { id: 4, timeline: '3', code: 'D09', category: 'R', qty: 1 },
+    { id: 5, timeline: '5', code: 'D01', category: 'R', qty: 5 },
+    { id: 6, timeline: '9', code: 'D01', category: 'R', qty: 1 },
+    { id: 7, timeline: '11', code: 'D01', category: 'R', qty: 12 },
+    { id: 8, timeline: '13', code: 'D09', category: 'R', qty: 2 },
+    { id: 9, timeline: '14', code: 'D09', category: 'R', qty: 2 },
+  ]; // sums to 28
+
+  function sumRejects(records: Array<{ rejects: string }>): number {
+    let n = 0;
+    for (const r of records) {
+      try {
+        const obj = JSON.parse(r.rejects || '{}') as Record<string, number>;
+        n += Object.values(obj).reduce((a, v) => a + (Number(v) || 0), 0);
+      } catch {
+        /* ignore */
+      }
+    }
+    return n;
+  }
+
+  it('expanded slots total the PMD_Rejects events (28), not the stale column (20) — no double count', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const key = '1300T|2026-06-19-Day|SFM507067';
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [driftedHeader()] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> =>
+      new Map([[key, rejectEvents]]);
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+
+    const recs = await dal.listProduction({
+      shiftId: '2026-06-19-Day',
+      jobNumber: 'SFM507067',
+    });
+    // Trace / operator sum the per-slot `rejects` JSON: must equal the
+    // event total, never 20 (column shadow) and never 48 (column + events).
+    expect(sumRejects(recs)).toBe(28);
+  });
+
+  it('falls back to the Reject column when PMD_Rejects has no events (legacy row)', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [driftedHeader()] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+
+    const recs = (await dal.listProduction({
+      shiftId: '2026-06-19-Day',
+      jobNumber: 'SFM507067',
+    })) as Array<{ slotIndex: number; rejectCount: number }>;
+    // No events at all → the surviving column total is preserved on slot 0
+    // rather than zeroed (don't destroy legacy data).
+    const slot0 = recs.find((r) => r.slotIndex === 0)!;
+    expect(slot0.rejectCount).toBe(20);
+  });
+});
+
 describe('sanitizeBodyStrings', () => {
   it('strips C0/C1 controls (except \\t \\n \\r) and U+2028/U+2029/BOM from string values', () => {
     const body: Record<string, unknown> = {

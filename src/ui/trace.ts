@@ -560,6 +560,51 @@ function idlePlaceholder(machineCode: string, shiftId: string): TraceRow {
   };
 }
 
+/** A shift is "past" once its end time is behind the wall clock.
+ *  shiftBounds resolves the Day/Afternoon/Night window so this is
+ *  correct across the non-lexicographic shift ordering (Day → Afternoon
+ *  → Night), unlike a naive shiftId string compare. */
+function isShiftPast(shiftId: string): boolean {
+  const b = shiftBounds(shiftId);
+  return b ? b.end.getTime() < Date.now() : false;
+}
+
+/**
+ * Rebuild a PlanningOrder from a signed-off PMD_Production canonical row
+ * so historical Job Number searches show real Order Qty / Job Left even
+ * after Epicor drops the order from Planning.csv. Mirrors operator.ts's
+ * synthetic order: PMD_Production denormalises the order TOTAL onto its
+ * JobRequired column, and carries no cycle time — so Shift Target stays
+ * "—" (qtyPerHr 0 → shiftTargetFor returns null), exactly as the
+ * operator sheet renders it for the same dropped order. Returns null
+ * when there is no recorded total to build from.
+ */
+export function syntheticOrderFromRecord(
+  canon: ProductionRecord | undefined,
+  jobNumber: string,
+): PlanningOrder | null {
+  const req = canon?.jobRequired ?? 0;
+  if (!canon || !req) return null;
+  return {
+    id: 0,
+    jobNumber,
+    machineCode: canon.machineCode,
+    originalMachine: '',
+    partNumber: canon.partNumber ?? '',
+    partDescription: canon.partDescription ?? '',
+    plannedStart: '',
+    plannedEnd: '',
+    orderQty: req,
+    jobRequired: req,
+    qtyPerHr: 0,
+    duration: 0,
+    released: false,
+    isDieChange: false,
+    manuallyAdded: true,
+    source: 'Manual',
+  };
+}
+
 /**
  * Group a flat list of records into (machine|shift|job) tuples and
  * build a TraceRow for each. Shared by the live snapshot and the
@@ -604,7 +649,19 @@ function buildTraceRowsFor(
         ticket: r.mangoTicket,
         note: '',
       }));
-    const plan = planByJob.get(jobNumber);
+    // Source-of-truth selection, identical to operator.ts's selectedOrder:
+    // Planning.csv only describes the CURRENT Epicor state, so it is
+    // authoritative for live / future shifts. A PAST shift means "show
+    // what was recorded", so rebuild the order from the PMD_Production
+    // row's denormalised JobRequired (= order total). This keeps Job
+    // Number Search consistent with the operator sheet for the same
+    // tuple and stops historical jobs Epicor has dropped from rendering
+    // "—" for Order Qty / Job Left.
+    const planOrder = planByJob.get(jobNumber);
+    const synthetic = syntheticOrderFromRecord(canonical, jobNumber);
+    const plan = isShiftPast(shiftId)
+      ? synthetic ?? planOrder
+      : planOrder ?? synthetic;
     // Job-wide Good. Prefer the cross-shift total when the caller could
     // compute one; the `has()` guard (not `??`) is deliberate — a failed
     // history fetch stores 0 in the map, and treating that as "good"

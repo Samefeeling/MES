@@ -1143,7 +1143,13 @@ export class SharePointDataLayer implements PmdDataLayer {
         statusCode: '',
         countStart: h.countStart,
         countEnd: h.countEnd,
-        rejectCount: h.reject,
+        // PMD_Rejects is the source of truth. When events exist they
+        // fully populate per-slot rejectCount below, so seed slot 0 at 0
+        // to avoid blending a stale PMD_Production.Reject column total
+        // with the event total (the 20-vs-28 drift). Only fall back to
+        // the column when there are NO events at all (legacy rows signed
+        // off before PMD_Rejects existed, or live rows pre-sign-off).
+        rejectCount: rejects.length ? 0 : h.reject,
         rejects: '{}',
         purgeKg: null,
         operator: h.operator,
@@ -1167,10 +1173,12 @@ export class SharePointDataLayer implements PmdDataLayer {
       // live on slot 0 by convention.
       slots[0].jobRequired = h.jobRequired;
       // And the reject total: the per-status loop initialises
-      // rejectCount to 0 because it doesn't know it's about to be
-      // promoted to canonical. Stamp h.reject here so re-sign-off
-      // can preserve the total when per-slot details are gone.
-      slots[0].rejectCount = h.reject;
+      // rejectCount to 0. Only stamp the column total when there are NO
+      // PMD_Rejects events — when events exist they are the source of
+      // truth and populate per-slot rejectCount below (see slot-0 seed
+      // comment above). This is what stops a stale Reject column from
+      // shadowing the real event total on read.
+      if (rejects.length === 0) slots[0].rejectCount = h.reject;
     }
     // PMD_Rejects events take precedence (signed-off shifts), but for
     // live (unsigned) rows the events list is empty — fall back to the
@@ -1353,12 +1361,22 @@ export class SharePointDataLayer implements PmdDataLayer {
       const partNum = partNumOf(job, slots);
       const partDesc = partDescOf(job, slots);
       const required = jobRequiredOf(job, slots);
-      // Preserve reject total when the per-slot rejects map is empty
-      // but the canonical slot 0 carries a known total (rehydrated
-      // from PMD_Production.Reject of an existing row that had its
-      // PMD_Rejects / RejectsBySlot details wiped by an earlier
-      // failed unlock). Without this, re-sign-off would overwrite a
-      // known total with 0.
+      // PMD_Rejects is the source of truth. agg.reject is by construction
+      // Σ agg.rejectEvents (same loop), and those events are what
+      // replaceRejectEvents writes below — so whenever per-slot detail
+      // exists, the Reject column, RejectsBySlot and TotalGood all derive
+      // from the SAME event set and cannot drift. The drift we hit on
+      // SFM507067 (column 20 vs events 28) came from the READ path
+      // blending a stale column total into slot 0; that is fixed in
+      // expandHeaderToSlots, so a rehydrated re-sign-off now re-aggregates
+      // the real events and self-heals the column.
+      //
+      // The `|| canon.rejectCount` fallback ONLY fires for a legacy row
+      // that has a Reject column total but no PMD_Rejects events at all
+      // (per-code detail destroyed by an old broken-unlock incident).
+      // There is nothing to re-derive from, so preserving the surviving
+      // total beats zeroing it — and since there are no events, the
+      // column is still the only record, so this introduces no drift.
       const canon = slots.find((s) => s.slotIndex === 0);
       const reject = agg.reject || (canon?.rejectCount ?? 0);
       try {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { goodForRecords } from '../src/ui/trace';
+import { goodForRecords, syntheticOrderFromRecord } from '../src/ui/trace';
 import { jobLeftPiecesFor, shiftTargetFor } from '../src/ui/operator';
 import { order, rec } from './helpers';
 
@@ -61,5 +61,38 @@ describe('goodForRecords (job-wide Good across shifts)', () => {
       }),
     ];
     expect(goodForRecords(recs)).toBe(146); // 96 + 50
+  });
+});
+
+describe('syntheticOrderFromRecord (past-shift order rebuilt from PMD_Production)', () => {
+  it('rebuilds Order Qty + Job Left basis from the denormalised JobRequired total', () => {
+    // PMD_Production.JobRequired denormalises the ORDER TOTAL, so a Job
+    // Number search for a job Epicor has dropped from Planning.csv still
+    // resolves Order Qty / Job Left straight from the List.
+    const canon = rec({
+      jobNumber: 'SFM507067',
+      slotIndex: 0,
+      statusCode: 'R',
+      partNumber: 'V11690',
+      partDescription: 'Ned Stool',
+      jobRequired: 96,
+      countStart: 0,
+      countEnd: 83,
+    });
+    const o = syntheticOrderFromRecord(canon, 'SFM507067')!;
+    expect(o.orderQty).toBe(96);
+    expect(o.jobRequired).toBe(96);
+    expect(o.partNumber).toBe('V11690');
+    // Job Left flows through the SAME formula the operator sheet uses.
+    expect(jobLeftPiecesFor(o, 30)).toBe(66); // 96 − 30
+    // No cycle time is recorded on PMD_Production, so Shift Target is "—"
+    // (null) — identical to how the operator sheet renders a dropped order.
+    expect(shiftTargetFor(o, jobLeftPiecesFor(o, 30)!)).toBeNull();
+  });
+
+  it('returns null when there is no recorded order total to rebuild from', () => {
+    const canon = rec({ jobNumber: 'J1', slotIndex: 0, statusCode: 'R' });
+    expect(syntheticOrderFromRecord(canon, 'J1')).toBeNull();
+    expect(syntheticOrderFromRecord(undefined, 'J1')).toBeNull();
   });
 });

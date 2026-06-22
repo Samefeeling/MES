@@ -122,10 +122,13 @@ function sid(): string {
 
 function blankRecord(slot: number): ProductionRecord {
   const iso = new Date().toISOString();
-  // Resolve the planning order for the selected job once so the slot
-  // carries JobHead_PartNum — PMD_Production / PMD_LiveStatus persist
-  // the colour-lookup key per row instead of relying on a planning join.
-  const order = S!.planning.find((o) => o.jobNumber === S!.selJob);
+  // Resolve the order for the selected job once so the slot carries
+  // JobHead_PartNum — PMD_Production / PMD_LiveStatus persist the
+  // colour-lookup key per row instead of relying on a planning join.
+  // selectedOrder() prefers PMD_Production for past shifts, so a
+  // supervisor editing history still stamps the recorded Part #
+  // rather than a blank (planning has long dropped the order).
+  const order = selectedOrder();
   return {
     id: 0,
     machineCode: S!.mc,
@@ -253,15 +256,24 @@ function shiftOrders(): PlanningOrder[] {
 }
 
 function selectedOrder(): PlanningOrder | undefined {
-  const fromPlanning = S!.planning.find((o) => o.jobNumber === S!.selJob);
-  if (fromPlanning) return fromPlanning;
-  // Fall back to a synthetic order rebuilt from PMD_Production rows
-  // already in S!.prod. This is the path for orders Epicor has dropped
-  // from active planning (completed in ERP) but that the operator /
-  // supervisor is now reviewing or unlocking — the header bar
-  // (Order Qty / Part# / Product Description) must still show the
-  // real values denormalised onto the PMD_Production row, not blanks.
   if (!S!.selJob) return undefined;
+  // Planning.csv reflects the CURRENT Epicor state — it is only relevant
+  // to the live and future shifts. Viewing a PAST shift/date means
+  // "review what was actually recorded", so the order must be rebuilt
+  // from PMD_Production (the List is the source of truth for history),
+  // exactly like Trace's Job Number Search. Consulting planning here
+  // would show today's remaining qty / cycle time against a shift that
+  // ran days ago, and would disagree with Trace for the same tuple.
+  if (!isPastShift()) {
+    const fromPlanning = S!.planning.find((o) => o.jobNumber === S!.selJob);
+    if (fromPlanning) return fromPlanning;
+  }
+  // Synthetic order rebuilt from the PMD_Production rows already in
+  // S!.prod. This is the only path for a past shift, and also the
+  // present/future fallback for orders Epicor has dropped from active
+  // planning (completed in ERP) but that the operator / supervisor is
+  // reviewing or unlocking — the header bar (Order Qty / Part# / Product
+  // Description) must still show the real denormalised values, not blanks.
   const canon = S!.prod.find(
     (r) => r.jobNumber === S!.selJob && r.slotIndex === 0,
   );
