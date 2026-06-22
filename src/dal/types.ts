@@ -73,6 +73,32 @@ export interface PmdDataLayer {
    *  share state in-process (memory DAL). */
   pushLiveSnapshot?(): Promise<void>;
 
+  /** This client's stable device id. Used to compare against a live
+   *  row's OwnerDevice so the UI knows whether IT owns the press or is
+   *  a read-only spectator. Optional — single-device backends (memory)
+   *  can omit it. */
+  getDeviceId?(): string;
+  /** The device currently owning the in-progress edit session on
+   *  (machine, shiftId), or null when no live job is owned. `ownedByOther`
+   *  is true when the owner is a different device than this one — the
+   *  operator UI then renders that machine's live shift read-only and
+   *  pins the Job# dropdown to the owned job until sign-off. Reads state
+   *  refreshed by the most recent listProduction. Optional. */
+  liveOwner?(
+    machineCode: string,
+    shiftId: string,
+  ): { jobNumber: string; deviceId: string; ownedByOther: boolean } | null;
+  /** Supervisor force-takeover of a live (machine, shift, job) session
+   *  whose owning device has walked off mid-shift (the press can't be
+   *  signed off because it isn't finished, and unlockShift only targets
+   *  signed rows). Stamps THIS device as the owner. Returns false when
+   *  there's no live row to reclaim. Optional. */
+  claimLiveOwnership?(
+    machineCode: string,
+    shiftId: string,
+    jobNumber: string,
+  ): Promise<boolean>;
+
   // Identity
   whoAmI(): Promise<UserContext>;
 }

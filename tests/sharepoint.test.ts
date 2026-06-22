@@ -618,6 +618,167 @@ describe('pushLiveSnapshot does not re-broadcast old shifts', () => {
   });
 });
 
+describe('live ownership (dominant-device lock)', () => {
+  const store = new Map<string, string>();
+  beforeAll(() => {
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string): string | null => store.get(k) ?? null,
+      setItem: (k: string, v: string): void => { store.set(k, v); },
+      removeItem: (k: string): void => { store.delete(k); },
+      clear: (): void => { store.clear(); },
+      key: (): string | null => null,
+      length: 0,
+    };
+  });
+  afterAll(() => {
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  const now = new Date();
+  const todayId = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const shiftId = `${todayId}-Night`; // ends tomorrow 07:00 → always "live"
+
+  function liveHeader(owner: string): Record<string, unknown> {
+    return {
+      machineCode: 'Batt1',
+      date: todayId,
+      shift: 'Night',
+      jobNumber: 'SFM900',
+      timeline: 'R···············',
+      countStart: 0,
+      countEnd: 10,
+      reject: 0,
+      operator: 'Joe',
+      supervisor: 'Sue',
+      ownerDevice: owner,
+    };
+  }
+
+  it('liveOwner reports ownedByOther for a row claimed by a different device', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_LiveStatus' ? [liveHeader('device-AAA')] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+
+    await dal.listProduction({ machineCode: 'Batt1', shiftId });
+    const owner = dal.liveOwner!('Batt1', shiftId);
+    expect(owner).not.toBeNull();
+    expect(owner!.jobNumber).toBe('SFM900');
+    expect(owner!.deviceId).toBe('device-AAA');
+    expect(owner!.ownedByOther).toBe(true); // this DAL has its own minted id
+  });
+
+  it('liveOwner returns ownedByOther=false when THIS device owns it', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const me = dal.getDeviceId!();
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_LiveStatus' ? [liveHeader(me)] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+
+    await dal.listProduction({ machineCode: 'Batt1', shiftId });
+    const owner = dal.liveOwner!('Batt1', shiftId);
+    expect(owner!.ownedByOther).toBe(false);
+  });
+
+  it('pushLiveSnapshot claims OwnerDevice once operator+supervisor+status are present', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const me = dal.getDeviceId!();
+    const cache = (dal as unknown as { editCache: Map<string, unknown[]> }).editCache;
+    cache.set(`Batt1|${shiftId}|SFM900`, [{
+      id: -1, machineCode: 'Batt1', shiftId, jobNumber: 'SFM900', slotIndex: 0,
+      statusCode: 'R', countStart: 0, countEnd: 10, rejects: '{}', purgeKg: null,
+      rejectCount: 0, bdIssue: '', mangoTicket: '', handoverNote: '',
+      operator: 'Joe', supervisor: 'Sue', qcBy: '', locked: false, lockedBy: '',
+      lockedAt: '', createdAt: '', updatedAt: '',
+    }]);
+    let pushedOwner: unknown;
+    const o = dal as unknown as {
+      listPlanning: () => Promise<unknown[]>;
+      upsertHeaderInto: (list: string, h: { ownerDevice?: string }) => Promise<void>;
+    };
+    o.listPlanning = async (): Promise<unknown[]> => [];
+    o.upsertHeaderInto = async (_list: string, h: { ownerDevice?: string }): Promise<void> => {
+      pushedOwner = h.ownerDevice;
+    };
+
+    await dal.pushLiveSnapshot!();
+    expect(pushedOwner).toBe(me);
+  });
+
+  it('pushLiveSnapshot does NOT claim when supervisor is still missing', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const cache = (dal as unknown as { editCache: Map<string, unknown[]> }).editCache;
+    cache.set(`Batt1|${shiftId}|SFM900`, [{
+      id: -1, machineCode: 'Batt1', shiftId, jobNumber: 'SFM900', slotIndex: 0,
+      statusCode: 'R', countStart: 0, countEnd: 10, rejects: '{}', purgeKg: null,
+      rejectCount: 0, bdIssue: '', mangoTicket: '', handoverNote: '',
+      operator: 'Joe', supervisor: '', qcBy: '', locked: false, lockedBy: '',
+      lockedAt: '', createdAt: '', updatedAt: '',
+    }]);
+    let pushedOwner: unknown = 'unset';
+    const o = dal as unknown as {
+      listPlanning: () => Promise<unknown[]>;
+      upsertHeaderInto: (list: string, h: { ownerDevice?: string }) => Promise<void>;
+    };
+    o.listPlanning = async (): Promise<unknown[]> => [];
+    o.upsertHeaderInto = async (_list: string, h: { ownerDevice?: string }): Promise<void> => {
+      pushedOwner = h.ownerDevice;
+    };
+
+    await dal.pushLiveSnapshot!();
+    // Snapshot still pushed (visibility), but with no owner claim.
+    expect(pushedOwner).toBe('');
+  });
+
+  it('pushLiveSnapshot skips a tuple owned by another device (no clobber)', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    // Seed the last-seen owner map as if a load saw device-AAA own it.
+    (dal as unknown as { liveOwnerByKey: Map<string, string> }).liveOwnerByKey.set(
+      `Batt1|${shiftId}|SFM900`,
+      'device-AAA',
+    );
+    const cache = (dal as unknown as { editCache: Map<string, unknown[]> }).editCache;
+    cache.set(`Batt1|${shiftId}|SFM900`, [{
+      id: -1, machineCode: 'Batt1', shiftId, jobNumber: 'SFM900', slotIndex: 0,
+      statusCode: 'R', countStart: 0, countEnd: 10, rejects: '{}', purgeKg: null,
+      rejectCount: 0, bdIssue: '', mangoTicket: '', handoverNote: '',
+      operator: 'Joe', supervisor: 'Sue', qcBy: '', locked: false, lockedBy: '',
+      lockedAt: '', createdAt: '', updatedAt: '',
+    }]);
+    const pushed: string[] = [];
+    const o = dal as unknown as {
+      listPlanning: () => Promise<unknown[]>;
+      upsertHeaderInto: (list: string, h: { jobNumber: string }) => Promise<void>;
+    };
+    o.listPlanning = async (): Promise<unknown[]> => [];
+    o.upsertHeaderInto = async (_list: string, h: { jobNumber: string }): Promise<void> => {
+      pushed.push(h.jobNumber);
+    };
+
+    await dal.pushLiveSnapshot!();
+    // The spectator device must not broadcast (or re-own) the row.
+    expect(pushed).not.toContain('SFM900');
+  });
+});
+
 describe('unlock → edit → re-sign-off (SFM507068 redesign)', () => {
   // Shared shim from the pushLiveSnapshot describe block above.
   const store = new Map<string, string>();
