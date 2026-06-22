@@ -276,6 +276,11 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 /* Status cell — tap selects this slot, hold-and-drag extends the range. */
 .slot-cell{width:100%;height:60px;border:0;background:transparent;font-size:28px;font-weight:900;text-align:center;cursor:pointer;color:inherit;padding:0;touch-action:none;user-select:none;-webkit-user-select:none}
 .op-grid td.multisel{box-shadow:inset 0 0 0 3px #1e3a8a,0 0 0 2px rgba(30,58,138,.25)}
+/* Slot already covered by another job on this (machine, shift). Render the
+   occupier's colour but mute it + slash overlay so the operator reads it
+   as locked, and the button itself is :disabled so taps don't fire. */
+.op-grid td.is-occupied{opacity:.55;background-image:repeating-linear-gradient(135deg,transparent 0 6px,rgba(15,23,42,.18) 6px 8px)}
+.op-grid td.is-occupied .slot-cell{cursor:not-allowed;pointer-events:none}
 .ab-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px}
 .ab-pill{padding:14px 8px;border-radius:12px;font-weight:800;cursor:pointer;border:2px solid;text-align:center;min-height:84px;display:flex;flex-direction:column;gap:4px;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent;transition:transform .08s}
 .ab-pill:active{transform:scale(.94)}

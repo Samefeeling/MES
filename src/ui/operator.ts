@@ -319,6 +319,26 @@ function slotRec(slot: number): ProductionRecord | undefined {
   return S!.prod.find((r) => r.jobNumber === S!.selJob && r.slotIndex === slot);
 }
 
+/**
+ * The earliest other-job row on (machine, shift) that already covers
+ * this slot with a Machine Status, or null when this slot is free. Used
+ * to lock cross-job overlap: once SFM507103 has been signed off with
+ * R 15:00-16:00, picking SFM506888 must NOT let the operator overwrite
+ * 15:00 with a second R block. Signed-off rows always block;
+ * still-being-edited other jobs block too (the press can only be in one
+ * state per slot — two operators sharing one press is a data error,
+ * not a feature).
+ */
+function occupyingOtherJob(slot: number): ProductionRecord | null {
+  for (const r of S!.prod) {
+    if (r.slotIndex !== slot) continue;
+    if (r.jobNumber === S!.selJob) continue;
+    if (!r.statusCode) continue;
+    return r;
+  }
+  return null;
+}
+
 function canonical(): ProductionRecord | undefined {
   return slotRec(0);
 }
@@ -857,21 +877,33 @@ function statusCellHtml(
   bdIssue: string,
   isNow: boolean,
 ): string {
-  const def = code ? STATUS_MAP[code] : undefined;
-  const style = def
-    ? `background:${def.color};color:${def.text};border-color:${def.border}`
+  // If THIS job hasn't claimed the slot, surface any other job that has
+  // — operator-side guard so 15:00 can't end up running for two orders.
+  const occ = code ? null : occupyingOtherJob(slot);
+  const occDef = occ?.statusCode ? STATUS_MAP[occ.statusCode] : undefined;
+  const effectiveDef = code ? STATUS_MAP[code] : occDef;
+  const style = effectiveDef
+    ? `background:${effectiveDef.color};color:${effectiveDef.text};border-color:${effectiveDef.border}`
     : '';
-  const tip =
-    code === 'B' && bdIssue ? ` title="${escapeHtml(bdIssue)} — ${escapeHtml(bdLabelFor(bdIssue))}"` : '';
+  let tip = '';
+  if (code === 'B' && bdIssue) {
+    tip = ` title="${escapeHtml(bdIssue)} — ${escapeHtml(bdLabelFor(bdIssue))}"`;
+  } else if (occ) {
+    tip = ` title="${escapeHtml(slotClock(sid(), slot))} · already used by ${escapeHtml(occ.jobNumber)} (${escapeHtml(occ.statusCode)})"`;
+  }
   const tag =
     code === 'B' && bdIssue
       ? `<span class="bd-tag">${escapeHtml(bdIssue.split('-')[0])}</span>`
       : '';
   let cls = `status-cell${isNow ? ' is-now' : ''}`;
+  if (occ) cls += ' is-occupied';
   if (S!.selSet.has(slot)) cls += ' multisel';
+  const btnAttrs = occ ? ' disabled aria-disabled="true"' : '';
   // Unified status entry — single-tap selects this slot, hold-and-drag across
   // cells selects a range; the picker opens automatically on finger-up.
-  return `<td class="${cls}"${tip}><button type="button" class="slot-cell" style="${style}" data-slot="${slot}" data-row="status">${code || '·'}</button>${tag}</td>`;
+  // Occupied cells render the occupier's code but are not selectable.
+  const cellChar = code || (occ?.statusCode ?? '·');
+  return `<td class="${cls}"${tip}><button type="button" class="slot-cell" style="${style}" data-slot="${slot}" data-row="status"${btnAttrs}>${cellChar}</button>${tag}</td>`;
 }
 
 function buildGrid(): string {
@@ -1577,14 +1609,24 @@ function wireStatusPicker(): void {
       .elementFromPoint(clientX, clientY)
       ?.closest<HTMLElement>('[data-slot][data-row="status"]');
     if (!el) return null;
-    return Number(el.dataset.slot);
+    const slot = Number(el.dataset.slot);
+    // Slots already held by another job on this (machine, shift) are
+    // not selectable — neither single-tap nor drag-range can pick them
+    // up. Prevents the duplicate-15:00 case where two orders both
+    // claim the same half-hour as Run time.
+    if (occupyingOtherJob(slot)) return null;
+    return slot;
   };
 
   const setRange = (a: number, b: number): void => {
     const lo = Math.min(a, b);
     const hi = Math.max(a, b);
     S!.selSet = new Set<number>();
-    for (let i = lo; i <= hi; i++) S!.selSet.add(i);
+    // Skip slots already held by another job — drag-range across a
+    // signed-off run mustn't sweep its slots into the selection.
+    for (let i = lo; i <= hi; i++) {
+      if (!occupyingOtherJob(i)) S!.selSet.add(i);
+    }
     paintSelection();
   };
 
