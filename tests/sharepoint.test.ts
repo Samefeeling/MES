@@ -777,6 +777,53 @@ describe('live ownership (dominant-device lock)', () => {
     // The spectator device must not broadcast (or re-own) the row.
     expect(pushed).not.toContain('SFM900');
   });
+
+  it('spectator listProduction picks up owner edits even with stale local cache', async () => {
+    // The PC-vs-iPad symptom: PC had touched the order earlier (selecting an
+    // operator was enough to seed editCache slot 0 with reject=1 and a half
+    // timeline). iPad then ran rejects to 23 and signed QC. Before this fix
+    // the "editCache wins per slot" merge silently kept reject=1 on PC.
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const cache = (dal as unknown as { editCache: Map<string, unknown[]> }).editCache;
+    const key = `Batt1|${shiftId}|SFM900`;
+    cache.set(key, [{
+      id: -1, machineCode: 'Batt1', shiftId, jobNumber: 'SFM900', slotIndex: 0,
+      statusCode: 'R', countStart: 0, countEnd: 5, rejects: '{}', purgeKg: null,
+      rejectCount: 1, bdIssue: '', mangoTicket: '', handoverNote: '',
+      operator: 'Joe', supervisor: '', qcBy: '', locked: false, lockedBy: '',
+      lockedAt: '', createdAt: '', updatedAt: '',
+    }]);
+
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+    };
+    const liveFromOwner = {
+      ...liveHeader('device-AAA'),
+      timeline: 'RRRR············',
+      countEnd: 50,
+      reject: 23,
+      operator: 'Joe',
+      supervisor: 'Sue',
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_LiveStatus' ? [liveFromOwner] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+
+    const rows = await dal.listProduction({ machineCode: 'Batt1', shiftId });
+    const slot0 = rows.find((r) => r.jobNumber === 'SFM900' && r.slotIndex === 0);
+    expect(slot0).toBeTruthy();
+    expect(slot0!.rejectCount).toBe(23);
+    expect(slot0!.supervisor).toBe('Sue');
+    // The four R slots from the owner must be visible too.
+    const runSlots = rows.filter(
+      (r) => r.jobNumber === 'SFM900' && r.statusCode === 'R',
+    );
+    expect(runSlots.length).toBe(4);
+  });
 });
 
 describe('unlock → edit → re-sign-off (SFM507068 redesign)', () => {

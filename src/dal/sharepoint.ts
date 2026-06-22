@@ -994,11 +994,20 @@ export class SharePointDataLayer implements PmdDataLayer {
     // burns a partial timeline into PMD_Production — exactly the
     // SFM507068 14:23 incident.
     //
-    // editCache wins per slot: its slots are strictly fresher than the
-    // 60 s mirror, and a slot the operator just blanked must not be
-    // re-filled from the older snapshot. We only ADD slots LiveStatus
-    // has that editCache lacks. Tuples that are already signed off are
-    // skipped — PMD_Production is canonical past sign-off.
+    // editCache wins per slot — but ONLY when this device legitimately
+    // owns the tuple. Otherwise (spectator PC, second iPad just looking)
+    // the local cache is stale by definition and would shadow the owner's
+    // 60 s mirror: PC poll fetches reject=23 from PMD_LiveStatus but its
+    // own editCache slot 0 (from an earlier glance at the job) still says
+    // reject=1, and the "add only what we lack" merge silently keeps the
+    // stale 1. Same bug masked half the QC sign-offs on remote viewers.
+    //
+    // Rules:
+    //   - tuple signed off → skip; PMD_Production is canonical.
+    //   - LiveStatus.OwnerDevice ≠ this device → REPLACE editCache for
+    //     the tuple with the live expansion. We're a spectator.
+    //   - otherwise (no owner yet, or owner == us) → keep current
+    //     merge-by-absence so locally-edited slots not yet pushed survive.
     let backfilled = false;
     for (const h of liveFresh) {
       if (!matchesFilter(h)) continue;
@@ -1013,6 +1022,13 @@ export class SharePointDataLayer implements PmdDataLayer {
         rejectsByKey.get(key) ?? [],
         false,
       );
+      const owner = h.ownerDevice || '';
+      const ownedByOther = !!owner && owner !== this.deviceId;
+      if (ownedByOther) {
+        this.editCache.set(key, liveSlots);
+        backfilled = true;
+        continue;
+      }
       const existing = this.editCache.get(key) ?? [];
       const haveSlot = new Set(existing.map((s) => s.slotIndex));
       let added = false;
