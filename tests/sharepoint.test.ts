@@ -997,6 +997,88 @@ describe('PMD_Production denormalisation: jobRequired + partDescription survive 
     expect(prod.body.timeline).toBe('R···············');
   });
 
+  it('persists CycleTime + ShiftTarget at sign-off (from planning) so past shifts recompute', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const writes: Array<{ list: string; body: Record<string, unknown> }> = [];
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+      upsertHeaderInto: (list: string, h: Record<string, unknown>) => Promise<void>;
+      replaceBreakdownEvents: () => Promise<void>;
+      replaceRejectEvents: () => Promise<void>;
+      deleteLiveRow: () => Promise<void>;
+      listPlanning: () => Promise<unknown[]>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [existing507071()] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+    o.upsertHeaderInto = async (list: string, h: Record<string, unknown>): Promise<void> => {
+      writes.push({ list, body: h });
+    };
+    o.replaceBreakdownEvents = async (): Promise<void> => { /* noop */ };
+    o.replaceRejectEvents = async (): Promise<void> => { /* noop */ };
+    o.deleteLiveRow = async (): Promise<void> => { /* noop */ };
+    // Planning still carries the order with a real cycle time (0.05 h/pc)
+    // and order total 176; gross this tuple = 115−61−8 = 46 good.
+    o.listPlanning = async (): Promise<unknown[]> => [
+      { jobNumber: '507071', orderQty: 176, qtyPerHr: 0.05, isDieChange: false },
+    ];
+
+    await dal.unlockShift('1300T', '2026-06-15-Day', '507071');
+    await dal.lockShift('1300T', '2026-06-15-Day', 'Bounpanh', 'Heng', '507071');
+
+    const prod = writes.find((w) => w.list === 'PMD_Production')!;
+    // Cycle time captured from planning so a future past-shift review can
+    // rebuild Shift Target after Epicor drops the order.
+    expect(prod.body.cycleTime).toBe(0.05);
+    // Shift Target snapshot: tuple Good = 115−61−8 = 46, Job Left =
+    // 176−46 = 130. 130 × 0.05 = 6.5 h < 8 h, so the job finishes inside
+    // the shift → target = Job Left = 130.
+    expect(prod.body.shiftTarget).toBe(130);
+  });
+
+  it('re-sign-off keeps CycleTime from the rehydrated row when planning has dropped it', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const writes: Array<{ list: string; body: Record<string, unknown> }> = [];
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+      upsertHeaderInto: (list: string, h: Record<string, unknown>) => Promise<void>;
+      replaceBreakdownEvents: () => Promise<void>;
+      replaceRejectEvents: () => Promise<void>;
+      deleteLiveRow: () => Promise<void>;
+      listPlanning: () => Promise<unknown[]>;
+    };
+    // Existing signed row already carries CycleTime=0.05 in the column.
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [{ ...existing507071(), cycleTime: 0.05 }] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+    o.upsertHeaderInto = async (list: string, h: Record<string, unknown>): Promise<void> => {
+      writes.push({ list, body: h });
+    };
+    o.replaceBreakdownEvents = async (): Promise<void> => { /* noop */ };
+    o.replaceRejectEvents = async (): Promise<void> => { /* noop */ };
+    o.deleteLiveRow = async (): Promise<void> => { /* noop */ };
+    o.listPlanning = async (): Promise<unknown[]> => []; // Epicor dropped it
+
+    await dal.unlockShift('1300T', '2026-06-15-Day', '507071');
+    await dal.lockShift('1300T', '2026-06-15-Day', 'Bounpanh', 'Heng', '507071');
+
+    const prod = writes.find((w) => w.list === 'PMD_Production')!;
+    // Survives via the rehydrated canonical slot even though planning is empty.
+    expect(prod.body.cycleTime).toBe(0.05);
+  });
+
   it('upsertHeaderInto does NOT write jobRequired=0 (would blank a real value via MERGE)', async () => {
     store.clear();
     const dal = new SharePointDataLayer({

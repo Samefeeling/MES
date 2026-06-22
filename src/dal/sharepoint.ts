@@ -17,6 +17,7 @@ import type {
 import type { PmdDataLayer } from './types';
 import { bdCategoryOf, bdLabelFor, BD_TAXONOMY } from '../core/breakdown';
 import { shiftBounds, slotClock } from '../core/shifts';
+import { shiftTargetFor } from '../core/targets';
 
 // =====================================================================
 // SharePointDataLayer — Resero Operations AU site.
@@ -131,6 +132,14 @@ const DEFAULT_FIELDS = {
      *  completed order from PMD_Planning. Optional column on the
      *  tenant; strip-rejected-fields tolerates absence. */
     jobRequired: 'JobRequired',
+    /** Cycle time (hours/piece) denormalised at sign-off so a past shift
+     *  can recompute Shift Target after Epicor drops the order. Optional
+     *  column; stripRejectedFields tolerates absence. */
+    cycleTime: 'CycleTime',
+    /** Shift Target snapshot written at sign-off for the SP list / Power
+     *  BI. The app recomputes the authoritative value from CycleTime, so
+     *  this is a denormalised convenience, not a read dependency. */
+    shiftTarget: 'ShiftTarget',
     countStart: 'CountStart',
     countEnd: 'CountEnd',
     reject: 'Reject',
@@ -959,6 +968,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       partNumber: F.partNum ? str(r[F.partNum]).trim() : '',
       partDescription: F.partDesc ? str(r[F.partDesc]) : '',
       jobRequired: F.jobRequired ? num(r[F.jobRequired]) : 0,
+      cycleTime: F.cycleTime ? num(r[F.cycleTime]) : 0,
       // The 16-char status timeline lives in the MachineCode column on
       // this tenant; prefer it over the (empty / fallback) F.timeline
       // entry so listProduction can rebuild per-slot status without a
@@ -1139,6 +1149,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         partNumber: h.partNumber,
         partDescription: h.partDescription,
         jobRequired: h.jobRequired,
+        cycleTime: h.cycleTime,
         slotIndex: 0,
         statusCode: '',
         countStart: h.countStart,
@@ -1172,6 +1183,9 @@ export class SharePointDataLayer implements PmdDataLayer {
       // first with jobRequired left blank, but the canonical totals
       // live on slot 0 by convention.
       slots[0].jobRequired = h.jobRequired;
+      // CycleTime rides along on the canonical slot so a past-shift
+      // review (synthetic order) can recompute Shift Target.
+      slots[0].cycleTime = h.cycleTime;
       // And the reject total: the per-status loop initialises
       // rejectCount to 0. Only stamp the column total when there are NO
       // PMD_Rejects events — when events exist they are the source of
@@ -1354,6 +1368,14 @@ export class SharePointDataLayer implements PmdDataLayer {
       if (fromCache) return fromCache;
       return orders.find((o) => o.jobNumber === job)?.orderQty ?? 0;
     };
+    // Cycle time (hours/piece) — same cache-first, planning-fallback rule
+    // as jobRequiredOf. Persisting it lets a past-shift review recompute
+    // Shift Target after Epicor has dropped the order from planning.
+    const cycleTimeOf = (job: string, slots: ProductionRecord[]): number => {
+      const fromCache = slots.find((s) => s.cycleTime && s.cycleTime > 0)?.cycleTime;
+      if (fromCache) return fromCache;
+      return orders.find((o) => o.jobNumber === job)?.qtyPerHr ?? 0;
+    };
     for (const slots of myTuples) {
       const job = slots[0]?.jobNumber ?? jobNumber ?? '';
       const agg = aggregateSlots(slots);
@@ -1379,6 +1401,18 @@ export class SharePointDataLayer implements PmdDataLayer {
       // column is still the only record, so this introduces no drift.
       const canon = slots.find((s) => s.slotIndex === 0);
       const reject = agg.reject || (canon?.rejectCount ?? 0);
+      const cycleTime = cycleTimeOf(job, slots);
+      // Shift Target snapshot for the SP list / Power BI. Built from the
+      // shared core formula so it matches what the operator/Trace pages
+      // recompute. jobLeft here is order total − THIS tuple's Good (the
+      // DAL has no cross-shift good at sign-off); the app recomputes the
+      // authoritative value from CycleTime, so this is a convenience
+      // snapshot, exact for single-shift jobs.
+      const tupleGood = Math.max(0, (agg.countEnd ?? 0) - (agg.countStart ?? 0) - reject);
+      const shiftTargetSnap = shiftTargetFor(
+        { jobRequired: required, qtyPerHr: cycleTime, isDieChange: false } as PlanningOrder,
+        Math.max(0, required - tupleGood),
+      );
       try {
         await this.upsertProductionHeader({
           machineCode,
@@ -1388,6 +1422,8 @@ export class SharePointDataLayer implements PmdDataLayer {
           partNumber: partNum,
           partDescription: partDesc,
           jobRequired: required,
+          cycleTime,
+          shiftTarget: shiftTargetSnap,
           timeline: agg.timeline,
           countStart: agg.countStart,
           countEnd: agg.countEnd,
@@ -1501,6 +1537,11 @@ export class SharePointDataLayer implements PmdDataLayer {
           partNumber: partNumByJob.get(jobNumber) ?? '',
           partDescription: '',
           jobRequired: 0,
+          // Carry cycle time onto the live mirror so other iPads (and a
+          // mid-shift reload) keep it; Shift Target is recomputed live,
+          // so no snapshot is written here.
+          cycleTime: canon.cycleTime ?? 0,
+          shiftTarget: null,
           timeline: agg.timeline,
           countStart: agg.countStart,
           countEnd: agg.countEnd,
@@ -1615,6 +1656,12 @@ export class SharePointDataLayer implements PmdDataLayer {
     // — writing 0 over a real existing value via the MERGE path would
     // blank it. stripRejectedFields tolerates absence of the column.
     if (F.jobRequired && h.jobRequired > 0) body[F.jobRequired] = h.jobRequired;
+    // CycleTime: only write a real rate. 0 means "unknown" (no planning
+    // row + no cached value) — writing 0 via MERGE would blank a good
+    // value, same rationale as JobRequired above.
+    if (F.cycleTime && h.cycleTime > 0) body[F.cycleTime] = h.cycleTime;
+    // ShiftTarget snapshot — write when we could compute one.
+    if (F.shiftTarget && h.shiftTarget != null) body[F.shiftTarget] = h.shiftTarget;
     if (F.downTime) body[F.downTime] = h.downTime;
     if (F.runTime) body[F.runTime] = h.runTime;
     if (F.handover) body[F.handover] = formatHandover(h.handover);
@@ -2142,6 +2189,7 @@ interface HeaderRow {
   partNumber: string;
   partDescription: string;
   jobRequired: number;
+  cycleTime: number;
   timeline: string;
   countStart: number | null;
   countEnd: number | null;
@@ -2163,6 +2211,12 @@ interface HeaderInput {
   partNumber: string;
   partDescription: string;
   jobRequired: number;
+  /** Cycle time (hours/piece) for the job — persisted so past shifts
+   *  recompute Shift Target. 0 when unknown (the column is skipped). */
+  cycleTime: number;
+  /** Shift Target snapshot for the SP list / Power BI. null when no
+   *  cycle time is available (the column is skipped). */
+  shiftTarget: number | null;
   timeline: string;
   countStart: number | null;
   countEnd: number | null;

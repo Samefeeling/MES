@@ -105,6 +105,13 @@ export interface ProductionRecord {
    *  to 0 / "—" when the underlying PMD_Production column hasn't been
    *  added on the tenant yet. */
   jobRequired?: number;
+  /** Cycle time (hours per piece, Epicor JobOper_ProdStandard)
+   *  denormalised onto the canonical (slot 0) row at sign-off via the
+   *  PMD_Production.CycleTime column. Lets a PAST shift recompute Shift
+   *  Target after Epicor drops the order from PMD_Planning — without it
+   *  the synthetic order had no rate and Shift Target rendered "—".
+   *  Falls back to 0 / undefined on tenants without the column. */
+  cycleTime?: number;
   slotIndex: number; // 0..15
   statusCode: StatusCode | '';
   countStart: number | null;

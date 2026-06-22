@@ -20,6 +20,10 @@ import {
   slotClock,
 } from '../core/shifts';
 import { STATUSES, STATUS_MAP } from '../core/status';
+// Re-exported so existing importers (Trace view, tests) can keep pulling
+// these from ./operator while the canonical definitions live in core.
+import { jobLeftPiecesFor, shiftTargetFor } from '../core/targets';
+export { jobLeftPiecesFor, shiftTargetFor } from '../core/targets';
 import { bdLabelFor } from '../core/breakdown';
 import { type Handover, parseHandover as sharedParseHandover } from '../core/handover';
 import { openBreakdownCascade } from './breakdown';
@@ -135,6 +139,9 @@ function blankRecord(slot: number): ProductionRecord {
     shiftId: sid(),
     jobNumber: S!.selJob,
     partNumber: order?.partNumber ?? '',
+    // Carry cycle time so it persists through editCache → sign-off even
+    // if Epicor drops the order from planning before the shift is signed.
+    cycleTime: order?.qtyPerHr ?? 0,
     slotIndex: slot,
     statusCode: '',
     countStart: null,
@@ -199,7 +206,9 @@ function shiftOrders(): PlanningOrder[] {
       // Order Qty total and the Job Left basis for orders Epicor has dropped.
       orderQty: canon?.jobRequired ?? 0,
       jobRequired: canon?.jobRequired ?? 0,
-      qtyPerHr: 0,
+      // CycleTime persisted at sign-off → Shift Target recomputes for a
+      // historical order even after Epicor drops it from planning.
+      qtyPerHr: canon?.cycleTime ?? 0,
       duration: 0,
       released: false,
       isDieChange: false,
@@ -295,7 +304,9 @@ function selectedOrder(): PlanningOrder | undefined {
     plannedEnd: '',
     orderQty: canon?.jobRequired ?? 0,
     jobRequired: canon?.jobRequired ?? 0,
-    qtyPerHr: 0,
+    // CycleTime persisted at sign-off → Shift Target recomputes for a
+    // past shift even after Epicor drops the order from planning.
+    qtyPerHr: canon?.cycleTime ?? 0,
     duration: 0,
     released: false,
     isDieChange: false,
@@ -517,34 +528,8 @@ function jobLeftPieces(): number | null {
 }
 
 /**
- * Pure formula behind {@link jobLeftPieces} — shared with the Trace view
- * (src/ui/trace.ts) so management sees the same number the operator does.
- * `jobGood` is the cumulative Good across every (machine, shift) tuple
- * of this job, including the current shift's in-flight contribution.
- * Returns null for die-change pseudo-orders.
- */
-export function jobLeftPiecesFor(
-  o: PlanningOrder,
-  jobGood: number,
-): number | null {
-  if (o.isDieChange) return null;
-  return Math.max(0, o.jobRequired - jobGood);
-}
-
-/**
  * Shift Target = pieces the operator should aim for this shift.
- *
- * The planning row's `qtyPerHr` field is sourced from Epicor's
- * `JobOper_ProdStandard` column, which on this tenant is expressed as
- * *hours per piece* (cycle time) — that's why the old "× pieces/hour"
- * formula was rounding to zero for every job, the value is in the
- * ~0.005 range.
- *
- * Operator-stated rule:
- *   if  JobLeft × CT  ≥  8h   →  target = floor(8 / CT)   (full shift)
- *   else                       →  target = JobLeft        (job will finish)
- *
- * Returns null when no planning rate is available.
+ * Thin wrapper over the shared core formula; see core/targets.ts.
  */
 function shiftTarget(): number | null {
   const o = selectedOrder();
@@ -552,17 +537,6 @@ function shiftTarget(): number | null {
   const jl = jobLeftPieces();
   if (jl == null) return null;
   return shiftTargetFor(o, jl);
-}
-
-/** Pure formula behind {@link shiftTarget}; see that comment for the rule.
- *  Shared with the Trace view so the two pages can never drift apart. */
-export function shiftTargetFor(
-  o: PlanningOrder,
-  jobLeft: number,
-): number | null {
-  if (!o.qtyPerHr || o.qtyPerHr <= 0) return null;
-  const ct = o.qtyPerHr; // hours per piece
-  return jobLeft * ct >= 8 ? Math.floor(8 / ct) : jobLeft;
 }
 
 /**

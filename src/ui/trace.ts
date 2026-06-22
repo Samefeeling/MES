@@ -596,7 +596,9 @@ export function syntheticOrderFromRecord(
     plannedEnd: '',
     orderQty: req,
     jobRequired: req,
-    qtyPerHr: 0,
+    // Cycle time persisted on PMD_Production at sign-off → Shift Target
+    // recomputes for the historical shift instead of rendering "—".
+    qtyPerHr: canon.cycleTime ?? 0,
     duration: 0,
     released: false,
     isDieChange: false,
