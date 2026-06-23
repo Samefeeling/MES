@@ -184,6 +184,9 @@ export class MemoryDataLayer implements PmdDataLayer {
     supervisor: string,
     operator: string,
     jobNumber?: string,
+    /** Accepted for interface parity with the SharePoint DAL; the memory
+     *  DAL doesn't persist a JobLeft column. */
+    _jobLeft?: number | null,
   ): Promise<void> {
     const now = new Date().toISOString();
     // Per-job sign-off: other orders on the same shift stay editable

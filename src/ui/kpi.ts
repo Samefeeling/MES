@@ -449,9 +449,13 @@ async function compute(now = new Date()): Promise<void> {
   const partNumByJob = new Map<string, string>();
   for (const o of planning) partNumByJob.set(o.jobNumber, o.partNumber);
 
-  // Build a JobNum → partDescription lookup once, used by the per-job
-  // breakdown rows (3rd indent level). Falls back to empty string for jobs
-  // not in the planning list (closed in Epicor since the shift ran).
+  // JobNum → partDescription lookup. PMD_Production carries the
+  // denormalised JobHead_PartDescription on every signed-off row, so
+  // resolve from there first; planning is only the seed for jobs that
+  // have no production rows yet. Planning rolls off Epicor when an
+  // order completes, so trusting planning alone made a finished job's
+  // description silently blank — production rows survive forever and
+  // are the source of truth here.
   const partDescByJob = new Map<string, string>();
   for (const o of planning) partDescByJob.set(o.jobNumber, o.partDescription);
 
@@ -464,6 +468,10 @@ async function compute(now = new Date()): Promise<void> {
     // still resolves a swatch.
     for (const r of all) {
       if (r.partNumber) partNumByJob.set(r.jobNumber, r.partNumber);
+      // Production wins for partDescription too — see partDescByJob
+      // comment above. Skip blanks so we never blow away a planning seed
+      // with an empty production row (the non-canonical slots carry '').
+      if (r.partDescription) partDescByJob.set(r.jobNumber, r.partDescription);
     }
     // Single pass per machine: partition into byShift × byDateBucket, then
     // aggregate each slice once at the end. Avoids re-filtering `all` 3×

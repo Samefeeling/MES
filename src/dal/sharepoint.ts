@@ -177,6 +177,13 @@ const DEFAULT_FIELDS = {
      *  tolerates absence (older tenants fall back to the render-time
      *  stamp). */
     signOff: 'Signoff',
+    /** Job Left at sign-off time — the same value the operator sees on
+     *  the Operator side panel (JobRequired − sum-of-Good across every
+     *  shift of this job, including the one being signed off). Persisted
+     *  so a supervisor reviewing a past shift in SharePoint / Power BI
+     *  can read what the floor saw without re-deriving from production
+     *  rows. Number column; stripRejectedFields tolerates absence. */
+    jobLeft: 'JobLeft',
   },
   rejects: {
     // Title = Machine; Date is a DateTime (not date-only).
@@ -1160,6 +1167,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       rejectsBySlot: F.rejectsBySlot ? str(r[F.rejectsBySlot]) : '',
       ownerDevice: F.ownerDevice ? str(r[F.ownerDevice]) : '',
       signOff: F.signOff ? str(r[F.signOff]) : '',
+      jobLeft: F.jobLeft && r[F.jobLeft] != null ? num(r[F.jobLeft]) : -1,
     }));
   }
 
@@ -1488,6 +1496,11 @@ export class SharePointDataLayer implements PmdDataLayer {
     supervisor: string,
     operator: string,
     jobNumber?: string,
+    /** Job Left as the operator UI computed it (jobRequired − sum-of-Good
+     *  across every shift of this job). Persisted to the JobLeft column
+     *  for back-reference. Omit to let the DAL fall back to the tuple-only
+     *  estimate (exact for single-shift jobs). */
+    jobLeft?: number | null,
   ): Promise<void> {
     const date = shiftId.slice(0, 10);
     const shift = shiftId.slice(11);
@@ -1585,13 +1598,22 @@ export class SharePointDataLayer implements PmdDataLayer {
       // authoritative value from CycleTime, so this is a convenience
       // snapshot, exact for single-shift jobs.
       const tupleGood = Math.max(0, (agg.countEnd ?? 0) - (agg.countStart ?? 0) - reject);
+      // Prefer the UI-computed Job Left (exact cross-shift Good). Fall back
+      // to the tuple-only estimate when the caller didn't supply one — the
+      // memory DAL test path and any future scripted sign-off go through
+      // here without UI state. Clamp ≥ 0 either way.
+      const jobLeftSnap =
+        jobLeft != null
+          ? Math.max(0, jobLeft)
+          : Math.max(0, required - tupleGood);
       const shiftTargetSnap = shiftTargetFor(
         { jobRequired: required, qtyPerHr: cycleTime, isDieChange: false } as PlanningOrder,
-        Math.max(0, required - tupleGood),
+        jobLeftSnap,
       );
       try {
         await this.upsertProductionHeader({
           signOff: new Date().toISOString(),
+          jobLeft: jobLeftSnap,
           machineCode,
           date,
           shift,
@@ -1867,6 +1889,12 @@ export class SharePointDataLayer implements PmdDataLayer {
     // timestamp — a live snapshot push leaves it undefined so the column
     // is never stamped on an in-progress row.
     if (F.signOff && h.signOff) body[F.signOff] = h.signOff;
+    // JobLeft (PMD_Production only). Only write when lockShift supplied a
+    // value — live snapshots leave it undefined so the column isn't
+    // touched on an in-progress row. The 0 value is meaningful ("job
+    // complete") so write it explicitly rather than skipping like the
+    // jobRequired guard does.
+    if (F.jobLeft && h.jobLeft != null) body[F.jobLeft] = h.jobLeft;
     if (F.totalGood) {
       const cs = h.countStart;
       const ce = h.countEnd;
@@ -2412,6 +2440,11 @@ interface HeaderRow {
   /** Sign-off timestamp (ISO) from PMD_Production.Signoff; '' when absent
    *  (live rows, or legacy signed rows from before the column existed). */
   signOff: string;
+  /** Job Left at sign-off time from PMD_Production.JobLeft; -1 when the
+   *  column is absent or empty (live rows / legacy signed rows). The
+   *  operator UI recomputes the authoritative value live, so this is a
+   *  back-reference convenience for SharePoint / Power BI. */
+  jobLeft: number;
 }
 
 interface HeaderInput {
@@ -2450,6 +2483,10 @@ interface HeaderInput {
   /** PMD_Production only — ISO sign-off timestamp written on lockShift.
    *  Omitted on live snapshot pushes so the column is left untouched. */
   signOff?: string;
+  /** PMD_Production only — Job Left at sign-off, computed by the
+   *  operator UI (jobRequired − sum-of-Good across every shift of this
+   *  job including this one). null/undefined skips the column write. */
+  jobLeft?: number | null;
 }
 
 interface StatusHours {

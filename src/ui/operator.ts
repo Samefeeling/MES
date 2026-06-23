@@ -1269,20 +1269,14 @@ function lockInfo(): { lockedBy: string; lockedAt: string } | null {
 }
 
 /**
- * Banner shown on a non-iPad browser (a PC viewer) with no supervisor
- * signed in. The whole sheet is read-only behind it. The device-class
- * rule replaces the old per-iPad OwnerDevice claim that caused fights
- * between iPads — iPads write freely now; only PCs are spectators by
- * default. A supervisor can sign in via the top-nav 🔓 button to edit.
+ * Compact "View only" indicator shown on a non-iPad browser (a PC viewer)
+ * with no supervisor signed in. The whole sheet is read-only behind it.
+ * Deliberately tiny — earlier multi-line banner was too loud for what's
+ * just a passive viewer state.
  */
 function buildOwnerBanner(): string {
   if (!isReadOnlyDevice()) return '';
-  return `<div class="lock-banner owner-banner">
-    <div class="lock-text">
-      <b>🔒 Read only — sign in as supervisor to edit</b>
-      <span>Floor data entry happens on the iPad. Use 🔓 Supervisor in the top nav to enable editing here.</span>
-    </div>
-  </div>`;
+  return `<span class="view-only-pill" title="Read only — sign in as supervisor via 🔓 in the top nav to edit">👁 View only</span>`;
 }
 
 function buildLockBanner(): string {
@@ -1997,7 +1991,18 @@ async function doSignoffSave(): Promise<void> {
     // Scope sign-off to the order being reviewed: another job already
     // running on this press's remaining timeline slots (operator
     // started the next order mid-shift) must stay live and editable.
-    await dalRef.lockShift(S!.mc, sid(), S!.selSupervisor, S!.selOperator, S!.selJob || undefined);
+    // Pass the UI's exact Job Left so PMD_Production.JobLeft mirrors what
+    // the operator saw on the side panel at sign-off (cross-shift Good,
+    // not the DAL's tuple-only estimate). null for die-change jobs (no
+    // piece target) or when there's no planning row to derive against.
+    await dalRef.lockShift(
+      S!.mc,
+      sid(),
+      S!.selSupervisor,
+      S!.selOperator,
+      S!.selJob || undefined,
+      jobLeftPieces(),
+    );
     closeModal();
     toast(`Signed off · ${S!.selJob || 'shift'} saved to Master`, 'ok');
     // Keep selJob: the next shift on the same job continues seamlessly

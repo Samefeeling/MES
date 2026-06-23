@@ -391,6 +391,10 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .owner-banner .lock-unlock-btn{background:#3b82f6}
 .owner-banner .lock-unlock-btn:hover{background:#2563eb}
 .owner-banner .lock-no-perm{color:#1e40af}
+/* Tiny "View only" pill shown on a PC viewer with no supervisor
+   sign-in. Replaces the older full-width owner banner — the device-
+   class read-only state is passive, so a chip is enough. */
+.view-only-pill{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:#1e40af;background:#dbeafe;border:1px solid #93c5fd;border-radius:999px;padding:2px 8px;margin-bottom:8px;cursor:default}
 
 /* ===== supervisor mode toggle in the top nav ===== */
 .sv-toggle.on{background:#dcfce7 !important;color:#166534 !important;border:1px solid #86efac !important}

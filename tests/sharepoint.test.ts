@@ -1550,6 +1550,84 @@ describe('signed-off history, 48h live cap, and Signoff timestamp', () => {
     expect(stamp).toBeGreaterThanOrEqual(before);
   });
 
+  it('lockShift writes UI-supplied Job Left to the JobLeft column', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const today = dayId(new Date());
+    const shiftId = `${today}-Day`;
+    const cache = (dal as unknown as { editCache: Map<string, unknown[]> }).editCache;
+    cache.set(`Batt1|${shiftId}|SFM700`, [{
+      id: -1, machineCode: 'Batt1', shiftId, jobNumber: 'SFM700', slotIndex: 0,
+      statusCode: 'R', countStart: 0, countEnd: 40, rejects: '{}', purgeKg: null,
+      rejectCount: 0, bdIssue: '', mangoTicket: '', handoverNote: '',
+      operator: 'Joe', supervisor: 'Sue', qcBy: '', locked: false, lockedBy: '',
+      lockedAt: '', createdAt: '', updatedAt: '',
+    }]);
+    let prodBody: Record<string, unknown> | null = null;
+    const o = dal as unknown as {
+      listPlanning: () => Promise<unknown[]>;
+      itemType: () => Promise<string>;
+      getAllItems: () => Promise<unknown[]>;
+      postWithFieldRetry: (l: string, u: string, b: Record<string, unknown>) => Promise<void>;
+      replaceBreakdownEvents: () => Promise<void>;
+      replaceRejectEvents: () => Promise<void>;
+      deleteLiveRow: () => Promise<void>;
+    };
+    o.listPlanning = async (): Promise<unknown[]> => [];
+    o.itemType = async (): Promise<string> => 'SP.X';
+    o.getAllItems = async (): Promise<unknown[]> => [];
+    o.postWithFieldRetry = async (_l, _u, b): Promise<void> => { prodBody = b; };
+    o.replaceBreakdownEvents = async (): Promise<void> => {};
+    o.replaceRejectEvents = async (): Promise<void> => {};
+    o.deleteLiveRow = async (): Promise<void> => {};
+
+    // UI computed Job Left = 217 (cross-shift Good already burnt down
+    // from a larger order). The column must mirror this exactly — not
+    // the DAL's tuple-only estimate (which would be (required − 40)).
+    await dal.lockShift('Batt1', shiftId, 'Sue', 'Joe', 'SFM700', 217);
+    expect(prodBody).not.toBeNull();
+    expect(prodBody!.JobLeft).toBe(217);
+  });
+
+  it('lockShift falls back to tuple-only JobLeft when the UI passes null', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const today = dayId(new Date());
+    const shiftId = `${today}-Day`;
+    const cache = (dal as unknown as { editCache: Map<string, unknown[]> }).editCache;
+    cache.set(`Batt1|${shiftId}|SFM700`, [{
+      id: -1, machineCode: 'Batt1', shiftId, jobNumber: 'SFM700', slotIndex: 0,
+      statusCode: 'R', countStart: 0, countEnd: 40, rejects: '{}', purgeKg: null,
+      rejectCount: 0, bdIssue: '', mangoTicket: '', handoverNote: '',
+      operator: 'Joe', supervisor: 'Sue', qcBy: '', locked: false, lockedBy: '',
+      lockedAt: '', createdAt: '', updatedAt: '',
+    }]);
+    let prodBody: Record<string, unknown> | null = null;
+    const o = dal as unknown as {
+      listPlanning: () => Promise<{ jobNumber: string; orderQty: number }[]>;
+      itemType: () => Promise<string>;
+      getAllItems: () => Promise<unknown[]>;
+      postWithFieldRetry: (l: string, u: string, b: Record<string, unknown>) => Promise<void>;
+      replaceBreakdownEvents: () => Promise<void>;
+      replaceRejectEvents: () => Promise<void>;
+      deleteLiveRow: () => Promise<void>;
+    };
+    // Planning seeds jobRequired = 100; tuple Good = 40 → fallback = 60.
+    o.listPlanning = async (): Promise<{ jobNumber: string; orderQty: number }[]> => [
+      { jobNumber: 'SFM700', orderQty: 100 } as { jobNumber: string; orderQty: number },
+    ];
+    o.itemType = async (): Promise<string> => 'SP.X';
+    o.getAllItems = async (): Promise<unknown[]> => [];
+    o.postWithFieldRetry = async (_l, _u, b): Promise<void> => { prodBody = b; };
+    o.replaceBreakdownEvents = async (): Promise<void> => {};
+    o.replaceRejectEvents = async (): Promise<void> => {};
+    o.deleteLiveRow = async (): Promise<void> => {};
+
+    await dal.lockShift('Batt1', shiftId, 'Sue', 'Joe', 'SFM700', null);
+    expect(prodBody).not.toBeNull();
+    expect(prodBody!.JobLeft).toBe(60);
+  });
+
   it('48h hard cap sweeps an old live row that still carries status', async () => {
     store.clear();
     const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
