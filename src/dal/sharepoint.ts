@@ -162,12 +162,12 @@ const DEFAULT_FIELDS = {
     // column closes that gap. The read path prefers PMD_Rejects events
     // when present, falling back to this JSON for live (unsigned) rows.
     rejectsBySlot: 'RejectsBySlot',
-    /** PMD_LiveStatus only: the device id that owns this in-progress
-     *  (machine, shift, job) edit session. Other iPads render the
-     *  machine's live shift read-only while this is set to a device
-     *  other than their own. Absent on PMD_Production (cleared at
-     *  sign-off when the live row is deleted); stripRejectedFields
-     *  tolerates the column not existing there. */
+    /** PMD_LiveStatus only: the device id that last touched this
+     *  (machine, shift, job) live row. Diagnostics-only — the write
+     *  rule is device-CLASS (iPad vs not) via SharePointOptions.canWrite,
+     *  not per-device-id arbitration (the old claim model caused fights
+     *  between iPads in practice). Absent on PMD_Production; strip-
+     *  rejected-fields tolerates the column not existing on a tenant. */
     ownerDevice: 'OwnerDevice',
     /** Wall-clock timestamp (date+time) of when the (machine, shift, job)
      *  was signed off, written on lockShift. The signed-off banner reads
@@ -253,12 +253,23 @@ export interface SharePointOptions {
   planningCsvPath?: string;
   /** Override any list/field internal name without editing this file. */
   fieldMap?: PartialFieldMap;
+  /**
+   * Whether THIS browser is allowed to mutate the SharePoint lists.
+   * The DAL itself is UA-agnostic — the UI injects this hook (typically
+   * `isIpadDevice() || isSupervisor()`) so cache-merge and live-snapshot
+   * paths can tell whether to treat the local editCache as authoritative
+   * (writable: per-slot merge wins) or stale (read-only: server snapshot
+   * wins wholesale). Defaults to `() => true` for backwards-compatibility
+   * and for tests / scripts that need to write unconditionally.
+   */
+  canWrite?: () => boolean;
 }
 
 export class SharePointDataLayer implements PmdDataLayer {
   private digest: { value: string; expires: number } | null = null;
   private readonly siteUrl: string;
   private readonly planningCsvPath?: string;
+  private readonly canWriteHook: () => boolean;
   private readonly F: SharePointFieldMap;
 
   /**
@@ -300,27 +311,23 @@ export class SharePointDataLayer implements PmdDataLayer {
    */
   private dieColorCache: ProductDieColor[] | null = null;
   /**
-   * Stable per-iPad identity. The first device to enter a qualifying
-   * edit session (machine + job + operator + supervisor + ≥1 status)
-   * claims the (machine, shift, job) live row via its OwnerDevice
-   * column; every other iPad then renders that machine's live shift
-   * read-only so two operators can't both type into the same press.
-   * Persisted in localStorage so a page reload keeps the same id.
+   * Stable per-device identity, persisted in localStorage. Written to
+   * PMD_LiveStatus.OwnerDevice on every snapshot push so we can see
+   * after the fact which iPad last touched a press, but no longer used
+   * to gate writes — the write rule is device-CLASS (iPad vs not) via
+   * SharePointOptions.canWrite, not per-device-id arbitration. The
+   * old per-device claim caused fights between iPads in practice (one
+   * iPad "owned" the press and locked the others out for no good
+   * floor-operations reason).
    */
   private deviceId = '';
   private static readonly DEVICE_ID_KEY = 'pmd.deviceId';
-  /**
-   * OwnerDevice last seen on each (machine|shiftId|jobNumber) live row,
-   * refreshed every listProduction. pushLiveSnapshot consults it to
-   * avoid stealing a row another device already owns, and the operator
-   * UI reads it (via liveOwner) to decide read-only state.
-   */
-  private liveOwnerByKey = new Map<string, string>();
 
   constructor(opts: SharePointOptions | string) {
     const o = typeof opts === 'string' ? { siteUrl: opts } : opts;
     this.siteUrl = o.siteUrl.replace(/\/$/, '');
     this.planningCsvPath = o.planningCsvPath;
+    this.canWriteHook = o.canWrite ?? ((): boolean => true);
     // Merge user overrides into the defaults.
     this.F = mergeFieldMap(DEFAULT_FIELDS, o.fieldMap);
     this.deviceId = this.resolveDeviceId();
@@ -350,73 +357,12 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
   }
 
-  /** This iPad's stable device id (see deviceId field). */
+  /** This iPad's stable device id. Still stamped onto PMD_LiveStatus's
+   *  OwnerDevice column for after-the-fact diagnostics ("which iPad
+   *  last touched this press?"), but the write/read rule is now purely
+   *  device-class based — see SharePointOptions.canWrite. */
   getDeviceId(): string {
     return this.deviceId;
-  }
-
-  /**
-   * Owner of the active live edit session on (machine, shiftId), or null
-   * when no in-progress job is owned. Reads the OwnerDevice map last
-   * refreshed by listProduction, so call after a load. `ownedByOther` is
-   * the signal the operator UI uses to drop into read-only — the press
-   * is being driven from another iPad. When several jobs on the machine
-   * are owned (a press mid hand-over), the lexically-last job wins as a
-   * stable, deterministic pick.
-   */
-  liveOwner(
-    machineCode: string,
-    shiftId: string,
-  ): { jobNumber: string; deviceId: string; ownedByOther: boolean } | null {
-    const prefix = `${machineCode}|${shiftId}|`;
-    let best: { jobNumber: string; deviceId: string } | null = null;
-    for (const [key, owner] of this.liveOwnerByKey) {
-      if (!owner || !key.startsWith(prefix)) continue;
-      const jobNumber = key.slice(prefix.length);
-      if (!best || jobNumber > best.jobNumber) best = { jobNumber, deviceId: owner };
-    }
-    if (!best) return null;
-    return { ...best, ownedByOther: best.deviceId !== this.deviceId };
-  }
-
-  /**
-   * Supervisor force-takeover: stamp THIS device as the owner of a live
-   * (machine, shift, job) row, overriding whatever device held it. The
-   * fallback for "iPad A walked off / died mid-shift" — the press can't
-   * be signed off (it isn't finished) and unlockShift only targets
-   * signed rows, so a supervisor reclaims the live session here. No-op
-   * (returns false) when there is no live row to stamp.
-   */
-  async claimLiveOwnership(
-    machineCode: string,
-    shiftId: string,
-    jobNumber: string,
-  ): Promise<boolean> {
-    const F = this.F.production;
-    if (!F.ownerDevice) return false;
-    const date = shiftId.slice(0, 10);
-    const shift = shiftId.slice(11);
-    const rows = await this.getAllItems<Record<string, unknown>>(
-      LISTS.liveStatus,
-      '$filter=' +
-        encodeURIComponent(
-          `${F.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${shift}' and ${F.jobNumber} eq '${jobNumber}'`,
-        ),
-    );
-    const target = rows.find((r) => dateOnly(r[F.date]) === date);
-    if (!target) return false;
-    const id = getId(target);
-    await this.post(
-      `${this.listUrl(LISTS.liveStatus)}/items(${id})`,
-      {
-        __metadata: { type: await this.itemType(LISTS.liveStatus) },
-        [F.ownerDevice]: this.deviceId,
-      },
-      '*', // MERGE the existing row, don't POST a new one
-    );
-    const key = this.cacheKey(machineCode, shiftId, jobNumber);
-    this.liveOwnerByKey.set(key, this.deviceId);
-    return true;
   }
 
   private rehydrateEditCache(): void {
@@ -901,19 +847,6 @@ export class SharePointDataLayer implements PmdDataLayer {
       this.fetchBreakdownTimelines(filter),
     ]);
 
-    // Refresh the OwnerDevice map from the live mirror so liveOwner()
-    // and pushLiveSnapshot's claim check see the latest owners. Rebuilt
-    // (not merged) each call so a released row (deleted at sign-off)
-    // drops out instead of pinning the machine read-only forever.
-    this.liveOwnerByKey = new Map();
-    for (const h of liveHeaders) {
-      if (!h.ownerDevice) continue;
-      this.liveOwnerByKey.set(
-        this.cacheKey(h.machineCode, `${h.date}-${h.shift}`, h.jobNumber),
-        h.ownerDevice,
-      );
-    }
-
     const matchesFilter = (h: HeaderRow): boolean => {
       // Defensive re-filter. shiftDateRange is intentionally loose
       // (±1 d) to catch legacy noon-UTC / local-start timestamps; with
@@ -1030,20 +963,22 @@ export class SharePointDataLayer implements PmdDataLayer {
     // burns a partial timeline into PMD_Production — exactly the
     // SFM507068 14:23 incident.
     //
-    // editCache wins per slot — but ONLY when this device legitimately
-    // owns the tuple. Otherwise (spectator PC, second iPad just looking)
-    // the local cache is stale by definition and would shadow the owner's
-    // 60 s mirror: PC poll fetches reject=23 from PMD_LiveStatus but its
-    // own editCache slot 0 (from an earlier glance at the job) still says
-    // reject=1, and the "add only what we lack" merge silently keeps the
-    // stale 1. Same bug masked half the QC sign-offs on remote viewers.
+    // editCache wins per slot — but ONLY when this device is allowed to
+    // write. On a read-only device (PC viewer with no supervisor signed
+    // in) the local cache is stale by definition and would shadow the
+    // iPad's 60 s mirror: PC poll fetches reject=23 from PMD_LiveStatus
+    // but its own editCache slot 0 (from an earlier glance at the job)
+    // still says reject=1, and the "add only what we lack" merge silently
+    // keeps the stale 1. Same bug masked half the QC sign-offs on remote
+    // viewers.
     //
     // Rules:
     //   - tuple signed off → skip; PMD_Production is canonical.
-    //   - LiveStatus.OwnerDevice ≠ this device → REPLACE editCache for
-    //     the tuple with the live expansion. We're a spectator.
-    //   - otherwise (no owner yet, or owner == us) → keep current
-    //     merge-by-absence so locally-edited slots not yet pushed survive.
+    //   - this device is read-only → REPLACE editCache for the tuple
+    //     with the live expansion. We're a spectator.
+    //   - this device can write → keep merge-by-absence so locally-edited
+    //     slots not yet pushed survive.
+    const writable = this.canWriteHook();
     let backfilled = false;
     for (const h of liveFresh) {
       if (!matchesFilter(h)) continue;
@@ -1058,9 +993,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         rejectsByKey.get(key) ?? [],
         false,
       );
-      const owner = h.ownerDevice || '';
-      const ownedByOther = !!owner && owner !== this.deviceId;
-      if (ownedByOther) {
+      if (!writable) {
         this.editCache.set(key, liveSlots);
         backfilled = true;
         continue;
@@ -1752,19 +1685,18 @@ export class SharePointDataLayer implements PmdDataLayer {
       // rows that DO carry status, which the listProduction junk
       // filter deliberately leaves alone.
       if (shiftEndedLongAgo(shiftId, now)) continue;
-      // Ownership arbitration. If another device already owns this live
-      // tuple, this iPad is a read-only spectator — do NOT broadcast its
-      // (stale) edits and do NOT clobber the owner's column. Skip the
-      // tuple entirely; the operator UI keeps this device read-only.
-      const currentOwner = this.liveOwnerByKey.get(key) ?? '';
-      if (currentOwner && currentOwner !== this.deviceId) continue;
-      // Claim ownership once the session qualifies (operator + supervisor
-      // + ≥1 status, per the dominant-device rule). Until then leave the
-      // column empty so a half-started tap doesn't lock the press.
-      const ownerDevice = qualifiesForOwnership(canon, slots)
-        ? this.deviceId
-        : currentOwner;
-      if (ownerDevice) this.liveOwnerByKey.set(key, ownerDevice);
+      // Read-only devices (PC viewer with no supervisor signed in)
+      // never push. Without this gate a stale local cache on a viewer
+      // would mirror straight back over the iPad's fresh data on every
+      // poll. The device-class rule replaced per-device ownership
+      // arbitration after the latter caused fights between iPads on
+      // the floor.
+      if (!this.canWriteHook()) continue;
+      // OwnerDevice column still gets stamped with this device's id
+      // (purely for after-the-fact diagnostics — "which iPad last
+      // touched this press?"). No claim arbitration: every writable
+      // device just overwrites.
+      const ownerDevice = this.deviceId;
       const date = shiftId.slice(0, 10);
       const shift = shiftId.slice(11);
       const agg = aggregateSlots(slots);
@@ -2610,20 +2542,6 @@ export function isStaleLiveHeader(
     if (ch && ch !== '·' && ch !== ' ') return false;
   }
   return true;
-}
-
-/**
- * Dominant-device rule: a (machine, shift, job) live session may claim
- * OwnerDevice only once it carries a confirmed operator AND supervisor
- * AND at least one Machine Status. Until all three are present a stray
- * tap mustn't lock the press out from under everyone else.
- */
-function qualifiesForOwnership(
-  canon: ProductionRecord | undefined,
-  slots: ProductionRecord[],
-): boolean {
-  if (!canon?.operator || !canon?.supervisor) return false;
-  return slots.some((s) => s.statusCode);
 }
 
 function hasMeaningfulProgress(slots: ProductionRecord[]): boolean {

@@ -1,6 +1,8 @@
 import type { PmdDataLayer, BackendKind } from './types';
+import { isIpadDevice } from '../core/device';
 import { MemoryDataLayer } from './memory';
 import { SharePointDataLayer } from './sharepoint';
+import { isSupervisor } from '../ui/supervisor-auth';
 
 export type { PmdDataLayer } from './types';
 
@@ -13,6 +15,11 @@ export function createDataLayer(env: Record<string, string | undefined> = {}): P
       return new SharePointDataLayer({
         siteUrl: env.VITE_SITE_URL ?? '',
         planningCsvPath: env.VITE_PLANNING_CSV_PATH,
+        // Device-class write rule: iPad writes freely; anything else is
+        // read-only unless a supervisor is signed in. Replaces the old
+        // per-device OwnerDevice claim arbitration that caused fights
+        // between iPads on the floor.
+        canWrite: () => isIpadDevice() || isSupervisor(),
       });
     case 'memory':
     default:

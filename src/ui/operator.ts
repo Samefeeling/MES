@@ -31,6 +31,19 @@ import { toast } from './toast';
 import { closeModal, escapeHtml, openModal } from './modal';
 import { renderOutputRejectChart } from './charts';
 import { clearSupervisor, isSupervisor } from './supervisor-auth';
+import { isIpadDevice } from '../core/device';
+
+/**
+ * Device-class write rule (replaces the old per-device OwnerDevice claim
+ * arbitration which caused fights between iPads on the floor):
+ *   iPad → writable (it's the on-floor data-entry device)
+ *   anything else → read-only, unless supervisor mode is signed in
+ * Memoised iPad detection + live supervisor session → re-evaluated on
+ * every call so a supervisor sign-in flips the UI immediately.
+ */
+function canWriteThisDevice(): boolean {
+  return isIpadDevice() || isSupervisor();
+}
 
 // PMD Operator Production Sheet — Excel-style rebuild of modPMDOperator.bas.
 // One machine + one shift + one job at a time. 16 half-hour slots horizontally;
@@ -62,11 +75,6 @@ interface OpState {
    *  boot. Drives the swatch shown on the Product Description meta cell
    *  so the operator can see the colour they're meant to be running. */
   dieColors: Map<string, { hex: string; name: string }>;
-  /** Live edit session owned by ANOTHER iPad on this (machine, shift),
-   *  or null. When set, this device renders read-only and the Job#
-   *  dropdown is pinned to the owned job until the owner signs off
-   *  (the dominant-device rule). Refreshed on every reload(). */
-  otherOwner: { jobNumber: string; deviceId: string } | null;
 }
 
 let S: OpState | null = null;
@@ -377,8 +385,8 @@ async function upsertSlot(
     toast('Signed off — sign in as supervisor to edit', 'warn');
     return;
   }
-  if (isOwnedByOther()) {
-    toast('Machine is running current job on another iPad — read only', 'warn');
+  if (!canWriteThisDevice()) {
+    toast('Read only — sign in as supervisor to edit', 'warn');
     return;
   }
   const existing = S!.prod.find(
@@ -454,35 +462,17 @@ async function reload(): Promise<void> {
   // the same machine + job.
   await maybeCarryCountStart();
   await refreshJobTotal();
-  refreshOtherOwner();
   saveView();
   render();
 }
 
-/**
- * Refresh the "another iPad owns this press" flag from the DAL's live
- * OwnerDevice map (populated by the listProduction above). Only the live
- * shift can be owned — a past shift is history, freely reviewable. When
- * another device owns the press, pin the Job# selection to the owned job
- * so the read-only view shows what's actually running, not a stale local
- * pick.
- */
-function refreshOtherOwner(): void {
-  S!.otherOwner = null;
-  if (isPastShift()) return;
-  const owner = dalRef.liveOwner?.(S!.mc, sid());
-  if (owner && owner.ownedByOther) {
-    S!.otherOwner = { jobNumber: owner.jobNumber, deviceId: owner.deviceId };
-    if (owner.jobNumber) S!.selJob = owner.jobNumber;
-  }
-}
-
-/** True when another iPad is the dominant device for this live press —
- *  every edit on THIS device is disabled until that device signs off
- *  (or a supervisor forces a takeover). Distinct from isJobLocked()
- *  (a signed-off row) — this is a live, in-progress lock by ownership. */
-function isOwnedByOther(): boolean {
-  return S!.otherOwner !== null;
+/** True when THIS browser is forbidden from writing — non-iPad without
+ *  supervisor sign-in. Distinct from isJobLocked() (a signed-off row);
+ *  this is a device-class lock that applies to every shift/job opened
+ *  here, past or live. Replaces the old per-device OwnerDevice claim
+ *  arbitration which caused iPad-vs-iPad fights on the floor. */
+function isReadOnlyDevice(): boolean {
+  return !canWriteThisDevice();
 }
 
 /**
@@ -786,11 +776,12 @@ function buildMeta(): string {
   // current/future shifts keep the free-text input + datalist autocomplete.
   const pastLocked = isPastShift() && !isSupervisor();
   let jobField: string;
-  if (isOwnedByOther()) {
-    // Another iPad owns the press — the Job# dropdown is pinned to the
-    // job it's running so this device can't switch orders mid-run. The
-    // dominant-device rule: only the owner picks the job until sign-off.
-    jobField = `<input type="text" disabled value="${escapeHtml(S!.selJob)}" title="Machine is running current job on another iPad — read only">`;
+  if (isReadOnlyDevice()) {
+    // Non-iPad without supervisor sign-in: the Job# dropdown freezes on
+    // whatever's currently selected. The device-class rule replaced the
+    // old per-iPad OwnerDevice claim which was causing fights on the
+    // floor — iPads write freely now, only PCs are read-only by default.
+    jobField = `<input type="text" disabled value="${escapeHtml(S!.selJob)}" title="Read only — sign in as supervisor to edit">`;
   } else if (pastLocked) {
     const historical = orders;
     const selectOpts = historical.length
@@ -817,8 +808,8 @@ function buildMeta(): string {
   // again so a correction can be made and re-signed off.
   const opSupLocked = lockInfo() !== null && !isSupervisor();
   const lockedOrSelect = (meta: 'operator' | 'supervisor', list: string[], value: string): string =>
-    isOwnedByOther()
-      ? `<input type="text" disabled value="${escapeHtml(value || '—')}" title="Machine is running current job on another iPad — read only">`
+    isReadOnlyDevice()
+      ? `<input type="text" disabled value="${escapeHtml(value || '—')}" title="Read only — sign in as supervisor to edit">`
       : opSupLocked
         ? `<input type="text" disabled value="${escapeHtml(value || '—')}" title="Signed off — sign in as supervisor to change">`
         : `<select data-meta="${meta}">${selOpts(list, value, meta)}</select>`;
@@ -986,8 +977,8 @@ function buildGrid(): string {
       .join('') +
     `</tr>`;
 
-  const gridRdo = isOwnedByOther()
-    ? ' disabled title="Machine is running current job on another iPad — read only"'
+  const gridRdo = isReadOnlyDevice()
+    ? ' disabled title="Read only — sign in as supervisor to edit"'
     : isJobLocked()
       ? ' disabled title="Signed off — sign in as supervisor and Unlock to edit"'
       : '';
@@ -1041,9 +1032,9 @@ function buildSide(): string {
   // on the side panel is rendered read-only so the operator can't
   // accidentally type into a frozen shift — supervisor mode re-enables
   // them via the Unlock flow. Title tooltips explain what changed.
-  const rdo = isJobLocked() || isOwnedByOther() ? 'disabled' : '';
-  const rdoTitle = isOwnedByOther()
-    ? ' title="Machine is running current job on another iPad — read only"'
+  const rdo = isJobLocked() || isReadOnlyDevice() ? 'disabled' : '';
+  const rdoTitle = isReadOnlyDevice()
+    ? ' title="Read only — sign in as supervisor to edit"'
     : isJobLocked()
       ? ' title="Signed off — sign in as supervisor and Unlock to edit"'
       : '';
@@ -1278,23 +1269,19 @@ function lockInfo(): { lockedBy: string; lockedAt: string } | null {
 }
 
 /**
- * Banner shown when another iPad is the dominant device for this live
- * press. The whole sheet is read-only behind it; a supervisor gets a
- * force-takeover button (the fallback for an owner that walked off
- * mid-shift, since the press can't be signed off until it's finished).
+ * Banner shown on a non-iPad browser (a PC viewer) with no supervisor
+ * signed in. The whole sheet is read-only behind it. The device-class
+ * rule replaces the old per-iPad OwnerDevice claim that caused fights
+ * between iPads — iPads write freely now; only PCs are spectators by
+ * default. A supervisor can sign in via the top-nav 🔓 button to edit.
  */
 function buildOwnerBanner(): string {
-  if (!isOwnedByOther()) return '';
-  const job = S!.otherOwner?.jobNumber ?? '';
-  const action = isSupervisor()
-    ? `<button type="button" class="lock-unlock-btn" data-takeover>🛠 Take over</button>`
-    : `<span class="lock-no-perm" title="Sign in via 🔓 Supervisor in the top nav to take over">Supervisor sign-in required to take over</span>`;
+  if (!isReadOnlyDevice()) return '';
   return `<div class="lock-banner owner-banner">
     <div class="lock-text">
-      <b>🔒 Machine is running current job — read only</b>
-      <span>${job ? 'Job ' + escapeHtml(job) + ' is owned by another iPad' : 'Owned by another iPad'} · sign off there to release</span>
+      <b>🔒 Read only — sign in as supervisor to edit</b>
+      <span>Floor data entry happens on the iPad. Use 🔓 Supervisor in the top nav to enable editing here.</span>
     </div>
-    ${action}
   </div>`;
 }
 
@@ -1482,7 +1469,6 @@ function wire(): void {
   app.querySelector('[data-refresh]')?.addEventListener('click', () => void refreshAll());
   app.querySelector('[data-saveclear]')?.addEventListener('click', () => openSaveSignoffModal());
   app.querySelector('[data-unlock]')?.addEventListener('click', () => openUnlockModal());
-  app.querySelector('[data-takeover]')?.addEventListener('click', () => void takeOverMachine());
   wireStatusPicker();
 }
 
@@ -1722,8 +1708,8 @@ function wireStatusPicker(): void {
       toast('Signed off — sign in as supervisor and Unlock to edit', 'warn');
       return;
     }
-    if (isOwnedByOther()) {
-      toast('Machine is running current job on another iPad — read only', 'warn');
+    if (isReadOnlyDevice()) {
+      toast('Read only — sign in as supervisor to edit', 'warn');
       return;
     }
     anchor = slot;
@@ -1976,8 +1962,8 @@ async function upsertSlotNoReload(
   // Same guard as upsertSlot — the side panel inputs are wired to
   // upsertSlotNoReload (Count Start / End / Purge / handover) and
   // must not write when the order is signed off and the user isn't
-  // a supervisor, or when another iPad owns this live press.
-  if (isJobLocked() || isOwnedByOther()) return;
+  // a supervisor, or when this is a read-only (non-iPad) device.
+  if (isJobLocked() || isReadOnlyDevice()) return;
   const existing = S!.prod.find(
     (r) => r.jobNumber === S!.selJob && r.slotIndex === slot,
   );
@@ -2003,8 +1989,8 @@ async function upsertSlotNoReload(
 }
 
 async function doSignoffSave(): Promise<void> {
-  if (isOwnedByOther()) {
-    toast('Machine is running current job on another iPad — sign off there', 'warn');
+  if (isReadOnlyDevice()) {
+    toast('Read only — sign in as supervisor to sign off here', 'warn');
     return;
   }
   try {
@@ -2041,8 +2027,8 @@ function openQcPicker(slot: number): void {
     toast('Signed off — sign in as supervisor and Unlock to edit', 'warn');
     return;
   }
-  if (isOwnedByOther()) {
-    toast('Machine is running current job on another iPad — read only', 'warn');
+  if (!canWriteThisDevice()) {
+    toast('Read only — sign in as supervisor to edit', 'warn');
     return;
   }
   const role = qcRoleFor(slot);
@@ -2170,32 +2156,6 @@ async function doUnlock(): Promise<void> {
   }
 }
 
-/**
- * Supervisor force-takeover of a live press whose owning iPad walked off
- * mid-shift. Stamps this device as the new OwnerDevice, then reloads —
- * the press becomes editable here and read-only on the device that left.
- */
-async function takeOverMachine(): Promise<void> {
-  if (!isSupervisor()) {
-    toast('Sign in via 🔓 Supervisor to take over', 'warn');
-    return;
-  }
-  const job = S!.otherOwner?.jobNumber || S!.selJob;
-  if (!job || !dalRef.claimLiveOwnership) return;
-  try {
-    const ok = await dalRef.claimLiveOwnership(S!.mc, sid(), job);
-    if (!ok) {
-      toast('Nothing to take over — the live row is gone', 'warn');
-    } else {
-      toast(`Took over ${job} on ${S!.mc}. You can edit now.`, 'ok');
-    }
-    await reload();
-  } catch (e) {
-    console.error('[takeover] failed', e);
-    toast(`Take over failed: ${(e as Error)?.message ?? e}`.slice(0, 140), 'err');
-  }
-}
-
 function jobTotals(): number {
   let rej = 0;
   for (const r of S!.prod.filter((x) => x.jobNumber === S!.selJob)) {
@@ -2273,7 +2233,6 @@ export async function renderOperator(
     jobTotalGood: 0,
     selSet: new Set<number>(),
     dieColors,
-    otherOwner: null,
   };
   if (nowTimer) clearInterval(nowTimer);
   nowTimer = setInterval(renderNowLine, 30_000);
@@ -2287,23 +2246,12 @@ export function operatorPollTick(): void {
 }
 
 /**
- * Per-tick cross-iPad sync. Refresh the live OwnerDevice map FIRST so an
- * idle spectator converges to read-only within one poll once another
- * iPad claims the press (without it, a device sitting on the machine
- * before the claim never locks). Re-render only when the ownership state
- * actually flips, so we never stomp on the owner mid-type. Then push
- * this iPad's snapshot — pushLiveSnapshot now sees the refreshed map and
- * won't broadcast (or steal) a tuple another device owns.
+ * Per-tick best-effort flush of this device's editCache to PMD_LiveStatus
+ * so other devices see in-progress work. The DAL's pushLiveSnapshot is a
+ * no-op on read-only devices (device-class write rule).
  */
 async function pollSync(): Promise<void> {
   if (!S) return;
-  if (!isPastShift() && dalRef.liveOwner) {
-    const before = S.otherOwner?.deviceId ?? '';
-    // Side-effect: refreshes the DAL's OwnerDevice map for this machine.
-    await dalRef.listProduction({ machineCode: S.mc, shiftId: sid() }).catch(() => null);
-    refreshOtherOwner();
-    if ((S.otherOwner?.deviceId ?? '') !== before) render();
-  }
   if (dalRef.pushLiveSnapshot) {
     await dalRef.pushLiveSnapshot().catch(() => {
       /* logged inside the DAL; never propagate to the poll loop */
