@@ -170,4 +170,10 @@ export interface ParetoSlice {
   code: string;
   label: string;
   value: number;
+  /** Optional per-shift split of `value` so the KPI Reject Pareto can
+   *  stack Day / Afternoon / Night like the Output-by-shift chart.
+   *  PMD_Rejects carries a Shift column, so listRejectPareto fills this;
+   *  sources without shift attribution (Downtime) leave it undefined and
+   *  the chart falls back to a single bar. Sums to `value`. */
+  byShift?: Record<ShiftCode, number>;
 }

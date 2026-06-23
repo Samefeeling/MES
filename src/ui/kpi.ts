@@ -12,6 +12,7 @@ import { closeModal, escapeHtml, openModal } from './modal';
 import {
   renderHoursOeeChart,
   renderOutputByShiftChart,
+  renderParetoByShiftChart,
   renderParetoChart,
 } from './charts';
 import { parseHandover } from '../core/handover';
@@ -885,10 +886,20 @@ function render(): void {
   // legend); Downtime Pareto from PMD_BreakDownlog (BDCode bars + cause
   // legend). Side by side in the chart strip; either one independently
   // hides when its source list returns nothing.
+  // Stack the floor Reject Pareto by shift when PMD_Rejects carried the
+  // Shift split (SharePoint backend); fall back to the single-colour bar
+  // when no slice has a byShift breakdown (memory DAL / older data).
+  const rejectHasShiftSplit = S!.rejectPareto.floor.some((s) => s.byShift);
   const rejectChart = S!.rejectPareto.floor.length
     ? `<div class="kpi-chart">
-          <h4>Reject Pareto — RejectCode (click a Reject number in the table to drill)</h4>
-          ${renderParetoChart(toParetoBuckets(S!.rejectPareto.floor))}
+          <h4>Reject Pareto — RejectCode${
+            rejectHasShiftSplit ? ' by shift' : ''
+          } (click a Reject number in the table to drill)</h4>
+          ${
+            rejectHasShiftSplit
+              ? renderParetoByShiftChart(toParetoShiftBuckets(S!.rejectPareto.floor))
+              : renderParetoChart(toParetoBuckets(S!.rejectPareto.floor))
+          }
           ${renderParetoLegend(S!.rejectPareto.floor)}
         </div>`
     : '';
@@ -1104,6 +1115,20 @@ function toParetoBuckets(
   _unit = '',
 ): Array<{ label: string; value: number }> {
   return slices.map((s) => ({ label: s.code, value: s.value }));
+}
+
+/** Shape slices for renderParetoByShiftChart: short code on the x-axis,
+ *  Day/Afternoon/Night split from the slice's byShift breakdown (0 when
+ *  a shift saw no rejects for that code). */
+function toParetoShiftBuckets(
+  slices: ParetoSlice[],
+): Array<{ label: string; day: number; afternoon: number; night: number }> {
+  return slices.map((s) => ({
+    label: s.code,
+    day: s.byShift?.Day ?? 0,
+    afternoon: s.byShift?.Afternoon ?? 0,
+    night: s.byShift?.Night ?? 0,
+  }));
 }
 
 function formatValue(v: number, unit: string): string {

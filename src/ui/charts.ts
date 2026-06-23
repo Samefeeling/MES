@@ -255,6 +255,38 @@ export function renderParetoChart(
   });
 }
 
+/**
+ * Reject Pareto stacked by shift. Same Pareto layout as renderParetoChart
+ * (bars sorted descending by total, cumulative-% line on the right axis),
+ * but each bar is split into Day / Afternoon / Night segments — matching
+ * the Output-by-shift colours. Cumulative % is over the grand total.
+ */
+export function renderParetoByShiftChart(
+  items: Array<{ label: string; day: number; afternoon: number; night: number }>,
+): string {
+  const sorted = items
+    .map((i) => ({ ...i, total: (i.day || 0) + (i.afternoon || 0) + (i.night || 0) }))
+    .filter((i) => i.total > 0)
+    .sort((a, b) => b.total - a.total);
+  const grand = sorted.reduce((a, i) => a + i.total, 0);
+  let cum = 0;
+  const data: StackBucket[] = sorted.map((i) => {
+    cum += i.total;
+    return {
+      label: i.label,
+      segments: [i.day, i.afternoon, i.night],
+      overlay: grand > 0 ? +((cum / grand) * 100).toFixed(1) : 0,
+    };
+  });
+  return renderDualAxis(data, {
+    segmentColors: SHIFT_COLORS,
+    segmentLabels: SHIFT_LABELS,
+    overlayLabel: 'Cumulative %',
+    overlayColor: '#1d4ed8',
+    overlayAsPercent: true,
+  });
+}
+
 /** Stacked Run/Down/Setup hours + OEE % line on the right axis. */
 export function renderHoursOeeChart(
   buckets: Array<{

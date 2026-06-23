@@ -10,6 +10,7 @@ import type {
   ProductionFilter,
   ProductionRecord,
   RejectCategory,
+  ShiftCode,
   StatusCode,
   Supervisor,
   UserContext,
@@ -757,6 +758,12 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
     const qty = new Map<string, number>();
     const catTally = new Map<string, Map<string, number>>();
+    // Per-code Day/Afternoon/Night split so the KPI chart can stack the
+    // bars by shift. PMD_Rejects.Shift is written from the shiftId at
+    // sign-off, so it's always one of the three codes; an unexpected
+    // value is simply not attributed to a shift (the bar would then be
+    // shorter than `value`, but that doesn't happen with real data).
+    const shiftTally = new Map<string, Record<ShiftCode, number>>();
     for (const r of rows) {
       const day = dateOnly(r[F.date]);
       if (day < filter.from || day > filter.to) continue;
@@ -771,8 +778,18 @@ export class SharePointDataLayer implements PmdDataLayer {
         m.set(cat, (m.get(cat) ?? 0) + n);
         catTally.set(code, m);
       }
+      const shift = str(r[F.shift]).trim();
+      if (shift === 'Day' || shift === 'Afternoon' || shift === 'Night') {
+        const st = shiftTally.get(code) ?? { Day: 0, Afternoon: 0, Night: 0 };
+        st[shift] += n;
+        shiftTally.set(code, st);
+      }
     }
-    return paretoFrom(qty, (code) => dominantKey(catTally.get(code)) || code);
+    return paretoFrom(
+      qty,
+      (code) => dominantKey(catTally.get(code)) || code,
+      (code) => shiftTally.get(code),
+    );
   }
 
   /**
@@ -2188,9 +2205,15 @@ function mergeFieldMap(base: SharePointFieldMap, override?: PartialFieldMap): Sh
 function paretoFrom(
   tally: Map<string, number>,
   labelFor: (code: string) => string,
+  byShiftFor?: (code: string) => Record<ShiftCode, number> | undefined,
 ): ParetoSlice[] {
   return Array.from(tally.entries())
-    .map(([code, value]) => ({ code, label: labelFor(code), value: +value.toFixed(2) }))
+    .map(([code, value]) => {
+      const slice: ParetoSlice = { code, label: labelFor(code), value: +value.toFixed(2) };
+      const bs = byShiftFor?.(code);
+      if (bs) slice.byShift = bs;
+      return slice;
+    })
     .sort((a, b) => b.value - a.value);
 }
 

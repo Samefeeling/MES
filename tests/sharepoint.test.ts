@@ -1602,3 +1602,30 @@ describe('sanitizeBodyStrings', () => {
     expect(body.__metadata).toEqual({ type: 'SP.X' });
   });
 });
+
+describe('listRejectPareto byShift breakdown', () => {
+  it('splits each RejectCode quantity across Day / Afternoon / Night', async () => {
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const rejectRows = [
+      { Title: 'Batt1', Shift: 'Day', Date: '2026-06-20T12:00:00Z', RejectCode: 'D01', RejectCategory: 'Flash', RejectNumber: 5 },
+      { Title: 'Batt1', Shift: 'Afternoon', Date: '2026-06-20T20:00:00Z', RejectCode: 'D01', RejectCategory: 'Flash', RejectNumber: 3 },
+      { Title: 'Batt1', Shift: 'Night', Date: '2026-06-20T23:00:00Z', RejectCode: 'D01', RejectCategory: 'Flash', RejectNumber: 2 },
+      { Title: 'Batt1', Shift: 'Day', Date: '2026-06-20T12:00:00Z', RejectCode: 'D02', RejectCategory: 'Short', RejectNumber: 4 },
+    ];
+    const o = dal as unknown as { getAllItems: () => Promise<unknown[]> };
+    o.getAllItems = async (): Promise<unknown[]> => rejectRows;
+
+    const slices = await dal.listRejectPareto({ from: '2026-06-20', to: '2026-06-20' });
+    const d01 = slices.find((s) => s.code === 'D01')!;
+    expect(d01.value).toBe(10);
+    expect(d01.byShift).toEqual({ Day: 5, Afternoon: 3, Night: 2 });
+    // Sum of the shift split equals the slice total.
+    const sum = d01.byShift!.Day + d01.byShift!.Afternoon + d01.byShift!.Night;
+    expect(sum).toBe(d01.value);
+
+    const d02 = slices.find((s) => s.code === 'D02')!;
+    expect(d02.byShift).toEqual({ Day: 4, Afternoon: 0, Night: 0 });
+    // D01 (10) sorts before D02 (4).
+    expect(slices[0].code).toBe('D01');
+  });
+});
