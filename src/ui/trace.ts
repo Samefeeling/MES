@@ -742,13 +742,33 @@ export function goodForRecords(records: ProductionRecord[]): number {
  * not just the current shift. One query per unique job, in parallel; a
  * failed fetch contributes 0 rather than dropping the row.
  */
+/**
+ * Job Number Search reads SIGNED-OFF history only — PMD_Production, never
+ * the in-progress PMD_LiveStatus mirror or another iPad's local cache. The
+ * dedicated DAL method skips those lists entirely; backends that don't
+ * model the split (memory DAL) fall back to listProduction filtered to
+ * locked (signed-off) rows, which is equivalent.
+ */
+async function readSignedOff(filter: {
+  jobNumber?: string;
+  machineCode?: string;
+  shiftIdFrom?: string;
+  shiftIdTo?: string;
+}): Promise<ProductionRecord[]> {
+  if (dalRef.listSignedOffProduction) {
+    return dalRef.listSignedOffProduction(filter);
+  }
+  const recs = await dalRef.listProduction(filter);
+  return recs.filter((r) => r.locked);
+}
+
 async function loadJobGoodTotals(jobNumbers: string[]): Promise<Map<string, number>> {
   const unique = Array.from(new Set(jobNumbers.filter(Boolean)));
   const out = new Map<string, number>();
   await Promise.all(
     unique.map(async (job) => {
       try {
-        const recs = await dalRef.listProduction({ jobNumber: job });
+        const recs = await readSignedOff({ jobNumber: job });
         out.set(job, goodForRecords(recs));
       } catch (e) {
         // Deliberately leave the key absent — buildTraceRowsFor uses
@@ -773,7 +793,7 @@ async function doSearch(): Promise<void> {
 
   const all: ProductionRecord[] = [];
   if (q.jobNumber) {
-    all.push(...(await dalRef.listProduction({ jobNumber: q.jobNumber.trim() })));
+    all.push(...(await readSignedOff({ jobNumber: q.jobNumber.trim() })));
   } else {
     const filter: {
       shiftIdFrom?: string;
@@ -783,7 +803,7 @@ async function doSearch(): Promise<void> {
     if (q.dateFrom) filter.shiftIdFrom = `${q.dateFrom}-`;
     if (q.dateTo) filter.shiftIdTo = `${q.dateTo}-￿`;
     if (q.machine) filter.machineCode = q.machine;
-    all.push(...(await dalRef.listProduction(filter)));
+    all.push(...(await readSignedOff(filter)));
   }
 
   // Post-filter for machine + date range (in case the backend ignored some hints).

@@ -222,7 +222,14 @@ describe('listProduction backfills editCache from PMD_LiveStatus', () => {
         siteUrl: 'https://example.sharepoint.com/sites/x',
       });
       const machineCode = 'Batt1';
-      const shiftId = '2026-06-13-Day';
+      // Use yesterday's Day shift so the seeded tuple is recent enough to
+      // survive the 48 h live-retention cap — this test isolates the
+      // per-slot merge logic, not staleness sweeping.
+      const pad2 = (n: number): string => String(n).padStart(2, '0');
+      const yd = new Date();
+      yd.setDate(yd.getDate() - 1);
+      const dateStr = `${yd.getFullYear()}-${pad2(yd.getMonth() + 1)}-${pad2(yd.getDate())}`;
+      const shiftId = `${dateStr}-Day`;
       const jobNumber = 'SFM507068';
 
       // Seed editCache with the partial state that survived the
@@ -282,7 +289,7 @@ describe('listProduction backfills editCache from PMD_LiveStatus', () => {
       // mirrored from the operator iPad before the reload.
       const liveHeader = {
         machineCode,
-        date: '2026-06-13',
+        date: dateStr,
         shift: 'Day',
         jobNumber,
         partNumber: 'P1',
@@ -1456,6 +1463,153 @@ describe('PMD_Rejects is the source of truth on read (SFM507067 drift)', () => {
     // rather than zeroed (don't destroy legacy data).
     const slot0 = recs.find((r) => r.slotIndex === 0)!;
     expect(slot0.rejectCount).toBe(20);
+  });
+});
+
+describe('signed-off history, 48h live cap, and Signoff timestamp', () => {
+  const store = new Map<string, string>();
+  beforeAll(() => {
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string): string | null => store.get(k) ?? null,
+      setItem: (k: string, v: string): void => { store.set(k, v); },
+      removeItem: (k: string): void => { store.delete(k); },
+      clear: (): void => { store.clear(); },
+      key: (): string | null => null,
+      length: 0,
+    };
+  });
+  afterAll(() => {
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  const dayId = (d: Date): string =>
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+  function signedHeader(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      machineCode: '1300T',
+      date: '2026-06-13',
+      shift: 'Day',
+      jobNumber: 'SFM700',
+      partNumber: 'P1',
+      partDescription: 'Widget',
+      timeline: 'RRRR············',
+      countStart: 0,
+      countEnd: 40,
+      reject: 4,
+      operator: 'Joe',
+      supervisor: 'Sue',
+      ...over,
+    };
+  }
+
+  it('listSignedOffProduction reads PMD_Production only — never live/cache', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const lists: string[] = [];
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> => {
+      lists.push(list);
+      return list === 'PMD_Production' ? [signedHeader()] : [];
+    };
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+
+    const recs = await dal.listSignedOffProduction({ jobNumber: 'SFM700' });
+    // PMD_LiveStatus must NOT have been consulted.
+    expect(lists).toEqual(['PMD_Production']);
+    const slot0 = recs.find((r) => r.slotIndex === 0)!;
+    expect(slot0.jobNumber).toBe('SFM700');
+    expect(slot0.locked).toBe(true);
+  });
+
+  it('lockedAt comes from the persisted Signoff timestamp, not the read clock', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const signedAtIso = '2026-06-13T15:42:00.000Z';
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [signedHeader({ signOff: signedAtIso })] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+
+    const recs = await dal.listSignedOffProduction({ jobNumber: 'SFM700' });
+    expect(recs.every((r) => r.lockedAt === signedAtIso)).toBe(true);
+  });
+
+  it('lockShift stamps the Signoff column', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const today = dayId(new Date());
+    const shiftId = `${today}-Day`;
+    const cache = (dal as unknown as { editCache: Map<string, unknown[]> }).editCache;
+    cache.set(`Batt1|${shiftId}|SFM700`, [{
+      id: -1, machineCode: 'Batt1', shiftId, jobNumber: 'SFM700', slotIndex: 0,
+      statusCode: 'R', countStart: 0, countEnd: 40, rejects: '{}', purgeKg: null,
+      rejectCount: 0, bdIssue: '', mangoTicket: '', handoverNote: '',
+      operator: 'Joe', supervisor: 'Sue', qcBy: '', locked: false, lockedBy: '',
+      lockedAt: '', createdAt: '', updatedAt: '',
+    }]);
+    let prodBody: Record<string, unknown> | null = null;
+    const o = dal as unknown as {
+      listPlanning: () => Promise<unknown[]>;
+      itemType: () => Promise<string>;
+      getAllItems: () => Promise<unknown[]>;
+      postWithFieldRetry: (l: string, u: string, b: Record<string, unknown>) => Promise<void>;
+      replaceBreakdownEvents: () => Promise<void>;
+      replaceRejectEvents: () => Promise<void>;
+      deleteLiveRow: () => Promise<void>;
+    };
+    o.listPlanning = async (): Promise<unknown[]> => [];
+    o.itemType = async (): Promise<string> => 'SP.X';
+    o.getAllItems = async (): Promise<unknown[]> => [];
+    o.postWithFieldRetry = async (_l, _u, b): Promise<void> => { prodBody = b; };
+    o.replaceBreakdownEvents = async (): Promise<void> => {};
+    o.replaceRejectEvents = async (): Promise<void> => {};
+    o.deleteLiveRow = async (): Promise<void> => {};
+
+    const before = Date.now();
+    await dal.lockShift('Batt1', shiftId, 'Sue', 'Joe', 'SFM700');
+    expect(prodBody).not.toBeNull();
+    const stamp = Date.parse(prodBody!.Signoff as string);
+    expect(Number.isFinite(stamp)).toBe(true);
+    expect(stamp).toBeGreaterThanOrEqual(before);
+  });
+
+  it('48h hard cap sweeps an old live row that still carries status', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const old = new Date();
+    old.setDate(old.getDate() - 3); // 3 days ago → past the 48h cap
+    const oldDate = dayId(old);
+    const deleted: string[] = [];
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+      deleteLiveRow: (mc: string, sid: string, job: string) => Promise<void>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_LiveStatus'
+        ? [signedHeader({ date: oldDate, jobNumber: 'SFM700', supervisor: '', timeline: 'RRRR············' })]
+        : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+    o.deleteLiveRow = async (_mc, sid, job): Promise<void> => { deleted.push(`${sid}|${job}`); };
+
+    await dal.listProduction({ machineCode: '1300T' });
+    // The old (status-bearing, never-signed-off) live row is swept even
+    // though isStaleLiveHeader (status-empty only) would have kept it.
+    expect(deleted).toContain(`${oldDate}-Day|SFM700`);
   });
 });
 

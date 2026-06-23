@@ -169,6 +169,13 @@ const DEFAULT_FIELDS = {
      *  sign-off when the live row is deleted); stripRejectedFields
      *  tolerates the column not existing there. */
     ownerDevice: 'OwnerDevice',
+    /** Wall-clock timestamp (date+time) of when the (machine, shift, job)
+     *  was signed off, written on lockShift. The signed-off banner reads
+     *  this so it shows when sign-off ACTUALLY happened, not the viewing
+     *  device's current clock. DateTime column; stripRejectedFields
+     *  tolerates absence (older tenants fall back to the render-time
+     *  stamp). */
+    signOff: 'Signoff',
   },
   rejects: {
     // Title = Machine; Date is a DateTime (not date-only).
@@ -959,8 +966,22 @@ export class SharePointDataLayer implements PmdDataLayer {
     const liveNow = new Date();
     const liveFresh: HeaderRow[] = [];
     for (const h of liveHeaders) {
+      const hSid = `${h.date}-${h.shift}`;
+      // Hard 48 h cap (Task: never-signed-off rows lingering forever):
+      // sweep ANY live row whose shift ended > 48 h ago, status or not.
+      // This is the only path that removes an OLD row that DOES carry
+      // status — isStaleLiveHeader deliberately leaves those alone. A
+      // tuple actively unlocked for correction is exempt (its live mirror
+      // is the supervisor's in-progress re-edit).
+      if (
+        shiftEndedLongAgo(hSid, liveNow, LIVE_HARD_CAP_MS) &&
+        !this.unlockedTuples.has(this.cacheKey(h.machineCode, hSid, h.jobNumber))
+      ) {
+        void this.deleteLiveRow(h.machineCode, hSid, h.jobNumber);
+        continue;
+      }
       if (isStaleLiveHeader(h, liveNow)) {
-        void this.deleteLiveRow(h.machineCode, `${h.date}-${h.shift}`, h.jobNumber);
+        void this.deleteLiveRow(h.machineCode, hSid, h.jobNumber);
       } else {
         liveFresh.push(h);
       }
@@ -975,9 +996,24 @@ export class SharePointDataLayer implements PmdDataLayer {
     // left in the cache but pushLiveSnapshot refuses to re-broadcast them.
     for (const k of Array.from(this.editCache.keys())) {
       const slots = this.editCache.get(k) ?? [];
-      if (slots.some((s) => s.statusCode)) continue;
       const sid = k.split('|')[1];
-      if (sid && shiftEndedLongAgo(sid, liveNow)) {
+      if (!sid) continue;
+      // A tuple a supervisor has just UNLOCKED for correction is exempt
+      // from every age sweep — it may legitimately target a months-old
+      // shift, and dropping it mid-edit would lose the correction before
+      // re-sign-off commits it.
+      if (this.unlockedTuples.has(k)) continue;
+      // Hard 48 h cap mirrors the live-row sweep above so an abandoned
+      // in-progress job (status set, never signed off) doesn't get
+      // re-broadcast from this device's localStorage indefinitely.
+      if (shiftEndedLongAgo(sid, liveNow, LIVE_HARD_CAP_MS)) {
+        this.editCache.delete(k);
+        purged = true;
+        continue;
+      }
+      // Status-empty mis-taps: drop after the shorter 8 h grace.
+      if (slots.some((s) => s.statusCode)) continue;
+      if (shiftEndedLongAgo(sid, liveNow)) {
         this.editCache.delete(k);
         purged = true;
       }
@@ -1082,6 +1118,43 @@ export class SharePointDataLayer implements PmdDataLayer {
   }
 
   /**
+   * Signed-off history only: reads PMD_Production exclusively — no
+   * PMD_LiveStatus mirror, no local editCache. The Trace "Job Number
+   * Search" uses this so a historical lookup reflects the canonical
+   * source of truth (the signed-off record) and never blends in
+   * in-progress / mis-typed live data that hasn't been reviewed. Rejects
+   * and breakdown timelines are still joined so each row expands to the
+   * correct per-slot status + reject breakdown.
+   */
+  async listSignedOffProduction(filter: ProductionFilter): Promise<ProductionRecord[]> {
+    const [prodHeaders, rejectsByKey, timelinesByKey] = await Promise.all([
+      this.fetchHeaders(LISTS.production, filter),
+      this.fetchRejectsByKey(filter),
+      this.fetchBreakdownTimelines(filter),
+    ]);
+    const out: ProductionRecord[] = [];
+    for (const h of prodHeaders) {
+      // shiftDateRange is intentionally loose (±1 d) — re-filter exactly
+      // against the requested predicates so adjacent-day rows that share
+      // the shift code don't leak in.
+      const hShiftId = `${h.date}-${h.shift}`;
+      if (filter.shiftId && hShiftId !== filter.shiftId) continue;
+      if (filter.shiftIdFrom && hShiftId < filter.shiftIdFrom) continue;
+      if (filter.shiftIdTo && hShiftId > filter.shiftIdTo) continue;
+      if (filter.machineCode && h.machineCode !== filter.machineCode) continue;
+      if (filter.jobNumber && h.jobNumber !== filter.jobNumber) continue;
+      const key = this.cacheKey(h.machineCode, hShiftId, h.jobNumber);
+      const hWithTimeline: HeaderRow = h.timeline
+        ? h
+        : { ...h, timeline: timelinesByKey.get(key) ?? '' };
+      out.push(
+        ...this.expandHeaderToSlots(hWithTimeline, rejectsByKey.get(key) ?? [], true),
+      );
+    }
+    return out;
+  }
+
+  /**
    * Read header rows from PMD_Production OR PMD_LiveStatus. Both
    * share the production field map by design — PMD_LiveStatus is a
    * column-for-column mirror of PMD_Production, holding the same
@@ -1136,6 +1209,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       qcChecks: F.qcChecks ? str(r[F.qcChecks]) : '',
       rejectsBySlot: F.rejectsBySlot ? str(r[F.rejectsBySlot]) : '',
       ownerDevice: F.ownerDevice ? str(r[F.ownerDevice]) : '',
+      signOff: F.signOff ? str(r[F.signOff]) : '',
     }));
   }
 
@@ -1236,6 +1310,12 @@ export class SharePointDataLayer implements PmdDataLayer {
     const slots: ProductionRecord[] = [];
     const timeline = (h.timeline || '').padEnd(16, '·').slice(0, 16);
     const stamp = new Date().toISOString();
+    // lockedAt drives the "Signed off … at <time>" banner. Prefer the
+    // persisted PMD_Production.Signoff timestamp so the banner shows when
+    // sign-off ACTUALLY happened, not this device's current clock. Falls
+    // back to the render stamp for legacy rows signed before the column
+    // existed (and for live rows, where lockedAt is unused).
+    const signedAt = isSignedOff && h.signOff ? h.signOff : stamp;
     // QualityChecks JSON {"<slotIndex>":"<name>"} → per-slot qcBy.
     // Bare-string fallback so a column that pre-dates the JSON format
     // (or has been mis-edited in SP directly) still surfaces something
@@ -1280,7 +1360,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         qcBy: qcMap[String(i)] ?? '',
         locked: isSignedOff,
         lockedBy: h.supervisor,
-        lockedAt: stamp,
+        lockedAt: signedAt,
         createdAt: stamp,
         updatedAt: stamp,
       });
@@ -1317,7 +1397,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         qcBy: qcMap['0'] ?? '',
         locked: isSignedOff,
         lockedBy: h.supervisor,
-        lockedAt: stamp,
+        lockedAt: signedAt,
         createdAt: stamp,
         updatedAt: stamp,
       });
@@ -1383,7 +1463,7 @@ export class SharePointDataLayer implements PmdDataLayer {
             qcBy: '',
             locked: isSignedOff,
             lockedBy: h.supervisor,
-            lockedAt: stamp,
+            lockedAt: signedAt,
             createdAt: stamp,
             updatedAt: stamp,
           };
@@ -1561,6 +1641,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       );
       try {
         await this.upsertProductionHeader({
+          signOff: new Date().toISOString(),
           machineCode,
           date,
           shift,
@@ -1833,6 +1914,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     // this is skipped anyway; stripRejectedFields covers any tenant that
     // hasn't added the column to the live list yet.
     if (F.ownerDevice && h.ownerDevice) body[F.ownerDevice] = h.ownerDevice;
+    // Signoff (PMD_Production only). Only write when lockShift supplied a
+    // timestamp — a live snapshot push leaves it undefined so the column
+    // is never stamped on an in-progress row.
+    if (F.signOff && h.signOff) body[F.signOff] = h.signOff;
     if (F.totalGood) {
       const cs = h.countStart;
       const ce = h.countEnd;
@@ -2369,6 +2454,9 @@ interface HeaderRow {
   rejectsBySlot: string;
   /** OwnerDevice from PMD_LiveStatus ('' on signed PMD_Production rows). */
   ownerDevice: string;
+  /** Sign-off timestamp (ISO) from PMD_Production.Signoff; '' when absent
+   *  (live rows, or legacy signed rows from before the column existed). */
+  signOff: string;
 }
 
 interface HeaderInput {
@@ -2404,6 +2492,9 @@ interface HeaderInput {
   /** PMD_LiveStatus only — the owning device id, or '' to leave the
    *  column untouched. Omitted/'' on PMD_Production writes. */
   ownerDevice?: string;
+  /** PMD_Production only — ISO sign-off timestamp written on lockShift.
+   *  Omitted on live snapshot pushes so the column is left untouched. */
+  signOff?: string;
 }
 
 interface StatusHours {
@@ -2449,6 +2540,16 @@ interface RejectEvent {
  * Past this, a shift can no longer be "in progress".
  */
 export const LIVE_STALE_GRACE_MS = 8 * 3600_000;
+
+/**
+ * Hard retention cap for PMD_LiveStatus. Any live row whose shift ended
+ * more than this ago is swept on the next read, WITH or WITHOUT machine
+ * status. The 8 h grace above only sweeps status-empty mis-taps; a real
+ * in-progress job that the operator recorded but never signed off would
+ * otherwise linger on the live board forever. 48 h keeps the last two
+ * days visible for late sign-off / review, then cleans up.
+ */
+export const LIVE_HARD_CAP_MS = 48 * 3600_000;
 
 /**
  * True when `shiftId`'s shift ended more than `graceMs` ago — i.e. it

@@ -20,7 +20,7 @@ import { parseHandover } from '../core/handover';
 // Per-machine OEE, output, reject, run/down/setup hours, plus a per-shift
 // breakdown (Day / Afternoon / Night) under each machine row.
 
-type PeriodKey = 'last3' | 'thisWeek' | 'lastWeek' | 'thisMonth' | 'lastMonth';
+type PeriodKey = 'last3' | 'thisWeek' | 'lastWeek' | 'thisMonth' | 'lastMonth' | 'custom';
 
 const PERIODS: Array<{ key: PeriodKey; label: string }> = [
   { key: 'last3', label: 'Last 24h' },
@@ -28,6 +28,7 @@ const PERIODS: Array<{ key: PeriodKey; label: string }> = [
   { key: 'lastWeek', label: 'Last week' },
   { key: 'thisMonth', label: 'This month' },
   { key: 'lastMonth', label: 'Last month' },
+  { key: 'custom', label: '📅 Custom' },
 ];
 
 const SHIFT_ORDER: ShiftCode[] = SHIFTS.map((s) => s.code);
@@ -157,6 +158,11 @@ interface KpiRow {
 
 interface KpiState {
   period: PeriodKey;
+  /** Custom range bounds (YYYY-MM-DD), used only when period === 'custom'.
+   *  Default to a sensible last-7-days window so the first render isn't
+   *  empty. */
+  customFrom: string;
+  customTo: string;
   machines: Machine[];
   loading: boolean;
   rows: KpiRow[];
@@ -209,12 +215,43 @@ function periodRange(
 ): { from: Date; to: Date; label: string; shiftIds?: Set<string> } {
   const d = new Date(now);
   d.setHours(0, 0, 0, 0);
+  if (key === 'custom') {
+    const fromStr = S?.customFrom || dateKey(d);
+    const toStr = S?.customTo || dateKey(d);
+    return {
+      from: new Date(fromStr + 'T00:00:00'),
+      to: new Date(toStr + 'T23:59:59'),
+      label: `${fromStr} → ${toStr}`,
+    };
+  }
   if (key === 'last3') {
     const ids = lastThreeShifts(now);
     const dates = ids.map((s) => s.slice(0, 10)).sort();
+    const from = new Date(dates[0] + 'T00:00:00');
+    const to = new Date(dates[dates.length - 1] + 'T23:59:59');
+    // Weekend bridge: the last 3 completed shifts on a Monday are all
+    // Sunday's — and an idle weekend makes that an empty window. Walk
+    // `from` back over any Saturday / Sunday so Monday's "Last 24h"
+    // reaches the previous Friday and shows the last working day's
+    // output (Fri → Sun) instead of empty Sunday cells. Switch to a
+    // date-range match (drop shiftIds) so the bridged weekend days are
+    // included; on a normal weekday from===to so it's equivalent to the
+    // exact 3-shift set.
+    let bridged = false;
+    while (from.getDay() === 0 || from.getDay() === 6) {
+      from.setDate(from.getDate() - 1);
+      bridged = true;
+    }
+    if (bridged) {
+      return {
+        from,
+        to,
+        label: `Last working day (${dateKey(from)} → ${dateKey(to)})`,
+      };
+    }
     return {
-      from: new Date(dates[0] + 'T00:00:00'),
-      to: new Date(dates[dates.length - 1] + 'T23:59:59'),
+      from,
+      to,
       label: `Last 3 completed shifts (${ids[0]} → ${ids[ids.length - 1]})`,
       shiftIds: new Set(ids),
     };
@@ -905,6 +942,14 @@ function render(): void {
         </div>
         <div class="shift-tabs">${tabs}<button type="button" class="shift-btn" data-kpi-refresh title="Re-pull production data from SharePoint">⟳</button></div>
       </div>
+      ${
+        S!.period === 'custom'
+          ? `<div class="kpi-range">
+              <label>From <input type="date" data-range="from" value="${escapeHtml(S!.customFrom)}" max="${escapeHtml(S!.customTo)}"></label>
+              <label>To <input type="date" data-range="to" value="${escapeHtml(S!.customTo)}" min="${escapeHtml(S!.customFrom)}"></label>
+            </div>`
+          : ''
+      }
       ${stats}
       <div class="kpi-table-wrap">
         <table class="summary-table kpi-table">
@@ -958,6 +1003,28 @@ function render(): void {
   app.querySelectorAll<HTMLButtonElement>('[data-period]').forEach((b) =>
     b.addEventListener('click', () => {
       S!.period = b.dataset.period as PeriodKey;
+      S!.loading = true;
+      render();
+      // A bare switch TO custom just reveals the date inputs over the
+      // existing range — don't recompute until the user has set bounds.
+      if (S!.period !== 'custom') void compute();
+      else {
+        S!.loading = false;
+        render();
+      }
+    }),
+  );
+  app.querySelectorAll<HTMLInputElement>('[data-range]').forEach((el) =>
+    el.addEventListener('change', () => {
+      const v = el.value;
+      if (!v) return;
+      if (el.dataset.range === 'from') {
+        S!.customFrom = v;
+        if (S!.customTo < v) S!.customTo = v; // keep from ≤ to
+      } else {
+        S!.customTo = v;
+        if (v < S!.customFrom) S!.customFrom = v;
+      }
       S!.loading = true;
       render();
       void compute();
@@ -1119,8 +1186,15 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
   dalRef = dal;
   document.body.className = 'shift-day';
   const machines = (await dal.listMachines()).sort((a, b) => a.sequence - b.sequence);
+  // Default custom range: last 7 calendar days, so switching to the
+  // Custom tab and pressing nothing still shows a meaningful window.
+  const today = new Date();
+  const weekAgo = new Date(today);
+  weekAgo.setDate(today.getDate() - 6);
   S = {
     period: 'last3',
+    customFrom: dateKey(weekAgo),
+    customTo: dateKey(today),
     machines,
     loading: true,
     rows: [],

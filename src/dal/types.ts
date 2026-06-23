@@ -45,6 +45,13 @@ export interface PmdDataLayer {
 
   // Production (hot path)
   listProduction(filter: ProductionFilter): Promise<ProductionRecord[]>;
+  /** Signed-off history only — reads PMD_Production exclusively, with no
+   *  in-progress PMD_LiveStatus mirror and no local editCache blended in.
+   *  The Trace "Job Number Search" uses this so a historical lookup
+   *  reflects the canonical source of truth. Optional — callers fall back
+   *  to listProduction()+locked filter when a backend doesn't model the
+   *  live/signed split (memory DAL). */
+  listSignedOffProduction?(filter: ProductionFilter): Promise<ProductionRecord[]>;
   upsertProductionRecord(record: ProductionRecord): Promise<ProductionRecord>;
   deleteProductionRecord(id: number): Promise<void>;
   /** Signs off records for a (machine, shift). When jobNumber is
