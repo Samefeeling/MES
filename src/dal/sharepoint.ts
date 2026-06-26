@@ -655,6 +655,26 @@ export class SharePointDataLayer implements PmdDataLayer {
         this.dieColorCache = [];
         return this.dieColorCache;
       }
+      // Resolve the DieNumber column once against the first row. SP often
+      // mangles display names with spaces into _x0020_ internal names,
+      // and operators add the column with a few different conventions
+      // ("DieNumber", "Die Number", "DieNum", "DieNo"), so probe the
+      // common variants instead of giving up when the configured name
+      // doesn't match. Logged so a missing column is obvious in F12.
+      const dieKey = resolveDieNumberKey(rows[0], F.dieNumber);
+      if (!dieKey) {
+        console.warn(
+          '[pmd] PMD_ProductDieColor: no DieNumber column matched. Keys present on row[0]:',
+          Object.keys(rows[0]),
+        );
+      } else if (dieKey !== F.dieNumber) {
+        console.info(
+          '[pmd] PMD_ProductDieColor: resolved DieNumber as internal name',
+          dieKey,
+          '(field map default was',
+          F.dieNumber + ')',
+        );
+      }
       // Direct field reads against the PartNum / ColorHex / ActualColor /
       // Category columns. Keep rows that carry a category even when the
       // hex is missing / invalid: they can't drive a swatch but still
@@ -665,10 +685,14 @@ export class SharePointDataLayer implements PmdDataLayer {
           hex: normaliseHex(str(r[F.hex])),
           name: str(r[F.name]).trim(),
           category: str(r[F.category]).trim(),
-          dieNumber: F.dieNumber ? str(r[F.dieNumber]).trim() : '',
+          dieNumber: dieKey ? str(r[dieKey]).trim() : '',
         }))
         .filter((c) => c.partNumber && (c.hex || c.category || c.dieNumber));
-      console.info('[pmd] PMD_ProductDieColor cached:', direct.length, 'of', rows.length, 'rows');
+      const withDie = direct.filter((c) => c.dieNumber).length;
+      console.info(
+        '[pmd] PMD_ProductDieColor cached:', direct.length, 'of', rows.length, 'rows ·',
+        withDie, 'carry DieNumber',
+      );
       this.dieColorCache = direct;
       return this.dieColorCache;
     } catch (e) {
@@ -2299,6 +2323,42 @@ function normaliseHex(raw: string): string {
   const s = raw.trim().replace(/^#/, '');
   if (/^[0-9a-fA-F]{3}$|^[0-9a-fA-F]{6}$/.test(s)) return `#${s}`;
   return '';
+}
+
+/**
+ * Best-effort resolver for the PMD_ProductDieColor.DieNumber column's
+ * SharePoint internal name. SP frequently differs from the display name:
+ * a column added as "Die Number" lands as `Die_x0020_Number`; "Die#"
+ * becomes `Die_x0023_`. Probe the configured default first, then a small
+ * set of common variants, then a regex sweep over the actual row keys.
+ * Returns the first key on `row` that resolves to anything (truthy
+ * preferred, but null/empty is acceptable to lock in the column choice).
+ */
+function resolveDieNumberKey(
+  row: Record<string, unknown>,
+  configured: string | undefined,
+): string | null {
+  const candidates = [
+    configured,
+    'DieNumber',
+    'Die_x0020_Number',
+    'Die_Number',
+    'DieNo',
+    'DieNum',
+    'Die_x0023_',
+  ].filter((s): s is string => !!s);
+  // First pass: prefer a candidate whose row value is non-empty.
+  for (const k of candidates) {
+    if (k in row && str(row[k]).trim()) return k;
+  }
+  // Second pass: configured key exists at all (even if blank on this row).
+  for (const k of candidates) {
+    if (k in row) return k;
+  }
+  // Third pass: scan ALL row keys for any "die*num" pattern. Skips
+  // anything starting with FieldValuesAsText / OData metadata.
+  const fallback = Object.keys(row).find((k) => /^die.*num/i.test(k));
+  return fallback ?? null;
 }
 
 function num(v: unknown): number {
