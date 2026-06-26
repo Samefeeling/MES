@@ -856,19 +856,20 @@ function buildMeta(): string {
   const swatch = die?.hex
     ? `<span class="m-die-swatch-inline" style="background:${die.hex}" title="${escapeHtml(die.name || die.hex)}"></span>`
     : '';
-  // Physical die number from PMD_ProductDieColor.DieNumber, shown as a
-  // small pill after the Product Description title so the floor knows
-  // which die to fit before starting. Hidden when the part has no die
-  // recorded in the list yet (the title alone is enough).
-  const dieNumberPill = die?.dieNumber
-    ? ` <span class="m-die-num" title="Die # for this part (from PMD_ProductDieColor.DieNumber)">Die# ${escapeHtml(die.dieNumber)}</span>`
-    : '';
+  // Physical die number from PMD_ProductDieColor.DieNumber, shown inline
+  // next to the Product Description title so the floor knows which die
+  // to fit before starting. ALWAYS rendered (em-dash when blank) so the
+  // operator can tell at a glance whether the list has a value for this
+  // part — silently hiding it made an empty cell indistinguishable from
+  // a missing column.
+  const dieNumber = die?.dieNumber || '';
+  const dieNumberLabel = ` <span class="m-die-num" title="Die # for this part (from PMD_ProductDieColor.DieNumber)">Die# ${escapeHtml(dieNumber || '—')}</span>`;
   return `<div class="op-meta">
     <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
     <label class="m-job">Job# ${jobField}</label>
     <label class="m-orderqty">Order Qty <input type="text" disabled value="${escapeHtml(String(orderQty))}"></label>
     <label class="m-part"><span class="m-part-title">Part# ${swatch}</span><input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
-    <label class="m-desc"><span class="m-desc-title">Product Description${dieNumberPill}</span><input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
+    <label class="m-desc"><span class="m-desc-title">Product Description${dieNumberLabel}</span><input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
     <label class="m-op">Operator ${opField}</label>
     <label class="m-sup">Supervisor ${supField}</label>
   </div>`;
