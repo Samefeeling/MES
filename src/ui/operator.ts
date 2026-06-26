@@ -2278,15 +2278,32 @@ export function operatorPollTick(): void {
 }
 
 /**
+ * Reentrancy guard for pollSync. The poll runs on a 60 s setInterval
+ * and is fire-and-forget (void pollSync()); without this flag a slow
+ * tick (CSV download + per-job upserts on flaky iPad Wi-Fi can take
+ * > 60 s) would stack a second pollSync onto the first, then a third
+ * onto that, until Safari's connection pool was saturated and the
+ * page froze. Reported by floor: iPad9 freeze, especially night
+ * shift. Belt-and-braces with the DAL's own snapshotInFlight guard.
+ */
+let pollSyncInFlight = false;
+
+/**
  * Per-tick best-effort flush of this device's editCache to PMD_LiveStatus
  * so other devices see in-progress work. The DAL's pushLiveSnapshot is a
  * no-op on read-only devices (device-class write rule).
  */
 async function pollSync(): Promise<void> {
   if (!S) return;
-  if (dalRef.pushLiveSnapshot) {
-    await dalRef.pushLiveSnapshot().catch(() => {
-      /* logged inside the DAL; never propagate to the poll loop */
-    });
+  if (pollSyncInFlight) return;
+  pollSyncInFlight = true;
+  try {
+    if (dalRef.pushLiveSnapshot) {
+      await dalRef.pushLiveSnapshot().catch(() => {
+        /* logged inside the DAL; never propagate to the poll loop */
+      });
+    }
+  } finally {
+    pollSyncInFlight = false;
   }
 }

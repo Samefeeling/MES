@@ -323,6 +323,30 @@ export class SharePointDataLayer implements PmdDataLayer {
    */
   private dieColorCache: ProductDieColor[] | null = null;
   /**
+   * Short-TTL `jobNumber → partNumber` map used by pushLiveSnapshot to
+   * stamp PartNum onto every PMD_LiveStatus mirror. Without the cache,
+   * every 60 s poll tick re-downloaded the full Planning CSV from SP
+   * (cache-busted with `_t`) just to fill this one Map — on flaky iPad
+   * Wi-Fi the recurring multi-second fetch piled up onto the next tick
+   * and froze the page. Planning changes slowly (15-min Epicor sync),
+   * so a 5-minute TTL is plenty fresh for the live mirror. User-facing
+   * Planning reads still go through listPlanning() directly and stay
+   * cache-bust-fresh.
+   */
+  private partNumByJobCache: { value: Map<string, string>; expires: number } | null = null;
+  private static readonly PART_NUM_CACHE_TTL_MS = 5 * 60_000;
+  /**
+   * Reentrancy guard for pushLiveSnapshot. operatorPollTick is
+   * fire-and-forget on a 60 s setInterval, so if a snapshot's network
+   * work takes longer than 60 s (slow Wi-Fi + N upserts × 3 round
+   * trips) the next tick used to start a SECOND snapshot in parallel,
+   * which stacked onto the third, fourth, … until Safari's 6-
+   * concurrent-connections cap was saturated and the tab locked up.
+   * One-in-flight at a time is the correct policy — a missed tick just
+   * pushes one minute later.
+   */
+  private snapshotInFlight = false;
+  /**
    * Stable per-device identity, persisted in localStorage. Written to
    * PMD_LiveStatus.OwnerDevice on every snapshot push so we can see
    * after the fact which iPad last touched a press, but no longer used
@@ -1735,14 +1759,25 @@ export class SharePointDataLayer implements PmdDataLayer {
    */
   async pushLiveSnapshot(): Promise<void> {
     if (this.editCache.size === 0) return;
-    // One planning fetch so every live row can carry JobHead_PartNum —
-    // KPIs and the colour swatch resolve PMD_ProductDieColor on the
-    // record's partNumber, not by joining back to planning.
-    const planning = await this.listPlanning({}).catch(() => [] as PlanningOrder[]);
-    const partNumByJob = new Map<string, string>();
-    for (const o of planning) partNumByJob.set(o.jobNumber, o.partNumber);
-    const tasks: Promise<void>[] = [];
+    // Reentrancy guard — see snapshotInFlight field comment. The poll
+    // tick is fire-and-forget; without this, a slow tick stacks onto
+    // the next one and saturates Safari's connection pool → freeze.
+    if (this.snapshotInFlight) return;
+    this.snapshotInFlight = true;
+    try {
+      await this.pushLiveSnapshotInner();
+    } finally {
+      this.snapshotInFlight = false;
+    }
+  }
+
+  private async pushLiveSnapshotInner(): Promise<void> {
+    // PartNum lookup for the live mirror. Cached for 5 min so we don't
+    // re-download the whole Planning CSV every 60 s — see
+    // partNumByJobCache field comment.
+    const partNumByJob = await this.getPartNumByJob();
     const now = new Date();
+    const tasks: Array<() => Promise<void>> = [];
     for (const [key, slots] of this.editCache) {
       if (slots.length === 0) continue;
       // Skip cache entries that hold nothing but a freshly-picked
@@ -1782,7 +1817,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       const date = shiftId.slice(0, 10);
       const shift = shiftId.slice(11);
       const agg = aggregateSlots(slots);
-      tasks.push(
+      tasks.push(() =>
         this.upsertHeaderInto(LISTS.liveStatus, {
           machineCode,
           date,
@@ -1816,7 +1851,29 @@ export class SharePointDataLayer implements PmdDataLayer {
         }),
       );
     }
-    await Promise.all(tasks);
+    // Push in serial — each upsert is digest + GET-by-key + POST/PATCH
+    // (3 round trips). With 5-10 jobs cached on a busy iPad, the old
+    // Promise.all fired 15-30 requests at once, immediately hit
+    // Safari's 6-connection-per-origin cap and queued the rest while
+    // the main thread waited. Serial keeps the connection pool free
+    // for the UI's own taps and reload(), at the cost of a slightly
+    // longer total snapshot wall-clock — fine, this is a best-effort
+    // background mirror, not a user-facing path.
+    for (const t of tasks) await t();
+  }
+
+  /**
+   * 5-minute-TTL cache for the snapshot push's PartNum lookup. See
+   * partNumByJobCache field comment for why this exists.
+   */
+  private async getPartNumByJob(): Promise<Map<string, string>> {
+    const c = this.partNumByJobCache;
+    if (c && c.expires > Date.now()) return c.value;
+    const planning = await this.listPlanning({}).catch(() => [] as PlanningOrder[]);
+    const m = new Map<string, string>();
+    for (const o of planning) m.set(o.jobNumber, o.partNumber);
+    this.partNumByJobCache = { value: m, expires: Date.now() + SharePointDataLayer.PART_NUM_CACHE_TTL_MS };
+    return m;
   }
 
   async unlockShift(
