@@ -71,10 +71,11 @@ interface OpState {
   jobTotalGood: number;
   /** Slots currently highlighted for status entry (tap or hold-and-drag). */
   selSet: Set<number>;
-  /** Part # → die / paint hex colour, read from PMD_ProductDieColor on
-   *  boot. Drives the swatch shown on the Product Description meta cell
-   *  so the operator can see the colour they're meant to be running. */
-  dieColors: Map<string, { hex: string; name: string }>;
+  /** Part # → die / paint hex colour + physical die number, read from
+   *  PMD_ProductDieColor on boot. Drives the swatch on the Product
+   *  Description meta cell + the Die# pill so the operator can see the
+   *  colour and which die to fit before starting the job. */
+  dieColors: Map<string, { hex: string; name: string; dieNumber: string }>;
 }
 
 let S: OpState | null = null;
@@ -855,12 +856,19 @@ function buildMeta(): string {
   const swatch = die?.hex
     ? `<span class="m-die-swatch-inline" style="background:${die.hex}" title="${escapeHtml(die.name || die.hex)}"></span>`
     : '';
+  // Physical die number from PMD_ProductDieColor.DieNumber, shown as a
+  // small pill after the Product Description title so the floor knows
+  // which die to fit before starting. Hidden when the part has no die
+  // recorded in the list yet (the title alone is enough).
+  const dieNumberPill = die?.dieNumber
+    ? ` <span class="m-die-num" title="Die # for this part (from PMD_ProductDieColor.DieNumber)">Die# ${escapeHtml(die.dieNumber)}</span>`
+    : '';
   return `<div class="op-meta">
     <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
     <label class="m-job">Job# ${jobField}</label>
     <label class="m-orderqty">Order Qty <input type="text" disabled value="${escapeHtml(String(orderQty))}"></label>
     <label class="m-part"><span class="m-part-title">Part# ${swatch}</span><input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
-    <label class="m-desc">Product Description <input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
+    <label class="m-desc"><span class="m-desc-title">Product Description${dieNumberPill}</span><input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
     <label class="m-op">Operator ${opField}</label>
     <label class="m-sup">Supervisor ${supField}</label>
   </div>`;
@@ -2208,7 +2216,7 @@ export async function renderOperator(
   const dieColors = new Map(
     dieColorList.map((c) => [
       c.partNumber.trim().toUpperCase(),
-      { hex: c.hex, name: c.name },
+      { hex: c.hex, name: c.name, dieNumber: c.dieNumber },
     ]),
   );
   const cs = currentShift(now);

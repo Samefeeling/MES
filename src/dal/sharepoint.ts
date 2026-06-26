@@ -242,6 +242,10 @@ const DEFAULT_FIELDS = {
     // Product category (e.g. "Battens") — groups the KPI TOTAL row
     // into per-category subtotals.
     category: 'Category',
+    /** Physical die number — shown next to Product Description on the
+     *  operator sheet so the floor knows which die to fit. Optional
+     *  column; stripRejectedFields tolerates absence. */
+    dieNumber: 'DieNumber',
   },
 } as const;
 
@@ -661,8 +665,9 @@ export class SharePointDataLayer implements PmdDataLayer {
           hex: normaliseHex(str(r[F.hex])),
           name: str(r[F.name]).trim(),
           category: str(r[F.category]).trim(),
+          dieNumber: F.dieNumber ? str(r[F.dieNumber]).trim() : '',
         }))
-        .filter((c) => c.partNumber && (c.hex || c.category));
+        .filter((c) => c.partNumber && (c.hex || c.category || c.dieNumber));
       console.info('[pmd] PMD_ProductDieColor cached:', direct.length, 'of', rows.length, 'rows');
       this.dieColorCache = direct;
       return this.dieColorCache;

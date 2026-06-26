@@ -51,6 +51,10 @@ export interface ProductDieColor {
   /** Product category (e.g. "Battens") — groups the KPI TOTAL row into
    *  per-category subtotals. Empty string when not recorded. */
   category: string;
+  /** Physical die number used to run the part (e.g. "D-247"). Shown on the
+   *  operator sheet next to Product Description so the floor knows which
+   *  die to fit before starting the job. Empty when not recorded. */
+  dieNumber: string;
 }
 
 export interface BdCode {

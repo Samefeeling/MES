@@ -226,6 +226,10 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    12px-uppercase label baseline without bumping the row's height. */
 .op-meta .m-part-title{display:inline-flex;align-items:center;gap:6px}
 .m-die-swatch-inline{display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.25);flex-shrink:0;box-shadow:inset 0 0 0 1px rgba(255,255,255,.3)}
+.op-meta .m-desc-title{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+/* Compact Die# pill after the Product Description title — read-only
+   chip so the floor sees which physical die to fit before starting. */
+.m-die-num{display:inline-flex;align-items:center;font-size:11px;font-weight:700;color:#1d4ed8;background:#dbeafe;border:1px solid #93c5fd;border-radius:999px;padding:1px 8px;letter-spacing:.02em}
 .op-meta .m-op select,.op-meta .m-sup select{width:140px}
 
 .shift-btn{padding:10px 16px;border:2px solid var(--bd);background:#fff;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;color:var(--mu);min-height:52px}

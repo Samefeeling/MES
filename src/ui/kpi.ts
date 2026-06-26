@@ -809,10 +809,15 @@ function render(): void {
   // every machine instead of N clicks per row.
   //  • "+" mirrors the per-row + / – (shift breakdown)
   //  • ">" mirrors the per-row › / ⌄ (per-order rollup)
-  const anyShiftsCollapsed = S!.collapsed.size > 0;
-  const anyOrdersHidden =
-    S!.ordersExpanded.size <
-    S!.rows.filter((r) => r.byJobTotal.length > 0).length;
+  // Machines with no jobs in the selected period have no shift breakdown
+  // and no order rollup, so they're excluded from the "any collapsed?"
+  // tally and from the toggle-all targets below. Without this filter the
+  // global "–" glyph stuck on "+" because the empty machines are never
+  // tracked in S!.collapsed, and the "expand all" click tried to drill
+  // into rows that have nothing to expand.
+  const machinesWithData = S!.rows.filter((r) => r.byJobTotal.length > 0);
+  const anyShiftsCollapsed = machinesWithData.some((r) => S!.collapsed.has(r.machineCode));
+  const anyOrdersHidden = S!.ordersExpanded.size < machinesWithData.length;
   const allShiftsGlyph = anyShiftsCollapsed ? '+' : '–';
   const allOrdersGlyph = anyOrdersHidden ? '›' : '⌄';
 
@@ -853,14 +858,21 @@ function render(): void {
   } else {
     body = S!.rows
       .map((r) => {
-        const isCollapsed = S!.collapsed.has(r.machineCode);
+        const hasData = r.byJobTotal.length > 0;
+        const isCollapsed = S!.collapsed.has(r.machineCode) || !hasData;
         const ordersOpen = S!.ordersExpanded.has(r.machineCode);
-        const toggle = `<button type="button" class="kpi-toggle" data-toggle="${escapeHtml(
-          r.machineCode,
-        )}" aria-label="${isCollapsed ? 'Show shift breakdown' : 'Hide shift breakdown'} for ${escapeHtml(r.machineCode)}" title="Toggle Day / Afternoon / Night breakdown">${
-          isCollapsed ? '+' : '–'
-        }</button>`;
-        const ordersToggle = r.byJobTotal.length
+        // A machine with no jobs in the period has no shift breakdown
+        // to show either (Day / Afternoon / Night would all be empty),
+        // so suppress the + chevron entirely — same rule as the >-orders
+        // toggle below. Operator gets a clean read-only row.
+        const toggle = hasData
+          ? `<button type="button" class="kpi-toggle" data-toggle="${escapeHtml(
+              r.machineCode,
+            )}" aria-label="${isCollapsed ? 'Show shift breakdown' : 'Hide shift breakdown'} for ${escapeHtml(r.machineCode)}" title="Toggle Day / Afternoon / Night breakdown">${
+              isCollapsed ? '+' : '–'
+            }</button>`
+          : '';
+        const ordersToggle = hasData
           ? `<button type="button" class="kpi-toggle kpi-orders-toggle" data-orders="${escapeHtml(
               r.machineCode,
             )}" aria-label="${ordersOpen ? 'Hide' : 'Show'} per-order rollup for ${escapeHtml(r.machineCode)}" title="Toggle per-Job# rollup across all shifts in this period">${
@@ -1168,8 +1180,13 @@ function render(): void {
   const allShiftsBtn = app.querySelector<HTMLButtonElement>('[data-toggle-all-shifts]');
   if (allShiftsBtn) {
     allShiftsBtn.addEventListener('click', () => {
+      // Only flip machines that have data — empties have no + chevron
+      // and aren't tracked anyway.
+      const targets = S!.rows
+        .filter((r) => r.byJobTotal.length > 0)
+        .map((r) => r.machineCode);
       if (S!.collapsed.size > 0) S!.collapsed = new Set();
-      else S!.collapsed = new Set(S!.machines.map((m) => m.machineCode));
+      else S!.collapsed = new Set(targets);
       render();
     });
   }
