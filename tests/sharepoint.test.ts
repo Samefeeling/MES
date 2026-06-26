@@ -1511,6 +1511,49 @@ describe('signed-off history, 48h live cap, and Signoff timestamp', () => {
     expect(recs.every((r) => r.lockedAt === signedAtIso)).toBe(true);
   });
 
+  it('round-trips frozen JobLeft + ShiftTarget onto the canonical record', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+    };
+    // The stub bypasses fetchHeaders' field mapping, so pass HeaderRow
+    // fields (camelCase) directly — these are what the real fetchHeaders
+    // would have produced from the JobLeft / ShiftTarget columns.
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production'
+        ? [signedHeader({ jobLeft: 300, shiftTarget: 40 })]
+        : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+
+    const recs = await dal.listSignedOffProduction({ jobNumber: 'SFM700' });
+    const slot0 = recs.find((r) => r.slotIndex === 0)!;
+    expect(slot0.jobLeft).toBe(300);
+    expect(slot0.shiftTarget).toBe(40);
+  });
+
+  it('leaves jobLeft/shiftTarget undefined when the columns are absent', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [signedHeader()] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+
+    const recs = await dal.listSignedOffProduction({ jobNumber: 'SFM700' });
+    const slot0 = recs.find((r) => r.slotIndex === 0)!;
+    expect(slot0.jobLeft).toBeUndefined();
+    expect(slot0.shiftTarget).toBeUndefined();
+  });
+
   it('lockShift stamps the Signoff column', async () => {
     store.clear();
     const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });

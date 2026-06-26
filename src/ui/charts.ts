@@ -305,7 +305,7 @@ export function renderHoursOeeChart(
   return renderDualAxis(data, {
     segmentColors: ['#16a34a', '#dc2626', '#f59e0b'],
     segmentLabels: ['Run h', 'Down h', 'Setup h'],
-    overlayLabel: 'OEE %',
+    overlayLabel: 'Efficiency %',
     overlayColor: '#1d4ed8',
     overlayAsPercent: true,
   });

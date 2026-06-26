@@ -57,6 +57,15 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-range{display:flex;flex-wrap:wrap;gap:14px;align-items:center;background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 14px}
 .kpi-range label{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:#0c4a6e}
 .kpi-range input[type=date]{font-size:14px;padding:6px 8px;border:1px solid var(--bd);border-radius:8px}
+/* Supervisor-only colour-threshold editor. */
+.kpi-thresholds{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 14px}
+.kpi-th-title{font-size:13px;font-weight:700;color:#0c4a6e}
+.kpi-th-group{display:flex;align-items:center;gap:6px;font-size:12px;color:#334155}
+.kpi-th-group b{font-weight:700;color:#0f172a}
+.kpi-th-field{display:flex;align-items:center;gap:3px;font-size:12px;color:#475569}
+.kpi-th-field input{width:48px;font-size:13px;padding:3px 5px;border:1px solid var(--bd);border-radius:6px;text-align:right}
+.kpi-th-reset{font-size:12px;font-weight:600;color:#475569;background:#f1f5f9;border:1px solid var(--bd);border-radius:8px;padding:4px 10px;cursor:pointer}
+.kpi-th-reset:hover{background:#e2e8f0}
 /* Headline stat tiles above the table — daily-meeting numbers readable
    from across the room. Top border carries the traffic-light colour. */
 .kpi-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}

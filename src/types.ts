@@ -112,6 +112,20 @@ export interface ProductionRecord {
    *  the synthetic order had no rate and Shift Target rendered "—".
    *  Falls back to 0 / undefined on tenants without the column. */
   cycleTime?: number;
+  /** Job Left frozen at JOB START (order total − Good already made on
+   *  every OTHER shift of this job). Stamped on the canonical (slot 0)
+   *  row when the tuple is first created and persisted to the
+   *  PMD_Production.JobLeft column, so a Trace lookup can read "how many
+   *  were still needed when this shift started" per row without
+   *  re-deriving it. The operator side panel still shows a LIVE Job Left
+   *  (this snapshot does not move as the shift produces). Undefined for
+   *  die-change rows and on tenants without the column. */
+  jobLeft?: number;
+  /** Shift Target frozen at JOB START (shiftTargetFor of the at-start
+   *  jobLeft + cycle time). Persisted to PMD_Production.ShiftTarget and
+   *  read back so Trace shows the recorded target per row. Undefined when
+   *  no rate was available / on tenants without the column. */
+  shiftTarget?: number;
   slotIndex: number; // 0..15
   statusCode: StatusCode | '';
   countStart: number | null;

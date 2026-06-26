@@ -672,11 +672,24 @@ function buildTraceRowsFor(
     const jobGood = jobGoodTotals.has(jobNumber)
       ? jobGoodTotals.get(jobNumber)!
       : Math.max(0, ce - cs - totalRej);
-    // Job Left + Shift Target come from the same pure formulas the
-    // operator side panel uses, so the two pages cannot drift apart.
-    const jobLeft = plan ? jobLeftPiecesFor(plan, jobGood) : null;
+    // Job Left + Shift Target: prefer the values FROZEN at job start on
+    // the PMD_Production row (canonical.jobLeft / .shiftTarget) so Trace
+    // reflects demand-at-start exactly as recorded — that's the whole
+    // point of the JobLeft column. Fall back to the live formula only for
+    // legacy rows that predate the column or in-progress shifts that
+    // haven't frozen a value yet.
+    const jobLeft =
+      canonical?.jobLeft != null
+        ? canonical.jobLeft
+        : plan
+          ? jobLeftPiecesFor(plan, jobGood)
+          : null;
     const shiftTargetVal =
-      plan && jobLeft != null ? shiftTargetFor(plan, jobLeft) : null;
+      canonical?.shiftTarget != null
+        ? canonical.shiftTarget
+        : plan && jobLeft != null
+          ? shiftTargetFor(plan, jobLeft)
+          : null;
     const qcBySlot = Array.from({ length: SLOTS_PER_SHIFT }, (_, i) => {
       const rec = list.find((r) => r.slotIndex === i);
       return rec?.qcBy ?? '';

@@ -146,7 +146,7 @@ function blankRecord(slot: number): ProductionRecord {
   // supervisor editing history still stamps the recorded Part #
   // rather than a blank (planning has long dropped the order).
   const order = selectedOrder();
-  return {
+  const rec: ProductionRecord = {
     id: 0,
     machineCode: S!.mc,
     shiftId: sid(),
@@ -174,6 +174,24 @@ function blankRecord(slot: number): ProductionRecord {
     createdAt: iso,
     updatedAt: iso,
   };
+  // Freeze Job Left + Shift Target on the canonical slot the moment the
+  // job starts on this (machine, shift). jobTotalGood is the Good already
+  // made on every OTHER shift of the job, so order total − that = "how
+  // many were still needed when this shift began". Frozen here (not
+  // recomputed at sign-off) so it survives re-sign-off and out-of-order
+  // edits, and so Trace can read demand-at-start per row. Live shifts
+  // only — a supervisor editing a PAST shift clones the existing row
+  // (which already carries its original frozen value) rather than
+  // re-freezing against today's totals.
+  if (slot === 0 && order && !isPastShift()) {
+    const jl = jobLeftPiecesFor(order, S!.jobTotalGood);
+    if (jl != null) {
+      rec.jobLeft = jl;
+      const st = shiftTargetFor(order, jl);
+      if (st != null) rec.shiftTarget = st;
+    }
+  }
+  return rec;
 }
 
 function isPastShift(): boolean {
@@ -1991,17 +2009,17 @@ async function doSignoffSave(): Promise<void> {
     // Scope sign-off to the order being reviewed: another job already
     // running on this press's remaining timeline slots (operator
     // started the next order mid-shift) must stay live and editable.
-    // Pass the UI's exact Job Left so PMD_Production.JobLeft mirrors what
-    // the operator saw on the side panel at sign-off (cross-shift Good,
-    // not the DAL's tuple-only estimate). null for die-change jobs (no
-    // piece target) or when there's no planning row to derive against.
+    // Pass the JobLeft frozen on the canonical row at job start so
+    // PMD_Production.JobLeft records demand-at-start (for Trace), not the
+    // live "remaining now". null for die-change jobs / rows with no frozen
+    // value — the DAL then falls back to its tuple-only estimate.
     await dalRef.lockShift(
       S!.mc,
       sid(),
       S!.selSupervisor,
       S!.selOperator,
       S!.selJob || undefined,
-      jobLeftPieces(),
+      canonical()?.jobLeft ?? null,
     );
     closeModal();
     toast(`Signed off · ${S!.selJob || 'shift'} saved to Master`, 'ok');

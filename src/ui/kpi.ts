@@ -16,6 +16,51 @@ import {
   renderParetoChart,
 } from './charts';
 import { parseHandover } from '../core/handover';
+import { isSupervisor } from './supervisor-auth';
+
+// Per-metric green / amber colour thresholds for the KPI table. Editable
+// by a signed-in supervisor (the floor tunes them per plant); persisted
+// per-browser in localStorage. A value ≥ green → green, ≥ amber → amber,
+// else red.
+interface KpiThresholds {
+  effGreen: number;
+  effAmber: number;
+  yieldGreen: number;
+  yieldAmber: number;
+  schedGreen: number;
+  schedAmber: number;
+}
+
+const DEFAULT_THRESHOLDS: KpiThresholds = {
+  effGreen: 85,
+  effAmber: 70,
+  yieldGreen: 98,
+  yieldAmber: 95,
+  schedGreen: 95,
+  schedAmber: 80,
+};
+
+const THRESHOLDS_KEY = 'pmd.kpiThresholds';
+
+function loadThresholds(): KpiThresholds {
+  try {
+    const raw = localStorage.getItem(THRESHOLDS_KEY);
+    if (!raw) return { ...DEFAULT_THRESHOLDS };
+    const parsed = JSON.parse(raw) as Partial<KpiThresholds>;
+    // Merge over defaults so a partial / older blob never yields NaN.
+    return { ...DEFAULT_THRESHOLDS, ...parsed };
+  } catch {
+    return { ...DEFAULT_THRESHOLDS };
+  }
+}
+
+function saveThresholds(t: KpiThresholds): void {
+  try {
+    localStorage.setItem(THRESHOLDS_KEY, JSON.stringify(t));
+  } catch {
+    /* private mode — keep the in-memory copy, just don't persist */
+  }
+}
 
 // Management KPI view (`#/kpi`) for daily / weekly / monthly meetings.
 // Per-machine OEE, output, reject, run/down/setup hours, plus a per-shift
@@ -164,6 +209,8 @@ interface KpiState {
    *  empty. */
   customFrom: string;
   customTo: string;
+  /** Editable colour thresholds (supervisor-tunable, localStorage). */
+  thresholds: KpiThresholds;
   machines: Machine[];
   loading: boolean;
   rows: KpiRow[];
@@ -697,11 +744,12 @@ function aggCells(
   rejectDrillKey?: string,
   downtimeDrillKey?: string,
 ): string {
-  const yc = colourClass(a.yieldPct, 98, 95);
-  const oc = colourClass(a.oee, 85, 70);
-  const sc = colourClass(includeSched, 95, 80);
+  const t = S!.thresholds;
+  const yc = colourClass(a.yieldPct, t.yieldGreen, t.yieldAmber);
+  const oc = colourClass(a.oee, t.effGreen, t.effAmber);
+  const sc = colourClass(includeSched, t.schedGreen, t.schedAmber);
   // Empty cells render an em-dash instead of "0" / "0.0%" — a literal
-  // zero in an OEE / output column reads as a real measurement (the
+  // zero in an Efficiency / output column reads as a real measurement (the
   // press ran but made nothing), where what we actually mean is "no
   // data for this slice". The dash makes that distinction visible.
   const n = (v: number): string => (v ? String(v) : '—');
@@ -724,6 +772,28 @@ function aggCells(
       includeSched == null ? '—' : includeSched + '%'
     }</td>
     ${formatHandoverCell(a.handovers)}`;
+}
+
+/**
+ * Supervisor-only editor for the green / amber colour thresholds. Hidden
+ * for operators (read-only view); a signed-in supervisor can tune them
+ * per plant and the values persist per-browser. Six number inputs:
+ * green + amber for Efficiency, Yield, Schedule Adherence.
+ */
+function buildThresholdEditor(): string {
+  if (!isSupervisor()) return '';
+  const t = S!.thresholds;
+  const field = (key: keyof KpiThresholds, label: string): string =>
+    `<label class="kpi-th-field">${escapeHtml(label)}
+      <input type="number" min="0" max="100" step="1" data-th="${key}" value="${t[key]}">
+    </label>`;
+  return `<div class="kpi-thresholds">
+    <span class="kpi-th-title">🎚 Colour thresholds</span>
+    <div class="kpi-th-group"><b>Efficiency</b>${field('effGreen', '🟢 ≥')}${field('effAmber', '🟡 ≥')}</div>
+    <div class="kpi-th-group"><b>Yield</b>${field('yieldGreen', '🟢 ≥')}${field('yieldAmber', '🟡 ≥')}</div>
+    <div class="kpi-th-group"><b>Sched. Adh.</b>${field('schedGreen', '🟢 ≥')}${field('schedAmber', '🟡 ≥')}</div>
+    <button type="button" class="kpi-th-reset" data-th-reset title="Restore default thresholds">Reset</button>
+  </div>`;
 }
 
 function render(): void {
@@ -926,7 +996,7 @@ function render(): void {
           ${renderOutputByShiftChart(outChartData)}
         </div>
         <div class="kpi-chart">
-          <h4>Run / Down / Setup hours (stacked) vs OEE</h4>
+          <h4>Run / Down / Setup hours (stacked) vs Efficiency</h4>
           ${renderHoursOeeChart(hoursChartData)}
         </div>
         ${rejectChart}
@@ -946,10 +1016,10 @@ function render(): void {
     : `<div class="kpi-stats">
         ${stat('Output', tot.output ? String(tot.output) : '—')}
         ${stat('Reject', tot.reject ? String(tot.reject) : '—', 'is-red')}
-        ${stat('Yield', totYield != null ? totYield + '%' : '—', totYield != null ? 'is-' + colourClass(+totYield, 98, 95) : '')}
+        ${stat('Yield', totYield != null ? totYield + '%' : '—', totYield != null ? 'is-' + colourClass(+totYield, S!.thresholds.yieldGreen, S!.thresholds.yieldAmber) : '')}
         ${stat('Run hours', tot.runHrs ? tot.runHrs.toFixed(1) : '—', 'is-green')}
         ${stat('Down hours', tot.downHrs ? tot.downHrs.toFixed(1) : '—', tot.downHrs ? 'is-red' : '')}
-        ${stat('OEE*', totOee != null ? totOee + '%' : '—', totOee != null ? 'is-' + colourClass(totOee, 85, 70) : '')}
+        ${stat('Efficiency*', totOee != null ? totOee + '%' : '—', totOee != null ? 'is-' + colourClass(totOee, S!.thresholds.effGreen, S!.thresholds.effAmber) : '')}
       </div>`;
 
   app.innerHTML = `
@@ -969,6 +1039,7 @@ function render(): void {
             </div>`
           : ''
       }
+      ${buildThresholdEditor()}
       ${stats}
       <div class="kpi-table-wrap">
         <table class="summary-table kpi-table">
@@ -982,7 +1053,7 @@ function render(): void {
             <th title="D — Die change">Die h</th>
             <th title="C — Colour change">Colour h</th>
             <th title="I — Insert change">Insert h</th>
-            <th>OEE*</th><th>Sched. Adh.</th>
+            <th>Efficiency*</th><th>Sched. Adh.</th>
             <th class="kpi-ho-head">Handover</th>
           </tr></thead>
           <tbody>${body}</tbody>
@@ -1011,7 +1082,7 @@ function render(): void {
         </table>
       </div>
       ${charts}
-      <p class="bd-sub">OEE* = run-slot share of all filled slots. Schedule Adherence = good qty ÷ planned qty for jobs starting in the period (suppressed in Last-24h). Shift sub-rows show each shift's contribution to the period total.</p>
+      <p class="bd-sub">Efficiency* = run-slot share of all filled slots. Schedule Adherence = good qty ÷ planned qty for jobs starting in the period (suppressed in Last-24h). Shift sub-rows show each shift's contribution to the period total.</p>
     </div>`;
 
   app.querySelector<HTMLButtonElement>('[data-kpi-refresh]')?.addEventListener('click', () => {
@@ -1049,6 +1120,21 @@ function render(): void {
       void compute();
     }),
   );
+  app.querySelectorAll<HTMLInputElement>('[data-th]').forEach((el) =>
+    el.addEventListener('change', () => {
+      const key = el.dataset.th as keyof KpiThresholds;
+      const v = Math.max(0, Math.min(100, Math.round(Number(el.value) || 0)));
+      S!.thresholds = { ...S!.thresholds, [key]: v };
+      saveThresholds(S!.thresholds);
+      // Recolour only — no data refetch needed.
+      render();
+    }),
+  );
+  app.querySelector<HTMLButtonElement>('[data-th-reset]')?.addEventListener('click', () => {
+    S!.thresholds = { ...DEFAULT_THRESHOLDS };
+    saveThresholds(S!.thresholds);
+    render();
+  });
   app.querySelectorAll<HTMLButtonElement>('[data-toggle]').forEach((b) =>
     b.addEventListener('click', () => {
       const mc = b.dataset.toggle!;
@@ -1228,6 +1314,7 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     period: 'last3',
     customFrom: dateKey(weekAgo),
     customTo: dateKey(today),
+    thresholds: loadThresholds(),
     machines,
     loading: true,
     rows: [],
@@ -1239,6 +1326,9 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     rejectPareto: { floor: [], byMachine: new Map() },
     downtimePareto: { floor: [], byMachine: new Map() },
   };
+  // No supervisor-change subscription needed here: main.ts already
+  // re-routes (→ renderKpi) on every supervisor toggle, so the threshold
+  // editor appears/disappears on unlock without a page reload.
   render();
   await compute();
 }

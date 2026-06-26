@@ -1168,6 +1168,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       ownerDevice: F.ownerDevice ? str(r[F.ownerDevice]) : '',
       signOff: F.signOff ? str(r[F.signOff]) : '',
       jobLeft: F.jobLeft && r[F.jobLeft] != null ? num(r[F.jobLeft]) : -1,
+      shiftTarget: F.shiftTarget && r[F.shiftTarget] != null ? num(r[F.shiftTarget]) : -1,
     }));
   }
 
@@ -1378,6 +1379,12 @@ export class SharePointDataLayer implements PmdDataLayer {
       // shadowing the real event total on read.
       if (rejects.length === 0) slots[0].rejectCount = h.reject;
     }
+    // Frozen-at-start Job Left / Shift Target ride on the canonical slot
+    // so Trace can read demand-at-start per row. -1 sentinel = column
+    // absent / never written (legacy or live-without-freeze rows); 0 is a
+    // valid value ("job complete") so guard on >= 0, not truthiness.
+    if (h.jobLeft >= 0) slots[0].jobLeft = h.jobLeft;
+    if (h.shiftTarget >= 0) slots[0].shiftTarget = h.shiftTarget;
     // PMD_Rejects events take precedence (signed-off shifts), but for
     // live (unsigned) rows the events list is empty — fall back to the
     // RejectsBySlot JSON column on PMD_LiveStatus so other iPads see
@@ -1598,18 +1605,25 @@ export class SharePointDataLayer implements PmdDataLayer {
       // authoritative value from CycleTime, so this is a convenience
       // snapshot, exact for single-shift jobs.
       const tupleGood = Math.max(0, (agg.countEnd ?? 0) - (agg.countStart ?? 0) - reject);
-      // Prefer the UI-computed Job Left (exact cross-shift Good). Fall back
-      // to the tuple-only estimate when the caller didn't supply one — the
-      // memory DAL test path and any future scripted sign-off go through
-      // here without UI state. Clamp ≥ 0 either way.
+      // Job Left written to the column is the value FROZEN at job start:
+      // prefer the canonical row's stamp (set by the operator UI / round-
+      // tripped from PMD_LiveStatus), then the explicit param, then the
+      // tuple-only estimate for a scripted sign-off with no UI state.
       const jobLeftSnap =
-        jobLeft != null
-          ? Math.max(0, jobLeft)
-          : Math.max(0, required - tupleGood);
-      const shiftTargetSnap = shiftTargetFor(
-        { jobRequired: required, qtyPerHr: cycleTime, isDieChange: false } as PlanningOrder,
-        jobLeftSnap,
-      );
+        canon?.jobLeft != null
+          ? Math.max(0, canon.jobLeft)
+          : jobLeft != null
+            ? Math.max(0, jobLeft)
+            : Math.max(0, required - tupleGood);
+      // Shift Target column likewise prefers the frozen-at-start value;
+      // recompute from the at-start Job Left only when none was stamped.
+      const shiftTargetSnap =
+        canon?.shiftTarget != null
+          ? canon.shiftTarget
+          : shiftTargetFor(
+              { jobRequired: required, qtyPerHr: cycleTime, isDieChange: false } as PlanningOrder,
+              jobLeftSnap,
+            );
       try {
         await this.upsertProductionHeader({
           signOff: new Date().toISOString(),
@@ -1748,11 +1762,13 @@ export class SharePointDataLayer implements PmdDataLayer {
           partNumber: partNumByJob.get(jobNumber) ?? '',
           partDescription: '',
           jobRequired: 0,
-          // Carry cycle time onto the live mirror so other iPads (and a
-          // mid-shift reload) keep it; Shift Target is recomputed live,
-          // so no snapshot is written here.
+          // Carry cycle time + the frozen-at-start Job Left / Shift
+          // Target onto the live mirror so a mid-shift reload (editCache
+          // lost, rehydrate from PMD_LiveStatus) keeps the frozen values
+          // rather than re-deriving them against shifted totals.
           cycleTime: canon.cycleTime ?? 0,
-          shiftTarget: null,
+          jobLeft: canon.jobLeft ?? null,
+          shiftTarget: canon.shiftTarget ?? null,
           timeline: agg.timeline,
           countStart: agg.countStart,
           countEnd: agg.countEnd,
@@ -2440,11 +2456,13 @@ interface HeaderRow {
   /** Sign-off timestamp (ISO) from PMD_Production.Signoff; '' when absent
    *  (live rows, or legacy signed rows from before the column existed). */
   signOff: string;
-  /** Job Left at sign-off time from PMD_Production.JobLeft; -1 when the
-   *  column is absent or empty (live rows / legacy signed rows). The
-   *  operator UI recomputes the authoritative value live, so this is a
-   *  back-reference convenience for SharePoint / Power BI. */
+  /** Job Left frozen at job start from PMD_Production.JobLeft; -1 when the
+   *  column is absent or empty (live rows / legacy signed rows). Stamped
+   *  onto the canonical record so Trace can read demand-at-start. */
   jobLeft: number;
+  /** Shift Target frozen at job start from PMD_Production.ShiftTarget; -1
+   *  when absent. Round-tripped onto the canonical record for Trace. */
+  shiftTarget: number;
 }
 
 interface HeaderInput {
