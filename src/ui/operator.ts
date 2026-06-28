@@ -383,6 +383,86 @@ function canonical(): ProductionRecord | undefined {
   return slotRec(0);
 }
 
+/**
+ * True when the currently-selected job has meaningful in-progress data
+ * that has NOT been signed off yet — i.e. leaving it now would strand
+ * the JobLeft snapshot (it only lands in PMD_Production at sign-off).
+ * Used to block a Job# / shift / machine switch until the operator
+ * signs the current order off (per floor policy: every worked order
+ * must be signed off before moving on, so Trace gets accurate Job Left).
+ * Never fires on read-only devices (can't sign off anyway) or past
+ * shifts (history review, not the live production flow).
+ */
+function currentJobNeedsSignoff(): boolean {
+  if (!S!.selJob) return false;
+  if (isReadOnlyDevice()) return false;
+  if (isPastShift()) return false;
+  const c = canonical();
+  if (c?.locked) return false; // already signed off — data is safe
+  const hasStatus = S!.prod.some((r) => r.jobNumber === S!.selJob && r.statusCode);
+  const hasCounts = c?.countStart != null || c?.countEnd != null;
+  return hasStatus || hasCounts;
+}
+
+/**
+ * Modal that blocks navigation away from an unsigned in-progress order
+ * and routes the operator straight into Sign Off & Save. "Cancel" keeps
+ * them on the current order (the switch is abandoned).
+ */
+function promptSignoffBeforeLeaving(): void {
+  const mc = openModal(`<div class="bd-modal">
+    <h2 class="bd-title">✋ Sign off the current order first</h2>
+    <p class="bd-sub">Order <b>${escapeHtml(S!.selJob)}</b> has in-progress data that hasn't been signed off. Sign off &amp; Save it before switching — otherwise its Job Left isn't recorded.</p>
+    <div class="bd-actions">
+      <button class="btn-ghost-big" data-stay>Cancel</button>
+      <button class="btn-primary-big" data-go-signoff>Sign off &amp; Save</button>
+    </div>
+  </div>`);
+  mc.querySelector('[data-stay]')?.addEventListener('click', closeModal);
+  mc.querySelector('[data-go-signoff]')?.addEventListener('click', () => {
+    closeModal();
+    openSaveSignoffModal();
+  });
+}
+
+/**
+ * Empty Machine-Status slots that must be filled before the selected
+ * job can be signed off (floor policy: no gaps up to the current
+ * half-hour for a live shift, or all 16 for a past shift). A slot held
+ * by ANOTHER job on the same press counts as satisfied — it's that
+ * job's responsibility, not this one's. When a different job takes over
+ * the press right after this job's last slot, this job's run is
+ * considered finished there and only its own slots are required to be
+ * gap-free; otherwise (this is the only / last job) coverage must reach
+ * the live cutoff. Assumes the caller already verified the job has at
+ * least one filled slot. Returns 0-based slot indices.
+ */
+function slotGapsForSignoff(): number[] {
+  const mineFilled = (i: number): boolean =>
+    S!.prod.some((r) => r.jobNumber === S!.selJob && r.slotIndex === i && r.statusCode);
+  let lastMine = -1;
+  for (let i = 0; i < SLOTS_PER_SHIFT; i++) if (mineFilled(i)) lastMine = i;
+  const globalCutoff = isPastShift()
+    ? SLOTS_PER_SHIFT - 1
+    : currentSlotIndex(sid(), new Date()) ?? SLOTS_PER_SHIFT - 1;
+  // Did another job take over the press after this job's last slot?
+  let otherTakesOver = false;
+  for (let i = lastMine + 1; i < SLOTS_PER_SHIFT; i++) {
+    if (occupyingOtherJob(i)) {
+      otherTakesOver = true;
+      break;
+    }
+  }
+  const cutoff = otherTakesOver ? lastMine : globalCutoff;
+  const gaps: number[] = [];
+  for (let i = 0; i <= cutoff; i++) {
+    if (mineFilled(i)) continue;
+    if (occupyingOtherJob(i)) continue;
+    gaps.push(i);
+  }
+  return gaps;
+}
+
 function parseRejects(r: ProductionRecord | undefined): Record<string, number> {
   if (!r || !r.rejects) return {};
   try {
@@ -1408,7 +1488,17 @@ function wire(): void {
   // supervisors reviewing history.)
   app.querySelectorAll<HTMLButtonElement>('[data-shift]').forEach((b) =>
     b.addEventListener('click', () => {
-      S!.shiftCode = b.dataset.shift as ShiftCode;
+      const next = b.dataset.shift as ShiftCode;
+      if (next === S!.shiftCode) return;
+      // Block moving to another shift while the current order is still
+      // unsigned (per floor policy: sign off before the shift handover
+      // so Job Left is recorded). State is untouched, so the active tab
+      // stays put without a re-render.
+      if (currentJobNeedsSignoff()) {
+        promptSignoffBeforeLeaving();
+        return;
+      }
+      S!.shiftCode = next;
       void reload();
     }),
   );
@@ -1518,6 +1608,13 @@ function onMetaChange(el: HTMLElement): void {
       break;
     }
     case 'machine':
+      // Block leaving an unsigned in-progress order — render() reverts
+      // the <select> back to the current machine.
+      if (val !== S!.mc && currentJobNeedsSignoff()) {
+        promptSignoffBeforeLeaving();
+        render();
+        break;
+      }
       S!.mc = val;
       // Machine change does clear selJob: a different press generally runs
       // a different order, and carrying the previous job number across
@@ -1527,6 +1624,15 @@ function onMetaChange(el: HTMLElement): void {
       void reload();
       break;
     case 'job':
+      // Block leaving an unsigned in-progress order for a different one
+      // — this is the main path that stranded Job Left (operator finishes
+      // an order and starts the next without signing off). render()
+      // reverts the input/select back to the current job.
+      if (val !== S!.selJob && currentJobNeedsSignoff()) {
+        promptSignoffBeforeLeaving();
+        render();
+        break;
+      }
       S!.selJob = val;
       saveView();
       // Full reload, not just render(): Job Left / Total Good and the
@@ -1634,6 +1740,20 @@ function openSaveSignoffModal(): void {
   );
   if (!hasStatus) {
     toast('Machine Status is empty — fill in at least one time slot before signing off', 'err');
+    return;
+  }
+  // No-gaps gate: every Machine-Status slot up to now (live) / all 16
+  // (past) must be filled before sign-off, so a half-recorded shift
+  // can't be locked in (the reported "worker skips slots, Job Left
+  // data is wrong" problem). Slots held by another job on this press
+  // are that job's responsibility and don't count as gaps here.
+  const gaps = slotGapsForSignoff();
+  if (gaps.length) {
+    const list = gaps.map((i) => i + 1).join(', ');
+    toast(
+      `Fill every time slot up to now before signing off — missing slot ${list}`,
+      'err',
+    );
     return;
   }
   const c = canonical();
