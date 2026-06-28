@@ -2029,12 +2029,37 @@ export class SharePointDataLayer implements PmdDataLayer {
       );
     const windowRows = await this.getAllItems<Record<string, unknown>>(list, qs);
     const existing = windowRows.filter((r) => dateOnly(r[F.date]) === h.date);
+    const idOf = (r: Record<string, unknown>): number | undefined =>
+      (r as { ID?: number; Id?: number }).ID ?? (r as { ID?: number; Id?: number }).Id;
     const target =
       existing.length > 0
-        ? `${this.listUrl(list)}/items(${(existing[0] as { ID?: number; Id?: number }).ID ?? (existing[0] as { ID?: number; Id?: number }).Id})`
+        ? `${this.listUrl(list)}/items(${idOf(existing[0])})`
         : `${this.listUrl(list)}/items`;
     const ifMatch = existing.length > 0 ? '*' : undefined;
     await this.postWithFieldRetry(list, target, body, ifMatch);
+    // Self-heal duplicates: a past double-submit (e.g. SFM507208 landed
+    // 11× when a laggy iPad let the supervisor tap Sign Off repeatedly)
+    // leaves several identical rows for the same (machine, shift, job,
+    // date). We just MERGEd the first; delete the rest so the tuple
+    // collapses back to a single canonical row. Best-effort — a failed
+    // delete just leaves a duplicate for the next sign-off to retry.
+    if (existing.length > 1) {
+      console.warn(
+        '[pmd] collapsing',
+        existing.length - 1,
+        'duplicate row(s) on',
+        list,
+        'for',
+        `${h.machineCode}|${shiftId}|${h.jobNumber}`,
+      );
+      for (const dup of existing.slice(1)) {
+        const id = idOf(dup);
+        if (id == null) continue;
+        await this.del(`${this.listUrl(list)}/items(${id})`).catch((e) => {
+          console.warn('[pmd] duplicate-row delete failed (will retry next sign-off):', e);
+        });
+      }
+    }
   }
 
   /** Per-list cache of column internal names that SP has already

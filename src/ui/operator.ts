@@ -81,6 +81,14 @@ interface OpState {
 let S: OpState | null = null;
 let dalRef: PmdDataLayer;
 let nowTimer: ReturnType<typeof setInterval> | undefined;
+// Guard against a double Sign Off. On a laggy iPad the supervisor used
+// to tap the confirm button repeatedly (no feedback while lockShift's
+// slow network round-trip ran) — each tap fired a fresh lockShift, and
+// because editCache is cleared only at the END of lockShift the MERGE
+// lookup couldn't see the in-flight POSTed row yet, so every tap POSTed
+// a NEW PMD_Production row (SFM507208 landed 11× identical). The confirm
+// button is also disabled on click; this flag is the belt-and-braces.
+let signoffInFlight = false;
 
 // Per-tab persistence of which shift the operator was last looking at.
 // Without this, switching to KPIs and back resets viewDate / shiftCode to
@@ -1662,8 +1670,16 @@ function openSaveSignoffModal(): void {
     </div>
   </div>`);
   mc.querySelector('[data-cancel]')?.addEventListener('click', closeModal);
-  mc.querySelector('[data-confirm-save]')?.addEventListener('click', () => {
-    void doSignoffSave();
+  const confirmBtn = mc.querySelector<HTMLButtonElement>('[data-confirm-save]');
+  confirmBtn?.addEventListener('click', () => {
+    // Disable immediately so a second tap on a laggy iPad can't fire a
+    // second lockShift (the duplicate-row cause). doSignoffSave keeps the
+    // modal open until the network round-trip resolves; on failure it
+    // re-enables so the supervisor can retry.
+    if (confirmBtn.disabled) return;
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Saving…';
+    void doSignoffSave(confirmBtn);
   });
 }
 
@@ -2009,11 +2025,15 @@ async function upsertSlotNoReload(
   await dalRef.upsertProductionRecord(rec);
 }
 
-async function doSignoffSave(): Promise<void> {
+async function doSignoffSave(confirmBtn?: HTMLButtonElement): Promise<void> {
   if (isReadOnlyDevice()) {
     toast('Read only — sign in as supervisor to sign off here', 'warn');
     return;
   }
+  // Reentrancy guard — a second concurrent sign-off would POST a
+  // duplicate PMD_Production row (see signoffInFlight comment).
+  if (signoffInFlight) return;
+  signoffInFlight = true;
   try {
     // Scope sign-off to the order being reviewed: another job already
     // running on this press's remaining timeline slots (operator
@@ -2047,6 +2067,14 @@ async function doSignoffSave(): Promise<void> {
     console.error('[signoff] lockShift failed:', e);
     const msg = (e as Error)?.message ?? String(e);
     toast(`Save failed: ${msg.slice(0, 140)}`, 'err');
+    // Re-enable the confirm button so the supervisor can retry after a
+    // transient failure (the modal is still open on this path).
+    if (confirmBtn) {
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = `Sign off as ${S!.selSupervisor}`;
+    }
+  } finally {
+    signoffInFlight = false;
   }
 }
 
