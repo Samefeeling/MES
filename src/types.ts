@@ -136,6 +136,13 @@ export interface ProductionRecord {
    *  read back so Trace shows the recorded target per row. Undefined when
    *  no rate was available / on tenants without the column. */
   shiftTarget?: number;
+  /** Number of identical cavities on the die (pieces produced per press
+   *  cycle). The press counter ticks once per cycle, so actual pieces =
+   *  (Count End − Count Start) × cavities. Canonical on slot 0, persisted
+   *  to PMD_Production.Cavities. Defaults to 1 (single cavity) — only a
+   *  few presses (550T / 320T / 150T / 125T) ever run a 2-cavity die, and
+   *  the operator ticks a box to set it. Undefined / 0 is treated as 1. */
+  cavities?: number;
   slotIndex: number; // 0..15
   statusCode: StatusCode | '';
   countStart: number | null;

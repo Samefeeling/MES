@@ -24,6 +24,23 @@ export interface Kpi {
   filledSlots: number;
 }
 
+/**
+ * Gross pieces from a tuple's counters, accounting for a multi-cavity
+ * die. The press counter ticks once per cycle; a die with N identical
+ * cavities yields N pieces per cycle, so actual pieces = cycles × N.
+ * cavities defaults to 1 (single cavity) — the overwhelming majority of
+ * presses — so legacy rows with no Cavities value are unchanged.
+ */
+export function cavityGross(
+  countStart: number | null,
+  countEnd: number | null,
+  cavities?: number | null,
+): number {
+  if (countStart == null || countEnd == null) return 0;
+  const c = cavities && cavities > 0 ? cavities : 1;
+  return Math.max(0, countEnd - countStart) * c;
+}
+
 function sumRejects(r: ProductionRecord): number {
   if (r.rejects && r.rejects !== '{}') {
     try {
@@ -85,10 +102,9 @@ export function aggregate(records: ProductionRecord[]): Kpi {
   let output = 0;
   for (const grp of groups.values()) {
     const canonical = grp.find((r) => r.slotIndex === 0) ?? grp[0];
-    let g = 0;
-    if (canonical && canonical.countStart != null && canonical.countEnd != null) {
-      g = Math.max(0, canonical.countEnd - canonical.countStart);
-    }
+    const g = canonical
+      ? cavityGross(canonical.countStart, canonical.countEnd, canonical.cavities)
+      : 0;
     const rej = grp.reduce((a, r) => a + sumRejects(r), 0);
     gross += g;
     scrap += rej;

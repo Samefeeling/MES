@@ -9,6 +9,8 @@ import {
   slotClock,
 } from '../core/shifts';
 import { bdLabelFor } from '../core/breakdown';
+import { cavityGross } from '../core/metrics';
+import { partsCoRun, type DieCoRun } from '../core/corun';
 import {
   jobLeftPiecesFor,
   qcCellPresentation,
@@ -68,6 +70,11 @@ interface TraceRow {
   /** True when this row is just a placeholder for an idle machine on
    *  the live view — render the card with a muted "Idle" badge. */
   idle?: boolean;
+  /** True when this row is part of a co-run group (≥2 orders sharing a
+   *  die, both CoRun=Yes, running on the press at the same time). The
+   *  Live board shows every co-runner as its own card with a badge, not
+   *  just the single "latest" job. */
+  coRun?: boolean;
 }
 
 /**
@@ -381,9 +388,14 @@ function renderCard(r: TraceRow): string {
     : r.idle
       ? `<span class="trace-idle">Idle</span>`
       : '';
+  // Co-run badge: this order shares its die with another running on the
+  // same press at the same time (both flagged CoRun=Yes).
+  const coRunBadge = r.coRun
+    ? `<span class="trace-corun" title="Co-running with another order on the same die">⛓ Co-run</span>`
+    : '';
   const headline = isLive
-    ? `${machineName}<span class="trace-job">${escapeHtml(r.jobNumber || '(no job)')}</span>${activityBadge}<span class="trace-meta">${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`
-    : `<b>${escapeHtml(r.jobNumber || '(no job)')}</b>${activityBadge}<span class="trace-meta">${escapeHtml(r.machineCode)} · ${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`;
+    ? `${machineName}<span class="trace-job">${escapeHtml(r.jobNumber || '(no job)')}</span>${activityBadge}${coRunBadge}<span class="trace-meta">${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`
+    : `<b>${escapeHtml(r.jobNumber || '(no job)')}</b>${activityBadge}${coRunBadge}<span class="trace-meta">${escapeHtml(r.machineCode)} · ${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`;
 
   return `<div class="trace-card${r.idle ? ' is-idle' : ''}${isLive ? ' is-live' : ''} act-${activity}" style="${isLive ? `--mc:${activityCol}` : ''}">
     <div class="trace-card-head">
@@ -450,14 +462,27 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
     render();
   }
   const live = currentShift(new Date());
-  const [rows, planning] = await Promise.all([
+  const [rows, planning, dieList] = await Promise.all([
     dalRef.listProduction({ shiftId: live.shiftId }).catch((err) => {
       console.warn('[pmd] live trace listProduction failed:', err);
       return [] as ProductionRecord[];
     }),
     dalRef.listPlanning({}).catch(() => [] as PlanningOrder[]),
+    dalRef.listProductDieColors
+      ? dalRef.listProductDieColors().catch(() => [])
+      : Promise.resolve([]),
   ]);
   const planByJob = new Map(planning.map((p) => [p.jobNumber, p]));
+  // Part # → die / CoRun, so the board can keep every co-running order
+  // visible instead of collapsing the press to one job.
+  const dieByPart = new Map<string, DieCoRun>(
+    dieList.map((c) => [
+      c.partNumber.trim().toUpperCase(),
+      { dieNumber: c.dieNumber, coRun: c.coRun },
+    ]),
+  );
+  const dieFor = (part: string): DieCoRun | undefined =>
+    dieByPart.get(part.trim().toUpperCase());
   // Cross-shift Good per job so Job Left / Shift Target on the live cards
   // count the whole order, not just this shift's output.
   const jobGoodTotals = await loadJobGoodTotals(
@@ -493,7 +518,21 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
     // the per-job rows to the single most-current one. Without this,
     // 1600T showed three cards (one per job logged this shift).
     const machineRows = buildTraceRowsFor(recs, planByJob, jobGoodTotals);
-    out.push(latestRow(machineRows));
+    const latest = latestRow(machineRows);
+    // EXCEPT co-running orders: when a die runs 2-3 parts simultaneously
+    // (same die, both CoRun=Yes) they are all "current", so show every
+    // co-runner of the latest job as its own card rather than hiding all
+    // but one. Sequential earlier jobs stay collapsed.
+    const latestDie = dieFor(latest.partNumber);
+    const coRunners = machineRows.filter(
+      (row) => row.key !== latest.key && partsCoRun(latestDie, dieFor(row.partNumber)),
+    );
+    if (coRunners.length) {
+      out.push({ ...latest, coRun: true });
+      for (const row of coRunners) out.push({ ...row, coRun: true });
+    } else {
+      out.push(latest);
+    }
   }
   S!.liveRows = out;
   S!.lastUpdated = new Date();
@@ -632,8 +671,6 @@ function buildTraceRowsFor(
       const slot = list.find((r) => r.slotIndex === i);
       return slot?.statusCode || '·';
     }).join('');
-    const cs = Number(canonical?.countStart ?? 0);
-    const ce = Number(canonical?.countEnd ?? 0);
     let totalRej = 0;
     for (const r of list) {
       try {
@@ -669,9 +706,10 @@ function buildTraceRowsFor(
     // history fetch stores 0 in the map, and treating that as "good"
     // would render Job Left = full order quantity. Falling back to this
     // tuple's own good keeps the number conservative.
+    const grossThis = cavityGross(canonical?.countStart ?? null, canonical?.countEnd ?? null, canonical?.cavities);
     const jobGood = jobGoodTotals.has(jobNumber)
       ? jobGoodTotals.get(jobNumber)!
-      : Math.max(0, ce - cs - totalRej);
+      : Math.max(0, grossThis - totalRej);
     // Job Left + Shift Target: prefer the values FROZEN at job start on
     // the PMD_Production row (canonical.jobLeft / .shiftTarget) so Trace
     // reflects demand-at-start exactly as recorded — that's the whole
@@ -706,7 +744,7 @@ function buildTraceRowsFor(
       timeline,
       countStart: canonical?.countStart ?? null,
       countEnd: canonical?.countEnd ?? null,
-      good: Math.max(0, ce - cs - totalRej),
+      good: Math.max(0, grossThis - totalRej),
       reject: totalRej,
       orderQty: plan && !plan.isDieChange ? plan.orderQty : null,
       jobLeft,
@@ -729,9 +767,7 @@ export function goodForRecords(records: ProductionRecord[]): number {
   for (const r of records) {
     const tuple = `${r.machineCode}|${r.shiftId}`;
     if (r.slotIndex === 0) {
-      const cs = Number(r.countStart ?? 0);
-      const ce = Number(r.countEnd ?? 0);
-      grossByTuple.set(tuple, Math.max(0, ce - cs));
+      grossByTuple.set(tuple, cavityGross(r.countStart, r.countEnd, r.cavities));
     }
     let rej = 0;
     try {

@@ -20,6 +20,8 @@ import {
   slotClock,
 } from '../core/shifts';
 import { STATUSES, STATUS_MAP } from '../core/status';
+import { cavityGross } from '../core/metrics';
+import { partsCoRun } from '../core/corun';
 // Re-exported so existing importers (Trace view, tests) can keep pulling
 // these from ./operator while the canonical definitions live in core.
 import { jobLeftPiecesFor, shiftTargetFor } from '../core/targets';
@@ -43,6 +45,16 @@ import { isIpadDevice } from '../core/device';
  */
 function canWriteThisDevice(): boolean {
   return isIpadDevice() || isSupervisor();
+}
+
+/** Presses that can run a 2-cavity die — the only machines that show the
+ *  "2 cavities (×2)" tick-box on the operator sheet. Everywhere else the
+ *  count is taken at face value (1 cavity). Edit this set if a die moves
+ *  to another press. */
+const CAVITY_MACHINES = new Set(['550T', '320T', '150T', '125T']);
+
+function machineHasCavityOption(mc: string): boolean {
+  return CAVITY_MACHINES.has(mc.trim());
 }
 
 // PMD Operator Production Sheet — Excel-style rebuild of modPMDOperator.bas.
@@ -441,12 +453,7 @@ function dieRowForJob(job: string): { dieNumber: string; coRun: boolean } | unde
  */
 function coRunsWith(jobA: string, jobB: string): boolean {
   if (!jobA || !jobB || jobA === jobB) return false;
-  const a = dieRowForJob(jobA);
-  const b = dieRowForJob(jobB);
-  if (!a || !b) return false;
-  if (!a.coRun || !b.coRun) return false;
-  const da = a.dieNumber.trim();
-  return da !== '' && da === b.dieNumber.trim();
+  return partsCoRun(dieRowForJob(jobA), dieRowForJob(jobB));
 }
 
 /** Distinct OTHER jobs already recorded on this (machine, shift) that
@@ -818,11 +825,15 @@ function jobLeftPieces(): number | null {
   const o = selectedOrder();
   if (!o) return null;
   const c = canonical();
-  const cs = Number(c?.countStart ?? 0);
-  const ce = Number(c?.countEnd ?? 0);
-  const grossThis = Math.max(0, ce - cs);
+  const grossThis = cavityGross(c?.countStart ?? null, c?.countEnd ?? null, c?.cavities);
   const goodThis = Math.max(0, grossThis - jobTotals());
   return jobLeftPiecesFor(o, S!.jobTotalGood + goodThis);
+}
+
+/** Cavities frozen on the selected job's canonical row (1 when unset). */
+function cavities(): number {
+  const v = canonical()?.cavities;
+  return v && v > 0 ? v : 1;
 }
 
 /**
@@ -879,9 +890,7 @@ export function sumOtherShiftGood(
     const key = `${r.machineCode}|${r.shiftId}`;
     if (key === currentKey) continue;
     if (r.slotIndex === 0) {
-      const cs = Number(r.countStart ?? 0);
-      const ce = Number(r.countEnd ?? 0);
-      grossByTuple.set(key, Math.max(0, ce - cs));
+      grossByTuple.set(key, cavityGross(r.countStart, r.countEnd, r.cavities));
     }
     let rej = 0;
     try {
@@ -908,9 +917,7 @@ export function sumOtherShiftGood(
 async function refreshJobTotalAndPaintSide(): Promise<void> {
   await refreshJobTotal();
   const c = canonical();
-  const cs = Number(c?.countStart ?? 0);
-  const ce = Number(c?.countEnd ?? 0);
-  const gross = Math.max(0, ce - cs);
+  const gross = cavityGross(c?.countStart ?? null, c?.countEnd ?? null, c?.cavities);
   const totalReject = jobTotals();
   const good = Math.max(0, gross - totalReject);
   const o = selectedOrder();
@@ -1277,9 +1284,10 @@ function buildSide(): string {
   const c = canonical();
   const cs = c?.countStart ?? '';
   const ce = c?.countEnd ?? '';
-  const cn = Number(c?.countEnd ?? 0) - Number(c?.countStart ?? 0);
+  const cav = cavities();
+  const gross = cavityGross(c?.countStart ?? null, c?.countEnd ?? null, cav);
   const totalReject = jobTotals();
-  const good = Math.max(0, cn - totalReject);
+  const good = Math.max(0, gross - totalReject);
   const o = selectedOrder();
   // §7 — Job Left = JobRequired - Σ Good across ALL shifts, not just this one.
   const jobLeft =
@@ -1312,8 +1320,13 @@ function buildSide(): string {
     <div class="sk"><label title="${escapeHtml(targetTitle)}">Shift Target</label><b title="${escapeHtml(targetTitle)}">${targetDisplay}</b></div>
     <div class="sk"><label>Count Start</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cstart" value="${cs}" ${rdo}${rdoTitle}></div>
     <div class="sk"><label>Count End</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cend" value="${ce}" ${rdo}${rdoTitle}></div>
+    ${
+      machineHasCavityOption(S!.mc)
+        ? `<div class="sk sk-cavity"><label title="Tick when the die has 2 identical cavities — each press cycle makes 2 parts, so Total Good = (Count End − Count Start) × 2 − Reject.">2 cavities (×2)</label><input type="checkbox" class="cavity-box" data-meta="cavity" ${cav > 1 ? 'checked' : ''} ${rdo}${rdoTitle}></div>`
+        : ''
+    }
     <div class="sk"><label>Total Reject</label><b class="r" data-live="totalReject">${totalReject}</b></div>
-    <div class="sk"><label>Total Good</label><b class="g" data-live="totalGood">${good}</b></div>
+    <div class="sk"><label${cav > 1 ? ' title="(Count End − Count Start) × 2 cavities − Reject"' : ''}>Total Good${cav > 1 ? ' <span class="cavity-tag">×2</span>' : ''}</label><b class="g" data-live="totalGood">${good}</b></div>
     <div class="sk"><label>Purge (kg)</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="purge" value="${purge}" ${rdo}${rdoTitle}></div>
     <div class="handover">
       <div class="handover-title">Handover</div>
@@ -1332,6 +1345,10 @@ interface SummaryBucket {
   shiftId: string;
   goCs: number;
   goCe: number;
+  /** Gross PIECES = Σ (Count End − Count Start) × cavities, so the
+   *  "Output (gross)" column matches Good once a 2-cavity die is in play
+   *  (goCe − goCs alone would under-count by half). */
+  grossPieces: number;
   good: number;
   rej: number;
   downHrs: number; // B + M slots × 0.5
@@ -1354,6 +1371,7 @@ function rollup(label: string, shiftId: string, rows: ProductionRecord[]): Summa
   let rej = 0;
   let goCs = 0;
   let goCe = 0;
+  let grossPieces = 0;
   let down = 0;
   let setup = 0;
   const seen = new Set<string>();
@@ -1375,7 +1393,7 @@ function rollup(label: string, shiftId: string, rows: ProductionRecord[]): Summa
     seen.add(key);
     const cs = Number(r.countStart ?? 0);
     const ce = Number(r.countEnd ?? 0);
-    const gross = Math.max(0, ce - cs);
+    const gross = cavityGross(r.countStart, r.countEnd, r.cavities);
     let jobRej = 0;
     try {
       const obj = JSON.parse(r.rejects || '{}') as Record<string, number>;
@@ -1385,6 +1403,7 @@ function rollup(label: string, shiftId: string, rows: ProductionRecord[]): Summa
     }
     goCs += cs;
     goCe += ce;
+    grossPieces += gross;
     rej += jobRej;
     good += Math.max(0, gross - jobRej);
   }
@@ -1393,6 +1412,7 @@ function rollup(label: string, shiftId: string, rows: ProductionRecord[]): Summa
     shiftId,
     goCs,
     goCe,
+    grossPieces,
     good,
     rej,
     downHrs: down * 0.5,
@@ -1418,7 +1438,7 @@ function buildSummary(): string {
           <th>${escapeHtml(b.label)}</th>
           <td class="num">${b.good}</td>
           <td class="num r">${b.rej}</td>
-          <td class="num">${b.goCe - b.goCs}</td>
+          <td class="num">${b.grossPieces}</td>
           <td class="num">${b.downHrs.toFixed(1)}h</td>
           <td class="num">${b.setupHrs.toFixed(1)}h</td>
         </tr>`,
@@ -1833,6 +1853,17 @@ function onMetaChange(el: HTMLElement): void {
       void refreshJobTotalAndPaintSide();
       break;
     }
+    case 'cavity': {
+      // 2-cavity tick-box: checked → 2 pieces/cycle, unchecked → 1.
+      // Persist on the canonical slot, then re-render so Total Good /
+      // Job Left / Shift Target and the ×2 tag all recompute. A checkbox
+      // has no text focus to preserve, so a full render is fine.
+      const on = val === 'true';
+      void upsertSlotNoReload(0, (r) => {
+        r.cavities = on ? 2 : 1;
+      }).then(() => render());
+      break;
+    }
     case 'hand-machine':
     case 'hand-mold':
     case 'hand-material':
@@ -1921,8 +1952,9 @@ function openSaveSignoffModal(): void {
     toast('Count End must be ≥ Count Start', 'err');
     return;
   }
+  const cav = cavities();
   const totalRej = jobTotals();
-  const good = Math.max(0, ce - cs - totalRej);
+  const good = Math.max(0, (ce - cs) * cav - totalRej);
   const o = selectedOrder();
 
   const mc = openModal(`<div class="bd-modal">
@@ -1933,7 +1965,7 @@ function openSaveSignoffModal(): void {
       <div><span>Supervisor</span><b>${escapeHtml(S!.selSupervisor)}</b></div>
       <div><span>Part</span><b>${escapeHtml(o?.partNumber ?? '—')}</b></div>
       <div><span>Order Qty</span><b>${o && !o.isDieChange ? o.orderQty : '—'}</b></div>
-      <div><span>Count Start → End</span><b>${cs} → ${ce}</b></div>
+      <div><span>Count Start → End</span><b>${cs} → ${ce}${cav > 1 ? ` <span class="cavity-tag">×${cav}</span>` : ''}</b></div>
       <div><span>Good (this shift)</span><b class="g">${good}</b></div>
       <div><span>Total Reject</span><b class="r">${totalRej}</b></div>
     </div>

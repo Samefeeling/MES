@@ -143,6 +143,11 @@ const DEFAULT_FIELDS = {
     shiftTarget: 'ShiftTarget',
     countStart: 'CountStart',
     countEnd: 'CountEnd',
+    /** Identical cavities on the die (pieces per press cycle). Actual
+     *  pieces = (CountEnd − CountStart) × Cavities. Canonical on slot 0.
+     *  Optional column; stripRejectedFields tolerates absence (defaults
+     *  to 1). */
+    cavities: 'Cavities',
     reject: 'Reject',
     operator: 'Operator',
     supervisor: 'Supervisor',
@@ -1208,6 +1213,9 @@ export class SharePointDataLayer implements PmdDataLayer {
       partDescription: F.partDesc ? str(r[F.partDesc]) : '',
       jobRequired: F.jobRequired ? num(r[F.jobRequired]) : 0,
       cycleTime: F.cycleTime ? num(r[F.cycleTime]) : 0,
+      // Cavities defaults to 1 when the column is absent / empty (a 0 from
+      // a blank cell must not zero the multiplier — that would wipe Good).
+      cavities: F.cavities && num(r[F.cavities]) > 0 ? num(r[F.cavities]) : 1,
       // The 16-char status timeline lives in the MachineCode column on
       // this tenant; prefer it over the (empty / fallback) F.timeline
       // entry so listProduction can rebuild per-slot status without a
@@ -1435,6 +1443,9 @@ export class SharePointDataLayer implements PmdDataLayer {
       // CycleTime rides along on the canonical slot so a past-shift
       // review (synthetic order) can recompute Shift Target.
       slots[0].cycleTime = h.cycleTime;
+      // Cavities likewise — every Good computation multiplies the tuple's
+      // gross by it, so it must reach the canonical record on read.
+      slots[0].cavities = h.cavities;
       // And the reject total: the per-status loop initialises
       // rejectCount to 0. Only stamp the column total when there are NO
       // PMD_Rejects events — when events exist they are the source of
@@ -1636,6 +1647,12 @@ export class SharePointDataLayer implements PmdDataLayer {
       if (fromCache) return fromCache;
       return orders.find((o) => o.jobNumber === job)?.qtyPerHr ?? 0;
     };
+    // Cavities frozen on the canonical slot by the operator UI; 1 when
+    // absent. Multiplies the tuple's gross when computing Good / Job Left.
+    const cavitiesOf = (slots: ProductionRecord[]): number => {
+      const v = slots.find((s) => s.slotIndex === 0)?.cavities;
+      return v && v > 0 ? v : 1;
+    };
     for (const slots of myTuples) {
       const job = slots[0]?.jobNumber ?? jobNumber ?? '';
       const agg = aggregateSlots(slots);
@@ -1662,13 +1679,17 @@ export class SharePointDataLayer implements PmdDataLayer {
       const canon = slots.find((s) => s.slotIndex === 0);
       const reject = agg.reject || (canon?.rejectCount ?? 0);
       const cycleTime = cycleTimeOf(job, slots);
+      const cavities = cavitiesOf(slots);
       // Shift Target snapshot for the SP list / Power BI. Built from the
       // shared core formula so it matches what the operator/Trace pages
       // recompute. jobLeft here is order total − THIS tuple's Good (the
       // DAL has no cross-shift good at sign-off); the app recomputes the
       // authoritative value from CycleTime, so this is a convenience
       // snapshot, exact for single-shift jobs.
-      const tupleGood = Math.max(0, (agg.countEnd ?? 0) - (agg.countStart ?? 0) - reject);
+      const tupleGood = Math.max(
+        0,
+        ((agg.countEnd ?? 0) - (agg.countStart ?? 0)) * cavities - reject,
+      );
       // Job Left written to the column is the value FROZEN at job start:
       // prefer the canonical row's stamp (set by the operator UI / round-
       // tripped from PMD_LiveStatus), then the explicit param, then the
@@ -1700,6 +1721,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           partDescription: partDesc,
           jobRequired: required,
           cycleTime,
+          cavities,
           shiftTarget: shiftTargetSnap,
           timeline: agg.timeline,
           countStart: agg.countStart,
@@ -1842,6 +1864,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           // lost, rehydrate from PMD_LiveStatus) keeps the frozen values
           // rather than re-deriving them against shifted totals.
           cycleTime: canon.cycleTime ?? 0,
+          cavities: canon.cavities ?? 1,
           jobLeft: canon.jobLeft ?? null,
           shiftTarget: canon.shiftTarget ?? null,
           timeline: agg.timeline,
@@ -2008,10 +2031,18 @@ export class SharePointDataLayer implements PmdDataLayer {
     // complete") so write it explicitly rather than skipping like the
     // jobRequired guard does.
     if (F.jobLeft && h.jobLeft != null) body[F.jobLeft] = h.jobLeft;
+    // Cavities: write only when > 1 (a real multi-cavity die). 1 is the
+    // default, and writing 1 via MERGE is harmless but pointless; skipping
+    // also means a tenant without the column never trips stripRejected.
+    const cavities = h.cavities && h.cavities > 0 ? h.cavities : 1;
+    if (F.cavities && cavities > 1) body[F.cavities] = cavities;
     if (F.totalGood) {
       const cs = h.countStart;
       const ce = h.countEnd;
-      const good = cs != null && ce != null ? Math.max(0, ce - cs - h.reject) : 0;
+      // Actual Good = cycles × cavities − rejects (rejects are counted as
+      // actual parts, not cycles, so they are not multiplied).
+      const good =
+        cs != null && ce != null ? Math.max(0, (ce - cs) * cavities - h.reject) : 0;
       body[F.totalGood] = good;
     }
     // SharePoint rejects C0/C1 control characters (NUL, etc.) in text
@@ -2598,6 +2629,10 @@ interface HeaderRow {
   partDescription: string;
   jobRequired: number;
   cycleTime: number;
+  /** Identical cavities on the die (pieces per cycle); 1 when the column
+   *  is absent / empty. Stamped onto the canonical record so every Good
+   *  computation can multiply (CountEnd − CountStart) by it. */
+  cavities: number;
   timeline: string;
   countStart: number | null;
   countEnd: number | null;
@@ -2637,6 +2672,9 @@ interface HeaderInput {
   /** Shift Target snapshot for the SP list / Power BI. null when no
    *  cycle time is available (the column is skipped). */
   shiftTarget: number | null;
+  /** Identical cavities on the die (pieces per cycle). 1 (or 0/undefined)
+   *  leaves the column at its default; written when > 1. */
+  cavities?: number;
   timeline: string;
   countStart: number | null;
   countEnd: number | null;
