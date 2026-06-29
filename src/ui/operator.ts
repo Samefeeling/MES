@@ -75,7 +75,7 @@ interface OpState {
    *  PMD_ProductDieColor on boot. Drives the swatch on the Product
    *  Description meta cell + the Die# pill so the operator can see the
    *  colour and which die to fit before starting the job. */
-  dieColors: Map<string, { hex: string; name: string; dieNumber: string }>;
+  dieColors: Map<string, { hex: string; name: string; dieNumber: string; coRun: boolean }>;
 }
 
 let S: OpState | null = null;
@@ -424,21 +424,29 @@ function partNumberForJob(job: string): string {
   return S!.planning.find((o) => o.jobNumber === job)?.partNumber ?? '';
 }
 
-/** DieNumber for a job (via its Part # → PMD_ProductDieColor). Empty
- *  string when the part has no die mapping — such jobs never co-run
- *  (we won't group on a blank die). */
-function dieNumberForJob(job: string): string {
+/** The PMD_ProductDieColor row for a job's part, or undefined. */
+function dieRowForJob(job: string): { dieNumber: string; coRun: boolean } | undefined {
   const pn = partNumberForJob(job).trim().toUpperCase();
-  if (!pn) return '';
-  return (S!.dieColors.get(pn)?.dieNumber ?? '').trim();
+  if (!pn) return undefined;
+  return S!.dieColors.get(pn);
 }
 
-/** Two jobs co-run when they share the same non-empty die. */
+/**
+ * Two jobs co-run when they share the same non-empty die AND both parts
+ * are flagged CoRun = Yes in PMD_ProductDieColor. The die match alone is
+ * not enough: different colours share a die and are often scheduled
+ * one-after-another rather than simultaneously, so the floor manually
+ * marks the genuinely-simultaneous parts with CoRun. Only then does the
+ * operator sheet mirror their machine status.
+ */
 function coRunsWith(jobA: string, jobB: string): boolean {
   if (!jobA || !jobB || jobA === jobB) return false;
-  const da = dieNumberForJob(jobA);
-  if (!da) return false;
-  return da === dieNumberForJob(jobB);
+  const a = dieRowForJob(jobA);
+  const b = dieRowForJob(jobB);
+  if (!a || !b) return false;
+  if (!a.coRun || !b.coRun) return false;
+  const da = a.dieNumber.trim();
+  return da !== '' && da === b.dieNumber.trim();
 }
 
 /** Distinct OTHER jobs already recorded on this (machine, shift) that
@@ -2551,7 +2559,7 @@ export async function renderOperator(
   const dieColors = new Map(
     dieColorList.map((c) => [
       c.partNumber.trim().toUpperCase(),
-      { hex: c.hex, name: c.name, dieNumber: c.dieNumber },
+      { hex: c.hex, name: c.name, dieNumber: c.dieNumber, coRun: c.coRun },
     ]),
   );
   const cs = currentShift(now);

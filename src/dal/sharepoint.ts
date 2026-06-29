@@ -246,6 +246,12 @@ const DEFAULT_FIELDS = {
      *  operator sheet so the floor knows which die to fit. Optional
      *  column; stripRejectedFields tolerates absence. */
     dieNumber: 'DieNumber',
+    /** Yes/No flag marking a part as a co-runner: parts that share a die
+     *  AND both carry CoRun = Yes are run simultaneously on one press, so
+     *  the operator sheet mirrors the machine status across them. Same
+     *  die without the flag (or only one side flagged) means they run
+     *  one-after-another and stay independent. Optional column. */
+    coRun: 'CoRun',
   },
 } as const;
 
@@ -710,12 +716,17 @@ export class SharePointDataLayer implements PmdDataLayer {
           name: str(r[F.name]).trim(),
           category: str(r[F.category]).trim(),
           dieNumber: dieKey ? str(r[dieKey]).trim() : '',
+          // CoRun Yes/No — true only on an explicit yes. SP Yes/No comes
+          // back as a real boolean; a choice/text column as "Yes". Absent
+          // column ⇒ undefined ⇒ false (parts default to NOT co-running).
+          coRun: F.coRun ? bool(r[F.coRun]) === true : false,
         }))
-        .filter((c) => c.partNumber && (c.hex || c.category || c.dieNumber));
+        .filter((c) => c.partNumber && (c.hex || c.category || c.dieNumber || c.coRun));
       const withDie = direct.filter((c) => c.dieNumber).length;
+      const withCoRun = direct.filter((c) => c.coRun).length;
       console.info(
         '[pmd] PMD_ProductDieColor cached:', direct.length, 'of', rows.length, 'rows ·',
-        withDie, 'carry DieNumber',
+        withDie, 'carry DieNumber ·', withCoRun, 'flagged CoRun=Yes',
       );
       this.dieColorCache = direct;
       return this.dieColorCache;

@@ -55,6 +55,12 @@ export interface ProductDieColor {
    *  operator sheet next to Product Description so the floor knows which
    *  die to fit before starting the job. Empty when not recorded. */
   dieNumber: string;
+  /** PMD_ProductDieColor.CoRun (Yes/No). Two parts are treated as
+   *  co-runners — run simultaneously on one press, so the operator sheet
+   *  mirrors their machine status — only when they share a die AND BOTH
+   *  carry CoRun = Yes. Same die without the flag means they run
+   *  one-after-another and stay independent. Defaults to false. */
+  coRun: boolean;
 }
 
 export interface BdCode {

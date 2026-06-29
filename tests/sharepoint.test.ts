@@ -1750,3 +1750,39 @@ describe('listRejectPareto byShift breakdown', () => {
     expect(slices[0].code).toBe('D01');
   });
 });
+
+describe('listProductDieColors CoRun flag', () => {
+  it('parses CoRun as a real boolean (Yes/No column) and a "Yes" string', async () => {
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const rows = [
+      // SP Yes/No column → real boolean true
+      { PartNum: 'P1', ColorHex: '#112233', ActualColor: 'Navy', Category: 'Battens', DieNumber: 'D-9', CoRun: true },
+      // choice/text column → "Yes" string
+      { PartNum: 'P2', ColorHex: '#445566', ActualColor: 'Teal', Category: 'Battens', DieNumber: 'D-9', CoRun: 'Yes' },
+      // explicit No → false
+      { PartNum: 'P3', ColorHex: '#778899', ActualColor: 'Grey', Category: 'Battens', DieNumber: 'D-9', CoRun: false },
+      // absent CoRun → defaults to false, but row still kept for its die/colour
+      { PartNum: 'P4', ColorHex: '#aabbcc', ActualColor: 'Sand', Category: 'Battens', DieNumber: 'D-9' },
+    ];
+    const o = dal as unknown as { getAllItems: () => Promise<unknown[]> };
+    o.getAllItems = async (): Promise<unknown[]> => rows;
+
+    const out = await dal.listProductDieColors!();
+    const byPart = new Map(out.map((c) => [c.partNumber, c]));
+    expect(byPart.get('P1')!.coRun).toBe(true);
+    expect(byPart.get('P2')!.coRun).toBe(true);
+    expect(byPart.get('P3')!.coRun).toBe(false);
+    expect(byPart.get('P4')!.coRun).toBe(false);
+    // The die number still rides along for every row.
+    expect(byPart.get('P1')!.dieNumber).toBe('D-9');
+  });
+
+  it('keeps a CoRun-only row that has no colour/category/die', async () => {
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const rows = [{ PartNum: 'P9', CoRun: true }];
+    const o = dal as unknown as { getAllItems: () => Promise<unknown[]> };
+    o.getAllItems = async (): Promise<unknown[]> => rows;
+    const out = await dal.listProductDieColors!();
+    expect(out.find((c) => c.partNumber === 'P9')?.coRun).toBe(true);
+  });
+});
