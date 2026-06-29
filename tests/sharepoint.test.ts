@@ -796,6 +796,80 @@ describe('device-class write rule (canWrite hook)', () => {
     );
     expect(runSlots.length).toBe(4);
   });
+
+  it('signed tuple re-edited after unlock: fresher live mirror wins on another device', async () => {
+    // Reported on 550T: signed off in the morning, unlocked + re-edited on
+    // the floor iPad, but a PC's Trace still showed the morning data. The
+    // PC has no editCache for the tuple and only sees the still-locked
+    // PMD_Production row + a fresh PMD_LiveStatus row. The live row's
+    // Modified is newer than the signed row's → it must win.
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+      canWrite: () => true,
+    });
+    const signedProd = {
+      machineCode: 'Batt1', date: todayId, shift: 'Night', jobNumber: 'SFM900',
+      timeline: 'SS··············', countStart: 0, countEnd: 200, reject: 8,
+      operator: 'Joe', supervisor: 'Sue',
+      modified: '2026-01-01T00:00:00Z', // signed in the morning
+    };
+    const liveReEdit = liveHeader({
+      timeline: 'RRRR············', countEnd: 50, reject: 23,
+      modified: '2026-01-02T00:00:00Z', // re-edited AFTER sign-off
+    });
+    const o = dal as unknown as {
+      fetchHeaders: (l: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+    };
+    o.fetchHeaders = async (l: string): Promise<unknown[]> =>
+      l === 'PMD_LiveStatus' ? [liveReEdit] : [signedProd];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+
+    const rows = await dal.listProduction({ machineCode: 'Batt1', shiftId });
+    const slot0 = rows.find((r) => r.jobNumber === 'SFM900' && r.slotIndex === 0);
+    expect(slot0!.rejectCount).toBe(23); // live data, not signed 8
+    expect(slot0!.locked).toBe(false);   // shown as in-progress re-edit
+    const runs = rows.filter((r) => r.jobNumber === 'SFM900' && r.statusCode === 'R');
+    expect(runs.length).toBe(4);         // RRRR from live, not SS from signed
+  });
+
+  it('signed tuple with a STALE leftover live row (older Modified): signed wins', async () => {
+    // A failed deleteLiveRow at sign-off leaves a live row, but it stopped
+    // being pushed BEFORE sign-off → its Modified is older than the signed
+    // row's. The comparison must keep the signed row winning (no inverse bug).
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+      canWrite: () => true,
+    });
+    const signedProd = {
+      machineCode: 'Batt1', date: todayId, shift: 'Night', jobNumber: 'SFM900',
+      timeline: 'SSRRRRRR········', countStart: 0, countEnd: 200, reject: 8,
+      operator: 'Joe', supervisor: 'Sue',
+      modified: '2026-01-02T00:00:00Z', // signed AFTER the leftover push
+    };
+    const staleLive = liveHeader({
+      timeline: 'RRRR············', countEnd: 50, reject: 23,
+      modified: '2026-01-01T00:00:00Z', // leftover, pushed before sign-off
+    });
+    const o = dal as unknown as {
+      fetchHeaders: (l: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+    };
+    o.fetchHeaders = async (l: string): Promise<unknown[]> =>
+      l === 'PMD_LiveStatus' ? [staleLive] : [signedProd];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+
+    const rows = await dal.listProduction({ machineCode: 'Batt1', shiftId });
+    const slot0 = rows.find((r) => r.jobNumber === 'SFM900' && r.slotIndex === 0);
+    expect(slot0!.rejectCount).toBe(8); // signed wins
+    expect(slot0!.locked).toBe(true);
+  });
 });
 
 describe('unlock → edit → re-sign-off (SFM507068 redesign)', () => {

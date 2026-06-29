@@ -964,6 +964,16 @@ export class SharePointDataLayer implements PmdDataLayer {
         .filter(matchesFilter)
         .map((h) => this.cacheKey(h.machineCode, `${h.date}-${h.shift}`, h.jobNumber)),
     );
+    // Last-commit time of each signed PMD_Production tuple (SP Modified,
+    // server clock). lockShift is the only writer of that row, so its
+    // Modified == the sign-off time.
+    const prodModMsByKey = new Map<string, number>();
+    for (const h of prodHeaders) {
+      if (!matchesFilter(h)) continue;
+      const key = this.cacheKey(h.machineCode, `${h.date}-${h.shift}`, h.jobNumber);
+      const t = h.modified ? Date.parse(h.modified) : NaN;
+      prodModMsByKey.set(key, isNaN(t) ? 0 : t);
+    }
     let purged = false;
     for (const k of Array.from(this.editCache.keys())) {
       if (!signedKeys.has(k)) continue;
@@ -1011,6 +1021,26 @@ export class SharePointDataLayer implements PmdDataLayer {
       } else {
         liveFresh.push(h);
       }
+    }
+
+    // Detect signed-off tuples that have since been UNLOCKED and are being
+    // RE-EDITED — the source-conflict that made a PC's Trace keep showing
+    // the morning's signed data while the floor iPad corrected it. unlock
+    // is a client-side flag (device-local), so another device only sees
+    // the still-locked PMD_Production row plus a fresh PMD_LiveStatus row.
+    // lockShift deletes the live row at sign-off, so a live row whose SP
+    // Modified is NEWER than the production row's last commit can only be a
+    // post-unlock re-edit — and for those the live mirror is the current
+    // truth and must win over the stale signed row, on every device. A
+    // failed-delete leftover has an OLDER Modified (it stopped being pushed
+    // before sign-off), so the comparison leaves the signed row winning.
+    const reEditedKeys = new Set<string>();
+    for (const h of liveFresh) {
+      const key = this.cacheKey(h.machineCode, `${h.date}-${h.shift}`, h.jobNumber);
+      const pmod = prodModMsByKey.get(key);
+      if (pmod == null || pmod === 0) continue; // not signed, or no timestamp
+      const lmod = h.modified ? Date.parse(h.modified) : NaN;
+      if (!isNaN(lmod) && lmod > pmod) reEditedKeys.add(key);
     }
     // GC editCache: drop any status-empty tuple whose shift ended > 8 h
     // ago. UNCONDITIONAL — this must run even when there are no stale
@@ -1077,7 +1107,10 @@ export class SharePointDataLayer implements PmdDataLayer {
       if (!matchesFilter(h)) continue;
       const hShiftId = `${h.date}-${h.shift}`;
       const key = this.cacheKey(h.machineCode, hShiftId, h.jobNumber);
-      if (signedKeys.has(key)) continue;
+      // Signed tuples normally skip the live backfill (PMD_Production is
+      // canonical). EXCEPT a tuple being re-edited after unlock: its live
+      // mirror is fresher than the signed row, so let it backfill and win.
+      if (signedKeys.has(key) && !reEditedKeys.has(key)) continue;
       const hWithTimeline: HeaderRow = h.timeline
         ? h
         : { ...h, timeline: timelinesByKey.get(key) ?? '' };
@@ -1133,8 +1166,13 @@ export class SharePointDataLayer implements PmdDataLayer {
     };
 
     // Signed-off first so it wins any (rare) overlap with a not-yet-
-    // deleted live row.
-    for (const h of prodHeaders) ingest(h, true);
+    // deleted live row — EXCEPT a re-edited tuple, whose stale signed row
+    // must not shadow the fresh live data the backfill just emitted.
+    for (const h of prodHeaders) {
+      const key = this.cacheKey(h.machineCode, `${h.date}-${h.shift}`, h.jobNumber);
+      if (reEditedKeys.has(key)) continue;
+      ingest(h, true);
+    }
     // Live rows already merged into editCache above; the ingest pass
     // still runs them to cover tuples that fall outside the editCache
     // filter (e.g. cross-machine Live Status board reads) — the
@@ -1241,6 +1279,8 @@ export class SharePointDataLayer implements PmdDataLayer {
       signOff: F.signOff ? str(r[F.signOff]) : '',
       jobLeft: F.jobLeft && r[F.jobLeft] != null ? num(r[F.jobLeft]) : -1,
       shiftTarget: F.shiftTarget && r[F.shiftTarget] != null ? num(r[F.shiftTarget]) : -1,
+      // Built-in SP column, always present in the verbose payload.
+      modified: str(r['Modified']),
     }));
   }
 
@@ -2656,6 +2696,12 @@ interface HeaderRow {
   /** Shift Target frozen at job start from PMD_Production.ShiftTarget; -1
    *  when absent. Round-tripped onto the canonical record for Trace. */
   shiftTarget: number;
+  /** SharePoint's built-in Modified timestamp (ISO). Used to detect a
+   *  signed-off tuple that has since been unlocked and re-edited: its
+   *  PMD_LiveStatus row gets a Modified NEWER than the PMD_Production
+   *  row's, which makes the live mirror win on every device (the unlock
+   *  flag itself is device-local). '' when the field is unreadable. */
+  modified: string;
 }
 
 interface HeaderInput {
