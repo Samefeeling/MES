@@ -147,19 +147,23 @@ function sid(): string {
 }
 
 function blankRecord(slot: number): ProductionRecord {
+  return blankRecordForJob(slot, S!.selJob);
+}
+
+function blankRecordForJob(slot: number, job: string): ProductionRecord {
   const iso = new Date().toISOString();
-  // Resolve the order for the selected job once so the slot carries
+  // Resolve the order for this job once so the slot carries
   // JobHead_PartNum — PMD_Production / PMD_LiveStatus persist the
   // colour-lookup key per row instead of relying on a planning join.
-  // selectedOrder() prefers PMD_Production for past shifts, so a
+  // orderForJob() prefers PMD_Production for past shifts, so a
   // supervisor editing history still stamps the recorded Part #
   // rather than a blank (planning has long dropped the order).
-  const order = selectedOrder();
+  const order = orderForJob(job);
   const rec: ProductionRecord = {
     id: 0,
     machineCode: S!.mc,
     shiftId: sid(),
-    jobNumber: S!.selJob,
+    jobNumber: job,
     partNumber: order?.partNumber ?? '',
     // Carry cycle time so it persists through editCache → sign-off even
     // if Epicor drops the order from planning before the shift is signed.
@@ -192,7 +196,12 @@ function blankRecord(slot: number): ProductionRecord {
   // only — a supervisor editing a PAST shift clones the existing row
   // (which already carries its original frozen value) rather than
   // re-freezing against today's totals.
-  if (slot === 0 && order && !isPastShift()) {
+  // Only the SELECTED job freezes here: S!.jobTotalGood is the
+  // cross-shift Good for the selected job, so freezing a co-run sibling
+  // (created by the status mirror / seed) against it would use the wrong
+  // total. The sibling instead gets its own freeze from
+  // ensureJobLeftFrozen() when the operator opens it.
+  if (slot === 0 && job === S!.selJob && order && !isPastShift()) {
     const jl = jobLeftPiecesFor(order, S!.jobTotalGood);
     if (jl != null) {
       rec.jobLeft = jl;
@@ -305,7 +314,19 @@ function shiftOrders(): PlanningOrder[] {
 }
 
 function selectedOrder(): PlanningOrder | undefined {
-  if (!S!.selJob) return undefined;
+  return orderForJob(S!.selJob);
+}
+
+/**
+ * Resolve the PlanningOrder for an arbitrary job on the current view
+ * (not just the selected one) — needed so the co-run mirror / seed can
+ * stamp a sibling order's Part# / cycle time / Job-Left freeze. Same
+ * precedence as the old selectedOrder: live/future shift prefers the
+ * planning CSV (current Epicor state), past shift / dropped order falls
+ * back to the denormalised PMD_Production rows in S!.prod.
+ */
+function orderForJob(job: string): PlanningOrder | undefined {
+  if (!job) return undefined;
   // Planning.csv reflects the CURRENT Epicor state — it is only relevant
   // to the live and future shifts. Viewing a PAST shift/date means
   // "review what was actually recorded", so the order must be rebuilt
@@ -314,7 +335,7 @@ function selectedOrder(): PlanningOrder | undefined {
   // would show today's remaining qty / cycle time against a shift that
   // ran days ago, and would disagree with Trace for the same tuple.
   if (!isPastShift()) {
-    const fromPlanning = S!.planning.find((o) => o.jobNumber === S!.selJob);
+    const fromPlanning = S!.planning.find((o) => o.jobNumber === job);
     if (fromPlanning) return fromPlanning;
   }
   // Synthetic order rebuilt from the PMD_Production rows already in
@@ -324,13 +345,13 @@ function selectedOrder(): PlanningOrder | undefined {
   // reviewing or unlocking — the header bar (Order Qty / Part# / Product
   // Description) must still show the real denormalised values, not blanks.
   const canon = S!.prod.find(
-    (r) => r.jobNumber === S!.selJob && r.slotIndex === 0,
+    (r) => r.jobNumber === job && r.slotIndex === 0,
   );
-  const anySlot = canon ?? S!.prod.find((r) => r.jobNumber === S!.selJob);
+  const anySlot = canon ?? S!.prod.find((r) => r.jobNumber === job);
   if (!anySlot) return undefined;
   return {
     id: 0,
-    jobNumber: S!.selJob,
+    jobNumber: job,
     machineCode: anySlot.machineCode,
     originalMachine: '',
     partNumber: anySlot.partNumber ?? '',
@@ -374,9 +395,67 @@ function occupyingOtherJob(slot: number): ProductionRecord | null {
     if (r.slotIndex !== slot) continue;
     if (r.jobNumber === S!.selJob) continue;
     if (!r.statusCode) continue;
+    // Co-running orders share one die on the same press, so they
+    // legitimately occupy the SAME half-hour with the SAME machine
+    // status — don't treat a co-runner as a blocking occupier. The
+    // status is mirrored across the group, so the selected job has its
+    // own copy on this slot anyway.
+    if (coRunsWith(r.jobNumber, S!.selJob)) continue;
     return r;
   }
   return null;
+}
+
+// ---- Co-running orders (one die → 2-3 parts at once) ----------------
+// A single die can run multiple parts simultaneously on one press, so
+// the same (machine, shift) legitimately has 2-3 orders running at the
+// exact same time. They share ONE machine-status timeline (it's the
+// press) but keep their own Count Start/End, Rejects, Job Left and
+// sign-off. Grouping is automatic by DieNumber (PMD_ProductDieColor) —
+// no new UI, no new SP column. The status entered on any one of them is
+// mirrored across the group; everything else stays per-order.
+
+/** Part # for any job on the current view — from its PMD_Production
+ *  rows first, then the planning CSV. */
+function partNumberForJob(job: string): string {
+  if (!job) return '';
+  const fromProd = S!.prod.find((r) => r.jobNumber === job && r.partNumber)?.partNumber;
+  if (fromProd) return fromProd;
+  return S!.planning.find((o) => o.jobNumber === job)?.partNumber ?? '';
+}
+
+/** DieNumber for a job (via its Part # → PMD_ProductDieColor). Empty
+ *  string when the part has no die mapping — such jobs never co-run
+ *  (we won't group on a blank die). */
+function dieNumberForJob(job: string): string {
+  const pn = partNumberForJob(job).trim().toUpperCase();
+  if (!pn) return '';
+  return (S!.dieColors.get(pn)?.dieNumber ?? '').trim();
+}
+
+/** Two jobs co-run when they share the same non-empty die. */
+function coRunsWith(jobA: string, jobB: string): boolean {
+  if (!jobA || !jobB || jobA === jobB) return false;
+  const da = dieNumberForJob(jobA);
+  if (!da) return false;
+  return da === dieNumberForJob(jobB);
+}
+
+/** Distinct OTHER jobs already recorded on this (machine, shift) that
+ *  share the given job's die — the mirror targets. Signed-off siblings
+ *  are excluded (we never write into a locked order). */
+function coRunSiblings(job: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const r of S!.prod) {
+    const j = r.jobNumber;
+    if (!j || j === job || seen.has(j)) continue;
+    if (!coRunsWith(j, job)) continue;
+    seen.add(j);
+    if (S!.prod.some((x) => x.jobNumber === j && x.locked)) continue;
+    out.push(j);
+  }
+  return out;
 }
 
 function canonical(): ProductionRecord | undefined {
@@ -390,13 +469,16 @@ function canonical(): ProductionRecord | undefined {
  * Used to block a Job# / shift / machine switch until the operator
  * signs the current order off (per floor policy: every worked order
  * must be signed off before moving on, so Trace gets accurate Job Left).
- * Never fires on read-only devices (can't sign off anyway) or past
- * shifts (history review, not the live production flow).
+ * Never fires on read-only devices (can't sign off anyway), past shifts
+ * (history review, not the live production flow), or when a supervisor
+ * is signed in — supervisors can unlock the discipline and navigate
+ * freely to correct data.
  */
 function currentJobNeedsSignoff(): boolean {
   if (!S!.selJob) return false;
   if (isReadOnlyDevice()) return false;
   if (isPastShift()) return false;
+  if (isSupervisor()) return false; // supervisor unlocks the discipline
   const c = canonical();
   if (c?.locked) return false; // already signed off — data is safe
   const hasStatus = S!.prod.some((r) => r.jobNumber === S!.selJob && r.statusCode);
@@ -569,8 +651,63 @@ async function reload(): Promise<void> {
   // the same machine + job.
   await maybeCarryCountStart();
   await refreshJobTotal();
+  await seedStatusFromCoRunner();
+  ensureJobLeftFrozen();
   saveView();
   render();
+}
+
+/**
+ * When the operator opens an order that shares a die with one already
+ * running this shift but has no machine status of its own yet, copy the
+ * co-runner's timeline into it — they run together off the same die, so
+ * the new order inherits the same status pattern. Only seeds a live,
+ * writable, unsigned order that is genuinely empty (so it never
+ * overwrites a status the operator has already entered, and never runs
+ * on a past-shift review).
+ */
+async function seedStatusFromCoRunner(): Promise<void> {
+  if (!S!.selJob || isPastShift() || isReadOnlyDevice() || isJobLocked()) return;
+  const mineHasStatus = S!.prod.some(
+    (r) => r.jobNumber === S!.selJob && r.statusCode,
+  );
+  if (mineHasStatus) return;
+  // Find a co-running sibling that DOES have a timeline to copy from.
+  const sib = coRunSiblings(S!.selJob).find((j) =>
+    S!.prod.some((r) => r.jobNumber === j && r.statusCode),
+  );
+  if (!sib) return;
+  const sibSlots = S!.prod.filter((r) => r.jobNumber === sib && r.statusCode);
+  for (const sr of sibSlots) {
+    await upsertSlotForJob(S!.selJob, sr.slotIndex, (r) => {
+      r.statusCode = sr.statusCode;
+      r.bdIssue = sr.bdIssue;
+      r.mangoTicket = sr.mangoTicket;
+    });
+  }
+}
+
+/**
+ * Ensure the selected live order has Job Left / Shift Target frozen on
+ * its canonical row. The normal path freezes in blankRecordForJob at
+ * creation, but a co-run sibling's slot 0 is created by the mirror /
+ * seed (which can't know that sibling's cross-shift Good), so its freeze
+ * is deferred to here — by now refreshJobTotal() has computed
+ * S!.jobTotalGood for the selected job, so the value is correct.
+ */
+function ensureJobLeftFrozen(): void {
+  if (isPastShift() || isReadOnlyDevice() || isJobLocked()) return;
+  const c = canonical();
+  if (!c || c.locked || c.jobLeft != null) return;
+  const order = selectedOrder();
+  if (!order) return;
+  const jl = jobLeftPiecesFor(order, S!.jobTotalGood);
+  if (jl == null) return;
+  void upsertSlotNoReload(0, (r) => {
+    r.jobLeft = jl;
+    const st = shiftTargetFor(order, jl);
+    if (st != null) r.shiftTarget = st;
+  });
 }
 
 /** True when THIS browser is forbidden from writing — non-iPad without
@@ -1627,8 +1764,15 @@ function onMetaChange(el: HTMLElement): void {
       // Block leaving an unsigned in-progress order for a different one
       // — this is the main path that stranded Job Left (operator finishes
       // an order and starts the next without signing off). render()
-      // reverts the input/select back to the current job.
-      if (val !== S!.selJob && currentJobNeedsSignoff()) {
+      // reverts the input/select back to the current job. Switching
+      // BETWEEN co-running orders (same die) is exempt: they run together
+      // and the operator must hop between them to enter each one's counts
+      // before any is signed off.
+      if (
+        val !== S!.selJob &&
+        !coRunsWith(val, S!.selJob) &&
+        currentJobNeedsSignoff()
+      ) {
         promptSignoffBeforeLeaving();
         render();
         break;
@@ -1747,7 +1891,9 @@ function openSaveSignoffModal(): void {
   // can't be locked in (the reported "worker skips slots, Job Left
   // data is wrong" problem). Slots held by another job on this press
   // are that job's responsibility and don't count as gaps here.
-  const gaps = slotGapsForSignoff();
+  // A signed-in supervisor bypasses the gate — they can sign off an
+  // exceptional / partially-recorded shift when correcting data.
+  const gaps = isSupervisor() ? [] : slotGapsForSignoff();
   if (gaps.length) {
     const list = gaps.map((i) => i + 1).join(', ');
     toast(
@@ -2085,17 +2231,27 @@ async function multiFillApply(
   bdIssue: string,
   mangoNote: string,
 ): Promise<void> {
+  const apply = (r: ProductionRecord): void => {
+    r.statusCode = code;
+    r.bdIssue = code === 'B' ? bdIssue : '';
+    if (code === 'B' && mangoNote) r.mangoTicket = mangoNote;
+    else if (code !== 'B') r.mangoTicket = '';
+  };
+  // Mirror the machine status across every co-running order on this die
+  // (they share the press, so they share the timeline). Counts / rejects
+  // / sign-off stay per-order — only the status row is mirrored.
+  const siblings = coRunSiblings(S!.selJob);
   // Sequential upserts — keep simple; could batch later if needed.
   for (const slot of slots) {
-    await upsertSlotNoReload(slot, (r) => {
-      r.statusCode = code;
-      r.bdIssue = code === 'B' ? bdIssue : '';
-      if (code === 'B' && mangoNote) r.mangoTicket = mangoNote;
-      else if (code !== 'B') r.mangoTicket = '';
-    });
+    await upsertSlotNoReload(slot, apply);
+    for (const sib of siblings) await upsertSlotForJob(sib, slot, apply);
   }
   S!.selSet.clear();
-  toast(`Filled ${slots.length} slot${slots.length === 1 ? '' : 's'} with ${code}`, 'ok');
+  const mirroredNote = siblings.length ? ` (+${siblings.length} co-run)` : '';
+  toast(
+    `Filled ${slots.length} slot${slots.length === 1 ? '' : 's'} with ${code}${mirroredNote}`,
+    'ok',
+  );
   // Skip reload() here. upsertSlotNoReload already mutated S!.prod in
   // memory, and a status edit cannot change anything reload() would
   // re-fetch — Job Left / Total Good are driven by Count Start/End and
@@ -2140,6 +2296,36 @@ async function upsertSlotNoReload(
   const idx = S!.prod.findIndex(
     (r) => r.jobNumber === S!.selJob && r.slotIndex === slot,
   );
+  if (idx >= 0) S!.prod[idx] = rec;
+  else S!.prod.push(rec);
+  await dalRef.upsertProductionRecord(rec);
+}
+
+/**
+ * Write one slot of an ARBITRARY job (not the selected one) — used by
+ * the co-run status mirror / seed to copy the machine status onto each
+ * sibling order sharing the die. Skips a sibling that's signed off
+ * (never modify a locked order) and respects the read-only device rule.
+ */
+async function upsertSlotForJob(
+  job: string,
+  slot: number,
+  mut: (r: ProductionRecord) => void,
+): Promise<void> {
+  if (!job || isReadOnlyDevice()) return;
+  if (S!.prod.some((r) => r.jobNumber === job && r.locked)) return;
+  const existing = S!.prod.find((r) => r.jobNumber === job && r.slotIndex === slot);
+  const rec = existing ? { ...existing } : blankRecordForJob(slot, job);
+  mut(rec);
+  let total = 0;
+  try {
+    const obj = JSON.parse(rec.rejects || '{}') as Record<string, number>;
+    total = Object.values(obj).reduce((a, v) => a + (Number(v) || 0), 0);
+  } catch {
+    /* keep 0 */
+  }
+  rec.rejectCount = total;
+  const idx = S!.prod.findIndex((r) => r.jobNumber === job && r.slotIndex === slot);
   if (idx >= 0) S!.prod[idx] = rec;
   else S!.prod.push(rec);
   await dalRef.upsertProductionRecord(rec);
