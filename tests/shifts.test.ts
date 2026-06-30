@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildShiftId,
+  msUntilShiftEnd,
   parseShiftId,
   previousShift,
   shiftBounds,
@@ -41,6 +42,18 @@ describe('shift id / bounds (§2.3)', () => {
     expect(b.start.getDate()).toBe(15);
     expect(b.end.getHours()).toBe(7);
     expect(b.end.getDate()).toBe(16);
+  });
+});
+
+describe('msUntilShiftEnd', () => {
+  it('counts down to the shift end, goes negative after, null on garbage', () => {
+    // Day shift ends 15:00. At 14:55 → 5 min left.
+    expect(msUntilShiftEnd('2026-05-15-Day', new Date(2026, 4, 15, 14, 55))).toBe(5 * 60_000);
+    expect(msUntilShiftEnd('2026-05-15-Day', new Date(2026, 4, 15, 15, 0))).toBe(0);
+    expect(msUntilShiftEnd('2026-05-15-Day', new Date(2026, 4, 15, 15, 10))).toBe(-10 * 60_000);
+    // Night ends 07:00 next day.
+    expect(msUntilShiftEnd('2026-05-15-Night', new Date(2026, 4, 16, 6, 56))).toBe(4 * 60_000);
+    expect(msUntilShiftEnd('garbage')).toBeNull();
   });
 });
 

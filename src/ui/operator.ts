@@ -15,6 +15,7 @@ import {
   currentShift,
   currentSlotIndex,
   dateKey,
+  msUntilShiftEnd,
   parseShiftId,
   previousShift,
   shiftBounds,
@@ -459,6 +460,13 @@ function occupyingOtherJob(slot: number): ProductionRecord | null {
 
 /** Part # for any job on the current view — from its PMD_Production
  *  rows first, then the planning CSV. */
+/** Whether a Job# appears in the loaded Planning.csv (current Epicor state).
+ *  Drives the "not in planning" warning that catches item numbers typed into
+ *  the Job# box. */
+function jobInPlanning(job: string): boolean {
+  return !!job && S!.planning.some((o) => o.jobNumber === job);
+}
+
 function partNumberForJob(job: string): string {
   if (!job) return '';
   const fromProd = S!.prod.find((r) => r.jobNumber === job && r.partNumber)?.partNumber;
@@ -568,25 +576,19 @@ function currentJobNeedsSignoff(): boolean {
   return hasStatus || hasCounts;
 }
 
+/** Minutes before shift end that the sign-off reminder starts nagging. */
+const SIGNOFF_REMINDER_MIN = 5;
+
 /**
- * Modal that blocks navigation away from an unsigned in-progress order
- * and routes the operator straight into Sign Off & Save. "Cancel" keeps
- * them on the current order (the switch is abandoned).
+ * True only in the final SIGNOFF_REMINDER_MIN of the LIVE shift. The floor
+ * asked to be reminded to sign off near handover rather than blocked on every
+ * navigation, so this is the one window where the reminder banner + one-shot
+ * toast appear.
  */
-function promptSignoffBeforeLeaving(): void {
-  const mc = openModal(`<div class="bd-modal">
-    <h2 class="bd-title">✋ Sign off the current order first</h2>
-    <p class="bd-sub">Order <b>${escapeHtml(S!.selJob)}</b> has in-progress data that hasn't been signed off. Sign off &amp; Save it before switching — otherwise its Job Left isn't recorded.</p>
-    <div class="bd-actions">
-      <button class="btn-ghost-big" data-stay>Cancel</button>
-      <button class="btn-primary-big" data-go-signoff>Sign off &amp; Save</button>
-    </div>
-  </div>`);
-  mc.querySelector('[data-stay]')?.addEventListener('click', closeModal);
-  mc.querySelector('[data-go-signoff]')?.addEventListener('click', () => {
-    closeModal();
-    openSaveSignoffModal();
-  });
+function inSignoffReminderWindow(now: Date = new Date()): boolean {
+  if (currentShift(now).shiftId !== sid()) return false; // live shift only
+  const ms = msUntilShiftEnd(sid(), now);
+  return ms != null && ms > 0 && ms <= SIGNOFF_REMINDER_MIN * 60_000;
 }
 
 /**
@@ -1188,9 +1190,17 @@ function buildMeta(): string {
         )
         .join('')}</span>`
     : '';
+  // Job# sanity check: a live-shift Job# that isn't in Planning.csv is almost
+  // always an item / part number typed into the wrong box. Warn (don't block —
+  // a just-released order can lag the 15-min Epicor sync). Past shifts derive
+  // their orders from PMD_Production, not planning, so the check is skipped.
+  const jobWarn =
+    S!.selJob && !isPastShift() && !jobInPlanning(S!.selJob)
+      ? `<span class="m-job-warn" title="This Job# is not in the planning list (Planning.csv). Check you didn't type the item / part number instead of the Job#.">⚠ Not in planning — is this the Job# or an item number?</span>`
+      : '';
   return `<div class="op-meta">
     <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
-    <label class="m-job">Job# ${jobField}${coRunBadge}</label>
+    <label class="m-job">Job# ${jobField}${coRunBadge}${jobWarn}</label>
     <label class="m-orderqty">Order Qty <input type="text" disabled value="${escapeHtml(String(orderQty))}"></label>
     <label class="m-part"><span class="m-part-title">Part# ${swatch}</span><input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
     <label class="m-desc"><span class="m-desc-title">Product Description${dieNumberLabel}</span><input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
@@ -1687,6 +1697,23 @@ function buildFutureShiftBanner(): string {
   </div>`;
 }
 
+/**
+ * Soft sign-off reminder shown only in the last few minutes of the live
+ * shift, when the selected order still has unsigned in-progress data. Replaces
+ * the old block-on-every-navigation prompt — the floor wanted a nudge near
+ * handover, not a gate each time they switch job / machine / shift.
+ */
+function buildSignoffReminderBanner(): string {
+  if (!inSignoffReminderWindow() || !currentJobNeedsSignoff()) return '';
+  return `<div class="signoff-reminder">
+    <div class="signoff-reminder-text">
+      <b>⏰ Shift ends soon</b>
+      <span>Sign off <b>${escapeHtml(S!.selJob)}</b> before the shift ends so its Job Left is recorded.</span>
+    </div>
+    <button type="button" class="signoff-now-btn" data-signoff-now>✅ Sign off now</button>
+  </div>`;
+}
+
 function render(): void {
   applyShiftTheme();
   // Preserve the half-hour grid's horizontal scroll position across a
@@ -1707,6 +1734,7 @@ function render(): void {
     ${buildActionBar()}
     ${buildOwnerBanner()}
     ${buildFutureShiftBanner()}
+    ${buildSignoffReminderBanner()}
     ${buildLockBanner()}
     ${buildMeta()}
     ${detail}
@@ -1760,14 +1788,10 @@ function wire(): void {
     b.addEventListener('click', () => {
       const next = b.dataset.shift as ShiftCode;
       if (next === S!.shiftCode) return;
-      // Block moving to another shift while the current order is still
-      // unsigned (per floor policy: sign off before the shift handover
-      // so Job Left is recorded). State is untouched, so the active tab
-      // stays put without a re-render.
-      if (currentJobNeedsSignoff()) {
-        promptSignoffBeforeLeaving();
-        return;
-      }
+      // Switching shift is free — the floor asked NOT to be blocked on every
+      // navigation. Sign-off discipline is now a soft reminder in the last
+      // 5 min of the shift (see buildSignoffReminderBanner) rather than a
+      // gate on leaving.
       S!.shiftCode = next;
       void reload();
     }),
@@ -1879,6 +1903,7 @@ function wire(): void {
     summaryCache = null;
     void reload();
   });
+  app.querySelector('[data-signoff-now]')?.addEventListener('click', () => openSaveSignoffModal());
   app.querySelector('[data-refresh]')?.addEventListener('click', () => void refreshAll());
   app.querySelector('[data-saveclear]')?.addEventListener('click', () => openSaveSignoffModal());
   app.querySelector('[data-unlock]')?.addEventListener('click', () => openUnlockModal());
@@ -1902,13 +1927,8 @@ function onMetaChange(el: HTMLElement): void {
       break;
     }
     case 'machine':
-      // Block leaving an unsigned in-progress order — render() reverts
-      // the <select> back to the current machine.
-      if (val !== S!.mc && currentJobNeedsSignoff()) {
-        promptSignoffBeforeLeaving();
-        render();
-        break;
-      }
+      // Free to switch presses — no sign-off gate on navigation (the floor
+      // found it too aggressive). The shift-end reminder covers discipline.
       S!.mc = val;
       // Machine change does clear selJob: a different press generally runs
       // a different order, and carrying the previous job number across
@@ -1918,22 +1938,9 @@ function onMetaChange(el: HTMLElement): void {
       void reload();
       break;
     case 'job':
-      // Block leaving an unsigned in-progress order for a different one
-      // — this is the main path that stranded Job Left (operator finishes
-      // an order and starts the next without signing off). render()
-      // reverts the input/select back to the current job. Switching
-      // BETWEEN co-running orders (same die) is exempt: they run together
-      // and the operator must hop between them to enter each one's counts
-      // before any is signed off.
-      if (
-        val !== S!.selJob &&
-        !coRunsWith(val, S!.selJob) &&
-        currentJobNeedsSignoff()
-      ) {
-        promptSignoffBeforeLeaving();
-        render();
-        break;
-      }
+      // Switching orders is free — the floor asked not to be blocked when
+      // moving between jobs. Job Left discipline is handled by the shift-end
+      // sign-off reminder instead of a gate here.
       S!.selJob = val;
       saveView();
       // Full reload, not just render(): Job Left / Total Good and the
@@ -2781,8 +2788,24 @@ export async function renderOperator(
     dieColors,
   };
   if (nowTimer) clearInterval(nowTimer);
-  nowTimer = setInterval(renderNowLine, 30_000);
+  nowTimer = setInterval(nowTick, 30_000);
   await reload();
+}
+
+/** Shift id the sign-off reminder toast has already fired for, so the
+ *  one-shot nag doesn't repeat every 30 s while in the window. */
+let signoffReminderShownFor: string | null = null;
+
+/** Half-minute heartbeat: redraw the now-line and, once per shift, fire the
+ *  shift-ending sign-off reminder (toast + a single render so the banner
+ *  appears without waiting for the next edit). */
+function nowTick(): void {
+  renderNowLine();
+  if (!inSignoffReminderWindow() || !currentJobNeedsSignoff()) return;
+  if (signoffReminderShownFor === sid()) return;
+  signoffReminderShownFor = sid();
+  toast(`Shift ends soon — sign off ${S!.selJob} before you leave`, 'warn');
+  render();
 }
 
 export function operatorPollTick(): void {

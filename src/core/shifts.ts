@@ -58,6 +58,14 @@ export function shiftBounds(shiftId: string): { start: Date; end: Date } | null 
   return { start, end };
 }
 
+/** Milliseconds from `now` until the shift ends — positive while the shift
+ *  is still running, negative once it's over, null if the id is malformed.
+ *  Drives the "sign off, the shift ends soon" reminder. */
+export function msUntilShiftEnd(shiftId: string, now: Date = new Date()): number | null {
+  const b = shiftBounds(shiftId);
+  return b ? b.end.getTime() - now.getTime() : null;
+}
+
 /** {start,end} of a single 30-min slot within a shift. */
 export function slotTimeRange(
   shiftId: string,
