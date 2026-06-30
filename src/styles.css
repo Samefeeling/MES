@@ -236,7 +236,7 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    background / border). Tabular numerals so multi-digit die numbers
    align nicely. */
 .m-die-num{color:#c2410c;font-variant-numeric:tabular-nums}
-.sk-cavity input.cavity-box{width:22px;height:22px;cursor:pointer}
+.sk-cavity select.cavity-sel{min-width:64px;padding:4px 6px;font-size:14px;font-weight:700;cursor:pointer}
 .cavity-tag{display:inline-block;padding:0 6px;border-radius:6px;background:#fde68a;color:#92400e;font-size:11px;font-weight:800;vertical-align:middle}
 .op-meta .m-op select,.op-meta .m-sup select{width:140px}
 

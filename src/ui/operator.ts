@@ -47,11 +47,14 @@ function canWriteThisDevice(): boolean {
   return isIpadDevice() || isSupervisor();
 }
 
-/** Presses that can run a 2-cavity die — the only machines that show the
- *  "2 cavities (×2)" tick-box on the operator sheet. Everywhere else the
- *  count is taken at face value (1 cavity). Edit this set if a die moves
- *  to another press. */
+/** Presses that can run a multi-cavity die — the only machines that show the
+ *  Cavities dropdown on the operator sheet. Everywhere else the count is taken
+ *  at face value (1 cavity). Edit this set if a die moves to another press. */
 const CAVITY_MACHINES = new Set(['550T', '320T', '150T', '125T']);
+
+/** Selectable cavity counts. A die makes this many identical parts per press
+ *  cycle, so Total Good = (Count End − Count Start) × cavities − Reject. */
+const CAVITY_OPTIONS = [1, 2, 4, 8];
 
 function machineHasCavityOption(mc: string): boolean {
   return CAVITY_MACHINES.has(mc.trim());
@@ -1322,11 +1325,13 @@ function buildSide(): string {
     <div class="sk"><label>Count End</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cend" value="${ce}" ${rdo}${rdoTitle}></div>
     ${
       machineHasCavityOption(S!.mc)
-        ? `<div class="sk sk-cavity"><label title="Tick when the die has 2 identical cavities — each press cycle makes 2 parts, so Total Good = (Count End − Count Start) × 2 − Reject.">2 cavities (×2)</label><input type="checkbox" class="cavity-box" data-meta="cavity" ${cav > 1 ? 'checked' : ''} ${rdo}${rdoTitle}></div>`
+        ? `<div class="sk sk-cavity"><label title="Number of identical cavities on the die — pieces produced per press cycle. Total Good = (Count End − Count Start) × cavities − Reject.">Cavities</label><select class="cavity-sel" data-meta="cavity" ${rdo}${rdoTitle}>${CAVITY_OPTIONS.map(
+            (n) => `<option value="${n}"${cav === n ? ' selected' : ''}>×${n}</option>`,
+          ).join('')}</select></div>`
         : ''
     }
     <div class="sk"><label>Total Reject</label><b class="r" data-live="totalReject">${totalReject}</b></div>
-    <div class="sk"><label${cav > 1 ? ' title="(Count End − Count Start) × 2 cavities − Reject"' : ''}>Total Good${cav > 1 ? ' <span class="cavity-tag">×2</span>' : ''}</label><b class="g" data-live="totalGood">${good}</b></div>
+    <div class="sk"><label${cav > 1 ? ` title="(Count End − Count Start) × ${cav} cavities − Reject"` : ''}>Total Good${cav > 1 ? ` <span class="cavity-tag">×${cav}</span>` : ''}</label><b class="g" data-live="totalGood">${good}</b></div>
     <div class="sk"><label>Purge (kg)</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="purge" value="${purge}" ${rdo}${rdoTitle}></div>
     <div class="handover">
       <div class="handover-title">Handover</div>
@@ -1854,13 +1859,13 @@ function onMetaChange(el: HTMLElement): void {
       break;
     }
     case 'cavity': {
-      // 2-cavity tick-box: checked → 2 pieces/cycle, unchecked → 1.
-      // Persist on the canonical slot, then re-render so Total Good /
-      // Job Left / Shift Target and the ×2 tag all recompute. A checkbox
-      // has no text focus to preserve, so a full render is fine.
-      const on = val === 'true';
+      // Cavities dropdown: parts produced per press cycle. Validate against the
+      // allowed set, falling back to 1. Persist on the canonical slot, then
+      // re-render so Total Good / Job Left / Shift Target and the ×N tag all
+      // recompute. A select has no text focus to preserve, so a full render is fine.
+      const n = CAVITY_OPTIONS.includes(Number(val)) ? Number(val) : 1;
       void upsertSlotNoReload(0, (r) => {
-        r.cavities = on ? 2 : 1;
+        r.cavities = n;
       }).then(() => render());
       break;
     }
