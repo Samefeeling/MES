@@ -476,6 +476,26 @@ function coRunSiblings(job: string): string[] {
   return out;
 }
 
+/** Distinct OTHER jobs that co-run with `job` on this (machine, shift),
+ *  whether already recorded OR merely planned for the shift. Drives the
+ *  ⛓ Co-Run chips next to Job#, so the floor sees the linked order — and
+ *  can hop to it — before any counts are entered. Unlike coRunSiblings
+ *  (the mirror write target) this keeps signed-off siblings, so the link
+ *  stays visible all shift. */
+function coRunLinks(job: string): string[] {
+  if (!job) return [];
+  const out: string[] = [];
+  const seen = new Set<string>([job]);
+  const consider = (j: string): void => {
+    if (!j || seen.has(j) || !coRunsWith(j, job)) return;
+    seen.add(j);
+    out.push(j);
+  };
+  for (const o of shiftOrders()) consider(o.jobNumber);
+  for (const r of S!.prod) consider(r.jobNumber);
+  return out;
+}
+
 function canonical(): ProductionRecord | undefined {
   return slotRec(0);
 }
@@ -1107,9 +1127,25 @@ function buildMeta(): string {
   // a missing column.
   const dieNumber = die?.dieNumber || '';
   const dieNumberLabel = ` <span class="m-die-num" title="Die # for this part (from PMD_ProductDieColor.DieNumber)">Die# ${escapeHtml(dieNumber || '—')}</span>`;
+  // ⛓ Co-Run chips: jobs sharing this die that are both flagged CoRun=Yes in
+  // PMD_ProductDieColor. They run simultaneously, so the floor needs to enter
+  // each one's counts and sees their machine status mirrored. The chip is a
+  // one-tap hop to the linked order (switching between co-runners is exempt
+  // from the sign-off-before-leaving gate). Admin-set, not worker-picked: the
+  // die is shared by colours that often run one-after-another, so only the
+  // CoRun flag — not the die alone — marks a genuine simultaneous pair.
+  const coRunLinkJobs = coRunLinks(S!.selJob);
+  const coRunBadge = coRunLinkJobs.length
+    ? `<span class="m-corun" title="Co-running on the same die — enter each order's counts; machine status is mirrored. Tap a linked job to switch.">⛓ Co-Run${coRunLinkJobs
+        .map(
+          (j) =>
+            `<button type="button" class="corun-chip" data-corun-jump="${escapeHtml(j)}" title="Switch to co-running order ${escapeHtml(j)}">${escapeHtml(j)}</button>`,
+        )
+        .join('')}</span>`
+    : '';
   return `<div class="op-meta">
     <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
-    <label class="m-job">Job# ${jobField}</label>
+    <label class="m-job">Job# ${jobField}${coRunBadge}</label>
     <label class="m-orderqty">Order Qty <input type="text" disabled value="${escapeHtml(String(orderQty))}"></label>
     <label class="m-part"><span class="m-part-title">Part# ${swatch}</span><input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
     <label class="m-desc"><span class="m-desc-title">Product Description${dieNumberLabel}</span><input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
@@ -1690,6 +1726,18 @@ function wire(): void {
   // Meta fields
   app.querySelectorAll<HTMLElement>('[data-meta]').forEach((el) => {
     el.addEventListener('change', () => onMetaChange(el));
+  });
+  // ⛓ Co-Run chips — one-tap hop to a co-running order. Switching between
+  // co-runners is exempt from the sign-off-before-leaving gate, so this skips
+  // straight to the reload that swaps the per-job view.
+  app.querySelectorAll<HTMLButtonElement>('[data-corun-jump]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const j = btn.dataset.corunJump;
+      if (!j || j === S!.selJob) return;
+      S!.selJob = j;
+      saveView();
+      void reload();
+    });
   });
   app
     .querySelector<HTMLTextAreaElement>('textarea[data-meta="comments"]')
