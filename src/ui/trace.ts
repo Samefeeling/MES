@@ -10,7 +10,7 @@ import {
 } from '../core/shifts';
 import { bdLabelFor } from '../core/breakdown';
 import { cavityGross } from '../core/metrics';
-import { partsCoRun, type DieCoRun } from '../core/corun';
+import { ordersCoRun, type DieCoRun } from '../core/corun';
 import {
   jobLeftPiecesFor,
   qcCellPresentation,
@@ -520,12 +520,15 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
     const machineRows = buildTraceRowsFor(recs, planByJob, jobGoodTotals);
     const latest = latestRow(machineRows);
     // EXCEPT co-running orders: when a die runs 2-3 parts simultaneously
-    // (same die, both CoRun=Yes) they are all "current", so show every
-    // co-runner of the latest job as its own card rather than hiding all
-    // but one. Sequential earlier jobs stay collapsed.
+    // (same die, both CoRun=Yes, equal Order Qty) they are all "current", so
+    // show every co-runner of the latest job as its own card rather than
+    // hiding all but one. Differing-quantity colours that merely share the
+    // die run sequentially and stay collapsed, as do earlier jobs.
     const latestDie = dieFor(latest.partNumber);
     const coRunners = machineRows.filter(
-      (row) => row.key !== latest.key && partsCoRun(latestDie, dieFor(row.partNumber)),
+      (row) =>
+        row.key !== latest.key &&
+        ordersCoRun(latestDie, dieFor(row.partNumber), latest.orderQty, row.orderQty),
     );
     if (coRunners.length) {
       out.push({ ...latest, coRun: true });

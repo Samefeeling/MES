@@ -21,7 +21,7 @@ import {
 } from '../core/shifts';
 import { STATUSES, STATUS_MAP } from '../core/status';
 import { cavityGross } from '../core/metrics';
-import { partsCoRun } from '../core/corun';
+import { ordersCoRun } from '../core/corun';
 // Re-exported so existing importers (Trace view, tests) can keep pulling
 // these from ./operator while the canonical definitions live in core.
 import { jobLeftPiecesFor, shiftTargetFor } from '../core/targets';
@@ -446,17 +446,34 @@ function dieRowForJob(job: string): { dieNumber: string; coRun: boolean } | unde
   return S!.dieColors.get(pn);
 }
 
+/** Order Quantity for a job (Epicor ProdQty), or null when unknown / a die
+ *  change. Used to gate co-running: genuinely-simultaneous orders share the
+ *  same quantity. */
+function orderQtyForJob(job: string): number | null {
+  const o = orderForJob(job);
+  if (!o || o.isDieChange) return null;
+  return o.orderQty > 0 ? o.orderQty : null;
+}
+
 /**
- * Two jobs co-run when they share the same non-empty die AND both parts
- * are flagged CoRun = Yes in PMD_ProductDieColor. The die match alone is
- * not enough: different colours share a die and are often scheduled
- * one-after-another rather than simultaneously, so the floor manually
- * marks the genuinely-simultaneous parts with CoRun. Only then does the
- * operator sheet mirror their machine status.
+ * Two jobs co-run when they share the same non-empty die, both parts are
+ * flagged CoRun = Yes in PMD_ProductDieColor, AND the two orders carry the
+ * same Order Quantity. The die match alone is not enough: different colours
+ * share a die and are often scheduled one-after-another, so the floor marks
+ * the genuinely-simultaneous parts with CoRun. The equal-quantity check is
+ * the final guard — a multi-cavity die makes one of each part per cycle, so
+ * truly co-running orders finish equal quantities; differing quantities mean
+ * the colours run separately even when both are flagged. Only when all three
+ * hold does the operator sheet mirror their machine status.
  */
 function coRunsWith(jobA: string, jobB: string): boolean {
   if (!jobA || !jobB || jobA === jobB) return false;
-  return partsCoRun(dieRowForJob(jobA), dieRowForJob(jobB));
+  return ordersCoRun(
+    dieRowForJob(jobA),
+    dieRowForJob(jobB),
+    orderQtyForJob(jobA),
+    orderQtyForJob(jobB),
+  );
 }
 
 /** Distinct OTHER jobs already recorded on this (machine, shift) that

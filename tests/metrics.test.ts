@@ -6,7 +6,7 @@ import {
   oeeColor,
   scrapColor,
 } from '../src/core/metrics';
-import { partsCoRun } from '../src/core/corun';
+import { partsCoRun, ordersCoRun } from '../src/core/corun';
 import { rec } from './helpers';
 
 describe('KPI aggregation (§4.1)', () => {
@@ -107,6 +107,27 @@ describe('partsCoRun', () => {
     expect(partsCoRun(yes(''), yes(''))).toBe(false); // blank die never groups
     expect(partsCoRun(yes('D9'), undefined)).toBe(false);
     expect(partsCoRun(undefined, undefined)).toBe(false);
+  });
+});
+
+describe('ordersCoRun', () => {
+  const yes = (dieNumber: string): { dieNumber: string; coRun: boolean } => ({ dieNumber, coRun: true });
+  const no = (dieNumber: string): { dieNumber: string; coRun: boolean } => ({ dieNumber, coRun: false });
+  it('co-runs only when parts co-run AND order quantities are equal & known', () => {
+    // same die, both flagged, equal qty → co-run
+    expect(ordersCoRun(yes('D9'), yes('D9'), 1400, 1400)).toBe(true);
+    // same die, both flagged, DIFFERENT qty → not co-run (the bug case:
+    // different colours share the die but run separately)
+    expect(ordersCoRun(yes('D9'), yes('D9'), 1400, 1200)).toBe(false);
+    // parts don't co-run (one flag off) → qty equality is irrelevant
+    expect(ordersCoRun(yes('D9'), no('D9'), 1400, 1400)).toBe(false);
+    // unknown qty on either side can't be confirmed equal → not co-run
+    expect(ordersCoRun(yes('D9'), yes('D9'), 1400, null)).toBe(false);
+    expect(ordersCoRun(yes('D9'), yes('D9'), null, 1400)).toBe(false);
+    expect(ordersCoRun(yes('D9'), yes('D9'), undefined, undefined)).toBe(false);
+    // non-positive quantities are treated as unknown
+    expect(ordersCoRun(yes('D9'), yes('D9'), 0, 0)).toBe(false);
+    expect(ordersCoRun(yes('D9'), yes('D9'), -5, -5)).toBe(false);
   });
 });
 
