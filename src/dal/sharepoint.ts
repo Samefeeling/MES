@@ -3148,7 +3148,12 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
     if (row.length === 0 || (row.length === 1 && row[0] === '')) continue;
-    const job = row[iJob] ?? '';
+    // Trim the JobNum like Part # below — a stray trailing space / NBSP in
+    // the Epicor export cell makes the exact-match lookups in orderForJob /
+    // the Job# dropdown miss, so Order Qty + Product Description silently come
+    // back blank for that order even though the row is present. (Reported:
+    // SFM507057 / Batt1 wouldn't load its Qty + description.)
+    const job = (row[iJob] ?? '').trim(); // trim() also strips NBSP / BOM
     if (!job) continue;
     let startIso = csvDateToIso(row[iStart] ?? '');
     // Layer the start-time decimal onto the start-date when the

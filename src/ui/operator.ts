@@ -378,7 +378,10 @@ function orderForJob(job: string): PlanningOrder | undefined {
   // would show today's remaining qty / cycle time against a shift that
   // ran days ago, and would disagree with Trace for the same tuple.
   if (!isPastShift()) {
-    const fromPlanning = S!.planning.find((o) => o.jobNumber === job);
+    const jt = job.trim();
+    const fromPlanning =
+      S!.planning.find((o) => o.jobNumber === job) ??
+      S!.planning.find((o) => o.jobNumber.trim() === jt);
     if (fromPlanning) return fromPlanning;
   }
   // Synthetic order rebuilt from the PMD_Production rows already in
@@ -464,7 +467,8 @@ function occupyingOtherJob(slot: number): ProductionRecord | null {
  *  Drives the "not in planning" warning that catches item numbers typed into
  *  the Job# box. */
 function jobInPlanning(job: string): boolean {
-  return !!job && S!.planning.some((o) => o.jobNumber === job);
+  const jt = job.trim();
+  return !!jt && S!.planning.some((o) => o.jobNumber.trim() === jt);
 }
 
 function partNumberForJob(job: string): string {
@@ -2305,6 +2309,7 @@ function openStatusPicker(isRange: boolean): void {
     ${sameAsPrev ? `<div class="bd-cause-list">${sameAsPrev}</div>` : ''}
     <div class="ab-grid">${pills}</div>
     <div class="bd-actions">
+      <button class="btn-ghost-big" data-end-order title="Order or shift finished: fill any empty slots up to now with R (Running), then go straight to Sign off.">🏁 End order / shift</button>
       <button class="btn-ghost-big" data-comments>💬 Comments</button>
       <button class="btn-ghost-big" data-clear>↺ Clear (back to blank)</button>
       <button class="btn-ghost-big" data-cancel>Cancel</button>
@@ -2332,6 +2337,15 @@ function openStatusPicker(isRange: boolean): void {
       return;
     }
     openCommentsModal();
+  });
+  // 🏁 End order / shift: fill any empty slots up to now with R, then route
+  // straight to Sign off. The selected slots in the picker are irrelevant to
+  // this action (it works off the whole timeline), so clear them first.
+  mc.querySelector('[data-end-order]')?.addEventListener('click', () => {
+    closeModal();
+    S!.selSet.clear();
+    paintSelection();
+    void endOrderAndSignoff();
   });
   mc.querySelector('[data-pick-same]')?.addEventListener('click', () => {
     closeModal();
@@ -2451,6 +2465,31 @@ async function multiFillApply(
   // Kick a live snapshot push so other iPads see the new status pattern
   // without waiting up to 60 s for the next poll tick. Fire-and-forget.
   if (dalRef.pushLiveSnapshot) void dalRef.pushLiveSnapshot();
+}
+
+/**
+ * "🏁 End order / shift" shortcut from the Set Status popup. Fills every empty
+ * slot up to the current half-hour with R (Running) for the selected job —
+ * exactly the gaps the sign-off gate would block on — then opens Sign off. Use
+ * when the order or shift is finished and the operator just wants to close it
+ * out without painting each remaining cell by hand.
+ */
+async function endOrderAndSignoff(): Promise<void> {
+  if (!S!.selJob) {
+    toast('Pick a Job# first', 'warn');
+    return;
+  }
+  if (isReadOnlyDevice()) {
+    toast('Read only — sign in as supervisor to edit', 'warn');
+    return;
+  }
+  if (isJobLocked()) {
+    toast('Order signed off — Unlock as supervisor to edit', 'warn');
+    return;
+  }
+  const gaps = slotGapsForSignoff();
+  if (gaps.length) await multiFillApply(gaps, 'R' as StatusCode, '', '');
+  openSaveSignoffModal();
 }
 
 /** Like upsertSlot but doesn't call reload — caller batches the final render. */

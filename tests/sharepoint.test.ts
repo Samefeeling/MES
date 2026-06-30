@@ -47,6 +47,20 @@ describe('parsePlanningCsv', () => {
     expect(out[0].jobRequired).toBe(250); // remaining → Job Left
   });
 
+  it('trims stray whitespace / NBSP off the JobNum so order lookups match', () => {
+    // Epicor export had a trailing NBSP on the JobNum cell; the exact-match
+    // lookups (orderForJob, Job# dropdown) then missed and Order Qty +
+    // Product Description came back blank. Reported: SFM507057 / Batt1.
+    const csv =
+      'JobHead_JobNum,JobHead_PartNum,JobHead_ProdQty\n' +
+      '"SFM507057  ",P7,1400\n' +
+      '  SFM507058 ,P8,900\n';
+    const out = parsePlanningCsv(csv);
+    expect(out[0].jobNumber).toBe('SFM507057');
+    expect(out[0].orderQty).toBe(1400);
+    expect(out[1].jobNumber).toBe('SFM507058');
+  });
+
   it('skips empty rows and ignores a UTF-8 BOM', () => {
     const csv = '﻿JobHead_JobNum,JobHead_PartNum\n\nJ200,P9\n';
     const out = parsePlanningCsv(csv);
