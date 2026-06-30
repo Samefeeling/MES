@@ -218,6 +218,7 @@ export class MemoryDataLayer implements PmdDataLayer {
         handoverNote: '',
         qcBy: '',
         locked: true,
+        reopened: false,
         lockedBy: supervisor,
         lockedAt: now,
         createdAt: now,
@@ -227,6 +228,7 @@ export class MemoryDataLayer implements PmdDataLayer {
     }
     for (const r of rows) {
       r.locked = true;
+      r.reopened = false;
       r.lockedBy = supervisor;
       r.lockedAt = now;
       r.supervisor = supervisor;
@@ -246,6 +248,7 @@ export class MemoryDataLayer implements PmdDataLayer {
       if (r.machineCode !== machineCode || r.shiftId !== shiftId) continue;
       if (jobNumber && r.jobNumber !== jobNumber) continue;
       r.locked = false;
+      r.reopened = true;
       r.lockedBy = '';
       r.lockedAt = '';
       r.updatedAt = now;

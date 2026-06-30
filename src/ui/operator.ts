@@ -1347,15 +1347,21 @@ function buildGrid(): string {
     : isJobLocked()
       ? ' disabled title="Signed off — sign in as supervisor and Unlock to edit"'
       : '';
+  // In reopened-for-correction mode, reject inputs are editable only on the
+  // already-signed slots — an empty slot can't sprout rejects any more than it
+  // can sprout a status letter.
+  const reopened = reopenedForCorrection();
   const rejRows = S!.rejCats
     .map((cat) => {
       const cells = recs
         .map((r, i) => {
           const v = parseRejects(r)[cat.code] ?? 0;
           const now = nowSlot === i ? ' is-now-col' : '';
+          const cellRdo =
+            gridRdo || (reopened && !slotHasOwnStatus(i) ? ' disabled' : '');
           return `<td class="num-cell${now}"><input type="text" inputmode="numeric" pattern="[0-9]*" class="rej-input" data-row="named" data-code="${escapeHtml(
             cat.code,
-          )}" data-slot="${i}" value="${v || ''}"${gridRdo}></td>`;
+          )}" data-slot="${i}" value="${v || ''}"${cellRdo}></td>`;
         })
         .join('');
       return `<tr class="row-named"><th class="rh">${escapeHtml(cat.code)} ${escapeHtml(
@@ -1632,6 +1638,24 @@ function isJobLocked(): boolean {
   return lockInfo() !== null && !isSupervisor();
 }
 
+/** The selected order has been signed off and re-opened for correction
+ *  (PMD_Production.Reopened = Yes). In this mode the floor may fix the
+ *  already-signed slots and the counts, but NOT add status to new (empty)
+ *  time periods — that keeps a re-opened order from sprouting fresh
+ *  production across devices. Read off the canonical slot, so every device
+ *  that sees the server flag agrees. */
+function reopenedForCorrection(): boolean {
+  return canonical()?.reopened === true;
+}
+
+/** Whether the selected job already has a machine-status letter on this slot
+ *  — i.e. it was part of the signed timeline. Editable slots in reopened mode. */
+function slotHasOwnStatus(slot: number): boolean {
+  return S!.prod.some(
+    (r) => r.jobNumber === S!.selJob && r.slotIndex === slot && !!r.statusCode,
+  );
+}
+
 function lockInfo(): { lockedBy: string; lockedAt: string } | null {
   // Lock is scoped to (machine, shift, **job**). A signed-off SFM507017
   // does not lock SFM507018 — the press still has half a shift of run
@@ -1657,6 +1681,16 @@ function lockInfo(): { lockedBy: string; lockedAt: string } | null {
 function buildOwnerBanner(): string {
   if (!isReadOnlyDevice()) return '';
   return `<span class="view-only-pill" title="Read only — sign in as supervisor via 🔓 in the top nav to edit">👁 View only</span>`;
+}
+
+/** Notice shown while a signed order is re-opened for correction, so the floor
+ *  understands why only the signed slots/counts are editable. */
+function buildReopenedBanner(): string {
+  if (!reopenedForCorrection()) return '';
+  return `<div class="reopened-banner">
+    <b>🔓 Re-opened for correction</b>
+    <span>Fix the already-signed slots and the counts, then sign off again. New time periods can't be added.</span>
+  </div>`;
 }
 
 function buildLockBanner(): string {
@@ -1739,6 +1773,7 @@ function render(): void {
     ${buildOwnerBanner()}
     ${buildFutureShiftBanner()}
     ${buildSignoffReminderBanner()}
+    ${buildReopenedBanner()}
     ${buildLockBanner()}
     ${buildMeta()}
     ${detail}
@@ -2175,9 +2210,13 @@ function wireStatusPicker(): void {
     const hi = Math.max(a, b);
     S!.selSet = new Set<number>();
     // Skip slots already held by another job — drag-range across a
-    // signed-off run mustn't sweep its slots into the selection.
+    // signed-off run mustn't sweep its slots into the selection. In
+    // reopened-for-correction mode also skip empty slots (only the signed
+    // slots may be edited).
     for (let i = lo; i <= hi; i++) {
-      if (!occupyingOtherJob(i)) S!.selSet.add(i);
+      if (occupyingOtherJob(i)) continue;
+      if (reopenedForCorrection() && !slotHasOwnStatus(i)) continue;
+      S!.selSet.add(i);
     }
     paintSelection();
   };
@@ -2204,6 +2243,12 @@ function wireStatusPicker(): void {
     }
     if (isReadOnlyDevice()) {
       toast('Read only — sign in as supervisor to edit', 'warn');
+      return;
+    }
+    // Reopened-for-correction: only the already-signed slots are editable.
+    // Tapping an empty slot to add a new time period is blocked.
+    if (reopenedForCorrection() && !slotHasOwnStatus(slot)) {
+      toast('Reopened for correction — fix the signed slots & counts; new time periods can\'t be added', 'warn');
       return;
     }
     anchor = slot;
@@ -2487,7 +2532,10 @@ async function endOrderAndSignoff(): Promise<void> {
     toast('Order signed off — Unlock as supervisor to edit', 'warn');
     return;
   }
-  const gaps = slotGapsForSignoff();
+  // In reopened-for-correction mode the order already ran and was signed —
+  // don't paint R onto empty slots (that would add new production). Just route
+  // to sign-off so the corrected counts/slots can be re-locked.
+  const gaps = reopenedForCorrection() ? [] : slotGapsForSignoff();
   if (gaps.length) await multiFillApply(gaps, 'R' as StatusCode, '', '');
   openSaveSignoffModal();
 }

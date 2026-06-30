@@ -884,6 +884,38 @@ describe('device-class write rule (canWrite hook)', () => {
     expect(slot0!.rejectCount).toBe(8); // signed wins
     expect(slot0!.locked).toBe(true);
   });
+
+  it('Reopened=Yes signed row reads as unlocked + reopened on every device', async () => {
+    // Authoritative server-side unlock: the PMD_Production row stays put but
+    // carries Reopened=Yes, so EVERY device (no editCache needed) sees it as
+    // editable-for-correction rather than locked.
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+      canWrite: () => true,
+    });
+    const reopenedProd = {
+      machineCode: 'Batt1', date: todayId, shift: 'Night', jobNumber: 'SFM900',
+      timeline: 'RRRR············', countStart: 0, countEnd: 200, reject: 8,
+      operator: 'Joe', supervisor: 'Sue',
+      reopened: true,
+      modified: '2026-01-01T00:00:00Z',
+    };
+    const o = dal as unknown as {
+      fetchHeaders: (l: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+    };
+    o.fetchHeaders = async (l: string): Promise<unknown[]> =>
+      l === 'PMD_LiveStatus' ? [] : [reopenedProd];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+
+    const rows = await dal.listProduction({ machineCode: 'Batt1', shiftId });
+    const slot0 = rows.find((r) => r.jobNumber === 'SFM900' && r.slotIndex === 0);
+    expect(slot0!.locked).toBe(false); // reopened → editable, not locked
+    expect(slot0!.reopened).toBe(true);
+  });
 });
 
 describe('unlock → edit → re-sign-off (SFM507068 redesign)', () => {

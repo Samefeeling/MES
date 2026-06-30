@@ -189,6 +189,12 @@ const DEFAULT_FIELDS = {
      *  can read what the floor saw without re-deriving from production
      *  rows. Number column; stripRejectedFields tolerates absence. */
     jobLeft: 'JobLeft',
+    /** PMD_Production only — Yes/No flag a supervisor sets when re-opening a
+     *  signed-off order for correction. Yes = reopened (editable again, all
+     *  devices agree); No / absent = locked. Cleared to No on re-sign-off.
+     *  Optional column; stripRejectedFields tolerates absence (then a
+     *  reopened order falls back to the old device-local behaviour). */
+    reopened: 'Reopened',
   },
   rejects: {
     // Title = Machine; Date is a DateTime (not date-only).
@@ -1277,6 +1283,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       rejectsBySlot: F.rejectsBySlot ? str(r[F.rejectsBySlot]) : '',
       ownerDevice: F.ownerDevice ? str(r[F.ownerDevice]) : '',
       signOff: F.signOff ? str(r[F.signOff]) : '',
+      reopened: F.reopened ? bool(r[F.reopened]) === true : false,
       jobLeft: F.jobLeft && r[F.jobLeft] != null ? num(r[F.jobLeft]) : -1,
       shiftTarget: F.shiftTarget && r[F.shiftTarget] != null ? num(r[F.shiftTarget]) : -1,
       // Built-in SP column, always present in the verbose payload.
@@ -1429,7 +1436,12 @@ export class SharePointDataLayer implements PmdDataLayer {
         mangoTicket: '',
         handoverNote: i === 0 ? h.handover : '',
         qcBy: qcMap[String(i)] ?? '',
-        locked: isSignedOff,
+        // A reopened-for-correction row is NOT locked — every device reads
+        // the Reopened=Yes flag and unlocks consistently (no device-local
+        // unlock split-brain). It still carries reopened=true so the UI can
+        // limit edits to the already-signed slots.
+        locked: isSignedOff && !h.reopened,
+        reopened: isSignedOff && h.reopened,
         lockedBy: h.supervisor,
         lockedAt: signedAt,
         createdAt: stamp,
@@ -1466,7 +1478,8 @@ export class SharePointDataLayer implements PmdDataLayer {
         mangoTicket: '',
         handoverNote: h.handover,
         qcBy: qcMap['0'] ?? '',
-        locked: isSignedOff,
+        locked: isSignedOff && !h.reopened,
+        reopened: isSignedOff && h.reopened,
         lockedBy: h.supervisor,
         lockedAt: signedAt,
         createdAt: stamp,
@@ -1753,6 +1766,8 @@ export class SharePointDataLayer implements PmdDataLayer {
         await this.upsertProductionHeader({
           signOff: new Date().toISOString(),
           jobLeft: jobLeftSnap,
+          // Re-lock: a fresh sign-off always clears any prior reopened flag.
+          reopened: false,
           machineCode,
           date,
           shift,
@@ -1977,11 +1992,24 @@ export class SharePointDataLayer implements PmdDataLayer {
       shiftId,
       ...(jobNumber ? { jobNumber } : {}),
     });
+    // Authoritative server-side unlock: flip PMD_Production.Reopened = Yes on
+    // the signed row(s) so EVERY device reads the same "reopened" state. This
+    // is a single-field MERGE — it never deletes or rewrites the row's data,
+    // so it carries none of the data-loss risk that retired the old
+    // delete-then-rewrite unlock. The client rehydrate below still runs so the
+    // unlocking device can edit immediately without waiting for a reload.
+    const reopenJobs = new Set(existing.map((r) => r.jobNumber).filter(Boolean));
+    for (const job of reopenJobs) {
+      await this.setReopenedFlag(machineCode, shiftId, job, true).catch((e) => {
+        console.warn('[unlock] setReopened failed (falling back to device-local):', e);
+      });
+    }
     let touchedAnyTuple = false;
     for (const r of existing) {
       const rehydrated: ProductionRecord = {
         ...r,
         locked: false,
+        reopened: true,
         lockedBy: '',
         lockedAt: '',
       };
@@ -2001,6 +2029,50 @@ export class SharePointDataLayer implements PmdDataLayer {
 
   isUnlockedTuple(machineCode: string, shiftId: string, jobNumber: string): boolean {
     return this.unlockedTuples.has(this.cacheKey(machineCode, shiftId, jobNumber));
+  }
+
+  /**
+   * Set PMD_Production.Reopened on the signed row(s) for a (machine, shift,
+   * job) tuple — a minimal single-field MERGE that leaves every other column
+   * untouched. Used by unlock (true) so all devices see the order as reopened.
+   * Best-effort: if the Reopened column doesn't exist on the tenant,
+   * postWithFieldRetry strips it and the caller falls back to device-local
+   * unlock. Date is narrowed to the exact calendar day like upsertHeaderInto.
+   */
+  private async setReopenedFlag(
+    machineCode: string,
+    shiftId: string,
+    jobNumber: string,
+    value: boolean,
+  ): Promise<void> {
+    const F = this.F.production;
+    if (!F.reopened) return;
+    const date = shiftId.slice(0, 10);
+    const qs =
+      '$filter=' +
+      encodeURIComponent(
+        `${F.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${shiftId.slice(11)}' and ${F.jobNumber} eq '${jobNumber}'`,
+      );
+    const windowRows = await this.getAllItems<Record<string, unknown>>(LISTS.production, qs);
+    const existing = windowRows.filter((r) => dateOnly(r[F.date]) === date);
+    const idOf = (r: Record<string, unknown>): number | undefined =>
+      (r as { ID?: number; Id?: number }).ID ?? (r as { ID?: number; Id?: number }).Id;
+    for (const row of existing) {
+      const id = idOf(row);
+      if (id == null) continue;
+      const body: Record<string, unknown> = {
+        __metadata: { type: await this.itemType(LISTS.production) },
+        [F.reopened]: value,
+      };
+      this.stripRejectedFields(LISTS.production, body);
+      if (!(F.reopened in body)) return; // column already known-absent
+      await this.postWithFieldRetry(
+        LISTS.production,
+        `${this.listUrl(LISTS.production)}/items(${id})`,
+        body,
+        '*',
+      );
+    }
   }
 
   private async upsertProductionHeader(h: HeaderInput): Promise<void> {
@@ -2071,6 +2143,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     // complete") so write it explicitly rather than skipping like the
     // jobRequired guard does.
     if (F.jobLeft && h.jobLeft != null) body[F.jobLeft] = h.jobLeft;
+    // Reopened (PMD_Production only). Written explicitly on sign-off (false,
+    // re-locks the row) and unlock (true). undefined on live pushes leaves
+    // the column untouched.
+    if (F.reopened && h.reopened !== undefined) body[F.reopened] = h.reopened;
     // Cavities: write only when > 1 (a real multi-cavity die). 1 is the
     // default, and writing 1 via MERGE is harmless but pointless; skipping
     // also means a tenant without the column never trips stripRejected.
@@ -2684,6 +2760,9 @@ interface HeaderRow {
   handover: string;
   qcChecks: string;
   rejectsBySlot: string;
+  /** PMD_Production.Reopened (Yes/No) — true when a signed-off order has been
+   *  re-opened for correction. false when locked / column absent. */
+  reopened: boolean;
   /** OwnerDevice from PMD_LiveStatus ('' on signed PMD_Production rows). */
   ownerDevice: string;
   /** Sign-off timestamp (ISO) from PMD_Production.Signoff; '' when absent
@@ -2747,6 +2826,10 @@ interface HeaderInput {
    *  operator UI (jobRequired − sum-of-Good across every shift of this
    *  job including this one). null/undefined skips the column write. */
   jobLeft?: number | null;
+  /** PMD_Production only — Reopened (Yes/No). Written explicitly on
+   *  sign-off (false, re-locks) and unlock (true). undefined leaves the
+   *  column untouched (live snapshot pushes). */
+  reopened?: boolean;
 }
 
 interface StatusHours {

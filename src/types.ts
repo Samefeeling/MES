@@ -164,6 +164,12 @@ export interface ProductionRecord {
   locked: boolean;
   lockedBy: string;
   lockedAt: string;
+  /** Signed-off then re-opened by a supervisor for correction
+   *  (PMD_Production.Reopened = Yes). The row is editable again — but only
+   *  its already-signed slots and counts, not new time periods — and every
+   *  device sees the same reopened state because the flag is on the server,
+   *  not device-local. Cleared back to false on the next sign-off. */
+  reopened?: boolean;
   createdAt: string;
   updatedAt: string;
 }
