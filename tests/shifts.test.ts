@@ -78,6 +78,20 @@ describe('current shift (§2.3)', () => {
     expect(cs.shiftId).toBe('2026-05-15-Night');
   });
 
+  it('a Night shift dated "today" is in the future before its 23:00 start', () => {
+    // The mis-date trap powering isFutureShift(): at 06:00 on 16 May the
+    // running Night is 15-May-Night, but a supervisor who leaves the date on
+    // "today" picks 16-May-Night — which doesn't start until 23:00 that day,
+    // so its bounds begin AFTER the current 06:00 clock (a future shift).
+    const now = new Date(2026, 4, 16, 6, 0);
+    expect(currentShift(now).shiftId).toBe('2026-05-15-Night');
+    const wronglyPicked = shiftBounds('2026-05-16-Night')!;
+    expect(now < wronglyPicked.start).toBe(true);
+    // The correct shift's window has already started (not future).
+    const running = shiftBounds('2026-05-15-Night')!;
+    expect(now < running.start).toBe(false);
+  });
+
   it('locates the active slot index, null when outside the shift', () => {
     expect(currentSlotIndex('2026-05-15-Day', new Date(2026, 4, 15, 7, 15))).toBe(0);
     expect(currentSlotIndex('2026-05-15-Day', new Date(2026, 4, 15, 9, 0))).toBe(4);

@@ -15,6 +15,7 @@ import {
   currentShift,
   currentSlotIndex,
   dateKey,
+  parseShiftId,
   previousShift,
   shiftBounds,
   slotClock,
@@ -238,6 +239,32 @@ function isPastShift(): boolean {
   if (S!.viewDate > today) return false;
   const liveShiftId = currentShift(new Date()).shiftId;
   return sid() !== liveShiftId;
+}
+
+/**
+ * The selected shift hasn't started yet — its wall-clock start is still in
+ * the future. The classic trap is a Night-shift supervisor working past
+ * midnight who leaves the date on "today": a Night shift dated today doesn't
+ * begin until 23:00 tonight, so production logged against it actually belongs
+ * to the Night shift that started 23:00 *yesterday* (the one running now).
+ * There is never real production for a shift that hasn't begun, so this is a
+ * reliable mis-date signal. One local clock, same basis as currentShift().
+ */
+function isFutureShift(now: Date = new Date()): boolean {
+  const b = shiftBounds(sid());
+  return b ? now < b.start : false;
+}
+
+/** "29 Jun 23:00 → 30 Jun 07:00" — the physical period a shift covers, so a
+ *  night that crosses midnight is unambiguous about which calendar day it is. */
+function shiftWindowLabel(shiftId: string): string {
+  const b = shiftBounds(shiftId);
+  if (!b) return '';
+  const day = (x: Date): string =>
+    x.toLocaleDateString('en-AU', { day: '2-digit', month: 'short' });
+  const time = (x: Date): string =>
+    x.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false });
+  return `${day(b.start)} ${time(b.start)} → ${day(b.end)} ${time(b.end)}`;
 }
 
 function shiftOrders(): PlanningOrder[] {
@@ -1037,6 +1064,7 @@ function buildActionBar(): string {
       <input type="date" class="ab-date-input" data-meta="date" value="${dateIso}">
     </div>
     <div class="ab-shifts">${tabs}</div>
+    <div class="ab-window" title="The physical clock window this shift covers — a Night shift starts the evening before and ends 07:00 the next morning, so its date is the START day.">🕑 ${escapeHtml(shiftWindowLabel(sid()))}</div>
     <div class="ab-right">
       <button class="btn-load" data-refresh title="Re-pull planning from SharePoint &amp; recompute Job Left">⟳ Refresh</button>
       <button class="btn-save" data-saveclear>✅ Sign off</button>
@@ -1641,6 +1669,24 @@ function buildLockBanner(): string {
   </div>`;
 }
 
+/**
+ * Loud warning when the selected shift hasn't started yet — almost always a
+ * night supervisor who left the date on "today" after midnight. Names the
+ * running shift and offers a one-tap jump to it, so this morning's work lands
+ * on yesterday's Night (the shift that actually ran) instead of tonight's.
+ */
+function buildFutureShiftBanner(): string {
+  if (!isFutureShift()) return '';
+  const running = currentShift(new Date());
+  return `<div class="future-banner">
+    <div class="future-text">
+      <b>⚠ This shift hasn't started yet</b>
+      <span>${escapeHtml(S!.shiftCode)} · ${escapeHtml(shiftWindowLabel(sid()))} is in the future. The shift running now is <b>${escapeHtml(running.code)} · ${escapeHtml(shiftWindowLabel(running.shiftId))}</b> — log this work there.</span>
+    </div>
+    <button type="button" class="future-fix-btn" data-jump-live>Switch to the running shift →</button>
+  </div>`;
+}
+
 function render(): void {
   applyShiftTheme();
   // Preserve the half-hour grid's horizontal scroll position across a
@@ -1660,6 +1706,7 @@ function render(): void {
   app.innerHTML = `<div class="op-sheet">
     ${buildActionBar()}
     ${buildOwnerBanner()}
+    ${buildFutureShiftBanner()}
     ${buildLockBanner()}
     ${buildMeta()}
     ${detail}
@@ -1820,6 +1867,18 @@ function wire(): void {
   );
 
   // Buttons
+  // ⚠ Future-shift fix — jump straight to the shift running now (the night
+  // that's actually in progress). No sign-off gate: the whole point is to get
+  // out of the mis-dated shift, where nothing legitimate should be entered.
+  app.querySelector('[data-jump-live]')?.addEventListener('click', () => {
+    const cs = currentShift(new Date());
+    const p = parseShiftId(cs.shiftId);
+    if (!p) return;
+    S!.viewDate = new Date(p.year, p.month - 1, p.day);
+    S!.shiftCode = p.code;
+    summaryCache = null;
+    void reload();
+  });
   app.querySelector('[data-refresh]')?.addEventListener('click', () => void refreshAll());
   app.querySelector('[data-saveclear]')?.addEventListener('click', () => openSaveSignoffModal());
   app.querySelector('[data-unlock]')?.addEventListener('click', () => openUnlockModal());
@@ -1984,6 +2043,17 @@ async function refreshAll(): Promise<void> {
  * Confirming locks the shift records and clears the in-form selection.
  */
 function openSaveSignoffModal(): void {
+  // A shift that hasn't started can't have real production — block sign-off
+  // outright (supervisor included) so this morning's Night work never gets
+  // locked onto tonight's not-yet-started shift. The banner above offers the
+  // one-tap jump to the running shift.
+  if (isFutureShift()) {
+    toast(
+      "This shift hasn't started yet — switch to the running shift before signing off",
+      'err',
+    );
+    return;
+  }
   if (!S!.selSupervisor) {
     toast('Pick a Supervisor before signing off', 'err');
     return;

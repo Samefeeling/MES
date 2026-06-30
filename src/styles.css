@@ -187,7 +187,17 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .ab-date{display:flex;align-items:center;gap:6px}
 .ab-date-input{padding:10px 12px;border:2px solid var(--bd);border-radius:10px;font-size:16px;font-weight:700;background:#fff;min-height:52px;color:var(--tx);min-width:170px;text-align:center}
 .ab-shifts{display:flex;gap:6px;flex-wrap:wrap}
+.ab-window{display:flex;align-items:center;gap:4px;font-size:13px;font-weight:700;color:var(--mu);font-variant-numeric:tabular-nums;white-space:nowrap}
 .ab-right{display:flex;align-items:center;gap:10px;margin-left:auto;flex-wrap:wrap}
+/* ⚠ Future-shift warning — a shift picked that hasn't started yet (the
+   classic night-past-midnight date slip). Loud amber so it can't be missed,
+   with a one-tap jump to the shift actually running. */
+.future-banner{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:#fffbeb;border:2px solid #f59e0b;border-radius:10px;padding:12px 14px}
+.future-text{display:flex;flex-direction:column;gap:2px;flex:1 1 320px;min-width:260px}
+.future-text>b{color:#92400e;font-size:15px}
+.future-text>span{color:#78350f;font-size:13px;line-height:1.4}
+.future-fix-btn{padding:11px 18px;border:none;border-radius:10px;background:#f59e0b;color:#3b2a06;font-size:15px;font-weight:800;cursor:pointer;min-height:52px;white-space:nowrap}
+.future-fix-btn:active{background:#d97706}
 .btn-load{padding:12px 18px;background:#fff;border:2px solid var(--theme-dark);color:var(--theme-dark);border-radius:10px;font-weight:700;font-size:16px;cursor:pointer;min-height:52px}
 .btn-load:hover{background:rgba(255,255,255,.85)}
 .btn-save{padding:12px 20px;background:var(--rd);color:#fff;border:0;border-radius:10px;font-weight:800;font-size:16px;cursor:pointer;min-height:52px;box-shadow:0 2px 0 #991b1b}
