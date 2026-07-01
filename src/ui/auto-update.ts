@@ -9,10 +9,13 @@
 //      same id to assets/version.json (see vite.config.ts).
 //   2. The running app polls version.json (cache-busted, so it always sees the
 //      freshly-deployed file) and compares it to its own baked id.
-//   3. When they differ, a new build is live. It force-reloads via a
-//      cache-busted document URL, which re-fetches index.html (now pointing at
-//      the new ?v= asset URLs) → the new JS/CSS load. localStorage is never
-//      touched, so the auth session (and the operator's editCache) survive.
+//   3. When they differ, a new build is live. It refreshes the browser's cache
+//      entry for its own fixed asset URLs (fetch cache:'reload'), then reloads.
+//      This works in the SPFx Web-part host too, where the shell loads
+//      assets/index.js at a fixed URL baked in the .sppkg: refreshing that
+//      exact cache entry means the reload's request for it gets the NEW code
+//      without any .sppkg change. localStorage is never touched, so the auth
+//      session (and the operator's editCache) survive.
 
 // Baked in at build time; 'dev' under vitest / a non-defined build.
 const BUILD_ID = typeof __BUILD_ID__ === 'string' ? __BUILD_ID__ : 'dev';
@@ -51,6 +54,7 @@ function versionUrl(cacheBust: number): string {
 
 let pendingBuild: string | null = null;
 let started = false;
+let applying = false;
 
 /** An operator is mid-entry — don't yank the page out from under them. */
 function isTyping(): boolean {
@@ -58,14 +62,47 @@ function isTyping(): boolean {
   return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
 }
 
+/**
+ * Refresh the browser's HTTP-cache entry for THIS bundle's own asset URLs.
+ *
+ * In the SPFx Web-part host the shell loads assets/index.js at a fixed URL
+ * baked into the .sppkg — a plain reload just re-requests that cached URL and
+ * gets the OLD code (why a manual cache-clear was needed). `fetch(url,
+ * {cache:'reload'})` bypasses the cache for the request AND rewrites the cache
+ * entry with the fresh response, so the subsequent reload's request for the
+ * same fixed URL is served the NEW code. We refresh the exact URL this module
+ * was loaded from (import.meta.url = the loader's cache key) plus its sibling
+ * CSS, so it matches whatever URL — query or not — the shell used.
+ */
+async function refreshAssetCaches(): Promise<void> {
+  let js = '';
+  try {
+    js = import.meta.url;
+  } catch {
+    return; // no module URL (classic script host) — nothing we can refresh
+  }
+  if (!js || !/^https?:/i.test(js)) return;
+  const css = js.replace(/index\.js(\?|#|$)/, 'index.css$1');
+  await Promise.allSettled([
+    fetch(js, { cache: 'reload' }),
+    fetch(css, { cache: 'reload' }),
+  ]);
+}
+
 /** Apply a detected update, but only at a moment that won't interrupt data
  *  entry. editCache is persisted to localStorage so a reload never loses work;
  *  this guard just avoids reloading while a finger is on a field. */
 function maybeReload(): void {
-  if (!pendingBuild) return;
+  if (!pendingBuild || applying) return;
   if (!document.hidden && isTyping()) return;
-  // replace() so the busted URL doesn't stack in history.
-  window.location.replace(bustedReloadUrl(window.location, pendingBuild));
+  applying = true;
+  const build = pendingBuild;
+  // Refresh the fixed-URL asset cache entries FIRST (see refreshAssetCaches),
+  // then reload. The _v buster additionally forces a fresh document in the
+  // plain-index.html host; it's harmless (ignored) on a SharePoint page.
+  void refreshAssetCaches().finally(() => {
+    window.location.replace(bustedReloadUrl(window.location, build));
+  });
 }
 
 async function check(): Promise<void> {
