@@ -11,6 +11,7 @@ import {
 } from './ui/supervisor-auth';
 import { toast } from './ui/toast';
 import { maybeAutoStartTutorial, startTutorial } from './ui/tutorial';
+import { startAutoUpdate } from './ui/auto-update';
 
 const dal: PmdDataLayer = createDataLayer(import.meta.env as Record<string, string>);
 
@@ -195,3 +196,7 @@ document.getElementById('refreshBtn')?.addEventListener('click', () => void rout
 
 ensureNav();
 void route().then(() => maybeAutoStartTutorial());
+
+// Poll for new deploys and self-update the iPad clients without a manual
+// cache clear (which was wiping the SharePoint auth session).
+startAutoUpdate();

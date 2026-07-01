@@ -46,11 +46,16 @@ const site =
   'https://reseroglobal.sharepoint.com/sites/ReseroOperationsAU';
 
 // path-in-dist  ->  SiteAssets folder
+// Order matters for the self-update flow: push the new JS/CSS and the
+// index.html that references them FIRST, then version.json LAST. The running
+// iPad clients only learn a new build exists when version.json changes, so it
+// must not advertise the new build until the code it points at is already live.
 const FILES = [
-  ['dist/index.html', 'SiteAssets/pmd'],
   ['dist/resero-logo.svg', 'SiteAssets/pmd'],
   ['dist/assets/index.js', 'SiteAssets/pmd/assets'],
   ['dist/assets/index.css', 'SiteAssets/pmd/assets'],
+  ['dist/index.html', 'SiteAssets/pmd'],
+  ['dist/assets/version.json', 'SiteAssets/pmd/assets'],
 ];
 
 function m365(args) {
