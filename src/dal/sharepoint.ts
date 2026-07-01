@@ -2274,8 +2274,51 @@ export class SharePointDataLayer implements PmdDataLayer {
         const culprit = await this.findInvalidTextField(list, url, body, ifMatch);
         if (culprit) return; // findInvalidTextField already wrote the body minus the offender
       }
+      // 400 "Cannot convert a primitive value to the expected type 'Edm.String'"
+      // — a boolean/number is being written to a column SharePoint has typed as
+      // text (e.g. a Reopened column created as Single line of text / Choice
+      // instead of Yes/No). Strip the offending field so sign-off still lands.
+      if (/convert a primitive value to the expected type/i.test(msg)) {
+        const culprit = await this.findMistypedPrimitiveField(list, url, body, ifMatch);
+        if (culprit) return;
+      }
       throw e;
     }
+  }
+
+  /** Bisect the boolean/number fields to find the one whose SharePoint column
+   *  is typed as text (Edm.String) — usually a Yes/No column accidentally
+   *  provisioned as Single line of text / Choice. Bans it (future writes skip
+   *  it) and posts the row without it so the sign-off lands. Booleans first —
+   *  they're the newest, rarest columns (Reopened) and the most likely victim
+   *  of a wrong type pick; numeric columns have been written for ages. Returns
+   *  the offender, or null if removing none helps (caller re-throws). */
+  private async findMistypedPrimitiveField(
+    list: string,
+    url: string,
+    body: Record<string, unknown>,
+    ifMatch: string | undefined,
+  ): Promise<string | null> {
+    const keys = Object.keys(body)
+      .filter((k) => k !== '__metadata' && (typeof body[k] === 'boolean' || typeof body[k] === 'number'))
+      .sort((a, b) => Number(typeof body[b] === 'boolean') - Number(typeof body[a] === 'boolean'));
+    for (const k of keys) {
+      const trial = { ...body };
+      delete trial[k];
+      try {
+        await this.post(url, trial, ifMatch);
+        const banned = this.rejectedFields.get(list) ?? new Set<string>();
+        banned.add(k);
+        this.rejectedFields.set(list, banned);
+        console.warn(
+          `[pmd] SP rejected a ${typeof body[k]} written to column '${k}' on ${list} — that column is typed as text, not ${typeof body[k] === 'boolean' ? 'Yes/No' : 'Number'}. Fix the '${k}' column type in SharePoint. Posted the row without it so the sign-off lands.`,
+        );
+        return k;
+      } catch (e) {
+        if (!/convert a primitive value to the expected type/i.test((e as Error).message || '')) throw e;
+      }
+    }
+    return null;
   }
 
   /** Bisect the string-valued fields of a SP body to find the one that

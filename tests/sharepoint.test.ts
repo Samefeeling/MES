@@ -1379,6 +1379,52 @@ describe('PMD_Production denormalisation: jobRequired + partDescription survive 
     expect(prod.body.cycleTime).toBe(0.05);
   });
 
+  it('sign-off survives a Reopened column mis-typed as text (primitive→Edm.String 400)', async () => {
+    // Reported: one iPad failed sign-off with "POST 400 Cannot convert a
+    // primitive value to the expected type 'Edm.String'". Cause: the Reopened
+    // column was created as text, so the boolean write is rejected. The retry
+    // must strip the offending field and let the rest of the row land.
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+      canWrite: () => true,
+    });
+    const posts: Record<string, unknown>[] = [];
+    const o = dal as unknown as {
+      post: (url: string, body: Record<string, unknown>, ifMatch?: string) => Promise<void>;
+      postWithFieldRetry: (
+        list: string,
+        url: string,
+        body: Record<string, unknown>,
+        ifMatch?: string,
+      ) => Promise<void>;
+      rejectedFields: Map<string, Set<string>>;
+    };
+    o.post = async (_url, body): Promise<void> => {
+      posts.push(body);
+      if ('Reopened' in body) {
+        throw new Error(
+          "POST 400 Cannot convert a primitive value to the expected type 'Edm.String'.",
+        );
+      }
+      // succeeds once Reopened is stripped
+    };
+    const body = {
+      __metadata: { type: 'SP.Data.MockListItem' },
+      Title: 'Batt2',
+      Reopened: false,
+      CountStart: 0,
+      CountEnd: 100,
+    };
+    await o.postWithFieldRetry('PMD_Production', 'https://x/items', body, '*');
+    // First attempt threw; the retry posted WITHOUT Reopened and succeeded.
+    expect(posts.length).toBe(2);
+    expect('Reopened' in posts[1]).toBe(false);
+    // Numeric fields (CountStart/End) survive — only the mistyped field is dropped.
+    expect(posts[1].CountStart).toBe(0);
+    // Future writes strip Reopened up front (no repeated bisect).
+    expect(o.rejectedFields.get('PMD_Production')?.has('Reopened')).toBe(true);
+  });
+
   it('upsertHeaderInto does NOT write jobRequired=0 (would blank a real value via MERGE)', async () => {
     store.clear();
     const dal = new SharePointDataLayer({
