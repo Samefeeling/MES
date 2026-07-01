@@ -4,7 +4,7 @@
 
 import type { BdCode } from '../types';
 
-export interface BdCategory {
+interface BdCategory {
   prefix: string;
   label: string;
   emoji: string;

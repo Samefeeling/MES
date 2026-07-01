@@ -3,7 +3,7 @@ import type { ShiftCode } from '../types';
 export const SLOTS_PER_SHIFT = 16; // §5.1 — 8h × 2
 export const SLOT_MINUTES = 30; // §5.1 — every slot is exactly 30 min
 
-export interface ShiftDef {
+interface ShiftDef {
   code: ShiftCode;
   label: string;
   startHour: number; // local hour the shift starts
