@@ -24,19 +24,10 @@ const BUILD_ID = typeof __BUILD_ID__ === 'string' ? __BUILD_ID__ : 'dev';
 // build reaches the floor within a few minutes, cheap enough to be invisible.
 const CHECK_MS = 3 * 60_000;
 
-/**
- * Add/replace a `_v` cache-buster on the document URL while preserving the
- * hash route. Reloading to this URL forces the browser to re-fetch index.html
- * (a URL it hasn't cached), which carries the new ?v= asset references. Pure
- * so it can be unit-tested without a document.
- */
-export function bustedReloadUrl(
-  loc: { pathname: string; search: string; hash: string },
-  build: string,
-): string {
-  const params = new URLSearchParams(loc.search);
-  params.set('_v', build);
-  return `${loc.pathname}?${params.toString()}${loc.hash}`;
+/** The index.css URL that sits next to a given index.js URL, preserving any
+ *  query / fragment. Pure so it can be unit-tested. */
+export function siblingCssUrl(jsUrl: string): string {
+  return jsUrl.replace(/index\.js(\?|#|$)/, 'index.css$1');
 }
 
 /** URL of the deployed version.json, resolved next to this script (assets/).
@@ -82,10 +73,9 @@ async function refreshAssetCaches(): Promise<void> {
     return; // no module URL (classic script host) — nothing we can refresh
   }
   if (!js || !/^https?:/i.test(js)) return;
-  const css = js.replace(/index\.js(\?|#|$)/, 'index.css$1');
   await Promise.allSettled([
     fetch(js, { cache: 'reload' }),
-    fetch(css, { cache: 'reload' }),
+    fetch(siblingCssUrl(js), { cache: 'reload' }),
   ]);
 }
 
@@ -96,13 +86,11 @@ function maybeReload(): void {
   if (!pendingBuild || applying) return;
   if (!document.hidden && isTyping()) return;
   applying = true;
-  const build = pendingBuild;
   // Refresh the fixed-URL asset cache entries FIRST (see refreshAssetCaches),
-  // then reload. The _v buster additionally forces a fresh document in the
-  // plain-index.html host; it's harmless (ignored) on a SharePoint page.
-  void refreshAssetCaches().finally(() => {
-    window.location.replace(bustedReloadUrl(window.location, build));
-  });
+  // then reload — the reload's request for the same fixed URL is now served
+  // the fresh code. Works for both the SPFx Web-part host (fixed URL in the
+  // shell) and a plain index.html host (fixed URL in the markup).
+  void refreshAssetCaches().finally(() => window.location.reload());
 }
 
 async function check(): Promise<void> {

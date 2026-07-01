@@ -1,31 +1,18 @@
 import { defineConfig, type Plugin } from 'vite';
 
-// A per-build id (millis, base36). Baked into the bundle as __BUILD_ID__ AND
-// written to assets/version.json + stamped onto the index.html asset URLs.
-// The running app polls version.json and, when it differs from its own baked
-// id, force-reloads to pick up the new code (see src/ui/auto-update.ts). This
-// is what makes an iPad update itself after `npm run deploy` without anyone
-// clearing the browser cache (which was wiping the SharePoint auth session).
+// A per-build id (millis, base36). Baked into the bundle as __BUILD_ID__ and
+// written to assets/version.json. The running app polls version.json and, when
+// it differs from its own baked id, refreshes its asset cache and reloads to
+// pick up the new code (see src/ui/auto-update.ts) — so an iPad self-updates
+// after `npm run deploy` without a manual cache clear (which was wiping the
+// SharePoint auth session).
 const BUILD_ID = Date.now().toString(36);
 
-// Fixed filenames (assets/index.js, assets/index.css) mean the browser caches
-// them forever under a stable URL, so a plain reload keeps the OLD code. We
-// append ?v=<BUILD_ID> to the asset URLs in index.html so a freshly-fetched
-// index.html points at a new URL → the browser re-downloads the JS/CSS.
 function pmdBuildVersion(): Plugin {
   return {
     name: 'pmd-build-version',
     config() {
       return { define: { __BUILD_ID__: JSON.stringify(BUILD_ID) } };
-    },
-    transformIndexHtml: {
-      order: 'post',
-      handler(html) {
-        return html.replace(
-          /(src|href)="(\.\/assets\/index\.(?:js|css))"/g,
-          (_m, attr: string, url: string) => `${attr}="${url}?v=${BUILD_ID}"`,
-        );
-      },
     },
     generateBundle() {
       // Emitted next to index.js so the app can fetch it relative to
