@@ -826,6 +826,7 @@ describe('device-class write rule (canWrite hook)', () => {
       machineCode: 'Batt1', date: todayId, shift: 'Night', jobNumber: 'SFM900',
       timeline: 'SS··············', countStart: 0, countEnd: 200, reject: 8,
       operator: 'Joe', supervisor: 'Sue',
+      reopened: true, // supervisor re-opened it on the server (Reopened=Yes)
       modified: '2026-01-01T00:00:00Z', // signed in the morning
     };
     const liveReEdit = liveHeader({
@@ -883,6 +884,51 @@ describe('device-class write rule (canWrite hook)', () => {
     const slot0 = rows.find((r) => r.jobNumber === 'SFM900' && r.slotIndex === 0);
     expect(slot0!.rejectCount).toBe(8); // signed wins
     expect(slot0!.locked).toBe(true);
+  });
+
+  it('fresher live shadow on a NOT-reopened signed tuple loses + gets deleted (SFM507147)', async () => {
+    // Reported: SFM507147 was re-signed in the morning from one device, but
+    // the floor iPad's leftover editCache re-mirrored a PMD_LiveStatus row
+    // AFTER that sign-off. Timestamp-only re-edit detection let the shadow
+    // win → the row read locked=false → the KPIs (locked-only) hid a signed
+    // order. With no Reopened=Yes on the signed row, the shadow must LOSE
+    // and be deleted on sight.
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+      canWrite: () => true,
+    });
+    const signedProd = {
+      machineCode: 'Batt1', date: todayId, shift: 'Night', jobNumber: 'SFM900',
+      timeline: 'RRRR············', countStart: 0, countEnd: 200, reject: 8,
+      operator: 'Joe', supervisor: 'Sue',
+      // no reopened flag — signed and canonical
+      modified: '2026-01-01T00:00:00Z',
+    };
+    const shadow = liveHeader({
+      timeline: 'RR··············', countEnd: 50, reject: 23,
+      modified: '2026-01-02T00:00:00Z', // re-mirrored AFTER the sign-off
+    });
+    const deleted: string[] = [];
+    const o = dal as unknown as {
+      fetchHeaders: (l: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+      deleteLiveRow: (mc: string, sid: string, job: string) => Promise<void>;
+    };
+    o.fetchHeaders = async (l: string): Promise<unknown[]> =>
+      l === 'PMD_LiveStatus' ? [shadow] : [signedProd];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+    o.deleteLiveRow = async (mc, sid, job): Promise<void> => {
+      deleted.push(`${mc}|${sid}|${job}`);
+    };
+
+    const rows = await dal.listProduction({ machineCode: 'Batt1', shiftId });
+    const slot0 = rows.find((r) => r.jobNumber === 'SFM900' && r.slotIndex === 0);
+    expect(slot0!.locked).toBe(true); // signed row canonical → KPIs count it
+    expect(slot0!.rejectCount).toBe(8); // signed data, not the shadow's 23
+    expect(deleted).toContain(`Batt1|${shiftId}|SFM900`); // shadow cleaned up
   });
 
   it('Reopened=Yes signed row reads as unlocked + reopened on every device', async () => {

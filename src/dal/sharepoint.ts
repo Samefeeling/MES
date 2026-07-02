@@ -974,11 +974,16 @@ export class SharePointDataLayer implements PmdDataLayer {
     // server clock). lockShift is the only writer of that row, so its
     // Modified == the sign-off time.
     const prodModMsByKey = new Map<string, number>();
+    // Tuples whose signed row carries Reopened=Yes — the server-authoritative
+    // "a supervisor re-opened this for correction" flag. Only these may be
+    // shadowed by a fresher live mirror (see reEditedKeys below).
+    const prodReopenedKeys = new Set<string>();
     for (const h of prodHeaders) {
       if (!matchesFilter(h)) continue;
       const key = this.cacheKey(h.machineCode, `${h.date}-${h.shift}`, h.jobNumber);
       const t = h.modified ? Date.parse(h.modified) : NaN;
       prodModMsByKey.set(key, isNaN(t) ? 0 : t);
+      if (h.reopened) prodReopenedKeys.add(key);
     }
     let purged = false;
     for (const k of Array.from(this.editCache.keys())) {
@@ -1034,19 +1039,33 @@ export class SharePointDataLayer implements PmdDataLayer {
     // the morning's signed data while the floor iPad corrected it. unlock
     // is a client-side flag (device-local), so another device only sees
     // the still-locked PMD_Production row plus a fresh PMD_LiveStatus row.
-    // lockShift deletes the live row at sign-off, so a live row whose SP
-    // Modified is NEWER than the production row's last commit can only be a
-    // post-unlock re-edit — and for those the live mirror is the current
-    // truth and must win over the stale signed row, on every device. A
-    // failed-delete leftover has an OLDER Modified (it stopped being pushed
-    // before sign-off), so the comparison leaves the signed row winning.
+    // A live row for a signed tuple wins ONLY when the signed row is flagged
+    // Reopened=Yes (server-authoritative unlock) AND the live mirror is
+    // fresher than the prod row's last commit — that's a supervisor's
+    // in-progress correction and must show on every device. A fresher live
+    // row on a NOT-reopened tuple is junk by definition (e.g. another iPad's
+    // leftover editCache re-mirrored AFTER a different device signed off —
+    // the SFM507147 case that hid a signed order from the KPIs): the signed
+    // row stays canonical and the shadow is deleted on sight. Timestamp alone
+    // used to decide this, which let that junk shadow win.
     const reEditedKeys = new Set<string>();
     for (const h of liveFresh) {
       const key = this.cacheKey(h.machineCode, `${h.date}-${h.shift}`, h.jobNumber);
       const pmod = prodModMsByKey.get(key);
       if (pmod == null || pmod === 0) continue; // not signed, or no timestamp
       const lmod = h.modified ? Date.parse(h.modified) : NaN;
-      if (!isNaN(lmod) && lmod > pmod) reEditedKeys.add(key);
+      const fresher = !isNaN(lmod) && lmod > pmod;
+      if (!fresher) continue;
+      if (prodReopenedKeys.has(key)) {
+        reEditedKeys.add(key);
+        continue;
+      }
+      // Fresher shadow on a signed, not-reopened tuple. Clean it up unless
+      // THIS device just unlocked it locally (tenant without the Reopened
+      // column falls back to the device-local flag — don't eat its edits).
+      if (!this.unlockedTuples.has(key)) {
+        void this.deleteLiveRow(h.machineCode, `${h.date}-${h.shift}`, h.jobNumber);
+      }
     }
     // GC editCache: drop any status-empty tuple whose shift ended > 8 h
     // ago. UNCONDITIONAL — this must run even when there are no stale
@@ -1283,7 +1302,12 @@ export class SharePointDataLayer implements PmdDataLayer {
       rejectsBySlot: F.rejectsBySlot ? str(r[F.rejectsBySlot]) : '',
       ownerDevice: F.ownerDevice ? str(r[F.ownerDevice]) : '',
       signOff: F.signOff ? str(r[F.signOff]) : '',
-      reopened: F.reopened ? bool(r[F.reopened]) === true : false,
+      // Strict native-boolean check, NOT bool(): a Yes/No column returns true/
+      // false in verbose OData. If the column was provisioned as text/Choice
+      // by mistake, a string like "Yes" must NOT read as reopened — that would
+      // unlock the row everywhere and hide it from the KPIs (locked-only view)
+      // with no way to clear it (boolean writes 400 on a text column).
+      reopened: F.reopened ? r[F.reopened] === true : false,
       jobLeft: F.jobLeft && r[F.jobLeft] != null ? num(r[F.jobLeft]) : -1,
       shiftTarget: F.shiftTarget && r[F.shiftTarget] != null ? num(r[F.shiftTarget]) : -1,
       // Built-in SP column, always present in the verbose payload.
