@@ -1471,6 +1471,56 @@ describe('PMD_Production denormalisation: jobRequired + partDescription survive 
     expect(o.rejectedFields.get('PMD_Production')?.has('Reopened')).toBe(true);
   });
 
+  it('sign-off survives a missing column AND a mistyped column in one body (550T)', async () => {
+    // Reported on 550T: a 2×-cavities sign-off carried Cavities (column not
+    // yet on the tenant) AND Reopened (column mistyped as text) in the same
+    // POST. The old single-shot retry stripped one offender, then the bare
+    // retry hit the second error and the whole sign-off failed. The loop
+    // must strip both and land the row.
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+      canWrite: () => true,
+    });
+    const posts: Record<string, unknown>[] = [];
+    const o = dal as unknown as {
+      post: (url: string, body: Record<string, unknown>, ifMatch?: string) => Promise<void>;
+      postWithFieldRetry: (
+        list: string,
+        url: string,
+        body: Record<string, unknown>,
+        ifMatch?: string,
+      ) => Promise<void>;
+      rejectedFields: Map<string, Set<string>>;
+    };
+    o.post = async (_url, body): Promise<void> => {
+      posts.push(body);
+      if ('Cavities' in body) {
+        throw new Error(
+          "POST 400 The property 'Cavities' does not exist on type 'SP.Data.PMD_ProductionListItem'.",
+        );
+      }
+      if ('Reopened' in body) {
+        throw new Error(
+          "POST 400 Cannot convert a primitive value to the expected type 'Edm.String'.",
+        );
+      }
+    };
+    await o.postWithFieldRetry('PMD_Production', 'https://x/items', {
+      __metadata: { type: 'SP.Data.MockListItem' },
+      Title: '550T',
+      Cavities: 2,
+      Reopened: false,
+      CountEnd: 100,
+    });
+    const last = posts[posts.length - 1];
+    expect('Cavities' in last).toBe(false);
+    expect('Reopened' in last).toBe(false);
+    expect(last.CountEnd).toBe(100); // the rest of the row landed
+    const banned = o.rejectedFields.get('PMD_Production')!;
+    expect(banned.has('Cavities')).toBe(true);
+    expect(banned.has('Reopened')).toBe(true);
+  });
+
   it('upsertHeaderInto does NOT write jobRequired=0 (would blank a real value via MERGE)', async () => {
     store.clear();
     const dal = new SharePointDataLayer({

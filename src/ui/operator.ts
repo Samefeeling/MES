@@ -29,6 +29,7 @@ import { ordersCoRun } from '../core/corun';
 import { jobLeftPiecesFor, shiftTargetFor } from '../core/targets';
 export { jobLeftPiecesFor, shiftTargetFor } from '../core/targets';
 import { bdLabelFor } from '../core/breakdown';
+import { compareOrdersByStart } from '../core/planning';
 import { type Handover, parseHandover as sharedParseHandover } from '../core/handover';
 import { openBreakdownCascade } from './breakdown';
 import { toast } from './toast';
@@ -696,38 +697,55 @@ async function upsertSlot(
   }
 }
 
-async function reload(): Promise<void> {
+/**
+ * The job with live activity furthest along this press's shift —
+ * PMD_LiveStatus rows surface in S!.prod as unsigned (locked=false) slot
+ * records with a non-empty statusCode, so the job whose latest filled slot is
+ * greatest is what the press is running right now. '' when nothing is live.
+ */
+function liveActiveJob(): string {
+  const lastSlotByJob = new Map<string, number>();
+  for (const r of S!.prod) {
+    if (!r.locked && r.statusCode && r.jobNumber) {
+      const cur = lastSlotByJob.get(r.jobNumber) ?? -1;
+      if (r.slotIndex > cur) lastSlotByJob.set(r.jobNumber, r.slotIndex);
+    }
+  }
+  let bestJob = '';
+  let bestSlot = -1;
+  for (const [j, s] of lastSlotByJob) {
+    if (s > bestSlot) {
+      bestSlot = s;
+      bestJob = j;
+    }
+  }
+  return bestJob;
+}
+
+/**
+ * @param preferLiveJob boot-time only: when the restored per-tab job has no
+ *   rows on this (machine, shift) but another order is live on the press,
+ *   land on the live one — the floor reported iPads opening on a stale saved
+ *   order and producing junk entries against it. NOT set on ordinary reloads:
+ *   an operator who deliberately picks the (still-empty) next order from the
+ *   dropdown must not be yanked back to the previous one by the next poll.
+ */
+async function reload(preferLiveJob = false): Promise<void> {
   const id = sid();
   S!.prod = await dalRef.listProduction({ machineCode: S!.mc, shiftId: id });
   const orders = shiftOrders();
-  // Don't clear a manually-typed JobNum just because it isn't in Planning
-  // yet — the operator may be entering an order that was released in Epicor
-  // after the most recent sync.
   if (!S!.selJob) {
-    // Prefer the job already showing live activity on this press —
-    // PMD_LiveStatus rows surface in S!.prod as unsigned (locked=false)
-    // slot records with a non-empty statusCode. The job whose latest
-    // filled slot is furthest along the shift is what the press is
-    // running right now, so default to that when the operator switches
-    // machines. They can still re-pick a different order from the
-    // datalist if needed.
-    const lastSlotByJob = new Map<string, number>();
-    for (const r of S!.prod) {
-      if (!r.locked && r.statusCode && r.jobNumber) {
-        const cur = lastSlotByJob.get(r.jobNumber) ?? -1;
-        if (r.slotIndex > cur) lastSlotByJob.set(r.jobNumber, r.slotIndex);
-      }
+    // No selection (fresh view / machine switch): prefer the order the press
+    // is running right now; fall back to the earliest-starting planned order.
+    const live = liveActiveJob();
+    if (live) S!.selJob = live;
+    else if (orders.length) {
+      S!.selJob = orders.slice().sort(compareOrdersByStart)[0].jobNumber;
     }
-    let bestJob = '';
-    let bestSlot = -1;
-    for (const [j, s] of lastSlotByJob) {
-      if (s > bestSlot) {
-        bestSlot = s;
-        bestJob = j;
-      }
-    }
-    if (bestJob) S!.selJob = bestJob;
-    else if (orders.length) S!.selJob = orders[0].jobNumber;
+  } else if (preferLiveJob && !isPastShift()) {
+    const touched = S!.prod.some((r) => r.jobNumber === S!.selJob);
+    const live = liveActiveJob();
+    if (!touched && live && live !== S!.selJob) S!.selJob = live;
   }
   hydrateOperatorSupervisor();
   // Count Start auto-carry: a same-machine/same-job continuation from
@@ -1088,25 +1106,36 @@ function buildMeta(): string {
     )
     .join('');
   const orders = shiftOrders();
-  // datalist + text input — operators can pick a Released order from the
-  // list (autocomplete) OR type a JobNum manually for the case where the
-  // order was just released in Epicor and the 15-min sync hasn't run yet.
-  const dataOpts = orders
-    .map((o) => {
-      const d = new Date(o.plannedStart);
+  // Job# is a strict dropdown of the released orders for this press, sorted
+  // by planned start (JobHead_StartDate + StartHour), earliest first — the
+  // next order to run is the first thing the operator sees. Free typing was
+  // removed on request: workers were entering item / part numbers (and other
+  // junk) into the Job# box. A just-released order appears after the 15-min
+  // Epicor sync; ⟳ Refresh pulls it sooner.
+  const sortedOrders = orders.slice().sort(compareOrdersByStart);
+  const jobOpts = (): string => {
+    const opts = sortedOrders.map((ord) => {
+      const d = new Date(ord.plannedStart);
       const when = isFinite(d.getTime())
-        ? ` · ${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`
+        ? ` · ${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
         : '';
-      const tag = o.manuallyAdded ? ' (history)' : '';
-      const label = `${o.jobNumber}${when}${tag}`;
-      return `<option value="${escapeHtml(o.jobNumber)}">${escapeHtml(label)}</option>`;
-    })
-    .join('');
+      const tag = ord.manuallyAdded ? ' (history)' : '';
+      return `<option value="${escapeHtml(ord.jobNumber)}"${
+        ord.jobNumber === S!.selJob ? ' selected' : ''
+      }>${escapeHtml(`${ord.jobNumber}${when}${tag}`)}</option>`;
+    });
+    // A selected job missing from the list (legacy manual entry, or planning
+    // aged it out mid-shift) must stay selectable — a <select> without its
+    // current value would silently jump to the first option.
+    if (S!.selJob && !sortedOrders.some((ord) => ord.jobNumber === S!.selJob)) {
+      opts.unshift(
+        `<option value="${escapeHtml(S!.selJob)}" selected>${escapeHtml(S!.selJob)}</option>`,
+      );
+    }
+    if (!S!.selJob) opts.unshift('<option value="" selected>— pick job —</option>');
+    return opts.length ? opts.join('') : '<option value="">— no orders —</option>';
+  };
   const o = selectedOrder();
-  // Past shifts (and non-supervisors) get a constrained <select> so they can
-  // still switch between the jobs that were actually run on that shift, but
-  // can't type a new JobNum and pollute historical data. Supervisors and
-  // current/future shifts keep the free-text input + datalist autocomplete.
   const pastLocked = isPastShift() && !isSupervisor();
   let jobField: string;
   if (isReadOnlyDevice()) {
@@ -1116,22 +1145,11 @@ function buildMeta(): string {
     // floor — iPads write freely now, only PCs are read-only by default.
     jobField = `<input type="text" disabled value="${escapeHtml(S!.selJob)}" title="Read only — sign in as supervisor to edit">`;
   } else if (pastLocked) {
-    const historical = orders;
-    const selectOpts = historical.length
-      ? historical
-          .map(
-            (h) =>
-              `<option value="${escapeHtml(h.jobNumber)}"${
-                h.jobNumber === S!.selJob ? ' selected' : ''
-              }>${escapeHtml(h.jobNumber)}</option>`,
-          )
-          .join('')
-      : '<option value="">— no records —</option>';
-    jobField = `<select data-meta="job" title="Past shift — sign in as supervisor to edit">${selectOpts}</select>`;
+    // Past shift: same dropdown, but shiftOrders() already restricts it to
+    // the jobs actually recorded on that shift.
+    jobField = `<select data-meta="job" title="Past shift — pick from the jobs recorded on this shift">${jobOpts()}</select>`;
   } else {
-    jobField = `<input type="text" list="op-job-list" data-meta="job" value="${escapeHtml(
-      S!.selJob,
-    )}" placeholder="pick or type"><datalist id="op-job-list">${dataOpts}</datalist>`;
+    jobField = `<select data-meta="job">${jobOpts()}</select>`;
   }
   // Signed-off shifts: operator & supervisor are frozen to the values that
   // were recorded at sign-off. Without this an iPad tap on the dropdown
@@ -2876,7 +2894,9 @@ export async function renderOperator(
   };
   if (nowTimer) clearInterval(nowTimer);
   nowTimer = setInterval(nowTick, 30_000);
-  await reload();
+  // Boot: let the live press activity override a stale restored job (see
+  // reload's preferLiveJob doc).
+  await reload(true);
 }
 
 /** Shift id the sign-off reminder toast has already fired for, so the

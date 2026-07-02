@@ -9,6 +9,21 @@ import type { PlanningOrder } from '../types';
 const DC_MIN_HOURS = 0.5; // §5.3 — DC orders have a fixed minimum 0.5h duration
 
 /**
+ * Chronological order for the operator Job# dropdown: earliest planned start
+ * (JobHead_StartDate + StartHour, already merged into plannedStart by the
+ * planning-CSV parser) first. Orders with no / unparseable start sort last,
+ * with the job number as a stable tie-break.
+ */
+export function compareOrdersByStart(a: PlanningOrder, b: PlanningOrder): number {
+  const ta = Date.parse(a.plannedStart);
+  const tb = Date.parse(b.plannedStart);
+  const va = isNaN(ta) ? Infinity : ta;
+  const vb = isNaN(tb) ? Infinity : tb;
+  if (va !== vb) return va - vb;
+  return a.jobNumber.localeCompare(b.jobNumber);
+}
+
+/**
  * Insert Auto-DC pseudo-orders between consecutive same-machine orders whose
  * PartNumber differs (§5.3). Input order is preserved by PlannedStart.
  */

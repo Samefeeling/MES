@@ -2272,42 +2272,69 @@ export class SharePointDataLayer implements PmdDataLayer {
     body: Record<string, unknown>,
     ifMatch?: string,
   ): Promise<void> {
-    try {
-      await this.post(url, body, ifMatch);
-    } catch (e) {
-      const msg = (e as Error).message || '';
+    // Iterative, NOT single-shot: one sign-off body can carry SEVERAL broken
+    // fields at once (reported on 550T: a missing Cavities column AND a
+    // mistyped Reopened column in the same POST). The old code stripped one
+    // offender then bare-posted — the second error escaped and failed the
+    // whole sign-off. Loop instead, handling one offender per pass; the bound
+    // is the theoretical max of strippable fields, and any non-recoverable
+    // error still throws immediately.
+    const work = { ...body };
+    // Strip a missing-property offender named in an SP error message.
+    // Returns true when a field was stripped (caller loops for another pass).
+    const stripMissing = (msg: string): boolean => {
       const missing = /property\s+'?([A-Za-z0-9_]+)'?\s+does not exist/i.exec(msg);
-      if (missing) {
-        const field = missing[1];
-        const banned = this.rejectedFields.get(list) ?? new Set<string>();
-        banned.add(field);
-        this.rejectedFields.set(list, banned);
-        console.warn(
-          '[pmd] SP rejected column',
-          field,
-          'on',
-          list,
-          '— stripping it from future writes. Add the column in SharePoint to persist this value.',
-        );
-        const retry = { ...body };
-        delete retry[field];
-        await this.post(url, retry, ifMatch);
+      if (!missing || !(missing[1] in work)) return false;
+      const field = missing[1];
+      const banned = this.rejectedFields.get(list) ?? new Set<string>();
+      banned.add(field);
+      this.rejectedFields.set(list, banned);
+      console.warn(
+        '[pmd] SP rejected column',
+        field,
+        'on',
+        list,
+        '— stripping it from future writes. Add the column in SharePoint to persist this value.',
+      );
+      delete work[field];
+      return true;
+    };
+    const maxPasses = Object.keys(work).length;
+    for (let pass = 0; pass < maxPasses; pass++) {
+      try {
+        await this.post(url, work, ifMatch);
         return;
+      } catch (e) {
+        const msg = (e as Error).message || '';
+        if (stripMissing(msg)) continue;
+        try {
+          if (/Invalid text value/i.test(msg)) {
+            // The bisect posts the winning trial itself — on success the row
+            // has already landed, so return rather than posting again (a
+            // second POST on the create path would make a duplicate row).
+            const culprit = await this.findInvalidTextField(list, url, work, ifMatch);
+            if (culprit) return;
+          }
+          // 400 "Cannot convert a primitive value to the expected type
+          // 'Edm.String'" — a boolean/number written to a column SharePoint
+          // has typed as text (e.g. a Reopened column created as Single line
+          // of text / Choice instead of Yes/No). Same bisect-and-land pattern.
+          if (/convert a primitive value to the expected type/i.test(msg)) {
+            const culprit = await this.findMistypedPrimitiveField(list, url, work, ifMatch);
+            if (culprit !== null) return;
+          }
+        } catch (inner) {
+          // A bisect trial hit a DIFFERENT error class. If it named a missing
+          // property, strip it and take another pass (one body can carry a
+          // missing column AND a mistyped column at once — the 550T case);
+          // anything else is non-recoverable.
+          if (stripMissing((inner as Error).message || '')) continue;
+          throw inner;
+        }
+        throw e;
       }
-      if (/Invalid text value/i.test(msg)) {
-        const culprit = await this.findInvalidTextField(list, url, body, ifMatch);
-        if (culprit) return; // findInvalidTextField already wrote the body minus the offender
-      }
-      // 400 "Cannot convert a primitive value to the expected type 'Edm.String'"
-      // — a boolean/number is being written to a column SharePoint has typed as
-      // text (e.g. a Reopened column created as Single line of text / Choice
-      // instead of Yes/No). Strip the offending field so sign-off still lands.
-      if (/convert a primitive value to the expected type/i.test(msg)) {
-        const culprit = await this.findMistypedPrimitiveField(list, url, body, ifMatch);
-        if (culprit) return;
-      }
-      throw e;
     }
+    throw new Error(`${list}: POST kept failing after stripping every strippable field`);
   }
 
   /** Bisect the boolean/number fields to find the one whose SharePoint column

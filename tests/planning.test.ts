@@ -1,6 +1,23 @@
 import { describe, it, expect } from 'vitest';
-import { generateDieChanges } from '../src/core/planning';
+import { compareOrdersByStart, generateDieChanges } from '../src/core/planning';
 import { order } from './helpers';
+
+describe('compareOrdersByStart', () => {
+  it('sorts by planned start (date + hour) ascending; blank starts last', () => {
+    const late = order({ jobNumber: 'C', plannedStart: '2026-07-01T18:40:00' });
+    const early = order({ jobNumber: 'A', plannedStart: '2026-07-01T07:00:00' });
+    const sameDayLater = order({ jobNumber: 'B', plannedStart: '2026-07-01T09:30:00' });
+    const noStart = order({ jobNumber: 'D', plannedStart: '' });
+    const sorted = [late, noStart, early, sameDayLater].sort(compareOrdersByStart);
+    expect(sorted.map((o) => o.jobNumber)).toEqual(['A', 'B', 'C', 'D']);
+  });
+
+  it('breaks ties on job number for a stable order', () => {
+    const a = order({ jobNumber: 'SFM2', plannedStart: '2026-07-01T07:00:00' });
+    const b = order({ jobNumber: 'SFM1', plannedStart: '2026-07-01T07:00:00' });
+    expect([a, b].sort(compareOrdersByStart).map((o) => o.jobNumber)).toEqual(['SFM1', 'SFM2']);
+  });
+});
 
 describe('auto die-change generation (§5.3)', () => {
   it('inserts a DC between consecutive same-machine orders with different parts', () => {
