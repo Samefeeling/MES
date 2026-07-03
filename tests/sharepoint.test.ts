@@ -1382,10 +1382,11 @@ describe('PMD_Production denormalisation: jobRequired + partDescription survive 
     // Cycle time captured from planning so a future past-shift review can
     // rebuild Shift Target after Epicor drops the order.
     expect(prod.body.cycleTime).toBe(0.05);
-    // Shift Target snapshot: tuple Good = 115−61−8 = 46, Job Left =
-    // 176−46 = 130. 130 × 0.05 = 6.5 h < 8 h, so the job finishes inside
-    // the shift → target = Job Left = 130.
-    expect(prod.body.shiftTarget).toBe(130);
+    // Shift Target snapshot recomputes from Job Left AT SHIFT START. This
+    // is the job's only shift, so nothing was made before it began: Job
+    // Left = the full 176. 176 × 0.05 = 8.8 h ≥ 8 h → the job does not
+    // finish inside the shift → target = a full shift, floor(8/0.05) = 160.
+    expect(prod.body.shiftTarget).toBe(160);
   });
 
   it('re-sign-off keeps CycleTime from the rehydrated row when planning has dropped it', async () => {
@@ -1894,7 +1895,7 @@ describe('signed-off history, 48h live cap, and Signoff timestamp', () => {
     expect(prodBody!.JobLeft).toBe(217);
   });
 
-  it('lockShift falls back to tuple-only JobLeft when the UI passes null', async () => {
+  it('lockShift recomputes JobLeft as remaining-at-start from the lists', async () => {
     store.clear();
     const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
     const today = dayId(new Date());
@@ -1917,7 +1918,11 @@ describe('signed-off history, 48h live cap, and Signoff timestamp', () => {
       replaceRejectEvents: () => Promise<void>;
       deleteLiveRow: () => Promise<void>;
     };
-    // Planning seeds jobRequired = 100; tuple Good = 40 → fallback = 60.
+    // Planning seeds jobRequired = 100. No other shift of the job exists
+    // anywhere, so "still needed when this shift began" = the full 100 —
+    // NOT 100 − 40: this shift's own 40 were made AFTER it began. (The
+    // old tuple-only fallback wrote 60 here, quietly mixing at-start and
+    // at-end semantics in the same column.)
     o.listPlanning = async (): Promise<{ jobNumber: string; orderQty: number }[]> => [
       { jobNumber: 'SFM700', orderQty: 100 } as { jobNumber: string; orderQty: number },
     ];
@@ -1930,7 +1935,60 @@ describe('signed-off history, 48h live cap, and Signoff timestamp', () => {
 
     await dal.lockShift('Batt1', shiftId, 'Sue', 'Joe', 'SFM700', null);
     expect(prodBody).not.toBeNull();
-    expect(prodBody!.JobLeft).toBe(60);
+    expect(prodBody!.JobLeft).toBe(100);
+  });
+
+  it('lockShift JobLeft recompute overrides a contaminated frozen value', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const today = dayId(new Date());
+    const shiftId = `${today}-Night`;
+    const cache = (dal as unknown as { editCache: Map<string, unknown[]> }).editCache;
+    // The SFM507147 shape: the canonical slot carries a frozen jobLeft of
+    // 397 — poisoned at freeze time by a phantom LiveStatus shadow the
+    // freezing iPad could see. The lists actually hold two earlier signed
+    // shifts totalling 350 good, so the column must get 1536 − 350 = 1186.
+    cache.set(`Batt1|${shiftId}|SFM700`, [{
+      id: -1, machineCode: 'Batt1', shiftId, jobNumber: 'SFM700', slotIndex: 0,
+      statusCode: 'R', countStart: 428, countEnd: 593, rejects: '{}', purgeKg: null,
+      rejectCount: 0, bdIssue: '', mangoTicket: '', handoverNote: '',
+      operator: 'Joe', supervisor: 'Sue', qcBy: '', locked: false, lockedBy: '',
+      lockedAt: '', createdAt: '', updatedAt: '', jobRequired: 1536, jobLeft: 397,
+    }]);
+    let prodBody: Record<string, unknown> | null = null;
+    const o = dal as unknown as {
+      listPlanning: () => Promise<unknown[]>;
+      itemType: () => Promise<string>;
+      getAllItems: () => Promise<unknown[]>;
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+      postWithFieldRetry: (l: string, u: string, b: Record<string, unknown>) => Promise<void>;
+      replaceBreakdownEvents: () => Promise<void>;
+      replaceRejectEvents: () => Promise<void>;
+      deleteLiveRow: () => Promise<void>;
+    };
+    o.listPlanning = async (): Promise<unknown[]> => [];
+    o.itemType = async (): Promise<string> => 'SP.X';
+    o.getAllItems = async (): Promise<unknown[]> => [];
+    // Stub bypasses field mapping — HeaderRow (camelCase) shapes.
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production'
+        ? [
+            signedHeader({ machineCode: 'Batt1', date: today, shift: 'Day', countStart: 78, countEnd: 254, reject: 0 }),
+            signedHeader({ machineCode: 'Batt1', date: today, shift: 'Afternoon', countStart: 254, countEnd: 428, reject: 0 }),
+          ]
+        : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+    o.postWithFieldRetry = async (_l, _u, b): Promise<void> => { prodBody = b; };
+    o.replaceBreakdownEvents = async (): Promise<void> => {};
+    o.replaceRejectEvents = async (): Promise<void> => {};
+    o.deleteLiveRow = async (): Promise<void> => {};
+
+    await dal.lockShift('Batt1', shiftId, 'Sue', 'Joe', 'SFM700', 397);
+    expect(prodBody).not.toBeNull();
+    expect(prodBody!.JobLeft).toBe(1186);
   });
 
   it('48h hard cap sweeps an old live row that still carries status', async () => {

@@ -28,6 +28,7 @@ import { ordersCoRun } from '../core/corun';
 // these from ./operator while the canonical definitions live in core.
 import { jobLeftPiecesFor, shiftTargetFor } from '../core/targets';
 export { jobLeftPiecesFor, shiftTargetFor } from '../core/targets';
+import { sumOtherShiftGood } from '../core/jobgood';
 import { bdLabelFor } from '../core/breakdown';
 import { compareOrdersByStart } from '../core/planning';
 import { type Handover, parseHandover as sharedParseHandover } from '../core/handover';
@@ -953,50 +954,6 @@ async function refreshJobTotal(): Promise<void> {
   }
   const all = await dalRef.listProduction({ jobNumber: S!.selJob });
   S!.jobTotalGood = sumOtherShiftGood(all, `${S!.mc}|${sid()}`);
-}
-
-/**
- * Σ good across every (machine, shift) tuple of this job EXCEPT the
- * currently-viewed one (`currentKey`), which jobLeftPieces() adds on
- * top via goodThis.
- *
- * good per tuple = gross − rejects, where:
- *   - gross (Count End − Count Start) lives ONLY on the canonical slot 0;
- *   - rejects are recorded per half-hour slot across the whole timeline.
- *
- * The previous version summed rejects from slot 0 only — but reject
- * events round-trip onto their own slot (see expandHeaderToSlots /
- * timelineToSlot), so any reject after the first half hour was invisible
- * here. A finished Day shift therefore handed the Afternoon shift its
- * GROSS count as "good", and Job Left came out too low once you switched
- * to Afternoon. Sum rejects across ALL slots of the tuple to fix that.
- */
-export function sumOtherShiftGood(
-  all: ProductionRecord[],
-  currentKey: string,
-): number {
-  const grossByTuple = new Map<string, number>();
-  const rejByTuple = new Map<string, number>();
-  for (const r of all) {
-    const key = `${r.machineCode}|${r.shiftId}`;
-    if (key === currentKey) continue;
-    if (r.slotIndex === 0) {
-      grossByTuple.set(key, cavityGross(r.countStart, r.countEnd, r.cavities));
-    }
-    let rej = 0;
-    try {
-      const obj = JSON.parse(r.rejects || '{}') as Record<string, number>;
-      rej = Object.values(obj).reduce((a, v) => a + (Number(v) || 0), 0);
-    } catch {
-      rej = Number(r.rejectCount) || 0;
-    }
-    if (rej) rejByTuple.set(key, (rejByTuple.get(key) ?? 0) + rej);
-  }
-  let total = 0;
-  for (const [key, gross] of grossByTuple) {
-    total += Math.max(0, gross - (rejByTuple.get(key) ?? 0));
-  }
-  return total;
 }
 
 /**

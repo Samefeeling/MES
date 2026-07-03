@@ -19,6 +19,7 @@ import type { PmdDataLayer } from './types';
 import { bdCategoryOf, bdLabelFor, BD_TAXONOMY } from '../core/breakdown';
 import { shiftBounds, slotClock } from '../core/shifts';
 import { shiftTargetFor } from '../core/targets';
+import { sumGoodStartedBefore } from '../core/jobgood';
 
 // =====================================================================
 // SharePointDataLayer — Resero Operations AU site.
@@ -1655,10 +1656,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     supervisor: string,
     operator: string,
     jobNumber?: string,
-    /** Job Left as the operator UI computed it (jobRequired − sum-of-Good
-     *  across every shift of this job). Persisted to the JobLeft column
-     *  for back-reference. Omit to let the DAL fall back to the tuple-only
-     *  estimate (exact for single-shift jobs). */
+    /** Job Left as the operator UI computed it. FALLBACK ONLY: the JobLeft
+     *  column is normally recomputed here from the production list itself
+     *  (see the jobLeftSnap block); this value is used when that read
+     *  fails and no frozen canonical value exists. */
     jobLeft?: number | null,
   ): Promise<void> {
     const date = shiftId.slice(0, 10);
@@ -1757,26 +1758,42 @@ export class SharePointDataLayer implements PmdDataLayer {
       const reject = agg.reject || (canon?.rejectCount ?? 0);
       const cycleTime = cycleTimeOf(job, slots);
       const cavities = cavitiesOf(slots);
-      // Shift Target snapshot for the SP list / Power BI. Built from the
-      // shared core formula so it matches what the operator/Trace pages
-      // recompute. jobLeft here is order total − THIS tuple's Good (the
-      // DAL has no cross-shift good at sign-off); the app recomputes the
-      // authoritative value from CycleTime, so this is a convenience
-      // snapshot, exact for single-shift jobs.
+      // This tuple's own net Good — last-resort Job Left estimate below.
       const tupleGood = Math.max(
         0,
         ((agg.countEnd ?? 0) - (agg.countStart ?? 0)) * cavities - reject,
       );
-      // Job Left written to the column is the value FROZEN at job start:
-      // prefer the canonical row's stamp (set by the operator UI / round-
-      // tripped from PMD_LiveStatus), then the explicit param, then the
-      // tuple-only estimate for a scripted sign-off with no UI state.
-      const jobLeftSnap =
-        canon?.jobLeft != null
-          ? Math.max(0, canon.jobLeft)
-          : jobLeft != null
-            ? Math.max(0, jobLeft)
-            : Math.max(0, required - tupleGood);
+      // Job Left column = pieces still needed when this shift BEGAN.
+      // Recompute it at sign-off from the production list itself (signed
+      // rows + real in-progress mirrors of every shift that started
+      // earlier), NOT from the value frozen client-side at job start:
+      // the frozen snapshot inherits whatever junk the freezing device
+      // could see at that moment (a stale PMD_LiveStatus shadow inflated
+      // SFM507147's cross-shift Good by a constant 456 and burned Job
+      // Left 574/397 into the columns), and when no freeze happened at
+      // all the old tuple-only fallback ignored every other shift of the
+      // job (the 1380 row). Recomputing here is also self-healing: a
+      // re-sign-off after unlock refreshes the column from whatever the
+      // lists say NOW. Frozen value → UI param → tuple-only estimate
+      // remain as fallbacks when the list read itself fails.
+      let jobLeftSnap: number | null = null;
+      if (required > 0) {
+        try {
+          const allJob = await this.listProduction({ jobNumber: job });
+          const before = sumGoodStartedBefore(allJob, machineCode, shiftId);
+          if (before != null) jobLeftSnap = Math.max(0, required - before);
+        } catch (e) {
+          console.warn('[pmd] JobLeft recompute failed, using frozen fallback:', e);
+        }
+      }
+      if (jobLeftSnap == null) {
+        jobLeftSnap =
+          canon?.jobLeft != null
+            ? Math.max(0, canon.jobLeft)
+            : jobLeft != null
+              ? Math.max(0, jobLeft)
+              : Math.max(0, required - tupleGood);
+      }
       // Shift Target column likewise prefers the frozen-at-start value;
       // recompute from the at-start Job Left only when none was stamped.
       const shiftTargetSnap =
