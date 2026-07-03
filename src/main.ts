@@ -34,6 +34,32 @@ console.info(
 const POLL_MS = 60_000; // §6.2 — active shift refresh
 let pollTimer: ReturnType<typeof setInterval> | undefined;
 
+// ---------------------------------------------------------------------
+// PMD_LiveStatus mirror — app-lifetime, independent of the active view.
+// It used to ride the operator page's poll timer, which route() clears:
+// an iPad parked on KPIs/Trace (or mid-navigation) silently stopped
+// mirroring its editCache and every other device read stale data. The
+// DAL's pushLiveSnapshot no-ops on read-only devices, skips non-authored
+// tuples, and carries its own stuck-guard watchdog, so an unconditional
+// tick here is safe and cheap.
+const MIRROR_MS = 60_000;
+setInterval(() => {
+  if (dal.pushLiveSnapshot) void dal.pushLiveSnapshot().catch(() => {});
+}, MIRROR_MS);
+// Immediate catch-up push when the iPad wakes / the tab regains focus —
+// Safari throttles or suspends interval timers in the background, so the
+// first tick after a wake could otherwise be a minute away.
+let lastWakePushMs = 0;
+function pushMirrorOnWake(): void {
+  if (document.visibilityState !== 'visible') return;
+  if (Date.now() - lastWakePushMs < 10_000) return;
+  lastWakePushMs = Date.now();
+  if (dal.pushLiveSnapshot) void dal.pushLiveSnapshot().catch(() => {});
+}
+document.addEventListener('visibilitychange', pushMirrorOnWake);
+window.addEventListener('focus', pushMirrorOnWake);
+window.addEventListener('pageshow', pushMirrorOnWake);
+
 interface Route {
   view: 'operator' | 'trace' | 'kpi';
   machineCode?: string;

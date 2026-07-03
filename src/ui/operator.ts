@@ -946,13 +946,26 @@ function shiftTarget(): number | null {
  * adds goodThis (this shift's good) on top of S!.jobTotalGood — counting
  * the current shift in both places double-subtracted it from JobRequired
  * and made Job Left collapse to 0 the moment Count End was filled in.
+ *
+ * SIGNED rows only (PMD_Production), same source the Trace page and the
+ * sign-off JobLeft column use, so all three always agree and the number
+ * is exactly reproducible from the list (JobRequired − Σ TotalGood).
+ * Mixing in live/editCache tuples made this drift on every stale mirror
+ * shadow; the price is that an earlier shift's output only counts once
+ * that shift is signed off.
  */
 async function refreshJobTotal(): Promise<void> {
   if (!S!.selJob) {
     S!.jobTotalGood = 0;
     return;
   }
-  const all = await dalRef.listProduction({ jobNumber: S!.selJob });
+  const all = dalRef.listSignedOffProduction
+    ? await dalRef.listSignedOffProduction({ jobNumber: S!.selJob })
+    : // Memory DAL fallback: signed rows only (reopened rows are signed
+      // rows temporarily unlocked for correction — still counted).
+      (await dalRef.listProduction({ jobNumber: S!.selJob })).filter(
+        (r) => r.locked || r.reopened,
+      );
   S!.jobTotalGood = sumOtherShiftGood(all, `${S!.mc}|${sid()}`);
 }
 
@@ -2875,43 +2888,9 @@ function nowTick(): void {
 export function operatorPollTick(): void {
   if (!S) return;
   renderNowLine();
-  void pollSync();
-}
-
-/**
- * Reentrancy guard for pollSync. The poll runs on a 60 s setInterval
- * and is fire-and-forget (void pollSync()); without this flag a slow
- * tick (CSV download + per-job upserts on flaky iPad Wi-Fi can take
- * > 60 s) would stack a second pollSync onto the first, then a third
- * onto that, until Safari's connection pool was saturated and the
- * page froze. Reported by floor: iPad9 freeze, especially night
- * shift. Belt-and-braces with the DAL's own snapshot guard.
- *
- * Timestamp, not boolean: an iPad Safari fetch can hang forever (Wi-Fi
- * drop mid-request), which kept a boolean guard stuck true and silently
- * stopped the mirror until a reload. A claim older than 5 min is
- * presumed hung and the next tick may proceed.
- */
-let pollSyncInFlightSince: number | null = null;
-const POLL_SYNC_STUCK_MS = 5 * 60_000;
-
-/**
- * Per-tick best-effort flush of this device's editCache to PMD_LiveStatus
- * so other devices see in-progress work. The DAL's pushLiveSnapshot is a
- * no-op on read-only devices (device-class write rule).
- */
-async function pollSync(): Promise<void> {
-  if (!S) return;
-  const now = Date.now();
-  if (pollSyncInFlightSince != null && now - pollSyncInFlightSince < POLL_SYNC_STUCK_MS) return;
-  pollSyncInFlightSince = now;
-  try {
-    if (dalRef.pushLiveSnapshot) {
-      await dalRef.pushLiveSnapshot().catch(() => {
-        /* logged inside the DAL; never propagate to the poll loop */
-      });
-    }
-  } finally {
-    if (pollSyncInFlightSince === now) pollSyncInFlightSince = null;
-  }
+  // The PMD_LiveStatus mirror is NOT pushed from here any more: it runs
+  // app-lifetime from main.ts (60 s tick + on-wake push), so leaving the
+  // operator page — or the route timer being cleared — can no longer
+  // silence this device's mirror. The DAL's own stuck-guard watchdog
+  // handles reentrancy.
 }

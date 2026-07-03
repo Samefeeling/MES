@@ -619,6 +619,11 @@ describe('pushLiveSnapshot does not re-broadcast old shifts', () => {
     const cache = (dal as unknown as { editCache: Map<string, unknown[]> }).editCache;
     cache.set('A|2026-06-03-Afternoon|EXP1', [mkSlot('EXP1', '2026-06-03-Afternoon')]);
     cache.set(`A|${todayId}-Night|CUR1`, [mkSlot('CUR1', `${todayId}-Night`)]);
+    // Both tuples were authored on this device — the skip under test is
+    // the shift-age rule, not the authored-tuple rule.
+    const dirty = (dal as unknown as { dirtyTuples: Set<string> }).dirtyTuples;
+    dirty.add('A|2026-06-03-Afternoon|EXP1');
+    dirty.add(`A|${todayId}-Night|CUR1`);
 
     const pushed: string[] = [];
     const o = dal as unknown as {
@@ -717,6 +722,7 @@ describe('device-class write rule (canWrite hook)', () => {
       operator: 'Joe', supervisor: 'Sue', qcBy: '', locked: false, lockedBy: '',
       lockedAt: '', createdAt: '', updatedAt: '',
     }]);
+    (dal as unknown as { dirtyTuples: Set<string> }).dirtyTuples.add(`Batt1|${shiftId}|SFM900`);
     let pushedOwner: unknown;
     const o = dal as unknown as {
       listPlanning: () => Promise<unknown[]>;
@@ -743,6 +749,7 @@ describe('device-class write rule (canWrite hook)', () => {
       operator: 'Joe', supervisor: 'Sue', qcBy: '', locked: false, lockedBy: '',
       lockedAt: '', createdAt: '', updatedAt: '',
     }]);
+    (dal as unknown as { dirtyTuples: Set<string> }).dirtyTuples.add(`Batt1|${shiftId}|SFM900`);
     const pushed: string[] = [];
     const o = dal as unknown as {
       listPlanning: () => Promise<unknown[]>;
@@ -764,6 +771,107 @@ describe('device-class write rule (canWrite hook)', () => {
     await dal.listProduction({ machineCode: 'Batt1', shiftId });
     await dal.pushLiveSnapshot!();
     expect(pushed).toContain('SFM900');
+  });
+
+  it('viewed (non-authored) tuple is NEVER pushed — kills the stale echo loop', async () => {
+    // iPad1 glanced at Batt2's shift once (backfilled into editCache),
+    // then kept re-broadcasting that stale 1-slot copy every 60 s,
+    // overwriting the editing iPad's fresh mirror. A tuple with no local
+    // authorship (not in dirtyTuples) must not be mirrored outward.
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+      canWrite: () => true,
+    });
+    const cache = (dal as unknown as { editCache: Map<string, unknown[]> }).editCache;
+    cache.set(`Batt2|${shiftId}|SFM901`, [{
+      id: -1, machineCode: 'Batt2', shiftId, jobNumber: 'SFM901', slotIndex: 0,
+      statusCode: 'R', countStart: 0, countEnd: 10, rejects: '{}', purgeKg: null,
+      rejectCount: 0, bdIssue: '', mangoTicket: '', handoverNote: '',
+      operator: 'Joe', supervisor: 'Sue', qcBy: '', locked: false, lockedBy: '',
+      lockedAt: '', createdAt: '', updatedAt: '',
+    }]);
+    // Deliberately NOT added to dirtyTuples — this device only viewed it.
+    const pushed: string[] = [];
+    const o = dal as unknown as {
+      listPlanning: () => Promise<unknown[]>;
+      upsertHeaderInto: (list: string, h: { jobNumber: string }) => Promise<void>;
+    };
+    o.listPlanning = async (): Promise<unknown[]> => [];
+    o.upsertHeaderInto = async (_l, h): Promise<void> => { pushed.push(h.jobNumber); };
+
+    await dal.pushLiveSnapshot!();
+    expect(pushed).toEqual([]);
+  });
+
+  it('writable device: a merely-VIEWED tuple is replaced by the live mirror on read', async () => {
+    // iPad1 viewing Batt2: its first backfill left a 1-slot copy in
+    // editCache; the editing iPad has since mirrored countEnd=50. The
+    // old merge-by-absence kept iPad1's stale copy forever; a tuple this
+    // device never authored must now track the mirror wholesale.
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+      canWrite: () => true,
+    });
+    const cache = (dal as unknown as { editCache: Map<string, unknown[]> }).editCache;
+    const key = `Batt1|${shiftId}|SFM900`;
+    cache.set(key, [{
+      id: -1, machineCode: 'Batt1', shiftId, jobNumber: 'SFM900', slotIndex: 0,
+      statusCode: 'R', countStart: 0, countEnd: 5, rejects: '{}', purgeKg: null,
+      rejectCount: 0, bdIssue: '', mangoTicket: '', handoverNote: '',
+      operator: 'Joe', supervisor: '', qcBy: '', locked: false, lockedBy: '',
+      lockedAt: '', createdAt: '', updatedAt: '',
+    }]);
+    const o = dal as unknown as {
+      fetchHeaders: (l: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+      deleteLiveRow: () => Promise<void>;
+    };
+    o.fetchHeaders = async (l: string): Promise<unknown[]> =>
+      l === 'PMD_LiveStatus' ? [liveHeader({ countEnd: 50 })] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+    o.deleteLiveRow = async (): Promise<void> => {};
+
+    const recs = await dal.listProduction({ machineCode: 'Batt1', shiftId });
+    const slot0 = recs.find((r) => r.slotIndex === 0 && r.jobNumber === 'SFM900')!;
+    expect(slot0.countEnd).toBe(50);
+  });
+
+  it('writable device: an AUTHORED tuple keeps its local slots over the live mirror', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+      canWrite: () => true,
+    });
+    const cache = (dal as unknown as { editCache: Map<string, unknown[]> }).editCache;
+    const key = `Batt1|${shiftId}|SFM900`;
+    cache.set(key, [{
+      id: -1, machineCode: 'Batt1', shiftId, jobNumber: 'SFM900', slotIndex: 0,
+      statusCode: 'R', countStart: 0, countEnd: 60, rejects: '{}', purgeKg: null,
+      rejectCount: 0, bdIssue: '', mangoTicket: '', handoverNote: '',
+      operator: 'Joe', supervisor: '', qcBy: '', locked: false, lockedBy: '',
+      lockedAt: '', createdAt: '', updatedAt: '',
+    }]);
+    (dal as unknown as { dirtyTuples: Set<string> }).dirtyTuples.add(key);
+    const o = dal as unknown as {
+      fetchHeaders: (l: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+      deleteLiveRow: () => Promise<void>;
+    };
+    // Mirror lags behind the local edits (countEnd 50 < local 60).
+    o.fetchHeaders = async (l: string): Promise<unknown[]> =>
+      l === 'PMD_LiveStatus' ? [liveHeader({ countEnd: 50 })] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+    o.deleteLiveRow = async (): Promise<void> => {};
+
+    const recs = await dal.listProduction({ machineCode: 'Batt1', shiftId });
+    const slot0 = recs.find((r) => r.slotIndex === 0 && r.jobNumber === 'SFM900')!;
+    expect(slot0.countEnd).toBe(60);
   });
 
   it('read-only device: listProduction REPLACES stale local editCache with live mirror', async () => {

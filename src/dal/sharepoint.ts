@@ -325,6 +325,26 @@ export class SharePointDataLayer implements PmdDataLayer {
   private unlockedTuples = new Set<string>();
   private static readonly UNLOCKED_TUPLES_KEY = 'pmd_unlocked_tuples_v1';
   /**
+   * Tuples whose editCache rows THIS DEVICE authored (an operator or
+   * supervisor actually typed/tapped into them here), as opposed to
+   * copies backfilled from PMD_LiveStatus purely for VIEWING another
+   * press's shift. The distinction is load-bearing twice over:
+   *
+   *   - pushLiveSnapshot mirrors ONLY dirty tuples. Broadcasting every
+   *     cached tuple made a device that merely glanced at another
+   *     machine re-publish its stale copy every 60 s, overwriting the
+   *     editing iPad's fresh mirror — the "full timeline collapsed
+   *     back to one slot" / "iPad1 shows wrong Batt2 data" echo loop.
+   *   - the live backfill REPLACES a non-dirty tuple wholesale, so a
+   *     viewer always shows the mirror's current picture. (The old
+   *     merge-by-absence kept the viewer's first-seen copy forever.)
+   *
+   * Persisted alongside editCache; pruned to the cache's keys on every
+   * persist so it cannot grow unbounded.
+   */
+  private dirtyTuples = new Set<string>();
+  private static readonly DIRTY_TUPLES_KEY = 'pmd_dirty_tuples_v1';
+  /**
    * Cache of `ListItemEntityTypeFullName` per list title. Encoding a list
    * title to that string by hand (`SP.Data.${encoded}ListItem`) is unreliable
    * — when a list has been renamed since creation, the entity type still
@@ -395,6 +415,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     this.deviceId = this.resolveDeviceId();
     this.rehydrateEditCache();
     this.rehydrateUnlockedTuples();
+    this.rehydrateDirtyTuples();
   }
 
   /** Read (or mint + persist) this device's stable id. */
@@ -463,6 +484,28 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
   }
 
+  private rehydrateDirtyTuples(): void {
+    if (typeof localStorage === 'undefined') {
+      // Node test env: no persistence, no migration needed.
+      return;
+    }
+    try {
+      const raw = localStorage.getItem(SharePointDataLayer.DIRTY_TUPLES_KEY);
+      if (raw != null) {
+        for (const k of JSON.parse(raw) as string[]) this.dirtyTuples.add(k);
+        return;
+      }
+      // Migration: a cache persisted by a build that predates dirty
+      // tracking can't tell authored tuples from viewed copies. Treat
+      // everything present as authored (the old behaviour) so a real
+      // half-filled shift is never clobbered by the first backfill;
+      // precision starts with the next fresh tuple.
+      for (const k of this.editCache.keys()) this.dirtyTuples.add(k);
+    } catch (e) {
+      console.warn('[pmd] could not rehydrate dirty tuples:', e);
+    }
+  }
+
   /**
    * Mark the cache dirty and write it to localStorage in the next
    * microtask. Callers can fire this on every keystroke / per-slot
@@ -476,8 +519,17 @@ export class SharePointDataLayer implements PmdDataLayer {
     this.persistTimer = setTimeout(() => {
       this.persistTimer = null;
       try {
+        // Dirty set rides along with the cache: prune keys whose cache
+        // entry is gone (signed off / swept) so it tracks live tuples only.
+        for (const k of this.dirtyTuples) {
+          if (!this.editCache.has(k)) this.dirtyTuples.delete(k);
+        }
         const payload = JSON.stringify(Array.from(this.editCache.entries()));
         localStorage.setItem(SharePointDataLayer.EDIT_CACHE_KEY, payload);
+        localStorage.setItem(
+          SharePointDataLayer.DIRTY_TUPLES_KEY,
+          JSON.stringify(Array.from(this.dirtyTuples)),
+        );
       } catch (e) {
         // Quota exceeded or private mode — caller will still get an
         // in-memory copy, we just won't survive a refresh.
@@ -1120,20 +1172,24 @@ export class SharePointDataLayer implements PmdDataLayer {
     // burns a partial timeline into PMD_Production — exactly the
     // SFM507068 14:23 incident.
     //
-    // editCache wins per slot — but ONLY when this device is allowed to
-    // write. On a read-only device (PC viewer with no supervisor signed
-    // in) the local cache is stale by definition and would shadow the
-    // iPad's 60 s mirror: PC poll fetches reject=23 from PMD_LiveStatus
-    // but its own editCache slot 0 (from an earlier glance at the job)
-    // still says reject=1, and the "add only what we lack" merge silently
-    // keeps the stale 1. Same bug masked half the QC sign-offs on remote
-    // viewers.
+    // editCache wins per slot — but ONLY for tuples this device actually
+    // AUTHORED (dirtyTuples). A copy that landed here purely for viewing
+    // (a spectator PC, or an iPad glancing at another press's shift) is
+    // stale by definition and must be REPLACED by the mirror's current
+    // picture wholesale: the old merge-by-absence kept whatever the
+    // viewer first saw forever — PC poll fetches reject=23 from
+    // PMD_LiveStatus but its own editCache slot 0 (from an earlier
+    // glance at the job) still says reject=1, and the "add only what we
+    // lack" merge silently keeps the stale 1. Same bug masked half the
+    // QC sign-offs on remote viewers and froze iPad1's view of Batt2 at
+    // whatever it backfilled first.
     //
     // Rules:
     //   - tuple signed off → skip; PMD_Production is canonical.
-    //   - this device is read-only → REPLACE editCache for the tuple
-    //     with the live expansion. We're a spectator.
-    //   - this device can write → keep merge-by-absence so locally-edited
+    //   - tuple not authored here (read-only device, or a writable
+    //     device that only viewed it) → REPLACE editCache with the live
+    //     expansion. We're a spectator for this tuple.
+    //   - tuple authored here → merge-by-absence so locally-edited
     //     slots not yet pushed survive.
     const writable = this.canWriteHook();
     let backfilled = false;
@@ -1153,7 +1209,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         rejectsByKey.get(key) ?? [],
         false,
       );
-      if (!writable) {
+      if (!writable || !this.dirtyTuples.has(key)) {
         this.editCache.set(key, liveSlots);
         backfilled = true;
         continue;
@@ -1637,6 +1693,9 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (idx >= 0) list[idx] = stored;
     else list.push(stored);
     this.editCache.set(key, list);
+    // A local write makes this device an AUTHOR of the tuple: it may
+    // mirror it outward and its copy wins the per-slot backfill merge.
+    this.dirtyTuples.add(key);
     this.persistEditCache();
     return stored;
   }
@@ -1771,23 +1830,24 @@ export class SharePointDataLayer implements PmdDataLayer {
         0,
         ((agg.countEnd ?? 0) - (agg.countStart ?? 0)) * cavities - reject,
       );
-      // Job Left column = pieces still needed when this shift BEGAN.
-      // Recompute it at sign-off from the production list itself (signed
-      // rows + real in-progress mirrors of every shift that started
-      // earlier), NOT from the value frozen client-side at job start:
-      // the frozen snapshot inherits whatever junk the freezing device
-      // could see at that moment (a stale PMD_LiveStatus shadow inflated
-      // SFM507147's cross-shift Good by a constant 456 and burned Job
-      // Left 574/397 into the columns), and when no freeze happened at
-      // all the old tuple-only fallback ignored every other shift of the
-      // job (the 1380 row). Recomputing here is also self-healing: a
-      // re-sign-off after unlock refreshes the column from whatever the
-      // lists say NOW. Frozen value → UI param → tuple-only estimate
-      // remain as fallbacks when the list read itself fails.
+      // Job Left column = pieces still needed when this shift BEGAN,
+      // recomputed from SIGNED PMD_Production rows only — the one
+      // source every device sees identically (JobRequired − Σ TotalGood
+      // of earlier-started signed shifts, exactly reproducible from the
+      // list itself). Client-side snapshots proved untrustable twice:
+      // the frozen-at-start value inherits whatever junk the freezing
+      // device could see (a stale PMD_LiveStatus shadow burned Job Left
+      // 574/397 into SFM507147), and the old tuple-only fallback
+      // ignored every other shift (the 1380 row). Live/editCache tuples
+      // are deliberately EXCLUDED: an unsigned earlier shift simply
+      // isn't counted until it signs off, and a re-sign-off after
+      // unlock refreshes the column — corrections self-heal. Frozen
+      // value → UI param → tuple-only estimate remain as fallbacks when
+      // the list read itself fails.
       let jobLeftSnap: number | null = null;
       if (required > 0) {
         try {
-          const allJob = await this.listProduction({ jobNumber: job });
+          const allJob = await this.listSignedOffProduction({ jobNumber: job });
           const before = sumGoodStartedBefore(allJob, machineCode, shiftId);
           if (before != null) jobLeftSnap = Math.max(0, required - before);
         } catch (e) {
@@ -1923,6 +1983,13 @@ export class SharePointDataLayer implements PmdDataLayer {
     const tasks: Array<() => Promise<void>> = [];
     for (const [key, slots] of this.editCache) {
       if (slots.length === 0) continue;
+      // ONLY tuples this device authored. A cache entry backfilled from
+      // PMD_LiveStatus for viewing another press must never be
+      // re-broadcast: a device that glanced at a shift once would
+      // otherwise republish that stale copy every 60 s, overwriting the
+      // editing iPad's fresh mirror (the Batt2 "full timeline collapsed
+      // to one slot" echo loop).
+      if (!this.dirtyTuples.has(key)) continue;
       // Skip cache entries that hold nothing but a freshly-picked
       // operator / supervisor name with no actual production data —
       // see hasMeaningfulProgress(). Avoids littering the broker with
@@ -2076,6 +2143,8 @@ export class SharePointDataLayer implements PmdDataLayer {
       if (!list.some((s) => s.slotIndex === r.slotIndex)) list.push(rehydrated);
       this.editCache.set(key, list);
       this.unlockedTuples.add(key);
+      // The unlocking device is about to author corrections here.
+      this.dirtyTuples.add(key);
       touchedAnyTuple = true;
     }
     this.persistEditCache();
