@@ -11,7 +11,7 @@ import {
 } from './ui/supervisor-auth';
 import { toast } from './ui/toast';
 import { maybeAutoStartTutorial, startTutorial } from './ui/tutorial';
-import { startAutoUpdate } from './ui/auto-update';
+import { currentBuildId, startAutoUpdate } from './ui/auto-update';
 
 const dal: PmdDataLayer = createDataLayer(import.meta.env as Record<string, string>);
 
@@ -43,9 +43,13 @@ let pollTimer: ReturnType<typeof setInterval> | undefined;
 // tuples, and carries its own stuck-guard watchdog, so an unconditional
 // tick here is safe and cheap.
 const MIRROR_MS = 60_000;
-setInterval(() => {
-  if (dal.pushLiveSnapshot) void dal.pushLiveSnapshot().catch(() => {});
-}, MIRROR_MS);
+function mirrorTick(): void {
+  if (!dal.pushLiveSnapshot) return;
+  void dal.pushLiveSnapshot()
+    .catch(() => {})
+    .finally(updateMirrorBadge);
+}
+setInterval(mirrorTick, MIRROR_MS);
 // Immediate catch-up push when the iPad wakes / the tab regains focus —
 // Safari throttles or suspends interval timers in the background, so the
 // first tick after a wake could otherwise be a minute away.
@@ -54,11 +58,58 @@ function pushMirrorOnWake(): void {
   if (document.visibilityState !== 'visible') return;
   if (Date.now() - lastWakePushMs < 10_000) return;
   lastWakePushMs = Date.now();
-  if (dal.pushLiveSnapshot) void dal.pushLiveSnapshot().catch(() => {});
+  mirrorTick();
 }
 document.addEventListener('visibilitychange', pushMirrorOnWake);
 window.addEventListener('focus', pushMirrorOnWake);
 window.addEventListener('pageshow', pushMirrorOnWake);
+
+/**
+ * Mirror-health badge next to the ☁ status: build id + this device's
+ * last successful live-mirror push (or its failure). "One iPad never
+ * gets its data onto SharePoint" was invisible on the device itself —
+ * this makes stale-bundle and dead-mirror states a glanceable fact on
+ * the floor: an old build id, a 👁 view-only tag, or a red ⚠ each name
+ * the problem directly.
+ */
+function updateMirrorBadge(): void {
+  let el = document.getElementById('mirrorBadge');
+  if (!el) {
+    const ss = document.getElementById('ss');
+    if (!ss || !ss.parentElement) return;
+    el = document.createElement('span');
+    el.id = 'mirrorBadge';
+    ss.parentElement.insertBefore(el, ss.nextSibling);
+  }
+  const build = currentBuildId().slice(-5);
+  const h = dal.mirrorHealth ? dal.mirrorHealth() : null;
+  const hhmm = (ms: number): string =>
+    new Date(ms).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false });
+  if (!h) {
+    el.textContent = `· ${build}`;
+    el.className = 'mb-idle';
+    el.title = `Build ${currentBuildId()}`;
+    return;
+  }
+  if (!h.writable) {
+    el.textContent = `· ${build} 👁`;
+    el.className = 'mb-idle';
+    el.title = `Build ${currentBuildId()} · view-only device (no supervisor signed in) — never mirrors`;
+  } else if (h.failAt != null && (h.okAt == null || h.failAt > h.okAt)) {
+    el.textContent = `· ${build} ⚠ ${hhmm(h.failAt)}`;
+    el.className = 'mb-bad';
+    el.title = `Build ${currentBuildId()} · live-mirror push FAILED at ${hhmm(h.failAt)}: ${h.error}`;
+  } else if (h.okAt != null) {
+    el.textContent = `· ${build} ⇅ ${hhmm(h.okAt)}`;
+    el.className = 'mb-ok';
+    el.title = `Build ${currentBuildId()} · live mirror last pushed ${hhmm(h.okAt)}`;
+  } else {
+    el.textContent = `· ${build} ⇅ —`;
+    el.className = 'mb-idle';
+    el.title = `Build ${currentBuildId()} · no mirror push yet this session`;
+  }
+}
+updateMirrorBadge();
 
 interface Route {
   view: 'operator' | 'trace' | 'kpi';

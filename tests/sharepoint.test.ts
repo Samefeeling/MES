@@ -773,6 +773,44 @@ describe('device-class write rule (canWrite hook)', () => {
     expect(pushed).toContain('SFM900');
   });
 
+  it('mirrorHealth records a successful push and a failed one (badge feed)', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+      canWrite: () => true,
+    });
+    const cache = (dal as unknown as { editCache: Map<string, unknown[]> }).editCache;
+    cache.set(`Batt1|${shiftId}|SFM900`, [{
+      id: -1, machineCode: 'Batt1', shiftId, jobNumber: 'SFM900', slotIndex: 0,
+      statusCode: 'R', countStart: 0, countEnd: 10, rejects: '{}', purgeKg: null,
+      rejectCount: 0, bdIssue: '', mangoTicket: '', handoverNote: '',
+      operator: 'Joe', supervisor: 'Sue', qcBy: '', locked: false, lockedBy: '',
+      lockedAt: '', createdAt: '', updatedAt: '',
+    }]);
+    (dal as unknown as { dirtyTuples: Set<string> }).dirtyTuples.add(`Batt1|${shiftId}|SFM900`);
+    const o = dal as unknown as {
+      listPlanning: () => Promise<unknown[]>;
+      upsertHeaderInto: (list: string, h: unknown) => Promise<void>;
+    };
+    o.listPlanning = async (): Promise<unknown[]> => [];
+    o.upsertHeaderInto = async (): Promise<void> => {};
+
+    expect(dal.mirrorHealth!().okAt).toBeNull();
+    await dal.pushLiveSnapshot!();
+    const ok = dal.mirrorHealth!();
+    expect(ok.writable).toBe(true);
+    expect(ok.okAt).not.toBeNull();
+    expect(ok.failAt).toBeNull();
+
+    o.upsertHeaderInto = async (): Promise<void> => {
+      throw new Error('403 access denied');
+    };
+    await dal.pushLiveSnapshot!();
+    const bad = dal.mirrorHealth!();
+    expect(bad.failAt).not.toBeNull();
+    expect(bad.error).toContain('403 access denied');
+  });
+
   it('viewed (non-authored) tuple is NEVER pushed — kills the stale echo loop', async () => {
     // iPad1 glanced at Batt2's shift once (backfilled into editCache),
     // then kept re-broadcasting that stale 1-slot copy every 60 s,

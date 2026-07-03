@@ -401,6 +401,16 @@ export class SharePointDataLayer implements PmdDataLayer {
   private snapshotInFlightSince: number | null = null;
   private static readonly SNAPSHOT_STUCK_MS = 5 * 60_000;
   /**
+   * Live-mirror health, surfaced by mirrorHealth() for the on-screen
+   * badge. "One iPad never gets its data onto SharePoint" was pure
+   * guesswork on the floor — the badge turns it into a glanceable fact:
+   * when did THIS device last push its mirror successfully, and if it's
+   * failing, with what error.
+   */
+  private lastMirrorOkAt: number | null = null;
+  private lastMirrorFailAt: number | null = null;
+  private lastMirrorError = '';
+  /**
    * Stable per-device identity, persisted in localStorage. Written to
    * PMD_LiveStatus.OwnerDevice on every snapshot push so we can see
    * after the fact which iPad last touched a press, but no longer used
@@ -1978,8 +1988,24 @@ export class SharePointDataLayer implements PmdDataLayer {
    * Fire-and-forget; a failure just means the live view is up-to-60-s
    * stale until the next tick succeeds.
    */
+  /** Live-mirror health for the on-screen badge: is this device allowed
+   *  to push, when did its last snapshot fully succeed, and what did the
+   *  last failure say. */
+  mirrorHealth(): { writable: boolean; okAt: number | null; failAt: number | null; error: string } {
+    return {
+      writable: this.canWriteHook(),
+      okAt: this.lastMirrorOkAt,
+      failAt: this.lastMirrorFailAt,
+      error: this.lastMirrorError,
+    };
+  }
+
   async pushLiveSnapshot(): Promise<void> {
-    if (this.editCache.size === 0) return;
+    if (this.editCache.size === 0) {
+      // Nothing to push is a healthy state — the mirror loop ran.
+      this.lastMirrorOkAt = Date.now();
+      return;
+    }
     // Reentrancy guard — see snapshotInFlightSince field comment. The
     // poll tick is fire-and-forget; without this, a slow tick stacks
     // onto the next one and saturates Safari's connection pool → freeze.
@@ -2004,6 +2030,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     // partNumByJobCache field comment.
     const partNumByJob = await this.getPartNumByJob();
     const now = new Date();
+    let failures = 0;
     const tasks: Array<() => Promise<void>> = [];
     for (const [key, slots] of this.editCache) {
       if (slots.length === 0) continue;
@@ -2085,7 +2112,11 @@ export class SharePointDataLayer implements PmdDataLayer {
           rejectsBySlot: agg.rejectsBySlot,
           ownerDevice,
         }).catch((e) => {
-          // Snapshot push is best-effort; never propagate.
+          // Snapshot push is best-effort; never propagate. Recorded for
+          // the mirror-health badge so a silently-failing iPad is
+          // visible on its own screen.
+          failures++;
+          this.lastMirrorError = `${key}: ${(e as Error)?.message ?? e}`;
           console.warn('[pmd] live snapshot push failed for', key, e);
         }),
       );
@@ -2099,6 +2130,8 @@ export class SharePointDataLayer implements PmdDataLayer {
     // longer total snapshot wall-clock — fine, this is a best-effort
     // background mirror, not a user-facing path.
     for (const t of tasks) await t();
+    if (failures === 0) this.lastMirrorOkAt = Date.now();
+    else this.lastMirrorFailAt = Date.now();
   }
 
   /**

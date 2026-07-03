@@ -80,6 +80,11 @@ export interface PmdDataLayer {
    *  share state in-process (memory DAL). */
   pushLiveSnapshot?(): Promise<void>;
 
+  /** Live-mirror health for the on-screen badge: whether this device is
+   *  allowed to push, when its last snapshot fully succeeded, and the
+   *  last failure's message. Optional — in-process backends omit it. */
+  mirrorHealth?(): { writable: boolean; okAt: number | null; failAt: number | null; error: string };
+
   /** This client's stable device id. Stamped onto PMD_LiveStatus's
    *  OwnerDevice column for after-the-fact diagnostics ("which iPad
    *  last touched this press?"). Optional — single-device backends

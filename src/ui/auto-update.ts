@@ -20,6 +20,13 @@
 // Baked in at build time; 'dev' under vitest / a non-defined build.
 const BUILD_ID = typeof __BUILD_ID__ === 'string' ? __BUILD_ID__ : 'dev';
 
+/** The build id baked into THIS running bundle. Shown in the mirror-health
+ *  badge so the floor can tell at a glance whether an iPad is on the
+ *  current deploy or stuck on a cached bundle. */
+export function currentBuildId(): string {
+  return BUILD_ID;
+}
+
 // How often to check for a new deploy. 3 min is frequent enough that a fresh
 // build reaches the floor within a few minutes, cheap enough to be invisible.
 const CHECK_MS = 3 * 60_000;

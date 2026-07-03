@@ -42,6 +42,11 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .top{background:var(--theme-dark);color:var(--theme-on-dark);padding:8px 18px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:50;box-shadow:0 2px 6px rgba(0,0,0,.15);transition:background .25s}
 .top h1{margin:0;font-size:20px;font-weight:700;flex:1;letter-spacing:.2px}
 .top .st{font-size:14px;opacity:.92;background:rgba(255,255,255,.16);padding:4px 10px;border-radius:99px;font-weight:600}
+/* Mirror-health badge (build id + last live-mirror push) next to ☁. */
+#mirrorBadge{font-size:12px;font-weight:600;padding:4px 8px;border-radius:99px;white-space:nowrap}
+#mirrorBadge.mb-ok{opacity:.85}
+#mirrorBadge.mb-idle{opacity:.6}
+#mirrorBadge.mb-bad{background:#c62828;color:#fff;opacity:1}
 .brand-logo{height:36px;width:auto;background:rgba(255,255,255,.96);padding:4px 10px;border-radius:8px}
 .top-nav{display:flex;gap:6px}
 .top-nav a{color:var(--theme-on-dark);text-decoration:none;padding:7px 14px;border-radius:8px;font-size:14px;font-weight:700;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25)}
