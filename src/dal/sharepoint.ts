@@ -1884,15 +1884,16 @@ export class SharePointDataLayer implements PmdDataLayer {
               ? Math.max(0, jobLeft)
               : Math.max(0, required - tupleGood);
       }
-      // Shift Target column likewise prefers the frozen-at-start value;
-      // recompute from the at-start Job Left only when none was stamped.
+      // Shift Target column: recompute from the at-start Job Left (same
+      // signed-rows source as jobLeftSnap). A value stamped on the
+      // canonical slot is legacy client-frozen data — contaminated by
+      // whatever that device saw at freeze time — and is only used when
+      // the recompute produced nothing.
       const shiftTargetSnap =
-        canon?.shiftTarget != null
-          ? canon.shiftTarget
-          : shiftTargetFor(
-              { jobRequired: required, qtyPerHr: cycleTime, isDieChange: false } as PlanningOrder,
-              jobLeftSnap,
-            );
+        shiftTargetFor(
+          { jobRequired: required, qtyPerHr: cycleTime, isDieChange: false } as PlanningOrder,
+          jobLeftSnap,
+        ) ?? canon?.shiftTarget ?? null;
       try {
         await this.upsertProductionHeader({
           signOff: new Date().toISOString(),
@@ -2059,14 +2060,14 @@ export class SharePointDataLayer implements PmdDataLayer {
           partNumber: partNumByJob.get(jobNumber) ?? '',
           partDescription: '',
           jobRequired: 0,
-          // Carry cycle time + the frozen-at-start Job Left / Shift
-          // Target onto the live mirror so a mid-shift reload (editCache
-          // lost, rehydrate from PMD_LiveStatus) keeps the frozen values
-          // rather than re-deriving them against shifted totals.
+          // Carry cycle time + cavities so a mid-shift reload (editCache
+          // lost, rehydrate from PMD_LiveStatus) keeps them. Job Left /
+          // Shift Target are deliberately NOT mirrored: they are derived
+          // from signed PMD_Production rows on read now — mirroring the
+          // old client-frozen snapshot is how a contaminated value
+          // spread to every device (SFM507147's phantom "200").
           cycleTime: canon.cycleTime ?? 0,
           cavities: canon.cavities ?? 1,
-          jobLeft: canon.jobLeft ?? null,
-          shiftTarget: canon.shiftTarget ?? null,
           timeline: agg.timeline,
           countStart: agg.countStart,
           countEnd: agg.countEnd,
@@ -3019,9 +3020,10 @@ interface HeaderInput {
   /** Cycle time (hours/piece) for the job — persisted so past shifts
    *  recompute Shift Target. 0 when unknown (the column is skipped). */
   cycleTime: number;
-  /** Shift Target snapshot for the SP list / Power BI. null when no
-   *  cycle time is available (the column is skipped). */
-  shiftTarget: number | null;
+  /** Shift Target snapshot for the SP list / Power BI (PMD_Production
+   *  only — live pushes omit it; the value derives from signed rows on
+   *  read). null/undefined skips the column write. */
+  shiftTarget?: number | null;
   /** Identical cavities on the die (pieces per cycle). 1 (or 0/undefined)
    *  leaves the column at its default; written when > 1. */
   cavities?: number;

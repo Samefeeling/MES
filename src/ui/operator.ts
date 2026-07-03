@@ -206,28 +206,14 @@ function blankRecordForJob(slot: number, job: string): ProductionRecord {
     createdAt: iso,
     updatedAt: iso,
   };
-  // Freeze Job Left + Shift Target on the canonical slot the moment the
-  // job starts on this (machine, shift). jobTotalGood is the Good already
-  // made on every OTHER shift of the job, so order total − that = "how
-  // many were still needed when this shift began". Frozen here (not
-  // recomputed at sign-off) so it survives re-sign-off and out-of-order
-  // edits, and so Trace can read demand-at-start per row. Live shifts
-  // only — a supervisor editing a PAST shift clones the existing row
-  // (which already carries its original frozen value) rather than
-  // re-freezing against today's totals.
-  // Only the SELECTED job freezes here: S!.jobTotalGood is the
-  // cross-shift Good for the selected job, so freezing a co-run sibling
-  // (created by the status mirror / seed) against it would use the wrong
-  // total. The sibling instead gets its own freeze from
-  // ensureJobLeftFrozen() when the operator opens it.
-  if (slot === 0 && job === S!.selJob && order && !isPastShift()) {
-    const jl = jobLeftPiecesFor(order, S!.jobTotalGood);
-    if (jl != null) {
-      rec.jobLeft = jl;
-      const st = shiftTargetFor(order, jl);
-      if (st != null) rec.shiftTarget = st;
-    }
-  }
+  // NOTE: Job Left / Shift Target are deliberately NOT stamped on the
+  // record any more. The old "freeze at job start" snapshot captured
+  // whatever the freezing device could see at that instant — stale live
+  // shadows contaminated it, it round-tripped through PMD_LiveStatus to
+  // every other device, and it could never self-correct (SFM507147's
+  // phantom "200"). Both values are now derived on read from signed
+  // PMD_Production rows, and the authoritative per-row columns are
+  // recomputed from the same source at sign-off (see lockShift).
   return rec;
 }
 
@@ -759,7 +745,6 @@ async function reload(preferLiveJob = false): Promise<void> {
   await maybeCarryCountStart();
   await refreshJobTotal();
   await seedStatusFromCoRunner();
-  ensureJobLeftFrozen();
   saveView();
   render();
 }
@@ -792,29 +777,6 @@ async function seedStatusFromCoRunner(): Promise<void> {
       r.mangoTicket = sr.mangoTicket;
     });
   }
-}
-
-/**
- * Ensure the selected live order has Job Left / Shift Target frozen on
- * its canonical row. The normal path freezes in blankRecordForJob at
- * creation, but a co-run sibling's slot 0 is created by the mirror /
- * seed (which can't know that sibling's cross-shift Good), so its freeze
- * is deferred to here — by now refreshJobTotal() has computed
- * S!.jobTotalGood for the selected job, so the value is correct.
- */
-function ensureJobLeftFrozen(): void {
-  if (isPastShift() || isReadOnlyDevice() || isJobLocked()) return;
-  const c = canonical();
-  if (!c || c.locked || c.jobLeft != null) return;
-  const order = selectedOrder();
-  if (!order) return;
-  const jl = jobLeftPiecesFor(order, S!.jobTotalGood);
-  if (jl == null) return;
-  void upsertSlotNoReload(0, (r) => {
-    r.jobLeft = jl;
-    const st = shiftTargetFor(order, jl);
-    if (st != null) r.shiftTarget = st;
-  });
 }
 
 /** True when THIS browser is forbidden from writing — non-iPad without
@@ -908,20 +870,6 @@ async function maybeCarryCountStart(): Promise<void> {
   });
 }
 
-/**
- * Pieces still needed across every shift on this job, after subtracting
- * the canonical Good count we've already accumulated. Returns null for
- * die-change jobs (no piece target) and when there's no planning row.
- */
-function jobLeftPieces(): number | null {
-  const o = selectedOrder();
-  if (!o) return null;
-  const c = canonical();
-  const grossThis = cavityGross(c?.countStart ?? null, c?.countEnd ?? null, c?.cavities);
-  const goodThis = Math.max(0, grossThis - jobTotals());
-  return jobLeftPiecesFor(o, S!.jobTotalGood + goodThis);
-}
-
 /** Cavities frozen on the selected job's canonical row (1 when unset). */
 function cavities(): number {
   const v = canonical()?.cavities;
@@ -929,13 +877,16 @@ function cavities(): number {
 }
 
 /**
- * Shift Target = pieces the operator should aim for this shift.
- * Thin wrapper over the shared core formula; see core/targets.ts.
+ * Shift Target = pieces the operator should aim for this shift, from the
+ * job demand AT SHIFT START (signed cross-shift good only — goodThis is
+ * deliberately excluded, otherwise the target would shrink as the shift
+ * produces). Stable through the shift without any frozen snapshot, and
+ * the same formula lockShift persists to the ShiftTarget column.
  */
 function shiftTarget(): number | null {
   const o = selectedOrder();
   if (!o) return null;
-  const jl = jobLeftPieces();
+  const jl = jobLeftPiecesFor(o, S!.jobTotalGood);
   if (jl == null) return null;
   return shiftTargetFor(o, jl);
 }
@@ -2606,10 +2557,9 @@ async function doSignoffSave(confirmBtn?: HTMLButtonElement): Promise<void> {
     // Scope sign-off to the order being reviewed: another job already
     // running on this press's remaining timeline slots (operator
     // started the next order mid-shift) must stay live and editable.
-    // Pass the JobLeft frozen on the canonical row at job start so
-    // PMD_Production.JobLeft records demand-at-start (for Trace), not the
-    // live "remaining now". null for die-change jobs / rows with no frozen
-    // value — the DAL then falls back to its tuple-only estimate.
+    // The JobLeft column is recomputed inside lockShift from signed
+    // rows; the canonical row's value (legacy frozen data, if any) rides
+    // along only as a deep fallback for when that read fails.
     await dalRef.lockShift(
       S!.mc,
       sid(),

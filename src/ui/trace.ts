@@ -730,29 +730,37 @@ function buildTraceRowsFor(
     const plan = isShiftPast(shiftId)
       ? synthetic ?? planOrder
       : planOrder ?? synthetic;
-    // Job-wide Good. Prefer the cross-shift total when the caller could
-    // compute one; the `has()` guard (not `??`) is deliberate — a failed
-    // history fetch stores 0 in the map, and treating that as "good"
-    // would render Job Left = full order quantity. Falling back to this
-    // tuple's own good keeps the number conservative.
+    // Job-wide Good. Prefer the signed cross-shift total when the caller
+    // could compute one; the `has()` guard (not `??`) is deliberate — a
+    // failed history fetch stores 0 in the map, and treating that as
+    // "good" would render Job Left = full order quantity. Falling back
+    // to this tuple's own good keeps the number conservative. An
+    // UNSIGNED (live) tuple adds its own in-progress good on top of the
+    // signed total so the card matches the operator side panel exactly
+    // (a signed tuple is already inside the signed total).
     const grossThis = cavityGross(canonical?.countStart ?? null, canonical?.countEnd ?? null, canonical?.cavities);
+    const goodThisTuple = Math.max(0, grossThis - totalRej);
+    const signedTuple = list.some((r) => r.locked || r.reopened);
     const jobGood = jobGoodTotals.has(jobNumber)
-      ? jobGoodTotals.get(jobNumber)!
-      : Math.max(0, grossThis - totalRej);
-    // Job Left + Shift Target: prefer the values FROZEN at job start on
-    // the PMD_Production row (canonical.jobLeft / .shiftTarget) so Trace
-    // reflects demand-at-start exactly as recorded — that's the whole
-    // point of the JobLeft column. Fall back to the live formula only for
-    // legacy rows that predate the column or in-progress shifts that
-    // haven't frozen a value yet.
+      ? jobGoodTotals.get(jobNumber)! + (signedTuple ? 0 : goodThisTuple)
+      : goodThisTuple;
+    // Job Left + Shift Target. SIGNED tuples read the PMD_Production
+    // columns — lockShift recomputes them from signed rows at sign-off,
+    // so they are the recorded demand-at-start for that row. An UNSIGNED
+    // tuple's canonical.jobLeft is different animal entirely: it's the
+    // editing device's old client-frozen snapshot mirrored through
+    // PMD_LiveStatus — stale by definition and historically contaminated
+    // (SFM507147's live card showed a phantom 200 while the signed rows
+    // said 656). Live cards therefore ALWAYS derive from the signed
+    // cross-shift Good instead.
     const jobLeft =
-      canonical?.jobLeft != null
+      signedTuple && canonical?.jobLeft != null
         ? canonical.jobLeft
         : plan
           ? jobLeftPiecesFor(plan, jobGood)
           : null;
     const shiftTargetVal =
-      canonical?.shiftTarget != null
+      signedTuple && canonical?.shiftTarget != null
         ? canonical.shiftTarget
         : plan && jobLeft != null
           ? shiftTargetFor(plan, jobLeft)
@@ -773,7 +781,7 @@ function buildTraceRowsFor(
       timeline,
       countStart: canonical?.countStart ?? null,
       countEnd: canonical?.countEnd ?? null,
-      good: Math.max(0, grossThis - totalRej),
+      good: goodThisTuple,
       reject: totalRej,
       orderQty: plan && !plan.isDieChange ? plan.orderQty : null,
       jobLeft,
