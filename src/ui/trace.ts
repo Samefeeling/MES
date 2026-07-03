@@ -186,11 +186,16 @@ let dalRef: PmdDataLayer;
 let livePollTimer: ReturnType<typeof setInterval> | undefined;
 let nowLineTimer: ReturnType<typeof setInterval> | undefined;
 /** How often Live Status re-pulls from PMD_LiveStatus / PMD_Production.
- *  5 min is a management-pace refresh — the per-job cross-shift Good
- *  fetches needed by Job Left / Shift Target make a tighter poll
- *  expensive against SharePoint, and supervisors using this view want
- *  a stable picture, not a per-keystroke ticker. */
-const LIVE_POLL_MS = 5 * 60_000;
+ *  2 min balances timeliness against SharePoint load (the per-job
+ *  cross-shift Good fetches needed by Job Left / Shift Target make a
+ *  per-keystroke poll expensive). The floor iPads mirror every 60 s, so
+ *  worst-case staleness on this view is ~3 min; switching back to the
+ *  tab refreshes immediately (visibility listener below). */
+const LIVE_POLL_MS = 2 * 60_000;
+/** Throttle for the focus/visibility-triggered refresh so tabbing back
+ *  and forth doesn't hammer SharePoint. */
+const LIVE_FOCUS_REFRESH_MIN_GAP_MS = 15_000;
+let lastLiveLoadMs = 0;
 
 export async function renderTrace(dal: PmdDataLayer): Promise<void> {
   dalRef = dal;
@@ -241,6 +246,26 @@ function stopLivePoll(): void {
   if (nowLineTimer) clearInterval(nowLineTimer);
   livePollTimer = undefined;
   nowLineTimer = undefined;
+}
+
+/**
+ * "Just looked at it" refresh: a supervisor tabbing back to the Live
+ * board expects the current picture, not up-to-2-min-old data (worse if
+ * the tab was backgrounded — browsers throttle interval timers, so the
+ * poll may not have fired at all while hidden). One module-level
+ * listener, self-gating on the trace view being active.
+ */
+function refreshLiveOnReturn(): void {
+  if (document.visibilityState !== 'visible') return;
+  if (!document.querySelector('.trace') || !S || S.view !== 'live') return;
+  if (Date.now() - lastLiveLoadMs < LIVE_FOCUS_REFRESH_MIN_GAP_MS) return;
+  void loadLive({ silent: true });
+}
+// Guarded so importing this module under the Node test runner (no DOM)
+// doesn't explode at load time.
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', refreshLiveOnReturn);
+  window.addEventListener('focus', refreshLiveOnReturn);
 }
 
 function render(): void {
@@ -457,6 +482,7 @@ function wire(): void {
  * right now" rather than just listing what already exists.
  */
 async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
+  lastLiveLoadMs = Date.now();
   if (!opts.silent) {
     S!.loading = true;
     render();

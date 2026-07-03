@@ -237,7 +237,7 @@ describe('listProduction backfills editCache from PMD_LiveStatus', () => {
       });
       const machineCode = 'Batt1';
       // Use yesterday's Day shift so the seeded tuple is recent enough to
-      // survive the 48 h live-retention cap — this test isolates the
+      // survive the 24 h live-retention cap — this test isolates the
       // per-slot merge logic, not staleness sweeping.
       const pad2 = (n: number): string => String(n).padStart(2, '0');
       const yd = new Date();
@@ -569,7 +569,7 @@ describe('shiftEndedLongAgo', () => {
     expect(shiftEndedLongAgo('garbage', new Date(2026, 5, 16))).toBe(false);
   });
   it('honours a custom grace window', () => {
-    // 24 h after start is past the default 8 h grace but not a 48 h one.
+    // 24 h after START is past the default 8 h grace but not the hard cap (measured from shift END).
     const now = new Date(2026, 5, 11, 7, 0);
     expect(shiftEndedLongAgo(sid, now)).toBe(true);
     expect(shiftEndedLongAgo(sid, now, 48 * 3600_000)).toBe(false);
@@ -1694,7 +1694,7 @@ describe('PMD_Rejects is the source of truth on read (SFM507067 drift)', () => {
   });
 });
 
-describe('signed-off history, 48h live cap, and Signoff timestamp', () => {
+describe('signed-off history, 24h live cap, and Signoff timestamp', () => {
   const store = new Map<string, string>();
   beforeAll(() => {
     (globalThis as { localStorage?: unknown }).localStorage = {
@@ -1991,11 +1991,11 @@ describe('signed-off history, 48h live cap, and Signoff timestamp', () => {
     expect(prodBody!.JobLeft).toBe(1186);
   });
 
-  it('48h hard cap sweeps an old live row that still carries status', async () => {
+  it('24h hard cap sweeps an old live row that still carries status', async () => {
     store.clear();
     const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
     const old = new Date();
-    old.setDate(old.getDate() - 3); // 3 days ago → past the 48h cap
+    old.setDate(old.getDate() - 3); // 3 days ago → past the 24h cap
     const oldDate = dayId(old);
     const deleted: string[] = [];
     const o = dal as unknown as {

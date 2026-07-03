@@ -2885,9 +2885,15 @@ export function operatorPollTick(): void {
  * > 60 s) would stack a second pollSync onto the first, then a third
  * onto that, until Safari's connection pool was saturated and the
  * page froze. Reported by floor: iPad9 freeze, especially night
- * shift. Belt-and-braces with the DAL's own snapshotInFlight guard.
+ * shift. Belt-and-braces with the DAL's own snapshot guard.
+ *
+ * Timestamp, not boolean: an iPad Safari fetch can hang forever (Wi-Fi
+ * drop mid-request), which kept a boolean guard stuck true and silently
+ * stopped the mirror until a reload. A claim older than 5 min is
+ * presumed hung and the next tick may proceed.
  */
-let pollSyncInFlight = false;
+let pollSyncInFlightSince: number | null = null;
+const POLL_SYNC_STUCK_MS = 5 * 60_000;
 
 /**
  * Per-tick best-effort flush of this device's editCache to PMD_LiveStatus
@@ -2896,8 +2902,9 @@ let pollSyncInFlight = false;
  */
 async function pollSync(): Promise<void> {
   if (!S) return;
-  if (pollSyncInFlight) return;
-  pollSyncInFlight = true;
+  const now = Date.now();
+  if (pollSyncInFlightSince != null && now - pollSyncInFlightSince < POLL_SYNC_STUCK_MS) return;
+  pollSyncInFlightSince = now;
   try {
     if (dalRef.pushLiveSnapshot) {
       await dalRef.pushLiveSnapshot().catch(() => {
@@ -2905,6 +2912,6 @@ async function pollSync(): Promise<void> {
       });
     }
   } finally {
-    pollSyncInFlight = false;
+    if (pollSyncInFlightSince === now) pollSyncInFlightSince = null;
   }
 }

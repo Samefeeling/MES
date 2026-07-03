@@ -362,8 +362,16 @@ export class SharePointDataLayer implements PmdDataLayer {
    * concurrent-connections cap was saturated and the tab locked up.
    * One-in-flight at a time is the correct policy — a missed tick just
    * pushes one minute later.
+   *
+   * Timestamp, not boolean: iPad Safari can leave a fetch pending FOREVER
+   * (Wi-Fi drop / network switch mid-request settles neither way), which
+   * kept the old boolean stuck true and silently killed the mirror until
+   * someone reloaded the page — the floor iPad had fresh data for hours
+   * while PMD_LiveStatus / Trace never saw it. A guard older than
+   * SNAPSHOT_STUCK_MS is presumed hung and a new snapshot may start.
    */
-  private snapshotInFlight = false;
+  private snapshotInFlightSince: number | null = null;
+  private static readonly SNAPSHOT_STUCK_MS = 5 * 60_000;
   /**
    * Stable per-device identity, persisted in localStorage. Written to
    * PMD_LiveStatus.OwnerDevice on every snapshot push so we can see
@@ -1015,8 +1023,8 @@ export class SharePointDataLayer implements PmdDataLayer {
     const liveFresh: HeaderRow[] = [];
     for (const h of liveHeaders) {
       const hSid = `${h.date}-${h.shift}`;
-      // Hard 48 h cap (Task: never-signed-off rows lingering forever):
-      // sweep ANY live row whose shift ended > 48 h ago, status or not.
+      // Hard 24 h cap (Task: never-signed-off rows lingering forever):
+      // sweep ANY live row whose shift ended > 24 h ago, status or not.
       // This is the only path that removes an OLD row that DOES carry
       // status — isStaleLiveHeader deliberately leaves those alone. A
       // tuple actively unlocked for correction is exempt (its live mirror
@@ -1085,7 +1093,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       // shift, and dropping it mid-edit would lose the correction before
       // re-sign-off commits it.
       if (this.unlockedTuples.has(k)) continue;
-      // Hard 48 h cap mirrors the live-row sweep above so an abandoned
+      // Hard 24 h cap mirrors the live-row sweep above so an abandoned
       // in-progress job (status set, never signed off) doesn't get
       // re-broadcast from this device's localStorage indefinitely.
       if (shiftEndedLongAgo(sid, liveNow, LIVE_HARD_CAP_MS)) {
@@ -1888,15 +1896,21 @@ export class SharePointDataLayer implements PmdDataLayer {
    */
   async pushLiveSnapshot(): Promise<void> {
     if (this.editCache.size === 0) return;
-    // Reentrancy guard — see snapshotInFlight field comment. The poll
-    // tick is fire-and-forget; without this, a slow tick stacks onto
-    // the next one and saturates Safari's connection pool → freeze.
-    if (this.snapshotInFlight) return;
-    this.snapshotInFlight = true;
+    // Reentrancy guard — see snapshotInFlightSince field comment. The
+    // poll tick is fire-and-forget; without this, a slow tick stacks
+    // onto the next one and saturates Safari's connection pool → freeze.
+    const now = Date.now();
+    if (this.snapshotInFlightSince != null) {
+      if (now - this.snapshotInFlightSince < SharePointDataLayer.SNAPSHOT_STUCK_MS) return;
+      console.warn('[pmd] live snapshot stuck for 5+ min (hung fetch?) — starting a fresh one');
+    }
+    this.snapshotInFlightSince = now;
     try {
       await this.pushLiveSnapshotInner();
     } finally {
-      this.snapshotInFlight = false;
+      // Only clear our own claim: if the watchdog already let a newer
+      // snapshot start, a late-settling hung run must not unlock it.
+      if (this.snapshotInFlightSince === now) this.snapshotInFlightSince = null;
     }
   }
 
@@ -2992,10 +3006,15 @@ export const LIVE_STALE_GRACE_MS = 8 * 3600_000;
  * more than this ago is swept on the next read, WITH or WITHOUT machine
  * status. The 8 h grace above only sweeps status-empty mis-taps; a real
  * in-progress job that the operator recorded but never signed off would
- * otherwise linger on the live board forever. 48 h keeps the last two
- * days visible for late sign-off / review, then cleans up.
+ * otherwise linger on the live board forever. 24 h still covers the
+ * observed late-sign-off pattern (a Night/Afternoon shift back-filled
+ * the next morning) while getting stale rows off the live board — and
+ * out of the cross-shift Good totals — a day sooner. NOTE: this also
+ * bounds how long un-signed-off work survives in a device's editCache;
+ * a shift must be signed off within a day of ending or its unsigned
+ * data is dropped.
  */
-export const LIVE_HARD_CAP_MS = 48 * 3600_000;
+export const LIVE_HARD_CAP_MS = 24 * 3600_000;
 
 /**
  * True when `shiftId`'s shift ended more than `graceMs` ago — i.e. it
