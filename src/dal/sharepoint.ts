@@ -196,6 +196,14 @@ const DEFAULT_FIELDS = {
      *  Optional column; stripRejectedFields tolerates absence (then a
      *  reopened order falls back to the old device-local behaviour). */
     reopened: 'Reopened',
+    /** Planned start of the order (JobHead_StartDate + StartHour from the
+     *  planning CSV, local ISO '2026-07-01T18:40:00'), denormalised onto
+     *  PMD_Production at sign-off — same pattern as PartNum/JobRequired.
+     *  Epicor drops completed orders from planning, so without this the
+     *  KPI Schedule Adherence has no planned-start for exactly the jobs
+     *  that finished. Text column (avoids the site-timezone shifting we
+     *  hit on Signoff); stripRejectedFields tolerates absence. */
+    plannedStart: 'PlannedStart',
   },
   rejects: {
     // Title = Machine; Date is a DateTime (not date-only).
@@ -1375,6 +1383,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       reopened: F.reopened ? r[F.reopened] === true : false,
       jobLeft: F.jobLeft && r[F.jobLeft] != null ? num(r[F.jobLeft]) : -1,
       shiftTarget: F.shiftTarget && r[F.shiftTarget] != null ? num(r[F.shiftTarget]) : -1,
+      plannedStart: F.plannedStart ? str(r[F.plannedStart]) : '',
       // Built-in SP column, always present in the verbose payload.
       modified: str(r['Modified']),
     }));
@@ -1602,6 +1611,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     // valid value ("job complete") so guard on >= 0, not truthiness.
     if (h.jobLeft >= 0) slots[0].jobLeft = h.jobLeft;
     if (h.shiftTarget >= 0) slots[0].shiftTarget = h.shiftTarget;
+    // Planned start denormalised at sign-off: ride the canonical slot so
+    // KPI Schedule Adherence and a re-sign-off (cache-first) can read it
+    // after Epicor drops the order from planning.
+    if (h.plannedStart) slots[0].plannedStart = h.plannedStart;
     // PMD_Rejects events take precedence (signed-off shifts), but for
     // live (unsigned) rows the events list is empty — fall back to the
     // RejectsBySlot JSON column on PMD_LiveStatus so other iPads see
@@ -1798,6 +1811,15 @@ export class SharePointDataLayer implements PmdDataLayer {
       const v = slots.find((s) => s.slotIndex === 0)?.cavities;
       return v && v > 0 ? v : 1;
     };
+    // Planned start (JobHead_StartDate + StartHour) — same cache-first,
+    // planning-fallback rule as jobRequiredOf. Persisting it is what lets
+    // KPI Schedule Adherence see when a job was SCHEDULED after Epicor
+    // drops the completed order from planning.
+    const plannedStartOf = (job: string, slots: ProductionRecord[]): string => {
+      const fromCache = slots.find((s) => s.plannedStart)?.plannedStart;
+      if (fromCache) return fromCache;
+      return orders.find((o) => o.jobNumber === job)?.plannedStart ?? '';
+    };
     for (const slots of myTuples) {
       const job = slots[0]?.jobNumber ?? jobNumber ?? '';
       const agg = aggregateSlots(slots);
@@ -1886,6 +1908,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           jobRequired: required,
           cycleTime,
           cavities,
+          plannedStart: plannedStartOf(job, slots),
           shiftTarget: shiftTargetSnap,
           timeline: agg.timeline,
           countStart: agg.countStart,
@@ -2271,6 +2294,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     // re-locks the row) and unlock (true). undefined on live pushes leaves
     // the column untouched.
     if (F.reopened && h.reopened !== undefined) body[F.reopened] = h.reopened;
+    // PlannedStart (PMD_Production only). Only write a known value —
+    // never blank an existing one via MERGE when planning has since
+    // dropped the order.
+    if (F.plannedStart && h.plannedStart) body[F.plannedStart] = h.plannedStart;
     // Cavities: write only when > 1 (a real multi-cavity die). 1 is the
     // default, and writing 1 via MERGE is harmless but pointless; skipping
     // also means a tenant without the column never trips stripRejected.
@@ -2969,6 +2996,10 @@ interface HeaderRow {
   /** Shift Target frozen at job start from PMD_Production.ShiftTarget; -1
    *  when absent. Round-tripped onto the canonical record for Trace. */
   shiftTarget: number;
+  /** Planned start (local ISO) from PMD_Production.PlannedStart; '' when
+   *  the column is absent / empty. Round-tripped onto the canonical
+   *  record so Schedule Adherence works after Epicor drops the order. */
+  plannedStart: string;
   /** SharePoint's built-in Modified timestamp (ISO). Used to detect a
    *  signed-off tuple that has since been unlocked and re-edited: its
    *  PMD_LiveStatus row gets a Modified NEWER than the PMD_Production
@@ -3024,6 +3055,9 @@ interface HeaderInput {
    *  sign-off (false, re-locks) and unlock (true). undefined leaves the
    *  column untouched (live snapshot pushes). */
   reopened?: boolean;
+  /** PMD_Production only — planned start (local ISO) denormalised at
+   *  sign-off. Empty/undefined skips the column write. */
+  plannedStart?: string;
 }
 
 interface StatusHours {

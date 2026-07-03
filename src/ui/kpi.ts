@@ -337,8 +337,12 @@ function inRange(
   return d >= from && d <= to;
 }
 
-function plannedInRange(order: PlanningOrder, from: Date, to: Date): boolean {
-  const t = new Date(order.plannedStart);
+/** Planned start (local ISO, from planning or a signed row's PlannedStart
+ *  column) falls inside [from, to]. `to` is extended to the end of its
+ *  calendar day since period bounds are date-level. Blank / unparseable
+ *  starts are never in range. */
+function plannedStartInRange(plannedStart: string, from: Date, to: Date): boolean {
+  const t = new Date(plannedStart);
   return t >= from && t <= new Date(to.getTime() + 86400_000 - 1);
 }
 
@@ -610,13 +614,44 @@ async function compute(now = new Date()): Promise<void> {
       })
       .sort((a, b2) => b2.agg.output - a.agg.output);
 
-    const planned =
-      S!.period === 'last3'
-        ? 0
-        : planning
-            .filter((o) => !o.isDieChange && plannedInRange(o, from, to))
-            .reduce((a, o) => a + (o.jobRequired || 0), 0);
-    const schedAdh = planned > 0 ? Math.round((total.output / planned) * 100) : null;
+    // Schedule Adherence: of the quantity SCHEDULED to start on THIS
+    // press in the window (JobHead_StartDate + StartHour), how much got
+    // made. Per job: min(good, required) — over-producing one order
+    // can't pay for another that never ran, and no job exceeds 100%.
+    // Two sources of "scheduled here":
+    //   - signed rows' denormalised PlannedStart (survives Epicor
+    //     dropping completed orders from planning — the old version
+    //     divided the machine's whole output by only the still-open
+    //     orders, un-scoped to the machine, which is where the
+    //     514%…1851% figures came from);
+    //   - current planning, for orders scheduled in the window that
+    //     never produced (they count against, produced = 0). Capped at
+    //     `now` so an order scheduled for tomorrow isn't "missed" today.
+    let schedAdh: number | null = null;
+    if (S!.period !== 'last3') {
+      const schedTo = new Date(Math.min(to.getTime(), now.getTime()));
+      const sched = new Map<string, { required: number; produced: number }>();
+      for (const [jobNumber, recs] of allByJob) {
+        const ps = recs.find((r) => r.plannedStart)?.plannedStart ?? '';
+        if (!ps || !plannedStartInRange(ps, from, schedTo)) continue;
+        const required = recs.reduce((a, r) => Math.max(a, r.jobRequired || 0), 0);
+        if (required <= 0) continue;
+        sched.set(jobNumber, { required, produced: aggregate(recs).output });
+      }
+      for (const o of planning) {
+        if (o.isDieChange || o.machineCode !== m.machineCode) continue;
+        if (!(o.jobRequired > 0) || sched.has(o.jobNumber)) continue;
+        if (!plannedStartInRange(o.plannedStart, from, schedTo)) continue;
+        sched.set(o.jobNumber, { required: o.jobRequired, produced: 0 });
+      }
+      let plannedQty = 0;
+      let madeQty = 0;
+      for (const { required, produced } of sched.values()) {
+        plannedQty += required;
+        madeQty += Math.min(produced, required);
+      }
+      schedAdh = plannedQty > 0 ? Math.round((madeQty / plannedQty) * 100) : null;
+    }
     return { machineCode: m.machineCode, total, byShift, jobsByShift, byJobTotal, schedAdh };
   });
 
@@ -1094,7 +1129,7 @@ function render(): void {
         </table>
       </div>
       ${charts}
-      <p class="bd-sub">Efficiency* = run-slot share of all filled slots. Schedule Adherence = good qty ÷ planned qty for jobs starting in the period (suppressed in Last-24h). Shift sub-rows show each shift's contribution to the period total.</p>
+      <p class="bd-sub">Efficiency* = run-slot share of all filled slots. Schedule Adherence = good qty ÷ scheduled qty, per machine, for jobs whose planned start (JobHead_StartDate + StartHour) falls in the period; each job capped at 100% (suppressed in Last-24h). Shift sub-rows show each shift's contribution to the period total.</p>
     </div>`;
 
   app.querySelector<HTMLButtonElement>('[data-kpi-refresh]')?.addEventListener('click', () => {

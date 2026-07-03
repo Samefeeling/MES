@@ -2046,6 +2046,64 @@ describe('signed-off history, 24h live cap, and Signoff timestamp', () => {
     expect(prodBody!.JobLeft).toBe(100);
   });
 
+  it('lockShift denormalises PlannedStart from planning (KPI Schedule Adherence)', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const today = dayId(new Date());
+    const shiftId = `${today}-Day`;
+    const cache = (dal as unknown as { editCache: Map<string, unknown[]> }).editCache;
+    cache.set(`Batt1|${shiftId}|SFM700`, [{
+      id: -1, machineCode: 'Batt1', shiftId, jobNumber: 'SFM700', slotIndex: 0,
+      statusCode: 'R', countStart: 0, countEnd: 40, rejects: '{}', purgeKg: null,
+      rejectCount: 0, bdIssue: '', mangoTicket: '', handoverNote: '',
+      operator: 'Joe', supervisor: 'Sue', qcBy: '', locked: false, lockedBy: '',
+      lockedAt: '', createdAt: '', updatedAt: '',
+    }]);
+    let prodBody: Record<string, unknown> | null = null;
+    const o = dal as unknown as {
+      listPlanning: () => Promise<unknown[]>;
+      itemType: () => Promise<string>;
+      getAllItems: () => Promise<unknown[]>;
+      postWithFieldRetry: (l: string, u: string, b: Record<string, unknown>) => Promise<void>;
+      replaceBreakdownEvents: () => Promise<void>;
+      replaceRejectEvents: () => Promise<void>;
+      deleteLiveRow: () => Promise<void>;
+    };
+    o.listPlanning = async (): Promise<unknown[]> => [
+      { jobNumber: 'SFM700', orderQty: 100, plannedStart: '2026-07-01T18:40:00' },
+    ];
+    o.itemType = async (): Promise<string> => 'SP.X';
+    o.getAllItems = async (): Promise<unknown[]> => [];
+    o.postWithFieldRetry = async (_l, _u, b): Promise<void> => { prodBody = b; };
+    o.replaceBreakdownEvents = async (): Promise<void> => {};
+    o.replaceRejectEvents = async (): Promise<void> => {};
+    o.deleteLiveRow = async (): Promise<void> => {};
+
+    await dal.lockShift('Batt1', shiftId, 'Sue', 'Joe', 'SFM700');
+    expect(prodBody).not.toBeNull();
+    expect(prodBody!.PlannedStart).toBe('2026-07-01T18:40:00');
+  });
+
+  it('round-trips PlannedStart onto the canonical record', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production'
+        ? [signedHeader({ plannedStart: '2026-07-01T18:40:00' })]
+        : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+
+    const recs = await dal.listSignedOffProduction({ jobNumber: 'SFM700' });
+    const slot0 = recs.find((r) => r.slotIndex === 0)!;
+    expect(slot0.plannedStart).toBe('2026-07-01T18:40:00');
+  });
+
   it('lockShift JobLeft recompute overrides a contaminated frozen value', async () => {
     store.clear();
     const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });

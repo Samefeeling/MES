@@ -143,6 +143,12 @@ export interface ProductionRecord {
    *  few presses (550T / 320T / 150T / 125T) ever run a 2-cavity die, and
    *  the operator ticks a box to set it. Undefined / 0 is treated as 1. */
   cavities?: number;
+  /** Planned start of the order (JobHead_StartDate + StartHour, local ISO
+   *  '2026-07-01T18:40:00'), denormalised onto PMD_Production.PlannedStart
+   *  at sign-off so KPI Schedule Adherence still knows when the job was
+   *  SCHEDULED after Epicor drops it from planning. Canonical on slot 0;
+   *  undefined on live rows and tenants without the column. */
+  plannedStart?: string;
   slotIndex: number; // 0..15
   statusCode: StatusCode | '';
   countStart: number | null;
