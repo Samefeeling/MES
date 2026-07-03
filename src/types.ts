@@ -81,9 +81,12 @@ export interface PlanningOrder {
   plannedStart: string; // ISO 8601
   plannedEnd: string; // ISO 8601
   /** Total order quantity (Epicor JobHead_ProdQty) — drives the "Order Qty"
-   *  display. Distinct from jobRequired, which counts down as pieces ship. */
+   *  display AND is the base for Job Left (order total − Σ PMD Good). */
   orderQty: number;
-  /** Remaining quantity (Epicor Calculated_RemainingQty) — drives "Job left". */
+  /** Remaining quantity (Epicor Calculated_RemainingQty). NOT the Job Left
+   *  base: Epicor decrements this as production is reported back to it, so
+   *  subtracting PMD's Good from it again double-counts (SFM507147 showed
+   *  0 with 656 left). Only used as a last-resort orderQty fallback. */
   jobRequired: number;
   qtyPerHr: number;
   duration: number; // hours

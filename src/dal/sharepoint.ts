@@ -2059,7 +2059,11 @@ export class SharePointDataLayer implements PmdDataLayer {
           jobNumber,
           partNumber: partNumByJob.get(jobNumber) ?? '',
           partDescription: '',
-          jobRequired: 0,
+          // Order total when the cache knows it — lets another device
+          // (or the Trace live board) rebuild a synthetic order for an
+          // in-progress job even after Epicor drops it from planning.
+          // upsertHeaderInto skips the column when this is 0.
+          jobRequired: slots.find((s) => s.jobRequired && s.jobRequired > 0)?.jobRequired ?? 0,
           // Carry cycle time + cavities so a mid-shift reload (editCache
           // lost, rehydrate from PMD_LiveStatus) keeps them. Job Left /
           // Shift Target are deliberately NOT mirrored: they are derived

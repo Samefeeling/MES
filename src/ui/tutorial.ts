@@ -77,7 +77,7 @@ const OPERATOR_STEPS: TutorialStep[] = [
     id: 'order-qty',
     title: 'Order Qty and Job Left',
     narration:
-      'The side panel on the right shows the order total and what is left. Order Qty is the whole-order quantity from planning (Epicor ProdQty). Job Left starts from the remaining quantity and counts down as Good pieces are produced across every shift on this job — not just yours — so two shifts running the same job see the same number drop together.',
+      'The side panel on the right shows the order total and what is left. Order Qty is the whole-order quantity from planning (Epicor ProdQty). Job Left is that total minus the Good pieces produced across every signed-off shift on this job — not just yours — so two shifts running the same job see the same number drop together.',
     target: '.op-side',
   },
   {

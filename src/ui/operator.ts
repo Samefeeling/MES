@@ -184,9 +184,13 @@ function blankRecordForJob(slot: number, job: string): ProductionRecord {
     shiftId: sid(),
     jobNumber: job,
     partNumber: order?.partNumber ?? '',
-    // Carry cycle time so it persists through editCache → sign-off even
-    // if Epicor drops the order from planning before the shift is signed.
+    // Carry cycle time + the ORDER TOTAL so they persist through
+    // editCache → live mirror → sign-off even if Epicor drops the order
+    // from planning before the shift is signed. jobRequired here is the
+    // total (orderQty), matching the PMD_Production.JobRequired column —
+    // NOT Epicor's decremented remaining qty.
     cycleTime: order?.qtyPerHr ?? 0,
+    jobRequired: order && order.orderQty > 0 ? order.orderQty : undefined,
     slotIndex: slot,
     statusCode: '',
     countStart: null,
@@ -933,10 +937,9 @@ async function refreshJobTotalAndPaintSide(): Promise<void> {
   const totalReject = jobTotals();
   const good = Math.max(0, gross - totalReject);
   const o = selectedOrder();
-  const jobLeft =
-    o && !o.isDieChange
-      ? Math.max(0, o.jobRequired - (S!.jobTotalGood + good))
-      : null;
+  // Shared core formula (order TOTAL − good) — see jobLeftPiecesFor for
+  // why the base must not be Epicor's already-decremented remaining qty.
+  const jobLeft = o ? jobLeftPiecesFor(o, S!.jobTotalGood + good) : null;
   // Patch by data-live tag — text-content matching used to live here,
   // but renaming a label silently broke the live update. Tags are set
   // in buildSide() on each <b> so this stays in sync with the layout.
@@ -1097,7 +1100,7 @@ function buildMeta(): string {
   );
   // Order Qty = total order quantity (Epicor JobHead_ProdQty), shown in the
   // meta row next to Job# / Part#. This is the whole-order size and stays
-  // fixed; Job Left (side panel) counts down off Calculated_RemainingQty.
+  // fixed; Job Left (side panel) = this total − Σ signed Good.
   const orderQty = o && !o.isDieChange ? o.orderQty : '—';
   // Die / paint colour swatch from PMD_ProductDieColor, looked up by
   // the selected job's Part #. Planning.csv always carries
@@ -1332,11 +1335,9 @@ function buildSide(): string {
   const totalReject = jobTotals();
   const good = Math.max(0, gross - totalReject);
   const o = selectedOrder();
-  // §7 — Job Left = JobRequired - Σ Good across ALL shifts, not just this one.
-  const jobLeft =
-    o && !o.isDieChange
-      ? Math.max(0, o.jobRequired - (S!.jobTotalGood + good))
-      : '—';
+  // §7 — Job Left = order total − Σ Good across ALL shifts, not just this
+  // one. Shared core formula; see jobLeftPiecesFor for the base choice.
+  const jobLeft = (o ? jobLeftPiecesFor(o, S!.jobTotalGood + good) : null) ?? '—';
   const purge = c?.purgeKg ?? '';
   const h = parseHandover(c);
   // When the (machine, shift, job) is signed off, every editable field

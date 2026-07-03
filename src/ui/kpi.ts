@@ -640,9 +640,11 @@ async function compute(now = new Date()): Promise<void> {
       }
       for (const o of planning) {
         if (o.isDieChange || o.machineCode !== m.machineCode) continue;
-        if (!(o.jobRequired > 0) || sched.has(o.jobNumber)) continue;
+        // Scheduled qty = the order TOTAL (same base as the rows'
+        // denormalised JobRequired), not Epicor's decremented remaining.
+        if (!(o.orderQty > 0) || sched.has(o.jobNumber)) continue;
         if (!plannedStartInRange(o.plannedStart, from, schedTo)) continue;
-        sched.set(o.jobNumber, { required: o.jobRequired, produced: 0 });
+        sched.set(o.jobNumber, { required: o.orderQty, produced: 0 });
       }
       let plannedQty = 0;
       let madeQty = 0;

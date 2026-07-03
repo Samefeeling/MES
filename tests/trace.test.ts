@@ -8,14 +8,24 @@ import { order, rec } from './helpers';
 // the operator. These tests fence the formula behaviour at that seam.
 
 describe('jobLeftPiecesFor (shared with operator side panel)', () => {
-  it('Job Left = remaining − cumulative Good across every shift', () => {
+  it('Job Left = ORDER TOTAL − cumulative Good across every shift', () => {
+    // The base is orderQty (JobHead_ProdQty), NOT jobRequired (Epicor's
+    // Calculated_RemainingQty): Epicor decrements the latter as
+    // production is reported back to it, so subtracting PMD's Good from
+    // it again double-counted every reported piece — SFM507147 showed
+    // Job Left 0 while 656 genuinely remained.
     const o = order({ jobNumber: 'J1', orderQty: 200, jobRequired: 96 });
+    expect(jobLeftPiecesFor(o, 30)).toBe(170); // 200 − 30
+  });
+
+  it('falls back to the remaining qty when no total was exported', () => {
+    const o = order({ jobNumber: 'J1', orderQty: 0, jobRequired: 96 });
     expect(jobLeftPiecesFor(o, 30)).toBe(66); // 96 − 30
   });
 
   it('never goes negative', () => {
     const o = order({ jobNumber: 'J1', orderQty: 200, jobRequired: 96 });
-    expect(jobLeftPiecesFor(o, 150)).toBe(0);
+    expect(jobLeftPiecesFor(o, 250)).toBe(0);
   });
 
   it('returns null for die-change pseudo-orders', () => {

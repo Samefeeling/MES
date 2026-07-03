@@ -11,10 +11,20 @@ import type { PlanningOrder } from '../types';
  * Job Left = order total − cumulative Good across every (machine, shift)
  * tuple of this job (caller passes that running total). Returns null for
  * die-change pseudo-orders (no piece target).
+ *
+ * The base is the ORDER TOTAL (orderQty, Epicor JobHead_ProdQty) — NOT
+ * `jobRequired` (Epicor Calculated_RemainingQty). Epicor decrements the
+ * remaining figure as production is reported back to it, so subtracting
+ * PMD's own Good from it again double-counted every reported piece:
+ * SFM507147 rendered Job Left 0 while 656 genuinely remained. Falls back
+ * to jobRequired only for rows that never carried a total (legacy
+ * exports); synthetic orders rebuilt from PMD_Production set both fields
+ * to the denormalised total, so they are unaffected either way.
  */
 export function jobLeftPiecesFor(o: PlanningOrder, jobGood: number): number | null {
   if (o.isDieChange) return null;
-  return Math.max(0, o.jobRequired - jobGood);
+  const total = o.orderQty > 0 ? o.orderQty : o.jobRequired;
+  return Math.max(0, total - jobGood);
 }
 
 /**
