@@ -75,10 +75,15 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-th-reset:hover{background:#e2e8f0}
 /* Headline stat tiles above the table — daily-meeting numbers readable
    from across the room. Top border carries the traffic-light colour. */
-.kpi-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
-.kpi-stat{background:#fff;border:1px solid var(--bd);border-top:4px solid var(--theme-dark);border-radius:12px;padding:12px 16px;display:flex;flex-direction:column;gap:4px}
-.kpi-stat-label{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--mu)}
-.kpi-stat-value{font-size:30px;font-weight:800;color:var(--tx);font-variant-numeric:tabular-nums;line-height:1.1}
+/* Headline tiles: ALWAYS one row (auto-flow column splits the width
+   evenly across however many tiles render), shrinking instead of
+   wrapping — 8 tiles were spilling onto a second row. min-width:0 lets
+   the grid actually compress a tile; the value font scales with the
+   viewport so "276.5" survives an iPad-width column. */
+.kpi-stats{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:8px}
+.kpi-stat{background:#fff;border:1px solid var(--bd);border-top:4px solid var(--theme-dark);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.kpi-stat-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kpi-stat-value{font-size:clamp(16px,2.2vw,28px);font-weight:800;color:var(--tx);font-variant-numeric:tabular-nums;line-height:1.1;white-space:nowrap}
 .kpi-stat.is-green{border-top-color:var(--gn)}.kpi-stat.is-green .kpi-stat-value{color:#15803d}
 .kpi-stat.is-amber{border-top-color:var(--am)}.kpi-stat.is-amber .kpi-stat-value{color:#b45309}
 .kpi-stat.is-red{border-top-color:var(--rd)}.kpi-stat.is-red .kpi-stat-value{color:#b91c1c}
