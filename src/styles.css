@@ -184,7 +184,10 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .trace-section .bd-code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;font-weight:800;background:#1e3a8a;color:#fff;padding:2px 6px;border-radius:4px}
 
 /* ===== operator sheet ===== */
-.op-sheet{background:var(--theme-base);border:1px solid var(--theme-accent);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:12px;transition:background .25s,border-color .25s}
+/* --disp-zoom (set on <body> by the operator view's − / + control) scales
+   the whole operator page via CSS zoom — action bar, meta, grid, side
+   panel, legend. Scoped to .op-sheet so Trace / KPI stay at 100%. */
+.op-sheet{background:var(--theme-base);border:1px solid var(--theme-accent);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:12px;transition:background .25s,border-color .25s;zoom:var(--disp-zoom,1)}
 
 /* Unified action bar — date nav + shift tabs + view level + Refresh + Save in one row.
    Replaces the old op-title and op-nav strips. */
@@ -193,6 +196,12 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .ab-date-input{padding:10px 12px;border:2px solid var(--bd);border-radius:10px;font-size:16px;font-weight:700;background:#fff;min-height:52px;color:var(--tx);min-width:170px;text-align:center}
 .ab-shifts{display:flex;gap:6px;flex-wrap:wrap}
 .ab-window{display:flex;align-items:center;gap:4px;font-size:13px;font-weight:700;color:var(--mu);font-variant-numeric:tabular-nums;white-space:nowrap}
+/* Display-size − / % / + stepper. 44px hit targets; the % readout is
+   fixed-width so the bar doesn't jiggle between 60% and 150%. */
+.ab-zoom{display:flex;align-items:center;gap:2px;background:#fff;border:2px solid var(--bd);border-radius:10px;padding:2px}
+.ab-zoom-btn{width:44px;height:44px;border:0;background:transparent;border-radius:8px;font-size:24px;font-weight:800;color:var(--theme-dark);cursor:pointer;line-height:1;-webkit-tap-highlight-color:transparent}
+.ab-zoom-btn:active{background:var(--gy)}
+.ab-zoom-val{min-width:70px;text-align:center;font-size:13px;font-weight:700;color:var(--mu);font-variant-numeric:tabular-nums;white-space:nowrap}
 .ab-right{display:flex;align-items:center;gap:10px;margin-left:auto;flex-wrap:wrap}
 /* ⚠ Future-shift warning — a shift picked that hasn't started yet (the
    classic night-past-midnight date slip). Loud amber so it can't be missed,
@@ -292,8 +301,12 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    this is what lets the pinned time / Quality Checks / Machine Status
    rows stay put while the operator scrolls down the D01–D10 defect rows.
    Without a cap the wrap grows to fit and the PAGE scrolls instead, and
-   position:sticky on an overflow ancestor that never scrolls does nothing. */
-.op-grid-wrap{position:relative;flex:1;background:#fff;border:2px solid var(--theme-accent);border-radius:10px;overflow:auto;max-height:calc(100vh - 250px);min-height:300px;--slot-w:60px}
+   position:sticky on an overflow ancestor that never scrolls does nothing.
+   The vh cap is divided by --disp-zoom because lengths inside the zoomed
+   .op-sheet subtree are re-multiplied by the zoom factor at paint time —
+   without the division a zoomed-in grid would paint taller than the
+   viewport and the pinned rows could scroll out of reach. */
+.op-grid-wrap{position:relative;flex:1;background:#fff;border:2px solid var(--theme-accent);border-radius:10px;overflow:auto;max-height:calc((100vh - 250px)/var(--disp-zoom,1));min-height:300px;--slot-w:60px}
 .op-grid{border-collapse:separate;border-spacing:0;font-size:14px;table-layout:fixed;width:auto;min-width:100%}
 .op-grid th,.op-grid td{border:1px solid #d1d5db;padding:0;margin:0;text-align:center;vertical-align:middle}
 .op-grid thead th{background:var(--theme-dark);color:var(--theme-on-dark);font-weight:700;height:44px;padding:0 4px;white-space:nowrap;font-size:13px;position:sticky;top:0;z-index:4}

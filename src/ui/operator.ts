@@ -152,6 +152,51 @@ function saveView(): void {
   }
 }
 
+// ===== Display zoom — scales the WHOLE operator page =====
+// The − / % / + control in the action bar sets CSS `zoom` on .op-sheet
+// via the --disp-zoom var (see styles.css), so the action bar, meta,
+// grid, side panel and legend all scale together — smaller to fit the
+// whole shift on screen, larger for readability. Persisted per DEVICE
+// in localStorage (not per tab): a floor iPad keeps its size across
+// reloads and asset redeploys. Distinct from the retired +/− viewLevel
+// zoom, which switched detail↔summary views rather than scaling.
+const DISP_ZOOM_KEY = 'pmd_disp_zoom_v1';
+const DISP_ZOOM_MIN = 0.6;
+const DISP_ZOOM_MAX = 1.5;
+const DISP_ZOOM_STEP = 0.1;
+
+/** Clamp + snap a display-zoom factor to the 0.6–1.5 range in 0.1 steps.
+ *  Pure — exported for tests. Non-finite input falls back to 1. */
+export function clampDispZoom(v: number): number {
+  if (!isFinite(v)) return 1;
+  const snapped = Math.round(v * 10) / 10;
+  return Math.min(DISP_ZOOM_MAX, Math.max(DISP_ZOOM_MIN, snapped));
+}
+
+let dispZoom = ((): number => {
+  try {
+    const raw = localStorage.getItem(DISP_ZOOM_KEY);
+    if (raw != null) return clampDispZoom(Number(raw));
+  } catch {
+    /* storage blocked — best effort */
+  }
+  return 1;
+})();
+
+function applyDispZoom(): void {
+  document.body.style.setProperty('--disp-zoom', String(dispZoom));
+}
+
+function stepDispZoom(dir: 1 | -1): void {
+  dispZoom = clampDispZoom(dispZoom + dir * DISP_ZOOM_STEP);
+  try {
+    localStorage.setItem(DISP_ZOOM_KEY, String(dispZoom));
+  } catch {
+    /* storage blocked — zoom still applies for this page load */
+  }
+  applyDispZoom();
+}
+
 const SLOT_PX = 64; // touch target for the half-hour status cell on 10" iPad
 
 const VIEW_LEVELS: Array<{ level: number; label: string }> = [
@@ -1013,6 +1058,11 @@ function buildActionBar(): string {
     </div>
     <div class="ab-shifts">${tabs}</div>
     <div class="ab-window" title="The physical clock window this shift covers — a Night shift starts the evening before and ends 07:00 the next morning, so its date is the START day.">🕑 ${escapeHtml(shiftWindowLabel(sid()))}</div>
+    <div class="ab-zoom" title="Display size — scales the whole operator page. Remembered on this device.">
+      <button type="button" class="ab-zoom-btn" data-dispzoom="-" aria-label="Smaller">−</button>
+      <span class="ab-zoom-val">🔍 ${Math.round(dispZoom * 100)}%</span>
+      <button type="button" class="ab-zoom-btn" data-dispzoom="+" aria-label="Larger">+</button>
+    </div>
     <div class="ab-right">
       <button class="btn-load" data-refresh title="Re-pull planning from SharePoint &amp; recompute Job Left">⟳ Refresh</button>
       <button class="btn-save" data-saveclear>✅ Sign off</button>
@@ -1694,6 +1744,7 @@ function buildSignoffReminderBanner(): string {
 
 function render(): void {
   applyShiftTheme();
+  applyDispZoom();
   // Preserve the half-hour grid's horizontal scroll position across a
   // re-render — without this, filling slot 12 with R via the status
   // picker re-rendered the operator sheet and snapped the grid back
@@ -1749,7 +1800,11 @@ function renderNowLine(): void {
   const x = startX + Math.max(0, Math.min(1, frac)) * (endX - startX);
   const line = document.createElement('div');
   line.className = 'now-line';
-  line.style.left = `${x}px`;
+  // getBoundingClientRect returns VISUAL (post-zoom) pixels, but style.left
+  // on a child of the zoomed .op-sheet subtree is re-multiplied by the zoom
+  // factor at paint time — divide it back out or the line drifts right as
+  // the operator zooms in.
+  line.style.left = `${x / dispZoom}px`;
   line.title = `Now: ${new Date().toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}`;
   wrap.appendChild(line);
 }
@@ -1882,6 +1937,17 @@ function wire(): void {
     summaryCache = null;
     void reload();
   });
+  // Display-size − / + steppers. No full re-render: just re-apply the CSS
+  // var, refresh the % label in place, and reposition the NOW line (its
+  // pixel maths divides by the zoom factor — see renderNowLine).
+  app.querySelectorAll<HTMLButtonElement>('[data-dispzoom]').forEach((b) =>
+    b.addEventListener('click', () => {
+      stepDispZoom(b.dataset.dispzoom === '+' ? 1 : -1);
+      const lbl = app.querySelector('.ab-zoom-val');
+      if (lbl) lbl.textContent = `🔍 ${Math.round(dispZoom * 100)}%`;
+      renderNowLine();
+    }),
+  );
   app.querySelector('[data-signoff-now]')?.addEventListener('click', () => openSaveSignoffModal());
   app.querySelector('[data-refresh]')?.addEventListener('click', () => void refreshAll());
   app.querySelector('[data-saveclear]')?.addEventListener('click', () => openSaveSignoffModal());
