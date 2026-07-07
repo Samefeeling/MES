@@ -232,6 +232,10 @@ function measureFitZoom(): number {
 function applyDispZoom(): void {
   dispZoom = dispZoomPref === 'fit' ? measureFitZoom() : dispZoomPref;
   document.body.style.setProperty('--disp-zoom', String(dispZoom));
+  // The grid's pinned header rows park under the sticky top bar; its real
+  // height feeds their sticky offsets (see the --topbar-h rules in CSS).
+  const topBar = document.querySelector<HTMLElement>('.top');
+  if (topBar) document.body.style.setProperty('--topbar-h', `${topBar.offsetHeight}px`);
   const lbl = document.querySelector('.ab-zoom-val');
   if (lbl) lbl.textContent = dispZoomLabel();
 }
@@ -262,6 +266,294 @@ if (typeof window !== 'undefined') {
       renderNowLine();
     }, 150);
   });
+}
+
+// ===== Voice dictation for the handover boxes =====
+// A 🎤 button on each of the four handover boxes (Machine / Mold /
+// Material / Method) live-transcribes speech into the textarea via the
+// Web Speech API where the browser exposes it (desktop Edge/Chrome,
+// Safari). iPad caveat: Edge on iOS is WebKit inside a WKWebView and
+// does NOT expose the API to third-party browsers — there the button
+// points the operator at the built-in fallback instead: the 🎤 dictation
+// key on the iPad on-screen keyboard, which types into any focused
+// text box (works in Edge, needs Settings → General → Keyboard →
+// Enable Dictation).
+interface SpeechRecognitionLike {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult:
+    | ((e: {
+        resultIndex: number;
+        results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }>;
+      }) => void)
+    | null;
+  onend: (() => void) | null;
+  onerror: ((e: { error?: string }) => void) | null;
+  start(): void;
+  stop(): void;
+}
+
+function speechCtor(): (new () => SpeechRecognitionLike) | null {
+  const w = window as unknown as Record<string, unknown>;
+  return (w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null) as
+    | (new () => SpeechRecognitionLike)
+    | null;
+}
+
+let activeRec: SpeechRecognitionLike | null = null;
+let activeMicField = '';
+
+function stopDictation(): void {
+  const rec = activeRec;
+  activeRec = null; // clear FIRST — rec.stop() fires onend synchronously in some engines
+  activeMicField = '';
+  if (rec) {
+    try {
+      rec.stop();
+    } catch {
+      /* already stopped */
+    }
+  }
+  document.querySelectorAll('.mic-btn.rec').forEach((b) => b.classList.remove('rec'));
+}
+
+function toggleDictation(field: string, btn: HTMLButtonElement): void {
+  if (activeMicField === field) {
+    // Tapping the flashing mic ends the take; commit via the same save
+    // path a keyboard blur uses.
+    const ta = document.querySelector<HTMLTextAreaElement>(`textarea[data-meta="${field}"]`);
+    stopDictation();
+    if (ta) onMetaChange(ta);
+    return;
+  }
+  stopDictation();
+  const Ctor = speechCtor();
+  if (!Ctor) {
+    toast(
+      'No voice input in this browser — use the 🎤 key on the iPad keyboard instead',
+      'warn',
+    );
+    return;
+  }
+  const ta = document.querySelector<HTMLTextAreaElement>(`textarea[data-meta="${field}"]`);
+  if (!ta || ta.disabled) return;
+  const rec = new Ctor();
+  rec.lang = 'en-AU';
+  rec.continuous = true;
+  rec.interimResults = false;
+  rec.onresult = (e) => {
+    // Re-query — a poll re-render may have swapped the textarea node out
+    // from under a long dictation.
+    const el = document.querySelector<HTMLTextAreaElement>(`textarea[data-meta="${field}"]`);
+    if (!el) return;
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const r = e.results[i];
+      if (!r.isFinal) continue;
+      const text = r[0].transcript.trim();
+      if (!text) continue;
+      el.value = el.value ? `${el.value.replace(/\s+$/, '')} ${text}` : text;
+    }
+  };
+  rec.onend = () => {
+    // Engines auto-end after silence; commit whatever landed.
+    if (activeMicField !== field) return;
+    const el = document.querySelector<HTMLTextAreaElement>(`textarea[data-meta="${field}"]`);
+    stopDictation();
+    if (el) onMetaChange(el);
+  };
+  rec.onerror = (e) => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      toast(
+        'Microphone blocked — allow mic access for this site, or use the 🎤 key on the keyboard',
+        'warn',
+      );
+    }
+  };
+  activeRec = rec;
+  activeMicField = field;
+  btn.classList.add('rec');
+  try {
+    rec.start();
+  } catch {
+    stopDictation();
+  }
+}
+
+// ===== Defect photos → PMD_Production attachments =====
+// 📷 button on the side panel opens the iPad camera (file input with
+// capture — native in Edge/Safari on iOS, no getUserMedia needed). The
+// shot is downscaled to ≤1600px JPEG and queued in localStorage, keyed
+// to the (machine, shift, job) tuple on screen. The queue flushes to
+// the tuple's PMD_Production row as list-item attachments — immediately
+// when the row already exists (signed-off shift), otherwise right after
+// Sign Off creates it. localStorage (not memory) so a tab reload during
+// the shift doesn't lose the evidence photos.
+const PHOTO_QUEUE_KEY = 'pmd_photo_queue_v1';
+/** localStorage is ~5 MB; at ≤ ~400 KB per compressed photo, 8 leaves
+ *  headroom for the edit cache that shares the store. */
+const PHOTO_QUEUE_MAX = 8;
+
+interface QueuedPhoto {
+  mc: string;
+  shiftId: string;
+  job: string;
+  name: string;
+  dataUrl: string;
+}
+
+function loadPhotoQueue(): QueuedPhoto[] {
+  try {
+    return JSON.parse(localStorage.getItem(PHOTO_QUEUE_KEY) ?? '[]') as QueuedPhoto[];
+  } catch {
+    return [];
+  }
+}
+
+function savePhotoQueue(q: QueuedPhoto[]): boolean {
+  try {
+    localStorage.setItem(PHOTO_QUEUE_KEY, JSON.stringify(q));
+    return true;
+  } catch {
+    return false; // quota — caller decides how to break the news
+  }
+}
+
+/** Downscale + re-encode a camera shot: ≤1600px on the long edge, JPEG
+ *  q0.72 ≈ 200-400 KB — enough to read a defect, small enough to queue
+ *  in localStorage and to keep the SP attachment upload quick on shop
+ *  WiFi. imageOrientation:'from-image' bakes the EXIF rotation in; the
+ *  catch retries without options for engines that reject the dictionary. */
+async function compressPhoto(file: File): Promise<string> {
+  const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() =>
+    createImageBitmap(file),
+  );
+  const MAX = 1600;
+  const scale = Math.min(1, MAX / Math.max(bmp.width, bmp.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bmp.width * scale));
+  canvas.height = Math.max(1, Math.round(bmp.height * scale));
+  canvas.getContext('2d')!.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  bmp.close();
+  return canvas.toDataURL('image/jpeg', 0.72);
+}
+
+function dataUrlToBlob(u: string): Blob {
+  const [meta, b64] = u.split(',');
+  const mime = /data:([^;]+)/.exec(meta)?.[1] ?? 'image/jpeg';
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+async function queuePhoto(file: File): Promise<void> {
+  const dataUrl = await compressPhoto(file);
+  const q = loadPhotoQueue();
+  if (q.filter((p) => p.mc === S!.mc && p.shiftId === sid() && p.job === S!.selJob).length >= PHOTO_QUEUE_MAX) {
+    toast(`Max ${PHOTO_QUEUE_MAX} photos per job — sign off to upload them first`, 'warn');
+    return;
+  }
+  // SP attachment filenames can't take #%&*:<>?/\{|} — keep to word chars.
+  const name = `PMD_${S!.mc}_${sid()}_${S!.selJob}_${Date.now()}.jpg`.replace(/[^\w.-]+/g, '_');
+  q.push({ mc: S!.mc, shiftId: sid(), job: S!.selJob, name, dataUrl });
+  if (!savePhotoQueue(q)) {
+    toast('Photo storage full — sign off to upload the queued photos first', 'err');
+    return;
+  }
+  renderPhotoStrip();
+  if (isJobLocked()) {
+    toast('Photo uploading to PMD_Production…', 'ok');
+  } else {
+    toast('Photo saved — uploads to PMD_Production at Sign off', 'ok');
+  }
+  void flushPhotoQueue();
+}
+
+let photoFlushInFlight = false;
+let lastPhotoFlushAt = 0;
+
+/** Try to attach every queued photo to its tuple's PMD_Production row.
+ *  attachProductionPhoto returns false while the row doesn't exist yet
+ *  (tuple not signed off) — those stay queued for the next pass. */
+async function flushPhotoQueue(): Promise<void> {
+  if (photoFlushInFlight || !dalRef.attachProductionPhoto) return;
+  const q = loadPhotoQueue();
+  if (q.length === 0) return;
+  photoFlushInFlight = true;
+  lastPhotoFlushAt = Date.now();
+  try {
+    const remain: QueuedPhoto[] = [];
+    for (const p of q) {
+      let done = false;
+      try {
+        done = await dalRef.attachProductionPhoto(
+          p.mc,
+          p.shiftId,
+          p.job,
+          p.name,
+          dataUrlToBlob(p.dataUrl),
+        );
+      } catch (e) {
+        // Transient (network / digest) — keep queued, next flush retries.
+        console.warn('[photo] attachment upload failed, keeping queued:', e);
+      }
+      if (!done) remain.push(p);
+    }
+    if (remain.length !== q.length) {
+      savePhotoQueue(remain);
+      renderPhotoStrip();
+    }
+  } finally {
+    photoFlushInFlight = false;
+  }
+}
+
+/** Rebuild the side panel's photo strip: queued shots (amber, ⏳, ✕ to
+ *  discard) then the tuple's already-uploaded attachments (tap to open).
+ *  The upload half is async + best-effort — SP only. */
+function renderPhotoStrip(): void {
+  const strip = document.querySelector<HTMLElement>('[data-photo-strip]');
+  if (!strip) return;
+  const mc = S!.mc;
+  const shiftId = sid();
+  const job = S!.selJob;
+  const queued = loadPhotoQueue().filter(
+    (p) => p.mc === mc && p.shiftId === shiftId && p.job === job,
+  );
+  strip.innerHTML = queued
+    .map(
+      (p) =>
+        `<span class="photo-thumb pending" title="Uploads to PMD_Production at Sign off"><img src="${p.dataUrl}" alt=""><button type="button" data-photo-del="${escapeHtml(p.name)}" title="Discard this photo">✕</button></span>`,
+    )
+    .join('');
+  strip.querySelectorAll<HTMLButtonElement>('[data-photo-del]').forEach((b) =>
+    b.addEventListener('click', () => {
+      savePhotoQueue(loadPhotoQueue().filter((p) => p.name !== b.dataset.photoDel));
+      renderPhotoStrip();
+    }),
+  );
+  if (!dalRef.listProductionPhotos || !job) return;
+  void (async () => {
+    try {
+      const up = await dalRef.listProductionPhotos!(mc, shiftId, job);
+      // The operator may have switched tuple while we awaited.
+      if (S!.mc !== mc || sid() !== shiftId || S!.selJob !== job) return;
+      const cur = document.querySelector<HTMLElement>('[data-photo-strip]');
+      if (!cur || up.length === 0) return;
+      cur.insertAdjacentHTML(
+        'beforeend',
+        up
+          .map(
+            (a) =>
+              `<a class="photo-thumb" href="${escapeHtml(a.url)}" target="_blank" rel="noopener" title="${escapeHtml(a.name)} — attached to PMD_Production"><img src="${escapeHtml(a.url)}" alt="${escapeHtml(a.name)}"></a>`,
+          )
+          .join(''),
+      );
+    } catch {
+      /* listing attachments is cosmetic — never block the sheet on it */
+    }
+  })();
 }
 
 const SLOT_PX = 64; // touch target for the half-hour status cell on 10" iPad
@@ -1443,6 +1735,22 @@ function buildGrid(): string {
   </div>`;
 }
 
+/** One handover box: label + 🎤 dictation toggle + textarea. The mic is
+ *  hidden while the box is read-only (locked shift / read-only device). */
+function handoverBox(
+  label: string,
+  field: string,
+  placeholder: string,
+  value: string,
+  rdo: string,
+  rdoTitle: string,
+): string {
+  const mic = rdo
+    ? ''
+    : `<button type="button" class="mic-btn" data-mic="${field}" title="Dictate — speak and it types here. On iPad you can also use the 🎤 key on the keyboard.">🎤</button>`;
+  return `<label><span>${label}${mic}</span><textarea data-meta="${field}" placeholder="${placeholder}" ${rdo}${rdoTitle}>${escapeHtml(value)}</textarea></label>`;
+}
+
 function buildSide(): string {
   const c = canonical();
   const cs = c?.countStart ?? '';
@@ -1491,13 +1799,19 @@ function buildSide(): string {
     <div class="sk"><label>Total Reject</label><b class="r" data-live="totalReject">${totalReject}</b></div>
     <div class="sk"><label${cav > 1 ? ` title="(Count End − Count Start) × ${cav} cavities − Reject"` : ''}>Total Good${cav > 1 ? ` <span class="cavity-tag">×${cav}</span>` : ''}</label><b class="g" data-live="totalGood">${good}</b></div>
     <div class="sk"><label>Purge (kg)</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="purge" value="${purge}" ${rdo}${rdoTitle}></div>
+    <div class="photos">
+      <div class="photos-title">📷 Photos</div>
+      <div class="photo-strip" data-photo-strip></div>
+      <button type="button" class="photo-take" data-photo-take ${isReadOnlyDevice() ? 'disabled title="Read only — sign in as supervisor to add photos"' : ''}>📷 Take photo</button>
+      <input type="file" accept="image/*" capture="environment" data-photo-file hidden>
+    </div>
     <div class="handover">
       <div class="handover-title">Handover</div>
       <div class="handover-grid">
-        <label><span>🛠 Machine</span><textarea data-meta="hand-machine" placeholder="Press state, robot, hot runner, breakdown follow-ups…" ${rdo}${rdoTitle}>${escapeHtml(h.machine)}</textarea></label>
-        <label><span>🧩 Mold</span><textarea data-meta="hand-mold" placeholder="Mould condition, slides, ejector, water lines, maintenance due…" ${rdo}${rdoTitle}>${escapeHtml(h.mold)}</textarea></label>
-        <label><span>📦 Material</span><textarea data-meta="hand-material" placeholder="Material lot, dryer, regrind, masterbatch…" ${rdo}${rdoTitle}>${escapeHtml(h.material)}</textarea></label>
-        <label><span>📋 Method</span><textarea data-meta="hand-method" placeholder="Cycle, settings, process changes, work instructions…" ${rdo}${rdoTitle}>${escapeHtml(h.method)}</textarea></label>
+        ${handoverBox('🛠 Machine', 'hand-machine', 'Press state, robot, hot runner, breakdown follow-ups…', h.machine, rdo, rdoTitle)}
+        ${handoverBox('🧩 Mold', 'hand-mold', 'Mould condition, slides, ejector, water lines, maintenance due…', h.mold, rdo, rdoTitle)}
+        ${handoverBox('📦 Material', 'hand-material', 'Material lot, dryer, regrind, masterbatch…', h.material, rdo, rdoTitle)}
+        ${handoverBox('📋 Method', 'hand-method', 'Cycle, settings, process changes, work instructions…', h.method, rdo, rdoTitle)}
       </div>
     </div>
   </aside>`;
@@ -1811,14 +2125,13 @@ function buildSignoffReminderBanner(): string {
 
 function render(): void {
   applyShiftTheme();
-  // Preserve the half-hour grid's horizontal scroll position across a
-  // re-render — without this, filling slot 12 with R via the status
-  // picker re-rendered the operator sheet and snapped the grid back
-  // to slot 0, forcing the operator to scroll right again every time
-  // on the 10" iPad.
-  const prevWrap = document.querySelector<HTMLElement>('.op-grid-wrap');
-  const prevScrollLeft = prevWrap?.scrollLeft ?? 0;
-  const prevScrollTop = prevWrap?.scrollTop ?? 0;
+  // Preserve the scroll position across a re-render — without this,
+  // filling slot 12 via the status picker snapped the view back to the
+  // top-left, forcing the operator to scroll again every time on the
+  // 10" iPad. The grid pans with the PAGE now (overflow:visible for
+  // page-scrollport sticky), so it's the window scroll that matters.
+  const prevScrollX = window.scrollX;
+  const prevScrollY = window.scrollY;
 
   const app = document.getElementById('app')!;
   const detail =
@@ -1839,12 +2152,8 @@ function render(): void {
   // banners / rows of THIS render (a lock banner appearing changes the fit).
   applyDispZoom();
   wire();
+  window.scrollTo(prevScrollX, prevScrollY);
   if (S!.viewLevel === 1) {
-    const wrap = document.querySelector<HTMLElement>('.op-grid-wrap');
-    if (wrap) {
-      wrap.scrollLeft = prevScrollLeft;
-      wrap.scrollTop = prevScrollTop;
-    }
     renderNowLine();
   }
 }
@@ -2023,6 +2332,36 @@ function wire(): void {
       renderNowLine();
     }),
   );
+  // 🎤 dictation toggles on the handover boxes.
+  app.querySelectorAll<HTMLButtonElement>('[data-mic]').forEach((b) =>
+    b.addEventListener('click', (e) => {
+      e.preventDefault();
+      toggleDictation(b.dataset.mic!, b);
+    }),
+  );
+  // 📷 defect photos → PMD_Production attachments.
+  const photoInput = app.querySelector<HTMLInputElement>('[data-photo-file]');
+  app.querySelector<HTMLButtonElement>('[data-photo-take]')?.addEventListener('click', () => {
+    if (!S!.selJob) {
+      toast('Pick a Job# first — photos attach to the job being run', 'warn');
+      return;
+    }
+    photoInput?.click();
+  });
+  photoInput?.addEventListener('change', () => {
+    const f = photoInput.files?.[0];
+    photoInput.value = ''; // same photo re-takeable
+    if (!f) return;
+    void queuePhoto(f).catch((e) => {
+      console.error('[photo] processing failed:', e);
+      toast('Could not process that photo — try again', 'err');
+    });
+  });
+  renderPhotoStrip();
+  // Retry stranded queued photos (e.g. the tuple was signed off on
+  // another device, or the last upload died mid-flight) — throttled so
+  // per-keystroke re-renders don't hammer SP with row lookups.
+  if (Date.now() - lastPhotoFlushAt > 60_000) void flushPhotoQueue();
   app.querySelector('[data-signoff-now]')?.addEventListener('click', () => openSaveSignoffModal());
   app.querySelector('[data-refresh]')?.addEventListener('click', () => void refreshAll());
   app.querySelector('[data-saveclear]')?.addEventListener('click', () => openSaveSignoffModal());
@@ -2721,6 +3060,9 @@ async function doSignoffSave(confirmBtn?: HTMLButtonElement): Promise<void> {
     // the next unlock.
     if (isSupervisor()) clearSupervisor();
     await reload();
+    // The PMD_Production row exists now — ship any photos the operator
+    // queued during the shift onto it as attachments.
+    void flushPhotoQueue();
   } catch (e) {
     // Surface the actual SP/Graph failure so we don't blindly blame "network".
     // The full stack is in console; toast shows the first line for triage.

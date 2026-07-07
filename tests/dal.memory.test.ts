@@ -189,4 +189,52 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
     expect(me.name).toBeTruthy();
     expect(['operator', 'supervisor', 'admin']).toContain(me.role);
   });
+
+  it('photo attachments require a SIGNED header row (queue-until-signoff contract)', async () => {
+    const sid = currentShift(NOW).shiftId;
+    const photo = new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: 'image/jpeg' });
+    await dal.upsertProductionRecord({
+      id: 0,
+      machineCode: '650T',
+      shiftId: sid,
+      jobNumber: 'JP1',
+      partNumber: '',
+      slotIndex: 0,
+      statusCode: 'R',
+      countStart: 0,
+      countEnd: 100,
+      rejectCount: 0,
+      rejects: '{}',
+      purgeKg: null,
+      operator: 'Op',
+      supervisor: '',
+      bdIssue: '',
+      mangoTicket: '',
+      handoverNote: '',
+      qcBy: '',
+      locked: false,
+      lockedBy: '',
+      lockedAt: '',
+      createdAt: '',
+      updatedAt: '',
+    });
+
+    // Not signed off yet → the DAL refuses and the caller keeps it queued.
+    expect(await dal.attachProductionPhoto('650T', sid, 'JP1', 'a.jpg', photo)).toBe(false);
+    expect(await dal.listProductionPhotos('650T', sid, 'JP1')).toEqual([]);
+
+    await dal.lockShift('650T', sid, 'Sup', 'Op', 'JP1');
+    expect(await dal.attachProductionPhoto('650T', sid, 'JP1', 'a.jpg', photo)).toBe(true);
+    const photos = await dal.listProductionPhotos('650T', sid, 'JP1');
+    expect(photos).toHaveLength(1);
+    expect(photos[0].name).toBe('a.jpg');
+    expect(photos[0].url).toBeTruthy();
+
+    // Same filename retried (dropped response) → dedupes, still one photo.
+    expect(await dal.attachProductionPhoto('650T', sid, 'JP1', 'a.jpg', photo)).toBe(true);
+    expect(await dal.listProductionPhotos('650T', sid, 'JP1')).toHaveLength(1);
+
+    // A different tuple stays empty.
+    expect(await dal.listProductionPhotos('650T', sid, 'OTHER')).toEqual([]);
+  });
 });

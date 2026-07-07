@@ -73,6 +73,26 @@ export interface PmdDataLayer {
    *  leftover live selection. Optional — backends that don't model an
    *  unlock-edit window can omit it (treated as false). */
   isUnlockedTuple?(machineCode: string, shiftId: string, jobNumber: string): boolean;
+  /** Attach a photo (already-compressed JPEG blob) to the PMD_Production
+   *  header row for (machine, shift, job). Returns false when that row
+   *  doesn't exist yet — the tuple hasn't been signed off — so callers
+   *  keep the photo queued and retry after lockShift creates the row.
+   *  Optional — backends without attachment storage omit it. */
+  attachProductionPhoto?(
+    machineCode: string,
+    shiftId: string,
+    jobNumber: string,
+    fileName: string,
+    data: Blob,
+  ): Promise<boolean>;
+  /** Photos already attached to the tuple's PMD_Production row, for the
+   *  side panel's thumbnail strip. Empty when the row doesn't exist.
+   *  Optional — pairs with attachProductionPhoto. */
+  listProductionPhotos?(
+    machineCode: string,
+    shiftId: string,
+    jobNumber: string,
+  ): Promise<Array<{ name: string; url: string }>>;
   /** Flush every unsigned editCache entry to the backing store as a
    *  "live snapshot" so other clients can see this iPad's in-progress
    *  work without waiting for Sign Off & Save. Fire-and-forget; the

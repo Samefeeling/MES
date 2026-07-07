@@ -186,8 +186,11 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 /* ===== operator sheet ===== */
 /* --disp-zoom (set on <body> by the operator view's − / + control) scales
    the whole operator page via CSS zoom — action bar, meta, grid, side
-   panel, legend. Scoped to .op-sheet so Trace / KPI stay at 100%. */
-.op-sheet{background:var(--theme-base);border:1px solid var(--theme-accent);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:12px;transition:background .25s,border-color .25s;zoom:var(--disp-zoom,1)}
+   panel, legend. Scoped to .op-sheet so Trace / KPI stay at 100%.
+   min-width:min-content: at a manual zoom-in the grid row gets wider than
+   the viewport; the sheet must grow with it so the yellow panel keeps
+   covering the grid while the page pans sideways. */
+.op-sheet{background:var(--theme-base);border:1px solid var(--theme-accent);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:12px;transition:background .25s,border-color .25s;zoom:var(--disp-zoom,1);min-width:min-content}
 
 /* Unified action bar — date nav + shift tabs + view level + Refresh + Save in one row.
    Replaces the old op-title and op-nav strips. */
@@ -307,15 +310,23 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    shows every row D01–D10 in full, matching the side panel instead of
    collapsing into an internal scrollbar half its height (a previous
    viewport-based max-height did exactly that on short screens). Keeping
-   the whole sheet on screen is auto-fit's job (the default ⛶ zoom);
-   at a manual zoom that overflows, the PAGE scrolls. overflow:auto
-   stays for the horizontal axis — 16 slots don't fit a portrait iPad —
-   which also means the top-sticky offsets on the header rows only
-   engage if a vertical cap is ever reintroduced. */
-.op-grid-wrap{position:relative;flex:1;background:#fff;border:2px solid var(--theme-accent);border-radius:10px;overflow:auto;min-height:300px;--slot-w:60px}
+   the whole sheet on screen is auto-fit's job (the default ⛶ zoom); at
+   a manual zoom that overflows, the PAGE scrolls — both axes.
+   overflow:visible (NOT auto) is what makes the pinned header rows work
+   there: any overflow≠visible would turn the wrap itself into the
+   sticky containing scrollport, and since the wrap never scrolls (it is
+   content-sized), the time / Quality Checks / Machine Status rows would
+   simply never pin. With visible overflow they stick against the PAGE
+   scrollport, under the sticky top bar — see the --topbar-h offsets. */
+.op-grid-wrap{position:relative;flex:1;background:#fff;border:2px solid var(--theme-accent);border-radius:10px;overflow:visible;min-height:300px;--slot-w:60px}
 .op-grid{border-collapse:separate;border-spacing:0;font-size:14px;table-layout:fixed;width:auto;min-width:100%}
 .op-grid th,.op-grid td{border:1px solid #d1d5db;padding:0;margin:0;text-align:center;vertical-align:middle}
-.op-grid thead th{background:var(--theme-dark);color:var(--theme-on-dark);font-weight:700;height:44px;padding:0 4px;white-space:nowrap;font-size:13px;position:sticky;top:0;z-index:4}
+/* Header rows pin against the PAGE scrollport, tucked under the sticky
+   top bar. The top bar's height (--topbar-h, set from JS — it doesn't
+   scale) is divided by the zoom factor because these offsets live inside
+   the zoomed .op-sheet subtree, where every length is re-multiplied by
+   the factor at paint time. */
+.op-grid thead th{background:var(--theme-dark);color:var(--theme-on-dark);font-weight:700;height:44px;padding:0 4px;white-space:nowrap;font-size:13px;position:sticky;top:calc(var(--topbar-h,52px)/var(--disp-zoom,1));z-index:4}
 .op-grid th.slot-head{width:var(--slot-w);font-size:12px}
 .op-grid th.rh{background:rgba(255,255,255,.85);color:var(--theme-on-base);width:200px;text-align:left;padding:0 12px;font-weight:700;position:sticky;left:0;z-index:2;font-size:15px}
 .op-grid thead th.corner{background:var(--theme-dark);color:var(--theme-on-dark);text-align:left;font-size:15px;z-index:6}
@@ -338,8 +349,8 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    so the clock and current machine status stay in view while the operator
    scrolls the defect grid. The left-sticky row-headers (th.rh) ride above
    both axes (z-index:6); the pinned body cells clear the NOW line (z:3). */
-.op-grid tr.row-qc th.rh{background:#0f172a;color:#fff;font-weight:800;font-size:14px;letter-spacing:.4px;text-transform:uppercase;top:44px;z-index:6}
-.op-grid tr.row-qc td{border-bottom:2px solid var(--theme-accent);background:#f8fafc;padding:0;position:sticky;top:44px;z-index:4}
+.op-grid tr.row-qc th.rh{background:#0f172a;color:#fff;font-weight:800;font-size:14px;letter-spacing:.4px;text-transform:uppercase;top:calc(var(--topbar-h,52px)/var(--disp-zoom,1) + 44px);z-index:6}
+.op-grid tr.row-qc td{border-bottom:2px solid var(--theme-accent);background:#f8fafc;padding:0;position:sticky;top:calc(var(--topbar-h,52px)/var(--disp-zoom,1) + 44px);z-index:4}
 /* Supervisor QC cells are the 3 cadence checkpoints per shift (slots
    1 / 7 / 13). Stronger amber tint + amber side-rails make them
    stand out against the operator cells so a supervisor walking the
@@ -352,8 +363,8 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .row-qc td.qc-supervisor .qc-btn{color:#92400e}
 .row-qc td.is-signed .qc-btn{color:#166534}
 .bd-cause.is-current{border-color:var(--theme-dark);background:#eff6ff}
-.op-grid tr.row-status th.rh{background:var(--theme-accent);color:var(--theme-on-dark);font-weight:800;font-size:16px;letter-spacing:.3px;text-transform:uppercase;top:108px;z-index:6}
-.op-grid tr.row-status td{border-bottom:3px solid var(--theme-dark);background:#f8fafc;position:sticky;top:108px;z-index:4}
+.op-grid tr.row-status th.rh{background:var(--theme-accent);color:var(--theme-on-dark);font-weight:800;font-size:16px;letter-spacing:.3px;text-transform:uppercase;top:calc(var(--topbar-h,52px)/var(--disp-zoom,1) + 108px);z-index:6}
+.op-grid tr.row-status td{border-bottom:3px solid var(--theme-dark);background:#f8fafc;position:sticky;top:calc(var(--topbar-h,52px)/var(--disp-zoom,1) + 108px);z-index:4}
 .op-grid tr.row-named th.rh{background:#fafafa;font-size:14px;color:#334155;font-weight:700}
 .op-grid tr.row-named:first-of-type td{border-top:0}
 
@@ -397,6 +408,21 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .op-side .sk input{width:130px;padding:10px;border:2px solid var(--bd);border-radius:8px;font-size:20px;text-align:right;min-height:48px;font-weight:700;font-variant-numeric:tabular-nums}
 
 /* §6 — Handover / Journey: 2x2 grid of textareas for People / Plant / Machine / Material. */
+/* 📷 defect photos — queued shots (amber ⏳, ✕ discards) upload to the
+   tuple's PMD_Production row as attachments at Sign off; uploaded ones
+   render from their SP URL and open full-size in a new tab. */
+.photos{display:flex;flex-direction:column;gap:6px;margin-top:4px;border-top:2px solid var(--theme-accent);padding-top:10px}
+.photos-title{font-size:13px;font-weight:800;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.5px}
+.photo-strip{display:flex;flex-wrap:wrap;gap:6px}
+.photo-strip:empty{display:none}
+.photo-thumb{position:relative;display:block;width:56px;height:56px;border:2px solid var(--bd);border-radius:8px;overflow:hidden;background:#fff}
+.photo-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.photo-thumb.pending{border-color:#f59e0b}
+.photo-thumb.pending::after{content:'⏳';position:absolute;left:2px;bottom:1px;font-size:11px}
+.photo-thumb [data-photo-del]{position:absolute;top:0;right:0;width:20px;height:20px;border:0;border-radius:0 0 0 8px;background:rgba(220,38,38,.92);color:#fff;font-size:11px;font-weight:800;cursor:pointer;line-height:1;padding:0}
+.photo-take{width:100%;min-height:48px;border:2px solid var(--bd);border-radius:10px;background:#fff;font-size:15px;font-weight:700;cursor:pointer;color:var(--tx)}
+.photo-take:active{background:var(--gy)}
+.photo-take:disabled{opacity:.5;cursor:not-allowed}
 .handover{display:flex;flex-direction:column;gap:8px;margin-top:4px;border-top:2px solid var(--theme-accent);padding-top:10px;flex:1 1 auto;min-height:0}
 .handover-title{font-size:13px;font-weight:800;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.5px}
 /* Fill the remaining space in the side panel so all four textboxes
@@ -405,6 +431,11 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    any extra room (operators were running out of typing space). */
 .handover-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:1 1 auto;min-height:240px}
 .handover-grid label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:700;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.4px;min-height:0}
+.handover-grid label span{display:flex;align-items:center;gap:6px}
+/* 🎤 dictation toggle — flashes red while listening */
+.mic-btn{margin-left:auto;width:36px;height:30px;border:1px solid var(--bd);border-radius:8px;background:#fff;cursor:pointer;font-size:15px;padding:0;line-height:1;-webkit-tap-highlight-color:transparent}
+.mic-btn.rec{background:#fecaca;border-color:#b91c1c;animation:micPulse 1.2s ease-in-out infinite}
+@keyframes micPulse{50%{box-shadow:0 0 0 5px rgba(220,38,38,.35)}}
 .handover-grid textarea{width:100%;flex:1 1 auto;min-height:110px;resize:vertical;border:2px solid var(--bd);border-radius:8px;padding:8px;font-family:inherit;font-size:15px;background:#fef9c3}
 
 /* §9 — Summary view shown when zoom is at Today / Week / Month. Read-only. */

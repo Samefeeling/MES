@@ -42,6 +42,9 @@ export class MemoryDataLayer implements PmdDataLayer {
   /** Tuples currently unlocked from a signed-off state (parity with the
    *  SharePoint DAL so the operator UI's force-load works in dev too). */
   private unlockedTuples = new Set<string>();
+  /** Photos "attached" per signed tuple — object URLs standing in for the
+   *  SharePoint attachment URLs, so the 📷 flow is testable in dev. */
+  private photos = new Map<string, Array<{ name: string; url: string }>>();
 
   constructor(now: Date = new Date()) {
     this.machines = seedMachines();
@@ -258,6 +261,41 @@ export class MemoryDataLayer implements PmdDataLayer {
 
   isUnlockedTuple(machineCode: string, shiftId: string, jobNumber: string): boolean {
     return this.unlockedTuples.has(`${machineCode}|${shiftId}|${jobNumber}`);
+  }
+
+  async attachProductionPhoto(
+    machineCode: string,
+    shiftId: string,
+    jobNumber: string,
+    fileName: string,
+    data: Blob,
+  ): Promise<boolean> {
+    // Same contract as SharePoint: attachments hang off the SIGNED header
+    // row, so an unsigned tuple reports false and the caller keeps the
+    // photo queued until lockShift.
+    const signed = this.production.some(
+      (r) =>
+        r.machineCode === machineCode &&
+        r.shiftId === shiftId &&
+        r.jobNumber === jobNumber &&
+        r.locked,
+    );
+    if (!signed) return false;
+    const key = `${machineCode}|${shiftId}|${jobNumber}`;
+    const list = this.photos.get(key) ?? [];
+    if (!list.some((p) => p.name === fileName)) {
+      list.push({ name: fileName, url: URL.createObjectURL(data) });
+    }
+    this.photos.set(key, list);
+    return true;
+  }
+
+  async listProductionPhotos(
+    machineCode: string,
+    shiftId: string,
+    jobNumber: string,
+  ): Promise<Array<{ name: string; url: string }>> {
+    return [...(this.photos.get(`${machineCode}|${shiftId}|${jobNumber}`) ?? [])];
   }
 
   async whoAmI(): Promise<UserContext> {

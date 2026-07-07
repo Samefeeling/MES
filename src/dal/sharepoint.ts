@@ -656,6 +656,72 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (!res.ok) throw new Error(`DELETE ${url} → ${res.status}`);
   }
 
+  /** Item ID of the tuple's PMD_Production header row, or null when the
+   *  tuple hasn't been signed off yet. Same composite-key lookup as
+   *  upsertHeaderInto: ±1d window for legacy-timestamp tolerance, then
+   *  narrowed to the exact calendar date. */
+  private async findProductionRowId(
+    machineCode: string,
+    shiftId: string,
+    jobNumber: string,
+  ): Promise<number | null> {
+    const F = this.F.production;
+    const date = shiftId.slice(0, 10);
+    const shift = shiftId.slice(11);
+    const qs =
+      '$filter=' +
+      encodeURIComponent(
+        `${F.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${shift}' and ${F.jobNumber} eq '${jobNumber}'`,
+      );
+    const rows = await this.getAllItems<Record<string, unknown>>(LISTS.production, qs);
+    const exact = rows.find((r) => dateOnly(r[F.date]) === date) as
+      | { ID?: number; Id?: number }
+      | undefined;
+    return exact?.ID ?? exact?.Id ?? null;
+  }
+
+  async attachProductionPhoto(
+    machineCode: string,
+    shiftId: string,
+    jobNumber: string,
+    fileName: string,
+    data: Blob,
+  ): Promise<boolean> {
+    const id = await this.findProductionRowId(machineCode, shiftId, jobNumber);
+    if (id == null) return false; // not signed off yet — caller keeps it queued
+    const digest = await this.getDigest();
+    // Attachment upload is raw binary, NOT the JSON post() path — SP
+    // stores the request body verbatim as the file.
+    const url = `${this.listUrl(LISTS.production)}/items(${id})/AttachmentFiles/add(FileName='${encodeURIComponent(fileName)}')`;
+    const res = await fetch(url, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { Accept: 'application/json;odata=verbose', 'X-RequestDigest': digest },
+      body: data,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      // Duplicate filename = this exact photo already landed (retry after
+      // a dropped response) — done, don't re-queue forever.
+      if (/already exists/i.test(text)) return true;
+      throw new Error(`Attachment upload ${res.status}: ${text.slice(0, 200)}`);
+    }
+    return true;
+  }
+
+  async listProductionPhotos(
+    machineCode: string,
+    shiftId: string,
+    jobNumber: string,
+  ): Promise<Array<{ name: string; url: string }>> {
+    const id = await this.findProductionRowId(machineCode, shiftId, jobNumber);
+    if (id == null) return [];
+    const env = await this.getJson<{
+      d: { results: Array<{ FileName: string; ServerRelativeUrl: string }> };
+    }>(`${this.listUrl(LISTS.production)}/items(${id})/AttachmentFiles`);
+    return env.d.results.map((a) => ({ name: a.FileName, url: a.ServerRelativeUrl }));
+  }
+
   /**
    * Look up the real ListItemEntityTypeFullName from SP and cache it. Cheap
    * (one extra GET on the first POST per list per page load) and resilient
