@@ -204,11 +204,10 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .ab-zoom-btn:active{background:var(--gy)}
 .ab-zoom-val{min-width:70px;height:44px;border:0;background:transparent;border-radius:8px;text-align:center;font-size:13px;font-weight:700;color:var(--mu);font-variant-numeric:tabular-nums;white-space:nowrap;cursor:pointer;-webkit-tap-highlight-color:transparent}
 .ab-zoom-val:active{background:var(--gy)}
-/* Measurement probe for auto-fit: zoom pinned to 1 and the grid cap
-   lifted, so scrollHeight-collapsed D-rows count toward the sheet's
-   natural height. Added for one getBoundingClientRect, then removed. */
+/* Measurement probe for auto-fit: zoom pinned to 1 so the sheet's
+   natural height is read scale-free. Added for one
+   getBoundingClientRect, then removed. */
 .op-sheet.measuring{zoom:1}
-.op-sheet.measuring .op-grid-wrap{max-height:none}
 .ab-right{display:flex;align-items:center;gap:10px;margin-left:auto;flex-wrap:wrap}
 /* ⚠ Future-shift warning — a shift picked that hasn't started yet (the
    classic night-past-midnight date slip). Loud amber so it can't be missed,
@@ -304,16 +303,16 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 
 /* ===== grid ===== */
 .op-grid-row{display:flex;gap:10px;align-items:stretch}
-/* Bounded height so the wrap itself is the scroll container (both axes):
-   this is what lets the pinned time / Quality Checks / Machine Status
-   rows stay put while the operator scrolls down the D01–D10 defect rows.
-   Without a cap the wrap grows to fit and the PAGE scrolls instead, and
-   position:sticky on an overflow ancestor that never scrolls does nothing.
-   The vh cap is divided by --disp-zoom because lengths inside the zoomed
-   .op-sheet subtree are re-multiplied by the zoom factor at paint time —
-   without the division a zoomed-in grid would paint taller than the
-   viewport and the pinned rows could scroll out of reach. */
-.op-grid-wrap{position:relative;flex:1;background:#fff;border:2px solid var(--theme-accent);border-radius:10px;overflow:auto;max-height:calc((100vh - 250px)/var(--disp-zoom,1));min-height:300px;--slot-w:60px}
+/* Natural height, deliberately UNCAPPED vertically: the grid always
+   shows every row D01–D10 in full, matching the side panel instead of
+   collapsing into an internal scrollbar half its height (a previous
+   viewport-based max-height did exactly that on short screens). Keeping
+   the whole sheet on screen is auto-fit's job (the default ⛶ zoom);
+   at a manual zoom that overflows, the PAGE scrolls. overflow:auto
+   stays for the horizontal axis — 16 slots don't fit a portrait iPad —
+   which also means the top-sticky offsets on the header rows only
+   engage if a vertical cap is ever reintroduced. */
+.op-grid-wrap{position:relative;flex:1;background:#fff;border:2px solid var(--theme-accent);border-radius:10px;overflow:auto;min-height:300px;--slot-w:60px}
 .op-grid{border-collapse:separate;border-spacing:0;font-size:14px;table-layout:fixed;width:auto;min-width:100%}
 .op-grid th,.op-grid td{border:1px solid #d1d5db;padding:0;margin:0;text-align:center;vertical-align:middle}
 .op-grid thead th{background:var(--theme-dark);color:var(--theme-on-dark);font-weight:700;height:44px;padding:0 4px;white-space:nowrap;font-size:13px;position:sticky;top:0;z-index:4}

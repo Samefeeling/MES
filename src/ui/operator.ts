@@ -178,8 +178,8 @@ export function clampDispZoom(v: number): number {
 
 /** Auto-fit zoom: what factor puts a sheet of natural height `sheetH`
  *  inside `availH` of viewport? Never enlarges past 100%; floor 0.6
- *  (below that text is unreadable — the grid falls back to scrolling,
- *  which the /--disp-zoom max-height keeps working). NOT snapped to
+ *  (below that text is unreadable — past the floor the PAGE scrolls
+ *  instead). NOT snapped to
  *  0.1 steps: snapping up would overflow, snapping down wastes space.
  *  Pure — exported for tests. */
 export function fitDispZoom(availH: number, sheetH: number): number {
@@ -211,9 +211,9 @@ function saveDispZoomPref(): void {
   }
 }
 
-/** Natural (zoom:1, uncapped-grid) height of the sheet. The .measuring
- *  class pins zoom to 1 and lifts the grid's max-height so the D-rows
- *  count toward the measurement instead of collapsing into a scrollbar. */
+/** Natural (zoom:1) height of the sheet — the grid is uncapped, so every
+ *  D-row already counts toward it; the .measuring class just pins the
+ *  zoom to 1 so the reading is scale-free. */
 function measureFitZoom(): number {
   const sheet = document.querySelector<HTMLElement>('.op-sheet');
   if (!sheet) return 1;
