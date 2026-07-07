@@ -4,8 +4,10 @@ import {
   COLOR_CHANGE_STD_HRS,
   INSERT_CHANGE_STD_HRS,
   expectedShiftOutput,
+  expectedShiftOutputFromPlanning,
   setupJudgement,
   setupStandardHours,
+  type PlannedOrderLike,
 } from '../src/core/standards';
 import type { ProductionRecord } from '../src/types';
 
@@ -159,5 +161,98 @@ describe('expectedShiftOutput (planning StartDate+StartHour × Standard hour)', 
     const recs = [...running('J1', 0, 8), ...running('JX', 8, 8)];
     const e = expectedShiftOutput(SID, recs, new Map([['J1', 0.01]]), new Map());
     expect(e.pieces).toBe(400); // 8h × (8/0.01)/16
+  });
+});
+
+describe('expectedShiftOutputFromPlanning (planned queue simulation)', () => {
+  // Day shift 2026-05-17 runs 07:00 → 15:00.
+  const order = (over: Partial<PlannedOrderLike>): PlannedOrderLike => ({
+    jobNumber: 'J1',
+    plannedStart: '2026-05-17T07:00:00',
+    remainingLaborHrs: 40,
+    remainingQty: 100000,
+    hrsPerPiece: 0.01,
+    ...over,
+  });
+
+  it('one long order fills the shift at its ProdStandard', () => {
+    const e = expectedShiftOutputFromPlanning(SID, [order({})], 0, 0);
+    expect(e.pieces).toBe(800); // 8h / 0.01
+    expect(e.jobsUsed).toEqual(['J1']);
+  });
+
+  it('the user recurrence: prev order finishes → remaining qty + rest of 8h on the next order', () => {
+    // J1 needs 3 labor hours / 300 pcs left; J2 queued behind at 0.02 h/pc.
+    // expected = 300 + (8 − 3) / 0.02 = 300 + 250
+    const q = [
+      order({ jobNumber: 'J1', remainingLaborHrs: 3, remainingQty: 300 }),
+      order({ jobNumber: 'J2', plannedStart: '2026-05-17T10:00:00', hrsPerPiece: 0.02 }),
+    ];
+    const e = expectedShiftOutputFromPlanning(SID, q, 0, 0);
+    expect(e.pieces).toBe(300 + 250);
+    expect(e.jobsUsed).toEqual(['J1', 'J2']);
+  });
+
+  it('a die change between the orders costs its 4h STANDARD', () => {
+    // expected = 300 + (8 − 3 − 4h C/O) / 0.02 = 300 + 50
+    const q = [
+      order({ jobNumber: 'J1', remainingLaborHrs: 3, remainingQty: 300 }),
+      order({ jobNumber: 'J2', plannedStart: '2026-05-17T10:00:00', hrsPerPiece: 0.02 }),
+    ];
+    const e = expectedShiftOutputFromPlanning(SID, q, 4, 0);
+    expect(e.pieces).toBe(350);
+  });
+
+  it('caps a partial run at the order remaining quantity', () => {
+    // Inconsistent Epicor data: 12 labor hours left but only 100 pcs.
+    const e = expectedShiftOutputFromPlanning(
+      SID,
+      [order({ remainingLaborHrs: 12, remainingQty: 100 })],
+      0,
+      0,
+    );
+    expect(e.pieces).toBe(100);
+  });
+
+  it('a late planned start leaves the gap unexpected', () => {
+    const e = expectedShiftOutputFromPlanning(
+      SID,
+      [order({ plannedStart: '2026-05-17T11:00:00' })],
+      0,
+      0,
+    );
+    expect(e.pieces).toBe(400); // only 4 of the 8 hours were scheduled
+  });
+
+  it('an order already running from yesterday fills from shift start', () => {
+    const e = expectedShiftOutputFromPlanning(
+      SID,
+      [order({ plannedStart: '2026-05-16T19:00:00' })],
+      0,
+      0,
+    );
+    expect(e.pieces).toBe(800);
+  });
+
+  it('falls back to remainingQty × ProdStandard when labor hours are blank', () => {
+    // 200 pcs × 0.01 = 2h of work, done inside the shift → 200 expected.
+    const e = expectedShiftOutputFromPlanning(
+      SID,
+      [order({ remainingLaborHrs: 0, remainingQty: 200 })],
+      0,
+      0,
+    );
+    expect(e.pieces).toBe(200);
+  });
+
+  it('null when nothing in planning overlaps the shift (rolled-off history)', () => {
+    const e = expectedShiftOutputFromPlanning(
+      SID,
+      [order({ plannedStart: '2026-05-20T07:00:00' })],
+      0,
+      0,
+    );
+    expect(e.pieces).toBeNull();
+    expect(e.jobsUsed).toEqual([]);
   });
 });

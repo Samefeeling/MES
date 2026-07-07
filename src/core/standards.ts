@@ -61,6 +61,101 @@ export function setupJudgement(
   return 'red';
 }
 
+/** The planning fields the schedule simulation consumes — a structural
+ *  subset of PlanningOrder so tests don't have to build full orders.
+ *  Field semantics follow the Epicor CSV: plannedStart =
+ *  JobHead_StartDate + StartHour; remainingLaborHrs =
+ *  Calculated_RemaingLaborHrs; remainingQty = Calculated_RemainingQty;
+ *  hrsPerPiece = JobOper_ProdStandard. */
+export interface PlannedOrderLike {
+  jobNumber: string;
+  plannedStart: string;
+  remainingLaborHrs: number;
+  remainingQty: number;
+  hrsPerPiece: number;
+}
+
+export interface ScheduleExpectation {
+  /** Expected good pieces; null when no planned order overlaps the
+   *  shift window (order rolled off Epicor — caller falls back to the
+   *  records-based model). */
+  pieces: number | null;
+  /** Jobs the simulation walked, for the tooltip. */
+  jobsUsed: string[];
+}
+
+/**
+ * Expected output for a shift straight from the PLANNING QUEUE — the
+ * floor-stated recurrence: run the order that's due at shift start; if
+ * its remaining labor hours (Calculated_RemaingLaborHrs) end inside the
+ * shift it contributes its remaining pieces (Calculated_RemainingQty),
+ * the standard changeover is paid if one occurred, and the NEXT planned
+ * order fills what's left of the 8 hours at ITS JobOper_ProdStandard:
+ *
+ *   expected = qtyRemaining(prev)
+ *            + (8h − laborHrs(prev) − std C/O) / ProdStandard(next)
+ *
+ * - Orders are walked in JobHead_StartDate + StartHour sequence; an
+ *   order can't start before its planned start (a late planned start
+ *   leaves the gap unexpected) nor before the machine frees up.
+ * - Each order is capped at its remaining quantity — the old model's
+ *   biggest lie: a job with 300 pieces left was "expected" to fill the
+ *   whole shift at rate, which is where sub-50% plan attainment came
+ *   from on shifts that simply FINISHED their order.
+ * - stdSetupHrs (observed changeover occurrences × standard — die 4h,
+ *   colour/insert 30 min) and actual smoko are removed from the
+ *   productive window before simulating.
+ * - Remaining qty / labor hours are as of the last Epicor sync, so the
+ *   simulation is exact for the current day and approximate for older
+ *   shifts in the window; buckets whose orders have left planning fall
+ *   back to the records-based model (pieces: null).
+ */
+export function expectedShiftOutputFromPlanning(
+  shiftId: string,
+  queue: PlannedOrderLike[],
+  stdSetupHrs: number,
+  smokoHrs: number,
+): ScheduleExpectation {
+  const b = shiftBounds(shiftId);
+  if (!b) return { pieces: null, jobsUsed: [] };
+  const windowEnd =
+    b.end.getTime() - Math.max(0, stdSetupHrs + smokoHrs) * 3_600_000;
+
+  const sorted = queue
+    .map((o) => ({ o, start: new Date(o.plannedStart).getTime() }))
+    .filter(({ o, start }) => isFinite(start) && start < b.end.getTime() && o.hrsPerPiece > 0)
+    .sort((a, z) => a.start - z.start);
+
+  let cursor = b.start.getTime();
+  let expected = 0;
+  const jobsUsed: string[] = [];
+  for (const { o, start } of sorted) {
+    const begin = Math.max(cursor, start);
+    if (begin >= windowEnd) break;
+    const needHrs =
+      o.remainingLaborHrs > 0
+        ? o.remainingLaborHrs
+        : o.remainingQty > 0
+          ? o.remainingQty * o.hrsPerPiece
+          : 0;
+    if (needHrs <= 0) continue;
+    const availHrs = (windowEnd - begin) / 3_600_000;
+    const usedHrs = Math.min(needHrs, availHrs);
+    // Completing inside the shift contributes the order's remaining
+    // pieces exactly; a partial run contributes rate × hours, still
+    // capped by what's left of the order.
+    const pieces =
+      usedHrs >= needHrs
+        ? Math.max(0, o.remainingQty)
+        : Math.min(Math.max(0, o.remainingQty), Math.floor(usedHrs / o.hrsPerPiece));
+    if (pieces > 0 || usedHrs > 0) jobsUsed.push(o.jobNumber);
+    expected += pieces;
+    cursor = begin + usedHrs * 3_600_000;
+    if (cursor >= windowEnd) break;
+  }
+  return { pieces: jobsUsed.length ? expected : null, jobsUsed };
+}
+
 export interface ExpectedOutput {
   /** Expected good pieces; null when no job in the bucket has a cycle
    *  time (nothing to judge against). */

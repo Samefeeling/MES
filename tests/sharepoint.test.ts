@@ -236,12 +236,17 @@ describe('listProduction backfills editCache from PMD_LiveStatus', () => {
         siteUrl: 'https://example.sharepoint.com/sites/x',
       });
       const machineCode = 'Batt1';
-      // Use yesterday's Day shift so the seeded tuple is recent enough to
-      // survive the 24 h live-retention cap — this test isolates the
-      // per-slot merge logic, not staleness sweeping.
+      // Use the most recent Day shift that is still inside the 24 h
+      // live-retention cap — this test isolates the per-slot merge
+      // logic, not staleness sweeping. A fixed "yesterday" broke after
+      // 15:00 local: yesterday's Day shift (ends 15:00) slid past the
+      // 24 h cap and the sweep deleted the seeded tuple, so the test
+      // passed in the morning and failed at night. Day shift ends at
+      // 15:00, so: after 15:00 use TODAY's (already ended, 0-9 h old),
+      // before 15:00 use YESTERDAY's (ended 9-24 h ago).
       const pad2 = (n: number): string => String(n).padStart(2, '0');
       const yd = new Date();
-      yd.setDate(yd.getDate() - 1);
+      if (yd.getHours() < 15) yd.setDate(yd.getDate() - 1);
       const dateStr = `${yd.getFullYear()}-${pad2(yd.getMonth() + 1)}-${pad2(yd.getDate())}`;
       const shiftId = `${dateStr}-Day`;
       const jobNumber = 'SFM507068';

@@ -12,6 +12,7 @@ import {
   DIE_CHANGE_STD_HRS,
   INSERT_CHANGE_STD_HRS,
   expectedShiftOutput,
+  expectedShiftOutputFromPlanning,
   setupJudgement,
   setupStandardHours,
 } from '../core/standards';
@@ -96,12 +97,13 @@ function saveThresholds(t: KpiThresholds): void {
 
 type PeriodKey = 'last3' | 'thisWeek' | 'lastWeek' | 'thisMonth' | 'lastMonth' | 'custom';
 
+// Trimmed to the three the meetings actually use — Last week / This
+// month / Last month cluttered the bar and 📅 Custom covers them all.
+// (periodRange still understands the removed keys, so nothing breaks
+// if one comes back.)
 const PERIODS: Array<{ key: PeriodKey; label: string }> = [
   { key: 'last3', label: 'Last 24h' },
   { key: 'thisWeek', label: 'This week' },
-  { key: 'lastWeek', label: 'Last week' },
-  { key: 'thisMonth', label: 'This month' },
-  { key: 'lastMonth', label: 'Last month' },
   { key: 'custom', label: '📅 Custom' },
 ];
 
@@ -602,6 +604,19 @@ async function compute(now = new Date()): Promise<void> {
       if (r.cycleTime && r.cycleTime > 0) ctByJob.set(r.jobNumber, r.cycleTime);
       if (r.plannedStart) psByJob.set(r.jobNumber, r.plannedStart);
     }
+    // Planning queue for the schedule-based expectation: this machine's
+    // live orders in planned sequence. Die-change pseudo-rows are
+    // excluded — changeover time enters the model as the OBSERVED
+    // occurrences × standard instead.
+    const planQueue = planning
+      .filter((o) => o.machineCode === m.machineCode && !o.isDieChange)
+      .map((o) => ({
+        jobNumber: o.jobNumber,
+        plannedStart: o.plannedStart,
+        remainingLaborHrs: o.duration,
+        remainingQty: o.jobRequired > 0 ? o.jobRequired : o.orderQty,
+        hrsPerPiece: o.qtyPerHr,
+      }));
     // Single pass per machine: partition into byShift × byDateBucket, then
     // aggregate each slice once at the end. Avoids re-filtering `all` 3×
     // and re-walking each shift slice to bucket by date.
@@ -641,10 +656,26 @@ async function compute(now = new Date()): Promise<void> {
         // Planning-driven expectation + changeover standards are per
         // SHIFT INSTANCE (runs-of-D counting and the planned-start cut
         // both need one shift's clock window); summed onto the shift agg
-        // after toAgg below.
+        // after toAgg below. The planned-queue simulation is the primary
+        // model (order sequence + RemainingQty caps); when the bucket's
+        // orders have rolled off planning (history), fall back to the
+        // records-based footprint model, whose inputs are denormalised
+        // onto the signed rows.
+        const bShiftId = `${dateKey}-${code}`;
+        const std = setupStandardHours(countSetupEvents(recs));
+        const smokoHrs =
+          recs.filter((r) => r.statusCode === 'M').length * 0.5;
+        const fromPlan = expectedShiftOutputFromPlanning(
+          bShiftId,
+          planQueue,
+          std.dieStdHrs + std.colorStdHrs + std.insertStdHrs,
+          smokoHrs,
+        );
         stdAcc.push({
-          exp: expectedShiftOutput(`${dateKey}-${code}`, recs, ctByJob, psByJob).pieces,
-          std: setupStandardHours(countSetupEvents(recs)),
+          exp:
+            fromPlan.pieces ??
+            expectedShiftOutput(bShiftId, recs, ctByJob, psByJob).pieces,
+          std,
         });
         const cb = charts.get(dateKey) ?? {
           label: dateKey.slice(5), // MM-DD
@@ -845,7 +876,7 @@ function outputCell(a: ShiftAgg): string {
   if (a.expOutput == null || a.expOutput <= 0) return `<td class="num">${n}</td>`;
   const pct = Math.round((a.output / a.expOutput) * 100);
   const cls = planColourClass(pct, S!.thresholds);
-  const title = `Expected ≈ ${a.expOutput} pcs from planning (StartDate+StartHour × Standard hour, less changeover standards: die 4h, colour/insert 30min each) — actual ${a.output} = ${pct}%`;
+  const title = `Expected ≈ ${a.expOutput} pcs from the planned order queue (StartDate+StartHour sequence, capped by remaining qty, at JobOper_ProdStandard; changeover standards deducted: die 4h, colour/insert 30min) — actual ${a.output} = ${pct}%`;
   return `<td class="num ${cls}" title="${escapeHtml(title)}">${n} <span class="kpi-exp">/${a.expOutput}</span></td>`;
 }
 
@@ -1241,14 +1272,17 @@ function render(): void {
         ${stat('Efficiency*', totOee != null ? totOee + '%' : '—', totOee != null ? 'is-' + colourClass(totOee, S!.thresholds.effGreen, S!.thresholds.effAmber) : '')}
       </div>`;
 
+  // Compact range note beside the tabs, replacing the old two-line title:
+  // just the window, years stripped ("07-06-Afternoon → 07-07-Day").
+  const rangeNote = (rangeLabel.includes('(')
+    ? rangeLabel.slice(rangeLabel.indexOf('(') + 1, rangeLabel.lastIndexOf(')'))
+    : rangeLabel
+  ).replace(/\b\d{4}-/g, '');
   app.innerHTML = `
     <div class="kpi">
       <div class="kpi-head">
-        <div class="kpi-head-text">
-          <h2>📊 Production KPIs — ${escapeHtml(rangeLabel)}</h2>
-          <p class="kpi-asof">Signed-off shifts only · as at ${escapeHtml(asAt)}</p>
-        </div>
         <div class="shift-tabs">${tabs}<button type="button" class="shift-btn" data-kpi-refresh title="Re-pull production data from SharePoint">⟳</button></div>
+        <span class="kpi-range-note" title="Signed-off shifts only · as at ${escapeHtml(asAt)}">${escapeHtml(rangeNote)}</span>
       </div>
       ${
         S!.period === 'custom'
@@ -1314,7 +1348,7 @@ function render(): void {
         </table>
       </div>
       ${charts}
-      <p class="bd-sub">Efficiency* = run-slot share of all filled slots. Schedule Adherence = good qty ÷ scheduled qty, per machine, for jobs whose planned start (JobHead_StartDate + StartHour) falls in the period; each job capped at 100% (suppressed in Last-24h). Shift sub-rows show each shift's contribution to the period total. Output is judged 🔴🟡🔵 against the planning expectation (small /number): 8h shift × Standard hour, from the planned start, minus changeover standards. Die / Colour / Insert hours are judged 🔴🟡🔵 against those standards: die change 4h (8 blocks), colour / insert change 30 min (1 block) per occurrence.</p>
+      <p class="bd-sub">Efficiency* = run-slot share of all filled slots. Schedule Adherence = good qty ÷ scheduled qty, per machine, for jobs whose planned start (JobHead_StartDate + StartHour) falls in the period; each job capped at 100% (suppressed in Last-24h). Shift sub-rows show each shift's contribution to the period total. Output is judged 🔴🟡🔵 against the planning expectation (small /number): the machine's planned order queue (JobHead_StartDate + StartHour, Calculated_RemainingQty / RemaingLaborHrs, JobOper_ProdStandard) simulated across the 8h shift — an order finishing mid-shift contributes its remaining pieces and the next order fills the rest — minus changeover standards. Die / Colour / Insert hours are judged 🔴🟡🔵 against those standards: die change 4h (8 blocks), colour / insert change 30 min (1 block) per occurrence.</p>
     </div>`;
 
   app.querySelector<HTMLButtonElement>('[data-kpi-refresh]')?.addEventListener('click', () => {
