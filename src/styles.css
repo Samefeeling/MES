@@ -62,6 +62,14 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    two-line "Production KPIs — …" title ate a whole row for it). The
    "signed-off only · as at" detail lives in its tooltip. */
 .kpi-range-note{font-size:13px;color:var(--mu);font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+/* Period tabs sized like the topbar Operator link (7px 14px pad,
+   14px font, 8px radius) — the 52px .shift-btn blocks the operator
+   shift picker uses were oversized and uneven here. */
+.kpi-head .shift-tabs{display:flex;align-items:center;gap:8px}
+.kpi-head .shift-btn{min-height:0;padding:7px 14px;border-width:1px;border-radius:8px;font-size:14px;line-height:16px}
+/* Formula footnote — one formula per line, small print. */
+.kpi-note{margin:0;font-size:11.5px;line-height:1.6;color:var(--mu)}
+.kpi-note b{color:#334155}
 /* Custom date-range picker, shown only under the Custom period tab. */
 .kpi-range{display:flex;flex-wrap:wrap;gap:14px;align-items:center;background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 14px}
 .kpi-range label{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:#0c4a6e}

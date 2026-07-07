@@ -1313,7 +1313,7 @@ function render(): void {
   app.innerHTML = `
     <div class="kpi">
       <div class="kpi-head">
-        <div class="shift-tabs">${tabs}<button type="button" class="shift-btn" data-kpi-refresh title="Re-pull production data from SharePoint">⟳</button></div>
+        <div class="shift-tabs">${tabs}</div>
         <span class="kpi-range-note" title="Signed-off shifts only · as at ${escapeHtml(asAt)}">${escapeHtml(rangeNote)}</span>
       </div>
       ${
@@ -1380,14 +1380,16 @@ function render(): void {
         </table>
       </div>
       ${charts}
-      <p class="bd-sub">Efficiency* = run-slot share of all filled slots. Schedule Adherence = good qty ÷ scheduled qty, per machine, for jobs whose planned start (JobHead_StartDate + StartHour) falls in the period; each job capped at 100% (suppressed in Last-24h). Shift sub-rows show each shift's contribution to the period total. Output is judged 🔴🟡🔵 against the planning expectation (small /number): the machine's planned order queue (JobHead_StartDate + StartHour, Calculated_RemainingQty / RemaingLaborHrs, JobOper_ProdStandard) simulated across the 8h shift — an order finishing mid-shift contributes its remaining pieces and the next order fills the rest — minus changeover standards. Die / Colour / Insert hours are judged 🔴🟡🔵 against those standards: die change 4h (8 blocks), colour / insert change 30 min (1 block) per occurrence.</p>
+      <div class="kpi-note">
+        <div><b>Output 🔵🟡🔴</b> = Σ Total Good vs expected (the small “/n”). Expected: simulate the machine's planned order queue over the shift — window = 8 h − Σ changeover standards − smoko; per order, hours needed = RemainingLaborHrs (else Remaining × ProdStandard); order finishes → all its remaining pieces, else ⌊hours used ÷ ProdStandard⌋. Remaining = the signed shift's own Job Left when the order ran, else planning.csv.</div>
+        <div><b>Yield%</b> = Good ÷ (Good + Reject).</div>
+        <div><b>Efficiency*</b> = Run slots ÷ all filled slots.</div>
+        <div><b>Sched. Adh.</b> = Good ÷ scheduled qty, for jobs whose planned start (StartDate + StartHour) falls in the period; each job capped at 100%. Hidden in Last 24 h.</div>
+        <div><b>Die / Colour / Insert h 🔵🟡🔴</b> = hours in D / C / I blocks vs standard = occurrences × (die 4 h · colour 0.5 h · insert 0.5 h); 🔵 ≤ std, 🟡 ≤ std + 0.5 h, 🔴 above.</div>
+        <div>Colour thresholds for Output / Yield / Efficiency are editable in the panel above. Shift sub-rows show each shift's contribution to the period total.</div>
+      </div>
     </div>`;
 
-  app.querySelector<HTMLButtonElement>('[data-kpi-refresh]')?.addEventListener('click', () => {
-    S!.loading = true;
-    render();
-    void compute();
-  });
   app.querySelectorAll<HTMLButtonElement>('[data-period]').forEach((b) =>
     b.addEventListener('click', () => {
       S!.period = b.dataset.period as PeriodKey;
