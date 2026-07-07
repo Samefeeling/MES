@@ -6,7 +6,15 @@ import type {
   ProductionRecord,
   ShiftCode,
 } from '../types';
-import { aggregate, type Kpi } from '../core/metrics';
+import { aggregate, countSetupEvents, type Kpi } from '../core/metrics';
+import {
+  COLOR_CHANGE_STD_HRS,
+  DIE_CHANGE_STD_HRS,
+  INSERT_CHANGE_STD_HRS,
+  expectedShiftOutput,
+  setupJudgement,
+  setupStandardHours,
+} from '../core/standards';
 import { currentShift, dateKey, parseShiftId, previousShift, SHIFTS } from '../core/shifts';
 import { closeModal, escapeHtml, openModal } from './modal';
 import {
@@ -43,6 +51,10 @@ interface KpiThresholds {
   yieldAmber: number;
   schedGreen: number;
   schedAmber: number;
+  /** Output vs planning-expected output (core/standards.ts). Blue at/above
+   *  planBlue %, amber at/above planAmber %, red below. */
+  planBlue: number;
+  planAmber: number;
 }
 
 const DEFAULT_THRESHOLDS: KpiThresholds = {
@@ -52,6 +64,8 @@ const DEFAULT_THRESHOLDS: KpiThresholds = {
   yieldAmber: 95,
   schedGreen: 95,
   schedAmber: 80,
+  planBlue: 95,
+  planAmber: 80,
 };
 
 const THRESHOLDS_KEY = 'pmd.kpiThresholds';
@@ -113,6 +127,16 @@ interface ShiftAgg {
   insertHrs: number;
   oee: number | null;
   handovers: HandoverEntry[];
+  /** Planning-driven expected good pieces (see core/standards.ts). null =
+   *  not computed for this slice (job rows / category rows) or no cycle
+   *  time anywhere in it — the Output cell stays uncoloured. */
+  expOutput: number | null;
+  /** Standard changeover allowances (occurrences × standard duration).
+   *  null = not computed for this slice; numbers colour the Die / Colour /
+   *  Insert hour cells red-amber-blue against the actuals. */
+  dieStdHrs: number | null;
+  colorStdHrs: number | null;
+  insertStdHrs: number | null;
 }
 
 interface JobAgg {
@@ -397,6 +421,14 @@ function toAgg(k: Kpi, records: ProductionRecord[]): ShiftAgg {
     insertHrs: k.insertHrs,
     oee: k.oee,
     handovers: collectHandovers(records),
+    // Expectation / standards are computed PER SHIFT BUCKET (the runs-of-D
+    // counting and the planned-start cut only make sense against one
+    // shift's clock window) and summed onto the agg by the caller — a
+    // bare toAgg slice (job rows, category rows) stays unjudged.
+    expOutput: null,
+    dieStdHrs: null,
+    colorStdHrs: null,
+    insertStdHrs: null,
   };
 }
 
@@ -413,7 +445,24 @@ function emptyAgg(): ShiftAgg {
     insertHrs: 0,
     oee: null,
     handovers: [],
+    expOutput: null,
+    dieStdHrs: null,
+    colorStdHrs: null,
+    insertStdHrs: null,
   };
+}
+
+/** Add a bucket's expectation/standards onto a running agg (null-aware:
+ *  the first computed bucket turns the field from null into a number). */
+function addStd(
+  a: ShiftAgg,
+  exp: number | null,
+  std: { dieStdHrs: number; colorStdHrs: number; insertStdHrs: number },
+): void {
+  if (exp != null) a.expOutput = (a.expOutput ?? 0) + exp;
+  a.dieStdHrs = (a.dieStdHrs ?? 0) + std.dieStdHrs;
+  a.colorStdHrs = (a.colorStdHrs ?? 0) + std.colorStdHrs;
+  a.insertStdHrs = (a.insertStdHrs ?? 0) + std.insertStdHrs;
 }
 
 function emptyChartShift(): ChartBucket['byShift'][ShiftCode] {
@@ -524,6 +573,18 @@ async function compute(now = new Date()): Promise<void> {
   const partDescByJob = new Map<string, string>();
   for (const o of planning) partDescByJob.set(o.jobNumber, o.partDescription);
 
+  // Cycle time (hours per piece — Epicor JobOper_ProdStandard, the
+  // "Standard hour") and planned start (JobHead_StartDate + StartHour)
+  // per job, feeding the expected-output judgement (core/standards.ts).
+  // Planning seeds both; the signed rows' denormalised copies override
+  // below, because planning rolls off Epicor once an order completes.
+  const ctByJob = new Map<string, number>();
+  const psByJob = new Map<string, string>();
+  for (const o of planning) {
+    if (o.qtyPerHr > 0) ctByJob.set(o.jobNumber, o.qtyPerHr);
+    if (o.plannedStart) psByJob.set(o.jobNumber, o.plannedStart);
+  }
+
   const charts = new Map<string, ChartBucket>();
   const rows: KpiRow[] = S!.machines.map((m, i) => {
     const all = perMachineProd[i];
@@ -537,6 +598,9 @@ async function compute(now = new Date()): Promise<void> {
       // comment above. Skip blanks so we never blow away a planning seed
       // with an empty production row (the non-canonical slots carry '').
       if (r.partDescription) partDescByJob.set(r.jobNumber, r.partDescription);
+      // Same production-wins rule for the expectation inputs.
+      if (r.cycleTime && r.cycleTime > 0) ctByJob.set(r.jobNumber, r.cycleTime);
+      if (r.plannedStart) psByJob.set(r.jobNumber, r.plannedStart);
     }
     // Single pass per machine: partition into byShift × byDateBucket, then
     // aggregate each slice once at the end. Avoids re-filtering `all` 3×
@@ -567,9 +631,21 @@ async function compute(now = new Date()): Promise<void> {
     for (const code of SHIFT_ORDER) {
       const shiftBuckets = buckets.get(code)!;
       const flat: ProductionRecord[] = [];
+      const stdAcc: Array<{
+        exp: number | null;
+        std: { dieStdHrs: number; colorStdHrs: number; insertStdHrs: number };
+      }> = [];
       for (const [dateKey, recs] of shiftBuckets) {
         flat.push(...recs);
         const k = aggregate(recs);
+        // Planning-driven expectation + changeover standards are per
+        // SHIFT INSTANCE (runs-of-D counting and the planned-start cut
+        // both need one shift's clock window); summed onto the shift agg
+        // after toAgg below.
+        stdAcc.push({
+          exp: expectedShiftOutput(`${dateKey}-${code}`, recs, ctByJob, psByJob).pieces,
+          std: setupStandardHours(countSetupEvents(recs)),
+        });
         const cb = charts.get(dateKey) ?? {
           label: dateKey.slice(5), // MM-DD
           byShift: { Day: emptyChartShift(), Afternoon: emptyChartShift(), Night: emptyChartShift() },
@@ -583,6 +659,7 @@ async function compute(now = new Date()): Promise<void> {
         charts.set(dateKey, cb);
       }
       byShift[code] = toAgg(aggregate(flat), flat);
+      for (const s of stdAcc) addStd(byShift[code], s.exp, s.std);
 
       // 3rd-level breakdown: group this shift's records by JobNum,
       // aggregate each, attach the part description (first two words).
@@ -605,6 +682,15 @@ async function compute(now = new Date()): Promise<void> {
         .sort((a, b2) => b2.agg.output - a.agg.output);
     }
     const total = toAgg(aggregate(all), all);
+    // Machine total = Σ of its shift aggs' expectations / standards.
+    for (const code of SHIFT_ORDER) {
+      const s = byShift[code];
+      addStd(total, s.expOutput, {
+        dieStdHrs: s.dieStdHrs ?? 0,
+        colorStdHrs: s.colorStdHrs ?? 0,
+        insertStdHrs: s.insertStdHrs ?? 0,
+      });
+    }
 
     // Per-Job# rollup across every shift in the period. The supervisor
     // uses this to answer "how is each order doing on 1600T over the
@@ -741,6 +827,42 @@ function colourClass(v: number | null, green: number, amber: number): string {
   return 'red';
 }
 
+/** Output-vs-plan colouring. The floor asked for 红黄蓝 — blue (not
+ *  green) marks "met the plan"; '' (no colour) when there's nothing to
+ *  judge against. */
+function planColourClass(pct: number | null, t: KpiThresholds): string {
+  if (pct == null) return '';
+  if (pct >= t.planBlue) return 'blue';
+  if (pct >= t.planAmber) return 'amber';
+  return 'red';
+}
+
+/** Output cell judged against the planning-driven expectation: value
+ *  coloured red / amber / blue, tooltip explains the maths. Plain cell
+ *  when the slice carries no expectation (job rows, no cycle time). */
+function outputCell(a: ShiftAgg): string {
+  const n = a.output ? String(a.output) : '—';
+  if (a.expOutput == null || a.expOutput <= 0) return `<td class="num">${n}</td>`;
+  const pct = Math.round((a.output / a.expOutput) * 100);
+  const cls = planColourClass(pct, S!.thresholds);
+  const title = `Expected ≈ ${a.expOutput} pcs from planning (StartDate+StartHour × Standard hour, less changeover standards: die 4h, colour/insert 30min each) — actual ${a.output} = ${pct}%`;
+  return `<td class="num ${cls}" title="${escapeHtml(title)}">${n} <span class="kpi-exp">/${a.expOutput}</span></td>`;
+}
+
+/** Die / Colour / Insert hour cell judged against the standard allowance
+ *  (occurrences × standard). Blue = within standard, amber = one block
+ *  over, red = worse; plain when the slice wasn't judged / had none. */
+function setupCell(actualHrs: number, stdHrs: number | null, stdEachHrs: number, label: string): string {
+  const v = actualHrs ? actualHrs.toFixed(1) : '—';
+  const cls = setupJudgement(actualHrs, stdHrs);
+  if (!cls) return `<td class="num">${v}</td>`;
+  const occurrences = Math.round((stdHrs ?? 0) / stdEachHrs);
+  const title = `${label}: ${occurrences} × ${stdEachHrs}h standard = ${(stdHrs ?? 0).toFixed(1)}h allowed — actual ${actualHrs.toFixed(1)}h${
+    actualHrs > (stdHrs ?? 0) ? ` (+${(actualHrs - (stdHrs ?? 0)).toFixed(1)}h over)` : ' (within standard)'
+  }`;
+  return `<td class="num ${cls}" title="${escapeHtml(title)}">${v}</td>`;
+}
+
 function formatHandoverCell(handovers: HandoverEntry[]): string {
   if (handovers.length === 0) return '<td class="kpi-ho-cell muted">—</td>';
   // Compact: one row per job, four emoji-prefixed segments; whitespace
@@ -819,21 +941,20 @@ function aggCells(
   // zero in an Efficiency / output column reads as a real measurement (the
   // press ran but made nothing), where what we actually mean is "no
   // data for this slice". The dash makes that distinction visible.
-  const n = (v: number): string => (v ? String(v) : '—');
   const h = (v: number): string => (v ? v.toFixed(1) : '—');
   // Yield is meaningless without pieces: emptyAgg() defaults yieldPct to
   // 100, so a slice with no output AND no reject must show '—', not a
   // green "100%" that reads as a perfect shift.
   const noPieces = !a.output && !a.reject;
   return `
-    <td class="num">${n(a.output)}</td>
+    ${outputCell(a)}
     ${rejectCell(a.reject, rejectDrillKey)}
     <td class="num ${noPieces ? '' : yc}">${noPieces ? '—' : `${a.yieldPct}%`}</td>
     <td class="num">${h(a.runHrs)}</td>
     ${downHrsCell(a.downHrs, downtimeDrillKey)}
-    <td class="num">${h(a.dieHrs)}</td>
-    <td class="num">${h(a.colorHrs)}</td>
-    <td class="num">${h(a.insertHrs)}</td>
+    ${setupCell(a.dieHrs, a.dieStdHrs, DIE_CHANGE_STD_HRS, 'Die change')}
+    ${setupCell(a.colorHrs, a.colorStdHrs, COLOR_CHANGE_STD_HRS, 'Colour change')}
+    ${setupCell(a.insertHrs, a.insertStdHrs, INSERT_CHANGE_STD_HRS, 'Insert change')}
     <td class="num ${oeeAndSched ? oc : ''}">${a.oee == null ? '—' : a.oee + '%'}</td>
     <td class="num ${oeeAndSched ? sc : ''}">${
       includeSched == null ? '—' : includeSched + '%'
@@ -859,6 +980,7 @@ function buildThresholdEditor(): string {
     <div class="kpi-th-group"><b>Efficiency</b>${field('effGreen', '🟢 ≥')}${field('effAmber', '🟡 ≥')}</div>
     <div class="kpi-th-group"><b>Yield</b>${field('yieldGreen', '🟢 ≥')}${field('yieldAmber', '🟡 ≥')}</div>
     <div class="kpi-th-group"><b>Sched. Adh.</b>${field('schedGreen', '🟢 ≥')}${field('schedAmber', '🟡 ≥')}</div>
+    <div class="kpi-th-group"><b>Output vs Plan</b>${field('planBlue', '🔵 ≥')}${field('planAmber', '🟡 ≥')}</div>
     <button type="button" class="kpi-th-reset" data-th-reset title="Restore default thresholds">Reset</button>
   </div>`;
 }
@@ -898,6 +1020,10 @@ function render(): void {
       a.dieHrs += r.total.dieHrs;
       a.colorHrs += r.total.colorHrs;
       a.insertHrs += r.total.insertHrs;
+      if (r.total.expOutput != null) a.expOutput = (a.expOutput ?? 0) + r.total.expOutput;
+      a.dieStdHrs = (a.dieStdHrs ?? 0) + (r.total.dieStdHrs ?? 0);
+      a.colorStdHrs = (a.colorStdHrs ?? 0) + (r.total.colorStdHrs ?? 0);
+      a.insertStdHrs = (a.insertStdHrs ?? 0) + (r.total.insertStdHrs ?? 0);
       return a;
     },
     {
@@ -909,6 +1035,10 @@ function render(): void {
       dieHrs: 0,
       colorHrs: 0,
       insertHrs: 0,
+      expOutput: null as number | null,
+      dieStdHrs: null as number | null,
+      colorStdHrs: null as number | null,
+      insertStdHrs: null as number | null,
     },
   );
   const totPieces = tot.output + tot.reject;
@@ -1090,10 +1220,19 @@ function render(): void {
     `<div class="kpi-stat${cls ? ' ' + cls : ''}"><span class="kpi-stat-label">${escapeHtml(
       label,
     )}</span><b class="kpi-stat-value">${value}</b></div>`;
+  const totPlanPct =
+    tot.expOutput != null && tot.expOutput > 0
+      ? Math.round((tot.output / tot.expOutput) * 100)
+      : null;
   const stats = S!.loading
     ? ''
     : `<div class="kpi-stats">
         ${stat('Output', tot.output ? String(tot.output) : '—')}
+        ${stat(
+          'vs Plan',
+          totPlanPct != null ? totPlanPct + '%' : '—',
+          totPlanPct != null ? 'is-' + planColourClass(totPlanPct, S!.thresholds) : '',
+        )}
         ${stat('Reject', tot.reject ? String(tot.reject) : '—', 'is-red')}
         ${stat('Yield', totYield != null ? totYield + '%' : '—', totYield != null ? 'is-' + colourClass(+totYield, S!.thresholds.yieldGreen, S!.thresholds.yieldAmber) : '')}
         ${stat('Run hours', tot.runHrs ? tot.runHrs.toFixed(1) : '—', 'is-green')}
@@ -1143,17 +1282,30 @@ function render(): void {
               : (() => {
                   const tn = (v: number): string => (v ? String(v) : '—');
                   const th = (v: number): string => (v ? v.toFixed(1) : '—');
+                  const totPct =
+                    tot.expOutput != null && tot.expOutput > 0
+                      ? Math.round((tot.output / tot.expOutput) * 100)
+                      : null;
+                  const totCls = planColourClass(totPct, S!.thresholds);
                   return `<tfoot><tr class="kpi-total">
                     <th>TOTAL</th>
                     ${colorCell()}
-                    <td class="num">${tn(tot.output)}</td>
+                    <td class="num ${totCls}"${
+                      totPct != null
+                        ? ` title="Expected ≈ ${tot.expOutput} pcs floor-wide — actual ${tot.output} = ${totPct}%"`
+                        : ''
+                    }>${tn(tot.output)}${
+                      tot.expOutput != null && tot.expOutput > 0
+                        ? ` <span class="kpi-exp">/${tot.expOutput}</span>`
+                        : ''
+                    }</td>
                     ${rejectCell(tot.reject, 'FLOOR')}
                     <td class="num">${totYield != null ? totYield + '%' : '—'}</td>
                     <td class="num">${th(tot.runHrs)}</td>
                     ${downHrsCell(tot.downHrs, 'FLOOR')}
-                    <td class="num">${th(tot.dieHrs)}</td>
-                    <td class="num">${th(tot.colorHrs)}</td>
-                    <td class="num">${th(tot.insertHrs)}</td>
+                    ${setupCell(tot.dieHrs, tot.dieStdHrs, DIE_CHANGE_STD_HRS, 'Die change')}
+                    ${setupCell(tot.colorHrs, tot.colorStdHrs, COLOR_CHANGE_STD_HRS, 'Colour change')}
+                    ${setupCell(tot.insertHrs, tot.insertStdHrs, INSERT_CHANGE_STD_HRS, 'Insert change')}
                     <td class="num">—</td><td class="num">—</td>
                     <td class="kpi-ho-cell muted">—</td>
                   </tr></tfoot>`;
@@ -1162,7 +1314,7 @@ function render(): void {
         </table>
       </div>
       ${charts}
-      <p class="bd-sub">Efficiency* = run-slot share of all filled slots. Schedule Adherence = good qty ÷ scheduled qty, per machine, for jobs whose planned start (JobHead_StartDate + StartHour) falls in the period; each job capped at 100% (suppressed in Last-24h). Shift sub-rows show each shift's contribution to the period total.</p>
+      <p class="bd-sub">Efficiency* = run-slot share of all filled slots. Schedule Adherence = good qty ÷ scheduled qty, per machine, for jobs whose planned start (JobHead_StartDate + StartHour) falls in the period; each job capped at 100% (suppressed in Last-24h). Shift sub-rows show each shift's contribution to the period total. Output is judged 🔴🟡🔵 against the planning expectation (small /number): 8h shift × Standard hour, from the planned start, minus changeover standards. Die / Colour / Insert hours are judged 🔴🟡🔵 against those standards: die change 4h (8 blocks), colour / insert change 30 min (1 block) per occurrence.</p>
     </div>`;
 
   app.querySelector<HTMLButtonElement>('[data-kpi-refresh]')?.addEventListener('click', () => {

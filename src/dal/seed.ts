@@ -187,7 +187,9 @@ export function seedPlanning(now: Date): PlanningOrder[] {
         plannedEnd: e1.toISOString(),
         orderQty: 480,
         jobRequired: 240,
-        qtyPerHr: 60,
+        // HOURS PER PIECE (Epicor JobOper_ProdStandard semantics — see
+        // core/targets.ts): 1/60 h/pc = 60 pieces/hour.
+        qtyPerHr: 1 / 60,
         duration: 4,
         released: true,
         isDieChange: false,
@@ -206,7 +208,8 @@ export function seedPlanning(now: Date): PlanningOrder[] {
         plannedEnd: e2.toISOString(),
         orderQty: 400,
         jobRequired: 200,
-        qtyPerHr: 50,
+        // 1/50 h/pc = 50 pieces/hour.
+        qtyPerHr: 1 / 50,
         duration: 4,
         released: true,
         isDieChange: false,
@@ -268,7 +271,9 @@ export function seedProduction(now: Date, planning: PlanningOrder[]): Production
           : bias[Math.floor(rng() * bias.length)];
 
         const onSlot0 = slot === 0;
-        const good = Math.round(order.qtyPerHr * 0.5 * (0.85 + rng() * 0.2));
+        // qtyPerHr is HOURS PER PIECE — half a slot-hour over it gives the
+        // slot's piece count (≈25-30 at 1/60 h/pc).
+        const good = Math.round((0.5 / order.qtyPerHr) * (0.85 + rng() * 0.2));
         const rejQty = rng() < 0.3 ? 1 + Math.floor(rng() * 3) : 0;
 
         recs.push({
