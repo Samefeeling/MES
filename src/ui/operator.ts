@@ -2043,17 +2043,6 @@ function lockInfo(): { lockedBy: string; lockedAt: string } | null {
   return null;
 }
 
-/**
- * Compact "View only" indicator shown on a non-iPad browser (a PC viewer)
- * with no supervisor signed in. The whole sheet is read-only behind it.
- * Deliberately tiny — earlier multi-line banner was too loud for what's
- * just a passive viewer state.
- */
-function buildOwnerBanner(): string {
-  if (!isReadOnlyDevice()) return '';
-  return `<span class="view-only-pill" title="Read only — sign in as supervisor via 🔓 in the top nav to edit">👁 View only</span>`;
-}
-
 /** Notice shown while a signed order is re-opened for correction, so the floor
  *  understands why only the signed slots/counts are editable. */
 function buildReopenedBanner(): string {
@@ -2140,7 +2129,6 @@ function render(): void {
       : buildSummary();
   app.innerHTML = `<div class="op-sheet">
     ${buildActionBar()}
-    ${buildOwnerBanner()}
     ${buildFutureShiftBanner()}
     ${buildSignoffReminderBanner()}
     ${buildReopenedBanner()}

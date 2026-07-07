@@ -10,7 +10,6 @@ import {
   tryEnterSupervisor,
 } from './ui/supervisor-auth';
 import { toast } from './ui/toast';
-import { maybeAutoStartTutorial, startTutorial } from './ui/tutorial';
 import { currentBuildId, startAutoUpdate } from './ui/auto-update';
 
 const dal: PmdDataLayer = createDataLayer(import.meta.env as Record<string, string>);
@@ -65,46 +64,48 @@ window.addEventListener('focus', pushMirrorOnWake);
 window.addEventListener('pageshow', pushMirrorOnWake);
 
 /**
- * Mirror-health badge next to the ☁ status: build id + this device's
- * last successful live-mirror push (or its failure). "One iPad never
- * gets its data onto SharePoint" was invisible on the device itself —
- * this makes stale-bundle and dead-mirror states a glanceable fact on
- * the floor: an old build id, a 👁 view-only tag, or a red ⚠ each name
- * the problem directly.
+ * Mirror-health badge: build id + this device's last successful
+ * live-mirror push (or its failure). "One iPad never gets its data onto
+ * SharePoint" was invisible on the device itself — an old build id, a
+ * 👁 view-only tag, or a red ⚠ each name the problem directly. Lives as
+ * a small FIXED pill in the bottom-right corner and only while
+ * supervisor mode is on: it's an admin diagnostic, not something the
+ * operators should be reading (they used to ask what "synchronising"
+ * meant on the old top-bar status).
  */
 function updateMirrorBadge(): void {
   let el = document.getElementById('mirrorBadge');
   if (!el) {
-    const ss = document.getElementById('ss');
-    if (!ss || !ss.parentElement) return;
     el = document.createElement('span');
     el.id = 'mirrorBadge';
-    ss.parentElement.insertBefore(el, ss.nextSibling);
+    document.body.appendChild(el);
   }
+  el.style.display = isSupervisor() ? '' : 'none';
+  if (!isSupervisor()) return;
   const build = currentBuildId().slice(-5);
   const h = dal.mirrorHealth ? dal.mirrorHealth() : null;
   const hhmm = (ms: number): string =>
     new Date(ms).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false });
   if (!h) {
-    el.textContent = `· ${build}`;
+    el.textContent = `${build}`;
     el.className = 'mb-idle';
     el.title = `Build ${currentBuildId()}`;
     return;
   }
   if (!h.writable) {
-    el.textContent = `· ${build} 👁`;
+    el.textContent = `${build} 👁`;
     el.className = 'mb-idle';
     el.title = `Build ${currentBuildId()} · view-only device (no supervisor signed in) — never mirrors`;
   } else if (h.failAt != null && (h.okAt == null || h.failAt > h.okAt)) {
-    el.textContent = `· ${build} ⚠ ${hhmm(h.failAt)}`;
+    el.textContent = `${build} ⚠ ${hhmm(h.failAt)}`;
     el.className = 'mb-bad';
     el.title = `Build ${currentBuildId()} · live-mirror push FAILED at ${hhmm(h.failAt)}: ${h.error}`;
   } else if (h.okAt != null) {
-    el.textContent = `· ${build} ⇅ ${hhmm(h.okAt)}`;
+    el.textContent = `${build} ⇅ ${hhmm(h.okAt)}`;
     el.className = 'mb-ok';
     el.title = `Build ${currentBuildId()} · live mirror last pushed ${hhmm(h.okAt)}`;
   } else {
-    el.textContent = `· ${build} ⇅ —`;
+    el.textContent = `${build} ⇅ —`;
     el.className = 'mb-idle';
     el.title = `Build ${currentBuildId()} · no mirror push yet this session`;
   }
@@ -125,16 +126,14 @@ function parseRoute(): Route {
   return { view: 'operator' };
 }
 
-function setStatus(text: string): void {
-  const el = document.getElementById('ss');
-  if (el) el.textContent = text;
-}
-
 // The top-nav links are baked into the SPFx shell's static HTML (in the
 // .sppkg), so a shell packaged before a view was added (e.g. KPIs) won't
 // show its link. Re-render the nav from the app on boot so new views are
 // reachable after `npm run deploy` alone — no .sppkg rebuild / IT needed.
+// The same boot pass also strips chrome an OLD shell may still carry
+// (the retired ☁ status pill lives in already-deployed static HTML).
 function ensureNav(): void {
+  document.getElementById('ss')?.remove();
   const nav = document.querySelector('.top-nav');
   if (!nav) return;
   const sv = isSupervisor();
@@ -147,19 +146,9 @@ function ensureNav(): void {
     '<a href="#/" data-nav>\u{270F}\u{FE0F} Operator</a>' +
     '<a href="#/trace" data-nav>\u{1F50D} Trace</a>' +
     '<a href="#/kpi" data-nav>\u{1F4CA} KPIs</a>' +
-    '<button type="button" class="tut-launch" data-tut="operator" title="Walk me through filling a shift from start to Sign Off">\u{1F4D8} Tutorial</button>' +
-    `<button type="button" class="tut-launch sv-toggle${sv ? ' on' : ''}" data-supervisor title="${
+    `<button type="button" class="nav-btn sv-toggle${sv ? ' on' : ''}" data-supervisor title="${
       sv ? 'Supervisor mode is on — tap to sign out' : 'Sign in as supervisor to unlock signed-off shifts'
     }">${sv ? '🔒 Supervisor (on)' : '🔓 Supervisor'}</button>`;
-  nav.querySelectorAll<HTMLButtonElement>('[data-tut]').forEach((b) =>
-    b.addEventListener('click', (e) => {
-      // Log so an operator can confirm the click is reaching JS even on
-      // an iPad without DevTools (Safari macOS → Develop → iPad shows it).
-      console.info('[pmd] Tutorial click', b.dataset.tut);
-      e.preventDefault();
-      startTutorial(b.dataset.tut as 'operator' | 'supervisor');
-    }),
-  );
   nav
     .querySelector<HTMLButtonElement>('[data-supervisor]')
     ?.addEventListener('click', onSupervisorClick);
@@ -176,10 +165,7 @@ function onSupervisorClick(): void {
   }
   promptSupervisorPassword((pwd) => {
     if (tryEnterSupervisor(pwd)) {
-      toast('Supervisor mode on. Walking you through unlock…', 'ok');
-      // The supervisor walkthrough is the natural follow-on action after
-      // sign-in, so launch it inline. They can dismiss with Skip.
-      startTutorial('supervisor');
+      toast('Supervisor mode on', 'ok');
     } else {
       toast('Wrong password', 'err');
     }
@@ -218,6 +204,9 @@ function promptSupervisorPassword(cb: (password: string) => void): void {
 // the lock-banner Unlock visibility stay in sync.
 onSupervisorChange(() => {
   ensureNav();
+  // The bottom-right mirror-health pill is supervisor-only diagnostics —
+  // show/hide it with the mode.
+  updateMirrorBadge();
   // The lock banner inside the operator view caches its render decision
   // on the supervisor state too. Re-route to re-render the active view.
   void route();
@@ -229,7 +218,6 @@ async function route(): Promise<void> {
     pollTimer = undefined;
   }
   try {
-    setStatus('☁ syncing');
     const r = parseRoute();
     if (r.view === 'trace') {
       await renderTrace(dal);
@@ -255,9 +243,10 @@ async function route(): Promise<void> {
       await renderOperator(dal, mc);
       pollTimer = setInterval(operatorPollTick, POLL_MS);
     }
-    setStatus('☁ ready');
   } catch (e) {
-    setStatus('☁ offline');
+    // No top-bar status pill any more (operators kept asking what
+    // "synchronising" meant); comms health is the supervisor-only
+    // bottom-right mirror badge, and route failures land here.
     console.error(e);
   }
 }
@@ -272,7 +261,7 @@ window.addEventListener('hashchange', () => void route());
 document.getElementById('refreshBtn')?.addEventListener('click', () => void route());
 
 ensureNav();
-void route().then(() => maybeAutoStartTutorial());
+void route();
 
 // Poll for new deploys and self-update the iPad clients without a manual
 // cache clear (which was wiping the SharePoint auth session).

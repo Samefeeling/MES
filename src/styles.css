@@ -41,9 +41,11 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 /* ===== top bar (uses theme-dark) — slim: logo + title + connection status ===== */
 .top{background:var(--theme-dark);color:var(--theme-on-dark);padding:8px 18px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:50;box-shadow:0 2px 6px rgba(0,0,0,.15);transition:background .25s}
 .top h1{margin:0;font-size:20px;font-weight:700;flex:1;letter-spacing:.2px}
-.top .st{font-size:14px;opacity:.92;background:rgba(255,255,255,.16);padding:4px 10px;border-radius:99px;font-weight:600}
-/* Mirror-health badge (build id + last live-mirror push) next to ☁. */
-#mirrorBadge{font-size:12px;font-weight:600;padding:4px 8px;border-radius:99px;white-space:nowrap}
+/* Mirror-health badge (build id + last live-mirror push): supervisor-only
+   diagnostics pinned to the bottom-right corner — visible only while
+   supervisor mode is on (display toggled from JS). Deliberately dim so
+   it never competes with the sheet. */
+#mirrorBadge{position:fixed;right:8px;bottom:8px;z-index:60;font-size:12px;font-weight:600;padding:4px 10px;border-radius:99px;white-space:nowrap;background:rgba(15,23,42,.75);color:#e2e8f0;pointer-events:auto;cursor:default}
 #mirrorBadge.mb-ok{opacity:.85}
 #mirrorBadge.mb-idle{opacity:.6}
 #mirrorBadge.mb-bad{background:#c62828;color:#fff;opacity:1}
@@ -503,12 +505,9 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .lock-unlock-btn{padding:10px 18px;border-radius:8px;background:#f59e0b;color:#fff;border:0;font-size:15px;font-weight:800;cursor:pointer;min-height:44px}
 .lock-unlock-btn:hover{background:#d97706}
 .lock-no-perm{font-size:13px;color:#92400e;font-style:italic;background:rgba(255,255,255,.5);padding:6px 10px;border-radius:6px}
-/* Tiny "View only" pill shown on a PC viewer with no supervisor
-   sign-in. Replaces the older full-width owner banner — the device-
-   class read-only state is passive, so a chip is enough. */
-.view-only-pill{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:#1e40af;background:#dbeafe;border:1px solid #93c5fd;border-radius:999px;padding:2px 8px;margin-bottom:8px;cursor:default}
-
 /* ===== supervisor mode toggle in the top nav ===== */
+.nav-btn{background:rgba(255,255,255,.14);color:var(--theme-on-dark);border:1px solid rgba(255,255,255,.25);padding:7px 14px;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;margin-left:4px}
+.nav-btn:hover{background:rgba(255,255,255,.24)}
 .sv-toggle.on{background:#dcfce7 !important;color:#166534 !important;border:1px solid #86efac !important}
 .sv-toggle.on:hover{background:#bbf7d0 !important}
 
@@ -516,30 +515,6 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .sv-login{display:flex;flex-direction:column;gap:14px}
 .sv-pwd-input{width:100%;font-size:18px;padding:14px 16px;border:2px solid var(--bd);border-radius:10px;font-family:inherit;background:#fff;box-sizing:border-box}
 .sv-pwd-input:focus{outline:none;border-color:var(--theme-dark);box-shadow:0 0 0 3px rgba(14,165,233,.18)}
-
-/* ===== built-in tutorial ===== */
-.tut-launch{background:rgba(255,255,255,.14);color:var(--theme-on-dark);border:1px solid rgba(255,255,255,.25);padding:7px 14px;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;margin-left:4px}
-.tut-launch:hover{background:rgba(255,255,255,.24)}
-.tut-host{position:fixed;inset:0;z-index:400;display:none;pointer-events:none}
-.tut-host.open{display:block}
-.tut-spotlight{position:absolute;border-radius:10px;box-shadow:0 0 0 9999px rgba(15,23,42,.65);outline:3px solid #f59e0b;outline-offset:0;pointer-events:none;transition:top .2s,left .2s,width .2s,height .2s}
-.tut-card{position:absolute;width:440px;max-width:92vw;background:#fff;border-radius:14px;padding:22px 22px 18px;box-shadow:0 20px 40px rgba(0,0,0,.35);pointer-events:auto;z-index:401}
-.tut-progress{font-size:12px;font-weight:800;color:#f59e0b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
-.tut-title{margin:0 0 12px;font-size:22px;font-weight:800;color:#1e293b;line-height:1.2}
-.tut-narration{margin:0 0 12px;font-size:17px;line-height:1.5;color:#475569}
-.tut-hint{margin:0 0 16px;font-size:14px;font-style:italic;color:#b45309;font-weight:600}
-.tut-actions{display:flex;gap:10px;align-items:center}
-.tut-actions button{padding:12px 18px;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;border:2px solid;min-height:48px}
-.tut-skip{background:#fff;border-color:#cbd5e1;color:#64748b}
-.tut-skip:hover{background:#f1f5f9}
-.tut-prev{background:#fff;border-color:#94a3b8;color:#475569}
-.tut-prev:hover:not(:disabled){background:#f1f5f9}
-.tut-prev:disabled{opacity:.35;cursor:default}
-.tut-next{background:#f59e0b;border-color:#f59e0b;color:#fff;margin-left:auto}
-.tut-next:hover{background:#d97706;border-color:#d97706}
-@media (max-width:900px){
-  .tut-card{width:92vw;left:4vw !important;right:4vw !important;margin-left:0 !important}
-}
 
 /* ===== KPI machine + shift + job rows ===== */
 /* Uniform row height across the three indent levels so the table reads
