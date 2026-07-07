@@ -197,11 +197,18 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .ab-shifts{display:flex;gap:6px;flex-wrap:wrap}
 .ab-window{display:flex;align-items:center;gap:4px;font-size:13px;font-weight:700;color:var(--mu);font-variant-numeric:tabular-nums;white-space:nowrap}
 /* Display-size − / % / + stepper. 44px hit targets; the % readout is
-   fixed-width so the bar doesn't jiggle between 60% and 150%. */
+   fixed-width so the bar doesn't jiggle between 60% and 150%. The %
+   itself is a button: tapping it returns to ⛶ auto-fit. */
 .ab-zoom{display:flex;align-items:center;gap:2px;background:#fff;border:2px solid var(--bd);border-radius:10px;padding:2px}
 .ab-zoom-btn{width:44px;height:44px;border:0;background:transparent;border-radius:8px;font-size:24px;font-weight:800;color:var(--theme-dark);cursor:pointer;line-height:1;-webkit-tap-highlight-color:transparent}
 .ab-zoom-btn:active{background:var(--gy)}
-.ab-zoom-val{min-width:70px;text-align:center;font-size:13px;font-weight:700;color:var(--mu);font-variant-numeric:tabular-nums;white-space:nowrap}
+.ab-zoom-val{min-width:70px;height:44px;border:0;background:transparent;border-radius:8px;text-align:center;font-size:13px;font-weight:700;color:var(--mu);font-variant-numeric:tabular-nums;white-space:nowrap;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.ab-zoom-val:active{background:var(--gy)}
+/* Measurement probe for auto-fit: zoom pinned to 1 and the grid cap
+   lifted, so scrollHeight-collapsed D-rows count toward the sheet's
+   natural height. Added for one getBoundingClientRect, then removed. */
+.op-sheet.measuring{zoom:1}
+.op-sheet.measuring .op-grid-wrap{max-height:none}
 .ab-right{display:flex;align-items:center;gap:10px;margin-left:auto;flex-wrap:wrap}
 /* ⚠ Future-shift warning — a shift picked that hasn't started yet (the
    classic night-past-midnight date slip). Loud amber so it can't be missed,
