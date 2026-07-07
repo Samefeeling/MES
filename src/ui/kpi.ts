@@ -16,7 +16,7 @@ import {
   setupJudgement,
   setupStandardHours,
 } from '../core/standards';
-import { currentShift, dateKey, parseShiftId, previousShift, SHIFTS } from '../core/shifts';
+import { currentShift, dateKey, parseShiftId, previousShift, shiftBounds, SHIFTS } from '../core/shifts';
 import { closeModal, escapeHtml, openModal } from './modal';
 import {
   renderHoursOeeChart,
@@ -665,9 +665,41 @@ async function compute(now = new Date()): Promise<void> {
         const std = setupStandardHours(countSetupEvents(recs));
         const smokoHrs =
           recs.filter((r) => r.statusCode === 'M').length * 0.5;
+        // Exact remaining at THIS shift's start beats the planning
+        // snapshot: each signed canonical row carries JobLeft (order
+        // TOTAL − Σ good of earlier-started signed shifts, retro-healed
+        // on late sign-offs) + CycleTime, denormalised at sign-off.
+        // Epicor's Calculated_Remaining* decrement daily as shifts book
+        // in, so for any bucket older than the last sync they overstate
+        // progress; the ledger value is per-shift truth. Planning stays
+        // in the queue for orders that DIDN'T run (the follow-on order
+        // the shift was supposed to start).
+        const q = new Map(planQueue.map((o) => [o.jobNumber, o]));
+        for (const r of recs) {
+          if (r.slotIndex !== 0 || r.jobLeft == null) continue;
+          const ct =
+            r.cycleTime && r.cycleTime > 0
+              ? r.cycleTime
+              : (q.get(r.jobNumber)?.hrsPerPiece ?? 0);
+          if (!(ct > 0)) continue;
+          q.set(r.jobNumber, {
+            jobNumber: r.jobNumber,
+            // JobLeft is measured AT shift start, so the entry is
+            // runnable from the shift's first slot unless planning says
+            // it wasn't due yet.
+            plannedStart:
+              r.plannedStart ||
+              q.get(r.jobNumber)?.plannedStart ||
+              shiftBounds(bShiftId)?.start.toISOString() ||
+              '',
+            remainingLaborHrs: r.jobLeft * ct,
+            remainingQty: r.jobLeft,
+            hrsPerPiece: ct,
+          });
+        }
         const fromPlan = expectedShiftOutputFromPlanning(
           bShiftId,
-          planQueue,
+          [...q.values()],
           std.dieStdHrs + std.colorStdHrs + std.insertStdHrs,
           smokoHrs,
         );

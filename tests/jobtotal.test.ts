@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { sumGoodStartedBefore, sumOtherShiftGood } from '../src/core/jobgood';
+import {
+  retroJobLeftFixes,
+  sumGoodStartedBefore,
+  sumOtherShiftGood,
+  unsignedEarlierTuples,
+} from '../src/core/jobgood';
 import { rec } from './helpers';
 
 describe('sumOtherShiftGood (cross-shift Job Left carry)', () => {
@@ -132,5 +137,116 @@ describe('sumGoodStartedBefore (sign-off JobLeft recompute)', () => {
 
   it('returns null when the target shiftId cannot be ordered', () => {
     expect(sumGoodStartedBefore([], 'Batt2', 'garbage')).toBeNull();
+  });
+});
+
+describe('unsignedEarlierTuples (the "Afternoon never signed off" ⚠)', () => {
+  // Blended read: signed Day, UNSIGNED Afternoon with output, current Night.
+  const day = rec({
+    jobNumber: 'J', slotIndex: 0, statusCode: 'R', machineCode: 'Batt2',
+    shiftId: '2026-07-02-Day', countStart: 0, countEnd: 100, locked: true,
+  });
+  const afternoonUnsigned = rec({
+    jobNumber: 'J', slotIndex: 0, statusCode: 'R', machineCode: 'Batt2',
+    shiftId: '2026-07-02-Afternoon', countStart: 100, countEnd: 180,
+  });
+
+  it('names an earlier unsigned shift that produced pieces', () => {
+    const keys = unsignedEarlierTuples([day, afternoonUnsigned], 'Batt2|2026-07-02-Night');
+    expect(keys).toEqual(['Batt2|2026-07-02-Afternoon']);
+  });
+
+  it('signed shifts and the current tuple never warn', () => {
+    expect(unsignedEarlierTuples([day], 'Batt2|2026-07-02-Night')).toEqual([]);
+    expect(
+      unsignedEarlierTuples([afternoonUnsigned], 'Batt2|2026-07-02-Afternoon'),
+    ).toEqual([]);
+  });
+
+  it('ignores unsigned tuples with no net output and later-started ones', () => {
+    const emptyUnsigned = rec({
+      jobNumber: 'J', slotIndex: 0, statusCode: 'R', machineCode: 'Batt2',
+      shiftId: '2026-07-02-Day', countStart: 50, countEnd: 50,
+    });
+    const laterUnsigned = rec({
+      jobNumber: 'J', slotIndex: 0, statusCode: 'R', machineCode: 'Batt2',
+      shiftId: '2026-07-03-Day', countStart: 0, countEnd: 60,
+    });
+    expect(
+      unsignedEarlierTuples([emptyUnsigned, laterUnsigned], 'Batt2|2026-07-02-Night'),
+    ).toEqual([]);
+  });
+
+  it('counter-only phantoms (no status letter) do not warn', () => {
+    const phantom = rec({
+      jobNumber: 'J', slotIndex: 0, statusCode: '', machineCode: 'Batt2',
+      shiftId: '2026-07-02-Day', countStart: 0, countEnd: 465,
+    });
+    expect(unsignedEarlierTuples([phantom], 'Batt2|2026-07-02-Night')).toEqual([]);
+  });
+
+  it('a reopened-for-correction tuple counts as signed (no warning)', () => {
+    const reopened = rec({
+      jobNumber: 'J', slotIndex: 0, statusCode: 'R', machineCode: 'Batt2',
+      shiftId: '2026-07-02-Day', countStart: 0, countEnd: 90, reopened: true,
+    });
+    expect(unsignedEarlierTuples([reopened], 'Batt2|2026-07-02-Night')).toEqual([]);
+  });
+});
+
+describe('retroJobLeftFixes (late sign-off heals later shifts)', () => {
+  // The reported failure: Night signed BEFORE Afternoon. When Afternoon's
+  // sign-off finally lands, Night's JobLeft column (written as 900 =
+  // 1000 − Day's 100 because Afternoon wasn't signed yet) must heal to
+  // 1000 − 100 − 80 = 820.
+  const signedTuple = (shiftId: string, cs: number, ce: number, jobLeft?: number) =>
+    rec({
+      jobNumber: 'J', slotIndex: 0, statusCode: 'R', machineCode: 'Batt2',
+      shiftId, countStart: cs, countEnd: ce, locked: true, jobLeft,
+    });
+
+  it('corrects a later-signed tuple whose JobLeft predates this sign-off', () => {
+    const all = [
+      signedTuple('2026-07-02-Day', 0, 100, 1000),
+      signedTuple('2026-07-02-Afternoon', 100, 180, 900), // just signed
+      signedTuple('2026-07-02-Night', 180, 250, 900), // stale: missed Afternoon
+    ];
+    expect(retroJobLeftFixes(all, 'Batt2', '2026-07-02-Afternoon', 1000)).toEqual([
+      { machineCode: 'Batt2', shiftId: '2026-07-02-Night', jobLeft: 820 },
+    ]);
+  });
+
+  it('no-op when the later tuples already agree', () => {
+    const all = [
+      signedTuple('2026-07-02-Afternoon', 100, 180, 900),
+      signedTuple('2026-07-02-Night', 180, 250, 820),
+      signedTuple('2026-07-02-Day', 0, 100, 1000),
+    ];
+    expect(retroJobLeftFixes(all, 'Batt2', '2026-07-02-Afternoon', 1000)).toEqual([]);
+  });
+
+  it('never touches EARLIER tuples and needs a real order total', () => {
+    const all = [
+      signedTuple('2026-07-02-Day', 0, 100, 555), // earlier — left alone
+      signedTuple('2026-07-02-Afternoon', 100, 180, 900),
+    ];
+    expect(retroJobLeftFixes(all, 'Batt2', '2026-07-02-Afternoon', 1000)).toEqual([]);
+    expect(retroJobLeftFixes(all, 'Batt2', '2026-07-02-Afternoon', 0)).toEqual([]);
+  });
+
+  it('rejects on later shifts net out of the heal', () => {
+    const all = [
+      signedTuple('2026-07-02-Afternoon', 0, 100, 1000), // just signed: good 100
+      // Night: gross 70 with 10 rejects → its own good 60 (irrelevant to
+      // ITS OWN JobLeft, which counts only shifts BEFORE it: 1000 − 100).
+      rec({
+        jobNumber: 'J', slotIndex: 0, statusCode: 'R', machineCode: 'Batt2',
+        shiftId: '2026-07-02-Night', countStart: 100, countEnd: 170, locked: true,
+        jobLeft: 1000, rejects: JSON.stringify({ D01: 10 }),
+      }),
+    ];
+    expect(retroJobLeftFixes(all, 'Batt2', '2026-07-02-Afternoon', 1000)).toEqual([
+      { machineCode: 'Batt2', shiftId: '2026-07-02-Night', jobLeft: 900 },
+    ]);
   });
 });

@@ -28,7 +28,7 @@ import { ordersCoRun } from '../core/corun';
 // these from ./operator while the canonical definitions live in core.
 import { jobLeftPiecesFor, shiftTargetFor } from '../core/targets';
 export { jobLeftPiecesFor, shiftTargetFor } from '../core/targets';
-import { sumOtherShiftGood } from '../core/jobgood';
+import { sumOtherShiftGood, unsignedEarlierTuples } from '../core/jobgood';
 import { bdLabelFor } from '../core/breakdown';
 import { compareOrdersByStart } from '../core/planning';
 import { type Handover, parseHandover as sharedParseHandover } from '../core/handover';
@@ -88,6 +88,12 @@ interface OpState {
   viewLevel: number;
   /** Sum of Good across all shifts of selJob — drives the cross-shift Job Left. */
   jobTotalGood: number;
+  /** "machine|shiftId" keys of EARLIER shifts of selJob that produced
+   *  pieces but were never signed off. Job Left arithmetic is signed-only
+   *  (see refreshJobTotal), so while this is non-empty the number
+   *  OVERSTATES what's still needed — the ⚠ next to Job Left names the
+   *  shift(s) that need signing. */
+  unsignedEarlier: string[];
   /** Slots currently highlighted for status entry (tap or hold-and-drag). */
   selSet: Set<number>;
   /** Part # → die / paint hex colour + physical die number, read from
@@ -1316,16 +1322,41 @@ function shiftTarget(): number | null {
 async function refreshJobTotal(): Promise<void> {
   if (!S!.selJob) {
     S!.jobTotalGood = 0;
+    S!.unsignedEarlier = [];
     return;
   }
-  const all = dalRef.listSignedOffProduction
+  const currentKey = `${S!.mc}|${sid()}`;
+  // Blended read (live mirror + cache + signed) feeds ONLY the unsigned-
+  // earlier-shift detector; the Job Left ARITHMETIC below stays strictly
+  // signed-only — mixing live tuples into the sum is what caused the
+  // SFM507147 phantom-shadow drift.
+  const blended = await dalRef.listProduction({ jobNumber: S!.selJob });
+  const signed = dalRef.listSignedOffProduction
     ? await dalRef.listSignedOffProduction({ jobNumber: S!.selJob })
     : // Memory DAL fallback: signed rows only (reopened rows are signed
       // rows temporarily unlocked for correction — still counted).
-      (await dalRef.listProduction({ jobNumber: S!.selJob })).filter(
-        (r) => r.locked || r.reopened,
-      );
-  S!.jobTotalGood = sumOtherShiftGood(all, `${S!.mc}|${sid()}`);
+      blended.filter((r) => r.locked || r.reopened);
+  S!.jobTotalGood = sumOtherShiftGood(signed, currentKey);
+  S!.unsignedEarlier = unsignedEarlierTuples(blended, currentKey);
+}
+
+/** "125T|2026-07-06-Afternoon" → "06/07 Afternoon" (+ machine when it's
+ *  not the press on screen) for the Job Left ⚠ tooltip. */
+function fmtTupleKey(key: string): string {
+  const cut = key.indexOf('|');
+  const mc = key.slice(0, cut);
+  const m = /^(\d{4})-(\d{2})-(\d{2})-(.+)$/.exec(key.slice(cut + 1));
+  if (!m) return key;
+  return `${m[3]}/${m[2]} ${m[4]}${mc !== S!.mc ? ` (${mc})` : ''}`;
+}
+
+function jobLeftWarnTitle(): string {
+  if (!S!.unsignedEarlier.length) return '';
+  return `Job Left may be OVERSTATED — earlier shift(s) produced pieces but are NOT signed off yet: ${S!.unsignedEarlier
+    .map(fmtTupleKey)
+    .join(
+      ', ',
+    )}. Their output only counts once a supervisor signs them off — then this number (and the shifts after) self-correct.`;
 }
 
 /**
@@ -1355,6 +1386,11 @@ async function refreshJobTotalAndPaintSide(): Promise<void> {
   set('jobLeft', jobLeft == null ? null : String(jobLeft));
   set('totalGood', String(good));
   set('totalReject', String(totalReject));
+  const warnEl = document.querySelector<HTMLElement>('.op-side [data-live="jlWarn"]');
+  if (warnEl) {
+    warnEl.style.display = S!.unsignedEarlier.length ? '' : 'none';
+    warnEl.title = jobLeftWarnTitle();
+  }
 }
 
 /**
@@ -1785,7 +1821,7 @@ function buildSide(): string {
     : `Shift Target = if Job Left × ${o!.qtyPerHr} h/piece ≥ 8h then 8 ÷ ${o!.qtyPerHr}, else Job Left.`;
   return `<aside class="op-side">
     <div class="side-title">Shift counters</div>
-    <div class="sk"><label>Job left</label><b data-live="jobLeft">${jobLeft}</b></div>
+    <div class="sk"><label>Job left</label><b data-live="jobLeft">${jobLeft}</b><span class="jl-warn" data-live="jlWarn" title="${escapeHtml(jobLeftWarnTitle())}"${S!.unsignedEarlier.length ? '' : ' style="display:none"'}>⚠</span></div>
     <div class="sk"><label title="${escapeHtml(targetTitle)}">Shift Target</label><b title="${escapeHtml(targetTitle)}">${targetDisplay}</b></div>
     <div class="sk"><label>Count Start</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cstart" value="${cs}" ${rdo}${rdoTitle}></div>
     <div class="sk"><label>Count End</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cend" value="${ce}" ${rdo}${rdoTitle}></div>
@@ -3281,6 +3317,7 @@ export async function renderOperator(
     selSupervisor,
     viewLevel: 1,
     jobTotalGood: 0,
+    unsignedEarlier: [],
     selSet: new Set<number>(),
     dieColors,
   };

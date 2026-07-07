@@ -437,6 +437,8 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .photo-take{width:100%;min-height:48px;border:2px solid var(--bd);border-radius:10px;background:#fff;font-size:15px;font-weight:700;cursor:pointer;color:var(--tx)}
 .photo-take:active{background:var(--gy)}
 .photo-take:disabled{opacity:.5;cursor:not-allowed}
+/* Job Left ⚠ — an earlier unsigned shift means the number is provisional */
+.jl-warn{color:#b45309;font-size:16px;margin-left:6px;cursor:help}
 .handover{display:flex;flex-direction:column;gap:8px;margin-top:4px;border-top:2px solid var(--theme-accent);padding-top:10px;flex:1 1 auto;min-height:0}
 .handover-title{font-size:13px;font-weight:800;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.5px}
 /* Fill the remaining space in the side panel so all four textboxes

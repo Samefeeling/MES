@@ -100,3 +100,75 @@ export function sumGoodStartedBefore(
   }
   return total;
 }
+
+/**
+ * Earlier-started tuples of this job that produced pieces but have NEVER
+ * been signed off — the exact hole in the signed-only Job Left maths:
+ * an unsigned Afternoon means the Night operator's Job Left silently
+ * overstates what's still needed. The arithmetic stays signed-only on
+ * purpose (mixing live tuples in re-opens the SFM507147 phantom-shadow
+ * bug); this list exists so the UI can SAY the number is provisional
+ * and name the shift that needs signing, instead of being silently
+ * wrong. `all` must be the BLENDED read (live + cache + signed).
+ * Returns "machine|shiftId" keys, earliest first.
+ */
+export function unsignedEarlierTuples(
+  all: ProductionRecord[],
+  currentKey: string,
+): string[] {
+  const myShiftId = currentKey.slice(currentKey.indexOf('|') + 1);
+  const my = shiftBounds(myShiftId)?.start.getTime();
+  // Which tuples carry a signed (or reopened-for-correction) row?
+  const signed = new Set<string>();
+  for (const r of all) {
+    if (r.locked || r.reopened) signed.add(`${r.machineCode}|${r.shiftId}`);
+  }
+  const out: Array<{ key: string; startMs: number }> = [];
+  for (const [key, t] of aggregateByTuple(all)) {
+    if (key === currentKey || !t.real || signed.has(key)) continue;
+    if (goodOf(t) <= 0) continue; // nothing produced — nothing missing
+    if (my != null && !isNaN(my) && !isNaN(t.startMs) && t.startMs >= my) continue;
+    out.push({ key, startMs: t.startMs });
+  }
+  return out.sort((a, b) => a.startMs - b.startMs).map((o) => o.key);
+}
+
+/**
+ * Corrections needed on LATER-started signed tuples' JobLeft after a
+ * (typically late) sign-off lands. Floor reality: Night regularly signs
+ * off before a forgotten Afternoon; when Afternoon's sign-off finally
+ * arrives, Night's already-written JobLeft column still excludes
+ * Afternoon's output. JobLeft is defined as "pieces still needed when
+ * the shift began" — a fact — so the ledger must converge to
+ *   required − Σ good(started earlier)
+ * regardless of sign-off ORDER. Returns the tuples whose stored jobLeft
+ * (canonical slot-0) disagrees with that, with the corrected value.
+ * `all` must be SIGNED rows of the job, including the just-signed tuple.
+ */
+export function retroJobLeftFixes(
+  all: ProductionRecord[],
+  signedMachine: string,
+  signedShiftId: string,
+  required: number,
+): Array<{ machineCode: string; shiftId: string; jobLeft: number }> {
+  if (!(required > 0)) return [];
+  const myStart = shiftBounds(signedShiftId)?.start.getTime();
+  if (myStart == null || isNaN(myStart)) return [];
+  const out: Array<{ machineCode: string; shiftId: string; jobLeft: number }> = [];
+  const seen = new Set<string>();
+  for (const r of all) {
+    if (r.slotIndex !== 0) continue;
+    const key = `${r.machineCode}|${r.shiftId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (r.machineCode === signedMachine && r.shiftId === signedShiftId) continue;
+    const start = shiftBounds(r.shiftId)?.start.getTime();
+    if (start == null || isNaN(start) || start <= myStart) continue;
+    const before = sumGoodStartedBefore(all, r.machineCode, r.shiftId);
+    if (before == null) continue;
+    const want = Math.max(0, required - before);
+    if (r.jobLeft === want) continue;
+    out.push({ machineCode: r.machineCode, shiftId: r.shiftId, jobLeft: want });
+  }
+  return out;
+}

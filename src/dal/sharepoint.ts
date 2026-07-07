@@ -19,7 +19,7 @@ import type { PmdDataLayer } from './types';
 import { bdCategoryOf, bdLabelFor, BD_TAXONOMY } from '../core/breakdown';
 import { shiftBounds, slotClock } from '../core/shifts';
 import { shiftTargetFor } from '../core/targets';
-import { sumGoodStartedBefore } from '../core/jobgood';
+import { retroJobLeftFixes, sumGoodStartedBefore } from '../core/jobgood';
 
 // =====================================================================
 // SharePointDataLayer — Resero Operations AU site.
@@ -2030,6 +2030,14 @@ export class SharePointDataLayer implements PmdDataLayer {
       // their next poll. Best-effort — pushLiveSnapshot won't re-create
       // the row because lockShift also clears editCache below.
       await this.deleteLiveRow(machineCode, shiftId, job);
+      // Late sign-off heal: if LATER shifts of this job signed first,
+      // their JobLeft columns were computed without this shift's output
+      // — bring the per-shift ledger back to exact. Best-effort: the
+      // sign-off itself already succeeded, and the next sign-off of the
+      // job retries any heal that fails here.
+      await this.healLaterJobLeft(machineCode, shiftId, job, required).catch((e) => {
+        console.warn('[pmd] JobLeft heal failed (next sign-off retries):', e);
+      });
       const tupleKey = ownKey(job);
       this.editCache.delete(tupleKey);
       this.unlockedTuples.delete(tupleKey);
@@ -2296,8 +2304,22 @@ export class SharePointDataLayer implements PmdDataLayer {
     jobNumber: string,
     value: boolean,
   ): Promise<void> {
+    if (!this.F.production.reopened) return;
+    await this.setProductionColumn(machineCode, shiftId, jobNumber, this.F.production.reopened, value);
+  }
+
+  /** Narrow single-column MERGE onto every PMD_Production row of a
+   *  (machine, shift, job) tuple — deliberately NOT upsertHeaderInto,
+   *  whose full-body MERGE can blank sibling columns. Used for the
+   *  Reopened flag and the retroactive JobLeft heal. */
+  private async setProductionColumn(
+    machineCode: string,
+    shiftId: string,
+    jobNumber: string,
+    field: string,
+    value: unknown,
+  ): Promise<void> {
     const F = this.F.production;
-    if (!F.reopened) return;
     const date = shiftId.slice(0, 10);
     const qs =
       '$filter=' +
@@ -2313,16 +2335,47 @@ export class SharePointDataLayer implements PmdDataLayer {
       if (id == null) continue;
       const body: Record<string, unknown> = {
         __metadata: { type: await this.itemType(LISTS.production) },
-        [F.reopened]: value,
+        [field]: value,
       };
       this.stripRejectedFields(LISTS.production, body);
-      if (!(F.reopened in body)) return; // column already known-absent
+      if (!(field in body)) return; // column already known-absent
       await this.postWithFieldRetry(
         LISTS.production,
         `${this.listUrl(LISTS.production)}/items(${id})`,
         body,
         '*',
       );
+    }
+  }
+
+  /**
+   * After a tuple signs off, re-derive the JobLeft column of every
+   * LATER-started signed tuple of the same job. Sign-off order on the
+   * floor is not chronological — Night regularly signs before a
+   * forgotten Afternoon — and JobLeft means "pieces still needed when
+   * the shift began" (order TOTAL − Σ good of earlier-started signed
+   * shifts), so a late-arriving earlier shift must flow into the later
+   * rows or the per-shift ledger the KPIs / Trace / next-shift Job Left
+   * read stays overstated forever. Pure decision logic lives in
+   * core/jobgood.retroJobLeftFixes; this just executes the MERGEs.
+   * Best-effort: a failed heal is retried by the NEXT sign-off of the
+   * same job (the recompute always walks the full list).
+   */
+  private async healLaterJobLeft(
+    machineCode: string,
+    shiftId: string,
+    jobNumber: string,
+    required: number,
+  ): Promise<void> {
+    const F = this.F.production;
+    if (!F.jobLeft || !(required > 0)) return;
+    const all = await this.listSignedOffProduction({ jobNumber });
+    const fixes = retroJobLeftFixes(all, machineCode, shiftId, required);
+    for (const f of fixes) {
+      console.info(
+        `[pmd] JobLeft heal: ${f.machineCode}|${f.shiftId}|${jobNumber} → ${f.jobLeft} (late sign-off of ${shiftId})`,
+      );
+      await this.setProductionColumn(f.machineCode, f.shiftId, jobNumber, F.jobLeft, f.jobLeft);
     }
   }
 
