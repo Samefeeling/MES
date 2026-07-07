@@ -288,13 +288,18 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 
 /* ===== grid ===== */
 .op-grid-row{display:flex;gap:10px;align-items:stretch}
-.op-grid-wrap{position:relative;flex:1;background:#fff;border:2px solid var(--theme-accent);border-radius:10px;overflow:auto;--slot-w:60px}
+/* Bounded height so the wrap itself is the scroll container (both axes):
+   this is what lets the pinned time / Quality Checks / Machine Status
+   rows stay put while the operator scrolls down the D01–D10 defect rows.
+   Without a cap the wrap grows to fit and the PAGE scrolls instead, and
+   position:sticky on an overflow ancestor that never scrolls does nothing. */
+.op-grid-wrap{position:relative;flex:1;background:#fff;border:2px solid var(--theme-accent);border-radius:10px;overflow:auto;max-height:calc(100vh - 250px);min-height:300px;--slot-w:60px}
 .op-grid{border-collapse:separate;border-spacing:0;font-size:14px;table-layout:fixed;width:auto;min-width:100%}
 .op-grid th,.op-grid td{border:1px solid #d1d5db;padding:0;margin:0;text-align:center;vertical-align:middle}
-.op-grid thead th{background:var(--theme-dark);color:var(--theme-on-dark);font-weight:700;height:44px;padding:0 4px;white-space:nowrap;font-size:13px}
+.op-grid thead th{background:var(--theme-dark);color:var(--theme-on-dark);font-weight:700;height:44px;padding:0 4px;white-space:nowrap;font-size:13px;position:sticky;top:0;z-index:4}
 .op-grid th.slot-head{width:var(--slot-w);font-size:12px}
 .op-grid th.rh{background:rgba(255,255,255,.85);color:var(--theme-on-base);width:200px;text-align:left;padding:0 12px;font-weight:700;position:sticky;left:0;z-index:2;font-size:15px}
-.op-grid thead th.corner{background:var(--theme-dark);color:var(--theme-on-dark);text-align:left;font-size:15px}
+.op-grid thead th.corner{background:var(--theme-dark);color:var(--theme-on-dark);text-align:left;font-size:15px;z-index:6}
 .op-grid tbody tr{height:64px}
 .op-grid tbody td{background:#fff;position:relative}
 .op-grid tbody td.num-cell,.op-grid tbody td.status-cell{padding:2px}
@@ -309,8 +314,13 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    muted "—"; signed cells turn green with the picked user's initials.
    Even / odd cells differ in tint so operators see the alternating
    cadence at a glance. */
-.op-grid tr.row-qc th.rh{background:#0f172a;color:#fff;font-weight:800;font-size:14px;letter-spacing:.4px;text-transform:uppercase}
-.op-grid tr.row-qc td{border-bottom:2px solid var(--theme-accent);background:#f8fafc;padding:0}
+/* Pin the Quality Checks + Machine Status rows to the top, stacked under
+   the 44px time header (each body row is 64px → QC at 44, Status at 108),
+   so the clock and current machine status stay in view while the operator
+   scrolls the defect grid. The left-sticky row-headers (th.rh) ride above
+   both axes (z-index:6); the pinned body cells clear the NOW line (z:3). */
+.op-grid tr.row-qc th.rh{background:#0f172a;color:#fff;font-weight:800;font-size:14px;letter-spacing:.4px;text-transform:uppercase;top:44px;z-index:6}
+.op-grid tr.row-qc td{border-bottom:2px solid var(--theme-accent);background:#f8fafc;padding:0;position:sticky;top:44px;z-index:4}
 /* Supervisor QC cells are the 3 cadence checkpoints per shift (slots
    1 / 7 / 13). Stronger amber tint + amber side-rails make them
    stand out against the operator cells so a supervisor walking the
@@ -323,8 +333,8 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .row-qc td.qc-supervisor .qc-btn{color:#92400e}
 .row-qc td.is-signed .qc-btn{color:#166534}
 .bd-cause.is-current{border-color:var(--theme-dark);background:#eff6ff}
-.op-grid tr.row-status th.rh{background:var(--theme-accent);color:var(--theme-on-dark);font-weight:800;font-size:16px;letter-spacing:.3px;text-transform:uppercase}
-.op-grid tr.row-status td{border-bottom:3px solid var(--theme-dark);background:#f8fafc}
+.op-grid tr.row-status th.rh{background:var(--theme-accent);color:var(--theme-on-dark);font-weight:800;font-size:16px;letter-spacing:.3px;text-transform:uppercase;top:108px;z-index:6}
+.op-grid tr.row-status td{border-bottom:3px solid var(--theme-dark);background:#f8fafc;position:sticky;top:108px;z-index:4}
 .op-grid tr.row-named th.rh{background:#fafafa;font-size:14px;color:#334155;font-weight:700}
 .op-grid tr.row-named:first-of-type td{border-top:0}
 

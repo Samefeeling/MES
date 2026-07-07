@@ -18,6 +18,20 @@ import {
 import { parseHandover } from '../core/handover';
 import { isSupervisor } from './supervisor-auth';
 
+/**
+ * The hot-stamping ("Hstamp") press is a distinct secondary process, so its
+ * output is broken out as its own category subtotal in the KPI TOTAL block
+ * rather than lumped into "Other". Matches on machine code OR display name,
+ * normalised (lower-cased, spaces / hyphens / underscores stripped) so it
+ * works whichever the tenant used — "Hstamp", "HStamp", "Hot Stamp",
+ * "Hot-Stamping". The demo "HS" (High-Speed Press) deliberately does NOT
+ * match: neither "hshighspeedpress" contains "hstamp" nor "hotstamp".
+ */
+export function isHotStampMachine(m: Pick<Machine, 'machineCode' | 'displayName'>): boolean {
+  const norm = `${m.machineCode} ${m.displayName}`.toLowerCase().replace(/[\s_-]/g, '');
+  return norm.includes('hstamp') || norm.includes('hotstamp');
+}
+
 // Per-metric green / amber colour thresholds for the KPI table. Editable
 // by a signed-in supervisor (the floor tunes them per plant); persisted
 // per-browser in localStorage. A value ≥ green → green, ≥ amber → amber,
@@ -664,15 +678,31 @@ async function compute(now = new Date()): Promise<void> {
   // the rows pass above — records win over planning) → Category. Parts
   // with no category row land in "Other" so the subtotals always sum to
   // the grand TOTAL.
+  //
+  // Exception: anything run on the hot-stamping press is bucketed as its
+  // own "Hstamp" category (machine wins over part category) so hot-stamp
+  // output shows on its own line in the Chair / Shell / Component summary
+  // instead of disappearing into "Other" — which is where its
+  // uncategorised parts landed before. Bucketing stays exclusive, so
+  // pulling Hstamp out deducts exactly that total from "Other" and the
+  // subtotals still sum to the grand TOTAL.
   const categoryByPart = new Map<string, string>();
   for (const c of dieColorList) {
     if (c.category) categoryByPart.set(c.partNumber.trim().toUpperCase(), c.category);
   }
+  const hstampCodes = new Set(
+    S!.machines.filter(isHotStampMachine).map((m) => m.machineCode),
+  );
   const byCategory = new Map<string, ProductionRecord[]>();
   for (const recs of perMachineProd) {
     for (const r of recs) {
-      const part = (partNumByJob.get(r.jobNumber) ?? '').trim().toUpperCase();
-      const cat = (part && categoryByPart.get(part)) || 'Other';
+      let cat: string;
+      if (hstampCodes.has(r.machineCode)) {
+        cat = 'Hstamp';
+      } else {
+        const part = (partNumByJob.get(r.jobNumber) ?? '').trim().toUpperCase();
+        cat = (part && categoryByPart.get(part)) || 'Other';
+      }
       const arr = byCategory.get(cat) ?? [];
       arr.push(r);
       byCategory.set(cat, arr);
@@ -1068,6 +1098,7 @@ function render(): void {
         ${stat('Yield', totYield != null ? totYield + '%' : '—', totYield != null ? 'is-' + colourClass(+totYield, S!.thresholds.yieldGreen, S!.thresholds.yieldAmber) : '')}
         ${stat('Run hours', tot.runHrs ? tot.runHrs.toFixed(1) : '—', 'is-green')}
         ${stat('Down hours', tot.downHrs ? tot.downHrs.toFixed(1) : '—', tot.downHrs ? 'is-red' : '')}
+        ${stat('C/O hours', tot.setupHrs ? tot.setupHrs.toFixed(1) : '—', tot.setupHrs ? 'is-amber' : '')}
         ${stat('Efficiency*', totOee != null ? totOee + '%' : '—', totOee != null ? 'is-' + colourClass(totOee, S!.thresholds.effGreen, S!.thresholds.effAmber) : '')}
       </div>`;
 
