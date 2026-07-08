@@ -1180,12 +1180,10 @@ function render(): void {
   // sums every machine in the period — total floor view.
   const outChartData = S!.chartBuckets.map((b) => {
     // Day standard = sum of the shift expectations that were computable;
-    // null when none were (no cycle time / no planning), so the label
-    // falls back to a bare output count.
-    const exps = [b.byShift.Day.exp, b.byShift.Afternoon.exp, b.byShift.Night.exp];
-    const standard = exps.some((e) => e != null)
-      ? exps.reduce<number>((a, e) => a + (e ?? 0), 0)
-      : null;
+    // Per-shift vs-Plan % (good ÷ expected) labels each segment; null
+    // when that shift had no planning expectation to divide by.
+    const vsPlan = (good: number, exp: number | null): number | null =>
+      exp != null && exp > 0 ? Math.round((good / exp) * 100) : null;
     return {
       label: b.label,
       day: b.byShift.Day.good,
@@ -1193,7 +1191,11 @@ function render(): void {
       night: b.byShift.Night.good,
       reject:
         b.byShift.Day.reject + b.byShift.Afternoon.reject + b.byShift.Night.reject,
-      standard,
+      vsPlan: [
+        vsPlan(b.byShift.Day.good, b.byShift.Day.exp),
+        vsPlan(b.byShift.Afternoon.good, b.byShift.Afternoon.exp),
+        vsPlan(b.byShift.Night.good, b.byShift.Night.exp),
+      ],
     };
   });
   const hoursChartData = S!.chartBuckets.map((b) => {

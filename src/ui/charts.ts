@@ -110,6 +110,9 @@ interface DualOpts {
   /** Optional text drawn above each bar's stack top (index aligns with
    *  `buckets`). null skips a bar. Used to print "output/standard". */
   topLabels?: Array<string | null>;
+  /** Optional small label centred inside each segment [bucket][segment]
+   *  — e.g. per-shift vs-Plan %. null / too-short segments are skipped. */
+  segmentValueLabels?: Array<Array<string | null>>;
 }
 
 function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
@@ -148,6 +151,13 @@ function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
       bars += `<rect x="${x.toFixed(1)}" y="${cumY.toFixed(1)}" width="${bw.toFixed(
         1,
       )}" height="${h.toFixed(1)}" fill="${o.segmentColors[s]}" rx="2"></rect>`;
+      // Small vs-Plan % centred in the segment (skip if too short to fit).
+      const segLabel = o.segmentValueLabels?.[i]?.[s];
+      if (segLabel && h >= 12) {
+        bars += `<text x="${cx.toFixed(1)}" y="${(cumY + h / 2 + 3).toFixed(
+          1,
+        )}" font-size="9" fill="#1e293b" text-anchor="middle">${escAttr(segLabel)}</text>`;
+      }
     }
     if (b.overlay != null) {
       const y = PT + innerH - (b.overlay / niceRight) * innerH;
@@ -224,9 +234,9 @@ export function renderOutputByShiftChart(
     afternoon: number;
     night: number;
     reject: number;
-    /** Planning-expected output for the whole day (sum of shift
-     *  expectations); null when nothing in the day carried one. */
-    standard?: number | null;
+    /** vs-Plan % per shift [Day, Afternoon, Night]; null skips a
+     *  segment's label (no planning expectation for that shift). */
+    vsPlan?: Array<number | null>;
   }>,
 ): string {
   const data: StackBucket[] = buckets.map((b) => ({
@@ -234,18 +244,16 @@ export function renderOutputByShiftChart(
     segments: [b.day, b.afternoon, b.night],
     overlay: b.reject,
   }));
-  // "output/standard" printed above each bar (matches the table's Output
-  // cell); plain output when the day has no expectation to divide by.
-  const topLabels = buckets.map((b) => {
-    const output = b.day + b.afternoon + b.night;
-    return b.standard != null && b.standard > 0 ? `${output}/${b.standard}` : String(output);
-  });
+  // Each shift segment labelled with its own vs-Plan % (small, not bold).
+  const segmentValueLabels = buckets.map((b) =>
+    (b.vsPlan ?? [null, null, null]).map((p) => (p == null ? null : `${p}%`)),
+  );
   return renderDualAxis(data, {
     segmentColors: SHIFT_COLORS,
     segmentLabels: SHIFT_LABELS,
     overlayLabel: 'Reject',
     overlayColor: '#dc2626',
-    topLabels,
+    segmentValueLabels,
   });
 }
 

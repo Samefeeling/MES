@@ -446,8 +446,6 @@ function renderCard(r: TraceRow): string {
       <span>Job Left <b>${r.jobLeft ?? '—'}</b></span>
       <span>Shift Target <b>${r.shiftTarget ?? '—'}</b></span>
       <span class="g">Good <b>${r.good}</b></span>
-    </div>
-    <div class="trace-card-totals trace-card-rejrow">
       <span class="r">Reject <b>${r.reject}</b></span>
     </div>
     <div class="trace-qc-row">${qcCells}</div>
