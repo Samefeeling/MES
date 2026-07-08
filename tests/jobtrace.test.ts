@@ -58,4 +58,12 @@ describe('renderJobTraceCards — day grouping', () => {
     const html = await renderJobTraceCards(stubDal([]), 'NOPE');
     expect(html).toContain('No signed-off production records');
   });
+
+  it('renders signed QC cells as bare initials, without the operator-sheet ✓', async () => {
+    const r = shift('2026-07-01-Day');
+    r.qcBy = 'John Taylor';
+    const html = await renderJobTraceCards(stubDal([r]), 'J1');
+    expect(html).toContain('>JT</div>');
+    expect(html).not.toContain('✓');
+  });
 });

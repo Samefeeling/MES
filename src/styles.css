@@ -626,6 +626,10 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    detail needs. Tighter modal gap for the same reason. */
 .kpi-trace-modal{gap:10px}
 .kpi-trace-modal .bd-title{font-size:17px}
+/* Title row with the Close button on the right — no bottom action bar,
+   so the order detail keeps all the vertical room. */
+.kpi-trace-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.kpi-trace-close{padding:8px 20px;font-size:14px;min-height:0}
 /* Day card: the (up to 3) shifts of one date, side-by-side in one row. */
 .trace-day-card .trace-day-shifts{display:flex;gap:12px;flex-wrap:wrap}
 .trace-day-shift{flex:1 1 300px;min-width:280px;border:1px solid var(--bd);border-radius:8px;padding:6px 8px;background:#fbfcfe}

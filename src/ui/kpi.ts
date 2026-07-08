@@ -1592,9 +1592,11 @@ function openParetoDrill(opts: {
  *  view. Loads asynchronously (shows a spinner first). */
 async function openJobTrace(jobNumber: string): Promise<void> {
   const mc = openModal(`<div class="bd-modal kpi-trace-modal">
-    <h2 class="bd-title">🔍 ${escapeHtml(jobNumber)} — Trace detail</h2>
+    <div class="kpi-trace-head">
+      <h2 class="bd-title">🔍 ${escapeHtml(jobNumber)} — Trace detail</h2>
+      <button type="button" class="btn-primary-big kpi-trace-close" data-drill-close>Close</button>
+    </div>
     <div class="trace kpi-trace-body"><div class="trace-empty">Loading…</div></div>
-    <div class="bd-actions"><button class="btn-primary-big" data-drill-close>Close</button></div>
   </div>`);
   mc.querySelector('[data-drill-close]')?.addEventListener('click', closeModal);
   try {

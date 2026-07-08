@@ -391,7 +391,11 @@ function traceGrids(r: TraceRow): { qc: string; timeline: string; rej: string } 
 
   const qc = `<div class="trace-qc-row">${Array.from({ length: SLOTS_PER_SHIFT }, (_, i) => {
     const p = qcCellPresentation(i, r.qcBySlot[i] ?? '');
-    return `<div class="trace-qc-slot qc-${p.role}${p.signed ? ' is-signed' : ''}" title="${p.title}">${p.label}</div>`;
+    // Read-only here, so the operator sheet's "✓ " tap-affordance prefix
+    // is just noise — the green signed tint already says "done"; bare
+    // initials keep the cramped popup grids legible.
+    const label = p.signed ? p.label.replace(/^✓\s*/, '') : p.label;
+    return `<div class="trace-qc-slot qc-${p.role}${p.signed ? ' is-signed' : ''}" title="${p.title}">${label}</div>`;
   }).join('')}</div>`;
 
   return { qc, timeline, rej };
