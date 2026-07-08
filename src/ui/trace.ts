@@ -258,7 +258,13 @@ function stopLivePoll(): void {
  */
 function refreshLiveOnReturn(): void {
   if (document.visibilityState !== 'visible') return;
-  if (!document.querySelector('.trace') || !S || S.view !== 'live') return;
+  // Only when the Live board is the ACTIVE page — scope the `.trace`
+  // probe to #app. The KPI job-number popup also mounts a `.trace`
+  // element (in the modal host #mc), which used to satisfy a bare
+  // document-wide query and re-render Trace over whatever page was
+  // showing on the next tab-return.
+  const mounted = document.getElementById('app')?.querySelector('.trace');
+  if (!mounted || !S || S.view !== 'live') return;
   if (Date.now() - lastLiveLoadMs < LIVE_FOCUS_REFRESH_MIN_GAP_MS) return;
   void loadLive({ silent: true });
 }

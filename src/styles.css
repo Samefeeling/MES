@@ -40,6 +40,15 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 
 /* ===== top bar (uses theme-dark) — slim: logo + title + connection status ===== */
 .top{background:var(--theme-dark);color:var(--theme-on-dark);padding:8px 18px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:50;box-shadow:0 2px 6px rgba(0,0,0,.15);transition:background .25s}
+/* Zooming the operator sheet past 100% makes it wider than the viewport.
+   A sticky top bar only spans the viewport, so scrolling right used to
+   expose white above the sheet where the bar had scrolled off. Let the
+   body grow to the sheet's width (only on the operator page, so the
+   Trace / KPI tables keep their own internal scroll) — the top bar and
+   the page padding then stretch across the full scrollable width. */
+body:has(.op-sheet){min-width:min-content}
+body:has(.op-sheet) .top,
+body:has(.op-sheet) .vw{min-width:min-content}
 .top h1{margin:0;font-size:20px;font-weight:700;flex:1;letter-spacing:.2px}
 /* Mirror-health badge (build id + last live-mirror push): supervisor-only
    diagnostics pinned to the bottom-right corner — visible only while
