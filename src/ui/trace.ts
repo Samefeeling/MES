@@ -345,38 +345,48 @@ function renderSearchResults(): string {
 }
 
 function renderCard(r: TraceRow): string {
+  // Per-slot reject codes, positioned under the status timeline so a
+  // defect reads at the time it happened (e.g. 09:00 D07×2, 10:30 D05×1
+  // D07×1) — the operator sheet records rejects per half-hour slot, so
+  // this mirrors that placement instead of a separate time-stamped list.
+  const rejBySlot: Record<number, string[]> = {};
+  for (const p of r.rejects) {
+    let obj: Record<string, number> = {};
+    try {
+      obj = p.rejects ? JSON.parse(p.rejects) : {};
+    } catch {
+      obj = {};
+    }
+    const parts = Object.entries(obj)
+      .filter(([, v]) => v)
+      .map(([k, v]) => `${k}×${v}`);
+    if (parts.length) rejBySlot[p.slotIndex] = parts;
+  }
+  const hasRejects = Object.keys(rejBySlot).length > 0;
+  const rejRow = hasRejects
+    ? `<div class="trace-rej-row">${Array.from({ length: SLOTS_PER_SHIFT }, (_, i) => {
+        const codes = rejBySlot[i];
+        if (!codes) return `<div class="trace-rej-slot"></div>`;
+        return `<div class="trace-rej-slot has-rej" title="${escapeHtml(
+          slotClock(r.shiftId, i),
+        )} · ${escapeHtml(codes.join(', '))}">${codes.map(escapeHtml).join('<br>')}</div>`;
+      }).join('')}</div>`
+    : '';
+
   const slots = Array.from({ length: SLOTS_PER_SHIFT }, (_, i) => {
     const ch = r.timeline[i] ?? '·';
     const def = ch === '·' ? null : STATUS_MAP[ch];
     const style = def
       ? `background:${def.color};color:${def.text};border-color:${def.border}`
       : 'background:#f1f5f9;color:#94a3b8';
+    const rej = rejBySlot[i] ? ` · Reject ${rejBySlot[i].join(', ')}` : '';
     return `<div class="trace-slot" title="${escapeHtml(slotClock(r.shiftId, i))} · ${escapeHtml(
-      def?.label ?? 'Empty',
+      (def?.label ?? 'Empty') + rej,
     )}" style="${style}">${ch}</div>`;
   }).join('');
 
   const dateLabel = r.shiftId.slice(0, 10);
   const shiftLabel = r.shiftId.slice(11);
-  const rejLines = r.rejects.length
-    ? `<div class="trace-section"><b>Rejects</b><ul>${r.rejects
-        .map((p) => {
-          let obj: Record<string, number> = {};
-          try {
-            obj = p.rejects ? JSON.parse(p.rejects) : {};
-          } catch {
-            obj = {};
-          }
-          const parts = Object.entries(obj)
-            .filter(([, v]) => v)
-            .map(([k, v]) => `${escapeHtml(k)} × ${v}`)
-            .join(', ');
-          if (!parts) return '';
-          return `<li><span class="ts">${escapeHtml(slotClock(r.shiftId, p.slotIndex))}</span> ${parts}</li>`;
-        })
-        .filter(Boolean)
-        .join('')}</ul></div>`
-    : '';
   const bdLines = r.bdSlots.length
     ? `<div class="trace-section"><b>Breakdowns</b><ul>${r.bdSlots
         .map(
@@ -403,8 +413,10 @@ function renderCard(r: TraceRow): string {
   // and see at a glance which line is running, which is in
   // changeover, which is down. The rail + tint carry the colour
   // signal — a dedicated machine swatch was distracting on top.
-  // Search view keeps the older job-first layout.
-  const isLive = S!.view === 'live';
+  // Search view keeps the older job-first layout. `S` is null when a card
+  // is rendered outside the Trace tab (the KPI job-number popup), which is
+  // the search layout too — so default isLive to false there.
+  const isLive = S?.view === 'live';
   const activity = activityFor(r);
   const activityCol = ACTIVITY_COLOURS[activity];
   const machineName = `<b class="trace-machine">${escapeHtml(r.machineCode)}</b>`;
@@ -440,7 +452,7 @@ function renderCard(r: TraceRow): string {
     </div>
     <div class="trace-qc-row">${qcCells}</div>
     <div class="trace-timeline">${slots}</div>
-    ${rejLines}
+    ${rejRow}
     ${bdLines}
   </div>`;
 }
@@ -868,6 +880,42 @@ async function loadJobGoodTotals(jobNumbers: string[]): Promise<Map<string, numb
     }),
   );
   return out;
+}
+
+/**
+ * Render the Trace detail card(s) for a single job as standalone HTML —
+ * used by the KPI table's job-number popup. Loads the job's full
+ * signed-off history through the passed DAL (works even if the Trace tab
+ * was never opened this session), then builds the exact same cards the
+ * search view produces, sorted machine → newest shift first. Returns an
+ * empty-state message when the job has no signed-off records.
+ */
+export async function renderJobTraceCards(
+  dal: PmdDataLayer,
+  jobNumber: string,
+): Promise<string> {
+  dalRef = dal;
+  const job = jobNumber.trim();
+  const all = await readSignedOff({ jobNumber: job });
+  if (all.length === 0) {
+    return `<div class="trace-empty">No signed-off production records for ${escapeHtml(
+      job,
+    )}.</div>`;
+  }
+  const planning = await dal.listPlanning({});
+  const planByJob = new Map(planning.map((p) => [p.jobNumber, p]));
+  const jobGoodTotals = new Map([[job, goodForRecords(all)]]);
+  const rows = buildTraceRowsFor(all, planByJob, jobGoodTotals);
+  rows.sort((a, b) =>
+    a.machineCode !== b.machineCode
+      ? a.machineCode < b.machineCode
+        ? -1
+        : 1
+      : a.shiftId < b.shiftId
+        ? 1
+        : -1,
+  );
+  return `<div class="trace-results">${rows.map(renderCard).join('')}</div>`;
 }
 
 async function doSearch(): Promise<void> {

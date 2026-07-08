@@ -26,6 +26,7 @@ import {
 } from './charts';
 import { parseHandover } from '../core/handover';
 import { isSupervisor } from './supervisor-auth';
+import { renderJobTraceCards } from './trace';
 
 /**
  * The hot-stamping ("Hstamp") press is a distinct secondary process, so its
@@ -275,7 +276,7 @@ interface KpiState {
 
 interface ChartBucket {
   label: string;
-  byShift: Record<ShiftCode, { good: number; reject: number; runHrs: number; downHrs: number; setupHrs: number; oee: number | null }>;
+  byShift: Record<ShiftCode, { good: number; reject: number; runHrs: number; downHrs: number; setupHrs: number; oee: number | null; exp: number | null }>;
 }
 
 let S: KpiState | null = null;
@@ -454,7 +455,7 @@ function addStd(
 }
 
 function emptyChartShift(): ChartBucket['byShift'][ShiftCode] {
-  return { good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, oee: null };
+  return { good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, oee: null, exp: null };
 }
 
 /** First two words of a part description — keeps the per-job row narrow
@@ -689,12 +690,10 @@ async function compute(now = new Date()): Promise<void> {
           std.dieStdHrs + std.colorStdHrs + std.insertStdHrs,
           smokoHrs,
         );
-        stdAcc.push({
-          exp:
-            fromPlan.pieces ??
-            expectedShiftOutput(bShiftId, recs, ctByJob, psByJob).pieces,
-          std,
-        });
+        const expPieces =
+          fromPlan.pieces ??
+          expectedShiftOutput(bShiftId, recs, ctByJob, psByJob).pieces;
+        stdAcc.push({ exp: expPieces, std });
         const cb = charts.get(dateKey) ?? {
           label: dateKey.slice(5), // MM-DD
           byShift: { Day: emptyChartShift(), Afternoon: emptyChartShift(), Night: emptyChartShift() },
@@ -705,6 +704,7 @@ async function compute(now = new Date()): Promise<void> {
         cell.runHrs += k.runHrs;
         cell.downHrs += k.downtimeHrs;
         cell.setupHrs += k.setupHrs;
+        if (expPieces != null) cell.exp = (cell.exp ?? 0) + expPieces;
         charts.set(dateKey, cb);
       }
       byShift[code] = toAgg(aggregate(flat), flat);
@@ -903,6 +903,19 @@ function formatHandoverCell(handovers: HandoverEntry[]): string {
     })
     .join('\n\n');
   return `<td class="kpi-ho-cell" title="${escapeHtml(full)}">${escapeHtml(compact)}</td>`;
+}
+
+/** Job-name row header: the job number is a button that opens the Trace
+ *  detail popup (slot-by-slot timeline) for that job, followed by the
+ *  muted part-description. */
+function jobNameTh(jobNumber: string, partDescShort: string, fullDesc: string): string {
+  return `<th class="kpi-job-name" title="${escapeHtml(fullDesc)}"><button type="button" class="kpi-job-link" data-job-trace="${escapeHtml(
+    jobNumber,
+  )}" title="View slot-by-slot Trace detail for ${escapeHtml(
+    jobNumber,
+  )}">${escapeHtml(jobNumber)}</button><span class="kpi-job-part">${escapeHtml(
+    partDescShort,
+  )}</span></th>`;
 }
 
 /** Color cell. Pass `undefined` for rolled-up rows (machine / shift /
@@ -1104,9 +1117,7 @@ function render(): void {
                   j.partDescShort ? ' — ' + j.partDescShort : ''
                 } (period total)`;
                 return `<tr class="kpi-job kpi-order-total">
-                  <th class="kpi-job-name" title="${escapeHtml(fullDesc)}">${escapeHtml(
-                    j.jobNumber,
-                  )}<span class="kpi-job-part">${escapeHtml(j.partDescShort)}</span></th>
+                  ${jobNameTh(j.jobNumber, j.partDescShort, fullDesc)}
                   ${colorCell(j.color)}
                   ${aggCells(j.agg, null, false)}
                 </tr>`;
@@ -1139,9 +1150,7 @@ function render(): void {
                 j.partDescShort ? ' — ' + j.partDescShort : ''
               }`;
               return `<tr class="kpi-job">
-                <th class="kpi-job-name" title="${escapeHtml(fullDesc)}">${escapeHtml(
-                  j.jobNumber,
-                )}<span class="kpi-job-part">${escapeHtml(j.partDescShort)}</span></th>
+                ${jobNameTh(j.jobNumber, j.partDescShort, fullDesc)}
                 ${colorCell(j.color)}
                 ${aggCells(j.agg, null, false)}
               </tr>`;
@@ -1169,14 +1178,24 @@ function render(): void {
   // Charts: one bucket per date with shift segments. Output (stacked by
   // shift) + Reject line; Run/Down/Setup (stacked) + OEE line. Each chart
   // sums every machine in the period — total floor view.
-  const outChartData = S!.chartBuckets.map((b) => ({
-    label: b.label,
-    day: b.byShift.Day.good,
-    afternoon: b.byShift.Afternoon.good,
-    night: b.byShift.Night.good,
-    reject:
-      b.byShift.Day.reject + b.byShift.Afternoon.reject + b.byShift.Night.reject,
-  }));
+  const outChartData = S!.chartBuckets.map((b) => {
+    // Day standard = sum of the shift expectations that were computable;
+    // null when none were (no cycle time / no planning), so the label
+    // falls back to a bare output count.
+    const exps = [b.byShift.Day.exp, b.byShift.Afternoon.exp, b.byShift.Night.exp];
+    const standard = exps.some((e) => e != null)
+      ? exps.reduce<number>((a, e) => a + (e ?? 0), 0)
+      : null;
+    return {
+      label: b.label,
+      day: b.byShift.Day.good,
+      afternoon: b.byShift.Afternoon.good,
+      night: b.byShift.Night.good,
+      reject:
+        b.byShift.Day.reject + b.byShift.Afternoon.reject + b.byShift.Night.reject,
+      standard,
+    };
+  });
   const hoursChartData = S!.chartBuckets.map((b) => {
     const run = b.byShift.Day.runHrs + b.byShift.Afternoon.runHrs + b.byShift.Night.runHrs;
     const down = b.byShift.Day.downHrs + b.byShift.Afternoon.downHrs + b.byShift.Night.downHrs;
@@ -1404,6 +1423,9 @@ function render(): void {
       render();
     }),
   );
+  app.querySelectorAll<HTMLButtonElement>('[data-job-trace]').forEach((b) =>
+    b.addEventListener('click', () => void openJobTrace(b.dataset.jobTrace!)),
+  );
   app.querySelectorAll<HTMLButtonElement>('[data-reject-drill]').forEach((b) =>
     b.addEventListener('click', () => openRejectDrill(b.dataset.rejectDrill!)),
   );
@@ -1545,6 +1567,28 @@ function openParetoDrill(opts: {
     <div class="bd-actions"><button class="btn-primary-big" data-drill-close>Close</button></div>
   </div>`);
   mc.querySelector('[data-drill-close]')?.addEventListener('click', closeModal);
+}
+
+/** Job-number popup: the same slot-by-slot Trace cards the Trace tab
+ *  shows, rendered in a modal so a supervisor can drill from a KPI number
+ *  into what actually happened on the floor without leaving the meeting
+ *  view. Loads asynchronously (shows a spinner first). */
+async function openJobTrace(jobNumber: string): Promise<void> {
+  const mc = openModal(`<div class="bd-modal kpi-trace-modal">
+    <h2 class="bd-title">🔍 ${escapeHtml(jobNumber)} — Trace detail</h2>
+    <div class="trace kpi-trace-body"><div class="trace-empty">Loading…</div></div>
+    <div class="bd-actions"><button class="btn-primary-big" data-drill-close>Close</button></div>
+  </div>`);
+  mc.querySelector('[data-drill-close]')?.addEventListener('click', closeModal);
+  try {
+    const html = await renderJobTraceCards(dalRef, jobNumber);
+    const body = mc.querySelector('.kpi-trace-body');
+    if (body) body.innerHTML = html;
+  } catch (e) {
+    console.warn('[pmd] job Trace load failed', e);
+    const body = mc.querySelector('.kpi-trace-body');
+    if (body) body.innerHTML = `<div class="trace-empty">Couldn't load Trace detail for ${escapeHtml(jobNumber)}.</div>`;
+  }
 }
 
 function openRejectDrill(scopeKey: string): void {

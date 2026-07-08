@@ -199,6 +199,12 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .trace-qc-slot.is-signed.qc-supervisor{background:#86efac;border-left-color:#15803d;border-right-color:#15803d}
 .trace-timeline{display:grid;grid-template-columns:repeat(16,1fr);gap:2px;margin:2px 0;position:relative}
 .trace-slot{height:22px;border:1px solid var(--bd);border-radius:3px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+/* Per-slot reject codes, aligned under the status timeline so a defect
+   sits directly beneath the half-hour it happened in. Empty slots keep
+   the column width; slots with rejects show the code(s) in red. */
+.trace-rej-row{display:grid;grid-template-columns:repeat(16,1fr);gap:2px;margin:1px 0 2px}
+.trace-rej-slot{min-height:14px;font-size:9px;font-weight:800;line-height:1.15;text-align:center;color:#b91c1c;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}
+.trace-rej-slot.has-rej{background:#fef2f2;border:1px solid #fecaca;border-radius:3px;padding:1px 0}
 .trace-now-line{position:absolute;top:-2px;bottom:-2px;width:2px;background:rgba(220,38,38,.55);box-shadow:0 0 6px rgba(220,38,38,.5);pointer-events:none;z-index:2;transform:translateX(-1px)}
 .trace-section{margin-top:6px;font-size:13px}
 .trace-section b{display:block;margin-bottom:4px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--mu)}
@@ -581,6 +587,9 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    different drill than the cool-grey shift→job rows. */
 .kpi-order-total th,.kpi-order-total td{background:#fefce8;border-top:1px dashed #facc15}
 .kpi-job-name{padding-left:56px !important}
+/* Job number is a link-button that opens the Trace detail popup. */
+.kpi-job-link{background:none;border:0;padding:0;font:inherit;color:#1d4ed8;font-weight:800;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.kpi-job-link:hover{color:#1e3a8a}
 .kpi-job-part{margin-left:8px;color:#94a3b8;font-style:italic;font-weight:400}
 /* Color column: 16px square swatch + label. Neutral falls back to a
    diagonal-hatch pattern so it reads "no colour requirement" at a
@@ -609,6 +618,10 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-reject-legend .kpi-rej-qty{font-weight:800;color:var(--rd);font-variant-numeric:tabular-nums}
 /* Reject drill-down modal: chart above a ranked Pareto table. */
 .kpi-drill-modal{max-width:760px}
+/* Job-number → Trace detail popup: wide enough for the 16-slot timeline,
+   scrolls when a job ran across many shifts. */
+.kpi-trace-modal{max-width:1000px}
+.kpi-trace-body{max-height:70vh;overflow:auto}
 .kpi-drill-chart{background:#fff;border:1px solid var(--bd);border-radius:8px;padding:8px}
 .kpi-drill-table tbody tr{cursor:default}
 .kpi-drill-table th,.kpi-drill-table td{padding:7px 10px}

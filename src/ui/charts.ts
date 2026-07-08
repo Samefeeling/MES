@@ -107,6 +107,9 @@ interface DualOpts {
   overlayLabel: string;
   overlayColor: string;
   overlayAsPercent?: boolean; // forces right axis to 0..100
+  /** Optional text drawn above each bar's stack top (index aligns with
+   *  `buckets`). null skips a bar. Used to print "output/standard". */
+  topLabels?: Array<string | null>;
 }
 
 function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
@@ -149,6 +152,16 @@ function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
     if (b.overlay != null) {
       const y = PT + innerH - (b.overlay / niceRight) * innerH;
       linePts.push(`${cx.toFixed(1)},${y.toFixed(1)}`);
+    }
+    // Value label above the stack top (e.g. "285/536" = output/standard).
+    const top = o.topLabels?.[i];
+    if (top) {
+      const ly = Math.max(PT + 8, cumY - 5);
+      bars += `<text x="${cx.toFixed(1)}" y="${ly.toFixed(
+        1,
+      )}" font-size="11" font-weight="700" fill="#1e293b" text-anchor="middle">${escAttr(
+        top,
+      )}</text>`;
     }
     bars += `<text x="${cx.toFixed(1)}" y="${H2 - 14}" font-size="11" fill="#475569" text-anchor="middle">${escAttr(
       b.label,
@@ -211,6 +224,9 @@ export function renderOutputByShiftChart(
     afternoon: number;
     night: number;
     reject: number;
+    /** Planning-expected output for the whole day (sum of shift
+     *  expectations); null when nothing in the day carried one. */
+    standard?: number | null;
   }>,
 ): string {
   const data: StackBucket[] = buckets.map((b) => ({
@@ -218,11 +234,18 @@ export function renderOutputByShiftChart(
     segments: [b.day, b.afternoon, b.night],
     overlay: b.reject,
   }));
+  // "output/standard" printed above each bar (matches the table's Output
+  // cell); plain output when the day has no expectation to divide by.
+  const topLabels = buckets.map((b) => {
+    const output = b.day + b.afternoon + b.night;
+    return b.standard != null && b.standard > 0 ? `${output}/${b.standard}` : String(output);
+  });
   return renderDualAxis(data, {
     segmentColors: SHIFT_COLORS,
     segmentLabels: SHIFT_LABELS,
     overlayLabel: 'Reject',
     overlayColor: '#dc2626',
+    topLabels,
   });
 }
 
