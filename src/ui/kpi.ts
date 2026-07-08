@@ -272,6 +272,9 @@ interface KpiState {
   /** Breakdown downtime hours per BDCode, sliced the same way. Sourced
    *  from PMD_BreakDownlog (label = breakdown cause from the taxonomy). */
   downtimePareto: { floor: ParetoSlice[]; byMachine: Map<string, ParetoSlice[]> };
+  /** Reject code → human description (PMD_RejectCategories, e.g. D01 →
+   *  "ShortShot"), so the Reject drill spells the codes out. */
+  rejectDescByCode: Map<string, string>;
 }
 
 interface ChartBucket {
@@ -1529,6 +1532,9 @@ function openParetoDrill(opts: {
   valueLabel: string;
   source: { floor: ParetoSlice[]; byMachine: Map<string, ParetoSlice[]> };
   scopeKey: string;
+  /** When set, adds a Description column that spells each code out
+   *  (D01 → "ShortShot"). Used by the Reject drill; downtime omits it. */
+  descByCode?: Map<string, string>;
 }): void {
   const slices =
     opts.scopeKey === 'FLOOR'
@@ -1537,15 +1543,20 @@ function openParetoDrill(opts: {
   const scopeLabel = opts.scopeKey === 'FLOOR' ? 'All machines' : opts.scopeKey;
   const total = slices.reduce((a, s) => a + s.value, 0);
   if (total === 0) return;
+  const withDesc = !!opts.descByCode;
   let cum = 0;
   const rows = slices
     .map((s, i) => {
       cum += s.value;
       const pct = ((s.value / total) * 100).toFixed(1);
       const cumPct = ((cum / total) * 100).toFixed(1);
+      const descCell = withDesc
+        ? `<td>${escapeHtml(opts.descByCode!.get(s.code) ?? s.label ?? '—')}</td>`
+        : '';
       return `<tr>
         <td class="num">${i + 1}</td>
         <td><b>${escapeHtml(s.code)}</b></td>
+        ${descCell}
         <td>${escapeHtml(s.label)}</td>
         <td class="num r">${formatValue(s.value, opts.unit)}</td>
         <td class="num">${pct}%</td>
@@ -1555,6 +1566,8 @@ function openParetoDrill(opts: {
     .join('');
   const chart = renderParetoChart(toParetoBuckets(slices));
   const totalDisplay = formatValue(+total.toFixed(2), opts.unit);
+  const descHead = withDesc ? '<th>Description</th>' : '';
+  const totalSpan = withDesc ? 4 : 3;
   const mc = openModal(`<div class="bd-modal kpi-drill-modal">
     <h2 class="bd-title">🔬 ${escapeHtml(opts.title)} — ${escapeHtml(scopeLabel)}</h2>
     <p class="bd-sub">${totalDisplay} across ${slices.length} code${
@@ -1562,9 +1575,9 @@ function openParetoDrill(opts: {
     } · ${escapeHtml(periodRange(S!.period, new Date()).label)}</p>
     <div class="kpi-drill-chart">${chart}</div>
     <table class="summary-table kpi-drill-table">
-      <thead><tr><th>#</th><th>Code</th><th>${escapeHtml(opts.valueLabel)}</th><th>Value</th><th>%</th><th>Cum %</th></tr></thead>
+      <thead><tr><th>#</th><th>Code</th>${descHead}<th>${escapeHtml(opts.valueLabel)}</th><th>Value</th><th>%</th><th>Cum %</th></tr></thead>
       <tbody>${rows}</tbody>
-      <tfoot><tr class="kpi-total"><th colspan="3">TOTAL</th><td class="num r">${totalDisplay}</td><td class="num">100%</td><td class="num">—</td></tr></tfoot>
+      <tfoot><tr class="kpi-total"><th colspan="${totalSpan}">TOTAL</th><td class="num r">${totalDisplay}</td><td class="num">100%</td><td class="num">—</td></tr></tfoot>
     </table>
     <div class="bd-actions"><button class="btn-primary-big" data-drill-close>Close</button></div>
   </div>`);
@@ -1597,9 +1610,12 @@ function openRejectDrill(scopeKey: string): void {
   openParetoDrill({
     title: 'Reject breakdown',
     unit: '',
-    valueLabel: 'Defect',
+    // The old s.label column now reads as the row's RejectCategory
+    // grouping; the new Description column spells the D-code out.
+    valueLabel: 'Category',
     source: S!.rejectPareto,
     scopeKey,
+    descByCode: S!.rejectDescByCode,
   });
 }
 
@@ -1637,7 +1653,16 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     catTotals: [],
     rejectPareto: { floor: [], byMachine: new Map() },
     downtimePareto: { floor: [], byMachine: new Map() },
+    rejectDescByCode: new Map(),
   };
+  // Reject code → description (D01 → "ShortShot"), for the Reject drill's
+  // Description column. Cheap, changes rarely; load once at mount.
+  try {
+    const cats = await dal.listRejectCategories();
+    S.rejectDescByCode = new Map(cats.map((c) => [c.code, c.label]));
+  } catch (e) {
+    console.warn('[pmd] reject categories load failed', e);
+  }
   // No supervisor-change subscription needed here: main.ts already
   // re-routes (→ renderKpi) on every supervisor toggle, so the threshold
   // editor appears/disappears on unlock without a page reload.
