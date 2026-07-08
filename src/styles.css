@@ -98,7 +98,6 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-stat.is-green{border-top-color:var(--gn)}.kpi-stat.is-green .kpi-stat-value{color:#15803d}
 .kpi-stat.is-amber{border-top-color:var(--am)}.kpi-stat.is-amber .kpi-stat-value{color:#b45309}
 .kpi-stat.is-red{border-top-color:var(--rd)}.kpi-stat.is-red .kpi-stat-value{color:#b91c1c}
-.kpi-stat.is-blue{border-top-color:#2563eb}.kpi-stat.is-blue .kpi-stat-value{color:#1d4ed8}
 /* Global toggles in the Machine column header. Inherit kpi-toggle for
    look but shave a few px so they sit comfortably next to the "Machine"
    label. */
@@ -111,8 +110,6 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-table td.amber{color:#b45309;font-weight:800}
 .kpi-table td.red{color:#b91c1c;font-weight:800}
 .kpi-table td.gray{color:var(--mu)}
-/* 红黄蓝 judgement (Output vs plan, changeover vs standard): blue = met. */
-.kpi-table td.blue{color:#1d4ed8;font-weight:800}
 /* The small "/expected" companion on a judged Output cell. */
 .kpi-exp{font-size:10px;font-weight:600;color:var(--mu)}
 .kpi-total th,.kpi-total td{border-top:2px solid var(--theme-dark);font-weight:800;background:#f8fafc}

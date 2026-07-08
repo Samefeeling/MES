@@ -842,18 +842,19 @@ function colourClass(v: number | null, green: number, amber: number): string {
   return 'red';
 }
 
-/** Output-vs-plan colouring. The floor asked for 红黄蓝 — blue (not
- *  green) marks "met the plan"; '' (no colour) when there's nothing to
- *  judge against. */
+/** Output-vs-plan colouring, on the one unified traffic-light language as
+ *  every other KPI: green = met, amber = close, red = short; '' (no
+ *  colour) when there's nothing to judge against. (Was 红黄蓝 with blue
+ *  for "met" — dropped so the whole board reads consistently.) */
 function planColourClass(pct: number | null, t: KpiThresholds): string {
   if (pct == null) return '';
-  if (pct >= t.planBlue) return 'blue';
+  if (pct >= t.planBlue) return 'green';
   if (pct >= t.planAmber) return 'amber';
   return 'red';
 }
 
 /** Output cell judged against the planning-driven expectation: value
- *  coloured red / amber / blue, tooltip explains the maths. Plain cell
+ *  coloured green / amber / red, tooltip explains the maths. Plain cell
  *  when the slice carries no expectation (job rows, no cycle time). */
 function outputCell(a: ShiftAgg): string {
   const n = a.output ? String(a.output) : '—';
@@ -1013,7 +1014,7 @@ function buildThresholdEditor(): string {
     <span class="kpi-th-title">🎚 Colour thresholds</span>
     <div class="kpi-th-group"><b>Efficiency</b>${field('effGreen', '🟢 ≥')}${field('effAmber', '🟡 ≥')}</div>
     <div class="kpi-th-group"><b>Yield</b>${field('yieldGreen', '🟢 ≥')}${field('yieldAmber', '🟡 ≥')}</div>
-    <div class="kpi-th-group"><b>Output / vs Plan</b>${field('planBlue', '🔵 ≥')}${field('planAmber', '🟡 ≥')}</div>
+    <div class="kpi-th-group"><b>Output / vs Plan</b>${field('planBlue', '🟢 ≥')}${field('planAmber', '🟡 ≥')}</div>
     <button type="button" class="kpi-th-reset" data-th-reset title="Restore default thresholds">Reset</button>
   </div>`;
 }
@@ -1363,10 +1364,11 @@ function render(): void {
       </div>
       ${charts}
       <div class="kpi-note">
-        <div><b>Output 🔵🟡🔴</b> = Σ Total Good vs expected (the small “/n”). Expected: simulate the machine's planned order queue over the shift — window = 8 h − Σ changeover standards − smoko; per order, hours needed = RemainingLaborHrs (else Remaining × ProdStandard); order finishes → all its remaining pieces, else ⌊hours used ÷ ProdStandard⌋. Remaining = the signed shift's own Job Left when the order ran, else planning.csv.</div>
+        <div>Every metric uses one traffic-light language: <b>🟢 met · 🟡 close · 🔴 short</b>.</div>
+        <div><b>Output 🟢🟡🔴</b> = Σ Total Good vs expected (the small “/n”). Expected: simulate the machine's planned order queue over the shift — window = 8 h − Σ changeover standards − smoko; per order, hours needed = RemainingLaborHrs (else Remaining × ProdStandard); order finishes → all its remaining pieces, else ⌊hours used ÷ ProdStandard⌋. Remaining = the signed shift's own Job Left when the order ran, else planning.csv.</div>
         <div><b>Yield%</b> = Good ÷ (Good + Reject).</div>
         <div><b>Efficiency*</b> = Run slots ÷ all filled slots.</div>
-        <div><b>vs Plan 🔵🟡🔴</b> = Total Good ÷ the same planning expectation the Output cell shows — the percentage form of Output's “/n”.</div>
+        <div><b>vs Plan 🟢🟡🔴</b> = Total Good ÷ the same planning expectation the Output cell shows — the percentage form of Output's “/n”.</div>
         <div><b>Die / Colour / Insert h 🟢🟡🔴</b> = hours in D / C / I blocks vs standard = occurrences × (die 4 h · colour 0.5 h · insert 0.5 h); 🟢 ≤ std, 🟡 ≤ std + 0.5 h, 🔴 above.</div>
         <div>Colour thresholds for Output / Yield / Efficiency are editable in the panel above. Shift sub-rows show each shift's contribution to the period total.</div>
       </div>
