@@ -50,10 +50,9 @@ interface KpiThresholds {
   effAmber: number;
   yieldGreen: number;
   yieldAmber: number;
-  schedGreen: number;
-  schedAmber: number;
-  /** Output vs planning-expected output (core/standards.ts). Blue at/above
-   *  planBlue %, amber at/above planAmber %, red below. */
+  /** Output vs planning-expected output (core/standards.ts), and the
+   *  "vs Plan" column. Blue at/above planBlue %, amber at/above planAmber
+   *  %, red below. */
   planBlue: number;
   planAmber: number;
 }
@@ -63,8 +62,6 @@ const DEFAULT_THRESHOLDS: KpiThresholds = {
   effAmber: 70,
   yieldGreen: 98,
   yieldAmber: 95,
-  schedGreen: 95,
-  schedAmber: 80,
   planBlue: 95,
   planAmber: 80,
 };
@@ -97,14 +94,13 @@ function saveThresholds(t: KpiThresholds): void {
 
 type PeriodKey = 'last3' | 'thisWeek' | 'lastWeek' | 'thisMonth' | 'lastMonth' | 'custom';
 
-// Trimmed to the three the meetings actually use — Last week / This
-// month / Last month cluttered the bar and 📅 Custom covers them all.
-// (periodRange still understands the removed keys, so nothing breaks
-// if one comes back.)
+// Two presets the meetings actually use; any other window is picked
+// directly on the always-visible From/To inputs (which is what 'custom'
+// is now — no tab). periodRange still understands the removed keys, so
+// nothing breaks if one comes back.
 const PERIODS: Array<{ key: PeriodKey; label: string }> = [
   { key: 'last3', label: 'Last 24h' },
   { key: 'thisWeek', label: 'This week' },
-  { key: 'custom', label: '📅 Custom' },
 ];
 
 const SHIFT_ORDER: ShiftCode[] = SHIFTS.map((s) => s.code);
@@ -239,7 +235,6 @@ interface KpiRow {
   /** Per-Job# rollup across every shift in the selected period — drives
    *  the "> Orders" toggle on the machine row. Sorted by output desc. */
   byJobTotal: JobAgg[];
-  schedAdh: number | null;
 }
 
 interface KpiState {
@@ -375,15 +370,6 @@ function inRange(
   if (!p) return false;
   const d = new Date(p.year, p.month - 1, p.day);
   return d >= from && d <= to;
-}
-
-/** Planned start (local ISO, from planning or a signed row's PlannedStart
- *  column) falls inside [from, to]. `to` is extended to the end of its
- *  calendar day since period bounds are date-level. Blank / unparseable
- *  starts are never in range. */
-function plannedStartInRange(plannedStart: string, from: Date, to: Date): boolean {
-  const t = new Date(plannedStart);
-  return t >= from && t <= new Date(to.getTime() + 86400_000 - 1);
 }
 
 // Handover parsing lives in core/handover.ts so the operator side-panel
@@ -777,47 +763,10 @@ async function compute(now = new Date()): Promise<void> {
       })
       .sort((a, b2) => b2.agg.output - a.agg.output);
 
-    // Schedule Adherence: of the quantity SCHEDULED to start on THIS
-    // press in the window (JobHead_StartDate + StartHour), how much got
-    // made. Per job: min(good, required) — over-producing one order
-    // can't pay for another that never ran, and no job exceeds 100%.
-    // Two sources of "scheduled here":
-    //   - signed rows' denormalised PlannedStart (survives Epicor
-    //     dropping completed orders from planning — the old version
-    //     divided the machine's whole output by only the still-open
-    //     orders, un-scoped to the machine, which is where the
-    //     514%…1851% figures came from);
-    //   - current planning, for orders scheduled in the window that
-    //     never produced (they count against, produced = 0). Capped at
-    //     `now` so an order scheduled for tomorrow isn't "missed" today.
-    let schedAdh: number | null = null;
-    if (S!.period !== 'last3') {
-      const schedTo = new Date(Math.min(to.getTime(), now.getTime()));
-      const sched = new Map<string, { required: number; produced: number }>();
-      for (const [jobNumber, recs] of allByJob) {
-        const ps = recs.find((r) => r.plannedStart)?.plannedStart ?? '';
-        if (!ps || !plannedStartInRange(ps, from, schedTo)) continue;
-        const required = recs.reduce((a, r) => Math.max(a, r.jobRequired || 0), 0);
-        if (required <= 0) continue;
-        sched.set(jobNumber, { required, produced: aggregate(recs).output });
-      }
-      for (const o of planning) {
-        if (o.isDieChange || o.machineCode !== m.machineCode) continue;
-        // Scheduled qty = the order TOTAL (same base as the rows'
-        // denormalised JobRequired), not Epicor's decremented remaining.
-        if (!(o.orderQty > 0) || sched.has(o.jobNumber)) continue;
-        if (!plannedStartInRange(o.plannedStart, from, schedTo)) continue;
-        sched.set(o.jobNumber, { required: o.orderQty, produced: 0 });
-      }
-      let plannedQty = 0;
-      let madeQty = 0;
-      for (const { required, produced } of sched.values()) {
-        plannedQty += required;
-        madeQty += Math.min(produced, required);
-      }
-      schedAdh = plannedQty > 0 ? Math.round((madeQty / plannedQty) * 100) : null;
-    }
-    return { machineCode: m.machineCode, total, byShift, jobsByShift, byJobTotal, schedAdh };
+    // Schedule Adherence was retired here — the Output "vs Plan" column
+    // now carries plan attainment, judged against the simulated planned-
+    // queue expectation rather than a separate scheduled-qty ratio.
+    return { machineCode: m.machineCode, total, byShift, jobsByShift, byJobTotal };
   });
 
   S!.rows = rows;
@@ -917,7 +866,10 @@ function outputCell(a: ShiftAgg): string {
  *  over, red = worse; plain when the slice wasn't judged / had none. */
 function setupCell(actualHrs: number, stdHrs: number | null, stdEachHrs: number, label: string): string {
   const v = actualHrs ? actualHrs.toFixed(1) : '—';
-  const cls = setupJudgement(actualHrs, stdHrs);
+  // Changeover hours ride the ordinary green/amber/red system — within
+  // standard is green (not the plan-blue used for Output). setupJudgement
+  // still returns 'blue' for at/under standard; remap it to green here.
+  const cls = setupJudgement(actualHrs, stdHrs).replace('blue', 'green');
   if (!cls) return `<td class="num">${v}</td>`;
   const occurrences = Math.round((stdHrs ?? 0) / stdEachHrs);
   const title = `${label}: ${occurrences} × ${stdEachHrs}h standard = ${(stdHrs ?? 0).toFixed(1)}h allowed — actual ${actualHrs.toFixed(1)}h${
@@ -991,15 +943,20 @@ function downHrsCell(downHrs: number, drillKey?: string): string {
 
 function aggCells(
   a: ShiftAgg,
-  includeSched: number | null = null,
-  oeeAndSched = true,
+  _legacy: number | null = null,
+  colourOee = true,
   rejectDrillKey?: string,
   downtimeDrillKey?: string,
 ): string {
   const t = S!.thresholds;
   const yc = colourClass(a.yieldPct, t.yieldGreen, t.yieldAmber);
   const oc = colourClass(a.oee, t.effGreen, t.effAmber);
-  const sc = colourClass(includeSched, t.schedGreen, t.schedAmber);
+  // vs Plan: same attainment the Output cell colours by, surfaced as its
+  // own percentage column (replaced Schedule Adherence). null when the
+  // slice carries no planning expectation.
+  const planPct =
+    a.expOutput != null && a.expOutput > 0 ? Math.round((a.output / a.expOutput) * 100) : null;
+  const pc = planColourClass(planPct, t);
   // Empty cells render an em-dash instead of "0" / "0.0%" — a literal
   // zero in an Efficiency / output column reads as a real measurement (the
   // press ran but made nothing), where what we actually mean is "no
@@ -1018,10 +975,8 @@ function aggCells(
     ${setupCell(a.dieHrs, a.dieStdHrs, DIE_CHANGE_STD_HRS, 'Die change')}
     ${setupCell(a.colorHrs, a.colorStdHrs, COLOR_CHANGE_STD_HRS, 'Colour change')}
     ${setupCell(a.insertHrs, a.insertStdHrs, INSERT_CHANGE_STD_HRS, 'Insert change')}
-    <td class="num ${oeeAndSched ? oc : ''}">${a.oee == null ? '—' : a.oee + '%'}</td>
-    <td class="num ${oeeAndSched ? sc : ''}">${
-      includeSched == null ? '—' : includeSched + '%'
-    }</td>
+    <td class="num ${colourOee ? oc : ''}">${a.oee == null ? '—' : a.oee + '%'}</td>
+    <td class="num ${pc}">${planPct == null ? '—' : planPct + '%'}</td>
     ${formatHandoverCell(a.handovers)}`;
 }
 
@@ -1042,8 +997,7 @@ function buildThresholdEditor(): string {
     <span class="kpi-th-title">🎚 Colour thresholds</span>
     <div class="kpi-th-group"><b>Efficiency</b>${field('effGreen', '🟢 ≥')}${field('effAmber', '🟡 ≥')}</div>
     <div class="kpi-th-group"><b>Yield</b>${field('yieldGreen', '🟢 ≥')}${field('yieldAmber', '🟡 ≥')}</div>
-    <div class="kpi-th-group"><b>Sched. Adh.</b>${field('schedGreen', '🟢 ≥')}${field('schedAmber', '🟡 ≥')}</div>
-    <div class="kpi-th-group"><b>Output vs Plan</b>${field('planBlue', '🔵 ≥')}${field('planAmber', '🟡 ≥')}</div>
+    <div class="kpi-th-group"><b>Output / vs Plan</b>${field('planBlue', '🔵 ≥')}${field('planAmber', '🟡 ≥')}</div>
     <button type="button" class="kpi-th-reset" data-th-reset title="Restore default thresholds">Reset</button>
   </div>`;
 }
@@ -1056,7 +1010,6 @@ function render(): void {
         p.label,
       )}</button>`,
   ).join('');
-  const rangeLabel = periodRange(S!.period, new Date()).label;
   // Global toggles live in the Machine column header — one click flips
   // every machine instead of N clicks per row.
   //  • "+" mirrors the per-row + / – (shift breakdown)
@@ -1142,7 +1095,7 @@ function render(): void {
         const headRow = `<tr class="kpi-machine">
           <th>${toggle}${ordersToggle}<span class="kpi-mc-name">${escapeHtml(r.machineCode)}</span></th>
           ${colorCell()}
-          ${aggCells(r.total, r.schedAdh, true, r.machineCode, r.machineCode)}
+          ${aggCells(r.total, null, true, r.machineCode, r.machineCode)}
         </tr>`;
         const orderRows = ordersOpen
           ? r.byJobTotal
@@ -1300,30 +1253,34 @@ function render(): void {
         ${stat('Yield', totYield != null ? totYield + '%' : '—', totYield != null ? 'is-' + colourClass(+totYield, S!.thresholds.yieldGreen, S!.thresholds.yieldAmber) : '')}
         ${stat('Run hours', tot.runHrs ? tot.runHrs.toFixed(1) : '—', 'is-green')}
         ${stat('Down hours', tot.downHrs ? tot.downHrs.toFixed(1) : '—', tot.downHrs ? 'is-red' : '')}
-        ${stat('C/O hours', tot.setupHrs ? tot.setupHrs.toFixed(1) : '—', tot.setupHrs ? 'is-amber' : '')}
+        ${(() => {
+          // C/O tile judged like the table cells: within the combined
+          // die+colour+insert standard is green, a little over amber, worse
+          // red (setupJudgement's 'blue' remapped to green — no plan-blue
+          // on changeover).
+          const coStd = (tot.dieStdHrs ?? 0) + (tot.colorStdHrs ?? 0) + (tot.insertStdHrs ?? 0);
+          const coCls = tot.setupHrs ? setupJudgement(tot.setupHrs, coStd).replace('blue', 'green') : '';
+          return stat('C/O hours', tot.setupHrs ? tot.setupHrs.toFixed(1) : '—', coCls ? 'is-' + coCls : '');
+        })()}
         ${stat('Efficiency*', totOee != null ? totOee + '%' : '—', totOee != null ? 'is-' + colourClass(totOee, S!.thresholds.effGreen, S!.thresholds.effAmber) : '')}
       </div>`;
 
-  // Compact range note beside the tabs, replacing the old two-line title:
-  // just the window, years stripped ("07-06-Afternoon → 07-07-Day").
-  const rangeNote = (rangeLabel.includes('(')
-    ? rangeLabel.slice(rangeLabel.indexOf('(') + 1, rangeLabel.lastIndexOf(')'))
-    : rangeLabel
-  ).replace(/\b\d{4}-/g, '');
+  // From/To always reflect the active window: for a preset tab they mirror
+  // the computed range (read-only intent, but still editable — editing
+  // drops to a custom range); under a custom range they show the picked
+  // bounds. periodRange returns Date objects, so key them to YYYY-MM-DD.
+  const activeRange = periodRange(S!.period, new Date());
+  const fromVal = S!.period === 'custom' ? S!.customFrom : dateKey(activeRange.from);
+  const toVal = S!.period === 'custom' ? S!.customTo : dateKey(activeRange.to);
   app.innerHTML = `
     <div class="kpi">
       <div class="kpi-head">
         <div class="shift-tabs">${tabs}</div>
-        <span class="kpi-range-note" title="Signed-off shifts only · as at ${escapeHtml(asAt)}">${escapeHtml(rangeNote)}</span>
+        <div class="kpi-range" title="Signed-off shifts only · as at ${escapeHtml(asAt)}">
+          <label>From <input type="date" data-range="from" value="${escapeHtml(fromVal)}"></label>
+          <label>To <input type="date" data-range="to" value="${escapeHtml(toVal)}"></label>
+        </div>
       </div>
-      ${
-        S!.period === 'custom'
-          ? `<div class="kpi-range">
-              <label>From <input type="date" data-range="from" value="${escapeHtml(S!.customFrom)}" max="${escapeHtml(S!.customTo)}"></label>
-              <label>To <input type="date" data-range="to" value="${escapeHtml(S!.customTo)}" min="${escapeHtml(S!.customFrom)}"></label>
-            </div>`
-          : ''
-      }
       ${buildThresholdEditor()}
       ${stats}
       <div class="kpi-table-wrap">
@@ -1338,7 +1295,7 @@ function render(): void {
             <th title="D — Die change">Die h</th>
             <th title="C — Colour change">Colour h</th>
             <th title="I — Insert change">Insert h</th>
-            <th>Efficiency*</th><th>Sched. Adh.</th>
+            <th>Efficiency*</th><th title="Total Good ÷ planning expectation">vs Plan</th>
             <th class="kpi-ho-head">Handover</th>
           </tr></thead>
           <tbody>${body}</tbody>
@@ -1372,7 +1329,8 @@ function render(): void {
                     ${setupCell(tot.dieHrs, tot.dieStdHrs, DIE_CHANGE_STD_HRS, 'Die change')}
                     ${setupCell(tot.colorHrs, tot.colorStdHrs, COLOR_CHANGE_STD_HRS, 'Colour change')}
                     ${setupCell(tot.insertHrs, tot.insertStdHrs, INSERT_CHANGE_STD_HRS, 'Insert change')}
-                    <td class="num">—</td><td class="num">—</td>
+                    <td class="num">—</td>
+                    <td class="num ${totCls}">${totPct == null ? '—' : totPct + '%'}</td>
                     <td class="kpi-ho-cell muted">—</td>
                   </tr></tfoot>`;
                 })()
@@ -1384,8 +1342,8 @@ function render(): void {
         <div><b>Output 🔵🟡🔴</b> = Σ Total Good vs expected (the small “/n”). Expected: simulate the machine's planned order queue over the shift — window = 8 h − Σ changeover standards − smoko; per order, hours needed = RemainingLaborHrs (else Remaining × ProdStandard); order finishes → all its remaining pieces, else ⌊hours used ÷ ProdStandard⌋. Remaining = the signed shift's own Job Left when the order ran, else planning.csv.</div>
         <div><b>Yield%</b> = Good ÷ (Good + Reject).</div>
         <div><b>Efficiency*</b> = Run slots ÷ all filled slots.</div>
-        <div><b>Sched. Adh.</b> = Good ÷ scheduled qty, for jobs whose planned start (StartDate + StartHour) falls in the period; each job capped at 100%. Hidden in Last 24 h.</div>
-        <div><b>Die / Colour / Insert h 🔵🟡🔴</b> = hours in D / C / I blocks vs standard = occurrences × (die 4 h · colour 0.5 h · insert 0.5 h); 🔵 ≤ std, 🟡 ≤ std + 0.5 h, 🔴 above.</div>
+        <div><b>vs Plan 🔵🟡🔴</b> = Total Good ÷ the same planning expectation the Output cell shows — the percentage form of Output's “/n”.</div>
+        <div><b>Die / Colour / Insert h 🟢🟡🔴</b> = hours in D / C / I blocks vs standard = occurrences × (die 4 h · colour 0.5 h · insert 0.5 h); 🟢 ≤ std, 🟡 ≤ std + 0.5 h, 🔴 above.</div>
         <div>Colour thresholds for Output / Yield / Efficiency are editable in the panel above. Shift sub-rows show each shift's contribution to the period total.</div>
       </div>
     </div>`;
@@ -1395,19 +1353,22 @@ function render(): void {
       S!.period = b.dataset.period as PeriodKey;
       S!.loading = true;
       render();
-      // A bare switch TO custom just reveals the date inputs over the
-      // existing range — don't recompute until the user has set bounds.
-      if (S!.period !== 'custom') void compute();
-      else {
-        S!.loading = false;
-        render();
-      }
+      void compute();
     }),
   );
   app.querySelectorAll<HTMLInputElement>('[data-range]').forEach((el) =>
     el.addEventListener('change', () => {
       const v = el.value;
       if (!v) return;
+      // Editing either date drops the active preset into a custom range.
+      // Seed both bounds from what the inputs currently show so the first
+      // edit doesn't reach back to a stale week-ago default.
+      if (S!.period !== 'custom') {
+        const r = periodRange(S!.period, new Date());
+        S!.customFrom = dateKey(r.from);
+        S!.customTo = dateKey(r.to);
+        S!.period = 'custom';
+      }
       if (el.dataset.range === 'from') {
         S!.customFrom = v;
         if (S!.customTo < v) S!.customTo = v; // keep from ≤ to

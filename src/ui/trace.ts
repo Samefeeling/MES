@@ -427,14 +427,15 @@ function renderCard(r: TraceRow): string {
       ${headline}
       <span class="trace-meta">${escapeHtml(r.partNumber)}${r.partDescription ? ' — ' + escapeHtml(r.partDescription) : ''}</span>
     </div>
-    <div class="trace-card-people">
-      Operator: <b>${escapeHtml(r.operator || '—')}</b> · Supervisor: <b>${escapeHtml(r.supervisor || '—')}</b>
-    </div>
     <div class="trace-card-totals">
+      <span>Operator <b>${escapeHtml(r.operator || '—')}</b></span>
+      <span>Supervisor <b>${escapeHtml(r.supervisor || '—')}</b></span>
       <span>Order Qty <b>${r.orderQty ?? '—'}</b></span>
       <span>Job Left <b>${r.jobLeft ?? '—'}</b></span>
       <span>Shift Target <b>${r.shiftTarget ?? '—'}</b></span>
       <span class="g">Good <b>${r.good}</b></span>
+    </div>
+    <div class="trace-card-totals trace-card-rejrow">
       <span class="r">Reject <b>${r.reject}</b></span>
     </div>
     <div class="trace-qc-row">${qcCells}</div>
@@ -918,7 +919,19 @@ async function doSearch(): Promise<void> {
   }
 
   const rows = buildTraceRowsFor(filtered, planByJob, jobGoodTotals);
-  rows.sort((a, b) => (a.shiftId < b.shiftId ? 1 : -1));
+  // Group by machine, then newest shift first within each machine, so a
+  // multi-machine / multi-day search reads as one press's timeline at a
+  // time (D01 newest→oldest, then D02, …) instead of the whole floor
+  // interleaved by date.
+  rows.sort((a, b) =>
+    a.machineCode !== b.machineCode
+      ? a.machineCode < b.machineCode
+        ? -1
+        : 1
+      : a.shiftId < b.shiftId
+        ? 1
+        : -1,
+  );
   S!.results = rows;
   S!.searched = true;
   S!.loading = false;

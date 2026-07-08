@@ -718,14 +718,16 @@ function shiftOrders(): PlanningOrder[] {
     return historicalIds.map(historicalOrder);
   }
 
-  // Active / future shift: filter to the orders whose [plannedStart,
-  // plannedEnd] window overlaps a 2-day horizon starting at the
-  // viewed date (i.e. today + tomorrow on a live shift). Epicor
-  // releases far more orders than a press will touch in one shift,
-  // and operators were scrolling past dozens of irrelevant entries
-  // to find the order in front of them. With JobHead_StartTime now
-  // layered onto JobHead_StartDate, the window is precise enough
-  // that "next two days" actually means it.
+  // Active / future shift: keep every planning order scheduled to start
+  // by the end of a 2-day horizon (today + tomorrow on a live shift).
+  // We only bound the FUTURE — Epicor releases far more upcoming orders
+  // than a press will touch in one shift, and operators were scrolling
+  // past dozens of not-yet-relevant entries. The PAST is left open: an
+  // order that is still in the planning list is, by definition, not yet
+  // complete (Epicor drops finished orders), so an overdue / long-running
+  // job that started days ago must still appear — the operator is very
+  // likely still running it. (Previously a lower `plannedEnd >= today`
+  // bound hid exactly those unfinished historical orders.)
   //
   // Orders missing a plannedStart (rare: legacy CSV row) fall
   // through the filter so the operator can still pick them.
@@ -736,7 +738,6 @@ function shiftOrders(): PlanningOrder[] {
   const windowEnd = new Date(windowStart);
   windowEnd.setDate(windowEnd.getDate() + 2);
   windowEnd.setHours(23, 59, 59, 999);
-  const ws = windowStart.getTime();
   const we = windowEnd.getTime();
   const planned = S!.planning
     .slice()
@@ -744,10 +745,8 @@ function shiftOrders(): PlanningOrder[] {
       if (!o.plannedStart) return true;
       const s = Date.parse(o.plannedStart);
       if (!isFinite(s)) return true;
-      const e = o.plannedEnd ? Date.parse(o.plannedEnd) : s;
-      // Standard interval overlap: order is kept when its window
-      // touches the horizon at any point.
-      return s <= we && (!isFinite(e) || e >= ws);
+      // Keep it unless it starts beyond the future horizon.
+      return s <= we;
     })
     .sort(
       (a, b2) =>
