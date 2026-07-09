@@ -1701,7 +1701,10 @@ function buildGrid(): string {
   const nowSlot = liveShiftId === sid() ? currentSlotIndex(sid(), new Date()) : null;
 
   const headers = Array.from({ length: SLOTS_PER_SHIFT }, (_, i) => {
-    const lbl = slotClock(sid(), i).replace('–', '-');
+    // Just the slot's START time ("07:00-") — the end time was redundant
+    // (it's the next slot's start) and forced a tiny font. Keeping only
+    // the start lets the label be larger and readable on the iPad.
+    const lbl = slotClock(sid(), i).split('–')[0] + '-';
     const now = nowSlot === i ? ' is-now-col' : '';
     return `<th class="slot-head${now}">${escapeHtml(lbl)}</th>`;
   }).join('');

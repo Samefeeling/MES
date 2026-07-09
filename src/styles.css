@@ -363,7 +363,7 @@ body:has(.op-sheet) .vw{min-width:min-content}
    the zoomed .op-sheet subtree, where every length is re-multiplied by
    the factor at paint time. */
 .op-grid thead th{background:var(--theme-dark);color:var(--theme-on-dark);font-weight:700;height:44px;padding:0 4px;white-space:nowrap;font-size:13px;position:sticky;top:calc(var(--topbar-h,52px)/var(--disp-zoom,1));z-index:4}
-.op-grid th.slot-head{width:var(--slot-w);font-size:12px}
+.op-grid th.slot-head{width:var(--slot-w);font-size:15px}
 .op-grid th.rh{background:rgba(255,255,255,.85);color:var(--theme-on-base);width:200px;text-align:left;padding:0 12px;font-weight:700;position:sticky;left:0;z-index:2;font-size:15px}
 .op-grid thead th.corner{background:var(--theme-dark);color:var(--theme-on-dark);text-align:left;font-size:15px;z-index:6}
 .op-grid tbody tr{height:64px}
