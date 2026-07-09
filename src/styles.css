@@ -105,7 +105,7 @@ body:has(.op-sheet) .vw{min-width:min-content}
 .kpi-stat-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .kpi-stat-value{font-size:clamp(16px,2.2vw,28px);font-weight:800;color:var(--tx);font-variant-numeric:tabular-nums;line-height:1.1;white-space:nowrap}
 .kpi-stat.is-green{border-top-color:var(--gn)}.kpi-stat.is-green .kpi-stat-value{color:#15803d}
-.kpi-stat.is-amber{border-top-color:var(--am)}.kpi-stat.is-amber .kpi-stat-value{color:#b45309}
+.kpi-stat.is-amber{border-top-color:var(--am);background:var(--am-bg)}.kpi-stat.is-amber .kpi-stat-value{color:#854d0e}
 .kpi-stat.is-red{border-top-color:var(--rd)}.kpi-stat.is-red .kpi-stat-value{color:#b91c1c}
 /* Global toggles in the Machine column header. Inherit kpi-toggle for
    look but shave a few px so they sit comfortably next to the "Machine"
@@ -116,7 +116,10 @@ body:has(.op-sheet) .vw{min-width:min-content}
 .kpi-table{background:#fff;font-variant-numeric:tabular-nums;border:0;border-radius:0;overflow:visible}
 .kpi-table td.num,.kpi-table th{white-space:nowrap}
 .kpi-table td.green{color:#15803d;font-weight:800}
-.kpi-table td.amber{color:#b45309;font-weight:800}
+/* Amber gets a filled light-yellow chip (not just orange-brown text,
+   which read as red): the "yellow light" has to be unmistakably yellow
+   and distinct from the red cells. Green / red stay coloured text. */
+.kpi-table td.amber{color:#854d0e;font-weight:800;background:var(--am-bg);box-shadow:inset 0 0 0 1px #fde68a}
 .kpi-table td.red{color:#b91c1c;font-weight:800}
 .kpi-table td.gray{color:var(--mu)}
 /* The small "/expected" companion on a judged Output cell. */
