@@ -181,6 +181,23 @@ export class MemoryDataLayer implements PmdDataLayer {
     this.production = this.production.filter((r) => r.id !== id);
   }
 
+  /** Contract parity with the SharePoint backend: forget a tuple's
+   *  UNSIGNED rows (a browse the worker never confirmed). Signed-off
+   *  rows are the permanent record and are never discarded. */
+  async discardUnconfirmedTuple(
+    machineCode: string,
+    shiftId: string,
+    jobNumber: string,
+  ): Promise<void> {
+    this.production = this.production.filter(
+      (r) =>
+        r.locked ||
+        r.machineCode !== machineCode ||
+        r.shiftId !== shiftId ||
+        r.jobNumber !== jobNumber,
+    );
+  }
+
   async lockShift(
     machineCode: string,
     shiftId: string,

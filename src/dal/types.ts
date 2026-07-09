@@ -100,6 +100,19 @@ export interface PmdDataLayer {
    *  share state in-process (memory DAL). */
   pushLiveSnapshot?(): Promise<void>;
 
+  /** Install the live-mirror gate: pushLiveSnapshot only broadcasts a
+   *  tuple the hook approves. The app wires this to the confirmed-tuple
+   *  registry (core/confirm.ts) so un-confirmed browse artefacts never
+   *  reach PMD_LiveStatus. Optional — in-process backends omit it. */
+  setLiveGate?(gate: (machineCode: string, shiftId: string, jobNumber: string) => boolean): void;
+
+  /** Discard a tuple's local unsigned edits (edit cache) and best-effort
+   *  delete its already-mirrored PMD_LiveStatus row. The operator UI
+   *  calls this when the worker navigates away from a (machine, shift,
+   *  job) they never confirmed — that selection was a browse, not a run,
+   *  and keeping it around is exactly how junk rows were born. Optional. */
+  discardUnconfirmedTuple?(machineCode: string, shiftId: string, jobNumber: string): Promise<void>;
+
   /** Live-mirror health for the on-screen badge: whether this device is
    *  allowed to push, when its last snapshot fully succeeded, and the
    *  last failure's message. Optional — in-process backends omit it. */

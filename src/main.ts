@@ -11,8 +11,16 @@ import {
 } from './ui/supervisor-auth';
 import { toast } from './ui/toast';
 import { currentBuildId, startAutoUpdate } from './ui/auto-update';
+import { isTupleConfirmed } from './core/confirm';
 
 const dal: PmdDataLayer = createDataLayer(import.meta.env as Record<string, string>);
+
+// Live-mirror gate: only tuples the worker CONFIRMED on this device
+// ("this order runs on this press, by these people" — the ✅ button on
+// the operator sheet) are broadcast to PMD_LiveStatus. Wired here, at
+// DAL creation, so the gate also covers app start on a non-operator
+// page with a stale edit cache.
+dal.setLiveGate?.(isTupleConfirmed);
 
 // Which backend got baked in at build time. If this logs "memory" on a
 // deployed page, the build was missing VITE_BACKEND=sharepoint — rebuild

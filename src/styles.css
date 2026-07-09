@@ -257,6 +257,17 @@ body:has(.op-sheet) .vw{min-width:min-content}
 .future-text>span{color:#78350f;font-size:13px;line-height:1.4}
 .future-fix-btn{padding:11px 18px;border:none;border-radius:10px;background:#f59e0b;color:#3b2a06;font-size:15px;font-weight:800;cursor:pointer;min-height:52px;white-space:nowrap}
 .future-fix-btn:active{background:#d97706}
+/* ✅ Confirm-to-start banner — gate between picking a (machine, order,
+   operator, supervisor) and actually logging/mirroring it. Green accent:
+   it's the "go" step, not a warning. */
+.confirm-bar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:#f0fdf4;border:2px solid #16a34a;border-radius:10px;padding:12px 14px}
+.confirm-text{display:flex;flex-direction:column;gap:2px;flex:1 1 320px;min-width:260px}
+.confirm-text>b{color:#166534;font-size:15px}
+.confirm-text>span{color:#14532d;font-size:13px;line-height:1.4}
+.confirm-text i{color:#b45309;font-style:normal;font-weight:700}
+.confirm-btn{padding:11px 18px;border:none;border-radius:10px;background:#16a34a;color:#fff;font-size:15px;font-weight:800;cursor:pointer;min-height:52px;white-space:nowrap}
+.confirm-btn:active{background:#15803d}
+.confirm-btn:disabled{background:#94a3b8;cursor:not-allowed}
 /* ⏰ Shift-ending sign-off reminder — soft nudge in the last 5 min, replaces
    the old block-on-navigation prompt. Blue so it reads as a reminder, not an
    error. */

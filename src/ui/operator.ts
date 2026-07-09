@@ -38,6 +38,7 @@ import { closeModal, escapeHtml, openModal } from './modal';
 import { renderOutputRejectChart } from './charts';
 import { clearSupervisor, isSupervisor } from './supervisor-auth';
 import { isIpadDevice } from '../core/device';
+import { confirmTuple, isTupleConfirmed } from '../core/confirm';
 
 /**
  * Device-class write rule (replaces the old per-device OwnerDevice claim
@@ -1136,28 +1137,42 @@ async function reload(preferLiveJob = false): Promise<void> {
   const orders = shiftOrders();
   if (!S!.selJob) {
     // No selection (fresh view / machine switch): prefer the order the press
-    // is running right now; fall back to the earliest-starting planned order.
+    // is running right now; then the previous shift's unfinished order
+    // (handover inheritance — still needs this crew's ✅ Confirm); fall
+    // back to the earliest-starting planned order.
     const live = liveActiveJob();
     if (live) S!.selJob = live;
-    else if (orders.length) {
-      S!.selJob = orders.slice().sort(compareOrdersByStart)[0].jobNumber;
+    else {
+      const inherited = await prevShiftUnfinishedJob();
+      if (inherited) S!.selJob = inherited;
+      else if (orders.length) {
+        S!.selJob = orders.slice().sort(compareOrdersByStart)[0].jobNumber;
+      }
     }
   } else if (preferLiveJob && !isPastShift()) {
     const touched = S!.prod.some((r) => r.jobNumber === S!.selJob);
     const live = liveActiveJob();
     if (!touched && live && live !== S!.selJob) S!.selJob = live;
   }
+  // Tuples that already carry real data are confirmed by definition —
+  // must run before needsConfirm() gates the automation below.
+  autoConfirmExistingWork();
   hydrateOperatorSupervisor();
-  // Count Start auto-carry: a same-machine/same-job continuation from
-  // the previous shift starts where the previous shift's counter ended
-  // — Day 14000 → Afternoon 14000 (Count Start) → Afternoon 28000 (End)
-  // → Night 28000 (Count Start). Only fires when the operator hasn't
-  // typed anything yet (count Start null on the live shift) and we
-  // have a non-null Count End from the immediately-preceding shift on
-  // the same machine + job.
-  await maybeCarryCountStart();
+  // Start-of-run automation is deferred until the worker confirms the
+  // selection: an unconfirmed browse must leave zero footprint (the
+  // auto-carried Count Start was exactly how junk tuples were born).
+  if (!needsConfirm()) {
+    // Count Start auto-carry: a same-machine/same-job continuation from
+    // the previous shift starts where the previous shift's counter ended
+    // — Day 14000 → Afternoon 14000 (Count Start) → Afternoon 28000 (End)
+    // → Night 28000 (Count Start). Only fires when the operator hasn't
+    // typed anything yet (count Start null on the live shift) and we
+    // have a non-null Count End from the immediately-preceding shift on
+    // the same machine + job.
+    await maybeCarryCountStart();
+  }
   await refreshJobTotal();
-  await seedStatusFromCoRunner();
+  if (!needsConfirm()) await seedStatusFromCoRunner();
   saveView();
   render();
 }
@@ -1201,6 +1216,119 @@ function isReadOnlyDevice(): boolean {
   return !canWriteThisDevice();
 }
 
+// ---------------------------------------------------------------------
+// Confirm flow — "this order really runs on this press, by these people".
+//
+// A live-shift (machine, order) selection starts UNCONFIRMED: the grid is
+// locked, nothing is auto-carried or mirrored, and navigating away
+// discards whatever the browse left behind. The worker picks Operator +
+// Supervisor and taps ✅ Confirm — from then on the tuple is live: grid
+// entry opens, Count Start carries over, and the 60 s mirror broadcasts
+// it to PMD_LiveStatus (main.ts wires the mirror gate to the same
+// registry). An unfinished order inherits onto the next shift's view but
+// needs a fresh confirmation there — each shift's crew vouches for its
+// own line. This is what keeps machine-hopping browses out of the data.
+// ---------------------------------------------------------------------
+
+/** True when the current selection still needs the worker's ✅ Confirm
+ *  before data entry / mirroring. Past shifts (history review), locked
+ *  orders and read-only devices are exempt — the gate is for creating
+ *  NEW live data only. */
+function needsConfirm(): boolean {
+  if (!S!.selJob || isPastShift() || isReadOnlyDevice() || isJobLocked()) return false;
+  return !isTupleConfirmed(S!.mc, sid(), S!.selJob);
+}
+
+/** Mirror of the DAL's hasMeaningfulProgress: real production evidence,
+ *  not just a picked name. */
+function rowHasProgress(r: ProductionRecord): boolean {
+  if (r.statusCode) return true;
+  if (r.countStart != null || r.countEnd != null || r.purgeKg != null) return true;
+  if (r.rejectCount > 0 || (r.rejects && r.rejects !== '{}')) return true;
+  const note = (r.handoverNote ?? '').trim();
+  return !!note && note !== '{}';
+}
+
+/**
+ * Grandfather clause, run on every reload: any job on this (machine,
+ * shift) that ALREADY carries real production data is treated as
+ * confirmed. Covers tuples created before the confirm flow shipped,
+ * tuples authored by another device (someone else already vouched), and
+ * signed-then-unlocked corrections — without it, deploying the gate
+ * would freeze every in-flight shift on the floor.
+ */
+function autoConfirmExistingWork(): void {
+  const byJob = new Map<string, boolean>();
+  for (const r of S!.prod) {
+    if (!r.jobNumber) continue;
+    byJob.set(r.jobNumber, (byJob.get(r.jobNumber) ?? false) || rowHasProgress(r));
+  }
+  for (const [job, has] of byJob) {
+    if (has && !isTupleConfirmed(S!.mc, sid(), job)) confirmTuple(S!.mc, sid(), job);
+  }
+}
+
+/** Before navigating away from an unconfirmed selection, drop whatever
+ *  the browse wrote (staged names, legacy junk) so it can never be
+ *  mirrored later. No-op when the tuple is confirmed or has no job. */
+function discardIfUnconfirmed(): void {
+  if (!needsConfirm()) return;
+  void dalRef
+    .discardUnconfirmedTuple?.(S!.mc, sid(), S!.selJob)
+    .catch((e) => console.warn('[pmd] unconfirmed-tuple discard failed', e));
+  // Keep the in-memory rows consistent with the discarded cache.
+  S!.prod = S!.prod.filter((r) => r.locked || r.jobNumber !== S!.selJob);
+}
+
+/**
+ * Shift handover inheritance: when a fresh (unconfirmed, empty) live
+ * shift opens with no live job of its own, offer the job the SAME press
+ * was running at the end of the PREVIOUS shift — provided it's still
+ * selectable (in planning ⇒ not complete). The worker still has to
+ * ✅ Confirm it, which is the "inherits but must be re-confirmed" rule.
+ */
+async function prevShiftUnfinishedJob(): Promise<string> {
+  if (isPastShift() || isFutureShift()) return '';
+  const prevSid = previousShift(sid());
+  if (!prevSid) return '';
+  try {
+    const rows = await dalRef.listProduction({ machineCode: S!.mc, shiftId: prevSid });
+    let best = '';
+    let bestSlot = -1;
+    for (const r of rows) {
+      if (!r.statusCode || !r.jobNumber) continue;
+      if (r.slotIndex > bestSlot) {
+        bestSlot = r.slotIndex;
+        best = r.jobNumber;
+      }
+    }
+    if (!best) return '';
+    return shiftOrders().some((o) => o.jobNumber === best) ? best : '';
+  } catch (e) {
+    console.warn('[pmd] prev-shift job inheritance lookup failed', e);
+    return '';
+  }
+}
+
+/** The ✅ Confirm tap: requires Operator AND Supervisor picked, writes
+ *  them onto the canonical slot, marks the tuple confirmed, then lets
+ *  the deferred start-of-run automation (Count Start carry, co-run
+ *  seed) run via reload. */
+async function confirmCurrentTuple(): Promise<void> {
+  if (!needsConfirm()) return;
+  if (!S!.selOperator || !S!.selSupervisor) {
+    toast('Pick Operator AND Supervisor first — the confirmation records who is running this order', 'warn');
+    return;
+  }
+  confirmTuple(S!.mc, sid(), S!.selJob);
+  await upsertSlotNoReload(0, (r) => {
+    r.operator = S!.selOperator;
+    r.supervisor = S!.selSupervisor;
+  });
+  toast(`Confirmed — ${S!.selJob} on ${S!.mc}, ${S!.selOperator}`, 'ok');
+  await reload();
+}
+
 /**
  * Operator / Supervisor always mirror the selected (machine, shift, job)
  * tuple's canonical slot-0 record — never a selection left over from a
@@ -1218,6 +1346,10 @@ function isReadOnlyDevice(): boolean {
  */
 function hydrateOperatorSupervisor(): void {
   const c = canonical();
+  // Unconfirmed tuple: names are STAGED locally (nothing written yet, so
+  // canonical is empty) — keep whatever the worker just picked so the
+  // reload between pick and ✅ Confirm doesn't blank the dropdowns.
+  if (needsConfirm() && !c?.operator && !c?.supervisor) return;
   S!.selOperator = c?.operator ?? '';
   S!.selSupervisor = c?.supervisor ?? '';
 }
@@ -1735,7 +1867,9 @@ function buildGrid(): string {
     ? ' disabled title="Read only — sign in as supervisor to edit"'
     : isJobLocked()
       ? ' disabled title="Signed off — sign in as supervisor and Unlock to edit"'
-      : '';
+      : needsConfirm()
+        ? ' disabled title="Tap ✅ Confirm above to start logging this order on this press"'
+        : '';
   // In reopened-for-correction mode, reject inputs are editable only on the
   // already-signed slots — an empty slot can't sprout rejects any more than it
   // can sprout a status letter.
@@ -1807,12 +1941,14 @@ function buildSide(): string {
   // on the side panel is rendered read-only so the operator can't
   // accidentally type into a frozen shift — supervisor mode re-enables
   // them via the Unlock flow. Title tooltips explain what changed.
-  const rdo = isJobLocked() || isReadOnlyDevice() ? 'disabled' : '';
+  const rdo = isJobLocked() || isReadOnlyDevice() || needsConfirm() ? 'disabled' : '';
   const rdoTitle = isReadOnlyDevice()
     ? ' title="Read only — sign in as supervisor to edit"'
     : isJobLocked()
       ? ' title="Signed off — sign in as supervisor and Unlock to edit"'
-      : '';
+      : needsConfirm()
+        ? ' title="Tap ✅ Confirm above to start logging this order on this press"'
+        : '';
   // Shift Target: pieces the operator should aim for this shift. See
   // shiftTarget() for the rule — either a full 8h run at cycle time, or
   // just the remainder of the job if it'll finish in under 8h.
@@ -1840,7 +1976,13 @@ function buildSide(): string {
     <div class="photos">
       <div class="photos-title">📷 Photos</div>
       <div class="photo-strip" data-photo-strip></div>
-      <button type="button" class="photo-take" data-photo-take ${isReadOnlyDevice() ? 'disabled title="Read only — sign in as supervisor to add photos"' : ''}>📷 Take photo</button>
+      <button type="button" class="photo-take" data-photo-take ${
+        isReadOnlyDevice()
+          ? 'disabled title="Read only — sign in as supervisor to add photos"'
+          : needsConfirm()
+            ? 'disabled title="Tap ✅ Confirm above to start logging this order on this press"'
+            : ''
+      }>📷 Take photo</button>
       <input type="file" accept="image/*" capture="environment" data-photo-file hidden>
     </div>
     <div class="handover">
@@ -2121,6 +2263,35 @@ function buildLockBanner(): string {
  * running shift and offers a one-tap jump to it, so this morning's work lands
  * on yesterday's Night (the shift that actually ran) instead of tonight's.
  */
+/**
+ * The ✅ Confirm banner — shown while the live selection is unconfirmed.
+ * Names what's being vouched for (order + press + shift + people) and
+ * carries the single Confirm button; it disappears once confirmed. The
+ * button stays disabled until BOTH Operator and Supervisor are picked in
+ * the meta row above, so a confirmation always records who ran the line.
+ */
+function buildConfirmBar(): string {
+  if (!needsConfirm()) return '';
+  const o = selectedOrder();
+  const ready = !!S!.selOperator && !!S!.selSupervisor;
+  const people = `${S!.selOperator ? escapeHtml(S!.selOperator) : '<i>pick operator</i>'} · ${
+    S!.selSupervisor ? escapeHtml(S!.selSupervisor) : '<i>pick supervisor</i>'
+  }`;
+  return `<div class="confirm-bar">
+    <div class="confirm-text">
+      <b>Confirm to start logging</b>
+      <span><b>${escapeHtml(S!.selJob)}</b>${
+        o?.partDescription ? ' — ' + escapeHtml(o.partDescription) : ''
+      } on <b>${escapeHtml(S!.mc)}</b> · ${escapeHtml(S!.shiftCode)} · ${people}</span>
+    </div>
+    <button type="button" class="confirm-btn" data-confirm-tuple${
+      ready
+        ? ''
+        : ' disabled title="Pick Operator and Supervisor in the row above first"'
+    }>✅ Confirm &amp; start</button>
+  </div>`;
+}
+
 function buildFutureShiftBanner(): string {
   if (!isFutureShift()) return '';
   const running = currentShift(new Date());
@@ -2172,6 +2343,7 @@ function render(): void {
     ${buildReopenedBanner()}
     ${buildLockBanner()}
     ${buildMeta()}
+    ${buildConfirmBar()}
     ${detail}
   </div>`;
   // After the sheet exists in the DOM: auto-fit needs to measure the real
@@ -2229,7 +2401,8 @@ function wire(): void {
       // Switching shift is free — the floor asked NOT to be blocked on every
       // navigation. Sign-off discipline is now a soft reminder in the last
       // 5 min of the shift (see buildSignoffReminderBanner) rather than a
-      // gate on leaving.
+      // gate on leaving. Unconfirmed browses are dropped on the way out.
+      discardIfUnconfirmed();
       S!.shiftCode = next;
       void reload();
     }),
@@ -2241,6 +2414,7 @@ function wire(): void {
       const sid = row.dataset.jumpShift!;
       const m = /^(\d{4})-(\d{2})-(\d{2})-(Day|Afternoon|Night)$/.exec(sid);
       if (!m) return;
+      discardIfUnconfirmed();
       S!.viewDate = new Date(+m[1], +m[2] - 1, +m[3]);
       S!.shiftCode = m[4] as ShiftCode;
       S!.viewLevel = 1;
@@ -2260,6 +2434,7 @@ function wire(): void {
     btn.addEventListener('click', () => {
       const j = btn.dataset.corunJump;
       if (!j || j === S!.selJob) return;
+      discardIfUnconfirmed();
       S!.selJob = j;
       saveView();
       void reload();
@@ -2323,6 +2498,10 @@ function wire(): void {
   // their place in the grid).
   app.querySelectorAll<HTMLButtonElement>('[data-qc-slot]').forEach((b) =>
     b.addEventListener('click', () => {
+      if (needsConfirm()) {
+        toast('Tap ✅ Confirm first — order, press, operator & supervisor', 'warn');
+        return;
+      }
       const slot = Number(b.dataset.qcSlot);
       if (Number.isFinite(slot)) openQcPicker(slot);
     }),
@@ -2332,10 +2511,14 @@ function wire(): void {
   // ⚠ Future-shift fix — jump straight to the shift running now (the night
   // that's actually in progress). No sign-off gate: the whole point is to get
   // out of the mis-dated shift, where nothing legitimate should be entered.
+  app
+    .querySelector<HTMLButtonElement>('[data-confirm-tuple]')
+    ?.addEventListener('click', () => void confirmCurrentTuple());
   app.querySelector('[data-jump-live]')?.addEventListener('click', () => {
     const cs = currentShift(new Date());
     const p = parseShiftId(cs.shiftId);
     if (!p) return;
+    discardIfUnconfirmed();
     S!.viewDate = new Date(p.year, p.month - 1, p.day);
     S!.shiftCode = p.code;
     summaryCache = null;
@@ -2405,6 +2588,7 @@ function onMetaChange(el: HTMLElement): void {
     case 'date': {
       const d = new Date(val);
       if (!isNaN(d.getTime())) {
+        discardIfUnconfirmed();
         d.setHours(0, 0, 0, 0);
         S!.viewDate = d;
         void reload();
@@ -2414,6 +2598,9 @@ function onMetaChange(el: HTMLElement): void {
     case 'machine':
       // Free to switch presses — no sign-off gate on navigation (the floor
       // found it too aggressive). The shift-end reminder covers discipline.
+      // An unconfirmed selection is discarded on the way out: that browse
+      // never happened as far as the data is concerned.
+      discardIfUnconfirmed();
       S!.mc = val;
       // Machine change does clear selJob: a different press generally runs
       // a different order, and carrying the previous job number across
@@ -2426,6 +2613,7 @@ function onMetaChange(el: HTMLElement): void {
       // Switching orders is free — the floor asked not to be blocked when
       // moving between jobs. Job Left discipline is handled by the shift-end
       // sign-off reminder instead of a gate here.
+      discardIfUnconfirmed();
       S!.selJob = val;
       saveView();
       // Full reload, not just render(): Job Left / Total Good and the
@@ -2437,6 +2625,12 @@ function onMetaChange(el: HTMLElement): void {
     case 'operator':
       S!.selOperator = val;
       saveView();
+      // Pre-confirm the name is only STAGED — the confirm tap writes it.
+      // Writing here would recreate the junk the confirm flow prevents.
+      if (needsConfirm()) {
+        render();
+        break;
+      }
       void upsertSlot(0, (r) => {
         r.operator = val;
       });
@@ -2444,6 +2638,10 @@ function onMetaChange(el: HTMLElement): void {
     case 'supervisor':
       S!.selSupervisor = val;
       saveView();
+      if (needsConfirm()) {
+        render();
+        break;
+      }
       void upsertSlot(0, (r) => {
         r.supervisor = val;
       });
@@ -2451,6 +2649,11 @@ function onMetaChange(el: HTMLElement): void {
     case 'purge':
     case 'cstart':
     case 'cend': {
+      if (needsConfirm()) {
+        toast('Tap ✅ Confirm first — order, press, operator & supervisor', 'warn');
+        render();
+        break;
+      }
       // Same race-protection as the handover textareas — a full reload
       // after each blur destroys the focused input the operator is
       // typing into next, e.g. tabbing from Count Start straight into
@@ -2475,6 +2678,11 @@ function onMetaChange(el: HTMLElement): void {
       break;
     }
     case 'cavity': {
+      if (needsConfirm()) {
+        toast('Tap ✅ Confirm first — order, press, operator & supervisor', 'warn');
+        render();
+        break;
+      }
       // Cavities dropdown: parts produced per press cycle. Validate against the
       // allowed set, falling back to 1. Persist on the canonical slot, then
       // re-render so Total Good / Job Left / Shift Target and the ×N tag all
@@ -2489,6 +2697,10 @@ function onMetaChange(el: HTMLElement): void {
     case 'hand-mold':
     case 'hand-material':
     case 'hand-method': {
+      if (needsConfirm()) {
+        toast('Tap ✅ Confirm first — order, press, operator & supervisor', 'warn');
+        break;
+      }
       const field = key.slice('hand-'.length) as 'machine' | 'mold' | 'material' | 'method';
       // Skip reload: a full re-render would destroy the textarea the operator
       // just tabbed into, losing whatever they're typing there.
@@ -2689,6 +2901,10 @@ function wireStatusPicker(): void {
     }
     if (isReadOnlyDevice()) {
       toast('Read only — sign in as supervisor to edit', 'warn');
+      return;
+    }
+    if (needsConfirm()) {
+      toast('Tap ✅ Confirm first — confirm the order, press, operator & supervisor to start logging', 'warn');
       return;
     }
     // Reopened-for-correction: only the already-signed slots are editable.
@@ -2976,6 +3192,10 @@ async function endOrderAndSignoff(): Promise<void> {
   }
   if (isJobLocked()) {
     toast('Order signed off — Unlock as supervisor to edit', 'warn');
+    return;
+  }
+  if (needsConfirm()) {
+    toast('Tap ✅ Confirm first — order, press, operator & supervisor', 'warn');
     return;
   }
   // In reopened-for-correction mode the order already ran and was signed —

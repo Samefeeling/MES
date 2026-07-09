@@ -308,6 +308,10 @@ export class SharePointDataLayer implements PmdDataLayer {
   private readonly siteUrl: string;
   private readonly planningCsvPath?: string;
   private readonly canWriteHook: () => boolean;
+  /** Live-mirror gate (setLiveGate) — pushLiveSnapshot skips any tuple
+   *  the hook rejects. null = no gate (mirror everything dirty). */
+  private liveGate: ((machineCode: string, shiftId: string, jobNumber: string) => boolean) | null =
+    null;
   private readonly F: SharePointFieldMap;
 
   /**
@@ -2074,6 +2078,33 @@ export class SharePointDataLayer implements PmdDataLayer {
     };
   }
 
+  setLiveGate(gate: (machineCode: string, shiftId: string, jobNumber: string) => boolean): void {
+    this.liveGate = gate;
+  }
+
+  /**
+   * Forget a tuple the worker never confirmed: drop its editCache entry +
+   * authorship mark so the 60 s mirror can't re-broadcast it, and
+   * best-effort delete any PMD_LiveStatus row an earlier tick already
+   * pushed. This is the "unconfirmed cache is cleared" half of the
+   * confirm flow — signed-off PMD_Production rows are never touched.
+   */
+  async discardUnconfirmedTuple(
+    machineCode: string,
+    shiftId: string,
+    jobNumber: string,
+  ): Promise<void> {
+    const key = this.cacheKey(machineCode, shiftId, jobNumber);
+    // An unlock-edit window holds REAL signed data rehydrated for
+    // correction — never discard that, whatever the confirm registry says.
+    if (this.unlockedTuples.has(key)) return;
+    if (this.editCache.delete(key)) {
+      this.dirtyTuples.delete(key);
+      this.persistEditCache();
+    }
+    await this.deleteLiveRow(machineCode, shiftId, jobNumber);
+  }
+
   async pushLiveSnapshot(): Promise<void> {
     if (this.editCache.size === 0) {
       // Nothing to push is a healthy state — the mirror loop ran.
@@ -2125,6 +2156,10 @@ export class SharePointDataLayer implements PmdDataLayer {
       if (!canon) continue;
       const [machineCode, shiftId, jobNumber] = key.split('|');
       if (!machineCode || !shiftId || !jobNumber) continue;
+      // Confirm gate: only a tuple the worker explicitly confirmed
+      // ("this order really runs on this press, by these people") is
+      // broadcast. Browse artefacts stay local until discarded.
+      if (this.liveGate && !this.liveGate(machineCode, shiftId, jobNumber)) continue;
       // Never mirror a shift that is well over. PMD_LiveStatus is an
       // IN-PROGRESS board; an old un-signed-off tuple that is still
       // sitting in THIS device's localStorage editCache (e.g. an
