@@ -242,14 +242,10 @@ subfolder). Hard-refresh (Ctrl+F5) after replacing — filenames are
 hash-free so the browser caches them.
 
 **iPad full-screen**: the overlay reclaims the SharePoint chrome. To also
-hide the browser chrome (address bar / tab strip), tap the **⛶ Full
-screen** button in the app's top bar — it uses the Fullscreen API and
-only appears when the browser supports it. Note: on iOS every browser
-(Edge included) is a WebKit shell, and some of those shells don't enable
-element fullscreen — if ⛶ doesn't appear in Edge on the iPad, fall back
-to **Safari → Share → Add to Home Screen** (opens standalone with no
-browser chrome), or for a locked-down floor tablet use **iPad Settings →
-Accessibility → Guided Access** (triple-click to lock to the page).
+hide the Edge/Safari browser chrome, open the page in **Safari → Share →
+Add to Home Screen**, or for a locked-down floor tablet use **iPad
+Settings → Accessibility → Guided Access** (triple-click to lock to the
+page).
 
 > **Stable filenames**: `vite.config.ts` emits `assets/index.js` and
 > `assets/index.css` (no hash) so the SiteAssets URLs stay valid after

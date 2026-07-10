@@ -134,51 +134,6 @@ function parseRoute(): Route {
   return { view: 'operator' };
 }
 
-// ---------------------------------------------------------------------
-// Fullscreen toggle (⛶ in the top bar). Hides the browser chrome —
-// address bar / tab strip — the only chrome left once the SPFx overlay
-// has covered SharePoint's. Every iOS browser (Edge included) is a
-// WebKit shell where element fullscreen is the webkit-prefixed API, so
-// both spellings are handled. Feature-detected: when the host WebView
-// doesn't enable the API at all, the button never renders and the
-// fallback stays Add to Home Screen / Guided Access (DEPLOYMENT.md § B).
-type FsDocument = Document & {
-  webkitFullscreenEnabled?: boolean;
-  webkitFullscreenElement?: Element | null;
-  webkitExitFullscreen?: () => void;
-};
-type FsElement = HTMLElement & { webkitRequestFullscreen?: () => void };
-
-function fullscreenSupported(): boolean {
-  const d = document as FsDocument;
-  return document.fullscreenEnabled === true || d.webkitFullscreenEnabled === true;
-}
-function fullscreenActive(): boolean {
-  const d = document as FsDocument;
-  return Boolean(document.fullscreenElement ?? d.webkitFullscreenElement);
-}
-function toggleFullscreen(): void {
-  const d = document as FsDocument;
-  if (fullscreenActive()) {
-    if (document.exitFullscreen) void document.exitFullscreen().catch(() => {});
-    else d.webkitExitFullscreen?.();
-    return;
-  }
-  const root = document.documentElement as FsElement;
-  if (root.requestFullscreen) {
-    void root
-      .requestFullscreen()
-      .catch(() => toast('Full screen was blocked by the browser', 'err'));
-  } else {
-    root.webkitRequestFullscreen?.();
-  }
-}
-// Re-render the nav on every fullscreen transition — including Esc / the
-// system swipe, which never go through the button — so the label tracks
-// the real state.
-document.addEventListener('fullscreenchange', () => ensureNav());
-document.addEventListener('webkitfullscreenchange', () => ensureNav());
-
 // The top-nav links are baked into the SPFx shell's static HTML (in the
 // .sppkg), so a shell packaged before a view was added (e.g. KPIs) won't
 // show its link. Re-render the nav from the app on boot so new views are
@@ -201,20 +156,10 @@ function ensureNav(): void {
     '<a href="#/kpi" data-nav>\u{1F4CA} KPIs</a>' +
     `<button type="button" class="nav-btn sv-toggle${sv ? ' on' : ''}" data-supervisor title="${
       sv ? 'Supervisor mode is on — tap to sign out' : 'Sign in as supervisor to unlock signed-off shifts'
-    }">${sv ? '🔒 Supervisor (on)' : '🔓 Supervisor'}</button>` +
-    (fullscreenSupported()
-      ? `<button type="button" class="nav-btn fs-toggle" data-fullscreen title="${
-          fullscreenActive()
-            ? 'Exit full screen'
-            : 'Full screen — hides the browser address bar'
-        }">${fullscreenActive() ? '⛶ Exit' : '⛶ Full screen'}</button>`
-      : '');
+    }">${sv ? '🔒 Supervisor (on)' : '🔓 Supervisor'}</button>`;
   nav
     .querySelector<HTMLButtonElement>('[data-supervisor]')
     ?.addEventListener('click', onSupervisorClick);
-  nav
-    .querySelector<HTMLButtonElement>('[data-fullscreen]')
-    ?.addEventListener('click', toggleFullscreen);
 }
 
 function onSupervisorClick(): void {
