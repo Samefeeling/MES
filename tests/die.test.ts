@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { aggregateDies, buildDieTrend, dieHealth } from '../src/core/die';
+import {
+  aggregateDies,
+  buildDieTrend,
+  dieHealth,
+  dieServiceStatus,
+  machineTonnage,
+  serviceIntervalFor,
+} from '../src/core/die';
 import { MemoryDataLayer } from '../src/dal/memory';
 import type { DieMaintenanceRequest, ProductDieColor } from '../src/types';
 import { rec } from './helpers';
@@ -80,8 +87,8 @@ describe('aggregateDies', () => {
     expect(d2.rejectPct).toBeNull();
     // Per-day series for the trend sparkline, day-ascending.
     expect(d1.daily).toEqual([
-      { day: '2026-07-08', rejects: 4, pieces: 200 },
-      { day: '2026-07-09', rejects: 0, pieces: 50 },
+      { day: '2026-07-08', rejects: 4, pieces: 200, shots: 100 },
+      { day: '2026-07-09', rejects: 0, pieces: 50, shots: 50 },
     ]);
   });
 
@@ -117,6 +124,78 @@ describe('aggregateDies', () => {
     expect(dies[0].dieNumber).toBe('DIE-2');
     expect(dies[0].openRequests).toBe(1);
     expect(dies[1].dieNumber).toBe('DIE-1');
+  });
+});
+
+describe('tonnage service rule', () => {
+  it('parses tonnage from machine codes (T and C suffixes, none for lines)', () => {
+    expect(machineTonnage('850T')).toBe(850);
+    expect(machineTonnage('320C')).toBe(320);
+    expect(machineTonnage('1600T')).toBe(1600);
+    expect(machineTonnage('Batt1')).toBeNull();
+    expect(machineTonnage('HS')).toBeNull();
+  });
+
+  it('maps tonnages onto the service-interval bands', () => {
+    expect(serviceIntervalFor(125).shots).toBe(100_000); // 100T-150T
+    expect(serviceIntervalFor(320).shots).toBe(50_000); // 210T-350T
+    expect(serviceIntervalFor(550).shots).toBe(20_000); // 450T-560T
+    expect(serviceIntervalFor(850).shots).toBe(10_000); // 650T-850T
+    expect(serviceIntervalFor(1000).shots).toBe(8_000); // 1000T+
+    expect(serviceIntervalFor(1600).shots).toBe(8_000); // extended band
+  });
+
+  it('counts shots since the last DONE service and flags soon/due', () => {
+    const master = [dc('P-A', 'DIE-1')];
+    const mkRec = (day: string, shots: number) =>
+      rec({
+        machineCode: '850T',
+        shiftId: `${day}-Day`,
+        jobNumber: `J${day}`,
+        slotIndex: 0,
+        statusCode: 'R',
+        partNumber: 'P-A',
+        countStart: 0,
+        countEnd: shots,
+      });
+    // 6k shots before the service, 9k after → counter must read 9k.
+    const records = [mkRec('2026-07-01', 6000), mkRec('2026-07-05', 4000), mkRec('2026-07-08', 5000)];
+    const done = req({
+      id: 9,
+      dieNumber: 'DIE-1',
+      status: 'done',
+      closedAt: '2026-07-02T10:00:00Z',
+    });
+    const [d1] = aggregateDies(master, records, [done]);
+    const s = dieServiceStatus(d1, [done])!;
+    expect(s.intervalShots).toBe(10_000); // 850T band
+    expect(s.shotsSince).toBe(9000);
+    expect(s.sinceIsService).toBe(true);
+    expect(s.since).toBe('2026-07-02');
+    expect(s.level).toBe('soon'); // 90% of 10k
+
+    // No completed service → counts everything, flagged as window-start.
+    const s2 = dieServiceStatus(d1, [])!;
+    expect(s2.shotsSince).toBe(15_000);
+    expect(s2.sinceIsService).toBe(false);
+    expect(s2.level).toBe('due');
+  });
+
+  it('uses the STRICTEST band among the presses the die ran on and skips no-rule lines', () => {
+    const master = [dc('P-A', 'DIE-1'), dc('P-B', 'DIE-2')];
+    const records = [
+      // DIE-1 ran on 125T (100k rule) AND 1600T (8k rule) → 8k governs.
+      rec({ machineCode: '125T', shiftId: '2026-07-08-Day', jobNumber: 'J1', slotIndex: 0, statusCode: 'R', partNumber: 'P-A', countStart: 0, countEnd: 5000 }),
+      rec({ machineCode: '1600T', shiftId: '2026-07-09-Day', jobNumber: 'J2', slotIndex: 0, statusCode: 'R', partNumber: 'P-A', countStart: 0, countEnd: 4000 }),
+      // DIE-2 only ran on Batt1 → no tonnage rule → null.
+      rec({ machineCode: 'Batt1', shiftId: '2026-07-09-Day', jobNumber: 'J3', slotIndex: 0, statusCode: 'R', partNumber: 'P-B', countStart: 0, countEnd: 9999 }),
+    ];
+    const dies = aggregateDies(master, records, []);
+    const s1 = dieServiceStatus(dies.find((d) => d.dieNumber === 'DIE-1')!, [])!;
+    expect(s1.intervalShots).toBe(8_000);
+    expect(s1.press).toBe('1600T');
+    expect(s1.level).toBe('due'); // 9k ≥ 8k
+    expect(dieServiceStatus(dies.find((d) => d.dieNumber === 'DIE-2')!, [])).toBeNull();
   });
 });
 

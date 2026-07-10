@@ -20,8 +20,10 @@ import {
   aggregateDies,
   buildDieTrend,
   dieHealth,
+  dieServiceStatus,
   MAINTENANCE_CONTACTS,
   type DieAgg,
+  type DieServiceStatus,
 } from '../core/die';
 import { closeModal, escapeHtml, openModal } from './modal';
 import { toast } from './toast';
@@ -77,6 +79,26 @@ const PRIORITY_LABELS: Record<MaintPriority, string> = {
   high: 'High',
   urgent: 'URGENT',
 };
+
+/** Mango's plant-equipment maintenance request form — the system the
+ *  toolroom actually works out of. Until the API integration lands, the
+ *  flow is: raise the request here (the PMD record), then open Mango via
+ *  this link and paste the ticket id back with "+ Mango #". */
+const MANGO_REQUEST_URL = 'https://my.mangolive.com/plant-equipment/request-maintenance';
+const mangoLink = (label: string, cls = ''): string =>
+  `<a class="die-mango-open${cls ? ' ' + cls : ''}" href="${MANGO_REQUEST_URL}" target="_blank" rel="noopener" title="Open Mango — Request Maintenance (new tab)">🥭 ${label} ↗</a>`;
+
+/** Service-rule position for a die (memoised per render pass). */
+function svcFor(d: DieAgg): DieServiceStatus | null {
+  return dieServiceStatus(d, S!.requests);
+}
+
+function svcTitle(s: DieServiceStatus): string {
+  const sinceTxt = s.sinceIsService
+    ? `since service on ${s.since}`
+    : `since ${s.since} (window start — no completed service on record, so this is AT LEAST)`;
+  return `${s.shotsSince.toLocaleString()} shots ${sinceTxt} · rule ${s.bandLabel}: service every ${s.intervalShots.toLocaleString()} shots (strictest press it ran: ${s.press}) · ${(s.pct * 100).toFixed(0)}% of interval`;
+}
 
 function isoDay(d: Date): string {
   const y = d.getFullYear();
@@ -167,10 +189,12 @@ function renderBody(): string {
   const open = S!.requests.filter((r) => r.status !== 'done');
   const active = S!.dies.filter((d) => d.runs > 0).length;
   const attention = S!.dies.filter((d) => dieHealth(d.rejectPct) === 'red').length;
+  const svcDue = S!.dies.filter((d) => svcFor(d)?.level === 'due').length;
   const chips = `<div class="die-chips">
     <span class="die-chip">Dies <b>${S!.dies.length}</b></span>
     <span class="die-chip">Ran in window <b>${active}</b></span>
     <span class="die-chip${attention ? ' is-bad' : ''}">High reject <b>${attention}</b></span>
+    <span class="die-chip${svcDue ? ' is-bad' : ''}" title="Past the tonnage service rule (100-150T: 100k · 210-350T: 50k · 450-560T: 20k · 650-850T: 10k · 1000T+: 8k shots)">Service due <b>${svcDue}</b></span>
     <span class="die-chip${open.length ? ' is-warn' : ''}">Open requests <b>${open.length}</b></span>
   </div>`;
   return `${chips}${renderDieTable()}${renderRequests()}`;
@@ -262,9 +286,16 @@ function renderDieTable(): string {
             `<span class="die-defect" title="${escapeHtml(rejLabel(x.code))}">${escapeHtml(x.code)}×${x.qty}</span>`,
         )
         .join(' ');
-      const maint = d.openRequests
-        ? `<span class="die-maint-badge">🛠 ${d.openRequests}</span>`
-        : '';
+      const svc = svcFor(d);
+      const svcBadge =
+        svc && svc.level !== 'ok'
+          ? `<span class="die-svc-badge ${svc.level}" title="${escapeHtml(svcTitle(svc))}">${
+              svc.level === 'due' ? '🔧 Service due' : '⏳ Service soon'
+            }</span>`
+          : '';
+      const maint =
+        (d.openRequests ? `<span class="die-maint-badge">🛠 ${d.openRequests}</span>` : '') +
+        svcBadge;
       const partsTip = d.parts
         .map((p) => `${p.partNumber}${p.name ? ` (${p.name})` : ''}`)
         .join(', ');
@@ -323,7 +354,7 @@ function renderDieTable(): string {
 
 function renderRequests(): string {
   if (S!.requests.length === 0) {
-    return `<div class="die-req-section"><h3>🛠 Maintenance Requests</h3>
+    return `<div class="die-req-section"><h3>🛠 Maintenance Requests ${mangoLink('Mango', 'sm')}</h3>
       <div class="trace-empty">No maintenance requests yet. Tap 📝 on a die (or the button above) to raise one.</div></div>`;
   }
   const order: Record<MaintStatus, number> = { open: 0, 'in-progress': 1, done: 2 };
@@ -362,7 +393,7 @@ function renderRequests(): string {
       </div>`;
     })
     .join('');
-  return `<div class="die-req-section"><h3>🛠 Maintenance Requests</h3>${rows}</div>`;
+  return `<div class="die-req-section"><h3>🛠 Maintenance Requests ${mangoLink('Mango', 'sm')}</h3>${rows}</div>`;
 }
 
 // ---------------------------------------------------------------------
@@ -395,6 +426,32 @@ function trendChart(d: DieAgg): string {
     })
     .join('');
   return `<div class="die-trend-lg">${bars}</div>`;
+}
+
+/** Preventive-maintenance position in the detail popup: the governing
+ *  tonnage rule, shots since the counter start, and a progress bar that
+ *  goes amber at 80% and red past the interval. */
+function renderServiceSection(d: DieAgg): string {
+  const s = svcFor(d);
+  const rule =
+    '100-150T: 100k · 210-350T: 50k · 450-560T: 20k · 650-850T: 10k · 1000T+: 8k shots';
+  if (!s) {
+    return `<h4>Service (tonnage rule)</h4>
+      <div class="die-svc-none">No shot-based rule applies — the die didn't run on a tonnage press in this window. Rule: ${rule}.</div>`;
+  }
+  const pctTxt = `${(s.pct * 100).toFixed(0)}%`;
+  const width = Math.min(100, Math.round(s.pct * 100));
+  const sinceTxt = s.sinceIsService
+    ? `since service on <b>${escapeHtml(s.since)}</b>`
+    : `since <b>${escapeHtml(s.since)}</b> (window start — no completed service on record, so at least)`;
+  return `<h4>Service (tonnage rule)</h4>
+    <div class="die-svc-line ${s.level}">
+      <span>Rule <b>every ${s.intervalShots.toLocaleString()} shots</b> (${escapeHtml(s.bandLabel)} — strictest press: ${escapeHtml(s.press)})
+      · <b>${s.shotsSince.toLocaleString()}</b> shots ${sinceTxt}</span>
+      <span class="die-svc-bar" title="${escapeHtml(svcTitle(s))}"><i class="${s.level}" style="width:${width}%"></i></span>
+      <b class="die-svc-pct ${s.level}">${pctTxt}</b>
+      ${s.level === 'due' ? '<span class="die-svc-flag">🔧 SERVICE DUE</span>' : s.level === 'soon' ? '<span class="die-svc-flag soon">⏳ approaching</span>' : ''}
+    </div>`;
 }
 
 function openDieDetail(dieNumber: string): void {
@@ -452,6 +509,7 @@ function openDieDetail(dieNumber: string): void {
       <span>Machines <b>${escapeHtml(d.machines.join(', ') || '—')}</b></span>
       <span>Last run <b>${escapeHtml(d.lastRun || '—')}</b></span>
     </div>
+    ${renderServiceSection(d)}
     <h4>Defect trend (${escapeHtml(S!.from)} → ${escapeHtml(S!.to)})</h4>
     ${trendChart(d)}
     <h4>Defects by code</h4>
@@ -481,7 +539,9 @@ function openRequestForm(dieNumber?: string): void {
       (d) =>
         `<option value="${escapeHtml(d.dieNumber)}"${
           d.dieNumber === dieNumber ? ' selected' : ''
-        }>${escapeHtml(d.dieNumber)}${d.category ? ` — ${escapeHtml(d.category)}` : ''}</option>`,
+        }>${escapeHtml(d.dieNumber)}${
+          d.description || d.category ? ` — ${escapeHtml(d.description || d.category)}` : ''
+        }</option>`,
     )
     .join('');
   const contactOpts = MAINTENANCE_CONTACTS.map(
@@ -523,7 +583,8 @@ function openRequestForm(dieNumber?: string): void {
       <label>Contact (to)<select data-rf="contact">${contactOpts}</select></label>
       <label>Requested by<select data-rf="by"><option value="">— name —</option>${byOpts}</select></label>
     </div>
-    <div class="bd-actions">
+    <div class="bd-actions die-req-actions">
+      ${mangoLink('Request in Mango')}
       <button class="btn-ghost-big" data-mod="close2">Cancel</button>
       <button class="btn-primary-big" data-rf-save>Send Request</button>
     </div>

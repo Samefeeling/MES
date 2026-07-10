@@ -60,9 +60,105 @@ export interface DieAgg {
   /** Open / in-progress maintenance requests against this die. */
   openRequests: number;
   /** Per-day usage inside the window, day-ascending — the raw series the
-   *  defect-trend sparkline buckets (see buildDieTrend). Days with no
-   *  production simply don't appear here. */
-  daily: Array<{ day: string; rejects: number; pieces: number }>;
+   *  defect-trend sparkline buckets (see buildDieTrend) and the service
+   *  counter read. Days with no production simply don't appear here. */
+  daily: Array<{ day: string; rejects: number; pieces: number; shots: number }>;
+}
+
+// ---------------------------------------------------------------------
+// Preventive-maintenance rule (furniture mould service intervals, by
+// press tonnage — bigger presses hammer the die harder per cycle):
+//   100T-150T  → every 100,000 shots
+//   210T-350T  → every  50,000 shots
+//   450T-560T  → every  20,000 shots
+//   650T-850T  → every  10,000 shots
+//   1000T+     → every   8,000 shots
+// Band edges are extended to cover in-between tonnages (e.g. 1300T,
+// 1600T fall in the 1000T+ band) so no press is ever rule-less.
+
+const SERVICE_BANDS: Array<{ max: number; shots: number; label: string }> = [
+  { max: 200, shots: 100_000, label: '100T-150T' },
+  { max: 400, shots: 50_000, label: '210T-350T' },
+  { max: 600, shots: 20_000, label: '450T-560T' },
+  { max: 900, shots: 10_000, label: '650T-850T' },
+  { max: Infinity, shots: 8_000, label: '1000T+' },
+];
+
+/** Tonnage from a machine code ("850T" → 850, "320C" → 320); null for
+ *  non-tonnage lines (Batt1, HS) which have no shot-based rule. */
+export function machineTonnage(code: string): number | null {
+  const m = /^(\d+)\s*[TC]/i.exec(code.trim());
+  return m ? Number(m[1]) : null;
+}
+
+/** Service interval (shots) for a press tonnage. */
+export function serviceIntervalFor(tonnage: number): { shots: number; label: string } {
+  const band = SERVICE_BANDS.find((b) => tonnage <= b.max)!;
+  return { shots: band.shots, label: band.label };
+}
+
+export interface DieServiceStatus {
+  /** Shots accumulated since the last COMPLETED maintenance (or since
+   *  the window start when the die has never been serviced). */
+  shotsSince: number;
+  /** Day the counter starts from (YYYY-MM-DD) and why. */
+  since: string;
+  sinceIsService: boolean;
+  /** The governing interval — the STRICTEST rule among the presses the
+   *  die ran on (a die that visits the 1600T wears at the 1000T+ rate). */
+  intervalShots: number;
+  bandLabel: string;
+  /** Press the strictest rule came from. */
+  press: string;
+  /** shotsSince ÷ interval. */
+  pct: number;
+  level: 'ok' | 'soon' | 'due';
+}
+
+/**
+ * Where a die sits against its preventive-maintenance rule. Returns null
+ * when none of the presses the die ran on carries a tonnage rule (Batt /
+ * HS lines) or the die didn't run at all. The counter resets at the most
+ * recent DONE maintenance request's closed date; dies never serviced
+ * count from the window start (an under-count — flagged via
+ * sinceIsService=false so the UI can say "at least").
+ */
+export function dieServiceStatus(
+  agg: DieAgg,
+  requests: DieMaintenanceRequest[],
+): DieServiceStatus | null {
+  let interval: { shots: number; label: string } | null = null;
+  let press = '';
+  for (const m of agg.machines) {
+    const t = machineTonnage(m);
+    if (t == null) continue;
+    const rule = serviceIntervalFor(t);
+    if (!interval || rule.shots < interval.shots) {
+      interval = rule;
+      press = m;
+    }
+  }
+  if (!interval || agg.daily.length === 0) return null;
+  const lastDone = requests
+    .filter((r) => r.dieNumber === agg.dieNumber && r.status === 'done' && r.closedAt)
+    .map((r) => r.closedAt.slice(0, 10))
+    .sort()
+    .pop();
+  const shotsSince = agg.daily
+    .filter((d) => !lastDone || d.day > lastDone)
+    .reduce((a, d) => a + d.shots, 0);
+  if (shotsSince === 0) return null;
+  const pct = shotsSince / interval.shots;
+  return {
+    shotsSince,
+    since: lastDone ?? agg.daily[0].day,
+    sinceIsService: !!lastDone,
+    intervalShots: interval.shots,
+    bandLabel: interval.label,
+    press,
+    pct,
+    level: pct >= 1 ? 'due' : pct >= 0.8 ? 'soon' : 'ok',
+  };
 }
 
 /** One bar of the defect-trend sparkline. */
@@ -231,7 +327,7 @@ export function aggregateDies(
   }
 
   const rejMaps = new Map<string, Map<string, number>>();
-  const dayMaps = new Map<string, Map<string, { rejects: number; pieces: number }>>();
+  const dayMaps = new Map<string, Map<string, { rejects: number; pieces: number; shots: number }>>();
   for (const t of tuples.values()) {
     const agg = byDie.get(t.die);
     if (!agg) continue;
@@ -245,10 +341,11 @@ export function aggregateDies(
     const m = rejMaps.get(t.die) ?? new Map<string, number>();
     for (const [code, qty] of t.rejByCode) m.set(code, (m.get(code) ?? 0) + qty);
     rejMaps.set(t.die, m);
-    const dm = dayMaps.get(t.die) ?? new Map<string, { rejects: number; pieces: number }>();
-    const cell = dm.get(day) ?? { rejects: 0, pieces: 0 };
+    const dm = dayMaps.get(t.die) ?? new Map<string, { rejects: number; pieces: number; shots: number }>();
+    const cell = dm.get(day) ?? { rejects: 0, pieces: 0, shots: 0 };
     cell.rejects += t.rejects;
     cell.pieces += t.pieces;
+    cell.shots += t.shots;
     dm.set(day, cell);
     dayMaps.set(t.die, dm);
   }

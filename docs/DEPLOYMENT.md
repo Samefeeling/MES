@@ -509,6 +509,15 @@ dedicated list:
 - Built-in maintenance contacts live in `src/core/die.ts`
   (`MAINTENANCE_CONTACTS`) — edit that list to match the real toolroom
   roster (phone/email optional).
+- **Preventive-service reminders** follow the furniture-mould tonnage
+  rule (100-150T: 100k · 210-350T: 50k · 450-560T: 20k · 650-850T: 10k ·
+  1000T+: 8k shots — bands in `src/core/die.ts` `SERVICE_BANDS`). The
+  shot counter resets at the newest **Done** maintenance request's
+  closed date, uses the strictest band among the presses the die ran
+  on, and goes ⏳ amber at 80% / 🔧 red past the interval. Dies never
+  serviced count from the window start (shown as "at least").
+- The request form and the Requests list link straight to Mango's
+  request-maintenance page (`my.mangolive.com/plant-equipment/request-maintenance`).
 
 ---
 
