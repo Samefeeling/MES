@@ -274,6 +274,9 @@ const DEFAULT_FIELDS = {
      *  operator sheet so the floor knows which die to fit. Optional
      *  column; stripRejectedFields tolerates absence. */
     dieNumber: 'DieNumber',
+    /** Die description (the `Die` column — the tool's human name).
+     *  Optional column; read resolves common naming variants. */
+    die: 'Die',
     /** Yes/No flag marking a part as a co-runner: parts that share a die
      *  AND both carry CoRun = Yes are run simultaneously on one press, so
      *  the operator sheet mirrors the machine status across them. Same
@@ -878,6 +881,8 @@ export class SharePointDataLayer implements PmdDataLayer {
       // common variants instead of giving up when the configured name
       // doesn't match. Logged so a missing column is obvious in F12.
       const dieKey = resolveDieNumberKey(rows[0], F.dieNumber);
+      // The `Die` (description) column, same naming-variant tolerance.
+      const dieDescKey = resolveDieDescKey(rows[0], F.die);
       if (!dieKey) {
         console.warn(
           '[pmd] PMD_ProductDieColor: no DieNumber column matched. Keys present on row[0]:',
@@ -902,6 +907,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           name: str(r[F.name]).trim(),
           category: str(r[F.category]).trim(),
           dieNumber: dieKey ? str(r[dieKey]).trim() : '',
+          die: dieDescKey ? str(r[dieDescKey]).trim() : '',
           // CoRun Yes/No — true only on an explicit yes. SP Yes/No comes
           // back as a real boolean; a choice/text column as "Yes". Absent
           // column ⇒ undefined ⇒ false (parts default to NOT co-running).
@@ -3197,6 +3203,30 @@ function resolveDieNumberKey(
   // anything starting with FieldValuesAsText / OData metadata.
   const fallback = Object.keys(row).find((k) => /^die.*num/i.test(k));
   return fallback ?? null;
+}
+
+/** Same variant-tolerant resolution for the `Die` DESCRIPTION column
+ *  (the tool's human name). Kept separate from resolveDieNumberKey so a
+ *  "Die Number" column can never be mistaken for the description. */
+function resolveDieDescKey(
+  row: Record<string, unknown>,
+  configured: string | undefined,
+): string | null {
+  const candidates = [
+    configured,
+    'Die',
+    'DieName',
+    'Die_x0020_Name',
+    'DieDescription',
+    'Die_x0020_Description',
+  ].filter((s): s is string => !!s);
+  for (const k of candidates) {
+    if (k in row && str(row[k]).trim()) return k;
+  }
+  for (const k of candidates) {
+    if (k in row) return k;
+  }
+  return null;
 }
 
 function num(v: unknown): number {

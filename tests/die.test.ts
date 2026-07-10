@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { aggregateDies, dieHealth } from '../src/core/die';
+import { aggregateDies, buildDieTrend, dieHealth } from '../src/core/die';
 import { MemoryDataLayer } from '../src/dal/memory';
 import type { DieMaintenanceRequest, ProductDieColor } from '../src/types';
 import { rec } from './helpers';
@@ -11,6 +11,7 @@ const dc = (partNumber: string, dieNumber: string, over: Partial<ProductDieColor
   name: 'Grey',
   category: 'Seating',
   dieNumber,
+  die: `Tool ${dieNumber}`,
   coRun: false,
   ...over,
 });
@@ -59,6 +60,7 @@ describe('aggregateDies', () => {
     const dies = aggregateDies(master, records, []);
     expect(dies.map((d) => d.dieNumber).sort()).toEqual(['DIE-1', 'DIE-2']);
     const d1 = dies.find((d) => d.dieNumber === 'DIE-1')!;
+    expect(d1.description).toBe('Tool DIE-1');
     expect(d1.parts.map((p) => p.partNumber)).toEqual(['P-A', 'P-B']);
     expect(d1.runs).toBe(2);
     expect(d1.shots).toBe(150); // 100 + 50 cycles
@@ -76,6 +78,30 @@ describe('aggregateDies', () => {
     const d2 = dies.find((d) => d.dieNumber === 'DIE-2')!;
     expect(d2.runs).toBe(0);
     expect(d2.rejectPct).toBeNull();
+    // Per-day series for the trend sparkline, day-ascending.
+    expect(d1.daily).toEqual([
+      { day: '2026-07-08', rejects: 4, pieces: 200 },
+      { day: '2026-07-09', rejects: 0, pieces: 50 },
+    ]);
+  });
+
+  it('buildDieTrend fills gaps daily on short windows and weekly past 35 days', () => {
+    const daily = [
+      { day: '2026-07-02', rejects: 2, pieces: 100 },
+      { day: '2026-07-05', rejects: 4, pieces: 80 },
+    ];
+    const short = buildDieTrend(daily, '2026-07-01', '2026-07-06');
+    expect(short.map((b) => b.rejects)).toEqual([0, 2, 0, 0, 4, 0]);
+    expect(short.every((b) => b.span === 1)).toBe(true);
+    expect(short[1].pieces).toBe(100);
+
+    const long = buildDieTrend(daily, '2026-06-01', '2026-07-26'); // 56 days → weekly
+    expect(long.every((b) => b.span === 7)).toBe(true);
+    expect(long.length).toBe(8);
+    // Both production days land in the week starting 2026-06-29.
+    const wk = long.find((b) => b.day === '2026-06-29')!;
+    expect(wk.rejects).toBe(6);
+    expect(wk.pieces).toBe(180);
   });
 
   it('floats dies with open requests to the top and counts only non-done ones', () => {

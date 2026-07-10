@@ -16,14 +16,38 @@ import type {
   MaintType,
   ProductDieColor,
 } from '../types';
-import { aggregateDies, dieHealth, MAINTENANCE_CONTACTS, type DieAgg } from '../core/die';
+import {
+  aggregateDies,
+  buildDieTrend,
+  dieHealth,
+  MAINTENANCE_CONTACTS,
+  type DieAgg,
+} from '../core/die';
 import { closeModal, escapeHtml, openModal } from './modal';
 import { toast } from './toast';
+
+/** 'smart' = the aggregate's attention-first order (open requests, then
+ *  reject-%, then shots). Any other key is a user-picked column sort. */
+type DieSortKey =
+  | 'smart'
+  | 'die'
+  | 'description'
+  | 'parts'
+  | 'machines'
+  | 'runs'
+  | 'shots'
+  | 'pieces'
+  | 'good'
+  | 'rejects'
+  | 'rejPct'
+  | 'lastRun';
 
 interface DieState {
   from: string; // YYYY-MM-DD inclusive
   to: string;
   filter: string;
+  sortKey: DieSortKey;
+  sortDir: 1 | -1;
   dies: DieAgg[];
   requests: DieMaintenanceRequest[];
   rejectLabels: Map<string, string>;
@@ -73,6 +97,8 @@ export async function mountDieTab(dal: PmdDataLayer, host: HTMLElement): Promise
     from: isoDay(from),
     to: isoDay(to),
     filter: '',
+    sortKey: 'smart',
+    sortDir: 1,
     dies: [],
     requests: [],
     rejectLabels: new Map(),
@@ -162,8 +188,67 @@ function filteredDies(): DieAgg[] {
   );
 }
 
+/** Column sort accessors. Strings compare case-insensitively; numeric
+ *  nulls (a die that never ran) always sink to the bottom. */
+const SORT_ACCESSORS: Record<Exclude<DieSortKey, 'smart'>, (d: DieAgg) => string | number | null> = {
+  die: (d) => d.dieNumber.toUpperCase(),
+  description: (d) => (d.description || '￿').toUpperCase(),
+  parts: (d) => d.parts.length,
+  machines: (d) => d.machines.length,
+  runs: (d) => d.runs,
+  shots: (d) => d.shots,
+  pieces: (d) => d.pieces,
+  good: (d) => d.good,
+  rejects: (d) => d.rejects,
+  rejPct: (d) => d.rejectPct,
+  lastRun: (d) => d.lastRun || null,
+};
+
+function sortedDies(dies: DieAgg[]): DieAgg[] {
+  if (S!.sortKey === 'smart') return dies; // aggregate's attention-first order
+  const get = SORT_ACCESSORS[S!.sortKey];
+  const dir = S!.sortDir;
+  return [...dies].sort((a, b) => {
+    const av = get(a);
+    const bv = get(b);
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1; // nulls last regardless of direction
+    if (bv == null) return -1;
+    if (av < bv) return -dir;
+    if (av > bv) return dir;
+    return 0;
+  });
+}
+
+/** Defect-trend sparkline: one bar per day (per week on >35-day windows),
+ *  bar height = reject qty, bar colour = that bucket's reject-% health.
+ *  Grey baseline dot = ran clean; empty = didn't run. This is the
+ *  "should we service it?" picture — a die drifting amber→red
+ *  left-to-right is asking for a repair before the KPI page notices. */
+function sparkline(d: DieAgg): string {
+  const buckets = buildDieTrend(d.daily, S!.from, S!.to);
+  if (buckets.length === 0 || d.runs === 0) return '<span class="die-spark-none">—</span>';
+  const max = Math.max(1, ...buckets.map((b) => b.rejects));
+  const bars = buckets
+    .map((b) => {
+      const pct = b.pieces > 0 ? (b.rejects / b.pieces) * 100 : null;
+      const health = dieHealth(pct);
+      const label = b.span === 1 ? b.day.slice(5) : `wk ${b.day.slice(5)}`;
+      if (b.pieces === 0 && b.rejects === 0)
+        return `<i class="empty" title="${escapeHtml(label)} · no production"></i>`;
+      const h = b.rejects === 0 ? 8 : Math.max(14, Math.round((b.rejects / max) * 100));
+      return `<i class="${health || 'green'}" style="height:${h}%" title="${escapeHtml(
+        `${label} · ${b.rejects} rej / ${b.pieces} pcs${pct != null ? ` (${pct.toFixed(1)}%)` : ''}`,
+      )}"></i>`;
+    })
+    .join('');
+  return `<span class="die-spark" data-die-detail="${escapeHtml(d.dieNumber)}" title="Reject trend ${escapeHtml(
+    S!.from,
+  )} → ${escapeHtml(S!.to)} — tap for detail">${bars}</span>`;
+}
+
 function renderDieTable(): string {
-  const dies = filteredDies();
+  const dies = sortedDies(filteredDies());
   if (dies.length === 0) {
     return `<div class="trace-empty">No dies match. Die numbers come from the PMD_ProductDieColor list's DieNumber column — fill it in there to see a die here.</div>`;
   }
@@ -171,7 +256,7 @@ function renderDieTable(): string {
     .map((d) => {
       const health = dieHealth(d.rejectPct);
       const top = d.rejByCode
-        .slice(0, 3)
+        .slice(0, 2)
         .map(
           (x) =>
             `<span class="die-defect" title="${escapeHtml(rejLabel(x.code))}">${escapeHtml(x.code)}×${x.qty}</span>`,
@@ -183,36 +268,57 @@ function renderDieTable(): string {
       const partsTip = d.parts
         .map((p) => `${p.partNumber}${p.name ? ` (${p.name})` : ''}`)
         .join(', ');
+      const machines =
+        d.machines.length > 3
+          ? `${d.machines.length} machines`
+          : d.machines.join(', ') || '—';
       return `<tr data-die-row="${escapeHtml(d.dieNumber)}">
         <td class="die-num"><button class="die-link" data-die-detail="${escapeHtml(d.dieNumber)}">${escapeHtml(d.dieNumber)}</button></td>
-        <td>${escapeHtml(d.category || '—')}</td>
+        <td class="die-desc" title="${escapeHtml(d.description || '')}">${escapeHtml(d.description || '—')}</td>
         <td title="${escapeHtml(partsTip)}">${d.parts.length}</td>
-        <td>${escapeHtml(d.machines.join(', ') || '—')}</td>
+        <td title="${escapeHtml(d.machines.join(', '))}">${escapeHtml(machines)}</td>
         <td class="num">${d.runs}</td>
         <td class="num">${d.shots.toLocaleString()}</td>
         <td class="num">${d.pieces.toLocaleString()}</td>
         <td class="num">${d.good.toLocaleString()}</td>
         <td class="num">${d.rejects.toLocaleString()}</td>
         <td class="num ${health}">${d.rejectPct == null ? '—' : d.rejectPct + '%'}</td>
-        <td>${top || '—'}</td>
+        <td class="die-trend-cell">${sparkline(d)}${top ? `<span class="die-trend-top">${top}</span>` : ''}</td>
         <td>${escapeHtml(d.lastRun || '—')}</td>
         <td>${maint}</td>
         <td><button class="die-req-btn" data-die-req="${escapeHtml(d.dieNumber)}" title="New maintenance request for this die">📝</button></td>
       </tr>`;
     })
     .join('');
+  const th = (key: DieSortKey | '', label: string, title = ''): string => {
+    if (!key)
+      return `<th${title ? ` title="${escapeHtml(title)}"` : ''}>${label}</th>`;
+    const active = S!.sortKey === key;
+    const ind = active ? (S!.sortDir === 1 ? ' ▲' : ' ▼') : '';
+    return `<th class="die-sort${active ? ' a' : ''}" data-die-sort="${key}"${
+      title ? ` title="${escapeHtml(title)}"` : ''
+    }>${label}${ind}</th>`;
+  };
   return `<div class="die-table-wrap"><table class="kpi-table die-table">
     <thead><tr>
-      <th>Die #</th><th>Category</th><th title="Part numbers that run on this die">Parts</th><th>Machines</th>
-      <th title="(machine, shift, job) runs in the window">Runs</th>
-      <th title="Press cycles = Σ (Count End − Count Start) — the die-wear number">Shots</th>
-      <th title="Shots × cavities">Pieces</th><th>Good</th><th>Reject</th>
-      <th title="Reject ÷ Pieces — 🟢 <2% · 🟡 2-5% · 🔴 >5%">Rej %</th>
-      <th>Top defects</th><th>Last run</th><th>Maint</th><th></th>
+      ${th('die', 'Die #')}
+      ${th('description', 'Description', "The tool's name — PMD_ProductDieColor's Die column")}
+      ${th('parts', 'Parts', 'Part numbers that run on this die')}
+      ${th('machines', 'Machines')}
+      ${th('runs', 'Runs', '(machine, shift, job) runs in the window')}
+      ${th('shots', 'Shots', 'Press cycles = Σ (Count End − Count Start) — the die-wear number')}
+      ${th('pieces', 'Pieces', 'Shots × cavities')}
+      ${th('good', 'Good')}
+      ${th('rejects', 'Reject')}
+      ${th('rejPct', 'Rej %', 'Reject ÷ Pieces — 🟢 <2% · 🟡 2-5% · 🔴 >5%')}
+      ${th('', 'Defect trend', 'Rejects per day (per week on long windows); bar colour = that day’s reject-% band')}
+      ${th('lastRun', 'Last run')}
+      ${th('', 'Maint')}
+      ${th('', '')}
     </tr></thead>
     <tbody>${rows}</tbody>
   </table></div>
-  <p class="kpi-note">Usage inside the selected window. <b>Shots</b> = press cycles (Count End − Count Start) — the number that wears the die; <b>Pieces</b> = shots × cavities. Rejects are charged to the die that made them via each part's DieNumber (PMD_ProductDieColor).</p>`;
+  <p class="kpi-note">Usage inside the selected window. <b>Shots</b> = press cycles (Count End − Count Start) — the number that wears the die; <b>Pieces</b> = shots × cavities. <b>Defect trend</b>: bar height = reject qty per day, colour = that day's reject-% band — a die drifting 🟡→🔴 left-to-right is due for service. Tap a column header to sort; tap Die # or the trend for detail.</p>`;
 }
 
 function renderRequests(): string {
@@ -262,6 +368,35 @@ function renderRequests(): string {
 // ---------------------------------------------------------------------
 // die detail popup
 
+/** Full-size defect trend for the detail popup: same buckets as the row
+ *  sparkline, taller bars, sparse date labels along the x-axis. */
+function trendChart(d: DieAgg): string {
+  const buckets = buildDieTrend(d.daily, S!.from, S!.to);
+  if (buckets.length === 0 || d.runs === 0)
+    return `<div class="trace-empty">No production in the window.</div>`;
+  const max = Math.max(1, ...buckets.map((b) => b.rejects));
+  const labelEvery = Math.max(1, Math.ceil(buckets.length / 8));
+  const bars = buckets
+    .map((b, i) => {
+      const pct = b.pieces > 0 ? (b.rejects / b.pieces) * 100 : null;
+      const health = dieHealth(pct);
+      const name = b.span === 1 ? b.day.slice(5) : `wk ${b.day.slice(5)}`;
+      const tip = `${name} · ${b.rejects} rej / ${b.pieces} pcs${
+        pct != null ? ` (${pct.toFixed(1)}%)` : ''
+      }`;
+      const idle = b.pieces === 0 && b.rejects === 0;
+      const h = idle ? 0 : b.rejects === 0 ? 4 : Math.max(8, Math.round((b.rejects / max) * 100));
+      const label = i % labelEvery === 0 ? name : '';
+      return `<div class="die-trend-col" title="${escapeHtml(tip)}">
+        <b>${b.rejects > 0 ? b.rejects : ''}</b>
+        <span class="die-trend-bar"><i class="${idle ? 'empty' : health || 'green'}" style="height:${h}%"></i></span>
+        <em>${escapeHtml(label)}</em>
+      </div>`;
+    })
+    .join('');
+  return `<div class="die-trend-lg">${bars}</div>`;
+}
+
 function openDieDetail(dieNumber: string): void {
   const d = S!.dies.find((x) => x.dieNumber === dieNumber);
   if (!d) return;
@@ -303,7 +438,7 @@ function openDieDetail(dieNumber: string): void {
   openModal(`<div class="die-detail">
     <div class="kpi-trace-head">
       <h3>🛠 ${escapeHtml(d.dieNumber)} <span class="die-detail-sub">${escapeHtml(
-        d.category || '',
+        [d.description, d.category].filter(Boolean).join(' · ') || '',
       )} · ${d.parts.length} part${d.parts.length === 1 ? '' : 's'}</span></h3>
       <button class="btn-ghost-big" data-mod="close">Close</button>
     </div>
@@ -317,7 +452,9 @@ function openDieDetail(dieNumber: string): void {
       <span>Machines <b>${escapeHtml(d.machines.join(', ') || '—')}</b></span>
       <span>Last run <b>${escapeHtml(d.lastRun || '—')}</b></span>
     </div>
-    <h4>Defects (${escapeHtml(S!.from)} → ${escapeHtml(S!.to)})</h4>
+    <h4>Defect trend (${escapeHtml(S!.from)} → ${escapeHtml(S!.to)})</h4>
+    ${trendChart(d)}
+    <h4>Defects by code</h4>
     ${bars}
     <h4>Parts on this die</h4>
     <ul class="die-detail-parts">${parts}</ul>
@@ -523,6 +660,19 @@ function wire(): void {
       if (pos != null) again.setSelectionRange(pos, pos);
     }
   });
+  h.querySelectorAll<HTMLTableCellElement>('[data-die-sort]').forEach((el) =>
+    el.addEventListener('click', () => {
+      const key = el.dataset.dieSort as DieSortKey;
+      if (S!.sortKey === key) {
+        S!.sortDir = S!.sortDir === 1 ? -1 : 1;
+      } else {
+        S!.sortKey = key;
+        // Numeric columns read best worst-first (descending); text ones A→Z.
+        S!.sortDir = key === 'die' || key === 'description' ? 1 : -1;
+      }
+      render();
+    }),
+  );
   h.querySelector('[data-die-new-req]')?.addEventListener('click', () => openRequestForm());
   h.querySelectorAll<HTMLButtonElement>('[data-die-detail]').forEach((b) =>
     b.addEventListener('click', () => openDieDetail(b.dataset.dieDetail!)),

@@ -676,8 +676,28 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .die-chip.is-warn{border-color:#FFA500;background:#fff7ed}
 .die-chip.is-bad{border-color:var(--rd);background:#fef2f2}
 .die-table-wrap{overflow-x:auto;margin-top:10px;background:#fff;border:1px solid var(--bd);border-radius:12px}
-.die-table{margin:0}
+/* One size down from the KPI table so the extra Description + trend
+   columns fit without a horizontal scroll on the iPad. */
+.die-table{margin:0;font-size:13px}
+.die-table thead th{font-size:12px}
 .die-table td.num{text-align:right;font-variant-numeric:tabular-nums}
+.die-table td.die-desc{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#334155}
+/* Sortable headers */
+th.die-sort{cursor:pointer;user-select:none;-webkit-user-select:none}
+th.die-sort:hover{background:#eef2f7}
+th.die-sort.a{color:#1d4ed8}
+/* Defect-trend sparkline: one bar per bucket, height = reject qty,
+   colour = that bucket's reject-% band. */
+.die-trend-cell{min-width:150px}
+.die-spark{display:inline-flex;align-items:flex-end;gap:1px;height:22px;min-width:90px;max-width:170px;vertical-align:middle;cursor:pointer;padding:1px 2px;border-radius:4px;background:#f8fafc}
+.die-spark i{flex:1 1 3px;min-width:2px;max-width:6px;border-radius:1px 1px 0 0}
+.die-spark i.green{background:var(--gn)}
+.die-spark i.amber{background:#FFA500}
+.die-spark i.red{background:var(--rd)}
+.die-spark i.empty{height:2px;background:#e2e8f0}
+.die-spark-none{color:var(--mu)}
+.die-trend-top{display:block;margin-top:2px}
+.die-trend-top .die-defect{font-size:10px;padding:0 4px}
 .die-table td.green{color:var(--gn);font-weight:800}
 .die-table td.amber{color:#FFA500;font-weight:800}
 .die-table td.red{color:var(--rd);font-weight:800}
@@ -720,6 +740,17 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .die-detail-stats b{color:var(--tx);font-variant-numeric:tabular-nums}
 .die-detail-stats .g b{color:var(--gn)}.die-detail-stats .r b{color:var(--rd)}
 .die-detail-stats .green b{color:var(--gn)}.die-detail-stats .amber b{color:#FFA500}.die-detail-stats .red b{color:var(--rd)}
+/* Full-size defect trend in the die detail popup. */
+.die-trend-lg{display:flex;align-items:flex-end;gap:2px;height:96px;background:#f8fafc;border:1px solid var(--bd);border-radius:8px;padding:6px 8px 2px}
+.die-trend-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;min-width:0}
+.die-trend-col b{font-size:10px;color:#991b1b;line-height:1;font-variant-numeric:tabular-nums}
+.die-trend-bar{flex:1;width:100%;max-width:18px;display:flex;align-items:flex-end;margin-top:1px}
+.die-trend-bar i{display:block;width:100%;border-radius:2px 2px 0 0}
+.die-trend-bar i.green{background:var(--gn)}
+.die-trend-bar i.amber{background:#FFA500}
+.die-trend-bar i.red{background:var(--rd)}
+.die-trend-bar i.empty{background:transparent}
+.die-trend-col em{font-size:9px;color:var(--mu);font-style:normal;white-space:nowrap;line-height:1.3;height:12px}
 .die-bar-row{display:flex;align-items:center;gap:8px;margin-bottom:4px;font-size:13px}
 .die-bar-code{width:38px;font-weight:800;color:#991b1b}
 .die-bar-label{width:170px;color:var(--mu);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

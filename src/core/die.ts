@@ -36,6 +36,8 @@ export const MAINTENANCE_CONTACTS: MaintContact[] = [
 /** Aggregated usage + quality picture for one physical die. */
 export interface DieAgg {
   dieNumber: string;
+  /** Human name of the tool (PMD_ProductDieColor's `Die` column). */
+  description: string;
   /** Every Part # that runs on this die (from PMD_ProductDieColor). */
   parts: Array<{ partNumber: string; name: string; category: string; coRun: boolean }>;
   category: string;
@@ -57,6 +59,61 @@ export interface DieAgg {
   lastRun: string;
   /** Open / in-progress maintenance requests against this die. */
   openRequests: number;
+  /** Per-day usage inside the window, day-ascending — the raw series the
+   *  defect-trend sparkline buckets (see buildDieTrend). Days with no
+   *  production simply don't appear here. */
+  daily: Array<{ day: string; rejects: number; pieces: number }>;
+}
+
+/** One bar of the defect-trend sparkline. */
+export interface DieTrendBucket {
+  /** First day of the bucket (YYYY-MM-DD). Daily buckets = the day. */
+  day: string;
+  /** Days the bucket spans (1 = daily, 7 = weekly). */
+  span: number;
+  rejects: number;
+  pieces: number;
+}
+
+function addDays(day: string, n: number): string {
+  const d = new Date(`${day}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
+
+/**
+ * Expand a die's sparse per-day series into a CONTINUOUS bucket series
+ * across [from, to] — gaps become zero buckets so the sparkline's x-axis
+ * is real time and a worsening defect trend reads left-to-right at a
+ * glance. Windows ≤ 35 days bucket daily; longer windows bucket weekly
+ * so 90 days still fits in a table cell.
+ */
+export function buildDieTrend(
+  daily: Array<{ day: string; rejects: number; pieces: number }>,
+  from: string,
+  to: string,
+): DieTrendBucket[] {
+  if (!from || !to || from > to) return [];
+  const days =
+    Math.round((new Date(`${to}T00:00:00`).getTime() - new Date(`${from}T00:00:00`).getTime()) / 86_400_000) + 1;
+  const span = days <= 35 ? 1 : 7;
+  const byDay = new Map(daily.map((d) => [d.day, d]));
+  const out: DieTrendBucket[] = [];
+  for (let start = from; start <= to; start = addDays(start, span)) {
+    const b: DieTrendBucket = { day: start, span, rejects: 0, pieces: 0 };
+    for (let i = 0; i < span; i++) {
+      const d = byDay.get(addDays(start, i));
+      if (d) {
+        b.rejects += d.rejects;
+        b.pieces += d.pieces;
+      }
+    }
+    out.push(b);
+  }
+  return out;
 }
 
 /** Reject-% traffic light for a die (same green/amber/red language as the
@@ -91,6 +148,7 @@ export function aggregateDies(
     if (!agg) {
       agg = {
         dieNumber: die,
+        description: c.die,
         parts: [],
         category: c.category,
         machines: [],
@@ -103,6 +161,7 @@ export function aggregateDies(
         rejByCode: [],
         lastRun: '',
         openRequests: 0,
+        daily: [],
       };
       byDie.set(die, agg);
     }
@@ -113,6 +172,7 @@ export function aggregateDies(
       coRun: c.coRun,
     });
     if (!agg.category && c.category) agg.category = c.category;
+    if (!agg.description && c.die) agg.description = c.die;
   }
 
   // Usage: group records into (machine|shift|job) tuples first — counts
@@ -171,6 +231,7 @@ export function aggregateDies(
   }
 
   const rejMaps = new Map<string, Map<string, number>>();
+  const dayMaps = new Map<string, Map<string, { rejects: number; pieces: number }>>();
   for (const t of tuples.values()) {
     const agg = byDie.get(t.die);
     if (!agg) continue;
@@ -184,6 +245,12 @@ export function aggregateDies(
     const m = rejMaps.get(t.die) ?? new Map<string, number>();
     for (const [code, qty] of t.rejByCode) m.set(code, (m.get(code) ?? 0) + qty);
     rejMaps.set(t.die, m);
+    const dm = dayMaps.get(t.die) ?? new Map<string, { rejects: number; pieces: number }>();
+    const cell = dm.get(day) ?? { rejects: 0, pieces: 0 };
+    cell.rejects += t.rejects;
+    cell.pieces += t.pieces;
+    dm.set(day, cell);
+    dayMaps.set(t.die, dm);
   }
 
   for (const agg of byDie.values()) {
@@ -197,6 +264,9 @@ export function aggregateDies(
     agg.openRequests = requests.filter(
       (q) => q.dieNumber === agg.dieNumber && q.status !== 'done',
     ).length;
+    agg.daily = Array.from(dayMaps.get(agg.dieNumber) ?? [])
+      .map(([day, v]) => ({ day, ...v }))
+      .sort((a, b) => (a.day < b.day ? -1 : 1));
   }
 
   return Array.from(byDie.values()).sort((a, b) => {

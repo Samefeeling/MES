@@ -131,23 +131,24 @@ const PRODUCT_DEFS: Array<[string, string, number, number]> = [
 // Die master mirroring PMD_ProductDieColor: die / colour / category per
 // Part #. The two Viva parts share DIE-3597 (a real co-run pattern) so
 // the Die Management tab's per-die rollup has a multi-part die to show.
-const DIE_COLOR_DEFS: Array<[string, string, string, string, string, boolean]> = [
-  // partNumber, hex, colour name, category, dieNumber, coRun
-  ['G08770030', '#334155', 'Slate Grey', 'Seating', 'DIE-3597', true],
-  ['G08770044', '#334155', 'Slate Grey', 'Seating', 'DIE-3597', true],
-  ['INSC00689', '#1e3a8a', 'Navy', 'Seating', 'DIE-0689', false],
-  ['INSC00000NRX003', '#7f1d1d', 'Fire Red', 'Seating', 'DIE-0689', false],
-  ['B14220011', '#0f766e', 'Teal', 'Battery', 'DIE-1422', false],
-  ['HS-PLT-0091', '#78350f', 'Umber', 'Pallets', 'DIE-0091', false],
+const DIE_COLOR_DEFS: Array<[string, string, string, string, string, string, boolean]> = [
+  // partNumber, hex, colour name, category, dieNumber, die description, coRun
+  ['G08770030', '#334155', 'Slate Grey', 'Seating', 'DIE-3597', 'Viva Backrest/Armrest 2-cav', true],
+  ['G08770044', '#334155', 'Slate Grey', 'Seating', 'DIE-3597', 'Viva Backrest/Armrest 2-cav', true],
+  ['INSC00689', '#1e3a8a', 'Navy', 'Seating', 'DIE-0689', 'Integra Chair Shell', false],
+  ['INSC00000NRX003', '#7f1d1d', 'Fire Red', 'Seating', 'DIE-0689', 'Integra Chair Shell', false],
+  ['B14220011', '#0f766e', 'Teal', 'Battery', 'DIE-1422', 'Battery Tray Lid 4-cav', false],
+  ['HS-PLT-0091', '#78350f', 'Umber', 'Pallets', 'DIE-0091', 'HS Pallet Insert 8-cav', false],
 ];
 
 export function seedProductDieColors(): ProductDieColor[] {
-  return DIE_COLOR_DEFS.map(([partNumber, hex, name, category, dieNumber, coRun]) => ({
+  return DIE_COLOR_DEFS.map(([partNumber, hex, name, category, dieNumber, die, coRun]) => ({
     partNumber,
     hex,
     name,
     category,
     dieNumber,
+    die,
     coRun,
   }));
 }

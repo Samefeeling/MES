@@ -55,6 +55,10 @@ export interface ProductDieColor {
    *  operator sheet next to Product Description so the floor knows which
    *  die to fit before starting the job. Empty when not recorded. */
   dieNumber: string;
+  /** Die description from PMD_ProductDieColor's `Die` column (the human
+   *  name of the tool, e.g. "Viva Backrest 2-cav"). Empty when not
+   *  recorded. Shown on the Die Management table next to the number. */
+  die: string;
   /** PMD_ProductDieColor.CoRun (Yes/No). Two parts are treated as
    *  co-runners — run simultaneously on one press, so the operator sheet
    *  mirrors their machine status — only when they share a die AND BOTH
