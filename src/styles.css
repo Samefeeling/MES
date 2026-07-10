@@ -39,16 +39,13 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .hidden{display:none!important}
 
 /* ===== top bar (uses theme-dark) — slim: logo + title + connection status ===== */
-.top{background:var(--theme-dark);color:var(--theme-on-dark);padding:8px 18px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:50;box-shadow:0 2px 6px rgba(0,0,0,.15);transition:background .25s}
-/* Zooming the operator sheet past 100% makes it wider than the viewport.
-   A sticky top bar only spans the viewport, so scrolling right used to
-   expose white above the sheet where the bar had scrolled off. Let the
-   body grow to the sheet's width (only on the operator page, so the
-   Trace / KPI tables keep their own internal scroll) — the top bar and
-   the page padding then stretch across the full scrollable width. */
-body:has(.op-sheet){min-width:min-content}
-body:has(.op-sheet) .top,
-body:has(.op-sheet) .vw{min-width:min-content}
+/* FIXED to the viewport, not sticky: the bar's size must never follow
+   the operator sheet's zoomed width (sticky sat in the body flow, so a
+   zoomed-wide sheet stretched it / scrolled it off sideways exposing
+   white). Fixed = always exactly one viewport wide, immune to both
+   horizontal scroll and --disp-zoom. Content starts below it via the
+   .vw margin (--topbar-h is measured from JS; 52px = logo 36 + 2×8). */
+.top{background:var(--theme-dark);color:var(--theme-on-dark);padding:8px 18px;display:flex;align-items:center;gap:14px;position:fixed;top:0;left:0;right:0;z-index:50;box-shadow:0 2px 6px rgba(0,0,0,.15);transition:background .25s}
 .top h1{margin:0;font-size:20px;font-weight:700;flex:1;letter-spacing:.2px}
 /* Mirror-health badge (build id + last live-mirror push): supervisor-only
    diagnostics pinned to the bottom-right corner — visible only while
@@ -59,10 +56,14 @@ body:has(.op-sheet) .vw{min-width:min-content}
 #mirrorBadge.mb-idle{opacity:.6}
 #mirrorBadge.mb-bad{background:#c62828;color:#fff;opacity:1}
 .brand-logo{height:36px;width:auto;background:rgba(255,255,255,.96);padding:4px 10px;border-radius:8px}
-.top-nav{display:flex;gap:6px}
+/* min-width:0 + overflow-x lets the nav shrink inside the fixed bar and
+   swipe sideways on a phone instead of the last buttons being clipped. */
+.top-nav{display:flex;gap:6px;min-width:0;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.top-nav::-webkit-scrollbar{display:none}
+.top-nav a,.top-nav .nav-btn{flex:0 0 auto;white-space:nowrap}
 .top-nav a{color:var(--theme-on-dark);text-decoration:none;padding:7px 14px;border-radius:8px;font-size:14px;font-weight:700;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25)}
 .top-nav a:hover{background:rgba(255,255,255,.24)}
-.vw{padding:14px}
+.vw{padding:14px;margin-top:var(--topbar-h,52px)}
 
 /* KPI / meeting view */
 .kpi{display:flex;flex-direction:column;gap:14px}

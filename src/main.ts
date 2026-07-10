@@ -142,6 +142,11 @@ function parseRoute(): Route {
 // (the retired ☁ status pill lives in already-deployed static HTML).
 function ensureNav(): void {
   document.getElementById('ss')?.remove();
+  // Short title — the full "PMD Operator Sheet" ate half a phone's top
+  // bar. Set from JS so the already-deployed SPFx shell (which bakes the
+  // long title into its static HTML) shortens without an .sppkg rebuild.
+  const pt = document.getElementById('pt');
+  if (pt) pt.textContent = 'PMD';
   const nav = document.querySelector('.top-nav');
   if (!nav) return;
   const sv = isSupervisor();
