@@ -1,11 +1,13 @@
 import type {
   BdCode,
+  DieMaintenanceRequest,
   Machine,
   Operator,
   ParetoFilter,
   ParetoSlice,
   PlanningFilter,
   PlanningOrder,
+  ProductDieColor,
   ProductionFilter,
   ProductionRecord,
   RejectCategory,
@@ -16,9 +18,11 @@ import type { PmdDataLayer } from './types';
 import { bdLabelFor } from '../core/breakdown';
 import {
   seedBdCodes,
+  seedDieMaintenance,
   seedMachines,
   seedOperators,
   seedPlanning,
+  seedProductDieColors,
   seedProduction,
   seedRejectCategories,
   seedSupervisors,
@@ -38,6 +42,9 @@ export class MemoryDataLayer implements PmdDataLayer {
   private bdCodes: BdCode[];
   private planning: PlanningOrder[];
   private production: ProductionRecord[];
+  private dieColors: ProductDieColor[];
+  private dieMaintenance: DieMaintenanceRequest[];
+  private nextMaintId: number;
   private nextProdId: number;
   /** Tuples currently unlocked from a signed-off state (parity with the
    *  SharePoint DAL so the operator UI's force-load works in dev too). */
@@ -54,6 +61,9 @@ export class MemoryDataLayer implements PmdDataLayer {
     this.bdCodes = seedBdCodes();
     this.planning = seedPlanning(now);
     this.production = seedProduction(now, this.planning);
+    this.dieColors = seedProductDieColors();
+    this.dieMaintenance = seedDieMaintenance(now);
+    this.nextMaintId = Math.max(0, ...this.dieMaintenance.map((r) => r.id)) + 1;
     this.nextProdId = Math.max(0, ...this.production.map((r) => r.id)) + 1;
   }
 
@@ -78,6 +88,41 @@ export class MemoryDataLayer implements PmdDataLayer {
   }
   async listBdCodes(): Promise<BdCode[]> {
     return MemoryDataLayer.clone([...this.bdCodes].sort((a, b) => a.sequence - b.sequence));
+  }
+  async listProductDieColors(): Promise<ProductDieColor[]> {
+    return MemoryDataLayer.clone(this.dieColors);
+  }
+
+  // ---- die maintenance (PMD_DieMaintenance parity) ---------------------
+
+  async listDieMaintenance(): Promise<DieMaintenanceRequest[]> {
+    return MemoryDataLayer.clone(
+      [...this.dieMaintenance].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
+    );
+  }
+
+  async createDieMaintenance(
+    req: Omit<DieMaintenanceRequest, 'id' | 'createdAt' | 'closedAt'>,
+  ): Promise<DieMaintenanceRequest> {
+    const created: DieMaintenanceRequest = MemoryDataLayer.clone({
+      ...req,
+      id: this.nextMaintId++,
+      createdAt: new Date().toISOString(),
+      closedAt: '',
+    });
+    this.dieMaintenance.push(created);
+    return MemoryDataLayer.clone(created);
+  }
+
+  async updateDieMaintenance(
+    id: number,
+    patch: Partial<Pick<DieMaintenanceRequest, 'status' | 'mangoTicket' | 'closedAt'>>,
+  ): Promise<void> {
+    const row = this.dieMaintenance.find((r) => r.id === id);
+    if (!row) throw new Error(`Die maintenance request ${id} not found`);
+    if (patch.status) row.status = patch.status;
+    if (patch.mangoTicket !== undefined) row.mangoTicket = patch.mangoTicket;
+    if (patch.closedAt !== undefined) row.closedAt = patch.closedAt;
   }
 
   async listPlanning(filter: PlanningFilter): Promise<PlanningOrder[]> {

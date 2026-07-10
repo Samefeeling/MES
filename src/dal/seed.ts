@@ -1,8 +1,10 @@
 import type {
   BdCode,
+  DieMaintenanceRequest,
   Machine,
   Operator,
   PlanningOrder,
+  ProductDieColor,
   ProductionRecord,
   RejectCategory,
   ShiftCode,
@@ -125,6 +127,72 @@ const PRODUCT_DEFS: Array<[string, string, number, number]> = [
   ['G08770044', 'Viva Armrest Left', 22.1, 2],
 ];
 
+
+// Die master mirroring PMD_ProductDieColor: die / colour / category per
+// Part #. The two Viva parts share DIE-3597 (a real co-run pattern) so
+// the Die Management tab's per-die rollup has a multi-part die to show.
+const DIE_COLOR_DEFS: Array<[string, string, string, string, string, boolean]> = [
+  // partNumber, hex, colour name, category, dieNumber, coRun
+  ['G08770030', '#334155', 'Slate Grey', 'Seating', 'DIE-3597', true],
+  ['G08770044', '#334155', 'Slate Grey', 'Seating', 'DIE-3597', true],
+  ['INSC00689', '#1e3a8a', 'Navy', 'Seating', 'DIE-0689', false],
+  ['INSC00000NRX003', '#7f1d1d', 'Fire Red', 'Seating', 'DIE-0689', false],
+  ['B14220011', '#0f766e', 'Teal', 'Battery', 'DIE-1422', false],
+  ['HS-PLT-0091', '#78350f', 'Umber', 'Pallets', 'DIE-0091', false],
+];
+
+export function seedProductDieColors(): ProductDieColor[] {
+  return DIE_COLOR_DEFS.map(([partNumber, hex, name, category, dieNumber, coRun]) => ({
+    partNumber,
+    hex,
+    name,
+    category,
+    dieNumber,
+    coRun,
+  }));
+}
+
+/** A couple of maintenance requests so the demo shows the whole Fabrico-
+ *  style lifecycle: one live request (open) and one already closed. */
+export function seedDieMaintenance(now: Date): DieMaintenanceRequest[] {
+  const daysAgo = (n: number): string => {
+    const d = new Date(now);
+    d.setDate(d.getDate() - n);
+    return d.toISOString();
+  };
+  return [
+    {
+      id: 1,
+      dieNumber: 'DIE-3597',
+      status: 'open',
+      maintType: 'repair',
+      priority: 'high',
+      description: 'Flash on cavity 2 parting line — D02 rejects climbing on Viva Backrest.',
+      contact: 'Toolroom Team',
+      requestedBy: 'Christopher King',
+      machineCode: '320T',
+      jobNumber: '',
+      mangoTicket: '',
+      createdAt: daysAgo(1),
+      closedAt: '',
+    },
+    {
+      id: 2,
+      dieNumber: 'DIE-1422',
+      status: 'done',
+      maintType: 'cleaning',
+      priority: 'normal',
+      description: 'Scheduled vent clean after battery tray campaign.',
+      contact: 'Maintenance Team',
+      requestedBy: 'Jeff Penn',
+      machineCode: 'Batt1',
+      jobNumber: '',
+      mangoTicket: 'MAN-30412',
+      createdAt: daysAgo(5),
+      closedAt: daysAgo(4),
+    },
+  ];
+}
 
 // 10 PMD defect codes (D01-D10). Each gets its own fixed row on the
 // operator sheet. The longer "Visual Signs" text is operator-training

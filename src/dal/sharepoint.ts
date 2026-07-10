@@ -1,6 +1,10 @@
 import type {
   BdCode,
+  DieMaintenanceRequest,
   Machine,
+  MaintPriority,
+  MaintStatus,
+  MaintType,
   Operator,
   ParetoFilter,
   ParetoSlice,
@@ -51,6 +55,10 @@ const LISTS = {
   rejectCategories: 'PMD_RejectCategories',
   breakdownMaster: 'PMD_BreakdownMaster',
   productDieColor: 'PMD_ProductDieColor',
+  /** Die maintenance work requests (Trace → 🛠 Die Management). Created
+   *  automatically by ensureDieMaintenanceList() on the first write if
+   *  the tenant doesn't have it yet — see that method for the schema. */
+  dieMaintenance: 'PMD_DieMaintenance',
   rdoRoster: 'RDO Roster 2026-2030',
 } as const;
 
@@ -272,6 +280,24 @@ const DEFAULT_FIELDS = {
      *  die without the flag (or only one side flagged) means they run
      *  one-after-another and stay independent. Optional column. */
     coRun: 'CoRun',
+  },
+  dieMaintenance: {
+    // Title = DieNumber (natural key into PMD_ProductDieColor.DieNumber).
+    // All other columns are plain Text/Note so auto-provisioning stays
+    // simple and nothing fights SharePoint's choice-column validation.
+    // ClosedAt is TEXT ISO on purpose — DateTime columns get shifted by
+    // the site timezone (same lesson as PMD_Production.PlannedStart).
+    dieNumber: 'Title',
+    status: 'Status',
+    maintType: 'MaintType',
+    priority: 'Priority',
+    description: 'Description',
+    contact: 'Contact',
+    requestedBy: 'RequestedBy',
+    machine: 'Machine',
+    jobNumber: 'JobNumber',
+    mangoTicket: 'MangoTicket',
+    closedAt: 'ClosedAt',
   },
 } as const;
 
@@ -900,6 +926,141 @@ export class SharePointDataLayer implements PmdDataLayer {
   }
 
   // ---- planning -------------------------------------------------------
+
+  // ---- die maintenance (PMD_DieMaintenance) ---------------------------
+
+  /** Set true once the list is known to exist so the ensure probe runs at
+   *  most once per page load. */
+  private dieMaintEnsured = false;
+
+  /**
+   * Make sure PMD_DieMaintenance exists, creating it (plus its columns)
+   * when it doesn't. Auto-provisioning keeps the Die Management tab
+   * usable without an IT round-trip: the first person to raise a request
+   * creates the list under their own permissions (site members can add
+   * lists on this site). Schema — Title holds the DieNumber; Status /
+   * MaintType / Priority / Contact / RequestedBy / Machine / JobNumber /
+   * MangoTicket / ClosedAt are single-line text; Description is a note.
+   * If creation is denied (read-only visitor), the caller's write fails
+   * with SharePoint's own message, which the UI surfaces in a toast.
+   */
+  private async ensureDieMaintenanceList(): Promise<void> {
+    if (this.dieMaintEnsured) return;
+    try {
+      await this.getJson(`${this.listUrl(LISTS.dieMaintenance)}?$select=Title`);
+      this.dieMaintEnsured = true;
+      return;
+    } catch {
+      /* not there — create it */
+    }
+    await this.post(`${this.siteUrl}/_api/web/lists`, {
+      __metadata: { type: 'SP.List' },
+      Title: LISTS.dieMaintenance,
+      BaseTemplate: 100, // generic list
+      Description:
+        'Die / tool maintenance work requests raised from the PMD Operator Sheet (Trace → Die Management). MangoTicket links to the Mango system.',
+    });
+    const F = this.F.dieMaintenance;
+    const textFields = [
+      F.status,
+      F.maintType,
+      F.priority,
+      F.contact,
+      F.requestedBy,
+      F.machine,
+      F.jobNumber,
+      F.mangoTicket,
+      F.closedAt,
+    ];
+    const fieldsUrl = `${this.listUrl(LISTS.dieMaintenance)}/fields`;
+    for (const title of textFields) {
+      await this.post(fieldsUrl, {
+        __metadata: { type: 'SP.Field' },
+        Title: title,
+        FieldTypeKind: 2, // single-line text
+      });
+    }
+    await this.post(fieldsUrl, {
+      __metadata: { type: 'SP.Field' },
+      Title: F.description,
+      FieldTypeKind: 3, // multi-line note
+    });
+    console.info('[pmd] PMD_DieMaintenance list created (auto-provisioned)');
+    this.dieMaintEnsured = true;
+  }
+
+  async listDieMaintenance(): Promise<DieMaintenanceRequest[]> {
+    const F = this.F.dieMaintenance;
+    try {
+      const rows = await this.getAllItems<Record<string, unknown>>(LISTS.dieMaintenance);
+      this.dieMaintEnsured = true;
+      return rows
+        .map((r) => ({
+          id: getId(r),
+          dieNumber: str(r[F.dieNumber]).trim(),
+          status: normaliseMaintStatus(str(r[F.status])),
+          maintType: normaliseMaintType(str(r[F.maintType])),
+          priority: normaliseMaintPriority(str(r[F.priority])),
+          description: str(r[F.description]),
+          contact: str(r[F.contact]),
+          requestedBy: str(r[F.requestedBy]),
+          machineCode: str(r[F.machine]),
+          jobNumber: str(r[F.jobNumber]),
+          mangoTicket: str(r[F.mangoTicket]),
+          createdAt: str(r['Created']),
+          closedAt: str(r[F.closedAt]),
+        }))
+        .filter((r) => r.dieNumber)
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    } catch (e) {
+      // Tenant without the list yet — an empty request book is the honest
+      // answer; the list gets created on the first write.
+      console.warn('[pmd] PMD_DieMaintenance unavailable (created on first request):', e);
+      return [];
+    }
+  }
+
+  async createDieMaintenance(
+    req: Omit<DieMaintenanceRequest, 'id' | 'createdAt' | 'closedAt'>,
+  ): Promise<DieMaintenanceRequest> {
+    await this.ensureDieMaintenanceList();
+    const F = this.F.dieMaintenance;
+    const res = await this.post(`${this.listUrl(LISTS.dieMaintenance)}/items`, {
+      __metadata: { type: await this.itemType(LISTS.dieMaintenance) },
+      [F.dieNumber]: req.dieNumber,
+      [F.status]: req.status,
+      [F.maintType]: req.maintType,
+      [F.priority]: req.priority,
+      [F.description]: req.description,
+      [F.contact]: req.contact,
+      [F.requestedBy]: req.requestedBy,
+      [F.machine]: req.machineCode,
+      [F.jobNumber]: req.jobNumber,
+      [F.mangoTicket]: req.mangoTicket,
+      [F.closedAt]: '',
+    });
+    const j = (await res.json()) as { d?: { ID?: number; Id?: number; Created?: string } };
+    return {
+      ...req,
+      id: j.d?.ID ?? j.d?.Id ?? 0,
+      createdAt: j.d?.Created ?? new Date().toISOString(),
+      closedAt: '',
+    };
+  }
+
+  async updateDieMaintenance(
+    id: number,
+    patch: Partial<Pick<DieMaintenanceRequest, 'status' | 'mangoTicket' | 'closedAt'>>,
+  ): Promise<void> {
+    const F = this.F.dieMaintenance;
+    const body: Record<string, unknown> = {
+      __metadata: { type: await this.itemType(LISTS.dieMaintenance) },
+    };
+    if (patch.status) body[F.status] = patch.status;
+    if (patch.mangoTicket !== undefined) body[F.mangoTicket] = patch.mangoTicket;
+    if (patch.closedAt !== undefined) body[F.closedAt] = patch.closedAt;
+    await this.post(`${this.listUrl(LISTS.dieMaintenance)}/items(${id})`, body, '*');
+  }
 
   async listPlanning(_filter: PlanningFilter): Promise<PlanningOrder[]> {
     // Two sources, picked by config:
@@ -2961,6 +3122,30 @@ function dominantKey(m: Map<string, number> | undefined): string {
 function getId(r: Record<string, unknown>): number {
   const v = (r as { ID?: number; Id?: number }).ID ?? (r as { Id?: number }).Id;
   return typeof v === 'number' ? v : 0;
+}
+
+// PMD_DieMaintenance stores lifecycle fields as plain text (people also
+// edit the list directly in SharePoint), so reads normalise whatever's
+// in the cell back onto the app's closed unions instead of trusting it.
+function normaliseMaintStatus(raw: string): MaintStatus {
+  const s = raw.trim().toLowerCase();
+  if (s === 'done' || s === 'closed' || s === 'complete' || s === 'completed') return 'done';
+  if (s.startsWith('in') || s === 'started' || s === 'wip') return 'in-progress';
+  return 'open';
+}
+function normaliseMaintType(raw: string): MaintType {
+  const s = raw.trim().toLowerCase();
+  if (s.startsWith('clean')) return 'cleaning';
+  if (s.startsWith('inspect')) return 'inspection';
+  if (s.startsWith('repair') || s.startsWith('fix')) return 'repair';
+  return s ? 'other' : 'other';
+}
+function normaliseMaintPriority(raw: string): MaintPriority {
+  const s = raw.trim().toLowerCase();
+  if (s === 'low') return 'low';
+  if (s === 'high') return 'high';
+  if (s === 'urgent' || s === 'critical') return 'urgent';
+  return 'normal';
 }
 
 function str(v: unknown): string {

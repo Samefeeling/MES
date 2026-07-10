@@ -483,6 +483,35 @@ list re-uses the same DEFAULT_FIELDS section.
 
 ---
 
+## PMD_DieMaintenance (Die Management work requests)
+
+The Trace page's **🛠 Die Management** tab tracks per-die usage (shots /
+pieces / rejects, joined to production via `PMD_ProductDieColor.DieNumber`)
+and raises maintenance requests against dies. Requests persist to a
+dedicated list:
+
+- **You don't need to create it.** The first time someone taps
+  *Send Request*, the app auto-provisions `PMD_DieMaintenance` (generic
+  list + columns) under that user's permissions. Site members with
+  "add lists" rights are enough; if creation is denied the toast shows
+  SharePoint's error and any site owner can create it manually instead.
+- Manual schema (all Single-line text unless noted): `Title` = DieNumber,
+  `Status` (open / in-progress / done), `MaintType` (repair / cleaning /
+  inspection / other), `Priority` (low / normal / high / urgent),
+  `Description` (**Multi-line**), `Contact`, `RequestedBy`, `Machine`,
+  `JobNumber`, `MangoTicket`, `ClosedAt` (ISO text). Values are free
+  text on purpose — people can edit the list directly in SharePoint and
+  the app normalises what it reads back.
+- **Mango integration (future)**: `MangoTicket` is the cross-link slot.
+  Today a ticket id can be attached by hand from the request card
+  (*+ Mango #*); when the Mango API hook lands, request creation will
+  push a ticket automatically and write its id back to this column.
+- Built-in maintenance contacts live in `src/core/die.ts`
+  (`MAINTENANCE_CONTACTS`) — edit that list to match the real toolroom
+  roster (phone/email optional).
+
+---
+
 ## Troubleshooting checklist
 
 | Symptom | Likely cause | Fix |

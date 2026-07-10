@@ -18,8 +18,9 @@ import {
   shiftTargetFor,
 } from './operator';
 import { escapeHtml } from './modal';
+import { mountDieTab } from './die';
 
-type TraceView = 'live' | 'search';
+type TraceView = 'live' | 'search' | 'die';
 
 interface TraceState {
   view: TraceView;
@@ -281,10 +282,22 @@ function render(): void {
     <div class="trace-tabs">
       <button class="shift-btn${S!.view === 'live' ? ' a' : ''}" data-tab="live">📡 Live Status</button>
       <button class="shift-btn${S!.view === 'search' ? ' a' : ''}" data-tab="search">🔍 Job Number Search</button>
+      <button class="shift-btn${S!.view === 'die' ? ' a' : ''}" data-tab="die">🛠 Die Management</button>
     </div>`;
-  const body = S!.view === 'live' ? renderLiveBody() : renderSearchBody();
+  // The Die tab owns its own state + render loop (ui/die.ts) — Trace just
+  // provides a host div and mounts it after the shell lands in the DOM.
+  const body =
+    S!.view === 'live'
+      ? renderLiveBody()
+      : S!.view === 'search'
+        ? renderSearchBody()
+        : `<div class="die-host"></div>`;
   app.innerHTML = `<div class="trace">${tabs}${body}</div>`;
   wire();
+  if (S!.view === 'die') {
+    const host = app.querySelector<HTMLElement>('.die-host');
+    if (host) void mountDieTab(dalRef, host);
+  }
 }
 
 function renderLiveBody(): string {

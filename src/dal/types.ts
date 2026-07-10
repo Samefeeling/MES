@@ -1,5 +1,6 @@
 import type {
   BdCode,
+  DieMaintenanceRequest,
   Machine,
   Operator,
   ParetoFilter,
@@ -27,6 +28,25 @@ export interface PmdDataLayer {
    *  Description swatch and the KPIs Color column. Optional — a tenant
    *  without PMD_ProductDieColor returns an empty list. */
   listProductDieColors?(): Promise<ProductDieColor[]>;
+
+  // Die maintenance (Trace → 🛠 Die Management). Backed by the
+  // PMD_DieMaintenance list on SharePoint (auto-provisioned on first
+  // write — see the SharePoint DAL); MangoTicket on each request is the
+  // future Mango-integration link. Optional as a group: a backend either
+  // implements all three or none.
+  /** All maintenance requests, newest first. Empty when the list doesn't
+   *  exist yet (nothing has been requested). */
+  listDieMaintenance?(): Promise<DieMaintenanceRequest[]>;
+  /** Persist a new request (id/createdAt assigned by the backend). */
+  createDieMaintenance?(
+    req: Omit<DieMaintenanceRequest, 'id' | 'createdAt' | 'closedAt'>,
+  ): Promise<DieMaintenanceRequest>;
+  /** Advance a request's lifecycle (open → in-progress → done) and/or
+   *  attach the Mango ticket id once it exists there. */
+  updateDieMaintenance?(
+    id: number,
+    patch: Partial<Pick<DieMaintenanceRequest, 'status' | 'mangoTicket' | 'closedAt'>>,
+  ): Promise<void>;
 
   // Planning (read-only — the Epicor → Planning.csv pipeline owns writes)
   listPlanning(filter: PlanningFilter): Promise<PlanningOrder[]>;

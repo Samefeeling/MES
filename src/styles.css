@@ -663,6 +663,77 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-drill-table tbody tr{cursor:default}
 .kpi-drill-table th,.kpi-drill-table td{padding:7px 10px}
 
+/* ===== Die Management (Trace → 🛠 tab) ===== */
+.die-head{background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 14px;display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.die-range{display:flex;gap:10px;align-items:center}
+.die-range label{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:var(--mu)}
+.die-range input[type=date]{border:1px solid var(--bd);border-radius:8px;padding:6px 8px;font-size:14px}
+.die-filter{border:1px solid var(--bd);border-radius:8px;padding:7px 10px;font-size:14px;min-width:180px;flex:1}
+.die-new-req{margin-left:auto;padding:8px 16px;font-size:14px;min-height:0}
+.die-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.die-chip{background:#fff;border:1px solid var(--bd);border-radius:99px;padding:5px 14px;font-size:13px;color:var(--mu)}
+.die-chip b{color:var(--tx);margin-left:4px}
+.die-chip.is-warn{border-color:#FFA500;background:#fff7ed}
+.die-chip.is-bad{border-color:var(--rd);background:#fef2f2}
+.die-table-wrap{overflow-x:auto;margin-top:10px;background:#fff;border:1px solid var(--bd);border-radius:12px}
+.die-table{margin:0}
+.die-table td.num{text-align:right;font-variant-numeric:tabular-nums}
+.die-table td.green{color:var(--gn);font-weight:800}
+.die-table td.amber{color:#FFA500;font-weight:800}
+.die-table td.red{color:var(--rd);font-weight:800}
+.die-link{background:none;border:none;color:#1d4ed8;font-weight:800;font-size:14px;cursor:pointer;text-decoration:underline;padding:0}
+.die-defect{display:inline-block;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:6px;padding:1px 6px;font-size:12px;font-weight:700;margin-right:2px}
+.die-maint-badge{background:#fff7ed;border:1px solid #fdba74;color:#9a3412;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:800}
+.die-req-btn{background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:4px 10px;font-size:15px;cursor:pointer}
+.die-req-btn:hover{background:#dbeafe}
+/* Requests list */
+.die-req-section{margin-top:16px}
+.die-req-section h3{margin:0 0 8px;font-size:16px}
+.die-req{background:#fff;border:1px solid var(--bd);border-left:5px solid #94a3b8;border-radius:10px;padding:9px 12px;margin-bottom:8px}
+.die-req.st-open{border-left-color:#FFA500}
+.die-req.st-in-progress{border-left-color:#2563eb}
+.die-req.st-done{border-left-color:var(--gn);opacity:.72}
+.die-req.pr-urgent{border-left-color:var(--rd);box-shadow:0 0 0 1px #fecaca inset}
+.die-req-hd{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px}
+.die-req-die{font-size:15px;color:#1e3a8a}
+.die-req-type{color:var(--mu)}
+.die-req-pr{border-radius:6px;padding:1px 8px;font-size:11px;font-weight:800;background:#f1f5f9;color:#475569}
+.die-req-pr.pr-high{background:#fff7ed;color:#9a3412}
+.die-req-pr.pr-urgent{background:#fef2f2;color:#b91c1c}
+.die-req-st{font-weight:800;font-size:12px;color:#475569}
+.die-req.st-open .die-req-st{color:#b45309}
+.die-req.st-in-progress .die-req-st{color:#2563eb}
+.die-req.st-done .die-req-st{color:var(--gn)}
+.die-req-meta{margin-left:auto;color:var(--mu);font-size:12px}
+.die-adv{border:1px solid var(--bd);background:#f8fafc;border-radius:8px;padding:4px 12px;font-size:13px;font-weight:700;cursor:pointer}
+.die-adv:hover{background:#eef2f7}
+.die-mango{background:#fefce8;border:1px solid #fde68a;color:#854d0e;border-radius:6px;padding:1px 8px;font-size:12px;font-weight:700}
+.die-mango-link{background:none;border:1px dashed var(--bd);border-radius:6px;color:var(--mu);font-size:11px;padding:2px 8px;cursor:pointer}
+.die-req-bd{margin-top:5px;font-size:14px}
+.die-req-ft{margin-top:4px;font-size:12px;color:var(--mu)}
+/* Die detail modal */
+.mdl:has(.die-detail),.mdl:has(.die-req-form){max-width:min(880px,94vw)}
+.die-detail h3,.die-req-form h3{margin:0;font-size:18px}
+.die-detail-sub{font-size:13px;color:var(--mu);font-weight:600}
+.die-detail h4{margin:14px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.4px;color:var(--mu)}
+.die-detail-stats{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--mu);margin-top:8px}
+.die-detail-stats b{color:var(--tx);font-variant-numeric:tabular-nums}
+.die-detail-stats .g b{color:var(--gn)}.die-detail-stats .r b{color:var(--rd)}
+.die-detail-stats .green b{color:var(--gn)}.die-detail-stats .amber b{color:#FFA500}.die-detail-stats .red b{color:var(--rd)}
+.die-bar-row{display:flex;align-items:center;gap:8px;margin-bottom:4px;font-size:13px}
+.die-bar-code{width:38px;font-weight:800;color:#991b1b}
+.die-bar-label{width:170px;color:var(--mu);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.die-bar-track{flex:1;background:#f1f5f9;border-radius:6px;height:14px;overflow:hidden}
+.die-bar-track i{display:block;height:100%;background:#ef4444;border-radius:6px}
+.die-bar-qty{width:36px;text-align:right;font-variant-numeric:tabular-nums}
+.die-detail-parts,.die-detail-hist{margin:4px 0 0;padding-left:20px;font-size:13px}
+.die-detail-parts li,.die-detail-hist li{margin-bottom:3px}
+.die-detail-hist .die-req-st{margin-right:4px}
+/* Request form */
+.die-req-form label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:700;color:var(--mu);margin-top:10px;flex:1}
+.die-req-form select,.die-req-form textarea{border:1px solid var(--bd);border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit}
+.die-req-form-row{display:flex;gap:10px;flex-wrap:wrap}
+
 /* ===== toast ===== */
 .toast{position:fixed;top:18px;right:18px;background:#1e293b;color:#fff;padding:14px 22px;border-radius:10px;font-size:17px;font-weight:700;z-index:300;opacity:0;transform:translateY(-10px);transition:.2s;pointer-events:none;max-width:80vw;box-shadow:0 4px 16px rgba(0,0,0,.25)}
 .toast.show{opacity:1;transform:translateY(0)}

@@ -63,6 +63,39 @@ export interface ProductDieColor {
   coRun: boolean;
 }
 
+/** Lifecycle of a die maintenance request (Fabrico-style work order):
+ *  raised on the floor → picked up by toolroom → closed. */
+export type MaintStatus = 'open' | 'in-progress' | 'done';
+export type MaintType = 'repair' | 'cleaning' | 'inspection' | 'other';
+export type MaintPriority = 'low' | 'normal' | 'high' | 'urgent';
+
+/** One row of PMD_DieMaintenance: a maintenance / cleaning work request
+ *  raised against a physical die (Title = DieNumber). MangoTicket is the
+ *  hook for the future Mango integration — once the request is mirrored
+ *  into Mango, its ticket id lands here so the two systems cross-link. */
+export interface DieMaintenanceRequest {
+  id: number;
+  /** Physical die this request is about (PMD_ProductDieColor.DieNumber). */
+  dieNumber: string;
+  status: MaintStatus;
+  maintType: MaintType;
+  priority: MaintPriority;
+  /** What's wrong / what needs doing — free text from the requester. */
+  description: string;
+  /** Built-in maintenance contact the request is addressed to. */
+  contact: string;
+  requestedBy: string;
+  /** Press the die was on when the problem was noticed (optional). */
+  machineCode: string;
+  /** Job running when the problem was noticed (optional). */
+  jobNumber: string;
+  /** Mango ticket id once the request exists there ('' until linked). */
+  mangoTicket: string;
+  createdAt: string; // ISO
+  /** Set when status transitions to done ('' while open/in-progress). */
+  closedAt: string;
+}
+
 export interface BdCode {
   code: string;
   label: string;

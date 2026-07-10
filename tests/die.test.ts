@@ -1,0 +1,136 @@
+import { describe, expect, it } from 'vitest';
+
+import { aggregateDies, dieHealth } from '../src/core/die';
+import { MemoryDataLayer } from '../src/dal/memory';
+import type { DieMaintenanceRequest, ProductDieColor } from '../src/types';
+import { rec } from './helpers';
+
+const dc = (partNumber: string, dieNumber: string, over: Partial<ProductDieColor> = {}): ProductDieColor => ({
+  partNumber,
+  hex: '#123456',
+  name: 'Grey',
+  category: 'Seating',
+  dieNumber,
+  coRun: false,
+  ...over,
+});
+
+const req = (over: Partial<DieMaintenanceRequest> & { dieNumber: string }): DieMaintenanceRequest => ({
+  id: 1,
+  status: 'open',
+  maintType: 'repair',
+  priority: 'normal',
+  description: '',
+  contact: '',
+  requestedBy: '',
+  machineCode: '',
+  jobNumber: '',
+  mangoTicket: '',
+  createdAt: '2026-07-01T00:00:00Z',
+  closedAt: '',
+  ...over,
+});
+
+describe('dieHealth', () => {
+  it('maps reject % onto the green/amber/red bands', () => {
+    expect(dieHealth(null)).toBe('');
+    expect(dieHealth(0)).toBe('green');
+    expect(dieHealth(1.9)).toBe('green');
+    expect(dieHealth(2)).toBe('amber');
+    expect(dieHealth(5)).toBe('amber');
+    expect(dieHealth(5.1)).toBe('red');
+  });
+});
+
+describe('aggregateDies', () => {
+  const master = [dc('P-A', 'DIE-1'), dc('P-B', 'DIE-1', { coRun: true }), dc('P-C', 'DIE-2')];
+
+  it('charges shots, pieces (× cavities) and per-code rejects to the part’s die', () => {
+    const records = [
+      // DIE-1 via P-A on M1: slot 0 carries counts (100 shots, 2 cavities),
+      // rejects spread over two slots.
+      rec({ machineCode: 'M1', shiftId: '2026-07-08-Day', jobNumber: 'J1', slotIndex: 0, statusCode: 'R', partNumber: 'P-A', countStart: 100, countEnd: 200, cavities: 2, rejects: '{"D07":2}' }),
+      rec({ machineCode: 'M1', shiftId: '2026-07-08-Day', jobNumber: 'J1', slotIndex: 1, statusCode: 'R', partNumber: 'P-A', rejects: '{"D07":1,"D05":1}' }),
+      // DIE-1 again via P-B on M2 a day later.
+      rec({ machineCode: 'M2', shiftId: '2026-07-09-Day', jobNumber: 'J2', slotIndex: 0, statusCode: 'R', partNumber: 'P-B', countStart: 0, countEnd: 50, rejects: '{}' }),
+      // Part with no die mapping — must be ignored, not crash.
+      rec({ machineCode: 'M3', shiftId: '2026-07-09-Day', jobNumber: 'J3', slotIndex: 0, statusCode: 'R', partNumber: 'UNMAPPED', countStart: 0, countEnd: 10 }),
+    ];
+    const dies = aggregateDies(master, records, []);
+    expect(dies.map((d) => d.dieNumber).sort()).toEqual(['DIE-1', 'DIE-2']);
+    const d1 = dies.find((d) => d.dieNumber === 'DIE-1')!;
+    expect(d1.parts.map((p) => p.partNumber)).toEqual(['P-A', 'P-B']);
+    expect(d1.runs).toBe(2);
+    expect(d1.shots).toBe(150); // 100 + 50 cycles
+    expect(d1.pieces).toBe(250); // 100×2 + 50×1
+    expect(d1.rejects).toBe(4);
+    expect(d1.good).toBe(246);
+    expect(d1.rejectPct).toBe(1.6);
+    expect(d1.rejByCode).toEqual([
+      { code: 'D07', qty: 3 },
+      { code: 'D05', qty: 1 },
+    ]);
+    expect(d1.machines).toEqual(['M1', 'M2']);
+    expect(d1.lastRun).toBe('2026-07-09');
+    // DIE-2 never ran but still shows (usage zero).
+    const d2 = dies.find((d) => d.dieNumber === 'DIE-2')!;
+    expect(d2.runs).toBe(0);
+    expect(d2.rejectPct).toBeNull();
+  });
+
+  it('floats dies with open requests to the top and counts only non-done ones', () => {
+    const records = [
+      rec({ machineCode: 'M1', shiftId: '2026-07-08-Day', jobNumber: 'J1', slotIndex: 0, statusCode: 'R', partNumber: 'P-A', countStart: 0, countEnd: 100, rejects: '{"D01":30}' }),
+    ];
+    const requests = [
+      req({ id: 1, dieNumber: 'DIE-2', status: 'open' }),
+      req({ id: 2, dieNumber: 'DIE-2', status: 'done' }),
+    ];
+    const dies = aggregateDies(master, records, requests);
+    // DIE-1 has 30% rejects, but DIE-2 has an open request → first.
+    expect(dies[0].dieNumber).toBe('DIE-2');
+    expect(dies[0].openRequests).toBe(1);
+    expect(dies[1].dieNumber).toBe('DIE-1');
+  });
+});
+
+describe('MemoryDataLayer die maintenance lifecycle', () => {
+  it('creates, advances and closes a request', async () => {
+    const dal = new MemoryDataLayer();
+    const created = await dal.createDieMaintenance({
+      dieNumber: 'DIE-0091',
+      status: 'open',
+      maintType: 'cleaning',
+      priority: 'high',
+      description: 'Vents blocked',
+      contact: 'Maintenance Team',
+      requestedBy: 'Christopher King',
+      machineCode: 'HS',
+      jobNumber: '',
+      mangoTicket: '',
+    });
+    expect(created.id).toBeGreaterThan(0);
+    expect(created.createdAt).not.toBe('');
+
+    await dal.updateDieMaintenance(created.id, { status: 'in-progress' });
+    await dal.updateDieMaintenance(created.id, {
+      status: 'done',
+      closedAt: '2026-07-10T05:00:00Z',
+      mangoTicket: 'MAN-31234',
+    });
+    const all = await dal.listDieMaintenance();
+    const row = all.find((r) => r.id === created.id)!;
+    expect(row.status).toBe('done');
+    expect(row.closedAt).toBe('2026-07-10T05:00:00Z');
+    expect(row.mangoTicket).toBe('MAN-31234');
+    // Newest first.
+    expect(all[0].id).toBe(created.id);
+  });
+
+  it('seeds the die master so the demo tab has data', async () => {
+    const dal = new MemoryDataLayer();
+    const colors = await dal.listProductDieColors();
+    expect(colors.length).toBeGreaterThan(0);
+    expect(colors.every((c) => c.dieNumber)).toBe(true);
+  });
+});
