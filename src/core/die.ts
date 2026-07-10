@@ -9,6 +9,7 @@
 
 import type {
   DieMaintenanceRequest,
+  PlanningOrder,
   ProductDieColor,
   ProductionRecord,
 } from '../types';
@@ -210,6 +211,55 @@ export function buildDieTrend(
     out.push(b);
   }
   return out;
+}
+
+/** The die's place in the production schedule. */
+export interface DiePlanned {
+  /** Planned start (JobHead_StartDate + StartHour, local ISO). */
+  start: string;
+  jobNumber: string;
+  machineCode: string;
+  /** True when the order's planned window covers `now` — the die is
+   *  scheduled to be IN the press right now. */
+  running: boolean;
+}
+
+/**
+ * Is this die scheduled for production? Finds the die's parts in
+ * PMD_Planning (which only carries in-progress / upcoming Epicor orders)
+ * and returns the order that matters for maintenance planning: the one
+ * running now, else the next one to start. Null = not on the schedule —
+ * a safe window to pull the die for service.
+ */
+export function nextPlannedFor(
+  dieParts: string[],
+  orders: PlanningOrder[],
+  now: Date,
+): DiePlanned | null {
+  const parts = new Set(dieParts.map((p) => p.trim().toUpperCase()));
+  const nowMs = now.getTime();
+  const mine = orders.filter(
+    (o) =>
+      !o.isDieChange &&
+      o.plannedStart &&
+      parts.has(o.partNumber.trim().toUpperCase()) &&
+      // Skip orders whose planned window is fully behind us; keep ones
+      // still running (end in the future) or not started yet.
+      (!o.plannedEnd || new Date(o.plannedEnd).getTime() >= nowMs),
+  );
+  if (mine.length === 0) return null;
+  mine.sort(
+    (a, b) => new Date(a.plannedStart).getTime() - new Date(b.plannedStart).getTime(),
+  );
+  // Prefer an order actually covering `now`; otherwise the soonest start.
+  const running = mine.find((o) => new Date(o.plannedStart).getTime() <= nowMs);
+  const pick = running ?? mine[0];
+  return {
+    start: pick.plannedStart,
+    jobNumber: pick.jobNumber,
+    machineCode: pick.machineCode,
+    running: !!running,
+  };
 }
 
 /** Reject-% traffic light for a die (same green/amber/red language as the

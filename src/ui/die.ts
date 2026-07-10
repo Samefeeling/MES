@@ -21,8 +21,10 @@ import {
   buildDieTrend,
   dieHealth,
   dieServiceStatus,
+  nextPlannedFor,
   MAINTENANCE_CONTACTS,
   type DieAgg,
+  type DiePlanned,
   type DieServiceStatus,
 } from '../core/die';
 import { closeModal, escapeHtml, openModal } from './modal';
@@ -42,7 +44,8 @@ type DieSortKey =
   | 'good'
   | 'rejects'
   | 'rejPct'
-  | 'lastRun';
+  | 'lastRun'
+  | 'scheduled';
 
 interface DieState {
   from: string; // YYYY-MM-DD inclusive
@@ -55,6 +58,9 @@ interface DieState {
   rejectLabels: Map<string, string>;
   dieColors: ProductDieColor[];
   supervisors: string[];
+  /** Die → its place in the production schedule (running / next start),
+   *  from PMD_Planning via the die's parts. Absent = not scheduled. */
+  planByDie: Map<string, DiePlanned>;
   loading: boolean;
 }
 
@@ -100,6 +106,16 @@ function svcTitle(s: DieServiceStatus): string {
   return `${s.shotsSince.toLocaleString()} shots ${sinceTxt} · rule ${s.bandLabel}: service every ${s.intervalShots.toLocaleString()} shots (strictest press it ran: ${s.press}) · ${(s.pct * 100).toFixed(0)}% of interval`;
 }
 
+/** "2026-07-12T07:00:00" → "07-12 07:00" (planned starts are local ISO). */
+function fmtPlanned(iso: string): string {
+  const m = /^\d{4}-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(iso);
+  if (m) return `${m[1]}-${m[2]} ${m[3]}:${m[4]}`;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 16);
+  const p = (n: number): string => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 function isoDay(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -126,6 +142,7 @@ export async function mountDieTab(dal: PmdDataLayer, host: HTMLElement): Promise
     rejectLabels: new Map(),
     dieColors: [],
     supervisors: [],
+    planByDie: new Map(),
     loading: true,
   };
   render();
@@ -136,7 +153,7 @@ async function loadAll(): Promise<void> {
   if (!S) return;
   S.loading = true;
   render();
-  const [dieColors, requests, rejCats, sups, records] = await Promise.all([
+  const [dieColors, requests, rejCats, sups, records, planning] = await Promise.all([
     dalRef.listProductDieColors ? dalRef.listProductDieColors().catch(() => []) : Promise.resolve([]),
     dalRef.listDieMaintenance ? dalRef.listDieMaintenance().catch(() => []) : Promise.resolve([]),
     dalRef.listRejectCategories().catch(() => []),
@@ -144,6 +161,7 @@ async function loadAll(): Promise<void> {
     dalRef
       .listProduction({ shiftIdFrom: `${S.from}-`, shiftIdTo: `${S.to}-￿` })
       .catch(() => []),
+    dalRef.listPlanning({}).catch(() => []),
   ]);
   if (!S) return;
   S.dieColors = dieColors;
@@ -151,6 +169,13 @@ async function loadAll(): Promise<void> {
   S.rejectLabels = new Map(rejCats.map((c) => [c.code, c.label]));
   S.supervisors = sups.map((s) => s.operatorName).filter((v, i, a) => a.indexOf(v) === i);
   S.dies = aggregateDies(dieColors, records, requests);
+  // Scheduled column: what the Epicor plan has lined up for each die.
+  const now = new Date();
+  S.planByDie = new Map();
+  for (const d of S.dies) {
+    const p = nextPlannedFor(d.parts.map((x) => x.partNumber), planning, now);
+    if (p) S.planByDie.set(d.dieNumber, p);
+  }
   S.loading = false;
   render();
 }
@@ -218,7 +243,13 @@ const SORT_ACCESSORS: Record<Exclude<DieSortKey, 'smart'>, (d: DieAgg) => string
   die: (d) => d.dieNumber.toUpperCase(),
   description: (d) => (d.description || '￿').toUpperCase(),
   parts: (d) => d.parts.length,
-  machines: (d) => d.machines.length,
+  // Count first, then the machine names alphabetically — a bare
+  // machines.length looked "broken" whenever several dies ran on the
+  // same number of presses (every click was a no-op tie).
+  machines: (d) =>
+    d.machines.length === 0
+      ? null
+      : `${String(d.machines.length).padStart(3, '0')}|${d.machines.join(',')}`,
   runs: (d) => d.runs,
   shots: (d) => d.shots,
   pieces: (d) => d.pieces,
@@ -226,6 +257,7 @@ const SORT_ACCESSORS: Record<Exclude<DieSortKey, 'smart'>, (d: DieAgg) => string
   rejects: (d) => d.rejects,
   rejPct: (d) => d.rejectPct,
   lastRun: (d) => d.lastRun || null,
+  scheduled: (d) => S!.planByDie.get(d.dieNumber)?.start ?? null,
 };
 
 function sortedDies(dies: DieAgg[]): DieAgg[] {
@@ -279,13 +311,6 @@ function renderDieTable(): string {
   const rows = dies
     .map((d) => {
       const health = dieHealth(d.rejectPct);
-      const top = d.rejByCode
-        .slice(0, 2)
-        .map(
-          (x) =>
-            `<span class="die-defect" title="${escapeHtml(rejLabel(x.code))}">${escapeHtml(x.code)}×${x.qty}</span>`,
-        )
-        .join(' ');
       const svc = svcFor(d);
       const svcBadge =
         svc && svc.level !== 'ok'
@@ -303,6 +328,17 @@ function renderDieTable(): string {
         d.machines.length > 3
           ? `${d.machines.length} machines`
           : d.machines.join(', ') || '—';
+      // Scheduled: is the die on the Epicor plan? Running now / next
+      // start / free. A free die is the safe one to pull for service.
+      const plan = S!.planByDie.get(d.dieNumber);
+      const planTip = plan
+        ? `${plan.jobNumber}${plan.machineCode ? ` on ${plan.machineCode}` : ''} · planned start ${fmtPlanned(plan.start)}`
+        : 'Not on the production schedule — safe window for service';
+      const planCell = plan
+        ? plan.running
+          ? `<span class="die-plan running" title="${escapeHtml(planTip)}">▶ Now · ${escapeHtml(fmtPlanned(plan.start))}</span>`
+          : `<span class="die-plan" title="${escapeHtml(planTip)}">${escapeHtml(fmtPlanned(plan.start))}</span>`
+        : `<span class="die-plan free" title="${escapeHtml(planTip)}">Free</span>`;
       return `<tr data-die-row="${escapeHtml(d.dieNumber)}">
         <td class="die-num"><button class="die-link" data-die-detail="${escapeHtml(d.dieNumber)}">${escapeHtml(d.dieNumber)}</button></td>
         <td class="die-desc" title="${escapeHtml(d.description || '')}">${escapeHtml(d.description || '—')}</td>
@@ -314,8 +350,9 @@ function renderDieTable(): string {
         <td class="num">${d.good.toLocaleString()}</td>
         <td class="num">${d.rejects.toLocaleString()}</td>
         <td class="num ${health}">${d.rejectPct == null ? '—' : d.rejectPct + '%'}</td>
-        <td class="die-trend-cell">${sparkline(d)}${top ? `<span class="die-trend-top">${top}</span>` : ''}</td>
+        <td class="die-trend-cell">${sparkline(d)}</td>
         <td>${escapeHtml(d.lastRun || '—')}</td>
+        <td>${planCell}</td>
         <td>${maint}</td>
         <td><button class="die-req-btn" data-die-req="${escapeHtml(d.dieNumber)}" title="New maintenance request for this die">📝</button></td>
       </tr>`;
@@ -342,8 +379,9 @@ function renderDieTable(): string {
       ${th('good', 'Good')}
       ${th('rejects', 'Reject')}
       ${th('rejPct', 'Rej %', 'Reject ÷ Pieces — 🟢 <2% · 🟡 2-5% · 🔴 >5%')}
-      ${th('', 'Defect trend', 'Rejects per day (per week on long windows); bar colour = that day’s reject-% band')}
+      ${th('', 'Defect trend', 'Rejects per day (per week on long windows); bar colour = that day’s reject-% band — tap for the code Pareto')}
       ${th('lastRun', 'Last run')}
+      ${th('scheduled', 'Scheduled', 'Next planned production (Epicor JobHead_StartDate). ▶ Now = running per plan · Free = not scheduled, safe to pull for service')}
       ${th('', 'Maint')}
       ${th('', '')}
     </tr></thead>
@@ -508,6 +546,11 @@ function openDieDetail(dieNumber: string): void {
       <span class="${health}">Rej % <b>${d.rejectPct == null ? '—' : d.rejectPct + '%'}</b></span>
       <span>Machines <b>${escapeHtml(d.machines.join(', ') || '—')}</b></span>
       <span>Last run <b>${escapeHtml(d.lastRun || '—')}</b></span>
+      <span>Scheduled <b>${(() => {
+        const p = S!.planByDie.get(d.dieNumber);
+        if (!p) return 'Free';
+        return `${p.running ? '▶ Now · ' : ''}${escapeHtml(fmtPlanned(p.start))} (${escapeHtml(p.jobNumber)})`;
+      })()}</b></span>
     </div>
     ${renderServiceSection(d)}
     <h4>Defect trend (${escapeHtml(S!.from)} → ${escapeHtml(S!.to)})</h4>
@@ -728,8 +771,12 @@ function wire(): void {
         S!.sortDir = S!.sortDir === 1 ? -1 : 1;
       } else {
         S!.sortKey = key;
-        // Numeric columns read best worst-first (descending); text ones A→Z.
-        S!.sortDir = key === 'die' || key === 'description' ? 1 : -1;
+        // Numeric columns read best worst-first (descending); text /
+        // date-like ones ascending (A→Z, soonest first).
+        S!.sortDir =
+          key === 'die' || key === 'description' || key === 'machines' || key === 'scheduled'
+            ? 1
+            : -1;
       }
       render();
     }),

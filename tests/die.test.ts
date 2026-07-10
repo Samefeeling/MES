@@ -6,11 +6,12 @@ import {
   dieHealth,
   dieServiceStatus,
   machineTonnage,
+  nextPlannedFor,
   serviceIntervalFor,
 } from '../src/core/die';
 import { MemoryDataLayer } from '../src/dal/memory';
 import type { DieMaintenanceRequest, ProductDieColor } from '../src/types';
-import { rec } from './helpers';
+import { order, rec } from './helpers';
 
 const dc = (partNumber: string, dieNumber: string, over: Partial<ProductDieColor> = {}): ProductDieColor => ({
   partNumber,
@@ -196,6 +197,31 @@ describe('tonnage service rule', () => {
     expect(s1.press).toBe('1600T');
     expect(s1.level).toBe('due'); // 9k ≥ 8k
     expect(dieServiceStatus(dies.find((d) => d.dieNumber === 'DIE-2')!, [])).toBeNull();
+  });
+});
+
+describe('nextPlannedFor', () => {
+  const now = new Date('2026-07-10T12:00:00');
+  const orders = [
+    order({ jobNumber: 'PAST', partNumber: 'P-A', plannedStart: '2026-07-08T07:00:00', plannedEnd: '2026-07-08T15:00:00' }),
+    order({ jobNumber: 'RUNNING', partNumber: 'P-A', machineCode: '850T', plannedStart: '2026-07-10T07:00:00', plannedEnd: '2026-07-10T15:00:00' }),
+    order({ jobNumber: 'NEXT', partNumber: 'P-A', plannedStart: '2026-07-12T07:00:00', plannedEnd: '2026-07-12T15:00:00' }),
+    order({ jobNumber: 'OTHER', partNumber: 'P-X', plannedStart: '2026-07-11T07:00:00', plannedEnd: '2026-07-11T15:00:00' }),
+  ];
+
+  it('prefers the order running right now and reports it as running', () => {
+    const p = nextPlannedFor(['P-A'], orders, now)!;
+    expect(p.jobNumber).toBe('RUNNING');
+    expect(p.running).toBe(true);
+    expect(p.machineCode).toBe('850T');
+  });
+
+  it('falls back to the soonest future start, and null when unscheduled', () => {
+    const later = new Date('2026-07-10T16:00:00'); // RUNNING has ended
+    const p = nextPlannedFor(['P-A'], orders, later)!;
+    expect(p.jobNumber).toBe('NEXT');
+    expect(p.running).toBe(false);
+    expect(nextPlannedFor(['P-UNKNOWN'], orders, now)).toBeNull();
   });
 });
 

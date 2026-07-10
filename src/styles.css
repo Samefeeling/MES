@@ -696,8 +696,10 @@ th.die-sort.a{color:#1d4ed8}
 .die-spark i.red{background:var(--rd)}
 .die-spark i.empty{height:2px;background:#e2e8f0}
 .die-spark-none{color:var(--mu)}
-.die-trend-top{display:block;margin-top:2px}
-.die-trend-top .die-defect{font-size:10px;padding:0 4px}
+/* Scheduled column: running / next planned start / free for service. */
+.die-plan{white-space:nowrap;font-variant-numeric:tabular-nums;color:#334155}
+.die-plan.running{color:var(--gn);font-weight:800}
+.die-plan.free{color:var(--mu)}
 .die-table td.green{color:var(--gn);font-weight:800}
 .die-table td.amber{color:#FFA500;font-weight:800}
 .die-table td.red{color:var(--rd);font-weight:800}

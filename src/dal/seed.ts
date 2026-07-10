@@ -228,17 +228,21 @@ export function seedBdCodes(): BdCode[] {
 
 // Two ERP orders per machine per Day shift, across the same 7-day window the
 // production seed fills, so historical shift navigation has a Gantt to show.
+// dayBack -1 = TOMORROW: real Epicor planning always carries upcoming
+// orders, and the Die Management "Scheduled" column needs future starts
+// to demo against (production is only seeded for past/today).
 export function seedPlanning(now: Date): PlanningOrder[] {
   const base: PlanningOrder[] = [];
   let id = 1;
   let mi = 0;
   for (const [machineCode] of MACHINE_DEFS) {
-    for (let dayBack = 6; dayBack >= 0; dayBack--) {
+    for (let dayBack = 6; dayBack >= -1; dayBack--) {
       const day = new Date(now);
       day.setDate(day.getDate() - dayBack);
       day.setHours(0, 0, 0, 0);
-      const a = PRODUCT_DEFS[(mi + dayBack) % PRODUCT_DEFS.length];
-      const b = PRODUCT_DEFS[(mi + dayBack + 1) % PRODUCT_DEFS.length];
+      // +length keeps the index positive for dayBack -1 (JS % is signed).
+      const a = PRODUCT_DEFS[(mi + dayBack + PRODUCT_DEFS.length) % PRODUCT_DEFS.length];
+      const b = PRODUCT_DEFS[(mi + dayBack + 1 + PRODUCT_DEFS.length) % PRODUCT_DEFS.length];
       const s1 = new Date(day);
       s1.setHours(7, 0, 0, 0);
       const e1 = new Date(day);
