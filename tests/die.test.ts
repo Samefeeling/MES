@@ -347,9 +347,26 @@ describe('parseMangoWorkOrdersCsv (Mango report → work-order mirror)', () => {
     expect(out[0].mangoTicket).toBe('WO-3');
   });
 
-  it('returns [] for an empty / header-only file', () => {
+  it('skips the Mango report-title line and finds the real header below it', () => {
+    const csv = [
+      'AU - Minto Maintenance Request 1783728039982', // title + export timestamp
+      '',
+      'Work Order No,Asset Name,Status,Description,Date Created,Date Completed',
+      'WO-9,Die 280 - Max Size 5,Open,Polish cavity,06/07/2026,',
+    ].join('\n');
+    const out = parseMangoWorkOrdersCsv(csv, KNOWN);
+    expect(out.length).toBe(1);
+    expect(out[0].mangoTicket).toBe('WO-9');
+    expect(out[0].dieNumber).toBe('280');
+    expect(out[0].createdAt.slice(0, 10)).toBe('2026-07-06');
+  });
+
+  it('returns [] for an empty / header-only / title-only file', () => {
     expect(parseMangoWorkOrdersCsv('', KNOWN)).toEqual([]);
     expect(parseMangoWorkOrdersCsv('Work Order,Status\n', KNOWN)).toEqual([]);
+    expect(
+      parseMangoWorkOrdersCsv('AU - Minto Maintenance Request 1783728039982\nno real header here\n', KNOWN),
+    ).toEqual([]);
   });
 });
 

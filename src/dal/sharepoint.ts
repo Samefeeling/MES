@@ -4165,7 +4165,35 @@ export function parseMangoWorkOrdersCsv(
   const rows = parseCsv(text.replace(/^﻿/, ''));
   if (rows.length < 2) return [];
   const normHeader = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const header = rows[0].map(normHeader);
+  // Mango prefixes the export with a report-TITLE line ("AU - Minto
+  // Maintenance Request 1783728039982" — the number is the export
+  // timestamp, different every time), sometimes followed by blanks.
+  // Locate the real header row by scoring the first rows against the
+  // column vocabulary and taking the earliest best scorer.
+  let headerAt = -1;
+  let bestScore = 0;
+  for (let i = 0; i < Math.min(rows.length, 10); i++) {
+    const cells = rows[i].map(normHeader);
+    let score = 0;
+    for (const candidates of Object.values(MANGO_CSV_COLUMNS)) {
+      if (
+        cells.some((c) => c && (candidates.includes(c) || candidates.some((k) => c.startsWith(k))))
+      )
+        score++;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      headerAt = i;
+    }
+  }
+  if (headerAt < 0 || bestScore < 2) {
+    console.warn(
+      '[pmd] Mango CSV: could not locate a header row (best score', bestScore,
+      ') — first lines:', rows.slice(0, 3).map((r) => r.join(',').slice(0, 120)),
+    );
+    return [];
+  }
+  const header = rows[headerAt].map(normHeader);
   const colIdx = (field: string): number => {
     const candidates = MANGO_CSV_COLUMNS[field];
     for (const c of candidates) {
@@ -4187,7 +4215,7 @@ export function parseMangoWorkOrdersCsv(
   if (missing.length > 0) {
     console.warn(
       '[pmd] Mango CSV: no column matched for', missing.join(', '),
-      '— headers present:', rows[0].join(' | '),
+      '— headers present:', rows[headerAt].join(' | '),
       '(extend MANGO_CSV_COLUMNS in sharepoint.ts)',
     );
   }
@@ -4201,7 +4229,7 @@ export function parseMangoWorkOrdersCsv(
       re: new RegExp(`(^|[^0-9A-Za-z])${regexEscape(die)}([^0-9A-Za-z]|$)`, 'i'),
     }));
   const out: DieMaintenanceRequest[] = [];
-  for (let r = 1; r < rows.length; r++) {
+  for (let r = headerAt + 1; r < rows.length; r++) {
     const row = rows[r];
     if (row.length === 0 || (row.length === 1 && row[0] === '')) continue;
     const asset = cell(row, 'asset');
