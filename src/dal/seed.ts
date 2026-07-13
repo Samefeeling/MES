@@ -181,8 +181,9 @@ export function seedDieMaster(now: Date): DieMaster[] {
     dieWeightKg,
     leanReady: cavities <= 2,
     toolInjectorPlate: cavities >= 4 ? 'Yes' : 'No',
-    changeOverIn: 20 + cavities * 5,
-    changeOverOut: 15 + cavities * 5,
+    // Changeover is recorded in HOURS on PMD_DieMaster.
+    changeOverIn: 1 + cavities * 0.25,
+    changeOverOut: 0.5 + cavities * 0.25,
     lifeCycle,
     dateStamp: stamp(daysAgo),
     toolStatus,

@@ -90,7 +90,8 @@ export interface DieMaster {
   leanReady: boolean | null;
   /** ToolInjectorPlate column (free text / Yes-No as entered). */
   toolInjectorPlate: string;
-  /** Changeover minutes in / out. */
+  /** Changeover HOURS in / out (the toolroom records these in hours,
+   *  not minutes — a big mould swap is a 1-4 h job). */
   changeOverIn: number | null;
   changeOverOut: number | null;
   /** Expected total life (shots). */

@@ -680,8 +680,8 @@ function renderMasterSection(d: DieAgg): string {
       ${cell('Cavities', m.cavities)}
       ${cell('Cycle time', m.cycleTime, ' s')}
       ${cell('Weight', m.dieWeightKg, ' kg')}
-      ${cell('C/O in', m.changeOverIn, ' min')}
-      ${cell('C/O out', m.changeOverOut, ' min')}
+      ${cell('C/O in', m.changeOverIn, ' h')}
+      ${cell('C/O out', m.changeOverOut, ' h')}
       ${m.leanReady == null ? '' : `<span>Lean ready <b>${m.leanReady ? 'Yes' : 'No'}</b></span>`}
       ${cell('Injector plate', m.toolInjectorPlate)}
       ${cell('Life cycle', m.lifeCycle, ' shots')}
