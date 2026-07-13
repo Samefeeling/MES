@@ -1053,9 +1053,17 @@ export class SharePointDataLayer implements PmdDataLayer {
       this.dieMasterCache = out;
       return this.dieMasterCache;
     } catch (e) {
-      // Tenant without the list — the Status column just shows "—".
-      // Not cached so the next call retries.
-      console.warn('[pmd] PMD_DieMaster unavailable, ToolStatus column disabled:', e);
+      // List unreachable — the Status column just shows "—". Not cached
+      // so the next call retries. The classic trap: creating the list in
+      // the Lists app saves it under "My lists" (the user's PERSONAL
+      // space) unless a site is picked — this site's REST then 404s even
+      // though the list looks fine to its owner.
+      console.warn(
+        `[pmd] PMD_DieMaster unreachable on ${this.siteUrl} — ToolStatus column disabled.`,
+        `If the list shows under "My lists" in the Lists app, it lives in the owner's personal`,
+        `space: recreate it on this site (Site contents → New → List → From existing list).`,
+        e,
+      );
       return [];
     }
   }

@@ -196,6 +196,22 @@ async function loadAll(): Promise<void> {
   S.requests = requests;
   S.rejectLabels = new Map(rejCats.map((c) => [c.code, c.label]));
   S.dies = aggregateDies(dieColors, records, requests);
+  // Join health check: master rows loaded but NONE matched a die means
+  // the two lists' DieNumber values disagree — dump samples so the
+  // mismatch is visible ("280" vs "DIE-280" vs "280.0"…).
+  if (master.length > 0) {
+    const matched = S.dies.filter((d) =>
+      S!.masterByDie.has(d.dieNumber.trim().toUpperCase()),
+    ).length;
+    if (matched === 0) {
+      console.warn(
+        '[pmd] PMD_DieMaster ↔ PMD_ProductDieColor join matched 0 dies.',
+        'DieMaster DieNumbers (first 5):', master.slice(0, 5).map((m) => JSON.stringify(m.dieNumber)),
+        '· ProductDieColor DieNumbers (first 5):',
+        S.dies.slice(0, 5).map((d) => JSON.stringify(d.dieNumber)),
+      );
+    }
+  }
   // Scheduled column: what the Epicor plan has lined up for each die.
   const now = new Date();
   S.planByDie = new Map();
@@ -242,12 +258,25 @@ function renderBody(): string {
   const active = S!.dies.filter((d) => d.runs > 0).length;
   const attention = S!.dies.filter((d) => dieHealth(d.rejectPct) === 'red').length;
   const svcDue = S!.dies.filter((d) => svcFor(d)?.level === 'due').length;
+  // Status-source health chip: makes a broken PMD_DieMaster hookup
+  // visible ON the page (the floor doesn't open F12). Three states:
+  // list unreachable/empty → warn; loaded but zero DieNumbers match →
+  // warn with counts; healthy → matched count, no drama.
+  const masterLoaded = S!.masterByDie.size;
+  const matched = S!.dies.filter((d) => masterFor(d.dieNumber)).length;
+  const statusChip =
+    masterLoaded === 0
+      ? `<span class="die-chip is-bad" title="PMD_DieMaster returned no rows, so every Status shows '—'. Most common cause: the list was created under 'My lists' in the Lists app (personal space) instead of on THIS SharePoint site — recreate it via Site contents → New → List on the site. Details in the F12 console ([pmd] PMD_DieMaster…).">Status source <b>⚠ no data</b></span>`
+      : matched === 0
+        ? `<span class="die-chip is-warn" title="PMD_DieMaster loaded ${masterLoaded} tools but not one DieNumber matches PMD_ProductDieColor's — compare the two columns' values (e.g. '280' vs 'DIE-280'). The F12 console logs 5 samples from each side.">Status join <b>0/${masterLoaded}</b></span>`
+        : `<span class="die-chip" title="Dies with a PMD_DieMaster ToolStatus">Status <b>${matched}/${S!.dies.length}</b></span>`;
   const chips = `<div class="die-chips">
     <span class="die-chip">Dies <b>${S!.dies.length}</b></span>
     <span class="die-chip">Ran in window <b>${active}</b></span>
     <span class="die-chip${attention ? ' is-bad' : ''}">High reject <b>${attention}</b></span>
     <span class="die-chip${svcDue ? ' is-bad' : ''}" title="Past the tonnage service rule (100-150T: 100k · 210-350T: 50k · 450-560T: 20k · 650-850T: 10k · 1000T+: 8k shots)">Service due <b>${svcDue}</b></span>
     <span class="die-chip${open.length ? ' is-warn' : ''}">Open requests <b>${open.length}</b></span>
+    ${statusChip}
   </div>`;
   return `${chips}${renderDieTable()}${renderRequests()}`;
 }
