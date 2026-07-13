@@ -96,8 +96,13 @@ export interface DieMaster {
   changeOverOut: number | null;
   /** Expected total life (shots). */
   lifeCycle: number | null;
-  /** DateStamp column — when the row was last reviewed. */
+  /** DateStamp column — when the row was last reviewed / status changed. */
   dateStamp: string;
+  /** LastServiceDate column — when the tool last came back from service.
+   *  Stamped automatically when the app sets ToolStatus to Serviced;
+   *  also the preferred reset point for the tonnage service counter.
+   *  '' when never recorded. */
+  lastServiceDate: string;
   /** '' when the ToolStatus cell is empty / unrecognised. */
   toolStatus: ToolStatus | '';
 }

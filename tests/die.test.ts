@@ -183,6 +183,23 @@ describe('tonnage service rule', () => {
     expect(s2.shotsSince).toBe(15_000);
     expect(s2.sinceIsService).toBe(false);
     expect(s2.level).toBe('due');
+
+    // PMD_DieMaster.LastServiceDate NEWER than the work order wins:
+    // counter restarts there (only the 07-08 run of 5k remains).
+    const s3 = dieServiceStatus(d1, [done], '2026-07-06T00:00:00Z')!;
+    expect(s3.shotsSince).toBe(5000);
+    expect(s3.since).toBe('2026-07-06');
+    expect(s3.sinceIsService).toBe(true);
+
+    // …and an OLDER LastServiceDate defers to the newer work order.
+    const s4 = dieServiceStatus(d1, [done], '2026-06-20T00:00:00Z')!;
+    expect(s4.since).toBe('2026-07-02');
+    expect(s4.shotsSince).toBe(9000);
+
+    // LastServiceDate alone (no work orders) is a real service marker.
+    const s5 = dieServiceStatus(d1, [], '2026-07-06T00:00:00Z')!;
+    expect(s5.shotsSince).toBe(5000);
+    expect(s5.sinceIsService).toBe(true);
   });
 
   it('uses the STRICTEST band among the presses the die ran on and skips no-rule lines', () => {
@@ -403,5 +420,23 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
     expect(d3597.cavities).toBe(2);
     expect(d3597.toolStatus).toBe('problems');
     expect(d3597.lifeCycle).toBe(1_000_000);
+    // The recently serviced die carries a LastServiceDate.
+    expect(master.find((m) => m.dieNumber === 'DIE-1422')!.lastServiceDate).not.toBe('');
+  });
+
+  it('updateDieMaster changes ToolStatus and stamps the audit dates', async () => {
+    const dal = new MemoryDataLayer();
+    await dal.updateDieMaster('die-0091', {
+      // case/space-insensitive die lookup on purpose
+      toolStatus: 'serviced',
+      dateStamp: '2026-07-13T02:00:00Z',
+      lastServiceDate: '2026-07-13T02:00:00Z',
+    });
+    const master = await dal.listDieMaster();
+    const row = master.find((m) => m.dieNumber === 'DIE-0091')!;
+    expect(row.toolStatus).toBe('serviced');
+    expect(row.dateStamp).toBe('2026-07-13T02:00:00Z');
+    expect(row.lastServiceDate).toBe('2026-07-13T02:00:00Z');
+    await expect(dal.updateDieMaster('NOPE', { toolStatus: 'problems' })).rejects.toThrow();
   });
 });

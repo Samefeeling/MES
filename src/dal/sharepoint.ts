@@ -25,7 +25,7 @@ import { bdCategoryOf, bdLabelFor, BD_TAXONOMY } from '../core/breakdown';
 import { shiftBounds, slotClock } from '../core/shifts';
 import { shiftTargetFor } from '../core/targets';
 import { retroJobLeftFixes, sumGoodStartedBefore } from '../core/jobgood';
-import { parseToolStatus } from '../core/die';
+import { parseToolStatus, TOOL_STATUS_META } from '../core/die';
 
 // =====================================================================
 // SharePointDataLayer — Resero Operations AU site.
@@ -306,6 +306,7 @@ const DEFAULT_FIELDS = {
     changeOverOut: 'ChangeOverOut',
     lifeCycle: 'LifeCycle',
     dateStamp: 'DateStamp',
+    lastServiceDate: 'LastServiceDate',
     toolStatus: 'ToolStatus',
   },
   dieMaintenance: {
@@ -437,6 +438,12 @@ export class SharePointDataLayer implements PmdDataLayer {
    */
   private dieColorCache: ProductDieColor[] | null = null;
   private dieMasterCache: DieMaster[] | null = null;
+  /** Resolved PMD_DieMaster internal names + item id per die number,
+   *  captured by listDieMaster so updateDieMaster can write directly. */
+  private dieMasterMeta: {
+    keys: Record<string, string>;
+    idByDie: Map<string, number>;
+  } | null = null;
   /**
    * Short-TTL `jobNumber → partNumber` map used by pushLiveSnapshot to
    * stamp PartNum onto every PMD_LiveStatus mirror. Without the cache,
@@ -1011,6 +1018,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         changeOverOut: resolve(F.changeOverOut),
         lifeCycle: resolve(F.lifeCycle),
         dateStamp: resolve(F.dateStamp),
+        lastServiceDate: resolve(F.lastServiceDate),
         toolStatus: resolve(F.toolStatus),
       };
       console.info('[pmd] PMD_DieMaster field resolution:', K);
@@ -1023,6 +1031,16 @@ export class SharePointDataLayer implements PmdDataLayer {
       // column is empty on every row (list made by renaming Title but a
       // separate DieNumber column also exists, unfilled).
       const dieKey = rows.some((r) => str(r[K.dieNumber]).trim()) ? K.dieNumber : 'Title';
+      // Remember resolved keys + item ids so updateDieMaster can write
+      // without re-resolving (idByDie keyed by normalised die number).
+      this.dieMasterMeta = {
+        keys: K,
+        idByDie: new Map(
+          rows
+            .map((r) => [str(r[dieKey]).trim().toUpperCase(), getId(r)] as const)
+            .filter(([die, id]) => die && id > 0),
+        ),
+      };
       const out = rows
         .map((r) => ({
           dieNumber: str(r[dieKey]).trim(),
@@ -1036,6 +1054,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           changeOverOut: nullOrNum(r[K.changeOverOut]),
           lifeCycle: nullOrNum(r[K.lifeCycle]),
           dateStamp: str(r[K.dateStamp]),
+          lastServiceDate: str(r[K.lastServiceDate]),
           toolStatus: parseToolStatus(str(r[K.toolStatus])),
         }))
         .filter((m) => m.dieNumber);
@@ -1065,6 +1084,41 @@ export class SharePointDataLayer implements PmdDataLayer {
         e,
       );
       return [];
+    }
+  }
+
+  async updateDieMaster(
+    dieNumber: string,
+    patch: Partial<Pick<DieMaster, 'toolStatus' | 'dateStamp' | 'lastServiceDate'>>,
+  ): Promise<void> {
+    // listDieMaster resolves the internal names + item ids; make sure it
+    // has run (it caches, so this is a no-op after the first call).
+    if (!this.dieMasterMeta) await this.listDieMaster();
+    const meta = this.dieMasterMeta;
+    const key = dieNumber.trim().toUpperCase();
+    const id = meta?.idByDie.get(key);
+    if (!meta || !id) throw new Error(`No PMD_DieMaster row for die ${dieNumber}`);
+    const body: Record<string, unknown> = {
+      __metadata: { type: await this.itemType(LISTS.dieMaster) },
+    };
+    // Write the human label ("To be Serviced"), not the union slug —
+    // the toolroom reads this list directly in SharePoint, and
+    // parseToolStatus round-trips it on the way back in.
+    if (patch.toolStatus !== undefined)
+      body[meta.keys.toolStatus] = patch.toolStatus ? TOOL_STATUS_META[patch.toolStatus].label : '';
+    if (patch.dateStamp !== undefined) body[meta.keys.dateStamp] = patch.dateStamp;
+    if (patch.lastServiceDate !== undefined)
+      body[meta.keys.lastServiceDate] = patch.lastServiceDate;
+    await this.post(`${this.listUrl(LISTS.dieMaster)}/items(${id})`, body, '*');
+    // Keep the read cache coherent so a re-mount shows the new state
+    // without a hard reload.
+    if (this.dieMasterCache) {
+      const row = this.dieMasterCache.find((m) => m.dieNumber.trim().toUpperCase() === key);
+      if (row) {
+        if (patch.toolStatus !== undefined) row.toolStatus = patch.toolStatus;
+        if (patch.dateStamp !== undefined) row.dateStamp = patch.dateStamp;
+        if (patch.lastServiceDate !== undefined) row.lastServiceDate = patch.lastServiceDate;
+      }
     }
   }
 

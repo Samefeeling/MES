@@ -145,13 +145,16 @@ export interface DieServiceStatus {
  * Where a die sits against its preventive-maintenance rule. Returns null
  * when none of the presses the die ran on carries a tonnage rule (Batt /
  * HS lines) or the die didn't run at all. The counter resets at the most
- * recent DONE maintenance request's closed date; dies never serviced
- * count from the window start (an under-count — flagged via
+ * recent SERVICE EVENT — the newer of the last DONE work order's closed
+ * date and PMD_DieMaster.LastServiceDate (the toolroom's own record,
+ * stamped when ToolStatus is set to Serviced). Dies with no service on
+ * record count from the window start (an under-count — flagged via
  * sinceIsService=false so the UI can say "at least").
  */
 export function dieServiceStatus(
   agg: DieAgg,
   requests: DieMaintenanceRequest[],
+  lastServiceDate?: string,
 ): DieServiceStatus | null {
   let interval: { shots: number; label: string } | null = null;
   let press = '';
@@ -170,15 +173,18 @@ export function dieServiceStatus(
     .map((r) => r.closedAt.slice(0, 10))
     .sort()
     .pop();
+  const master = lastServiceDate?.slice(0, 10) || undefined;
+  const lastService =
+    lastDone && master ? (lastDone > master ? lastDone : master) : lastDone ?? master;
   const shotsSince = agg.daily
-    .filter((d) => !lastDone || d.day > lastDone)
+    .filter((d) => !lastService || d.day > lastService)
     .reduce((a, d) => a + d.shots, 0);
   if (shotsSince === 0) return null;
   const pct = shotsSince / interval.shots;
   return {
     shotsSince,
-    since: lastDone ?? agg.daily[0].day,
-    sinceIsService: !!lastDone,
+    since: lastService ?? agg.daily[0].day,
+    sinceIsService: !!lastService,
     intervalShots: interval.shots,
     bandLabel: interval.label,
     press,

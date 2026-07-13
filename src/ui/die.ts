@@ -31,6 +31,7 @@ import {
   type DieServiceStatus,
 } from '../core/die';
 import { closeModal, escapeHtml, openModal } from './modal';
+import { toast } from './toast';
 
 /** 'smart' = the aggregate's attention-first order (open requests, then
  *  reject-%, then shots). Any other key is a user-picked column sort. */
@@ -39,6 +40,7 @@ type DieSortKey =
   | 'die'
   | 'description'
   | 'toolStatus'
+  | 'lastService'
   | 'parts'
   | 'machines'
   | 'runs'
@@ -99,9 +101,10 @@ const MANGO_REQUEST_URL = 'https://my.mangolive.com/plant-equipment/request-main
 const mangoLink = (label: string, cls = ''): string =>
   `<a class="die-mango-open${cls ? ' ' + cls : ''}" href="${MANGO_REQUEST_URL}" target="_blank" rel="noopener" title="Open Mango — Request Maintenance (new tab)">🥭 ${label} ↗</a>`;
 
-/** Service-rule position for a die (memoised per render pass). */
+/** Service-rule position for a die. The counter resets at the newer of
+ *  the last DONE work order and PMD_DieMaster.LastServiceDate. */
 function svcFor(d: DieAgg): DieServiceStatus | null {
-  return dieServiceStatus(d, S!.requests);
+  return dieServiceStatus(d, S!.requests, masterFor(d.dieNumber)?.lastServiceDate || undefined);
 }
 
 function svcTitle(s: DieServiceStatus): string {
@@ -128,19 +131,24 @@ function masterFor(dieNumber: string): DieMaster | undefined {
   return S!.masterByDie.get(dieNumber.trim().toUpperCase());
 }
 
-function toolStatusBadge(dieNumber: string): string {
+/** The badge is a BUTTON when the backend can write PMD_DieMaster —
+ *  tapping it opens the status picker. A die with no master row stays a
+ *  plain dash (the app can't invent asset rows). */
+function toolStatusBadge(dieNumber: string, editable = false): string {
   const m = masterFor(dieNumber);
-  if (!m || !m.toolStatus) {
-    const why = m
-      ? 'PMD_DieMaster.ToolStatus is empty for this die'
-      : 'No PMD_DieMaster row for this die yet';
-    return `<span class="die-tstat none" title="${escapeHtml(why)}">—</span>`;
+  if (!m) {
+    return `<span class="die-tstat none" title="No PMD_DieMaster row for this die yet">—</span>`;
   }
-  const meta = TOOL_STATUS_META[m.toolStatus];
+  const meta = m.toolStatus ? TOOL_STATUS_META[m.toolStatus] : null;
   const when = m.dateStamp ? ` · updated ${m.dateStamp.slice(0, 10)}` : '';
-  return `<span class="die-tstat ${meta.cls}" title="${escapeHtml(
-    `PMD_DieMaster ToolStatus${when}`,
-  )}">● ${meta.label}</span>`;
+  const inner = meta ? `● ${meta.label}` : '—';
+  const cls = meta ? `die-tstat ${meta.cls}` : 'die-tstat none';
+  if (editable && dalRef.updateDieMaster) {
+    return `<button class="${cls} die-tstat-btn" data-die-status="${escapeHtml(dieNumber)}" title="${escapeHtml(
+      `PMD_DieMaster ToolStatus${when} — tap to change`,
+    )}">${inner} ▾</button>`;
+  }
+  return `<span class="${cls}" title="${escapeHtml(`PMD_DieMaster ToolStatus${when}`)}">${inner}</span>`;
 }
 
 function isoDay(d: Date): string {
@@ -239,15 +247,28 @@ function render(): void {
   wire();
 }
 
+/** Same visual language as the KPI page head: compact preset tabs (the
+ *  active range highlighted) + the same From/To date pickers, in one
+ *  white card. */
 function renderHead(): string {
+  const today = isoDay(new Date());
+  const activeDays =
+    S!.to === today
+      ? Math.round(
+          (new Date(`${S!.to}T00:00:00`).getTime() - new Date(`${S!.from}T00:00:00`).getTime()) /
+            86_400_000,
+        ) + 1
+      : 0;
   const preset = (days: number, label: string): string =>
-    `<button class="shift-btn" data-die-preset="${days}">${label}</button>`;
-  return `<div class="die-head">
-    <span class="die-range">
+    `<button class="shift-btn${days === activeDays ? ' a' : ''}" data-die-preset="${days}">${label}</button>`;
+  return `<div class="kpi-head die-head">
+    <div class="shift-tabs">
+      ${preset(7, '7 days')}${preset(30, '30 days')}${preset(90, '90 days')}
+    </div>
+    <div class="kpi-range">
       <label>From <input type="date" data-die-from value="${escapeHtml(S!.from)}"></label>
       <label>To <input type="date" data-die-to value="${escapeHtml(S!.to)}"></label>
-    </span>
-    ${preset(7, '7 days')}${preset(30, '30 days')}${preset(90, '90 days')}
+    </div>
     <input type="text" class="die-filter" data-die-filter placeholder="Filter die / part…" value="${escapeHtml(S!.filter)}">
     ${mangoLink('Raise Request in Mango', 'lg')}
   </div>`;
@@ -303,6 +324,8 @@ const SORT_ACCESSORS: Record<Exclude<DieSortKey, 'smart'>, (d: DieAgg) => string
     const st = masterFor(d.dieNumber)?.toolStatus;
     return st ? TOOL_STATUS_META[st].rank : null;
   },
+  // Ascending = longest since service first (the actionable order).
+  lastService: (d) => masterFor(d.dieNumber)?.lastServiceDate?.slice(0, 10) || null,
   parts: (d) => d.parts.length,
   // Count first, then the machine names alphabetically — a bare
   // machines.length looked "broken" whenever several dies ran on the
@@ -347,9 +370,9 @@ function sortedDies(dies: DieAgg[]): DieAgg[] {
  *  the <colgroup> are both keyed by these, so a future column insert
  *  invalidates nothing (unknown keys are simply ignored). */
 const DIE_COL_KEYS = [
-  'die', 'description', 'toolStatus', 'parts', 'machines', 'runs', 'shots',
-  'pieces', 'good', 'rejects', 'rejPct', 'trend', 'lastRun', 'scheduled',
-  'maint',
+  'die', 'description', 'toolStatus', 'lastService', 'parts', 'machines',
+  'runs', 'shots', 'pieces', 'good', 'rejects', 'rejPct', 'trend',
+  'lastRun', 'scheduled', 'maint',
 ] as const;
 const COLW_KEY = 'pmd.die.colw';
 
@@ -512,7 +535,13 @@ function renderDieTable(): string {
       return `<tr data-die-row="${escapeHtml(d.dieNumber)}">
         <td class="die-num"><button class="die-link" data-die-detail="${escapeHtml(d.dieNumber)}">${escapeHtml(d.dieNumber)}</button></td>
         <td class="die-desc" title="${escapeHtml(d.description || '')}">${escapeHtml(d.description || '—')}</td>
-        <td>${toolStatusBadge(d.dieNumber)}</td>
+        <td>${toolStatusBadge(d.dieNumber, true)}</td>
+        <td>${(() => {
+          const ls = masterFor(d.dieNumber)?.lastServiceDate;
+          return ls
+            ? `<span title="PMD_DieMaster LastServiceDate">${escapeHtml(ls.slice(0, 10))}</span>`
+            : '<span class="die-tstat none">—</span>';
+        })()}</td>
         <td title="${escapeHtml(partsTip)}">${d.parts.length}</td>
         <td title="${escapeHtml(d.machines.join(', '))}">${escapeHtml(machines)}</td>
         <td class="num">${d.runs}</td>
@@ -547,7 +576,8 @@ function renderDieTable(): string {
     <thead><tr>
       ${th('die', 'Die #')}
       ${th('description', 'Description', "The tool's name — PMD_ProductDieColor's Die column")}
-      ${th('toolStatus', 'Status', 'Tool condition from PMD_DieMaster.ToolStatus: 🔴 Problems · 🟠 To be Serviced · 🔵 In service · 🟢 Serviced')}
+      ${th('toolStatus', 'Status', 'Tool condition from PMD_DieMaster.ToolStatus: 🔴 Problems · 🟠 To be Serviced · 🔵 In service · 🟢 Serviced — tap a badge to change it')}
+      ${th('lastService', 'Last service', 'PMD_DieMaster.LastServiceDate — stamped automatically when Status is set to Serviced. Sorting ascending puts the longest-unserviced tools first')}
       ${th('parts', 'Parts', 'Part numbers that run on this die')}
       ${th('machines', 'Machines')}
       ${th('runs', 'Runs', '(machine, shift, job) runs in the window')}
@@ -607,14 +637,97 @@ function renderRequests(): string {
 }
 
 // ---------------------------------------------------------------------
+// ToolStatus picker — tap the badge, pick the tool's new condition. The
+// change writes straight to PMD_DieMaster (ToolStatus + DateStamp), and
+// setting "Serviced" also stamps LastServiceDate so the tonnage service
+// counter restarts from today.
+
+function openStatusPicker(dieNumber: string): void {
+  const m = masterFor(dieNumber);
+  if (!m || !dalRef.updateDieMaster) return;
+  const order: Array<keyof typeof TOOL_STATUS_META> = [
+    'serviced', 'in-service', 'to-be-serviced', 'problems',
+  ];
+  const opts = order
+    .map((st) => {
+      const meta = TOOL_STATUS_META[st];
+      const current = m.toolStatus === st;
+      return `<button class="die-st-opt${current ? ' cur' : ''}" data-die-st="${st}">
+        <span class="die-tstat ${meta.cls}">● ${meta.label}</span>
+        ${st === 'serviced' ? '<em>stamps Last service = today</em>' : ''}
+        ${current ? '<b>current</b>' : ''}
+      </button>`;
+    })
+    .join('');
+  openModal(`<div class="die-st-pick">
+    <div class="kpi-trace-head">
+      <h3>🛠 ${escapeHtml(dieNumber)} — Tool Status</h3>
+      <button class="btn-ghost-big" data-mod="close">Cancel</button>
+    </div>
+    <p class="die-req-note">Writes to PMD_DieMaster (ToolStatus + DateStamp).</p>
+    ${opts}
+  </div>`);
+  const mc = document.getElementById('mc')!;
+  mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
+  mc.querySelectorAll<HTMLButtonElement>('[data-die-st]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const st = b.dataset.dieSt as keyof typeof TOOL_STATUS_META;
+      void (async () => {
+        const now = new Date().toISOString();
+        const patch: { toolStatus: typeof st; dateStamp: string; lastServiceDate?: string } = {
+          toolStatus: st,
+          dateStamp: now,
+        };
+        if (st === 'serviced') patch.lastServiceDate = now;
+        const prev = { toolStatus: m.toolStatus, dateStamp: m.dateStamp, lastServiceDate: m.lastServiceDate };
+        // Optimistic — the row updates immediately; a failed write rolls back.
+        m.toolStatus = st;
+        m.dateStamp = now;
+        if (patch.lastServiceDate) m.lastServiceDate = patch.lastServiceDate;
+        closeModal();
+        render();
+        try {
+          await dalRef.updateDieMaster!(dieNumber, patch);
+          toast(`${dieNumber} → ${TOOL_STATUS_META[st].label}`, 'ok');
+        } catch (e) {
+          Object.assign(m, prev);
+          render();
+          console.error('[pmd] ToolStatus update failed:', e);
+          toast(`Could not update: ${e instanceof Error ? e.message : e}`, 'err');
+        }
+      })();
+    }),
+  );
+}
+
+// ---------------------------------------------------------------------
 // die detail popup
 
 /** Full-size defect trend for the detail popup: same buckets as the row
- *  sparkline, taller bars, sparse date labels along the x-axis. */
+ *  sparkline, taller bars, sparse date labels along the x-axis. Days a
+ *  service was completed (DONE work order closed / LastServiceDate) are
+ *  marked 🔧 under the axis — defects that keep climbing AFTER a wrench
+ *  mark mean the repair didn't take. */
 function trendChart(d: DieAgg): string {
   const buckets = buildDieTrend(d.daily, S!.from, S!.to);
   if (buckets.length === 0 || d.runs === 0)
     return `<div class="trace-empty">No production in the window.</div>`;
+  const svcDays = new Set<string>();
+  for (const r of S!.requests)
+    if (r.dieNumber === d.dieNumber && r.status === 'done' && r.closedAt)
+      svcDays.add(r.closedAt.slice(0, 10));
+  const ls = masterFor(d.dieNumber)?.lastServiceDate;
+  if (ls) svcDays.add(ls.slice(0, 10));
+  const bucketHasService = (day: string, span: number): boolean => {
+    if (span === 1) return svcDays.has(day);
+    const start = new Date(`${day}T00:00:00`).getTime();
+    const end = start + span * 86_400_000;
+    for (const s of svcDays) {
+      const t = new Date(`${s}T00:00:00`).getTime();
+      if (t >= start && t < end) return true;
+    }
+    return false;
+  };
   const max = Math.max(1, ...buckets.map((b) => b.rejects));
   const labelEvery = Math.max(1, Math.ceil(buckets.length / 8));
   const bars = buckets
@@ -622,20 +735,24 @@ function trendChart(d: DieAgg): string {
       const pct = b.pieces > 0 ? (b.rejects / b.pieces) * 100 : null;
       const health = dieHealth(pct);
       const name = b.span === 1 ? b.day.slice(5) : `wk ${b.day.slice(5)}`;
+      const serviced = bucketHasService(b.day, b.span);
       const tip = `${name} · ${b.rejects} rej / ${b.pieces} pcs${
         pct != null ? ` (${pct.toFixed(1)}%)` : ''
-      }`;
+      }${serviced ? ' · 🔧 service completed' : ''}`;
       const idle = b.pieces === 0 && b.rejects === 0;
       const h = idle ? 0 : b.rejects === 0 ? 4 : Math.max(8, Math.round((b.rejects / max) * 100));
       const label = i % labelEvery === 0 ? name : '';
-      return `<div class="die-trend-col" title="${escapeHtml(tip)}">
+      return `<div class="die-trend-col${serviced ? ' svc' : ''}" title="${escapeHtml(tip)}">
         <b>${b.rejects > 0 ? b.rejects : ''}</b>
         <span class="die-trend-bar"><i class="${idle ? 'empty' : health || 'green'}" style="height:${h}%"></i></span>
-        <em>${escapeHtml(label)}</em>
+        <em>${serviced ? '🔧' : ''}${escapeHtml(label)}</em>
       </div>`;
     })
     .join('');
-  return `<div class="die-trend-lg">${bars}</div>`;
+  const legend = svcDays.size
+    ? `<p class="kpi-note">🔧 = service completed that ${buckets[0].span === 1 ? 'day' : 'week'} (closed work order / Last service). Rejects that keep climbing after a 🔧 mean the repair didn't take.</p>`
+    : '';
+  return `<div class="die-trend-lg">${bars}</div>${legend}`;
 }
 
 /** Preventive-maintenance position in the detail popup: the governing
@@ -685,6 +802,7 @@ function renderMasterSection(d: DieAgg): string {
       ${m.leanReady == null ? '' : `<span>Lean ready <b>${m.leanReady ? 'Yes' : 'No'}</b></span>`}
       ${cell('Injector plate', m.toolInjectorPlate)}
       ${cell('Life cycle', m.lifeCycle, ' shots')}
+      ${cell('Last service', m.lastServiceDate ? m.lastServiceDate.slice(0, 10) : '')}
       ${cell('Updated', m.dateStamp ? m.dateStamp.slice(0, 10) : '')}
     </div>`;
 }
@@ -713,19 +831,44 @@ function openDieDetail(dieNumber: string): void {
         }</li>`,
     )
     .join('');
-  const hist = S!.requests.filter((r) => r.dieNumber === dieNumber);
+  // Work-order history (mirrored from Mango) — the "what have we already
+  // tried on this tool" record that sits next to the defect trend when
+  // judging repair vs run-on. Open orders first, then newest closed.
+  const hist = [...S!.requests]
+    .filter((r) => r.dieNumber === dieNumber)
+    .sort((a, b) =>
+      (a.status === 'done' ? 1 : 0) - (b.status === 'done' ? 1 : 0) ||
+      (a.createdAt < b.createdAt ? 1 : -1),
+    );
   const histHtml = hist.length
     ? hist
-        .map(
-          (r) =>
-            `<li><span class="die-req-st st-${r.status}">${STATUS_LABELS[r.status]}</span> ${
-              TYPE_LABELS[r.maintType]
-            } · ${escapeHtml(r.createdAt.slice(0, 10))} — ${escapeHtml(r.description)}${
-              r.mangoTicket ? ` (🥭 ${escapeHtml(r.mangoTicket)})` : ''
-            }</li>`,
-        )
+        .map((r) => {
+          const opened = r.createdAt ? r.createdAt.slice(0, 10) : '';
+          const closed = r.closedAt ? r.closedAt.slice(0, 10) : '';
+          const days =
+            opened && closed
+              ? Math.max(
+                  0,
+                  Math.round(
+                    (new Date(`${closed}T00:00:00`).getTime() -
+                      new Date(`${opened}T00:00:00`).getTime()) / 86_400_000,
+                  ),
+                )
+              : null;
+          const span = closed
+            ? `${escapeHtml(opened)} → ${escapeHtml(closed)}${days != null ? ` · ${days === 0 ? '<1' : days} d` : ''}`
+            : `${escapeHtml(opened)} · still open`;
+          return `<li class="die-hist-row">
+            <span class="die-req-st st-${r.status}">${STATUS_LABELS[r.status]}</span>
+            <span class="die-req-type">${TYPE_LABELS[r.maintType]}</span>
+            ${r.mangoTicket ? `<span class="die-mango">🥭 ${escapeHtml(r.mangoTicket)}</span>` : ''}
+            <span class="die-hist-span">${span}</span>
+            <span class="die-hist-desc">${escapeHtml(r.description || '—')}</span>
+            ${r.contact ? `<span class="die-hist-who">→ ${escapeHtml(r.contact)}</span>` : ''}
+          </li>`;
+        })
         .join('')
-    : '<li>No maintenance history.</li>';
+    : '<li>No maintenance history on record.</li>';
   const health = dieHealth(d.rejectPct);
   openModal(`<div class="die-detail">
     <div class="kpi-trace-head">
@@ -819,7 +962,8 @@ function wire(): void {
           key === 'description' ||
           key === 'machines' ||
           key === 'scheduled' ||
-          key === 'toolStatus' // rank 0 = Problems, so ascending is worst-first
+          key === 'toolStatus' || // rank 0 = Problems, so ascending is worst-first
+          key === 'lastService' // oldest service first = needs attention first
             ? 1
             : -1;
       }
@@ -830,5 +974,11 @@ function wire(): void {
   if (table) wireColResize(table);
   h.querySelectorAll<HTMLButtonElement>('[data-die-detail]').forEach((b) =>
     b.addEventListener('click', () => openDieDetail(b.dataset.dieDetail!)),
+  );
+  h.querySelectorAll<HTMLButtonElement>('[data-die-status]').forEach((b) =>
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openStatusPicker(b.dataset.dieStatus!);
+    }),
   );
 }

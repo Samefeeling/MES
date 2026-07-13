@@ -664,10 +664,11 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-drill-table th,.kpi-drill-table td{padding:7px 10px}
 
 /* ===== Die Management (Trace → 🛠 tab) ===== */
-.die-head{background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 14px;display:flex;flex-wrap:wrap;align-items:center;gap:10px}
-.die-range{display:flex;gap:10px;align-items:center}
-.die-range label{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:var(--mu)}
-.die-range input[type=date]{border:1px solid var(--bd);border-radius:8px;padding:6px 8px;font-size:14px}
+/* Die head reuses the KPI head card (same tabs, same From/To pickers) —
+   only the extras (filter, Mango pill) are die-specific. The KPI rule
+   pushing .kpi-range right doesn't apply here: the filter wants the
+   stretch space. */
+.die-head .kpi-range{margin-left:0}
 .die-filter{border:1px solid var(--bd);border-radius:8px;padding:7px 10px;font-size:14px;min-width:180px;flex:1}
 .die-new-req{margin-left:auto;padding:8px 16px;font-size:14px;min-height:0}
 .die-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
@@ -703,6 +704,25 @@ th.die-sort.a{color:#1d4ed8}
 .die-tstat.ts-blue{color:#2563eb}
 .die-tstat.ts-orange{color:#FFA500}
 .die-tstat.ts-red{color:var(--rd)}
+/* Editable badge (backend can write PMD_DieMaster): same colours, but a
+   tappable pill with a caret. */
+.die-tstat-btn{background:#fff;border:1px solid var(--bd);border-radius:8px;padding:3px 8px;cursor:pointer}
+.die-tstat-btn:hover{background:#f1f5f9;border-color:#94a3b8}
+/* Status picker modal */
+.die-st-pick .die-st-opt{display:flex;align-items:center;gap:10px;width:100%;margin-top:8px;padding:12px 14px;background:#fff;border:1px solid var(--bd);border-radius:10px;font-size:14px;cursor:pointer;text-align:left}
+.die-st-pick .die-st-opt:hover{background:#f1f5f9}
+.die-st-pick .die-st-opt.cur{border-color:#1d4ed8;box-shadow:0 0 0 1px #1d4ed8}
+.die-st-pick .die-st-opt .die-tstat{font-size:14px}
+.die-st-pick .die-st-opt em{color:var(--mu);font-size:12px;font-style:normal}
+.die-st-pick .die-st-opt b{margin-left:auto;color:#1d4ed8;font-size:12px}
+/* Service (🔧) markers on the big trend chart */
+.die-trend-col.svc em{color:#9a3412;font-style:normal;font-weight:800}
+.die-trend-col.svc .die-trend-bar{box-shadow:inset 0 -3px 0 #fdba74}
+/* Work-order history rows in the die detail */
+.die-hist-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;padding:6px 0;border-bottom:1px dashed var(--bd);list-style:none}
+.die-hist-row .die-hist-span{font-variant-numeric:tabular-nums;color:#334155;font-weight:600;font-size:12px}
+.die-hist-row .die-hist-desc{flex:1 1 100%;color:#334155}
+.die-hist-row .die-hist-who{color:var(--mu);font-size:12px}
 /* Defect-trend sparkline: one bar per bucket, height = reject qty,
    colour = that bucket's reject-% band. */
 .die-trend-cell{min-width:150px}
