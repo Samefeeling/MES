@@ -1,6 +1,7 @@
 import type {
   BdCode,
   DieMaintenanceRequest,
+  DieMaster,
   Machine,
   Operator,
   ParetoFilter,
@@ -19,6 +20,7 @@ import { bdLabelFor } from '../core/breakdown';
 import {
   seedBdCodes,
   seedDieMaintenance,
+  seedDieMaster,
   seedMachines,
   seedOperators,
   seedPlanning,
@@ -43,6 +45,7 @@ export class MemoryDataLayer implements PmdDataLayer {
   private planning: PlanningOrder[];
   private production: ProductionRecord[];
   private dieColors: ProductDieColor[];
+  private dieMaster: DieMaster[];
   private dieMaintenance: DieMaintenanceRequest[];
   private nextMaintId: number;
   private nextProdId: number;
@@ -62,6 +65,7 @@ export class MemoryDataLayer implements PmdDataLayer {
     this.planning = seedPlanning(now);
     this.production = seedProduction(now, this.planning);
     this.dieColors = seedProductDieColors();
+    this.dieMaster = seedDieMaster(now);
     this.dieMaintenance = seedDieMaintenance(now);
     this.nextMaintId = Math.max(0, ...this.dieMaintenance.map((r) => r.id)) + 1;
     this.nextProdId = Math.max(0, ...this.production.map((r) => r.id)) + 1;
@@ -91,6 +95,9 @@ export class MemoryDataLayer implements PmdDataLayer {
   }
   async listProductDieColors(): Promise<ProductDieColor[]> {
     return MemoryDataLayer.clone(this.dieColors);
+  }
+  async listDieMaster(): Promise<DieMaster[]> {
+    return MemoryDataLayer.clone(this.dieMaster);
   }
 
   // ---- die maintenance (PMD_DieMaintenance parity) ---------------------

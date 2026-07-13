@@ -7,7 +7,9 @@ import {
   dieServiceStatus,
   machineTonnage,
   nextPlannedFor,
+  parseToolStatus,
   serviceIntervalFor,
+  TOOL_STATUS_META,
 } from '../src/core/die';
 import { MemoryDataLayer } from '../src/dal/memory';
 import type { DieMaintenanceRequest, ProductDieColor } from '../src/types';
@@ -263,5 +265,58 @@ describe('MemoryDataLayer die maintenance lifecycle', () => {
     const colors = await dal.listProductDieColors();
     expect(colors.length).toBeGreaterThan(0);
     expect(colors.every((c) => c.dieNumber)).toBe(true);
+  });
+});
+
+describe('parseToolStatus (PMD_DieMaster.ToolStatus normalisation)', () => {
+  it('accepts the four canonical labels in any casing / spacing', () => {
+    expect(parseToolStatus('Serviced')).toBe('serviced');
+    expect(parseToolStatus('In service')).toBe('in-service');
+    expect(parseToolStatus('IN-SERVICE')).toBe('in-service');
+    expect(parseToolStatus('To be Serviced')).toBe('to-be-serviced');
+    expect(parseToolStatus('  to  be  serviced ')).toBe('to-be-serviced');
+    expect(parseToolStatus('Problems')).toBe('problems');
+    expect(parseToolStatus('problem')).toBe('problems');
+  });
+
+  it('never mistakes "In service" or "To be Serviced" for "Serviced"', () => {
+    // All three normalise to strings containing "service" — order matters.
+    expect(parseToolStatus('inservice')).toBe('in-service');
+    expect(parseToolStatus('tobeserviced')).toBe('to-be-serviced');
+    expect(parseToolStatus('serviced')).toBe('serviced');
+  });
+
+  it('returns "" for empty / unrecognised cells', () => {
+    expect(parseToolStatus('')).toBe('');
+    expect(parseToolStatus('   ')).toBe('');
+    expect(parseToolStatus('banana')).toBe('');
+  });
+
+  it('ranks worst-first for the Status column sort', () => {
+    expect(TOOL_STATUS_META.problems.rank).toBeLessThan(TOOL_STATUS_META['to-be-serviced'].rank);
+    expect(TOOL_STATUS_META['to-be-serviced'].rank).toBeLessThan(TOOL_STATUS_META['in-service'].rank);
+    expect(TOOL_STATUS_META['in-service'].rank).toBeLessThan(TOOL_STATUS_META.serviced.rank);
+  });
+});
+
+describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
+  it('seeds one row per die covering all four ToolStatus values', async () => {
+    const dal = new MemoryDataLayer();
+    const master = await dal.listDieMaster();
+    expect(master.length).toBeGreaterThanOrEqual(4);
+    const statuses = new Set(master.map((m) => m.toolStatus));
+    expect(statuses.has('serviced')).toBe(true);
+    expect(statuses.has('in-service')).toBe(true);
+    expect(statuses.has('to-be-serviced')).toBe(true);
+    expect(statuses.has('problems')).toBe(true);
+    // Every master row joins back to the part→die mapping.
+    const colors = await dal.listProductDieColors();
+    const dies = new Set(colors.map((c) => c.dieNumber));
+    expect(master.every((m) => dies.has(m.dieNumber))).toBe(true);
+    // Asset facts carried through.
+    const d3597 = master.find((m) => m.dieNumber === 'DIE-3597')!;
+    expect(d3597.cavities).toBe(2);
+    expect(d3597.toolStatus).toBe('problems');
+    expect(d3597.lifeCycle).toBe(1_000_000);
   });
 });

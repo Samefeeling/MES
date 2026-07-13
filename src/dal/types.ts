@@ -1,6 +1,7 @@
 import type {
   BdCode,
   DieMaintenanceRequest,
+  DieMaster,
   Machine,
   Operator,
   ParetoFilter,
@@ -28,6 +29,12 @@ export interface PmdDataLayer {
    *  Description swatch and the KPIs Color column. Optional — a tenant
    *  without PMD_ProductDieColor returns an empty list. */
   listProductDieColors?(): Promise<ProductDieColor[]>;
+  /** The die ASSET register (PMD_DieMaster) — one row per physical tool:
+   *  cavities, cycle time, weight, changeover minutes, expected life and
+   *  the toolroom's ToolStatus verdict. Read-only from the app (the
+   *  toolroom edits the list in SharePoint). Optional — a tenant without
+   *  the list returns an empty array and the Status column shows "—". */
+  listDieMaster?(): Promise<DieMaster[]>;
 
   // Die maintenance (Trace → 🛠 Die Management). Backed by the
   // PMD_DieMaintenance list on SharePoint (auto-provisioned on first

@@ -12,6 +12,7 @@ import type {
   PlanningOrder,
   ProductDieColor,
   ProductionRecord,
+  ToolStatus,
 } from '../types';
 import { cavityGross } from './metrics';
 
@@ -33,6 +34,30 @@ export const MAINTENANCE_CONTACTS: MaintContact[] = [
   { role: 'Maintenance — cleaning / service', name: 'Maintenance Team' },
   { role: 'PMD Supervisor', name: 'Shift Supervisor' },
 ];
+
+/** Display metadata per ToolStatus. `rank` orders the Status column
+ *  worst-first (Problems → To be Serviced → In service → Serviced) so a
+ *  single click surfaces the tools that need eyes. `cls` is the CSS
+ *  colour class (ts-red / ts-orange / ts-blue / ts-green). */
+export const TOOL_STATUS_META: Record<ToolStatus, { label: string; cls: string; rank: number }> = {
+  problems: { label: 'Problems', cls: 'ts-red', rank: 0 },
+  'to-be-serviced': { label: 'To be Serviced', cls: 'ts-orange', rank: 1 },
+  'in-service': { label: 'In service', cls: 'ts-blue', rank: 2 },
+  serviced: { label: 'Serviced', cls: 'ts-green', rank: 3 },
+};
+
+/** Normalise a free-text PMD_DieMaster.ToolStatus cell onto the closed
+ *  union — the list is edited by hand in SharePoint, so tolerate case,
+ *  spaces, hyphens and a few synonyms. '' when empty / unrecognised. */
+export function parseToolStatus(raw: string): ToolStatus | '' {
+  const s = raw.trim().toLowerCase().replace(/[^a-z]/g, '');
+  if (!s) return '';
+  if (s.includes('problem') || s === 'issue' || s === 'issues' || s === 'broken') return 'problems';
+  if (s.startsWith('tobe') || s.includes('needsservice') || s === 'due') return 'to-be-serviced';
+  if (s.startsWith('inservice') || s === 'inuse' || s === 'running' || s === 'active') return 'in-service';
+  if (s.startsWith('serviced') || s === 'ok' || s === 'good') return 'serviced';
+  return '';
+}
 
 /** Aggregated usage + quality picture for one physical die. */
 export interface DieAgg {

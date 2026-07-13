@@ -686,6 +686,23 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 th.die-sort{cursor:pointer;user-select:none;-webkit-user-select:none}
 th.die-sort:hover{background:#eef2f7}
 th.die-sort.a{color:#1d4ed8}
+/* Column-resize handles: a grab zone on every header's right edge.
+   Once the user drags, JS pins the <colgroup> widths, switches the table
+   to fixed layout (class .resized) and persists to localStorage. */
+.die-table thead th{position:relative}
+.die-rz{position:absolute;top:0;right:-5px;width:11px;height:100%;cursor:col-resize;touch-action:none;z-index:2}
+.die-rz::after{content:"";position:absolute;left:5px;top:22%;height:56%;width:1px;background:var(--bd)}
+.die-rz:hover::after,.die-rz:active::after{width:3px;left:4px;background:#1d4ed8;border-radius:2px}
+.die-table.resized{max-width:none}
+.die-table.resized th,.die-table.resized td{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ToolStatus badge (PMD_DieMaster): Serviced green · In service blue ·
+   To be Serviced orange · Problems red. */
+.die-tstat{font-weight:700;white-space:nowrap;font-size:12px}
+.die-tstat.none{color:var(--mu);font-weight:400}
+.die-tstat.ts-green{color:#15803d}
+.die-tstat.ts-blue{color:#2563eb}
+.die-tstat.ts-orange{color:#FFA500}
+.die-tstat.ts-red{color:var(--rd)}
 /* Defect-trend sparkline: one bar per bucket, height = reject qty,
    colour = that bucket's reject-% band. */
 .die-trend-cell{min-width:150px}

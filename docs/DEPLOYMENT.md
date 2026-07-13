@@ -519,6 +519,25 @@ dedicated list:
 - The request form and the Requests list link straight to Mango's
   request-maintenance page (`my.mangolive.com/plant-equipment/request-maintenance`).
 
+## PMD_DieMaster (die asset register)
+
+Optional list, created by hand (2026-07), that feeds the Die Management
+table's **Status** column and the "Die master" block in the die detail
+popup. One row per physical tool; the toolroom maintains it directly in
+SharePoint (the app only reads it — a hard reload picks up edits).
+
+- Columns (single-word display names so internal names match):
+  `DieNumber` (may live in `Title` — both are probed), `DieDescription`,
+  `Cavities`, `CycleTime`, `DieWeightKG`, `LeanReady` (Yes/No),
+  `ToolInjectorPlate`, `ChangeOverIn`, `ChangeOverOut`, `LifeCycle`,
+  `DateStamp`, `ToolStatus`.
+- `ToolStatus` values (free text, tolerantly parsed): **Serviced**
+  (green), **In service** (blue), **To be Serviced** (orange),
+  **Problems** (red). Anything else / empty shows as "—". Sorting the
+  Status column surfaces Problems first.
+- A die missing from this list still shows in the table (usage comes
+  from `PMD_ProductDieColor` + production) — only its Status is "—".
+
 ---
 
 ## Troubleshooting checklist

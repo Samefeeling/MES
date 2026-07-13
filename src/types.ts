@@ -67,6 +67,40 @@ export interface ProductDieColor {
   coRun: boolean;
 }
 
+/** Condition of a physical die, from PMD_DieMaster.ToolStatus:
+ *  Serviced (green — maintenance up to date) · In service (blue — the
+ *  tool is in active use) · To be Serviced (orange — service is owed) ·
+ *  Problems (red — known defect / do not run without checking). */
+export type ToolStatus = 'serviced' | 'in-service' | 'to-be-serviced' | 'problems';
+
+/** One row of PMD_DieMaster — the die ASSET register (one row per
+ *  physical tool), maintained by the toolroom directly in SharePoint.
+ *  PMD_ProductDieColor stays the part→die MAPPING; this list carries the
+ *  tool's own facts. All numeric fields are null when the cell is empty. */
+export interface DieMaster {
+  /** Natural key, matches ProductDieColor.dieNumber. */
+  dieNumber: string;
+  /** DieDescription column. */
+  description: string;
+  cavities: number | null;
+  /** Nominal cycle time (seconds). */
+  cycleTime: number | null;
+  dieWeightKg: number | null;
+  /** Yes/No: tool is lean-changeover ready. Null when the cell is empty. */
+  leanReady: boolean | null;
+  /** ToolInjectorPlate column (free text / Yes-No as entered). */
+  toolInjectorPlate: string;
+  /** Changeover minutes in / out. */
+  changeOverIn: number | null;
+  changeOverOut: number | null;
+  /** Expected total life (shots). */
+  lifeCycle: number | null;
+  /** DateStamp column — when the row was last reviewed. */
+  dateStamp: string;
+  /** '' when the ToolStatus cell is empty / unrecognised. */
+  toolStatus: ToolStatus | '';
+}
+
 /** Lifecycle of a die maintenance request (Fabrico-style work order):
  *  raised on the floor → picked up by toolroom → closed. */
 export type MaintStatus = 'open' | 'in-progress' | 'done';

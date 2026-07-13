@@ -11,6 +11,7 @@
 import type { PmdDataLayer } from '../dal';
 import type {
   DieMaintenanceRequest,
+  DieMaster,
   MaintPriority,
   MaintStatus,
   MaintType,
@@ -23,6 +24,7 @@ import {
   dieServiceStatus,
   nextPlannedFor,
   MAINTENANCE_CONTACTS,
+  TOOL_STATUS_META,
   type DieAgg,
   type DiePlanned,
   type DieServiceStatus,
@@ -36,6 +38,7 @@ type DieSortKey =
   | 'smart'
   | 'die'
   | 'description'
+  | 'toolStatus'
   | 'parts'
   | 'machines'
   | 'runs'
@@ -57,6 +60,9 @@ interface DieState {
   requests: DieMaintenanceRequest[];
   rejectLabels: Map<string, string>;
   dieColors: ProductDieColor[];
+  /** Die → its PMD_DieMaster row (asset facts + ToolStatus). Absent =
+   *  the toolroom hasn't registered the tool there yet. */
+  masterByDie: Map<string, DieMaster>;
   supervisors: string[];
   /** Die → its place in the production schedule (running / next start),
    *  from PMD_Planning via the die's parts. Absent = not scheduled. */
@@ -116,6 +122,25 @@ function fmtPlanned(iso: string): string {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+/** ToolStatus badge from the die's PMD_DieMaster row: 🔴 Problems ·
+ *  🟠 To be Serviced · 🔵 In service · 🟢 Serviced. Dash when the tool
+ *  isn't registered there (or the cell is empty) — the toolroom owns
+ *  that list, so the app never invents a status. */
+function toolStatusBadge(dieNumber: string): string {
+  const m = S!.masterByDie.get(dieNumber);
+  if (!m || !m.toolStatus) {
+    const why = m
+      ? 'PMD_DieMaster.ToolStatus is empty for this die'
+      : 'No PMD_DieMaster row for this die yet';
+    return `<span class="die-tstat none" title="${escapeHtml(why)}">—</span>`;
+  }
+  const meta = TOOL_STATUS_META[m.toolStatus];
+  const when = m.dateStamp ? ` · updated ${m.dateStamp.slice(0, 10)}` : '';
+  return `<span class="die-tstat ${meta.cls}" title="${escapeHtml(
+    `PMD_DieMaster ToolStatus${when}`,
+  )}">● ${meta.label}</span>`;
+}
+
 function isoDay(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -141,6 +166,7 @@ export async function mountDieTab(dal: PmdDataLayer, host: HTMLElement): Promise
     requests: [],
     rejectLabels: new Map(),
     dieColors: [],
+    masterByDie: new Map(),
     supervisors: [],
     planByDie: new Map(),
     loading: true,
@@ -153,7 +179,7 @@ async function loadAll(): Promise<void> {
   if (!S) return;
   S.loading = true;
   render();
-  const [dieColors, requests, rejCats, sups, records, planning] = await Promise.all([
+  const [dieColors, requests, rejCats, sups, records, planning, master] = await Promise.all([
     dalRef.listProductDieColors ? dalRef.listProductDieColors().catch(() => []) : Promise.resolve([]),
     dalRef.listDieMaintenance ? dalRef.listDieMaintenance().catch(() => []) : Promise.resolve([]),
     dalRef.listRejectCategories().catch(() => []),
@@ -162,9 +188,11 @@ async function loadAll(): Promise<void> {
       .listProduction({ shiftIdFrom: `${S.from}-`, shiftIdTo: `${S.to}-￿` })
       .catch(() => []),
     dalRef.listPlanning({}).catch(() => []),
+    dalRef.listDieMaster ? dalRef.listDieMaster().catch(() => []) : Promise.resolve([]),
   ]);
   if (!S) return;
   S.dieColors = dieColors;
+  S.masterByDie = new Map(master.map((m) => [m.dieNumber, m]));
   S.requests = requests;
   S.rejectLabels = new Map(rejCats.map((c) => [c.code, c.label]));
   S.supervisors = sups.map((s) => s.operatorName).filter((v, i, a) => a.indexOf(v) === i);
@@ -242,6 +270,11 @@ function filteredDies(): DieAgg[] {
 const SORT_ACCESSORS: Record<Exclude<DieSortKey, 'smart'>, (d: DieAgg) => string | number | null> = {
   die: (d) => d.dieNumber.toUpperCase(),
   description: (d) => (d.description || '￿').toUpperCase(),
+  // Worst-first rank (Problems 0 → Serviced 3); unregistered dies last.
+  toolStatus: (d) => {
+    const st = S!.masterByDie.get(d.dieNumber)?.toolStatus;
+    return st ? TOOL_STATUS_META[st].rank : null;
+  },
   parts: (d) => d.parts.length,
   // Count first, then the machine names alphabetically — a bare
   // machines.length looked "broken" whenever several dies ran on the
@@ -273,6 +306,115 @@ function sortedDies(dies: DieAgg[]): DieAgg[] {
     if (av < bv) return -dir;
     if (av > bv) return dir;
     return 0;
+  });
+}
+
+// ---------------------------------------------------------------------
+// column resizing — the die table carries 16 columns, and what's a
+// comfortable width on the iPad is cramped on a PC monitor. Dragging a
+// header's right edge resizes that column; widths persist per device in
+// localStorage and are re-applied on every render. Double-tap resets.
+
+/** One key per table column, in header order — the localStorage map and
+ *  the <colgroup> are both keyed by these, so a future column insert
+ *  invalidates nothing (unknown keys are simply ignored). */
+const DIE_COL_KEYS = [
+  'die', 'description', 'toolStatus', 'parts', 'machines', 'runs', 'shots',
+  'pieces', 'good', 'rejects', 'rejPct', 'trend', 'lastRun', 'scheduled',
+  'maint', 'act',
+] as const;
+const COLW_KEY = 'pmd.die.colw';
+
+function savedColWidths(): Record<string, number> | null {
+  try {
+    const raw = localStorage.getItem(COLW_KEY);
+    if (!raw) return null;
+    const obj = JSON.parse(raw) as Record<string, number>;
+    return obj && typeof obj === 'object' ? obj : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Re-apply saved widths after a render. Fixed layout only kicks in once
+ *  the user has resized something — before that the browser's automatic
+ *  layout stays in charge. */
+function applyColWidths(table: HTMLTableElement): void {
+  const saved = savedColWidths();
+  if (!saved) return;
+  const cols = Array.from(table.querySelectorAll<HTMLTableColElement>('colgroup col'));
+  let total = 0;
+  let allSaved = true;
+  for (const c of cols) {
+    const w = saved[c.dataset.ck ?? ''];
+    if (typeof w === 'number' && w > 0) {
+      c.style.width = `${Math.round(w)}px`;
+      total += Math.round(w);
+    } else {
+      allSaved = false;
+    }
+  }
+  if (total > 0) {
+    table.style.tableLayout = 'fixed';
+    table.classList.add('resized');
+    // With every column pinned the table's own width must be the sum,
+    // otherwise fixed layout re-squeezes to the container.
+    if (allSaved) table.style.width = `${total}px`;
+  }
+}
+
+function wireColResize(table: HTMLTableElement): void {
+  applyColWidths(table);
+  const ths = Array.from(table.querySelectorAll<HTMLTableCellElement>('thead th'));
+  const cols = Array.from(table.querySelectorAll<HTMLTableColElement>('colgroup col'));
+  table.querySelectorAll<HTMLElement>('[data-die-rz]').forEach((rz) => {
+    // The handle lives inside a sortable <th> — swallow clicks so a
+    // resize never doubles as a sort.
+    rz.addEventListener('click', (e) => e.stopPropagation());
+    rz.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      localStorage.removeItem(COLW_KEY);
+      render();
+    });
+    rz.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const th = rz.closest('th');
+      const idx = th ? ths.indexOf(th as HTMLTableCellElement) : -1;
+      if (idx < 0 || !cols[idx]) return;
+      // Freeze every column at its current rendered width first — under
+      // automatic layout, growing one column would rebalance the rest.
+      const widths = ths.map((t) => Math.round(t.getBoundingClientRect().width));
+      cols.forEach((c, i) => (c.style.width = `${widths[i]}px`));
+      table.style.tableLayout = 'fixed';
+      table.classList.add('resized');
+      const totalRest = widths.reduce((a, b) => a + b, 0) - widths[idx];
+      table.style.width = `${totalRest + widths[idx]}px`;
+      const startX = e.clientX;
+      const startW = widths[idx];
+      rz.setPointerCapture(e.pointerId);
+      const move = (ev: PointerEvent): void => {
+        const w = Math.max(40, startW + (ev.clientX - startX));
+        cols[idx].style.width = `${w}px`;
+        table.style.width = `${totalRest + w}px`;
+      };
+      const up = (): void => {
+        rz.removeEventListener('pointermove', move);
+        const out: Record<string, number> = {};
+        cols.forEach((c, i) => {
+          out[c.dataset.ck ?? String(i)] =
+            Math.round(parseFloat(c.style.width)) || widths[i];
+        });
+        try {
+          localStorage.setItem(COLW_KEY, JSON.stringify(out));
+        } catch {
+          /* storage full / private mode — the resize still applies for this page */
+        }
+      };
+      rz.addEventListener('pointermove', move);
+      rz.addEventListener('pointerup', up, { once: true });
+      rz.addEventListener('pointercancel', up, { once: true });
+    });
   });
 }
 
@@ -342,6 +484,7 @@ function renderDieTable(): string {
       return `<tr data-die-row="${escapeHtml(d.dieNumber)}">
         <td class="die-num"><button class="die-link" data-die-detail="${escapeHtml(d.dieNumber)}">${escapeHtml(d.dieNumber)}</button></td>
         <td class="die-desc" title="${escapeHtml(d.description || '')}">${escapeHtml(d.description || '—')}</td>
+        <td>${toolStatusBadge(d.dieNumber)}</td>
         <td title="${escapeHtml(partsTip)}">${d.parts.length}</td>
         <td title="${escapeHtml(d.machines.join(', '))}">${escapeHtml(machines)}</td>
         <td class="num">${d.runs}</td>
@@ -358,19 +501,26 @@ function renderDieTable(): string {
       </tr>`;
     })
     .join('');
+  // Drag the right edge of any header to resize that column (widths are
+  // remembered per device — the PC monitor wants a wider table than the
+  // iPad); double-tap an edge to reset every column back to automatic.
+  const rz = `<span class="die-rz" data-die-rz title="Drag to resize · double-tap to reset all columns"></span>`;
   const th = (key: DieSortKey | '', label: string, title = ''): string => {
     if (!key)
-      return `<th${title ? ` title="${escapeHtml(title)}"` : ''}>${label}</th>`;
+      return `<th${title ? ` title="${escapeHtml(title)}"` : ''}>${label}${rz}</th>`;
     const active = S!.sortKey === key;
     const ind = active ? (S!.sortDir === 1 ? ' ▲' : ' ▼') : '';
     return `<th class="die-sort${active ? ' a' : ''}" data-die-sort="${key}"${
       title ? ` title="${escapeHtml(title)}"` : ''
-    }>${label}${ind}</th>`;
+    }>${label}${ind}${rz}</th>`;
   };
+  const colgroup = `<colgroup>${DIE_COL_KEYS.map((k) => `<col data-ck="${k}">`).join('')}</colgroup>`;
   return `<div class="die-table-wrap"><table class="kpi-table die-table">
+    ${colgroup}
     <thead><tr>
       ${th('die', 'Die #')}
       ${th('description', 'Description', "The tool's name — PMD_ProductDieColor's Die column")}
+      ${th('toolStatus', 'Status', 'Tool condition from PMD_DieMaster.ToolStatus: 🔴 Problems · 🟠 To be Serviced · 🔵 In service · 🟢 Serviced')}
       ${th('parts', 'Parts', 'Part numbers that run on this die')}
       ${th('machines', 'Machines')}
       ${th('runs', 'Runs', '(machine, shift, job) runs in the window')}
@@ -387,7 +537,7 @@ function renderDieTable(): string {
     </tr></thead>
     <tbody>${rows}</tbody>
   </table></div>
-  <p class="kpi-note">Usage inside the selected window. <b>Shots</b> = press cycles (Count End − Count Start) — the number that wears the die; <b>Pieces</b> = shots × cavities. <b>Defect trend</b>: bar height = reject qty per day, colour = that day's reject-% band — a die drifting 🟡→🔴 left-to-right is due for service. Tap a column header to sort; tap Die # or the trend for detail.</p>`;
+  <p class="kpi-note">Usage inside the selected window. <b>Shots</b> = press cycles (Count End − Count Start) — the number that wears the die; <b>Pieces</b> = shots × cavities. <b>Status</b> is the toolroom's verdict from PMD_DieMaster. <b>Defect trend</b>: bar height = reject qty per day, colour = that day's reject-% band — a die drifting 🟡→🔴 left-to-right is due for service. Tap a column header to sort; drag a header's right edge to resize the column (double-tap the edge to reset); tap Die # or the trend for detail.</p>`;
 }
 
 function renderRequests(): string {
@@ -492,6 +642,31 @@ function renderServiceSection(d: DieAgg): string {
     </div>`;
 }
 
+/** Asset facts from the die's PMD_DieMaster row, shown in the detail
+ *  popup. Empty string (no section) when the tool isn't registered. */
+function renderMasterSection(d: DieAgg): string {
+  const m = S!.masterByDie.get(d.dieNumber);
+  if (!m) return '';
+  const cell = (label: string, v: string | number | null, suffix = ''): string =>
+    v == null || v === ''
+      ? ''
+      : `<span>${label} <b>${escapeHtml(
+          typeof v === 'number' ? v.toLocaleString() : v,
+        )}${suffix}</b></span>`;
+  return `<h4>Die master (PMD_DieMaster)</h4>
+    <div class="die-detail-stats die-master-stats">
+      ${cell('Cavities', m.cavities)}
+      ${cell('Cycle time', m.cycleTime, ' s')}
+      ${cell('Weight', m.dieWeightKg, ' kg')}
+      ${cell('C/O in', m.changeOverIn, ' min')}
+      ${cell('C/O out', m.changeOverOut, ' min')}
+      ${m.leanReady == null ? '' : `<span>Lean ready <b>${m.leanReady ? 'Yes' : 'No'}</b></span>`}
+      ${cell('Injector plate', m.toolInjectorPlate)}
+      ${cell('Life cycle', m.lifeCycle, ' shots')}
+      ${cell('Updated', m.dateStamp ? m.dateStamp.slice(0, 10) : '')}
+    </div>`;
+}
+
 function openDieDetail(dieNumber: string): void {
   const d = S!.dies.find((x) => x.dieNumber === dieNumber);
   if (!d) return;
@@ -538,6 +713,7 @@ function openDieDetail(dieNumber: string): void {
       <button class="btn-ghost-big" data-mod="close">Close</button>
     </div>
     <div class="die-detail-stats">
+      <span>Status ${toolStatusBadge(d.dieNumber)}</span>
       <span>Runs <b>${d.runs}</b></span>
       <span>Shots <b>${d.shots.toLocaleString()}</b></span>
       <span>Pieces <b>${d.pieces.toLocaleString()}</b></span>
@@ -552,6 +728,7 @@ function openDieDetail(dieNumber: string): void {
         return `${p.running ? '▶ Now · ' : ''}${escapeHtml(fmtPlanned(p.start))} (${escapeHtml(p.jobNumber)})`;
       })()}</b></span>
     </div>
+    ${renderMasterSection(d)}
     ${renderServiceSection(d)}
     <h4>Defect trend (${escapeHtml(S!.from)} → ${escapeHtml(S!.to)})</h4>
     ${trendChart(d)}
@@ -774,13 +951,19 @@ function wire(): void {
         // Numeric columns read best worst-first (descending); text /
         // date-like ones ascending (A→Z, soonest first).
         S!.sortDir =
-          key === 'die' || key === 'description' || key === 'machines' || key === 'scheduled'
+          key === 'die' ||
+          key === 'description' ||
+          key === 'machines' ||
+          key === 'scheduled' ||
+          key === 'toolStatus' // rank 0 = Problems, so ascending is worst-first
             ? 1
             : -1;
       }
       render();
     }),
   );
+  const table = h.querySelector<HTMLTableElement>('.die-table');
+  if (table) wireColResize(table);
   h.querySelector('[data-die-new-req]')?.addEventListener('click', () => openRequestForm());
   h.querySelectorAll<HTMLButtonElement>('[data-die-detail]').forEach((b) =>
     b.addEventListener('click', () => openDieDetail(b.dataset.dieDetail!)),

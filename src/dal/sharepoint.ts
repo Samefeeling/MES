@@ -1,6 +1,7 @@
 import type {
   BdCode,
   DieMaintenanceRequest,
+  DieMaster,
   Machine,
   MaintPriority,
   MaintStatus,
@@ -24,6 +25,7 @@ import { bdCategoryOf, bdLabelFor, BD_TAXONOMY } from '../core/breakdown';
 import { shiftBounds, slotClock } from '../core/shifts';
 import { shiftTargetFor } from '../core/targets';
 import { retroJobLeftFixes, sumGoodStartedBefore } from '../core/jobgood';
+import { parseToolStatus } from '../core/die';
 
 // =====================================================================
 // SharePointDataLayer — Resero Operations AU site.
@@ -59,6 +61,10 @@ const LISTS = {
    *  automatically by ensureDieMaintenanceList() on the first write if
    *  the tenant doesn't have it yet — see that method for the schema. */
   dieMaintenance: 'PMD_DieMaintenance',
+  /** Die asset register (one row per physical tool) — created by hand on
+   *  the site (2026-07). Read-only from the app; the toolroom maintains
+   *  ToolStatus / cavities / changeover facts directly in SharePoint. */
+  dieMaster: 'PMD_DieMaster',
   rdoRoster: 'RDO Roster 2026-2030',
 } as const;
 
@@ -284,6 +290,24 @@ const DEFAULT_FIELDS = {
      *  one-after-another and stay independent. Optional column. */
     coRun: 'CoRun',
   },
+  dieMaster: {
+    // Column names as created on the site (single-word display names, so
+    // internal names match). DieNumber may live in Title instead when the
+    // list was made by renaming the default column — listDieMaster probes
+    // both. All cells are hand-edited; reads coerce defensively.
+    dieNumber: 'DieNumber',
+    description: 'DieDescription',
+    cavities: 'Cavities',
+    cycleTime: 'CycleTime',
+    dieWeightKg: 'DieWeightKG',
+    leanReady: 'LeanReady',
+    toolInjectorPlate: 'ToolInjectorPlate',
+    changeOverIn: 'ChangeOverIn',
+    changeOverOut: 'ChangeOverOut',
+    lifeCycle: 'LifeCycle',
+    dateStamp: 'DateStamp',
+    toolStatus: 'ToolStatus',
+  },
   dieMaintenance: {
     // Title = DieNumber (natural key into PMD_ProductDieColor.DieNumber).
     // All other columns are plain Text/Note so auto-provisioning stays
@@ -401,6 +425,7 @@ export class SharePointDataLayer implements PmdDataLayer {
    * reuse forever; the user can hard-refresh to repopulate.
    */
   private dieColorCache: ProductDieColor[] | null = null;
+  private dieMasterCache: DieMaster[] | null = null;
   /**
    * Short-TTL `jobNumber → partNumber` map used by pushLiveSnapshot to
    * stamp PartNum onto every PMD_LiveStatus mirror. Without the cache,
@@ -927,6 +952,52 @@ export class SharePointDataLayer implements PmdDataLayer {
       // existing keyword-derived colour on KPIs takes over.
       // Do NOT cache the failure — the next call retries.
       console.warn('[pmd] PMD_ProductDieColor unavailable, swatches disabled:', e);
+      return [];
+    }
+  }
+
+  // ---- die master (PMD_DieMaster) -------------------------------------
+
+  async listDieMaster(): Promise<DieMaster[]> {
+    // Same cache policy as PMD_ProductDieColor: small, hand-maintained,
+    // read-only at runtime — a hard reload picks up toolroom edits.
+    if (this.dieMasterCache) return this.dieMasterCache;
+    const F = this.F.dieMaster;
+    try {
+      const rows = await this.getAllItems<Record<string, unknown>>(LISTS.dieMaster);
+      if (rows.length === 0) {
+        this.dieMasterCache = [];
+        return this.dieMasterCache;
+      }
+      // DieNumber lands in Title when the list was created by renaming
+      // the default column instead of adding a new one — probe both.
+      const dieKey =
+        F.dieNumber in rows[0] && rows.some((r) => str(r[F.dieNumber]).trim())
+          ? F.dieNumber
+          : 'Title';
+      const out = rows
+        .map((r) => ({
+          dieNumber: str(r[dieKey]).trim(),
+          description: str(r[F.description]).trim(),
+          cavities: nullOrNum(r[F.cavities]),
+          cycleTime: nullOrNum(r[F.cycleTime]),
+          dieWeightKg: nullOrNum(r[F.dieWeightKg]),
+          leanReady: bool(r[F.leanReady]) ?? null,
+          toolInjectorPlate: str(r[F.toolInjectorPlate]).trim(),
+          changeOverIn: nullOrNum(r[F.changeOverIn]),
+          changeOverOut: nullOrNum(r[F.changeOverOut]),
+          lifeCycle: nullOrNum(r[F.lifeCycle]),
+          dateStamp: str(r[F.dateStamp]),
+          toolStatus: parseToolStatus(str(r[F.toolStatus])),
+        }))
+        .filter((m) => m.dieNumber);
+      console.info('[pmd] PMD_DieMaster cached:', out.length, 'of', rows.length, 'rows');
+      this.dieMasterCache = out;
+      return this.dieMasterCache;
+    } catch (e) {
+      // Tenant without the list — the Status column just shows "—".
+      // Not cached so the next call retries.
+      console.warn('[pmd] PMD_DieMaster unavailable, ToolStatus column disabled:', e);
       return [];
     }
   }

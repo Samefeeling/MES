@@ -1,6 +1,7 @@
 import type {
   BdCode,
   DieMaintenanceRequest,
+  DieMaster,
   Machine,
   Operator,
   PlanningOrder,
@@ -151,6 +152,47 @@ export function seedProductDieColors(): ProductDieColor[] {
     die,
     coRun,
   }));
+}
+
+/** PMD_DieMaster parity: the die ASSET register. One row per physical
+ *  tool, covering all four ToolStatus colours so the demo table shows the
+ *  full traffic-light range. DIE-3597's "problems" matches its seeded
+ *  open repair request; DIE-1422's "serviced" matches its closed one. */
+export function seedDieMaster(now: Date): DieMaster[] {
+  const stamp = (daysAgo: number): string => {
+    const d = new Date(now);
+    d.setDate(d.getDate() - daysAgo);
+    return d.toISOString();
+  };
+  const row = (
+    dieNumber: string,
+    description: string,
+    cavities: number,
+    cycleTime: number,
+    dieWeightKg: number,
+    lifeCycle: number,
+    toolStatus: DieMaster['toolStatus'],
+    daysAgo: number,
+  ): DieMaster => ({
+    dieNumber,
+    description,
+    cavities,
+    cycleTime,
+    dieWeightKg,
+    leanReady: cavities <= 2,
+    toolInjectorPlate: cavities >= 4 ? 'Yes' : 'No',
+    changeOverIn: 20 + cavities * 5,
+    changeOverOut: 15 + cavities * 5,
+    lifeCycle,
+    dateStamp: stamp(daysAgo),
+    toolStatus,
+  });
+  return [
+    row('DIE-3597', 'Viva Backrest/Armrest 2-cav', 2, 28.5, 780, 1_000_000, 'problems', 1),
+    row('DIE-0689', 'Integra Chair Shell', 1, 41.0, 1450, 800_000, 'in-service', 3),
+    row('DIE-1422', 'Battery Tray Lid 4-cav', 4, 19.8, 260, 1_200_000, 'serviced', 4),
+    row('DIE-0091', 'HS Pallet Insert 8-cav', 8, 7.4, 190, 2_000_000, 'to-be-serviced', 9),
+  ];
 }
 
 /** A couple of maintenance requests so the demo shows the whole Fabrico-
