@@ -4,9 +4,11 @@
 //     good / rejects, joined via PMD_ProductDieColor's DieNumber),
 //   · a per-die defect database (reject codes charged to the die that
 //     made them, with the D01-D10 descriptions),
-//   · maintenance requests (open → in-progress → done) persisted to
-//     PMD_DieMaintenance, addressed to the built-in contacts, with a
-//     MangoTicket slot for the future Mango integration.
+//   · maintenance work orders: MANGO is the system of record (management
+//     decision, 2026-07) — every "raise a request" action deep-links to
+//     Mango's form, and the work-order list here is a READ-ONLY mirror
+//     fed by the Mango CSV report sync (scripts/sync-mango-csv.mjs →
+//     OneDrive → SharePoint file → listDieMaintenance).
 
 import type { PmdDataLayer } from '../dal';
 import type {
@@ -23,14 +25,12 @@ import {
   dieHealth,
   dieServiceStatus,
   nextPlannedFor,
-  MAINTENANCE_CONTACTS,
   TOOL_STATUS_META,
   type DieAgg,
   type DiePlanned,
   type DieServiceStatus,
 } from '../core/die';
 import { closeModal, escapeHtml, openModal } from './modal';
-import { toast } from './toast';
 
 /** 'smart' = the aggregate's attention-first order (open requests, then
  *  reject-%, then shots). Any other key is a user-picked column sort. */
@@ -60,10 +60,9 @@ interface DieState {
   requests: DieMaintenanceRequest[];
   rejectLabels: Map<string, string>;
   dieColors: ProductDieColor[];
-  /** Die → its PMD_DieMaster row (asset facts + ToolStatus). Absent =
-   *  the toolroom hasn't registered the tool there yet. */
+  /** Die (trimmed, UPPERCASED) → its PMD_DieMaster row (asset facts +
+   *  ToolStatus). Absent = the toolroom hasn't registered the tool. */
   masterByDie: Map<string, DieMaster>;
-  supervisors: string[];
   /** Die → its place in the production schedule (running / next start),
    *  from PMD_Planning via the die's parts. Absent = not scheduled. */
   planByDie: Map<string, DiePlanned>;
@@ -92,10 +91,10 @@ const PRIORITY_LABELS: Record<MaintPriority, string> = {
   urgent: 'URGENT',
 };
 
-/** Mango's plant-equipment maintenance request form — the system the
- *  toolroom actually works out of. Until the API integration lands, the
- *  flow is: raise the request here (the PMD record), then open Mango via
- *  this link and paste the ticket id back with "+ Mango #". */
+/** Mango's plant-equipment maintenance request form — the system of
+ *  record for work orders (management decision: no separate PMD form).
+ *  Every "raise a request" action deep-links here; statuses flow back
+ *  via the CSV report sync (scripts/sync-mango-csv.mjs). */
 const MANGO_REQUEST_URL = 'https://my.mangolive.com/plant-equipment/request-maintenance';
 const mangoLink = (label: string, cls = ''): string =>
   `<a class="die-mango-open${cls ? ' ' + cls : ''}" href="${MANGO_REQUEST_URL}" target="_blank" rel="noopener" title="Open Mango — Request Maintenance (new tab)">🥭 ${label} ↗</a>`;
@@ -122,12 +121,15 @@ function fmtPlanned(iso: string): string {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-/** ToolStatus badge from the die's PMD_DieMaster row: 🔴 Problems ·
- *  🟠 To be Serviced · 🔵 In service · 🟢 Serviced. Dash when the tool
- *  isn't registered there (or the cell is empty) — the toolroom owns
- *  that list, so the app never invents a status. */
+/** Master lookup with a normalised key — PMD_DieMaster and
+ *  PMD_ProductDieColor are hand-edited lists, so "280 " vs "280" or
+ *  case drift must not break the join. */
+function masterFor(dieNumber: string): DieMaster | undefined {
+  return S!.masterByDie.get(dieNumber.trim().toUpperCase());
+}
+
 function toolStatusBadge(dieNumber: string): string {
-  const m = S!.masterByDie.get(dieNumber);
+  const m = masterFor(dieNumber);
   if (!m || !m.toolStatus) {
     const why = m
       ? 'PMD_DieMaster.ToolStatus is empty for this die'
@@ -167,7 +169,6 @@ export async function mountDieTab(dal: PmdDataLayer, host: HTMLElement): Promise
     rejectLabels: new Map(),
     dieColors: [],
     masterByDie: new Map(),
-    supervisors: [],
     planByDie: new Map(),
     loading: true,
   };
@@ -179,11 +180,10 @@ async function loadAll(): Promise<void> {
   if (!S) return;
   S.loading = true;
   render();
-  const [dieColors, requests, rejCats, sups, records, planning, master] = await Promise.all([
+  const [dieColors, requests, rejCats, records, planning, master] = await Promise.all([
     dalRef.listProductDieColors ? dalRef.listProductDieColors().catch(() => []) : Promise.resolve([]),
     dalRef.listDieMaintenance ? dalRef.listDieMaintenance().catch(() => []) : Promise.resolve([]),
     dalRef.listRejectCategories().catch(() => []),
-    dalRef.listSupervisors().catch(() => []),
     dalRef
       .listProduction({ shiftIdFrom: `${S.from}-`, shiftIdTo: `${S.to}-￿` })
       .catch(() => []),
@@ -192,10 +192,9 @@ async function loadAll(): Promise<void> {
   ]);
   if (!S) return;
   S.dieColors = dieColors;
-  S.masterByDie = new Map(master.map((m) => [m.dieNumber, m]));
+  S.masterByDie = new Map(master.map((m) => [m.dieNumber.trim().toUpperCase(), m]));
   S.requests = requests;
   S.rejectLabels = new Map(rejCats.map((c) => [c.code, c.label]));
-  S.supervisors = sups.map((s) => s.operatorName).filter((v, i, a) => a.indexOf(v) === i);
   S.dies = aggregateDies(dieColors, records, requests);
   // Scheduled column: what the Epicor plan has lined up for each die.
   const now = new Date();
@@ -234,7 +233,7 @@ function renderHead(): string {
     </span>
     ${preset(7, '7 days')}${preset(30, '30 days')}${preset(90, '90 days')}
     <input type="text" class="die-filter" data-die-filter placeholder="Filter die / part…" value="${escapeHtml(S!.filter)}">
-    <button class="btn-primary-big die-new-req" data-die-new-req>📝 Maintenance Request</button>
+    ${mangoLink('Raise Request in Mango', 'lg')}
   </div>`;
 }
 
@@ -272,7 +271,7 @@ const SORT_ACCESSORS: Record<Exclude<DieSortKey, 'smart'>, (d: DieAgg) => string
   description: (d) => (d.description || '￿').toUpperCase(),
   // Worst-first rank (Problems 0 → Serviced 3); unregistered dies last.
   toolStatus: (d) => {
-    const st = S!.masterByDie.get(d.dieNumber)?.toolStatus;
+    const st = masterFor(d.dieNumber)?.toolStatus;
     return st ? TOOL_STATUS_META[st].rank : null;
   },
   parts: (d) => d.parts.length,
@@ -321,7 +320,7 @@ function sortedDies(dies: DieAgg[]): DieAgg[] {
 const DIE_COL_KEYS = [
   'die', 'description', 'toolStatus', 'parts', 'machines', 'runs', 'shots',
   'pieces', 'good', 'rejects', 'rejPct', 'trend', 'lastRun', 'scheduled',
-  'maint', 'act',
+  'maint',
 ] as const;
 const COLW_KEY = 'pmd.die.colw';
 
@@ -497,7 +496,6 @@ function renderDieTable(): string {
         <td>${escapeHtml(d.lastRun || '—')}</td>
         <td>${planCell}</td>
         <td>${maint}</td>
-        <td><button class="die-req-btn" data-die-req="${escapeHtml(d.dieNumber)}" title="New maintenance request for this die">📝</button></td>
       </tr>`;
     })
     .join('');
@@ -533,33 +531,29 @@ function renderDieTable(): string {
       ${th('lastRun', 'Last run')}
       ${th('scheduled', 'Scheduled', 'Next planned production (Epicor JobHead_StartDate). ▶ Now = running per plan · Free = not scheduled, safe to pull for service')}
       ${th('', 'Maint')}
-      ${th('', '')}
     </tr></thead>
     <tbody>${rows}</tbody>
   </table></div>
   <p class="kpi-note">Usage inside the selected window. <b>Shots</b> = press cycles (Count End − Count Start) — the number that wears the die; <b>Pieces</b> = shots × cavities. <b>Status</b> is the toolroom's verdict from PMD_DieMaster. <b>Defect trend</b>: bar height = reject qty per day, colour = that day's reject-% band — a die drifting 🟡→🔴 left-to-right is due for service. Tap a column header to sort; drag a header's right edge to resize the column (double-tap the edge to reset); tap Die # or the trend for detail.</p>`;
 }
 
+/** READ-ONLY work-order mirror. Mango owns the lifecycle — this list
+ *  just shows where each order stands (fed by the CSV report sync, or by
+ *  legacy PMD_DieMaintenance rows on tenants without the sync yet). */
 function renderRequests(): string {
+  const note = `<p class="die-req-note">Work orders live in <b>Mango</b> — raise and progress them there; this list is a read-only mirror refreshed by the report sync.</p>`;
   if (S!.requests.length === 0) {
-    return `<div class="die-req-section"><h3>🛠 Maintenance Requests ${mangoLink('Mango', 'sm')}</h3>
-      <div class="trace-empty">No maintenance requests yet. Tap 📝 on a die (or the button above) to raise one.</div></div>`;
+    return `<div class="die-req-section"><h3>🛠 Maintenance Work Orders ${mangoLink('Mango', 'sm')}</h3>
+      ${note}
+      <div class="trace-empty">No work orders on record for these dies yet.</div></div>`;
   }
   const order: Record<MaintStatus, number> = { open: 0, 'in-progress': 1, done: 2 };
   const rows = [...S!.requests]
     .sort((a, b) => order[a.status] - order[b.status] || (a.createdAt < b.createdAt ? 1 : -1))
     .map((r) => {
-      const advance =
-        r.status === 'open'
-          ? `<button class="die-adv" data-die-adv="${r.id}" data-next="in-progress">▶ Start</button>`
-          : r.status === 'in-progress'
-            ? `<button class="die-adv" data-die-adv="${r.id}" data-next="done">✔ Complete</button>`
-            : '';
       const mango = r.mangoTicket
-        ? `<span class="die-mango" title="Mango ticket">🥭 ${escapeHtml(r.mangoTicket)}</span>`
-        : r.status !== 'done'
-          ? `<button class="die-mango-link" data-die-mango="${r.id}" title="Attach the Mango ticket id once it exists there">+ Mango #</button>`
-          : '';
+        ? `<span class="die-mango" title="Mango work order">🥭 ${escapeHtml(r.mangoTicket)}</span>`
+        : '';
       const when = r.createdAt ? r.createdAt.slice(0, 10) : '';
       const closed = r.closedAt ? ` · closed ${escapeHtml(r.closedAt.slice(0, 10))}` : '';
       return `<div class="die-req st-${r.status} pr-${r.priority}">
@@ -570,7 +564,6 @@ function renderRequests(): string {
           <span class="die-req-st">${STATUS_LABELS[r.status]}</span>
           ${mango}
           <span class="die-req-meta">${escapeHtml(when)}${closed}</span>
-          ${advance}
         </div>
         <div class="die-req-bd">${escapeHtml(r.description || '—')}</div>
         <div class="die-req-ft">To <b>${escapeHtml(r.contact || '—')}</b> · from ${escapeHtml(
@@ -581,7 +574,7 @@ function renderRequests(): string {
       </div>`;
     })
     .join('');
-  return `<div class="die-req-section"><h3>🛠 Maintenance Requests ${mangoLink('Mango', 'sm')}</h3>${rows}</div>`;
+  return `<div class="die-req-section"><h3>🛠 Maintenance Work Orders ${mangoLink('Mango', 'sm')}</h3>${note}${rows}</div>`;
 }
 
 // ---------------------------------------------------------------------
@@ -645,7 +638,7 @@ function renderServiceSection(d: DieAgg): string {
 /** Asset facts from the die's PMD_DieMaster row, shown in the detail
  *  popup. Empty string (no section) when the tool isn't registered. */
 function renderMasterSection(d: DieAgg): string {
-  const m = S!.masterByDie.get(d.dieNumber);
+  const m = masterFor(d.dieNumber);
   if (!m) return '';
   const cell = (label: string, v: string | number | null, suffix = ''): string =>
     v == null || v === ''
@@ -739,169 +732,11 @@ function openDieDetail(dieNumber: string): void {
     <h4>Maintenance history</h4>
     <ul class="die-detail-hist">${histHtml}</ul>
     <div class="bd-actions">
-      <button class="btn-primary-big" data-die-detail-req="${escapeHtml(d.dieNumber)}">📝 New Maintenance Request</button>
+      ${mangoLink('Raise Request in Mango', 'lg')}
     </div>
   </div>`);
   const mc = document.getElementById('mc')!;
   mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
-  mc.querySelector<HTMLButtonElement>('[data-die-detail-req]')?.addEventListener('click', () => {
-    closeModal();
-    openRequestForm(dieNumber);
-  });
-}
-
-// ---------------------------------------------------------------------
-// maintenance request form
-
-function openRequestForm(dieNumber?: string): void {
-  const dieOpts = S!.dies
-    .map(
-      (d) =>
-        `<option value="${escapeHtml(d.dieNumber)}"${
-          d.dieNumber === dieNumber ? ' selected' : ''
-        }>${escapeHtml(d.dieNumber)}${
-          d.description || d.category ? ` — ${escapeHtml(d.description || d.category)}` : ''
-        }</option>`,
-    )
-    .join('');
-  const contactOpts = MAINTENANCE_CONTACTS.map(
-    (c) =>
-      `<option value="${escapeHtml(c.name)}">${escapeHtml(c.role)} — ${escapeHtml(c.name)}${
-        c.phone ? ` (${escapeHtml(c.phone)})` : ''
-      }</option>`,
-  ).join('');
-  const byOpts = S!.supervisors
-    .map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`)
-    .join('');
-  const machineOpts = Array.from(new Set(S!.dies.flatMap((d) => d.machines)))
-    .sort()
-    .map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`)
-    .join('');
-  openModal(`<div class="die-req-form">
-    <div class="kpi-trace-head">
-      <h3>📝 Die Maintenance Request</h3>
-      <button class="btn-ghost-big" data-mod="close">Close</button>
-    </div>
-    <label>Die<select data-rf="die">${dieOpts}</select></label>
-    <div class="die-req-form-row">
-      <label>Type<select data-rf="type">
-        <option value="repair">🔧 Repair</option>
-        <option value="cleaning">🧽 Cleaning</option>
-        <option value="inspection">🔍 Inspection</option>
-        <option value="other">📋 Other</option>
-      </select></label>
-      <label>Priority<select data-rf="priority">
-        <option value="normal">Normal</option>
-        <option value="low">Low</option>
-        <option value="high">High</option>
-        <option value="urgent">URGENT</option>
-      </select></label>
-      <label>Machine<select data-rf="machine"><option value="">—</option>${machineOpts}</select></label>
-    </div>
-    <label>Problem / work needed<textarea data-rf="desc" rows="3" placeholder="What's wrong, which cavity, what the parts look like…"></textarea></label>
-    <div class="die-req-form-row">
-      <label>Contact (to)<select data-rf="contact">${contactOpts}</select></label>
-      <label>Requested by<select data-rf="by"><option value="">— name —</option>${byOpts}</select></label>
-    </div>
-    <div class="bd-actions die-req-actions">
-      ${mangoLink('Request in Mango')}
-      <button class="btn-ghost-big" data-mod="close2">Cancel</button>
-      <button class="btn-primary-big" data-rf-save>Send Request</button>
-    </div>
-  </div>`);
-  const mc = document.getElementById('mc')!;
-  const val = (k: string): string =>
-    (mc.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
-      `[data-rf="${k}"]`,
-    )?.value ?? '').trim();
-  mc.querySelectorAll('[data-mod="close"],[data-mod="close2"]').forEach((b) =>
-    b.addEventListener('click', () => closeModal()),
-  );
-  mc.querySelector<HTMLButtonElement>('[data-rf-save]')?.addEventListener('click', () => {
-    void (async () => {
-      const die = val('die');
-      const desc = val('desc');
-      const by = val('by');
-      if (!die) return toast('Pick a die', 'err');
-      if (!desc) return toast('Describe the problem / work needed', 'err');
-      if (!by) return toast('Pick who is requesting', 'err');
-      if (!dalRef.createDieMaintenance) return toast('This backend cannot save requests', 'err');
-      const btn = mc.querySelector<HTMLButtonElement>('[data-rf-save]');
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = 'Saving…';
-      }
-      try {
-        const created = await dalRef.createDieMaintenance({
-          dieNumber: die,
-          status: 'open',
-          maintType: (val('type') || 'repair') as MaintType,
-          priority: (val('priority') || 'normal') as MaintPriority,
-          description: desc,
-          contact: val('contact'),
-          requestedBy: by,
-          machineCode: val('machine'),
-          jobNumber: '',
-          mangoTicket: '',
-        });
-        S!.requests.unshift(created);
-        // Re-aggregate so the die's 🛠 badge updates immediately.
-        for (const d of S!.dies)
-          if (d.dieNumber === die)
-            d.openRequests = S!.requests.filter(
-              (q) => q.dieNumber === die && q.status !== 'done',
-            ).length;
-        closeModal();
-        toast(`Request sent to ${created.contact || 'maintenance'}`, 'ok');
-        render();
-      } catch (e) {
-        console.error('[pmd] die maintenance save failed:', e);
-        toast(`Could not save: ${e instanceof Error ? e.message : e}`, 'err');
-        if (btn) {
-          btn.disabled = false;
-          btn.textContent = 'Send Request';
-        }
-      }
-    })();
-  });
-}
-
-async function advanceRequest(id: number, next: MaintStatus): Promise<void> {
-  if (!dalRef.updateDieMaintenance) return;
-  const req = S!.requests.find((r) => r.id === id);
-  if (!req) return;
-  const patch: { status: MaintStatus; closedAt?: string } = { status: next };
-  if (next === 'done') patch.closedAt = new Date().toISOString();
-  try {
-    await dalRef.updateDieMaintenance(id, patch);
-    req.status = next;
-    if (patch.closedAt) req.closedAt = patch.closedAt;
-    for (const d of S!.dies)
-      if (d.dieNumber === req.dieNumber)
-        d.openRequests = S!.requests.filter(
-          (q) => q.dieNumber === d.dieNumber && q.status !== 'done',
-        ).length;
-    toast(next === 'done' ? 'Request completed' : 'Request started', 'ok');
-    render();
-  } catch (e) {
-    console.error('[pmd] die maintenance update failed:', e);
-    toast(`Could not update: ${e instanceof Error ? e.message : e}`, 'err');
-  }
-}
-
-function attachMango(id: number): void {
-  const ticket = window.prompt('Mango ticket id (e.g. MAN-31234):', '');
-  if (ticket == null) return;
-  void (async () => {
-    try {
-      await dalRef.updateDieMaintenance?.(id, { mangoTicket: ticket.trim() });
-      const req = S!.requests.find((r) => r.id === id);
-      if (req) req.mangoTicket = ticket.trim();
-      render();
-    } catch (e) {
-      toast(`Could not update: ${e instanceof Error ? e.message : e}`, 'err');
-    }
-  })();
 }
 
 // ---------------------------------------------------------------------
@@ -964,22 +799,7 @@ function wire(): void {
   );
   const table = h.querySelector<HTMLTableElement>('.die-table');
   if (table) wireColResize(table);
-  h.querySelector('[data-die-new-req]')?.addEventListener('click', () => openRequestForm());
   h.querySelectorAll<HTMLButtonElement>('[data-die-detail]').forEach((b) =>
     b.addEventListener('click', () => openDieDetail(b.dataset.dieDetail!)),
-  );
-  h.querySelectorAll<HTMLButtonElement>('[data-die-req]').forEach((b) =>
-    b.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openRequestForm(b.dataset.dieReq!);
-    }),
-  );
-  h.querySelectorAll<HTMLButtonElement>('[data-die-adv]').forEach((b) =>
-    b.addEventListener('click', () =>
-      void advanceRequest(Number(b.dataset.dieAdv), b.dataset.next as MaintStatus),
-    ),
-  );
-  h.querySelectorAll<HTMLButtonElement>('[data-die-mango]').forEach((b) =>
-    b.addEventListener('click', () => attachMango(Number(b.dataset.dieMango))),
   );
 }

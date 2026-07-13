@@ -12,6 +12,7 @@ import {
   TOOL_STATUS_META,
 } from '../src/core/die';
 import { MemoryDataLayer } from '../src/dal/memory';
+import { parseMangoWorkOrdersCsv } from '../src/dal/sharepoint';
 import type { DieMaintenanceRequest, ProductDieColor } from '../src/types';
 import { order, rec } from './helpers';
 
@@ -296,6 +297,59 @@ describe('parseToolStatus (PMD_DieMaster.ToolStatus normalisation)', () => {
     expect(TOOL_STATUS_META.problems.rank).toBeLessThan(TOOL_STATUS_META['to-be-serviced'].rank);
     expect(TOOL_STATUS_META['to-be-serviced'].rank).toBeLessThan(TOOL_STATUS_META['in-service'].rank);
     expect(TOOL_STATUS_META['in-service'].rank).toBeLessThan(TOOL_STATUS_META.serviced.rank);
+  });
+});
+
+describe('parseMangoWorkOrdersCsv (Mango report → work-order mirror)', () => {
+  const KNOWN = ['280', '269', '1280', 'DIE-3597'];
+
+  it('maps a typical CMMS export and attributes dies by asset text', () => {
+    const csv = [
+      'Work Order No,Asset Name,Status,Work Type,Priority,Description,Requested By,Assigned To,Date Created,Date Completed',
+      'WO-1001,Die 280 - Max Size 5,Completed,Repair,High,Flash on cavity 2,Chris King,Toolroom,01/07/2026,03/07/2026',
+      'WO-1002,Press 850T,Outstanding,Cleaning,Normal,Clean vents on die 269,Jeff Penn,,05/07/2026,',
+      'WO-1003,Misc bench,Cancelled,Repair,Low,should be skipped,,,05/07/2026,',
+    ].join('\n');
+    const out = parseMangoWorkOrdersCsv(csv, KNOWN);
+    expect(out.length).toBe(2); // cancelled row skipped
+    const done = out.find((o) => o.mangoTicket === 'WO-1001')!;
+    expect(done.dieNumber).toBe('280');
+    expect(done.status).toBe('done');
+    expect(done.maintType).toBe('repair');
+    expect(done.priority).toBe('high');
+    expect(done.createdAt.slice(0, 10)).toBe('2026-07-01');
+    expect(done.closedAt.slice(0, 10)).toBe('2026-07-03');
+    // Die found in the DESCRIPTION when the asset doesn't carry it.
+    const open = out.find((o) => o.mangoTicket === 'WO-1002')!;
+    expect(open.dieNumber).toBe('269');
+    expect(open.status).toBe('open');
+    // Newest first.
+    expect(out[0].mangoTicket).toBe('WO-1002');
+  });
+
+  it('prefers the longest die number so 1280 never falls to 280', () => {
+    const csv = [
+      'WO No,Asset,Status,Description,Date Created',
+      'WO-2,Die 1280 housing,Open,check wear,01/07/2026',
+    ].join('\n');
+    const out = parseMangoWorkOrdersCsv(csv, KNOWN);
+    expect(out[0].dieNumber).toBe('1280');
+  });
+
+  it('keeps unmatched orders under their asset name', () => {
+    const csv = [
+      'Work Order Number,Equipment,Status,Details,Created',
+      'WO-3,Granulator 2,In Progress,blade change,02/07/2026',
+    ].join('\n');
+    const out = parseMangoWorkOrdersCsv(csv, KNOWN);
+    expect(out[0].dieNumber).toBe('Granulator 2');
+    expect(out[0].status).toBe('in-progress');
+    expect(out[0].mangoTicket).toBe('WO-3');
+  });
+
+  it('returns [] for an empty / header-only file', () => {
+    expect(parseMangoWorkOrdersCsv('', KNOWN)).toEqual([]);
+    expect(parseMangoWorkOrdersCsv('Work Order,Status\n', KNOWN)).toEqual([]);
   });
 });
 

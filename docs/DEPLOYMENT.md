@@ -483,41 +483,55 @@ list re-uses the same DEFAULT_FIELDS section.
 
 ---
 
-## PMD_DieMaintenance (Die Management work requests)
+## Die Management work orders — Mango is the system of record
 
 The Trace page's **🛠 Die Management** tab tracks per-die usage (shots /
 pieces / rejects, joined to production via `PMD_ProductDieColor.DieNumber`)
-and raises maintenance requests against dies. Requests persist to a
-dedicated list:
+and shows each die's maintenance work orders. **Work orders live in
+Mango** (management decision, 2026-07): every *Raise Request in Mango*
+button deep-links to Mango's form, and the in-app list is a **read-only
+mirror** — there is no separate PMD request form.
 
-- **You don't need to create it.** The first time someone taps
-  *Send Request*, the app auto-provisions `PMD_DieMaintenance` (generic
-  list + columns) under that user's permissions. Site members with
-  "add lists" rights are enough; if creation is denied the toast shows
-  SharePoint's error and any site owner can create it manually instead.
-- Manual schema (all Single-line text unless noted): `Title` = DieNumber,
-  `Status` (open / in-progress / done), `MaintType` (repair / cleaning /
-  inspection / other), `Priority` (low / normal / high / urgent),
-  `Description` (**Multi-line**), `Contact`, `RequestedBy`, `Machine`,
-  `JobNumber`, `MangoTicket`, `ClosedAt` (ISO text). Values are free
-  text on purpose — people can edit the list directly in SharePoint and
-  the app normalises what it reads back.
-- **Mango integration (future)**: `MangoTicket` is the cross-link slot.
-  Today a ticket id can be attached by hand from the request card
-  (*+ Mango #*); when the Mango API hook lands, request creation will
-  push a ticket automatically and write its id back to this column.
-- Built-in maintenance contacts live in `src/core/die.ts`
-  (`MAINTENANCE_CONTACTS`) — edit that list to match the real toolroom
-  roster (phone/email optional).
+Statuses flow back from Mango via a CSV report sync (Mango has no API
+for the Plant/Equipment module):
+
+1. **`scripts/sync-mango-csv.mjs`** (Playwright, Node) runs on the same
+   always-on PC as the Epicor sync, every 15-30 min via Task Scheduler.
+   It opens Mango's work-order report page with a saved browser session
+   and downloads the CSV into the OneDrive-synced folder — no SharePoint
+   credentials in the script, same pattern as `Planning.csv`.
+   One-time setup (in the script's header too):
+   `npm i playwright && npx playwright install chromium`, copy
+   `scripts/sync-mango-csv.config.example.json` to
+   `C:\PMDSync\mango-sync.config.json`, then `node sync-mango-csv.mjs
+   --login` once to sign into Mango by hand (MFA-safe — the session is
+   stored and reused). `--probe` screenshots the report page and lists
+   its buttons if the export control needs to be named explicitly
+   (`ExportSelector`).
+2. The app reads that file when **`VITE_MANGO_CSV_PATH`** is set (e.g.
+   `/sites/PMD/Shared Documents/PMD/MangoWorkOrders.csv`). Columns are
+   matched by tolerant header names (`MANGO_CSV_COLUMNS` in
+   `src/dal/sharepoint.ts` — extend there if the report names a column
+   unexpectedly; a console warning lists any that failed to match).
+   Dies are attributed by scanning the asset + description text for a
+   known DieNumber; unmatched orders still show under their asset name.
+   Cancelled orders are skipped.
+3. Without `VITE_MANGO_CSV_PATH` (or while the file doesn't exist yet)
+   the tab falls back to the legacy `PMD_DieMaintenance` list, whose
+   schema stays documented below for the sync-less transition period:
+   `Title` = DieNumber, `Status`, `MaintType`, `Priority`, `Description`
+   (Multi-line), `Contact`, `RequestedBy`, `Machine`, `JobNumber`,
+   `MangoTicket`, `ClosedAt` (ISO text) — all free text, normalised on
+   read.
 - **Preventive-service reminders** follow the furniture-mould tonnage
   rule (100-150T: 100k · 210-350T: 50k · 450-560T: 20k · 650-850T: 10k ·
   1000T+: 8k shots — bands in `src/core/die.ts` `SERVICE_BANDS`). The
   shot counter resets at the newest **Done** maintenance request's
   closed date, uses the strictest band among the presses the die ran
   on, and goes ⏳ amber at 80% / 🔧 red past the interval. Dies never
-  serviced count from the window start (shown as "at least").
-- The request form and the Requests list link straight to Mango's
-  request-maintenance page (`my.mangolive.com/plant-equipment/request-maintenance`).
+  serviced count from the window start (shown as "at least"). The
+  Done-request reset reads the mirrored Mango orders too (their
+  completed date fills `closedAt`).
 
 ## PMD_DieMaster (die asset register)
 
@@ -526,11 +540,13 @@ table's **Status** column and the "Die master" block in the die detail
 popup. One row per physical tool; the toolroom maintains it directly in
 SharePoint (the app only reads it — a hard reload picks up edits).
 
-- Columns (single-word display names so internal names match):
-  `DieNumber` (may live in `Title` — both are probed), `DieDescription`,
-  `Cavities`, `CycleTime`, `DieWeightKG`, `LeanReady` (Yes/No),
-  `ToolInjectorPlate`, `ChangeOverIn`, `ChangeOverOut`, `LifeCycle`,
-  `DateStamp`, `ToolStatus`.
+- Columns: `DieNumber` (may live in `Title` — both are probed),
+  `DieDescription`, `Cavities`, `CycleTime`, `DieWeightKG`, `LeanReady`
+  (Yes/No), `ToolInjectorPlate`, `ChangeOverIn`, `ChangeOverOut`,
+  `LifeCycle`, `DateStamp`, `ToolStatus`. Internal column names are
+  resolved at read time from the list's own field map (display title →
+  internal name), so renamed / re-created columns keep working — the
+  resolution is logged to the console (`PMD_DieMaster field resolution`).
 - `ToolStatus` values (free text, tolerantly parsed): **Serviced**
   (green), **In service** (blue), **To be Serviced** (orange),
   **Problems** (red). Anything else / empty shows as "—". Sorting the

@@ -15,6 +15,9 @@ export function createDataLayer(env: Record<string, string | undefined> = {}): P
       return new SharePointDataLayer({
         siteUrl: env.VITE_SITE_URL ?? '',
         planningCsvPath: env.VITE_PLANNING_CSV_PATH,
+        // Mango work-order report mirror (Die Management tab). See
+        // scripts/sync-mango-csv.mjs + docs/DEPLOYMENT.md.
+        mangoCsvPath: env.VITE_MANGO_CSV_PATH,
         // Device-class write rule: iPad writes freely; anything else is
         // read-only unless a supervisor is signed in. Replaces the old
         // per-device OwnerDevice claim arbitration that caused fights

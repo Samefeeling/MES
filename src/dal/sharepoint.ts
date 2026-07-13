@@ -342,6 +342,16 @@ export interface SharePointOptions {
    * Produced by scripts/sync-epicor-to-sp.ps1 + OneDrive sync.
    */
   planningCsvPath?: string;
+  /**
+   * Server-relative path to the Mango plant-equipment work-order report
+   * (CSV). When set, the Die Management tab's work-order list mirrors
+   * this file INSTEAD of the PMD_DieMaintenance list — Mango is the
+   * system of record; the file is refreshed by scripts/sync-mango-csv.mjs
+   * (Playwright download on the on-prem PC) + OneDrive sync, same
+   * pipeline as Planning.csv. Example:
+   *   "/sites/PMD/Shared Documents/PMD/MangoWorkOrders.csv"
+   */
+  mangoCsvPath?: string;
   /** Override any list/field internal name without editing this file. */
   fieldMap?: PartialFieldMap;
   /**
@@ -360,6 +370,7 @@ export class SharePointDataLayer implements PmdDataLayer {
   private digest: { value: string; expires: number } | null = null;
   private readonly siteUrl: string;
   private readonly planningCsvPath?: string;
+  private readonly mangoCsvPath?: string;
   private readonly canWriteHook: () => boolean;
   /** Live-mirror gate (setLiveGate) — pushLiveSnapshot skips any tuple
    *  the hook rejects. null = no gate (mirror everything dirty). */
@@ -485,6 +496,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     const o = typeof opts === 'string' ? { siteUrl: opts } : opts;
     this.siteUrl = o.siteUrl.replace(/\/$/, '');
     this.planningCsvPath = o.planningCsvPath;
+    this.mangoCsvPath = o.mangoCsvPath;
     this.canWriteHook = o.canWrite ?? ((): boolean => true);
     // Merge user overrides into the defaults.
     this.F = mergeFieldMap(DEFAULT_FIELDS, o.fieldMap);
@@ -964,34 +976,80 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (this.dieMasterCache) return this.dieMasterCache;
     const F = this.F.dieMaster;
     try {
+      // The list was created by hand in the modern UI, where a column's
+      // INTERNAL name routinely diverges from the header you see (a
+      // renamed Title column, field_2 from grid-view adds, Name0 after a
+      // collision…). Guessing display names against row keys is what made
+      // every Status render "—" — so resolve deterministically instead:
+      // pull the list's field map (display Title → InternalName) and look
+      // each configured name up. Exact InternalName match wins; display-
+      // Title match (case/space-insensitive) second; configured name last.
+      const fieldsEnv = await this.getJson<{
+        d: { results: Array<{ Title: string; InternalName: string }> };
+      }>(
+        `${this.listUrl(LISTS.dieMaster)}/fields?$filter=Hidden eq false&$select=Title,InternalName`,
+      );
+      const fields = fieldsEnv.d.results;
+      const normName = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const internals = new Set(fields.map((f) => f.InternalName));
+      const byTitle = new Map<string, string>();
+      for (const f of fields) {
+        const key = normName(f.Title);
+        if (!byTitle.has(key)) byTitle.set(key, f.InternalName);
+      }
+      const resolve = (configured: string): string =>
+        internals.has(configured) ? configured : byTitle.get(normName(configured)) ?? configured;
+      const K = {
+        dieNumber: resolve(F.dieNumber),
+        description: resolve(F.description),
+        cavities: resolve(F.cavities),
+        cycleTime: resolve(F.cycleTime),
+        dieWeightKg: resolve(F.dieWeightKg),
+        leanReady: resolve(F.leanReady),
+        toolInjectorPlate: resolve(F.toolInjectorPlate),
+        changeOverIn: resolve(F.changeOverIn),
+        changeOverOut: resolve(F.changeOverOut),
+        lifeCycle: resolve(F.lifeCycle),
+        dateStamp: resolve(F.dateStamp),
+        toolStatus: resolve(F.toolStatus),
+      };
+      console.info('[pmd] PMD_DieMaster field resolution:', K);
       const rows = await this.getAllItems<Record<string, unknown>>(LISTS.dieMaster);
       if (rows.length === 0) {
         this.dieMasterCache = [];
         return this.dieMasterCache;
       }
-      // DieNumber lands in Title when the list was created by renaming
-      // the default column instead of adding a new one — probe both.
-      const dieKey =
-        F.dieNumber in rows[0] && rows.some((r) => str(r[F.dieNumber]).trim())
-          ? F.dieNumber
-          : 'Title';
+      // DieNumber additionally falls back to Title when the resolved
+      // column is empty on every row (list made by renaming Title but a
+      // separate DieNumber column also exists, unfilled).
+      const dieKey = rows.some((r) => str(r[K.dieNumber]).trim()) ? K.dieNumber : 'Title';
       const out = rows
         .map((r) => ({
           dieNumber: str(r[dieKey]).trim(),
-          description: str(r[F.description]).trim(),
-          cavities: nullOrNum(r[F.cavities]),
-          cycleTime: nullOrNum(r[F.cycleTime]),
-          dieWeightKg: nullOrNum(r[F.dieWeightKg]),
-          leanReady: bool(r[F.leanReady]) ?? null,
-          toolInjectorPlate: str(r[F.toolInjectorPlate]).trim(),
-          changeOverIn: nullOrNum(r[F.changeOverIn]),
-          changeOverOut: nullOrNum(r[F.changeOverOut]),
-          lifeCycle: nullOrNum(r[F.lifeCycle]),
-          dateStamp: str(r[F.dateStamp]),
-          toolStatus: parseToolStatus(str(r[F.toolStatus])),
+          description: str(r[K.description]).trim(),
+          cavities: nullOrNum(r[K.cavities]),
+          cycleTime: nullOrNum(r[K.cycleTime]),
+          dieWeightKg: nullOrNum(r[K.dieWeightKg]),
+          leanReady: bool(r[K.leanReady]) ?? null,
+          toolInjectorPlate: str(r[K.toolInjectorPlate]).trim(),
+          changeOverIn: nullOrNum(r[K.changeOverIn]),
+          changeOverOut: nullOrNum(r[K.changeOverOut]),
+          lifeCycle: nullOrNum(r[K.lifeCycle]),
+          dateStamp: str(r[K.dateStamp]),
+          toolStatus: parseToolStatus(str(r[K.toolStatus])),
         }))
         .filter((m) => m.dieNumber);
-      console.info('[pmd] PMD_DieMaster cached:', out.length, 'of', rows.length, 'rows');
+      const withStatus = out.filter((m) => m.toolStatus).length;
+      console.info(
+        '[pmd] PMD_DieMaster cached:', out.length, 'of', rows.length, 'rows ·',
+        withStatus, 'carry a recognised ToolStatus',
+      );
+      if (out.length > 0 && withStatus === 0) {
+        console.warn(
+          '[pmd] PMD_DieMaster: no row has a recognised ToolStatus — check the resolved key',
+          K.toolStatus, 'and the cell values. Keys on row[0]:', Object.keys(rows[0]),
+        );
+      }
       this.dieMasterCache = out;
       return this.dieMasterCache;
     } catch (e) {
@@ -1067,6 +1125,33 @@ export class SharePointDataLayer implements PmdDataLayer {
   }
 
   async listDieMaintenance(): Promise<DieMaintenanceRequest[]> {
+    // Mango CSV report (preferred when configured): Mango is the system
+    // of record for work orders; scripts/sync-mango-csv.mjs downloads its
+    // report into the OneDrive-synced folder and this reads the mirror.
+    // Falls back to the PMD_DieMaintenance list if the file isn't there
+    // (sync not set up yet / first run pending).
+    if (this.mangoCsvPath) {
+      try {
+        const [text, dieColors] = await Promise.all([
+          this.fetchSiteFile(this.mangoCsvPath, 'Mango work-order CSV'),
+          this.listProductDieColors(),
+        ]);
+        const known = Array.from(
+          new Set(dieColors.map((d) => d.dieNumber.trim()).filter(Boolean)),
+        );
+        const orders = parseMangoWorkOrdersCsv(text, known);
+        const matched = orders.filter((o) => known.includes(o.dieNumber)).length;
+        console.info(
+          '[pmd] Mango work-order CSV:', orders.length, 'orders ·',
+          matched, 'matched to a die number',
+        );
+        return orders;
+      } catch (e) {
+        console.warn(
+          '[pmd] Mango work-order CSV unavailable — falling back to PMD_DieMaintenance:', e,
+        );
+      }
+    }
     const F = this.F.dieMaintenance;
     try {
       const rows = await this.getAllItems<Record<string, unknown>>(LISTS.dieMaintenance);
@@ -1180,11 +1265,12 @@ export class SharePointDataLayer implements PmdDataLayer {
     });
   }
 
-  private async loadPlanningCsv(rawPath: string): Promise<PlanningOrder[]> {
-    // Accept a full https://…/sites/…/file.csv URL or a server-relative
-    // path with or without percent-encoded spaces — normalise once,
-    // encode per segment so '/' separators survive, double single quotes
-    // for OData. Cache-bust per request so OneDrive uploads show up.
+  /** Fetch a doc-library file's raw text. Accepts a full https://… URL
+   *  or a server-relative path with or without percent-encoded spaces —
+   *  normalise once, encode per segment so '/' separators survive,
+   *  double single quotes for OData. Cache-busts per request so OneDrive
+   *  uploads show up immediately. */
+  private async fetchSiteFile(rawPath: string, what: string): Promise<string> {
     const serverRelative = toServerRelativePath(rawPath);
     const encodedPath = serverRelative
       .split('/')
@@ -1197,11 +1283,13 @@ export class SharePointDataLayer implements PmdDataLayer {
       headers: { Accept: 'text/csv,text/plain,*/*' },
     });
     if (!res.ok) {
-      throw new Error(
-        `Planning CSV fetch failed (${res.status}) for ${serverRelative}`,
-      );
+      throw new Error(`${what} fetch failed (${res.status}) for ${serverRelative}`);
     }
-    return parsePlanningCsv(await res.text());
+    return res.text();
+  }
+
+  private async loadPlanningCsv(rawPath: string): Promise<PlanningOrder[]> {
+    return parsePlanningCsv(await this.fetchSiteFile(rawPath, 'Planning CSV'));
   }
 
   // ---- management Pareto aggregations --------------------------------
@@ -3997,6 +4085,142 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
     });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Mango plant-equipment work-order report (CSV) → DieMaintenanceRequest[].
+// Downloaded by scripts/sync-mango-csv.mjs into the OneDrive-synced folder
+// (same pipeline as Planning.csv). Mango has no API for this module, so the
+// CSV report is the only machine-readable surface we get.
+// ---------------------------------------------------------------------------
+
+/** Column candidates per logical field, matched against NORMALISED headers
+ *  (lowercase, alphanumeric only) — exact match first, then prefix. Mango's
+ *  export headers weren't specified anywhere, so this list covers the usual
+ *  CMMS vocabulary; extend it here if the real report names one differently
+ *  (the console warning from parseMangoWorkOrdersCsv tells you which). */
+const MANGO_CSV_COLUMNS: Record<string, string[]> = {
+  ticket: [
+    'workorderno', 'workordernumber', 'workorder', 'orderno', 'ordernumber',
+    'requestno', 'requestnumber', 'wonumber', 'wono', 'wo', 'referenceno',
+    'reference', 'ticketno', 'ticket', 'number', 'no', 'id',
+  ],
+  asset: [
+    'assetname', 'asset', 'equipmentname', 'equipment', 'plantequipment',
+    'plant', 'itemname', 'item', 'assetdescription',
+  ],
+  status: ['status', 'state', 'workorderstatus', 'requeststatus'],
+  type: ['worktype', 'maintenancetype', 'jobtype', 'type', 'category'],
+  priority: ['priority', 'urgency'],
+  description: [
+    'description', 'workdescription', 'details', 'detail', 'summary',
+    'workrequired', 'task', 'subject', 'title', 'faultdescription',
+  ],
+  requestedBy: [
+    'requestedby', 'raisedby', 'reportedby', 'createdby', 'loggedby',
+    'requestor', 'requester',
+  ],
+  contact: ['assignedto', 'assignee', 'allocatedto', 'tradesperson', 'contact', 'owner'],
+  createdAt: [
+    'datecreated', 'createddate', 'created', 'dateraised', 'raiseddate',
+    'datelogged', 'loggeddate', 'requestdate', 'daterequested', 'startdate', 'date',
+  ],
+  closedAt: [
+    'datecompleted', 'completeddate', 'completed', 'dateclosed', 'closeddate',
+    'completiondate', 'finishdate', 'finisheddate', 'datefinished',
+  ],
+};
+
+function regexEscape(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Parse Mango's work-order CSV report into the app's work-order shape.
+ *
+ * Die attribution: Mango tracks ASSETS, not PMD die numbers, so each
+ * row's asset + description text is scanned for a known die number
+ * (word-boundary match, longest number first so "1280" can't claim
+ * "280"'s orders). Rows that match no die keep the asset name in
+ * `dieNumber` — they still show in the work-order list, they just don't
+ * join to a die row or its badges.
+ *
+ * Cancelled / declined orders are skipped; everything else normalises
+ * onto open / in-progress / done via the same tolerant readers the
+ * PMD_DieMaintenance list uses. Ids are synthetic (the UI is read-only
+ * against this source).
+ */
+export function parseMangoWorkOrdersCsv(
+  text: string,
+  knownDieNumbers: string[],
+): DieMaintenanceRequest[] {
+  const rows = parseCsv(text.replace(/^﻿/, ''));
+  if (rows.length < 2) return [];
+  const normHeader = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const header = rows[0].map(normHeader);
+  const colIdx = (field: string): number => {
+    const candidates = MANGO_CSV_COLUMNS[field];
+    for (const c of candidates) {
+      const i = header.indexOf(c);
+      if (i >= 0) return i;
+    }
+    for (const c of candidates) {
+      const i = header.findIndex((h) => h.startsWith(c));
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+  const idx: Record<string, number> = {};
+  const missing: string[] = [];
+  for (const field of Object.keys(MANGO_CSV_COLUMNS)) {
+    idx[field] = colIdx(field);
+    if (idx[field] < 0) missing.push(field);
+  }
+  if (missing.length > 0) {
+    console.warn(
+      '[pmd] Mango CSV: no column matched for', missing.join(', '),
+      '— headers present:', rows[0].join(' | '),
+      '(extend MANGO_CSV_COLUMNS in sharepoint.ts)',
+    );
+  }
+  const cell = (row: string[], field: string): string =>
+    idx[field] >= 0 ? (row[idx[field]] ?? '').trim() : '';
+  // Longest first so a die "1280" wins over "280" on the same text.
+  const matchers = Array.from(new Set(knownDieNumbers.map((d) => d.trim()).filter(Boolean)))
+    .sort((a, b) => b.length - a.length)
+    .map((die) => ({
+      die,
+      re: new RegExp(`(^|[^0-9A-Za-z])${regexEscape(die)}([^0-9A-Za-z]|$)`, 'i'),
+    }));
+  const out: DieMaintenanceRequest[] = [];
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (row.length === 0 || (row.length === 1 && row[0] === '')) continue;
+    const asset = cell(row, 'asset');
+    const description = cell(row, 'description');
+    const ticket = cell(row, 'ticket');
+    if (!asset && !description && !ticket) continue;
+    const rawStatus = cell(row, 'status');
+    if (/cancel|declin|reject|void/i.test(rawStatus)) continue;
+    const haystack = `${asset} ${description}`;
+    const die = matchers.find((m) => m.re.test(haystack))?.die ?? '';
+    out.push({
+      id: 1_000_000 + r, // synthetic — this source is read-only in the UI
+      dieNumber: die || asset,
+      status: normaliseMaintStatus(rawStatus),
+      maintType: normaliseMaintType(cell(row, 'type')),
+      priority: normaliseMaintPriority(cell(row, 'priority')),
+      description: description || asset,
+      contact: cell(row, 'contact'),
+      requestedBy: cell(row, 'requestedBy'),
+      machineCode: '',
+      jobNumber: '',
+      mangoTicket: ticket,
+      createdAt: csvDateToIso(cell(row, 'createdAt')),
+      closedAt: csvDateToIso(cell(row, 'closedAt')),
+    });
+  }
+  return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
 /**
