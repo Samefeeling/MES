@@ -4,6 +4,7 @@
   "ExportSelector": "",
   "OutputCsvPath": "C:\\Users\\pmdsync\\OneDrive - Resero\\PMD\\MangoWorkOrders.csv",
   "StorageStatePath": "C:\\PMDSync\\mango-auth.json",
+  "BrowserChannel": "msedge",
   "Headless": true,
   "TimeoutMs": 60000
 }

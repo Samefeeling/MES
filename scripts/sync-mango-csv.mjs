@@ -11,8 +11,15 @@
 // renamed, update ReportUrl / ExportSelector in the config — the code
 // shouldn't need touching.
 //
+// Browser: drives the machine's own Microsoft Edge by default
+// (BrowserChannel "msedge") — corporate PCs have Edge and IT policy often
+// blocks unsigned downloaded browsers, so nothing extra to install or
+// whitelist. Set BrowserChannel to "chrome" for installed Chrome, or ""
+// to use Playwright's bundled Chromium (then also run
+// `npx playwright install chromium`).
+//
 // One-time setup on the PC:
-//   npm i playwright && npx playwright install chromium
+//   npm i playwright
 //   copy scripts/sync-mango-csv.config.example.json C:\PMDSync\mango-sync.config.json  (fill it in)
 //   node sync-mango-csv.mjs --login    <- log into Mango by hand ONCE (handles MFA);
 //                                         the session is stored in StorageStatePath
@@ -51,7 +58,19 @@ const timeout = Number(cfg.TimeoutMs) || 60_000;
 const mode = process.argv.includes('--login') ? 'login' : process.argv.includes('--probe') ? 'probe' : 'sync';
 
 // ---- 2. browser --------------------------------------------------------
-const browser = await chromium.launch({ headless: mode === 'sync' ? headless : false });
+// "msedge" (default) / "chrome" run the browser already installed on the
+// PC; "" falls back to Playwright's bundled Chromium.
+const channel = cfg.BrowserChannel === undefined ? 'msedge' : cfg.BrowserChannel;
+const launchOpts = { headless: mode === 'sync' ? headless : false };
+let browser;
+try {
+  browser = await chromium.launch(channel ? { ...launchOpts, channel } : launchOpts);
+  log(`Browser: ${channel || "Playwright's bundled Chromium"}`);
+} catch (e) {
+  if (!channel) throw e;
+  log(`Could not launch channel "${channel}" (${e.message.split('\n')[0]}) — falling back to bundled Chromium.`);
+  browser = await chromium.launch(launchOpts);
+}
 const haveState = existsSync(cfg.StorageStatePath);
 if (mode === 'sync' && !haveState) {
   await browser.close();

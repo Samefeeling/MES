@@ -500,8 +500,11 @@ for the Plant/Equipment module):
    It opens Mango's work-order report page with a saved browser session
    and downloads the CSV into the OneDrive-synced folder — no SharePoint
    credentials in the script, same pattern as `Planning.csv`.
-   One-time setup (in the script's header too):
-   `npm i playwright && npx playwright install chromium`, copy
+   It drives the PC's own **Microsoft Edge** by default
+   (`BrowserChannel: "msedge"` — corporate IT policy commonly blocks
+   Playwright's downloaded Chromium, and Edge is already installed and
+   whitelisted). One-time setup (in the script's header too):
+   `npm i playwright` (no browser download needed for Edge), copy
    `scripts/sync-mango-csv.config.example.json` to
    `C:\PMDSync\mango-sync.config.json`, then `node sync-mango-csv.mjs
    --login` once to sign into Mango by hand (MFA-safe — the session is
