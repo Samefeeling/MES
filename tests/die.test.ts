@@ -301,71 +301,85 @@ describe('parseToolStatus (PMD_DieMaster.ToolStatus normalisation)', () => {
 });
 
 describe('parseMangoWorkOrdersCsv (Mango report → work-order mirror)', () => {
-  const KNOWN = ['280', '269', '1280', 'DIE-3597'];
+  // Shaped exactly like the real "AU - Minto Maintenance Request" export:
+  // a junk ordering line, the header row, then whole-plant rows of which
+  // only the "AU - Die <n> …" assets belong to Die Management. The
+  // stage/comment log lives in "Actions taken" (quoted, multi-line).
+  const MINTO_HEADER =
+    'Number,Downtime,Labour Hours,Current Stage,Plant/Equipment,Brief Description,Employee,Created Date,Branch,To be completed by,Type of Maintenance ,Identified By,Date identified,Time,AM/PM,Work shift,Describe the issue,Actions taken,Region,Department,Assign to Action';
+  const row = (
+    num: string,
+    stage: string,
+    plant: string,
+    brief: string,
+    employee: string,
+    created: string,
+    type: string,
+    assign: string,
+    actions: string,
+  ): string =>
+    `${num},,4,${stage},${plant},${brief},${employee},${created},Resero - Minto,,${type},,${created},7,AM,Day,,"${actions}",AU,Moulding,${assign}`;
 
-  it('maps a typical CMMS export and attributes dies by asset text', () => {
-    const csv = [
-      'Work Order No,Asset Name,Status,Work Type,Priority,Description,Requested By,Assigned To,Date Created,Date Completed',
-      'WO-1001,Die 280 - Max Size 5,Completed,Repair,High,Flash on cavity 2,Chris King,Toolroom,01/07/2026,03/07/2026',
-      'WO-1002,Press 850T,Outstanding,Cleaning,Normal,Clean vents on die 269,Jeff Penn,,05/07/2026,',
-      'WO-1003,Misc bench,Cancelled,Repair,Low,should be skipped,,,05/07/2026,',
-    ].join('\n');
-    const out = parseMangoWorkOrdersCsv(csv, KNOWN);
-    expect(out.length).toBe(2); // cancelled row skipped
-    const done = out.find((o) => o.mangoTicket === 'WO-1001')!;
-    expect(done.dieNumber).toBe('280');
-    expect(done.status).toBe('done');
-    expect(done.maintType).toBe('repair');
-    expect(done.priority).toBe('high');
-    expect(done.createdAt.slice(0, 10)).toBe('2026-07-01');
-    expect(done.closedAt.slice(0, 10)).toBe('2026-07-03');
-    // Die found in the DESCRIPTION when the asset doesn't carry it.
-    const open = out.find((o) => o.mangoTicket === 'WO-1002')!;
-    expect(open.dieNumber).toBe('269');
-    expect(open.status).toBe('open');
+  const csv = [
+    ',,,,1,2,4,,7,,3,,5,,,,,,6',
+    MINTO_HEADER,
+    row(
+      'MWO 02029', 'Stage 4 Closed', 'AU - Die 81 Proteus Back Outer',
+      'Plastic stuck inside due to nozzle leak', 'Anil Pattarath', '2/10/2025',
+      '2. Breakdown', 'Anil Pattarath',
+      'Thu, 02/10/2025, Avila Pushparaj (Stage 1 Coordinator Assessing): \nComment: Anil, please action \n Mon, 13/10/2025, Avila Pushparaj (Stage 3 Coordinator Reviewing):  Change Stage from Stage 3 Coordinator Reviewing to Stage 4 Closed',
+    ),
+    row(
+      'MWO 02038', 'Stage 2 Being Investigated', 'AU - Die 254 Postura Chair +460/510 mm',
+      'Hydraulic cylinders problem holding pressure', 'Karl Stevens', '7/10/2025',
+      '3. Preventive Maintenance', 'Manuel Taco', '',
+    ),
+    row(
+      'MWO 02022', 'Stage 4 Closed', 'AU - Shredder & Granulator',
+      'blocked mat in 2nd cutter', 'Steven Brough', '1/10/2025',
+      '2. Breakdown', '', '',
+    ),
+    row(
+      'MWO 02050', 'Stage 4 Closed', 'AU - Toyota Hilux - Minto Ute Diesel (Harry Singh)',
+      'service', 'Harry Singh', '3/10/2025', '3. Preventive Maintenance', '', '',
+    ),
+  ].join('\n');
+
+  it('keeps only Die rows and extracts the die number from Plant/Equipment', () => {
+    const out = parseMangoWorkOrdersCsv(csv);
+    // Shredder and the Diesel ute are the plant's problem, not ours.
+    expect(out.length).toBe(2);
+    expect(out.map((o) => o.dieNumber).sort()).toEqual(['254', '81']);
+  });
+
+  it('maps the Minto columns: ticket, stage→status, type, people, d/m/yyyy dates', () => {
+    const out = parseMangoWorkOrdersCsv(csv);
+    const closed = out.find((o) => o.mangoTicket === 'MWO 02029')!;
+    expect(closed.status).toBe('done');
+    expect(closed.maintType).toBe('repair'); // 2. Breakdown
+    expect(closed.description).toBe('Plastic stuck inside due to nozzle leak');
+    expect(closed.requestedBy).toBe('Anil Pattarath');
+    expect(closed.contact).toBe('Anil Pattarath');
+    expect(closed.createdAt.slice(0, 10)).toBe('2025-10-02'); // 2/10/2025 is d/m
+    const open = out.find((o) => o.mangoTicket === 'MWO 02038')!;
+    expect(open.status).toBe('in-progress'); // Stage 2 Being Investigated
+    expect(open.maintType).toBe('inspection'); // 3. Preventive Maintenance
+    expect(open.closedAt).toBe('');
     // Newest first.
-    expect(out[0].mangoTicket).toBe('WO-1002');
+    expect(out[0].mangoTicket).toBe('MWO 02038');
   });
 
-  it('prefers the longest die number so 1280 never falls to 280', () => {
-    const csv = [
-      'WO No,Asset,Status,Description,Date Created',
-      'WO-2,Die 1280 housing,Open,check wear,01/07/2026',
-    ].join('\n');
-    const out = parseMangoWorkOrdersCsv(csv, KNOWN);
-    expect(out[0].dieNumber).toBe('1280');
-  });
-
-  it('keeps unmatched orders under their asset name', () => {
-    const csv = [
-      'Work Order Number,Equipment,Status,Details,Created',
-      'WO-3,Granulator 2,In Progress,blade change,02/07/2026',
-    ].join('\n');
-    const out = parseMangoWorkOrdersCsv(csv, KNOWN);
-    expect(out[0].dieNumber).toBe('Granulator 2');
-    expect(out[0].status).toBe('in-progress');
-    expect(out[0].mangoTicket).toBe('WO-3');
-  });
-
-  it('skips the Mango report-title line and finds the real header below it', () => {
-    const csv = [
-      'AU - Minto Maintenance Request 1783728039982', // title + export timestamp
-      '',
-      'Work Order No,Asset Name,Status,Description,Date Created,Date Completed',
-      'WO-9,Die 280 - Max Size 5,Open,Polish cavity,06/07/2026,',
-    ].join('\n');
-    const out = parseMangoWorkOrdersCsv(csv, KNOWN);
-    expect(out.length).toBe(1);
-    expect(out[0].mangoTicket).toBe('WO-9');
-    expect(out[0].dieNumber).toBe('280');
-    expect(out[0].createdAt.slice(0, 10)).toBe('2026-07-06');
+  it("recovers the closure date from the Actions-taken log's 'to Stage 4 Closed' line", () => {
+    const out = parseMangoWorkOrdersCsv(csv);
+    const closed = out.find((o) => o.mangoTicket === 'MWO 02029')!;
+    expect(closed.closedAt.slice(0, 10)).toBe('2025-10-13');
   });
 
   it('returns [] for an empty / header-only / title-only file', () => {
-    expect(parseMangoWorkOrdersCsv('', KNOWN)).toEqual([]);
-    expect(parseMangoWorkOrdersCsv('Work Order,Status\n', KNOWN)).toEqual([]);
+    expect(parseMangoWorkOrdersCsv('')).toEqual([]);
+    expect(parseMangoWorkOrdersCsv(`${MINTO_HEADER}\n`)).toEqual([]);
     expect(
-      parseMangoWorkOrdersCsv('AU - Minto Maintenance Request 1783728039982\nno real header here\n', KNOWN),
+      parseMangoWorkOrdersCsv('AU - Minto Maintenance Request 1783728039982\nno real header here\n'),
     ).toEqual([]);
   });
 });

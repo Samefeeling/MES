@@ -1144,11 +1144,11 @@ export class SharePointDataLayer implements PmdDataLayer {
           this.fetchSiteFile(this.mangoCsvPath, 'Mango work-order CSV'),
           this.listProductDieColors(),
         ]);
-        const known = Array.from(
-          new Set(dieColors.map((d) => d.dieNumber.trim()).filter(Boolean)),
+        const known = new Set(
+          dieColors.map((d) => d.dieNumber.trim().toUpperCase()).filter(Boolean),
         );
-        const orders = parseMangoWorkOrdersCsv(text, known);
-        const matched = orders.filter((o) => known.includes(o.dieNumber)).length;
+        const orders = parseMangoWorkOrdersCsv(text);
+        const matched = orders.filter((o) => known.has(o.dieNumber.toUpperCase())).length;
         console.info(
           '[pmd] Mango work-order CSV:', orders.length, 'orders ·',
           matched, 'matched to a die number',
@@ -3298,19 +3298,24 @@ function getId(r: Record<string, unknown>): number {
 }
 
 // PMD_DieMaintenance stores lifecycle fields as plain text (people also
-// edit the list directly in SharePoint), so reads normalise whatever's
-// in the cell back onto the app's closed unions instead of trusting it.
+// edit the list directly in SharePoint), and the Mango mirror feeds the
+// same readers its stage/type vocabulary — so normalise whatever's in
+// the cell back onto the app's closed unions instead of trusting it.
 function normaliseMaintStatus(raw: string): MaintStatus {
   const s = raw.trim().toLowerCase();
-  if (s === 'done' || s === 'closed' || s === 'complete' || s === 'completed') return 'done';
-  if (s.startsWith('in') || s === 'started' || s === 'wip') return 'in-progress';
+  // Mango: "Stage 4 Closed" → done · "Stage 2 Being Investigated" /
+  // "Stage 3 Coordinator Reviewing" → in-progress · "Stage 1
+  // Coordinator Assessing" (just raised) → open.
+  if (/closed|complete|done/.test(s)) return 'done';
+  if (/^in|investigat|review|started|wip|progress/.test(s)) return 'in-progress';
   return 'open';
 }
 function normaliseMaintType(raw: string): MaintType {
   const s = raw.trim().toLowerCase();
   if (s.startsWith('clean')) return 'cleaning';
-  if (s.startsWith('inspect')) return 'inspection';
-  if (s.startsWith('repair') || s.startsWith('fix')) return 'repair';
+  // Mango's "3. Preventive Maintenance" / "1. Calibration" are check-ups.
+  if (/inspect|preventive|calibrat/.test(s)) return 'inspection';
+  if (/repair|fix|breakdown/.test(s)) return 'repair';
   return s ? 'other' : 'other';
 }
 function normaliseMaintPriority(raw: string): MaintPriority {
@@ -4103,65 +4108,80 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
 // ---------------------------------------------------------------------------
 
 /** Column candidates per logical field, matched against NORMALISED headers
- *  (lowercase, alphanumeric only) — exact match first, then prefix. Mango's
- *  export headers weren't specified anywhere, so this list covers the usual
- *  CMMS vocabulary; extend it here if the real report names one differently
- *  (the console warning from parseMangoWorkOrdersCsv tells you which). */
+ *  (lowercase, alphanumeric only) — exact match first, then prefix.
+ *  Calibrated against the real "AU - Minto Maintenance Request" export
+ *  (2026-07: Number · Current Stage · Plant/Equipment · Brief Description
+ *  · Employee · Created Date · Type of Maintenance · Assign to Action ·
+ *  Actions taken …), with generic CMMS vocabulary kept as fallbacks in
+ *  case Mango's report layout changes. Extend here if a column stops
+ *  matching (the console warning names the field and shows the headers). */
 const MANGO_CSV_COLUMNS: Record<string, string[]> = {
+  // "Number" → MWO 02022
   ticket: [
-    'workorderno', 'workordernumber', 'workorder', 'orderno', 'ordernumber',
-    'requestno', 'requestnumber', 'wonumber', 'wono', 'wo', 'referenceno',
-    'reference', 'ticketno', 'ticket', 'number', 'no', 'id',
+    'number', 'workorderno', 'workordernumber', 'workorder', 'orderno',
+    'ordernumber', 'requestno', 'requestnumber', 'wonumber', 'wono', 'wo',
+    'referenceno', 'reference', 'ticketno', 'ticket', 'no', 'id',
   ],
+  // "Plant/Equipment" → AU - Die 280 Postura Max 430 & 460
   asset: [
-    'assetname', 'asset', 'equipmentname', 'equipment', 'plantequipment',
+    'plantequipment', 'assetname', 'asset', 'equipmentname', 'equipment',
     'plant', 'itemname', 'item', 'assetdescription',
   ],
-  status: ['status', 'state', 'workorderstatus', 'requeststatus'],
-  type: ['worktype', 'maintenancetype', 'jobtype', 'type', 'category'],
+  // "Current Stage" → Stage 1 Coordinator Assessing … Stage 4 Closed
+  status: ['currentstage', 'stage', 'status', 'state', 'workorderstatus', 'requeststatus'],
+  // "Type of Maintenance " (trailing space) → 1. Calibration … 5. Employee Suggestion
+  type: ['typeofmaintenance', 'worktype', 'maintenancetype', 'jobtype', 'type', 'category'],
   priority: ['priority', 'urgency'],
+  // "Brief Description" is the short human line; "Describe the issue" backs it up
   description: [
-    'description', 'workdescription', 'details', 'detail', 'summary',
-    'workrequired', 'task', 'subject', 'title', 'faultdescription',
+    'briefdescription', 'description', 'describetheissue', 'workdescription',
+    'details', 'detail', 'summary', 'workrequired', 'task', 'subject',
+    'faultdescription',
   ],
+  // "Employee" raised it; "Identified By" as fallback
   requestedBy: [
-    'requestedby', 'raisedby', 'reportedby', 'createdby', 'loggedby',
-    'requestor', 'requester',
+    'employee', 'identifiedby', 'requestedby', 'raisedby', 'reportedby',
+    'createdby', 'loggedby', 'requestor', 'requester',
   ],
-  contact: ['assignedto', 'assignee', 'allocatedto', 'tradesperson', 'contact', 'owner'],
+  // "Assign to Action" — who's on it
+  contact: ['assignto', 'assignedto', 'assignee', 'allocatedto', 'tradesperson', 'contact', 'owner'],
+  // "Created Date" → 2/10/2025 (en-AU d/m/yyyy)
   createdAt: [
-    'datecreated', 'createddate', 'created', 'dateraised', 'raiseddate',
-    'datelogged', 'loggeddate', 'requestdate', 'daterequested', 'startdate', 'date',
+    'createddate', 'datecreated', 'created', 'dateraised', 'raiseddate',
+    'datelogged', 'loggeddate', 'requestdate', 'daterequested', 'date',
   ],
+  // The Minto export has NO completion-date column — closure is recovered
+  // from the "Actions taken" stage log instead (see below). These stay for
+  // report layouts that do carry one.
   closedAt: [
     'datecompleted', 'completeddate', 'completed', 'dateclosed', 'closeddate',
     'completiondate', 'finishdate', 'finisheddate', 'datefinished',
   ],
+  // "Actions taken" — the chronological stage/comment log ("Mon,
+  // 13/10/2025, Avila Pushparaj (…): Change Stage from … to Stage 4
+  // Closed"). Source of the closure date.
+  actionsLog: ['actionstaken', 'actionlog', 'actions', 'history', 'comments', 'log'],
 };
-
-function regexEscape(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 /**
  * Parse Mango's work-order CSV report into the app's work-order shape.
  *
- * Die attribution: Mango tracks ASSETS, not PMD die numbers, so each
- * row's asset + description text is scanned for a known die number
- * (word-boundary match, longest number first so "1280" can't claim
- * "280"'s orders). Rows that match no die keep the asset name in
- * `dieNumber` — they still show in the work-order list, they just don't
- * join to a die row or its badges.
+ * The report covers the WHOLE plant (forklifts, presses, dock levelers…);
+ * only rows whose Plant/Equipment names a die belong to Die Management,
+ * so everything else is dropped. Die assets follow the site convention
+ * "AU - Die 280 Postura Max 430 & 460" — the number after the word "Die"
+ * IS the PMD_ProductDieColor DieNumber, so it's extracted directly
+ * (word-boundary match: "Diesel" never qualifies). A die row whose
+ * number can't be extracted keeps the asset name so it stays visible.
  *
- * Cancelled / declined orders are skipped; everything else normalises
- * onto open / in-progress / done via the same tolerant readers the
- * PMD_DieMaintenance list uses. Ids are synthetic (the UI is read-only
- * against this source).
+ * Status maps the Mango stages (Stage 1 Assessing → open · Stage 2/3 →
+ * in-progress · Stage 4 Closed → done); cancelled/declined orders are
+ * skipped. The Minto export carries no completion-date column, so for
+ * closed orders the date is recovered from the "Actions taken" log — the
+ * newest "… to Stage 4 Closed" line, else the log's last date. Ids are
+ * synthetic (the UI is read-only against this source).
  */
-export function parseMangoWorkOrdersCsv(
-  text: string,
-  knownDieNumbers: string[],
-): DieMaintenanceRequest[] {
+export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
   const rows = parseCsv(text.replace(/^﻿/, ''));
   if (rows.length < 2) return [];
   const normHeader = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -4208,9 +4228,12 @@ export function parseMangoWorkOrdersCsv(
   };
   const idx: Record<string, number> = {};
   const missing: string[] = [];
+  // The Minto layout legitimately has no priority / completion-date
+  // column (closure comes from the actions log) — don't cry wolf.
+  const optional = new Set(['priority', 'closedAt', 'actionsLog']);
   for (const field of Object.keys(MANGO_CSV_COLUMNS)) {
     idx[field] = colIdx(field);
-    if (idx[field] < 0) missing.push(field);
+    if (idx[field] < 0 && !optional.has(field)) missing.push(field);
   }
   if (missing.length > 0) {
     console.warn(
@@ -4221,29 +4244,41 @@ export function parseMangoWorkOrdersCsv(
   }
   const cell = (row: string[], field: string): string =>
     idx[field] >= 0 ? (row[idx[field]] ?? '').trim() : '';
-  // Longest first so a die "1280" wins over "280" on the same text.
-  const matchers = Array.from(new Set(knownDieNumbers.map((d) => d.trim()).filter(Boolean)))
-    .sort((a, b) => b.length - a.length)
-    .map((die) => ({
-      die,
-      re: new RegExp(`(^|[^0-9A-Za-z])${regexEscape(die)}([^0-9A-Za-z]|$)`, 'i'),
-    }));
+  // "…Die 280…" as a WORD then the number — "Diesel" has no boundary
+  // after "die" so it never matches.
+  const dieRe = /\bdie\b[^0-9a-z]*(\d+)/i;
   const out: DieMaintenanceRequest[] = [];
   for (let r = headerAt + 1; r < rows.length; r++) {
     const row = rows[r];
     if (row.length === 0 || (row.length === 1 && row[0] === '')) continue;
     const asset = cell(row, 'asset');
-    const description = cell(row, 'description');
+    // Die rows only — the rest of the plant's work orders are Mango's
+    // business, not the Die Management tab's.
+    const dieMatch = dieRe.exec(asset);
+    if (!dieMatch && !/\bdies?\b/i.test(asset)) continue;
     const ticket = cell(row, 'ticket');
+    const description = cell(row, 'description');
     if (!asset && !description && !ticket) continue;
     const rawStatus = cell(row, 'status');
     if (/cancel|declin|reject|void/i.test(rawStatus)) continue;
-    const haystack = `${asset} ${description}`;
-    const die = matchers.find((m) => m.re.test(haystack))?.die ?? '';
+    const status = normaliseMaintStatus(rawStatus);
+    // Closure date: a real completed column when the layout has one,
+    // else the newest "to Stage 4 Closed" line of the actions log, else
+    // the log's last date (entries are chronological).
+    let closedAt = csvDateToIso(cell(row, 'closedAt'));
+    if (!closedAt && status === 'done') {
+      const log = cell(row, 'actionsLog');
+      const toClosed = Array.from(
+        log.matchAll(/(\d{1,2}\/\d{1,2}\/\d{4})[^\n]*to\s+stage\s*4\s*closed/gi),
+      ).pop();
+      const anyDates = log.match(/\d{1,2}\/\d{1,2}\/\d{4}/g);
+      const pick = toClosed?.[1] ?? anyDates?.[anyDates.length - 1] ?? '';
+      if (pick) closedAt = csvDateToIso(pick);
+    }
     out.push({
       id: 1_000_000 + r, // synthetic — this source is read-only in the UI
-      dieNumber: die || asset,
-      status: normaliseMaintStatus(rawStatus),
+      dieNumber: dieMatch ? dieMatch[1] : asset,
+      status,
       maintType: normaliseMaintType(cell(row, 'type')),
       priority: normaliseMaintPriority(cell(row, 'priority')),
       description: description || asset,
@@ -4253,7 +4288,7 @@ export function parseMangoWorkOrdersCsv(
       jobNumber: '',
       mangoTicket: ticket,
       createdAt: csvDateToIso(cell(row, 'createdAt')),
-      closedAt: csvDateToIso(cell(row, 'closedAt')),
+      closedAt,
     });
   }
   return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));

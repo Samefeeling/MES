@@ -509,13 +509,20 @@ for the Plant/Equipment module):
    its buttons if the export control needs to be named explicitly
    (`ExportSelector`).
 2. The app reads that file when **`VITE_MANGO_CSV_PATH`** is set (e.g.
-   `/sites/PMD/Shared Documents/PMD/MangoWorkOrders.csv`). Columns are
+   `/sites/ReseroOperationsAU/Shared Documents/General/Planning/Data/MangoWorkOrders.csv`).
+   The parser is calibrated against the real "AU - Minto Maintenance
+   Request" export: it skips the title/ordering lines above the header,
+   keeps ONLY rows whose `Plant/Equipment` names a die (the plant-wide
+   rest — presses, forklifts — is dropped), and takes the die number
+   straight from the site convention `AU - Die 280 …` (matching
+   PMD_ProductDieColor.DieNumber). Stages map to open ("Stage 1") /
+   in-progress ("Stage 2/3") / done ("Stage 4 Closed"); the closure
+   date is recovered from the "Actions taken" log's "to Stage 4 Closed"
+   line since the export has no completion-date column. Columns are
    matched by tolerant header names (`MANGO_CSV_COLUMNS` in
-   `src/dal/sharepoint.ts` — extend there if the report names a column
-   unexpectedly; a console warning lists any that failed to match).
-   Dies are attributed by scanning the asset + description text for a
-   known DieNumber; unmatched orders still show under their asset name.
-   Cancelled orders are skipped.
+   `src/dal/sharepoint.ts` — extend there if a future report layout
+   renames one; a console warning names any essential field that failed
+   to match).
 3. Without `VITE_MANGO_CSV_PATH` (or while the file doesn't exist yet)
    the tab falls back to the legacy `PMD_DieMaintenance` list, whose
    schema stays documented below for the sync-less transition period:
