@@ -787,41 +787,22 @@ function trendChart(d: DieAgg): string {
       const health = dieHealth(pct);
       const name = b.span === 1 ? b.day.slice(5) : `wk ${b.day.slice(5)}`;
       const serviced = bucketHasService(b.day, b.span);
-      // Machine-status attribution: which status the press was on when
-      // these rejects were logged — S under a ShortShot spike says
-      // "startup scrap", R says the die scraps in steady-state running.
-      const stSplit = Object.entries(b.rejByStatus).sort((x, y) => y[1] - x[1]);
-      const stTip = stSplit.length
-        ? ` · status: ${stSplit
-            .map(([s, q]) => `${STATUS_MAP[s]?.label ?? s} ×${q}`)
-            .join(' · ')}`
-        : '';
-      const letters = stSplit
-        .slice(0, 3)
-        .map(([s]) => {
-          const meta = STATUS_MAP[s];
-          return `<i style="${meta ? `background:${meta.color};border-color:${meta.border};color:${meta.text}` : ''}">${escapeHtml(s)}</i>`;
-        })
-        .join('');
       const tip = `${name} · ${b.rejects} rej / ${b.pieces} pcs${
         pct != null ? ` (${pct.toFixed(1)}%)` : ''
-      }${stTip}${serviced ? ' · 🔧 service completed' : ''}`;
+      }${serviced ? ' · 🔧 service completed' : ''}`;
       const idle = b.pieces === 0 && b.rejects === 0;
       const h = idle ? 0 : b.rejects === 0 ? 4 : Math.max(8, Math.round((b.rejects / max) * 100));
       const label = i % labelEvery === 0 ? name : '';
       return `<div class="die-trend-col${serviced ? ' svc' : ''}" title="${escapeHtml(tip)}">
         <b>${b.rejects > 0 ? b.rejects : ''}</b>
-        ${b.rejects > 0 && letters ? `<span class="die-trend-stl">${letters}</span>` : '<span class="die-trend-stl"></span>'}
         <span class="die-trend-bar"><i class="${idle ? 'empty' : health || 'green'}" style="height:${h}%"></i></span>
         <em>${serviced ? '🔧' : ''}${escapeHtml(label)}</em>
       </div>`;
     })
     .join('');
-  const legend = `<p class="kpi-note">Letters above a bar = the MACHINE STATUS the rejects were logged under (S Startup · R Running · D Die Change · C Colour Change · P Purge…) — a ShortShot spike marked S is startup scrap, marked R it's the die misbehaving mid-run.${
-    svcDays.size
-      ? ` 🔧 = service completed that ${buckets[0].span === 1 ? 'day' : 'week'} (closed work order / Last service) — rejects that keep climbing after a 🔧 mean the repair didn't take.`
-      : ''
-  }</p>`;
+  const legend = svcDays.size
+    ? `<p class="kpi-note">Bar height = rejects that ${buckets[0].span === 1 ? 'day' : 'week'}; colour = the reject-% band. 🔧 = service completed (closed work order / Last service) — rejects that keep climbing after a 🔧 mean the repair didn't take. See <b>Defects by code</b> below for the machine-status split.</p>`
+    : `<p class="kpi-note">Bar height = rejects that ${buckets[0].span === 1 ? 'day' : 'week'}; colour = the reject-% band. See <b>Defects by code</b> below for the machine-status split.</p>`;
   return `<div class="die-trend-lg">${bars}</div>${legend}`;
 }
 
@@ -880,12 +861,18 @@ function renderMasterSection(d: DieAgg): string {
 function openDieDetail(dieNumber: string): void {
   const d = S!.dies.find((x) => x.dieNumber === dieNumber);
   if (!d) return;
-  const maxQty = d.rejByCode[0]?.qty ?? 0;
+  // Only real, labelled defect codes belong in the Pareto — drop the '—'
+  // placeholder bucket (rejects logged with no code) and any blank / unknown
+  // code that has no reject-category label, so nothing fabricated shows.
+  const codes = d.rejByCode.filter(
+    (x) => x.code && x.code !== '—' && rejLabel(x.code),
+  );
+  const maxQty = codes[0]?.qty ?? 0;
   // Each code's bar is stacked by the machine status that logged the
   // scrap (letters in the operator-timeline colours) — a ShortShot bar
   // that's mostly S is a startup problem, mostly R points at the tool.
-  const bars = d.rejByCode.length
-    ? d.rejByCode
+  const bars = codes.length
+    ? codes
         .map((x) => {
           const split = Object.entries(x.byStatus).sort((a, b) => b[1] - a[1]);
           const tip = split

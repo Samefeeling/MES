@@ -1184,6 +1184,17 @@ export class SharePointDataLayer implements PmdDataLayer {
 
   async createDieChangeLog(log: Omit<DieChangeLog, 'id' | 'createdAt'>): Promise<DieChangeLog> {
     const F = this.F.dieChangeLog;
+    // Idempotent on machine + date + shift + job: one row per die change even
+    // if the operator's iPad reloaded and the popup re-fired. An existing row
+    // for the same tuple is UPDATED (MERGE) rather than duplicated.
+    const key = (r: { machineCode: string; date: string; shift: string; jobNumber: string }) =>
+      `${r.machineCode.trim().toUpperCase()}|${r.date}|${r.shift.trim().toUpperCase()}|${r.jobNumber.trim().toUpperCase()}`;
+    let existing: DieChangeLog | undefined;
+    try {
+      existing = (await this.listDieChangeLog()).find((r) => key(r) === key(log));
+    } catch {
+      /* list read failed — fall through to a plain insert */
+    }
     const body: Record<string, unknown> = {
       __metadata: { type: await this.itemType(LISTS.dieChangeLog) },
       Title: `${log.machineCode} ${log.date} · Die ${log.dieNumberOut || '?'} → ${log.dieNumberIn || '?'}`,
@@ -1205,7 +1216,16 @@ export class SharePointDataLayer implements PmdDataLayer {
     };
     for (const c of DIE_COMPONENTS) {
       const cond = log.components[c.key];
+      // On update, always write the component (clearing a downgraded flag);
+      // on insert, only send a value when set. body[c.key] otherwise stays
+      // absent so SharePoint keeps its default.
       if (cond) body[c.key] = DIE_CONDITION_META[cond].label;
+      else if (existing) body[c.key] = null;
+    }
+    if (existing) {
+      // MERGE the existing row (IF-MATCH '*') — no duplicate created.
+      await this.post(`${this.listUrl(LISTS.dieChangeLog)}/items(${existing.id})`, body, '*');
+      return { ...log, id: existing.id, createdAt: existing.createdAt };
     }
     const res = await this.post(`${this.listUrl(LISTS.dieChangeLog)}/items`, body);
     const j = (await res.json()) as { d?: { ID?: number; Id?: number; Created?: string } };

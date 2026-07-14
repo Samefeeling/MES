@@ -54,6 +54,41 @@ let pendingBuild: string | null = null;
 let started = false;
 let applying = false;
 
+// We may auto-reload at most ONCE per target build per tab session. If the
+// reload comes back still running the OLD bundle — SharePoint / the CDN is
+// still serving the stale asset for its fixed URL — reloading again would
+// just loop forever ("page keeps refreshing"). Remembering which build we
+// last reloaded toward, in sessionStorage (survives the reload, clears when
+// the tab closes), breaks that loop: we try once, and if it didn't take we
+// stop and let the version badge prompt a manual refresh.
+const RELOAD_KEY = 'pmd.autoUpdate.reloadedFor';
+
+/** Whether an auto-reload should fire for `pending`, given the build we last
+ *  reloaded toward this session. False once we've already reloaded for this
+ *  exact build (the loop-breaker). Pure so it can be unit-tested. */
+export function shouldAutoReload(
+  pending: string | null,
+  alreadyReloadedFor: string,
+): boolean {
+  return !!pending && pending !== alreadyReloadedFor;
+}
+
+function reloadedFor(): string {
+  try {
+    return sessionStorage.getItem(RELOAD_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+function rememberReload(build: string): void {
+  try {
+    sessionStorage.setItem(RELOAD_KEY, build);
+  } catch {
+    /* private mode / storage disabled — the `applying` flag still guards
+       against a same-load double reload; we just can't survive the reload */
+  }
+}
+
 /** An operator is mid-entry — don't yank the page out from under them. */
 function isTyping(): boolean {
   const el = document.activeElement;
@@ -90,9 +125,14 @@ async function refreshAssetCaches(): Promise<void> {
  *  entry. editCache is persisted to localStorage so a reload never loses work;
  *  this guard just avoids reloading while a finger is on a field. */
 function maybeReload(): void {
-  if (!pendingBuild || applying) return;
+  if (applying) return;
   if (!document.hidden && isTyping()) return;
+  // Already reloaded once toward this exact build and we're STILL on the old
+  // one → the new asset hasn't propagated. Don't loop; wait for a manual
+  // refresh (or the next, different build).
+  if (!shouldAutoReload(pendingBuild, reloadedFor())) return;
   applying = true;
+  rememberReload(pendingBuild!);
   // Refresh the fixed-URL asset cache entries FIRST (see refreshAssetCaches),
   // then reload — the reload's request for the same fixed URL is now served
   // the fresh code. Works for both the SPFx Web-part host (fixed URL in the

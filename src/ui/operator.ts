@@ -3190,10 +3190,47 @@ async function multiFillApply(
 
 const dieLogPrompted = new Set<string>();
 
+// One Die Change Log per (machine + date + shift + job). The in-memory set
+// stops a re-prompt within a session; the persisted set (localStorage) makes
+// that guarantee survive a PAGE RELOAD, so a refresh mid-shift never re-opens
+// the popup for a change already logged — the source of duplicate
+// PMD_DieChangeLog rows. The DAL create is also idempotent on the same key as
+// a server-side backstop (see sharepoint/memory createDieChangeLog).
+const DCL_SAVED_KEY = 'pmd.dieChangeLog.saved';
+
+/** Unique id for one die change: machine + shiftId (date+shift) + job. */
+function dieChangeLogKey(): string {
+  return `${S!.mc}|${sid()}|${S!.selJob}`;
+}
+
+function savedDieLogKeys(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DCL_SAVED_KEY);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Record a saved die change so neither this session nor a later reload
+ *  re-prompts (and re-creates a row) for the same tuple. */
+function markDieLogSaved(key: string): void {
+  dieLogPrompted.add(key);
+  try {
+    const s = savedDieLogKeys();
+    s.add(key);
+    // Keep the store bounded — only the last ~200 tuples matter.
+    const arr = [...s].slice(-200);
+    localStorage.setItem(DCL_SAVED_KEY, JSON.stringify(arr));
+  } catch {
+    /* storage disabled — the in-memory guard still holds for this session */
+  }
+}
+
 function maybeOpenDieChangeLog(code: StatusCode): void {
   if (!dalRef.createDieChangeLog || !S!.selJob) return;
-  const key = `${S!.mc}|${sid()}|${S!.selJob}`;
-  if (dieLogPrompted.has(key)) return;
+  const key = dieChangeLogKey();
+  if (dieLogPrompted.has(key) || savedDieLogKeys().has(key)) return;
   dieLogPrompted.add(key);
   openDieChangeLogModal(code);
 }
@@ -3328,6 +3365,7 @@ function openDieChangeLogModal(trigger: StatusCode): void {
           components,
           problemDescription: prob,
         });
+        markDieLogSaved(dieChangeLogKey());
         closeModal();
         toast(
           flagged > 0

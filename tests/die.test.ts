@@ -515,6 +515,43 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
     expect(parseDieCondition('banana')).toBe('');
   });
 
+  it('die change log is idempotent on machine+date+shift+job (no duplicate on refresh)', async () => {
+    const dal = new MemoryDataLayer();
+    const base = {
+      date: '2026-07-14',
+      shift: 'Day',
+      dieSetter: 'Anil Pattarath',
+      machineCode: '1600T',
+      changeOver: ['Die'],
+      jobNumber: 'SFM507001',
+      dieNumberOut: '280',
+      dieDescriptionOut: 'Postura Max',
+      dieNumberIn: '254',
+      dieDescriptionIn: 'Postura Chair',
+      components: { Venting: 'worn' as const },
+      problemDescription: 'Vents crusted.',
+    };
+    const first = await dal.createDieChangeLog(base);
+    // A page reload re-fires the popup for the same tuple; the setter fixes a
+    // rating and saves again. Only ONE row must exist, updated in place.
+    const second = await dal.createDieChangeLog({
+      ...base,
+      // lower-case machine + padded job prove the key is normalised
+      machineCode: '1600t',
+      jobNumber: ' SFM507001 ',
+      components: { Venting: 'damaged' as const },
+      problemDescription: 'Vents cracked through.',
+    });
+    expect(second.id).toBe(first.id);
+    const all = await dal.listDieChangeLog();
+    expect(all.length).toBe(1);
+    expect(all[0].components.Venting).toBe('damaged');
+    expect(all[0].problemDescription).toBe('Vents cracked through.');
+    // A genuinely different tuple (different job) still inserts a new row.
+    await dal.createDieChangeLog({ ...base, jobNumber: 'SFM507002' });
+    expect((await dal.listDieChangeLog()).length).toBe(2);
+  });
+
   it('updateDieMaster changes ToolStatus and stamps the audit dates', async () => {
     const dal = new MemoryDataLayer();
     await dal.updateDieMaster('die-0091', {
