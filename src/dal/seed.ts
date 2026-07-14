@@ -236,6 +236,13 @@ export function seedDieMaintenance(now: Date): DieMaintenanceRequest[] {
       mangoTicket: 'MAN-30412',
       createdAt: daysAgo(5),
       closedAt: daysAgo(4),
+      // Mango report detail — demo parity with the CSV mirror.
+      downtime: '2',
+      labourHours: '3.5',
+      issueDetail: 'Vents blocked with residue after the long battery tray campaign; short shots on cavities 3-4.',
+      workSummary: 'Stripped and ultrasonic-cleaned all vent inserts, polished parting line.',
+      correctiveAction: 'Vent inserts cleaned and re-lapped.',
+      preventativeAction: 'Added vent clean to the campaign-end checklist.',
     },
   ];
 }

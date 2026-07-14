@@ -4215,6 +4215,15 @@ const MANGO_CSV_COLUMNS: Record<string, string[]> = {
   // 13/10/2025, Avila Pushparaj (…): Change Stage from … to Stage 4
   // Closed"). Source of the closure date.
   actionsLog: ['actionstaken', 'actionlog', 'actions', 'history', 'comments', 'log'],
+  // ---- work-order DETAIL columns (all optional) — shown in the die
+  // drilldown's Maintenance Work Order Detail section.
+  downtime: ['downtime'],
+  labourHours: ['labourhours', 'laborhours'],
+  issueDetail: ['describetheissue', 'issuedescription', 'faultdetail'],
+  workSummary: ['summaryofworkcompleted', 'worksummary', 'workcompleted'],
+  correctiveAction: ['correctiveactiontaken', 'correctiveaction'],
+  preventativeAction: ['preventativeactiontaken', 'preventiveactiontaken', 'preventativeaction', 'preventiveaction'],
+  cost: ['costpartslabour', 'cost'],
 };
 
 /**
@@ -4283,8 +4292,12 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
   const idx: Record<string, number> = {};
   const missing: string[] = [];
   // The Minto layout legitimately has no priority / completion-date
-  // column (closure comes from the actions log) — don't cry wolf.
-  const optional = new Set(['priority', 'closedAt', 'actionsLog']);
+  // column (closure comes from the actions log), and the detail columns
+  // vary by report — don't cry wolf over any of them.
+  const optional = new Set([
+    'priority', 'closedAt', 'actionsLog', 'downtime', 'labourHours',
+    'issueDetail', 'workSummary', 'correctiveAction', 'preventativeAction', 'cost',
+  ]);
   for (const field of Object.keys(MANGO_CSV_COLUMNS)) {
     idx[field] = colIdx(field);
     if (idx[field] < 0 && !optional.has(field)) missing.push(field);
@@ -4343,6 +4356,13 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
       mangoTicket: ticket,
       createdAt: csvDateToIso(cell(row, 'createdAt')),
       closedAt,
+      downtime: cell(row, 'downtime') || undefined,
+      labourHours: cell(row, 'labourHours') || undefined,
+      issueDetail: cell(row, 'issueDetail') || undefined,
+      workSummary: cell(row, 'workSummary') || undefined,
+      correctiveAction: cell(row, 'correctiveAction') || undefined,
+      preventativeAction: cell(row, 'preventativeAction') || undefined,
+      cost: cell(row, 'cost') || undefined,
     });
   }
   return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));

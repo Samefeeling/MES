@@ -823,14 +823,6 @@ function openDieDetail(dieNumber: string): void {
         )
         .join('')
     : `<div class="trace-empty">No rejects recorded for this die in the window. 🎉</div>`;
-  const parts = d.parts
-    .map(
-      (p) =>
-        `<li>${escapeHtml(p.partNumber)}${p.name ? ` — ${escapeHtml(p.name)}` : ''}${
-          p.coRun ? ' <span class="trace-corun">⛓ Co-run</span>' : ''
-        }</li>`,
-    )
-    .join('');
   // Work-order history (mirrored from Mango) — the "what have we already
   // tried on this tool" record that sits next to the defect trend when
   // judging repair vs run-on. Open orders first, then newest closed.
@@ -858,17 +850,41 @@ function openDieDetail(dieNumber: string): void {
           const span = closed
             ? `${escapeHtml(opened)} → ${escapeHtml(closed)}${days != null ? ` · ${days === 0 ? '<1' : days} d` : ''}`
             : `${escapeHtml(opened)} · still open`;
+          // Numbers line: downtime / labour / cost as recorded in Mango.
+          const nums = [
+            r.downtime ? `Downtime <b>${escapeHtml(r.downtime)} h</b>` : '',
+            r.labourHours ? `Labour <b>${escapeHtml(r.labourHours)} h</b>` : '',
+            r.cost ? `Cost <b>${escapeHtml(r.cost)}</b>` : '',
+          ]
+            .filter(Boolean)
+            .join(' · ');
+          // Narrative lines: what was wrong, what was done, what stops
+          // it recurring — the judgement material next to the trend.
+          const line = (label: string, v?: string): string =>
+            v ? `<div class="die-hist-line"><i>${label}</i>${escapeHtml(v)}</div>` : '';
           return `<li class="die-hist-row">
             <span class="die-req-st st-${r.status}">${STATUS_LABELS[r.status]}</span>
             <span class="die-req-type">${TYPE_LABELS[r.maintType]}</span>
             ${r.mangoTicket ? `<span class="die-mango">🥭 ${escapeHtml(r.mangoTicket)}</span>` : ''}
             <span class="die-hist-span">${span}</span>
+            ${nums ? `<span class="die-hist-nums">${nums}</span>` : ''}
             <span class="die-hist-desc">${escapeHtml(r.description || '—')}</span>
+            ${line('Issue', r.issueDetail !== r.description ? r.issueDetail : undefined)}
+            ${line('Work done', r.workSummary)}
+            ${line('Corrective', r.correctiveAction)}
+            ${line('Preventative', r.preventativeAction)}
             ${r.contact ? `<span class="die-hist-who">→ ${escapeHtml(r.contact)}</span>` : ''}
           </li>`;
         })
         .join('')
-    : '<li>No maintenance history on record.</li>';
+    : '<li>No maintenance work orders on record for this die.</li>';
+  // Most recent die change inside the window (status 'D' slots).
+  const dcRec = d.lastDieChange;
+  const dieChangeHtml = dcRec
+    ? `<div class="die-dc">🔁 <b>${escapeHtml(dcRec.day)}</b> · ${escapeHtml(dcRec.shift)} shift
+        · <b>${escapeHtml(dcRec.machine)}</b> · job ${escapeHtml(dcRec.jobNumber)}
+        · <b>${(dcRec.slots * 0.5).toLocaleString()} h</b> (${dcRec.slots} × 30 min slots on Die Change)</div>`
+    : `<div class="die-dc none">No die change recorded in the selected window (${escapeHtml(S!.from)} → ${escapeHtml(S!.to)}).</div>`;
   const health = dieHealth(d.rejectPct);
   openModal(`<div class="die-detail">
     <div class="kpi-trace-head">
@@ -899,10 +915,10 @@ function openDieDetail(dieNumber: string): void {
     ${trendChart(d)}
     <h4>Defects by code</h4>
     ${bars}
-    <h4>Parts on this die</h4>
-    <ul class="die-detail-parts">${parts}</ul>
-    <h4>Maintenance history</h4>
+    <h4>Maintenance Work Order Detail</h4>
     <ul class="die-detail-hist">${histHtml}</ul>
+    <h4>Last die change</h4>
+    ${dieChangeHtml}
     <div class="bd-actions">
       ${mangoLink('Raise Request in Mango', 'lg')}
     </div>

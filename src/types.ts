@@ -138,6 +138,24 @@ export interface DieMaintenanceRequest {
   createdAt: string; // ISO
   /** Set when status transitions to done ('' while open/in-progress). */
   closedAt: string;
+
+  // ---- Mango report detail (optional) — only the CSV work-order mirror
+  // fills these; rows from the PMD_DieMaintenance list leave them
+  // undefined. All free text as exported.
+  /** Downtime the fault caused (hours, as recorded in Mango). */
+  downtime?: string;
+  /** Labour hours booked on the work order. */
+  labourHours?: string;
+  /** "Describe the issue" — the requester's full fault description. */
+  issueDetail?: string;
+  /** "Summary of work completed". */
+  workSummary?: string;
+  /** "Corrective action taken". */
+  correctiveAction?: string;
+  /** "Preventative action taken". */
+  preventativeAction?: string;
+  /** "Cost (parts, labour)". */
+  cost?: string;
 }
 
 export interface BdCode {

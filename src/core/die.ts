@@ -89,6 +89,16 @@ export interface DieAgg {
    *  defect-trend sparkline buckets (see buildDieTrend) and the service
    *  counter read. Days with no production simply don't appear here. */
   daily: Array<{ day: string; rejects: number; pieces: number; shots: number }>;
+  /** Most recent die-change event charged to this die inside the window:
+   *  slots with status 'D' on a run of one of the die's parts. `slots` ×
+   *  30 min = how long the change took. Null = none in the window. */
+  lastDieChange: {
+    day: string;
+    shift: string;
+    machine: string;
+    jobNumber: string;
+    slots: number;
+  } | null;
 }
 
 // ---------------------------------------------------------------------
@@ -339,6 +349,7 @@ export function aggregateDies(
         lastRun: '',
         openRequests: 0,
         daily: [],
+        lastDieChange: null,
       };
       byDie.set(die, agg);
     }
@@ -359,10 +370,13 @@ export function aggregateDies(
     die: string;
     machine: string;
     shiftId: string;
+    jobNumber: string;
     shots: number;
     pieces: number;
     rejects: number;
     rejByCode: Map<string, number>;
+    /** Slots this tuple spent on status 'D' (Die Change), 30 min each. */
+    dieChangeSlots: number;
   }
   const tuples = new Map<string, Tuple>();
   for (const r of records) {
@@ -375,13 +389,16 @@ export function aggregateDies(
         die,
         machine: r.machineCode,
         shiftId: r.shiftId,
+        jobNumber: r.jobNumber,
         shots: 0,
         pieces: 0,
         rejects: 0,
         rejByCode: new Map(),
+        dieChangeSlots: 0,
       };
       tuples.set(key, t);
     }
+    if (r.statusCode === 'D') t.dieChangeSlots++;
     if (r.slotIndex === 0 && r.countStart != null && r.countEnd != null) {
       t.shots = Math.max(0, r.countEnd - r.countStart);
       t.pieces = cavityGross(r.countStart, r.countEnd, r.cavities);
@@ -419,6 +436,15 @@ export function aggregateDies(
     if (!agg.machines.includes(t.machine)) agg.machines.push(t.machine);
     const day = t.shiftId.slice(0, 10);
     if (day > agg.lastRun) agg.lastRun = day;
+    if (t.dieChangeSlots > 0 && (!agg.lastDieChange || day > agg.lastDieChange.day)) {
+      agg.lastDieChange = {
+        day,
+        shift: t.shiftId.slice(11),
+        machine: t.machine,
+        jobNumber: t.jobNumber,
+        slots: t.dieChangeSlots,
+      };
+    }
     const m = rejMaps.get(t.die) ?? new Map<string, number>();
     for (const [code, qty] of t.rejByCode) m.set(code, (m.get(code) ?? 0) + qty);
     rejMaps.set(t.die, m);

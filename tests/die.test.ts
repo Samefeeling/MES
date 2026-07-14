@@ -149,6 +149,29 @@ describe('tonnage service rule', () => {
     expect(serviceIntervalFor(1600).shots).toBe(8_000); // extended band
   });
 
+  it('records the most recent die change (status D slots) per die', () => {
+    const master = [dc('P-A', 'DIE-1'), dc('P-B', 'DIE-2')];
+    const records = [
+      // Older change on 550T: two D slots (= 1 h).
+      rec({ machineCode: '550T', shiftId: '2026-07-05-Day', jobNumber: 'J1', slotIndex: 0, statusCode: 'D', partNumber: 'P-A', countStart: 0, countEnd: 0 }),
+      rec({ machineCode: '550T', shiftId: '2026-07-05-Day', jobNumber: 'J1', slotIndex: 1, statusCode: 'D', partNumber: 'P-A' }),
+      rec({ machineCode: '550T', shiftId: '2026-07-05-Day', jobNumber: 'J1', slotIndex: 2, statusCode: 'R', partNumber: 'P-A' }),
+      // Newer change on 850T Night: one D slot — this one must win.
+      rec({ machineCode: '850T', shiftId: '2026-07-08-Night', jobNumber: 'J2', slotIndex: 0, statusCode: 'D', partNumber: 'P-A', countStart: 0, countEnd: 100 }),
+      // DIE-2 never had a die change.
+      rec({ machineCode: '320T', shiftId: '2026-07-08-Day', jobNumber: 'J3', slotIndex: 0, statusCode: 'R', partNumber: 'P-B', countStart: 0, countEnd: 50 }),
+    ];
+    const dies = aggregateDies(master, records, []);
+    expect(dies.find((d) => d.dieNumber === 'DIE-1')!.lastDieChange).toEqual({
+      day: '2026-07-08',
+      shift: 'Night',
+      machine: '850T',
+      jobNumber: 'J2',
+      slots: 1,
+    });
+    expect(dies.find((d) => d.dieNumber === 'DIE-2')!.lastDieChange).toBeNull();
+  });
+
   it('counts shots since the last DONE service and flags soon/due', () => {
     const master = [dc('P-A', 'DIE-1')];
     const mkRec = (day: string, shots: number) =>
@@ -323,7 +346,7 @@ describe('parseMangoWorkOrdersCsv (Mango report → work-order mirror)', () => {
   // only the "AU - Die <n> …" assets belong to Die Management. The
   // stage/comment log lives in "Actions taken" (quoted, multi-line).
   const MINTO_HEADER =
-    'Number,Downtime,Labour Hours,Current Stage,Plant/Equipment,Brief Description,Employee,Created Date,Branch,To be completed by,Type of Maintenance ,Identified By,Date identified,Time,AM/PM,Work shift,Describe the issue,Actions taken,Region,Department,Assign to Action';
+    'Number,Downtime,Labour Hours,Current Stage,Plant/Equipment,Brief Description,Employee,Created Date,Branch,To be completed by,Type of Maintenance ,Identified By,Date identified,Time,AM/PM,Work shift,Describe the issue,Actions taken,Region,Department,Assign to Action,Work can be done to,Summary of work completed,"Cost (parts, labour)",Corrective action taken,Preventative action taken,Summary';
   const row = (
     num: string,
     stage: string,
@@ -334,8 +357,10 @@ describe('parseMangoWorkOrdersCsv (Mango report → work-order mirror)', () => {
     type: string,
     assign: string,
     actions: string,
+    work = '',
+    corrective = '',
   ): string =>
-    `${num},,4,${stage},${plant},${brief},${employee},${created},Resero - Minto,,${type},,${created},7,AM,Day,,"${actions}",AU,Moulding,${assign}`;
+    `${num},,4,${stage},${plant},${brief},${employee},${created},Resero - Minto,,${type},,${created},7,AM,Day,,"${actions}",AU,Moulding,${assign},,${work},,${corrective},,`;
 
   const csv = [
     ',,,,1,2,4,,7,,3,,5,,,,,,6',
@@ -345,6 +370,8 @@ describe('parseMangoWorkOrdersCsv (Mango report → work-order mirror)', () => {
       'Plastic stuck inside due to nozzle leak', 'Anil Pattarath', '2/10/2025',
       '2. Breakdown', 'Anil Pattarath',
       'Thu, 02/10/2025, Avila Pushparaj (Stage 1 Coordinator Assessing): \nComment: Anil, please action \n Mon, 13/10/2025, Avila Pushparaj (Stage 3 Coordinator Reviewing):  Change Stage from Stage 3 Coordinator Reviewing to Stage 4 Closed',
+      'Cleared nozzle leak; purged and polished sprue bush.',
+      'Replaced nozzle seal.',
     ),
     row(
       'MWO 02038', 'Stage 2 Being Investigated', 'AU - Die 254 Postura Chair +460/510 mm',
@@ -375,6 +402,11 @@ describe('parseMangoWorkOrdersCsv (Mango report → work-order mirror)', () => {
     expect(closed.status).toBe('done');
     expect(closed.maintType).toBe('repair'); // 2. Breakdown
     expect(closed.description).toBe('Plastic stuck inside due to nozzle leak');
+    // Work-order detail columns for the drilldown.
+    expect(closed.labourHours).toBe('4');
+    expect(closed.workSummary).toBe('Cleared nozzle leak; purged and polished sprue bush.');
+    expect(closed.correctiveAction).toBe('Replaced nozzle seal.');
+    expect(closed.downtime).toBeUndefined(); // empty cell stays undefined
     expect(closed.requestedBy).toBe('Anil Pattarath');
     expect(closed.contact).toBe('Anil Pattarath');
     expect(closed.createdAt.slice(0, 10)).toBe('2025-10-02'); // 2/10/2025 is d/m
