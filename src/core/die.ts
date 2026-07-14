@@ -122,8 +122,11 @@ export interface DieAgg {
   rejects: number;
   /** rejects ÷ pieces × 100, null when the die made nothing. */
   rejectPct: number | null;
-  /** Reject quantity per defect code, value-descending. */
-  rejByCode: Array<{ code: string; qty: number }>;
+  /** Reject quantity per defect code, value-descending. byStatus splits
+   *  each code's quantity by the MACHINE STATUS letter of the slot that
+   *  logged it (S = startup scrap, R = steady-state, …) so the code
+   *  Pareto can show WHERE in the run each defect bites. */
+  rejByCode: Array<{ code: string; qty: number; byStatus: Record<string, number> }>;
   /** Date (YYYY-MM-DD) of the most recent run in the window, '' if none. */
   lastRun: string;
   /** Open / in-progress maintenance requests against this die. */
@@ -437,7 +440,8 @@ export function aggregateDies(
     shots: number;
     pieces: number;
     rejects: number;
-    rejByCode: Map<string, number>;
+    /** code → status letter → qty (the slot's status when it was logged). */
+    rejByCode: Map<string, Map<string, number>>;
     /** Reject qty per machine-status letter of the slot that logged it. */
     rejByStatus: Map<string, number>;
     /** Slots this tuple spent on status 'D' (Die Change), 30 min each. */
@@ -475,28 +479,31 @@ export function aggregateDies(
     } catch {
       obj = {};
     }
+    // Charge each code's rejects to the slot's machine status — S(tartup)
+    // scrap and R(unning) scrap have very different fixes.
+    const st = r.statusCode || '·';
+    const charge = (code: string, n: number) => {
+      const cm = t!.rejByCode.get(code) ?? new Map<string, number>();
+      cm.set(st, (cm.get(st) ?? 0) + n);
+      t!.rejByCode.set(code, cm);
+    };
     let slotRej = 0;
     for (const [code, v] of Object.entries(obj)) {
       const n = Number(v) || 0;
       if (n <= 0) continue;
       slotRej += n;
-      t.rejByCode.set(code, (t.rejByCode.get(code) ?? 0) + n);
+      charge(code, n);
     }
     // Rows that predate the per-code JSON only carry rejectCount.
     if (slotRej === 0 && Number(r.rejectCount) > 0) {
       slotRej = Number(r.rejectCount);
-      t.rejByCode.set('—', (t.rejByCode.get('—') ?? 0) + slotRej);
+      charge('—', slotRej);
     }
     t.rejects += slotRej;
-    // Charge the slot's rejects to its machine status — S(tartup) scrap
-    // and R(unning) scrap have very different fixes.
-    if (slotRej > 0) {
-      const st = r.statusCode || '·';
-      t.rejByStatus.set(st, (t.rejByStatus.get(st) ?? 0) + slotRej);
-    }
+    if (slotRej > 0) t.rejByStatus.set(st, (t.rejByStatus.get(st) ?? 0) + slotRej);
   }
 
-  const rejMaps = new Map<string, Map<string, number>>();
+  const rejMaps = new Map<string, Map<string, Map<string, number>>>();
   const dayMaps = new Map<
     string,
     Map<string, { rejects: number; pieces: number; shots: number; rejByStatus: Record<string, number> }>
@@ -521,8 +528,12 @@ export function aggregateDies(
         slots: t.dieChangeSlots,
       };
     }
-    const m = rejMaps.get(t.die) ?? new Map<string, number>();
-    for (const [code, qty] of t.rejByCode) m.set(code, (m.get(code) ?? 0) + qty);
+    const m = rejMaps.get(t.die) ?? new Map<string, Map<string, number>>();
+    for (const [code, sm] of t.rejByCode) {
+      const cm = m.get(code) ?? new Map<string, number>();
+      for (const [st, q] of sm) cm.set(st, (cm.get(st) ?? 0) + q);
+      m.set(code, cm);
+    }
     rejMaps.set(t.die, m);
     const dm =
       dayMaps.get(t.die) ??
@@ -546,7 +557,15 @@ export function aggregateDies(
     agg.rejectPct =
       agg.pieces > 0 ? +((agg.rejects / agg.pieces) * 100).toFixed(1) : null;
     agg.rejByCode = Array.from(rejMaps.get(agg.dieNumber) ?? [])
-      .map(([code, qty]) => ({ code, qty }))
+      .map(([code, sm]) => {
+        const byStatus: Record<string, number> = {};
+        let qty = 0;
+        for (const [st, q] of sm) {
+          byStatus[st] = q;
+          qty += q;
+        }
+        return { code, qty, byStatus };
+      })
       .sort((a, b) => b.qty - a.qty);
     agg.machines.sort();
     // Normalised match — the Mango mirror carries bare numbers ("280")

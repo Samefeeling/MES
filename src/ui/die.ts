@@ -881,16 +881,36 @@ function openDieDetail(dieNumber: string): void {
   const d = S!.dies.find((x) => x.dieNumber === dieNumber);
   if (!d) return;
   const maxQty = d.rejByCode[0]?.qty ?? 0;
+  // Each code's bar is stacked by the machine status that logged the
+  // scrap (letters in the operator-timeline colours) — a ShortShot bar
+  // that's mostly S is a startup problem, mostly R points at the tool.
   const bars = d.rejByCode.length
     ? d.rejByCode
-        .map(
-          (x) => `<div class="die-bar-row">
+        .map((x) => {
+          const split = Object.entries(x.byStatus).sort((a, b) => b[1] - a[1]);
+          const tip = split
+            .map(([s, q]) => `${STATUS_MAP[s]?.label ?? s} ×${q}`)
+            .join(' · ');
+          const segs = split
+            .map(([s, q]) => {
+              const meta = STATUS_MAP[s];
+              const w = x.qty ? (q / x.qty) * 100 : 0;
+              const paint = meta
+                ? `;background:${meta.color};border-color:${meta.border};color:${meta.text}`
+                : '';
+              // Letter only when the segment is wide enough to carry it.
+              return `<i class="die-bar-seg" style="width:${w}%${paint}">${w >= 8 ? escapeHtml(s) : ''}</i>`;
+            })
+            .join('');
+          return `<div class="die-bar-row" title="${escapeHtml(
+            `${x.code} ${rejLabel(x.code) || ''} · ${x.qty} — ${tip}`,
+          )}">
             <span class="die-bar-code">${escapeHtml(x.code)}</span>
             <span class="die-bar-label">${escapeHtml(rejLabel(x.code) || '—')}</span>
-            <span class="die-bar-track"><i style="width:${maxQty ? Math.max(4, (x.qty / maxQty) * 100) : 0}%"></i></span>
+            <span class="die-bar-track"><span class="die-bar-fill" style="width:${maxQty ? Math.max(4, (x.qty / maxQty) * 100) : 0}%">${segs}</span></span>
             <b class="die-bar-qty">${x.qty}</b>
-          </div>`,
-        )
+          </div>`;
+        })
         .join('')
     : `<div class="trace-empty">No rejects recorded for this die in the window. 🎉</div>`;
   // Work-order history (mirrored from Mango) — the "what have we already

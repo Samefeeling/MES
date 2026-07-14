@@ -81,8 +81,8 @@ describe('aggregateDies', () => {
     expect(d1.good).toBe(246);
     expect(d1.rejectPct).toBe(1.6);
     expect(d1.rejByCode).toEqual([
-      { code: 'D07', qty: 3 },
-      { code: 'D05', qty: 1 },
+      { code: 'D07', qty: 3, byStatus: { R: 3 } },
+      { code: 'D05', qty: 1, byStatus: { R: 1 } },
     ]);
     expect(d1.machines).toEqual(['M1', 'M2']);
     expect(d1.lastRun).toBe('2026-07-09');
@@ -172,6 +172,8 @@ describe('tonnage service rule', () => {
     expect(d1.medianRunShots).toBe(2000);
     const day8 = d1.daily.find((x) => x.day === '2026-07-08')!;
     expect(day8.rejByStatus).toEqual({ S: 5, R: 2 });
+    // The code Pareto carries the same per-status split for each code.
+    expect(d1.rejByCode).toEqual([{ code: 'D01', qty: 7, byStatus: { S: 5, R: 2 } }]);
     // …and the trend buckets carry the split through.
     const buckets = buildDieTrend(d1.daily, '2026-07-08', '2026-07-10');
     expect(buckets[0].rejByStatus).toEqual({ S: 5, R: 2 });

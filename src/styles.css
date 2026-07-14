@@ -857,8 +857,13 @@ th.die-sort.a{color:#1d4ed8}
 .die-bar-row{display:flex;align-items:center;gap:8px;margin-bottom:4px;font-size:13px}
 .die-bar-code{width:38px;font-weight:800;color:#991b1b}
 .die-bar-label{width:170px;color:var(--mu);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.die-bar-track{flex:1;background:#f1f5f9;border-radius:6px;height:14px;overflow:hidden}
-.die-bar-track i{display:block;height:100%;background:#ef4444;border-radius:6px}
+.die-bar-track{flex:1;background:#f1f5f9;border-radius:6px;height:16px;overflow:hidden}
+.die-bar-fill{display:flex;height:100%;border-radius:6px;overflow:hidden}
+/* One segment per machine-status letter; colour + letter come inline
+   from STATUS_MAP so the Pareto matches the operator timeline. Red is
+   the fallback for legacy rows with no status on the slot. */
+.die-bar-seg{display:flex;align-items:center;justify-content:center;height:100%;background:#ef4444;color:#fff;font-size:10px;font-weight:800;font-style:normal;line-height:1;overflow:hidden;border-right:1px solid rgba(255,255,255,.75)}
+.die-bar-seg:last-child{border-right:none}
 .die-bar-qty{width:36px;text-align:right;font-variant-numeric:tabular-nums}
 .die-detail-hist{margin:4px 0 0;padding-left:20px;font-size:13px}
 .die-detail-hist li{margin-bottom:3px}
