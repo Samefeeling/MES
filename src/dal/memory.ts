@@ -20,6 +20,7 @@ import type { PmdDataLayer } from './types';
 import { bdLabelFor } from '../core/breakdown';
 import {
   seedBdCodes,
+  seedDieChangeLogs,
   seedDieMaintenance,
   seedDieMaster,
   seedMachines,
@@ -70,6 +71,8 @@ export class MemoryDataLayer implements PmdDataLayer {
     this.dieColors = seedProductDieColors();
     this.dieMaster = seedDieMaster(now);
     this.dieMaintenance = seedDieMaintenance(now);
+    this.dieChangeLogs = seedDieChangeLogs(now);
+    this.nextDclId = Math.max(0, ...this.dieChangeLogs.map((r) => r.id)) + 1;
     this.nextMaintId = Math.max(0, ...this.dieMaintenance.map((r) => r.id)) + 1;
     this.nextProdId = Math.max(0, ...this.production.map((r) => r.id)) + 1;
   }

@@ -5,6 +5,7 @@ import {
   buildDieTrend,
   dieHealth,
   dieServiceStatus,
+  latestConditionByDie,
   machineTonnage,
   nextPlannedFor,
   parseDieCondition,
@@ -14,7 +15,7 @@ import {
 } from '../src/core/die';
 import { MemoryDataLayer } from '../src/dal/memory';
 import { parseMangoWorkOrdersCsv } from '../src/dal/sharepoint';
-import type { DieMaintenanceRequest, ProductDieColor } from '../src/types';
+import type { DieChangeLog, DieMaintenanceRequest, ProductDieColor } from '../src/types';
 import { order, rec } from './helpers';
 
 const dc = (partNumber: string, dieNumber: string, over: Partial<ProductDieColor> = {}): ProductDieColor => ({
@@ -340,6 +341,59 @@ describe('MemoryDataLayer die maintenance lifecycle', () => {
   });
 });
 
+describe('latestConditionByDie (PMD_DieChangeLog → toolroom flags)', () => {
+  const log = (over: Partial<DieChangeLog>): DieChangeLog => ({
+    id: 1,
+    date: '2026-07-10',
+    shift: 'Day',
+    dieSetter: 'Van Minh Ma',
+    machineCode: '550T',
+    changeOver: ['Die'],
+    jobNumber: 'SFM507268',
+    dieNumberOut: '117',
+    dieDescriptionOut: 'PROTEUS SEAT MOULDING',
+    dieNumberIn: '174',
+    dieDescriptionIn: 'PODIUM SEAT',
+    components: {},
+    problemDescription: '',
+    createdAt: '2026-07-10T08:00:00Z',
+    ...over,
+  });
+
+  it('extracts worn/damaged flags (damaged first) keyed by the OUT die', () => {
+    const m = latestConditionByDie([
+      log({ components: { MouldingSurfaces: 'worn', Cores: 'damaged', Bolts: 'good' } }),
+    ]);
+    const c = m.get('117')!;
+    expect(c.flags.map((f) => `${f.label}:${f.condition}`)).toEqual([
+      'Cores:damaged',
+      'Moulding Surfaces:worn',
+    ]);
+    expect(c.hasDamaged).toBe(true);
+    expect(m.has('174')).toBe(false); // IN die is not rated
+  });
+
+  it('the LATEST report wins — a newer all-good check clears older flags', () => {
+    const m = latestConditionByDie([
+      log({ id: 1, date: '2026-07-08', components: { Venting: 'damaged' } }),
+      log({ id: 2, date: '2026-07-12', components: { Bolts: 'good' } }),
+    ]);
+    const c = m.get('117')!;
+    expect(c.date).toBe('2026-07-12');
+    expect(c.flags).toEqual([]);
+    expect(c.hasDamaged).toBe(false);
+  });
+
+  it('normalises the die key and skips rows without a die out', () => {
+    const m = latestConditionByDie([
+      log({ dieNumberOut: ' die-0091 ', components: { GuidePins: 'worn' } }),
+      log({ id: 3, dieNumberOut: '' }),
+    ]);
+    expect(m.get('DIE-0091')!.flags[0].key).toBe('GuidePins');
+    expect(m.size).toBe(1);
+  });
+});
+
 describe('parseToolStatus (PMD_DieMaster.ToolStatus normalisation)', () => {
   it('accepts the four canonical labels in any casing / spacing', () => {
     expect(parseToolStatus('Serviced')).toBe('serviced');
@@ -543,13 +597,18 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
       problemDescription: 'Vents cracked through.',
     });
     expect(second.id).toBe(first.id);
+    // Count only THIS tuple's rows — the memory DAL also carries seeded
+    // demo reports for other dies.
+    const mine = (all: Awaited<ReturnType<typeof dal.listDieChangeLog>>) =>
+      all.filter((r) => r.jobNumber.trim() === 'SFM507001');
     const all = await dal.listDieChangeLog();
-    expect(all.length).toBe(1);
-    expect(all[0].components.Venting).toBe('damaged');
-    expect(all[0].problemDescription).toBe('Vents cracked through.');
+    expect(mine(all).length).toBe(1);
+    expect(mine(all)[0].components.Venting).toBe('damaged');
+    expect(mine(all)[0].problemDescription).toBe('Vents cracked through.');
     // A genuinely different tuple (different job) still inserts a new row.
+    const before = (await dal.listDieChangeLog()).length;
     await dal.createDieChangeLog({ ...base, jobNumber: 'SFM507002' });
-    expect((await dal.listDieChangeLog()).length).toBe(2);
+    expect((await dal.listDieChangeLog()).length).toBe(before + 1);
   });
 
   it('updateDieMaster changes ToolStatus and stamps the audit dates', async () => {

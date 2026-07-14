@@ -1,5 +1,7 @@
 import type {
   BdCode,
+  DieChangeLog,
+  DieComponentCondition,
   DieMaintenanceRequest,
   DieMaster,
   Machine,
@@ -247,6 +249,53 @@ export function seedDieMaintenance(now: Date): DieMaintenanceRequest[] {
       workSummary: 'Stripped and ultrasonic-cleaned all vent inserts, polished parting line.',
       correctiveAction: 'Vent inserts cleaned and re-lapped.',
       preventativeAction: 'Added vent clean to the campaign-end checklist.',
+    },
+  ];
+}
+
+/** Two setter condition reports (PMD_DieChangeLog) so the demo shows the
+ *  Maint-column flags + Status override: DIE-0091 has a DAMAGED moulding
+ *  surface (→ effective Status Problems, priority service), DIE-0689 is
+ *  merely worn on venting (→ amber Maint chip only). */
+export function seedDieChangeLogs(now: Date): DieChangeLog[] {
+  const day = (n: number): string => {
+    const d = new Date(now);
+    d.setDate(d.getDate() - n);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  const allGood = (): Record<string, DieComponentCondition> => ({});
+  return [
+    {
+      id: 1,
+      date: day(2),
+      shift: 'Day',
+      dieSetter: 'Anil Pattarath',
+      machineCode: '850T',
+      changeOver: ['Die'],
+      jobNumber: 'SFM506888',
+      dieNumberOut: 'DIE-0091',
+      dieDescriptionOut: 'HS Pallet Insert 8-cav',
+      dieNumberIn: 'DIE-1422',
+      dieDescriptionIn: 'Battery Tray Lid 4-cav',
+      components: { ...allGood(), MouldingSurfaces: 'damaged', GuidePins: 'worn' },
+      problemDescription: 'Cavity 6 surface gouged near the gate; guide pins showing wear lines.',
+      createdAt: new Date(new Date(now).setDate(now.getDate() - 2)).toISOString(),
+    },
+    {
+      id: 2,
+      date: day(4),
+      shift: 'Night',
+      dieSetter: 'Van Minh Ma',
+      machineCode: '1600T',
+      changeOver: ['Die'],
+      jobNumber: 'SFM506811',
+      dieNumberOut: 'DIE-0689',
+      dieDescriptionOut: 'Integra Chair Shell',
+      dieNumberIn: 'DIE-3597',
+      dieDescriptionIn: 'Viva Backrest/Armrest 2-cav',
+      components: { ...allGood(), Venting: 'worn' },
+      problemDescription: 'Vents crusting up — clean at next service.',
+      createdAt: new Date(new Date(now).setDate(now.getDate() - 4)).toISOString(),
     },
   ];
 }

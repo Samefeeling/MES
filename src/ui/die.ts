@@ -18,15 +18,19 @@ import type {
   MaintStatus,
   MaintType,
   ProductDieColor,
+  ToolStatus,
 } from '../types';
 import {
   aggregateDies,
   buildDieTrend,
+  DIE_CONDITION_META,
   dieHealth,
   dieServiceStatus,
+  latestConditionByDie,
   nextPlannedFor,
   TOOL_STATUS_META,
   type DieAgg,
+  type DieConditionSummary,
   type DiePlanned,
   type DieServiceStatus,
 } from '../core/die';
@@ -71,6 +75,9 @@ interface DieState {
   /** Die → its place in the production schedule (running / next start),
    *  from PMD_Planning via the die's parts. Absent = not scheduled. */
   planByDie: Map<string, DiePlanned>;
+  /** Die (trimmed, UPPERCASED) → latest die-change condition report from
+   *  PMD_DieChangeLog. Worn/damaged components flag priority service. */
+  condByDie: Map<string, DieConditionSummary>;
   loading: boolean;
 }
 
@@ -141,8 +148,25 @@ function requestsFor(dieNumber: string): DieMaintenanceRequest[] {
   return S!.requests.filter((r) => r.dieNumber.trim().toUpperCase() === key);
 }
 
+/** Latest die-change condition report (PMD_DieChangeLog, keyed on the
+ *  die that came OUT). Undefined = no report filed yet. */
+function condFor(dieNumber: string): DieConditionSummary | undefined {
+  return S!.condByDie.get(dieNumber.trim().toUpperCase());
+}
+
+/** ToolStatus for DISPLAY: PMD_DieMaster's value, overridden to Problems
+ *  when the latest die-change report rated any component "3. Damaged" —
+ *  the setter's fresh inspection outranks a stale master row. */
+function effectiveStatus(dieNumber: string): { st: ToolStatus | ''; overridden: boolean } {
+  const st = masterFor(dieNumber)?.toolStatus ?? '';
+  if (condFor(dieNumber)?.hasDamaged && st !== 'problems')
+    return { st: 'problems', overridden: true };
+  return { st, overridden: false };
+}
+
 /** Availability comes from the toolroom's own record (PMD_DieMaster),
- *  driven by ToolStatus:
+ *  driven by the EFFECTIVE ToolStatus (incl. the damaged-component
+ *  override from the die-change log):
  *    Problems   → Unavailable (can't run at all)
  *    In service → the maintenance-confirmed return date from the
  *                 DieMaster Available column; 'In maint' until the
@@ -150,10 +174,11 @@ function requestsFor(dieNumber: string): DieMaintenanceRequest[] {
  *    otherwise  → Available */
 function availableFor(d: DieAgg): { html: string; sort: string | null } {
   const m = masterFor(d.dieNumber);
-  const st = m?.toolStatus ?? '';
+  const eff = effectiveStatus(d.dieNumber);
+  const st = eff.st;
   if (st === 'problems')
     return {
-      html: '<span class="die-avail late" title="ToolStatus is Problems — the die cannot be used">Unavailable</span>',
+      html: `<span class="die-avail late" title="${eff.overridden ? 'Damaged component in the latest Die Change Log — the die cannot be used' : 'ToolStatus is Problems — the die cannot be used'}">Unavailable</span>`,
       sort: '9999-99-99',
     };
   if (st === 'in-service') {
@@ -177,22 +202,31 @@ function availableFor(d: DieAgg): { html: string; sort: string | null } {
 
 /** The badge is a BUTTON when the backend can write PMD_DieMaster —
  *  tapping it opens the status picker. A die with no master row stays a
- *  plain dash (the app can't invent asset rows). */
+ *  plain dash (the app can't invent asset rows) — unless the die-change
+ *  log reports a damaged component, which shows as Problems regardless. */
 function toolStatusBadge(dieNumber: string, editable = false): string {
   const m = masterFor(dieNumber);
-  if (!m) {
+  const eff = effectiveStatus(dieNumber);
+  if (!m && !eff.overridden) {
     return `<span class="die-tstat none" title="No PMD_DieMaster row for this die yet">—</span>`;
   }
-  const meta = m.toolStatus ? TOOL_STATUS_META[m.toolStatus] : null;
-  const when = m.dateStamp ? ` · updated ${m.dateStamp.slice(0, 10)}` : '';
-  const inner = meta ? `● ${meta.label}` : '—';
+  const meta = eff.st ? TOOL_STATUS_META[eff.st] : null;
+  const c = condFor(dieNumber);
+  const src = eff.overridden
+    ? `"3. Damaged" in the Die Change Log of ${c!.date} (${c!.flags
+        .filter((f) => f.condition === 'damaged')
+        .map((f) => f.label)
+        .join(', ')}) — priority service` +
+      (m ? '. Tap to set PMD_DieMaster to match' : '')
+    : `PMD_DieMaster ToolStatus${m?.dateStamp ? ` · updated ${m.dateStamp.slice(0, 10)}` : ''}`;
+  const inner = meta ? `● ${meta.label}${eff.overridden ? ' ⚠' : ''}` : '—';
   const cls = meta ? `die-tstat ${meta.cls}` : 'die-tstat none';
-  if (editable && dalRef.updateDieMaster) {
+  if (editable && m && dalRef.updateDieMaster) {
     return `<button class="${cls} die-tstat-btn" data-die-status="${escapeHtml(dieNumber)}" title="${escapeHtml(
-      `PMD_DieMaster ToolStatus${when} — tap to change`,
+      `${src}${eff.overridden ? '' : ' — tap to change'}`,
     )}">${inner} ▾</button>`;
   }
-  return `<span class="${cls}" title="${escapeHtml(`PMD_DieMaster ToolStatus${when}`)}">${inner}</span>`;
+  return `<span class="${cls}" title="${escapeHtml(src)}">${inner}</span>`;
 }
 
 function isoDay(d: Date): string {
@@ -222,6 +256,7 @@ export async function mountDieTab(dal: PmdDataLayer, host: HTMLElement): Promise
     dieColors: [],
     masterByDie: new Map(),
     planByDie: new Map(),
+    condByDie: new Map(),
     loading: true,
   };
   render();
@@ -232,7 +267,7 @@ async function loadAll(): Promise<void> {
   if (!S) return;
   S.loading = true;
   render();
-  const [dieColors, requests, rejCats, records, planning, master] = await Promise.all([
+  const [dieColors, requests, rejCats, records, planning, master, changeLogs] = await Promise.all([
     dalRef.listProductDieColors ? dalRef.listProductDieColors().catch(() => []) : Promise.resolve([]),
     dalRef.listDieMaintenance ? dalRef.listDieMaintenance().catch(() => []) : Promise.resolve([]),
     dalRef.listRejectCategories().catch(() => []),
@@ -241,10 +276,12 @@ async function loadAll(): Promise<void> {
       .catch(() => []),
     dalRef.listPlanning({}).catch(() => []),
     dalRef.listDieMaster ? dalRef.listDieMaster().catch(() => []) : Promise.resolve([]),
+    dalRef.listDieChangeLog ? dalRef.listDieChangeLog().catch(() => []) : Promise.resolve([]),
   ]);
   if (!S) return;
   S.dieColors = dieColors;
   S.masterByDie = new Map(master.map((m) => [m.dieNumber.trim().toUpperCase(), m]));
+  S.condByDie = latestConditionByDie(changeLogs);
   S.requests = requests;
   S.rejectLabels = new Map(rejCats.map((c) => [c.code, c.label]));
   S.dies = aggregateDies(dieColors, records, requests);
@@ -371,9 +408,10 @@ function filteredDies(): DieAgg[] {
 const SORT_ACCESSORS: Record<Exclude<DieSortKey, 'smart'>, (d: DieAgg) => string | number | null> = {
   die: (d) => d.dieNumber.toUpperCase(),
   description: (d) => (d.description || '￿').toUpperCase(),
-  // Worst-first rank (Problems 0 → Serviced 3); unregistered dies last.
+  // Worst-first rank (Problems 0 → Serviced 3), on the EFFECTIVE status
+  // (incl. the damaged-component override); unregistered dies last.
   toolStatus: (d) => {
-    const st = masterFor(d.dieNumber)?.toolStatus;
+    const st = effectiveStatus(d.dieNumber).st;
     return st ? TOOL_STATUS_META[st].rank : null;
   },
   // Ascending = longest since service first (the actionable order).
@@ -571,7 +609,30 @@ function renderDieTable(): string {
               svc.level === 'due' ? '🔧 Service due' : '⏳ Service soon'
             }</span>`
           : '';
+      // Worn / damaged components from the latest die-change condition
+      // report — anything rated >1 queues the die for priority service.
+      const cond = condFor(d.dieNumber);
+      const condChips = cond && cond.flags.length
+        ? cond.flags
+            .slice(0, 2)
+            .map(
+              (f) =>
+                `<span class="die-cond-chip ${f.condition}" title="${escapeHtml(
+                  `${f.label} — ${DIE_CONDITION_META[f.condition].label} · Die Change Log ${cond.date} ${cond.shift} · ${cond.dieSetter}`,
+                )}">${escapeHtml(f.label)} ${DIE_CONDITION_META[f.condition].short}</span>`,
+            )
+            .join('') +
+          (cond.flags.length > 2
+            ? `<span class="die-cond-chip more" title="${escapeHtml(
+                cond.flags
+                  .slice(2)
+                  .map((f) => `${f.label} ${DIE_CONDITION_META[f.condition].short}`)
+                  .join(' · '),
+              )}">+${cond.flags.length - 2}</span>`
+            : '')
+        : '';
       const maint =
+        condChips +
         (d.openRequests ? `<span class="die-maint-badge">🛠 ${d.openRequests}</span>` : '') +
         svcBadge;
       const partsTip = d.parts
@@ -974,6 +1035,31 @@ function openDieDetail(dieNumber: string): void {
         · <b>${escapeHtml(dcRec.machine)}</b> · job ${escapeHtml(dcRec.jobNumber)}
         · <b>${(dcRec.slots * 0.5).toLocaleString()} h</b> (${dcRec.slots} × 30 min slots on Die Change)</div>`
     : `<div class="die-dc none">No die change recorded in the selected window (${escapeHtml(S!.from)} → ${escapeHtml(S!.to)}).</div>`;
+  // Latest setter's condition report (PMD_DieChangeLog) — the 13-component
+  // check filed when this die last came OUT of a press. Worn/damaged
+  // components are the toolroom's priority-service queue.
+  const cond = condFor(d.dieNumber);
+  const condHtml = !cond
+    ? `<div class="die-dc none">No die-change condition report on record yet (PMD_DieChangeLog) — filed by the setter when the die comes out of the press.</div>`
+    : `<div class="die-cond${cond.hasDamaged ? ' bad' : cond.flags.length ? ' warn' : ''}">
+        <div class="die-cond-meta">📋 <b>${escapeHtml(cond.date)}</b> · ${escapeHtml(cond.shift)} shift
+          · <b>${escapeHtml(cond.machineCode)}</b> · job ${escapeHtml(cond.jobNumber)}
+          · by <b>${escapeHtml(cond.dieSetter || '—')}</b></div>
+        ${
+          cond.flags.length
+            ? `<div class="die-cond-flags">${cond.flags
+                .map(
+                  (f) =>
+                    `<span class="die-cond-chip ${f.condition}">${escapeHtml(f.label)} — ${escapeHtml(
+                      DIE_CONDITION_META[f.condition].label,
+                    )}</span>`,
+                )
+                .join('')}</div>
+              ${cond.hasDamaged ? '<div class="die-cond-note bad">⚠ Component damaged — the die shows as <b>Problems</b> and service is PRIORITY.</div>' : '<div class="die-cond-note">Rated 2 — operational, but queue for priority service at the next window.</div>'}`
+            : '<div class="die-cond-ok">All 13 components rated “1. Good work order” ✓</div>'
+        }
+        ${cond.problemDescription ? `<div class="die-cond-desc">“${escapeHtml(cond.problemDescription)}”</div>` : ''}
+      </div>`;
   const health = dieHealth(d.rejectPct);
   openModal(`<div class="die-detail">
     <div class="kpi-trace-head">
@@ -1008,6 +1094,8 @@ function openDieDetail(dieNumber: string): void {
     <ul class="die-detail-hist">${histHtml}</ul>
     <h4>Last die change</h4>
     ${dieChangeHtml}
+    <h4>Die condition — latest setter check (PMD_DieChangeLog)</h4>
+    ${condHtml}
     <div class="bd-actions">
       ${mangoLink('Raise Request in Mango', 'lg')}
     </div>

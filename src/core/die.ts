@@ -8,6 +8,7 @@
 // mirrored into Mango later — MangoTicket on the request is the link slot.
 
 import type {
+  DieChangeLog,
   DieComponentCondition,
   DieMaintenanceRequest,
   PlanningOrder,
@@ -47,6 +48,67 @@ export const DIE_CONDITION_META: Record<
   worn: { label: '2. Operational but worn', short: '2', cls: 'amber' },
   damaged: { label: '3. Damaged or can’t be used', short: '3', cls: 'red' },
 };
+
+/** One component the setter rated worse than "1. Good work order". */
+export interface DieConditionFlag {
+  key: string;
+  label: string;
+  condition: 'worn' | 'damaged';
+}
+
+/** Toolroom summary of the LATEST die-change condition report filed
+ *  against a die. Ratings describe the die coming OUT of the press
+ *  (DieNumberOut) — the setter inspects it while it's on the bench. */
+export interface DieConditionSummary {
+  date: string;
+  shift: string;
+  machineCode: string;
+  dieSetter: string;
+  jobNumber: string;
+  problemDescription: string;
+  /** Components rated 2 (worn) / 3 (damaged), damaged first — anything
+   *  here queues the die for priority service. Empty = all 13 good. */
+  flags: DieConditionFlag[];
+  /** Any component rated 3 — the die must surface as Problems. */
+  hasDamaged: boolean;
+}
+
+/**
+ * Latest condition report per die (key = DieNumberOut, trimmed +
+ * uppercased). "Latest" is by report date, then createdAt — a newer
+ * all-good report clears an older worn flag (the die was fixed or the
+ * wear was re-judged), which is exactly how the toolroom reads it.
+ */
+export function latestConditionByDie(logs: DieChangeLog[]): Map<string, DieConditionSummary> {
+  const sorted = [...logs].sort((a, b) =>
+    a.date !== b.date ? (a.date < b.date ? 1 : -1) : a.createdAt < b.createdAt ? 1 : -1,
+  );
+  const out = new Map<string, DieConditionSummary>();
+  for (const l of sorted) {
+    const die = (l.dieNumberOut ?? '').trim().toUpperCase();
+    if (!die || out.has(die)) continue; // first hit in newest-first order = latest
+    const flags: DieConditionFlag[] = [];
+    for (const c of DIE_COMPONENTS) {
+      const cond = l.components[c.key];
+      if (cond === 'worn' || cond === 'damaged')
+        flags.push({ key: c.key, label: c.label, condition: cond });
+    }
+    flags.sort((a, b) =>
+      a.condition === b.condition ? 0 : a.condition === 'damaged' ? -1 : 1,
+    );
+    out.set(die, {
+      date: l.date,
+      shift: l.shift,
+      machineCode: l.machineCode,
+      dieSetter: l.dieSetter,
+      jobNumber: l.jobNumber,
+      problemDescription: l.problemDescription,
+      flags,
+      hasDamaged: flags.some((f) => f.condition === 'damaged'),
+    });
+  }
+  return out;
+}
 
 /** Free text ("2. Operational but worn", "worn", "3") → condition. */
 export function parseDieCondition(raw: string): DieComponentCondition {

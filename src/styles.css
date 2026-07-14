@@ -782,6 +782,24 @@ th.die-sort.a{color:#1d4ed8}
 .die-table td.red{color:var(--rd);font-weight:800}
 .die-link{background:none;border:none;color:#1d4ed8;font-weight:800;font-size:14px;cursor:pointer;text-decoration:underline;padding:0}
 .die-maint-badge{background:#fff7ed;border:1px solid #fdba74;color:#9a3412;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:800}
+/* Worn / damaged component chips from the latest die-change condition
+   report (PMD_DieChangeLog): 2 = amber, 3 = red. */
+.die-cond-chip{display:inline-block;border-radius:6px;padding:1px 7px;font-size:11px;font-weight:800;white-space:nowrap;margin:1px 3px 1px 0}
+.die-cond-chip.worn{background:#fff7ed;border:1px solid #fdba74;color:#9a3412}
+.die-cond-chip.damaged{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c}
+.die-cond-chip.more{background:#f1f5f9;border:1px solid var(--bd);color:var(--mu)}
+/* Drilldown condition-report block */
+.die-cond{background:#f8fafc;border:1px solid var(--bd);border-radius:8px;padding:8px 10px;font-size:13px}
+.die-cond.warn{background:#fff7ed;border-color:#fdba74}
+.die-cond.bad{background:#fef2f2;border-color:#fecaca}
+.die-cond-meta{color:var(--mu)}
+.die-cond-meta b{color:var(--tx)}
+.die-cond-flags{margin-top:6px}
+.die-cond-flags .die-cond-chip{font-size:12px;padding:2px 9px}
+.die-cond-note{margin-top:5px;font-size:12px;color:#9a3412;font-weight:700}
+.die-cond-note.bad{color:#b91c1c}
+.die-cond-ok{margin-top:5px;color:var(--gn);font-weight:700;font-size:12px}
+.die-cond-desc{margin-top:5px;color:#334155;font-style:italic}
 /* Requests list */
 .die-req-section{margin-top:16px}
 .die-req-section h3{margin:0 0 8px;font-size:16px}
