@@ -17,25 +17,6 @@ import type {
 } from '../types';
 import { cavityGross } from './metrics';
 
-/** Built-in maintenance contacts for die repair / cleaning requests.
- *  Edit this list to match the real toolroom roster — phone / email are
- *  optional and render as tap-to-call / mail links when present. When the
- *  Mango integration lands, contact routing moves to Mango's assignment
- *  rules and this list becomes the offline fallback. */
-export interface MaintContact {
-  /** What they're contacted FOR (shown as the group label). */
-  role: string;
-  name: string;
-  phone?: string;
-  email?: string;
-}
-
-export const MAINTENANCE_CONTACTS: MaintContact[] = [
-  { role: 'Toolroom — die repair', name: 'Toolroom Team' },
-  { role: 'Maintenance — cleaning / service', name: 'Maintenance Team' },
-  { role: 'PMD Supervisor', name: 'Shift Supervisor' },
-];
-
 // ---------------------------------------------------------------------
 // Die-change condition report (PMD_DieChangeLog). The component keys ARE
 // the SharePoint column names; labels are what the operator sees.
