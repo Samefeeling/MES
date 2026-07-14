@@ -32,6 +32,7 @@ import {
 } from '../core/die';
 import { closeModal, escapeHtml, openModal } from './modal';
 import { toast } from './toast';
+import { STATUS_MAP } from '../core/status';
 
 /** 'smart' = the aggregate's attention-first order (open requests, then
  *  reject-%, then shots). Any other key is a user-picked column sort. */
@@ -44,13 +45,15 @@ type DieSortKey =
   | 'parts'
   | 'machines'
   | 'runs'
+  | 'medRun'
   | 'shots'
   | 'pieces'
   | 'good'
   | 'rejects'
   | 'rejPct'
   | 'lastRun'
-  | 'scheduled';
+  | 'scheduled'
+  | 'available';
 
 interface DieState {
   from: string; // YYYY-MM-DD inclusive
@@ -129,6 +132,36 @@ function fmtPlanned(iso: string): string {
  *  case drift must not break the join. */
 function masterFor(dieNumber: string): DieMaster | undefined {
   return S!.masterByDie.get(dieNumber.trim().toUpperCase());
+}
+
+/** Work orders for a die, tolerant of trim/case drift between the Mango
+ *  mirror's numbers and PMD_ProductDieColor's DieNumber. */
+function requestsFor(dieNumber: string): DieMaintenanceRequest[] {
+  const key = dieNumber.trim().toUpperCase();
+  return S!.requests.filter((r) => r.dieNumber.trim().toUpperCase() === key);
+}
+
+/** When is this die back from maintenance? Now = no open work orders;
+ *  otherwise the latest "To be completed by" among its open orders. */
+function availableFor(d: DieAgg): { html: string; sort: string | null } {
+  const open = requestsFor(d.dieNumber).filter((r) => r.status !== 'done');
+  if (open.length === 0)
+    return {
+      html: '<span class="die-avail now" title="No open work orders — the die is available">Now</span>',
+      sort: '0000-00-00',
+    };
+  const dues = open.map((r) => (r.dueDate ?? '').slice(0, 10)).filter(Boolean).sort();
+  const due = dues[dues.length - 1];
+  if (!due)
+    return {
+      html: `<span class="die-avail maint" title="${open.length} open work order${open.length === 1 ? '' : 's'} with no promised date in Mango">In maint</span>`,
+      sort: '9999-99-99',
+    };
+  const late = due < isoDay(new Date());
+  return {
+    html: `<span class="die-avail${late ? ' late' : ''}" title="Mango 'To be completed by' on the open work order${open.length === 1 ? '' : 's'}${late ? ' — OVERDUE' : ''}">${late ? '⚠ ' : ''}${escapeHtml(due.slice(5))}</span>`,
+    sort: due,
+  };
 }
 
 /** The badge is a BUTTON when the backend can write PMD_DieMaster —
@@ -291,6 +324,13 @@ function renderBody(): string {
       : matched === 0
         ? `<span class="die-chip is-warn" title="PMD_DieMaster loaded ${masterLoaded} tools but not one DieNumber matches PMD_ProductDieColor's — compare the two columns' values (e.g. '280' vs 'DIE-280'). The F12 console logs 5 samples from each side.">Status join <b>0/${masterLoaded}</b></span>`
         : `<span class="die-chip" title="Dies with a PMD_DieMaster ToolStatus">Status <b>${matched}/${S!.dies.length}</b></span>`;
+  // Work-order source chip: is the Mango CSV mirror actually feeding
+  // this page, or are we on the PMD_DieMaintenance fallback?
+  const woSrc = dalRef.workOrderSource ? dalRef.workOrderSource() : null;
+  const woChip =
+    woSrc === 'mango-csv'
+      ? `<span class="die-chip" title="Work orders mirrored from the Mango CSV report">WO <b>Mango CSV · ${S!.requests.length}</b></span>`
+      : `<span class="die-chip is-warn" title="Work orders are coming from the PMD_DieMaintenance list — the Mango CSV mirror is NOT active. Set VITE_MANGO_CSV_PATH to the report file's server-relative path and rebuild; F12 shows '[pmd] Mango work-order CSV' messages.">WO <b>PMD list — no Mango CSV</b></span>`;
   const chips = `<div class="die-chips">
     <span class="die-chip">Dies <b>${S!.dies.length}</b></span>
     <span class="die-chip">Ran in window <b>${active}</b></span>
@@ -298,6 +338,7 @@ function renderBody(): string {
     <span class="die-chip${svcDue ? ' is-bad' : ''}" title="Past the tonnage service rule (100-150T: 100k · 210-350T: 50k · 450-560T: 20k · 650-850T: 10k · 1000T+: 8k shots)">Service due <b>${svcDue}</b></span>
     <span class="die-chip${open.length ? ' is-warn' : ''}">Open requests <b>${open.length}</b></span>
     ${statusChip}
+    ${woChip}
   </div>`;
   return `${chips}${renderDieTable()}${renderRequests()}`;
 }
@@ -335,6 +376,7 @@ const SORT_ACCESSORS: Record<Exclude<DieSortKey, 'smart'>, (d: DieAgg) => string
       ? null
       : `${String(d.machines.length).padStart(3, '0')}|${d.machines.join(',')}`,
   runs: (d) => d.runs,
+  medRun: (d) => d.medianRunShots,
   shots: (d) => d.shots,
   pieces: (d) => d.pieces,
   good: (d) => d.good,
@@ -342,6 +384,8 @@ const SORT_ACCESSORS: Record<Exclude<DieSortKey, 'smart'>, (d: DieAgg) => string
   rejPct: (d) => d.rejectPct,
   lastRun: (d) => d.lastRun || null,
   scheduled: (d) => S!.planByDie.get(d.dieNumber)?.start ?? null,
+  // 'Now' (0000…) sorts first, then promised dates, then dateless maint.
+  available: (d) => availableFor(d).sort,
 };
 
 function sortedDies(dies: DieAgg[]): DieAgg[] {
@@ -371,8 +415,8 @@ function sortedDies(dies: DieAgg[]): DieAgg[] {
  *  invalidates nothing (unknown keys are simply ignored). */
 const DIE_COL_KEYS = [
   'die', 'description', 'toolStatus', 'lastService', 'parts', 'machines',
-  'runs', 'shots', 'pieces', 'good', 'rejects', 'rejPct', 'trend',
-  'lastRun', 'scheduled', 'maint',
+  'runs', 'medRun', 'shots', 'pieces', 'good', 'rejects', 'rejPct', 'trend',
+  'lastRun', 'scheduled', 'available', 'maint',
 ] as const;
 const COLW_KEY = 'pmd.die.colw';
 
@@ -485,9 +529,13 @@ function sparkline(d: DieAgg): string {
       const label = b.span === 1 ? b.day.slice(5) : `wk ${b.day.slice(5)}`;
       if (b.pieces === 0 && b.rejects === 0)
         return `<i class="empty" title="${escapeHtml(label)} · no production"></i>`;
+      const split = Object.entries(b.rejByStatus)
+        .sort((x, y) => y[1] - x[1])
+        .map(([s, q]) => `${s}×${q}`)
+        .join(' ');
       const h = b.rejects === 0 ? 8 : Math.max(14, Math.round((b.rejects / max) * 100));
       return `<i class="${health || 'green'}" style="height:${h}%" title="${escapeHtml(
-        `${label} · ${b.rejects} rej / ${b.pieces} pcs${pct != null ? ` (${pct.toFixed(1)}%)` : ''}`,
+        `${label} · ${b.rejects} rej / ${b.pieces} pcs${pct != null ? ` (${pct.toFixed(1)}%)` : ''}${split ? ` · ${split}` : ''}`,
       )}"></i>`;
     })
     .join('');
@@ -545,6 +593,7 @@ function renderDieTable(): string {
         <td title="${escapeHtml(partsTip)}">${d.parts.length}</td>
         <td title="${escapeHtml(d.machines.join(', '))}">${escapeHtml(machines)}</td>
         <td class="num">${d.runs}</td>
+        <td class="num">${d.medianRunShots == null ? '—' : d.medianRunShots.toLocaleString()}</td>
         <td class="num">${d.shots.toLocaleString()}</td>
         <td class="num">${d.pieces.toLocaleString()}</td>
         <td class="num">${d.good.toLocaleString()}</td>
@@ -553,6 +602,7 @@ function renderDieTable(): string {
         <td class="die-trend-cell">${sparkline(d)}</td>
         <td>${escapeHtml(d.lastRun || '—')}</td>
         <td>${planCell}</td>
+        <td>${availableFor(d).html}</td>
         <td>${maint}</td>
       </tr>`;
     })
@@ -581,6 +631,7 @@ function renderDieTable(): string {
       ${th('parts', 'Parts', 'Part numbers that run on this die')}
       ${th('machines', 'Machines')}
       ${th('runs', 'Runs', '(machine, shift, job) runs in the window')}
+      ${th('medRun', 'Med run', 'Median shots per run — the typical campaign size, for planning how big a service window needs to be')}
       ${th('shots', 'Shots', 'Press cycles = Σ (Count End − Count Start) — the die-wear number')}
       ${th('pieces', 'Pieces', 'Shots × cavities')}
       ${th('good', 'Good')}
@@ -589,6 +640,7 @@ function renderDieTable(): string {
       ${th('', 'Defect trend', 'Rejects per day (per week on long windows); bar colour = that day’s reject-% band — tap for the code Pareto')}
       ${th('lastRun', 'Last run')}
       ${th('scheduled', 'Scheduled', 'Next planned production (Epicor JobHead_StartDate). ▶ Now = running per plan · Free = not scheduled, safe to pull for service')}
+      ${th('available', 'Available', "When the die is back from maintenance: Now = no open work orders · a date = Mango's 'To be completed by' on its open orders · ⚠ = that promise has passed")}
       ${th('', 'Maint')}
     </tr></thead>
     <tbody>${rows}</tbody>
@@ -713,9 +765,8 @@ function trendChart(d: DieAgg): string {
   if (buckets.length === 0 || d.runs === 0)
     return `<div class="trace-empty">No production in the window.</div>`;
   const svcDays = new Set<string>();
-  for (const r of S!.requests)
-    if (r.dieNumber === d.dieNumber && r.status === 'done' && r.closedAt)
-      svcDays.add(r.closedAt.slice(0, 10));
+  for (const r of requestsFor(d.dieNumber))
+    if (r.status === 'done' && r.closedAt) svcDays.add(r.closedAt.slice(0, 10));
   const ls = masterFor(d.dieNumber)?.lastServiceDate;
   if (ls) svcDays.add(ls.slice(0, 10));
   const bucketHasService = (day: string, span: number): boolean => {
@@ -736,22 +787,41 @@ function trendChart(d: DieAgg): string {
       const health = dieHealth(pct);
       const name = b.span === 1 ? b.day.slice(5) : `wk ${b.day.slice(5)}`;
       const serviced = bucketHasService(b.day, b.span);
+      // Machine-status attribution: which status the press was on when
+      // these rejects were logged — S under a ShortShot spike says
+      // "startup scrap", R says the die scraps in steady-state running.
+      const stSplit = Object.entries(b.rejByStatus).sort((x, y) => y[1] - x[1]);
+      const stTip = stSplit.length
+        ? ` · status: ${stSplit
+            .map(([s, q]) => `${STATUS_MAP[s]?.label ?? s} ×${q}`)
+            .join(' · ')}`
+        : '';
+      const letters = stSplit
+        .slice(0, 3)
+        .map(([s]) => {
+          const meta = STATUS_MAP[s];
+          return `<i style="${meta ? `background:${meta.color};border-color:${meta.border};color:${meta.text}` : ''}">${escapeHtml(s)}</i>`;
+        })
+        .join('');
       const tip = `${name} · ${b.rejects} rej / ${b.pieces} pcs${
         pct != null ? ` (${pct.toFixed(1)}%)` : ''
-      }${serviced ? ' · 🔧 service completed' : ''}`;
+      }${stTip}${serviced ? ' · 🔧 service completed' : ''}`;
       const idle = b.pieces === 0 && b.rejects === 0;
       const h = idle ? 0 : b.rejects === 0 ? 4 : Math.max(8, Math.round((b.rejects / max) * 100));
       const label = i % labelEvery === 0 ? name : '';
       return `<div class="die-trend-col${serviced ? ' svc' : ''}" title="${escapeHtml(tip)}">
         <b>${b.rejects > 0 ? b.rejects : ''}</b>
+        ${b.rejects > 0 && letters ? `<span class="die-trend-stl">${letters}</span>` : '<span class="die-trend-stl"></span>'}
         <span class="die-trend-bar"><i class="${idle ? 'empty' : health || 'green'}" style="height:${h}%"></i></span>
         <em>${serviced ? '🔧' : ''}${escapeHtml(label)}</em>
       </div>`;
     })
     .join('');
-  const legend = svcDays.size
-    ? `<p class="kpi-note">🔧 = service completed that ${buckets[0].span === 1 ? 'day' : 'week'} (closed work order / Last service). Rejects that keep climbing after a 🔧 mean the repair didn't take.</p>`
-    : '';
+  const legend = `<p class="kpi-note">Letters above a bar = the MACHINE STATUS the rejects were logged under (S Startup · R Running · D Die Change · C Colour Change · P Purge…) — a ShortShot spike marked S is startup scrap, marked R it's the die misbehaving mid-run.${
+    svcDays.size
+      ? ` 🔧 = service completed that ${buckets[0].span === 1 ? 'day' : 'week'} (closed work order / Last service) — rejects that keep climbing after a 🔧 mean the repair didn't take.`
+      : ''
+  }</p>`;
   return `<div class="die-trend-lg">${bars}</div>${legend}`;
 }
 
@@ -826,8 +896,7 @@ function openDieDetail(dieNumber: string): void {
   // Work-order history (mirrored from Mango) — the "what have we already
   // tried on this tool" record that sits next to the defect trend when
   // judging repair vs run-on. Open orders first, then newest closed.
-  const hist = [...S!.requests]
-    .filter((r) => r.dieNumber === dieNumber)
+  const hist = requestsFor(dieNumber)
     .sort((a, b) =>
       (a.status === 'done' ? 1 : 0) - (b.status === 'done' ? 1 : 0) ||
       (a.createdAt < b.createdAt ? 1 : -1),

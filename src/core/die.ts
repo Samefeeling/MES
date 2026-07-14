@@ -8,6 +8,7 @@
 // mirrored into Mango later — MangoTicket on the request is the link slot.
 
 import type {
+  DieComponentCondition,
   DieMaintenanceRequest,
   PlanningOrder,
   ProductDieColor,
@@ -34,6 +35,48 @@ export const MAINTENANCE_CONTACTS: MaintContact[] = [
   { role: 'Maintenance — cleaning / service', name: 'Maintenance Team' },
   { role: 'PMD Supervisor', name: 'Shift Supervisor' },
 ];
+
+// ---------------------------------------------------------------------
+// Die-change condition report (PMD_DieChangeLog). The component keys ARE
+// the SharePoint column names; labels are what the operator sees.
+
+export const DIE_COMPONENTS: Array<{ key: string; label: string }> = [
+  { key: 'Bolts', label: 'Bolts' },
+  { key: 'Cores', label: 'Cores' },
+  { key: 'EjectorPins', label: 'Ejector Pins' },
+  { key: 'ElectricalIssues', label: 'Electrical Issues' },
+  { key: 'GasNeedle', label: 'Gas Needle' },
+  { key: 'GuidePins', label: 'Guide Pins' },
+  { key: 'HotRunners', label: 'Hot Runners' },
+  { key: 'MouldingSurfaces', label: 'Moulding Surfaces' },
+  { key: 'Nozzle', label: 'Nozzle' },
+  { key: 'NozzleTip', label: 'Nozzle Tip' },
+  { key: 'OilLeaks', label: 'Oil Leaks' },
+  { key: 'Venting', label: 'Venting' },
+  { key: 'WaterLeaks', label: 'Water Leaks' },
+];
+
+/** The EXACT choice strings on the list (note the curly apostrophe in
+ *  "can’t" — SharePoint choice validation is literal). */
+export const DIE_CONDITION_META: Record<
+  Exclude<DieComponentCondition, ''>,
+  { label: string; short: string; cls: string }
+> = {
+  good: { label: '1. Good work order', short: '1', cls: 'green' },
+  worn: { label: '2. Operational but worn', short: '2', cls: 'amber' },
+  damaged: { label: '3. Damaged or can’t be used', short: '3', cls: 'red' },
+};
+
+/** Free text ("2. Operational but worn", "worn", "3") → condition. */
+export function parseDieCondition(raw: string): DieComponentCondition {
+  const s = raw.trim().toLowerCase();
+  if (!s) return '';
+  if (s.startsWith('1') || s.includes('good')) return 'good';
+  if (s.startsWith('2') || s.includes('worn')) return 'worn';
+  if (s.startsWith('3') || s.includes('damag') || s.includes('cant') || s.includes('can’t') || s.includes("can't"))
+    return 'damaged';
+  return '';
+}
 
 /** Display metadata per ToolStatus. `rank` orders the Status column
  *  worst-first (Problems → To be Serviced → In service → Serviced) so a
@@ -85,10 +128,22 @@ export interface DieAgg {
   lastRun: string;
   /** Open / in-progress maintenance requests against this die. */
   openRequests: number;
+  /** Median shots per run (tuple) inside the window — the typical
+   *  campaign size, for planning when a service window opens up. Null
+   *  when the die never ran. */
+  medianRunShots: number | null;
   /** Per-day usage inside the window, day-ascending — the raw series the
    *  defect-trend sparkline buckets (see buildDieTrend) and the service
-   *  counter read. Days with no production simply don't appear here. */
-  daily: Array<{ day: string; rejects: number; pieces: number; shots: number }>;
+   *  counter read. Days with no production simply don't appear here.
+   *  rejByStatus splits the day's rejects by the MACHINE STATUS of the
+   *  slot that logged them (S = startup scrap, R = steady-state, …). */
+  daily: Array<{
+    day: string;
+    rejects: number;
+    pieces: number;
+    shots: number;
+    rejByStatus: Record<string, number>;
+  }>;
   /** Most recent die-change event charged to this die inside the window:
    *  slots with status 'D' on a run of one of the die's parts. `slots` ×
    *  30 min = how long the change took. Null = none in the window. */
@@ -178,8 +233,9 @@ export function dieServiceStatus(
     }
   }
   if (!interval || agg.daily.length === 0) return null;
+  const dieKey = agg.dieNumber.trim().toUpperCase();
   const lastDone = requests
-    .filter((r) => r.dieNumber === agg.dieNumber && r.status === 'done' && r.closedAt)
+    .filter((r) => r.dieNumber.trim().toUpperCase() === dieKey && r.status === 'done' && r.closedAt)
     .map((r) => r.closedAt.slice(0, 10))
     .sort()
     .pop();
@@ -211,6 +267,10 @@ export interface DieTrendBucket {
   span: number;
   rejects: number;
   pieces: number;
+  /** Rejects split by the machine status of the slot that logged them
+   *  (letter → qty). Distinguishes startup scrap (S/D) from steady-state
+   *  (R) rejects at a glance. */
+  rejByStatus: Record<string, number>;
 }
 
 function addDays(day: string, n: number): string {
@@ -230,7 +290,7 @@ function addDays(day: string, n: number): string {
  * so 90 days still fits in a table cell.
  */
 export function buildDieTrend(
-  daily: Array<{ day: string; rejects: number; pieces: number }>,
+  daily: Array<{ day: string; rejects: number; pieces: number; rejByStatus?: Record<string, number> }>,
   from: string,
   to: string,
 ): DieTrendBucket[] {
@@ -241,12 +301,14 @@ export function buildDieTrend(
   const byDay = new Map(daily.map((d) => [d.day, d]));
   const out: DieTrendBucket[] = [];
   for (let start = from; start <= to; start = addDays(start, span)) {
-    const b: DieTrendBucket = { day: start, span, rejects: 0, pieces: 0 };
+    const b: DieTrendBucket = { day: start, span, rejects: 0, pieces: 0, rejByStatus: {} };
     for (let i = 0; i < span; i++) {
       const d = byDay.get(addDays(start, i));
       if (d) {
         b.rejects += d.rejects;
         b.pieces += d.pieces;
+        for (const [st, q] of Object.entries(d.rejByStatus ?? {}))
+          b.rejByStatus[st] = (b.rejByStatus[st] ?? 0) + q;
       }
     }
     out.push(b);
@@ -348,6 +410,7 @@ export function aggregateDies(
         rejByCode: [],
         lastRun: '',
         openRequests: 0,
+        medianRunShots: null,
         daily: [],
         lastDieChange: null,
       };
@@ -375,6 +438,8 @@ export function aggregateDies(
     pieces: number;
     rejects: number;
     rejByCode: Map<string, number>;
+    /** Reject qty per machine-status letter of the slot that logged it. */
+    rejByStatus: Map<string, number>;
     /** Slots this tuple spent on status 'D' (Die Change), 30 min each. */
     dieChangeSlots: number;
   }
@@ -394,6 +459,7 @@ export function aggregateDies(
         pieces: 0,
         rejects: 0,
         rejByCode: new Map(),
+        rejByStatus: new Map(),
         dieChangeSlots: 0,
       };
       tuples.set(key, t);
@@ -422,10 +488,20 @@ export function aggregateDies(
       t.rejByCode.set('—', (t.rejByCode.get('—') ?? 0) + slotRej);
     }
     t.rejects += slotRej;
+    // Charge the slot's rejects to its machine status — S(tartup) scrap
+    // and R(unning) scrap have very different fixes.
+    if (slotRej > 0) {
+      const st = r.statusCode || '·';
+      t.rejByStatus.set(st, (t.rejByStatus.get(st) ?? 0) + slotRej);
+    }
   }
 
   const rejMaps = new Map<string, Map<string, number>>();
-  const dayMaps = new Map<string, Map<string, { rejects: number; pieces: number; shots: number }>>();
+  const dayMaps = new Map<
+    string,
+    Map<string, { rejects: number; pieces: number; shots: number; rejByStatus: Record<string, number> }>
+  >();
+  const runShots = new Map<string, number[]>();
   for (const t of tuples.values()) {
     const agg = byDie.get(t.die);
     if (!agg) continue;
@@ -448,13 +524,21 @@ export function aggregateDies(
     const m = rejMaps.get(t.die) ?? new Map<string, number>();
     for (const [code, qty] of t.rejByCode) m.set(code, (m.get(code) ?? 0) + qty);
     rejMaps.set(t.die, m);
-    const dm = dayMaps.get(t.die) ?? new Map<string, { rejects: number; pieces: number; shots: number }>();
-    const cell = dm.get(day) ?? { rejects: 0, pieces: 0, shots: 0 };
+    const dm =
+      dayMaps.get(t.die) ??
+      new Map<string, { rejects: number; pieces: number; shots: number; rejByStatus: Record<string, number> }>();
+    const cell = dm.get(day) ?? { rejects: 0, pieces: 0, shots: 0, rejByStatus: {} };
     cell.rejects += t.rejects;
     cell.pieces += t.pieces;
     cell.shots += t.shots;
+    for (const [st, q] of t.rejByStatus) cell.rejByStatus[st] = (cell.rejByStatus[st] ?? 0) + q;
     dm.set(day, cell);
     dayMaps.set(t.die, dm);
+    if (t.shots > 0) {
+      const arr = runShots.get(t.die) ?? [];
+      arr.push(t.shots);
+      runShots.set(t.die, arr);
+    }
   }
 
   for (const agg of byDie.values()) {
@@ -465,12 +549,23 @@ export function aggregateDies(
       .map(([code, qty]) => ({ code, qty }))
       .sort((a, b) => b.qty - a.qty);
     agg.machines.sort();
+    // Normalised match — the Mango mirror carries bare numbers ("280")
+    // that must join PMD_ProductDieColor's DieNumber however it's typed.
     agg.openRequests = requests.filter(
-      (q) => q.dieNumber === agg.dieNumber && q.status !== 'done',
+      (q) =>
+        q.dieNumber.trim().toUpperCase() === agg.dieNumber.trim().toUpperCase() &&
+        q.status !== 'done',
     ).length;
     agg.daily = Array.from(dayMaps.get(agg.dieNumber) ?? [])
       .map(([day, v]) => ({ day, ...v }))
       .sort((a, b) => (a.day < b.day ? -1 : 1));
+    const runs = (runShots.get(agg.dieNumber) ?? []).sort((a, b) => a - b);
+    agg.medianRunShots =
+      runs.length === 0
+        ? null
+        : runs.length % 2
+          ? runs[(runs.length - 1) / 2]
+          : Math.round((runs[runs.length / 2 - 1] + runs[runs.length / 2]) / 2);
   }
 
   return Array.from(byDie.values()).sort((a, b) => {

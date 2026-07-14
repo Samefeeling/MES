@@ -543,6 +543,22 @@ for the Plant/Equipment module):
   Done-request reset reads the mirrored Mango orders too (their
   completed date fills `closedAt`).
 
+## PMD_DieChangeLog (die-change condition reports)
+
+Created by hand (2026-07); internal names verified against the list
+schema export. The operator sheet pops a **Die Change Log** form the
+first time a tuple's timeline gets a **D** (Die Change) or **I**
+(Insert Change) status: date / shift / die setter / machine / job /
+Die-Out / Die-In are prefilled (setter can correct them), and the
+operator rates the 13 die components — Bolts, Cores, EjectorPins,
+ElectricalIssues, GasNeedle, GuidePins, HotRunners, MouldingSurfaces,
+Nozzle, NozzleTip, OilLeaks, Venting, WaterLeaks — as
+*1. Good work order* / *2. Operational but worn* / *3. Damaged or
+can't be used* (defaults to 1; a 2 or 3 requires a problem
+description). Saving writes one row; **Skip** is allowed (the prompt
+fires once per machine+shift+job per session). Writers need Edit
+permission on the list.
+
 ## PMD_DieMaster (die asset register)
 
 Optional list, created by hand (2026-07), that feeds the Die Management

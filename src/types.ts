@@ -156,6 +156,39 @@ export interface DieMaintenanceRequest {
   preventativeAction?: string;
   /** "Cost (parts, labour)". */
   cost?: string;
+  /** "To be completed by" — Mango's promised completion date. For open
+   *  orders this is when the die should be AVAILABLE again (ISO). */
+  dueDate?: string;
+}
+
+/** Condition of one die component at die-change time, mapping the
+ *  PMD_DieChangeLog choice values: "1. Good work order" / "2. Operational
+ *  but worn" / "3. Damaged or can't be used". '' = not assessed. */
+export type DieComponentCondition = '' | 'good' | 'worn' | 'damaged';
+
+/** One row of PMD_DieChangeLog — the die-change condition report the
+ *  operator fills when they first mark a Die Change (D) or Insert
+ *  Change (I) on the timeline. Component keys are the list's column
+ *  names (Bolts, Cores, EjectorPins, …, WaterLeaks). */
+export interface DieChangeLog {
+  id: number;
+  /** Calendar date of the change (YYYY-MM-DD). */
+  date: string;
+  shift: string;
+  /** Who performed the change (DieSetter column). */
+  dieSetter: string;
+  machineCode: string;
+  /** ChangeOver multi-choice: Die / Insert / Space In / SpaceOut. */
+  changeOver: string[];
+  jobNumber: string;
+  dieNumberOut: string;
+  dieDescriptionOut: string;
+  dieNumberIn: string;
+  dieDescriptionIn: string;
+  /** Component key → condition ('' when not assessed). */
+  components: Record<string, DieComponentCondition>;
+  problemDescription: string;
+  createdAt: string; // ISO
 }
 
 export interface BdCode {

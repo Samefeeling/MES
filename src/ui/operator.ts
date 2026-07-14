@@ -1,5 +1,6 @@
 import type { PmdDataLayer } from '../dal';
 import type {
+  DieComponentCondition,
   Machine,
   Operator,
   PlanningOrder,
@@ -35,6 +36,7 @@ import { type Handover, parseHandover as sharedParseHandover } from '../core/han
 import { openBreakdownCascade } from './breakdown';
 import { toast } from './toast';
 import { closeModal, escapeHtml, openModal } from './modal';
+import { DIE_COMPONENTS, DIE_CONDITION_META } from '../core/die';
 import { renderOutputRejectChart } from './charts';
 import { clearSupervisor, isSupervisor } from './supervisor-auth';
 import { isIpadDevice } from '../core/device';
@@ -101,7 +103,7 @@ interface OpState {
    *  PMD_ProductDieColor on boot. Drives the swatch on the Product
    *  Description meta cell + the Die# pill so the operator can see the
    *  colour and which die to fit before starting the job. */
-  dieColors: Map<string, { hex: string; name: string; dieNumber: string; coRun: boolean }>;
+  dieColors: Map<string, { hex: string; name: string; dieNumber: string; die: string; coRun: boolean }>;
 }
 
 let S: OpState | null = null;
@@ -3172,6 +3174,177 @@ async function multiFillApply(
   // Kick a live snapshot push so other iPads see the new status pattern
   // without waiting up to 60 s for the next poll tick. Fire-and-forget.
   if (dalRef.pushLiveSnapshot) void dalRef.pushLiveSnapshot();
+  // First Die/Insert Change on this (machine, shift, job) → capture the
+  // die-change condition report while the setter is still at the press.
+  if (code === 'D' || code === 'I') maybeOpenDieChangeLog(code);
+}
+
+// ---------------------------------------------------------------------
+// Die Change Log (PMD_DieChangeLog) — pops up the FIRST time the
+// operator marks a Die Change (D) or Insert Change (I) on a tuple's
+// timeline. Date / shift / setter / machine / job / die-out / die-in are
+// prefilled; the setter's real work is the 13-component condition
+// check (1 Good · 2 Worn · 3 Damaged) that builds the die's health
+// history for the toolroom. Skipping is allowed (once per tuple per
+// session) — the log can still be added in SharePoint later.
+
+const dieLogPrompted = new Set<string>();
+
+function maybeOpenDieChangeLog(code: StatusCode): void {
+  if (!dalRef.createDieChangeLog || !S!.selJob) return;
+  const key = `${S!.mc}|${sid()}|${S!.selJob}`;
+  if (dieLogPrompted.has(key)) return;
+  dieLogPrompted.add(key);
+  openDieChangeLogModal(code);
+}
+
+function openDieChangeLogModal(trigger: StatusCode): void {
+  const dieByPart = (part?: string): { dieNumber: string; die: string } | undefined =>
+    part ? S!.dieColors.get(part.trim().toUpperCase()) : undefined;
+  const partIn =
+    orderForJob(S!.selJob)?.partNumber ??
+    S!.prod.find((r) => r.jobNumber === S!.selJob && r.partNumber)?.partNumber ??
+    '';
+  const dieIn = dieByPart(partIn);
+  // Die OUT (best effort): the die of the job that occupied earlier
+  // slots on this press this shift — the setter can correct it.
+  let dieOut: { dieNumber: string; die: string } | undefined;
+  const others = [...S!.prod]
+    .filter((r) => r.jobNumber && r.jobNumber !== S!.selJob && r.statusCode)
+    .sort((a, b) => b.slotIndex - a.slotIndex);
+  for (const r of others) {
+    const d = dieByPart(r.partNumber);
+    if (d?.dieNumber && d.dieNumber !== dieIn?.dieNumber) {
+      dieOut = d;
+      break;
+    }
+  }
+  const dies = Array.from(
+    new Map(
+      Array.from(S!.dieColors.values())
+        .filter((d) => d.dieNumber)
+        .map((d) => [d.dieNumber, d]),
+    ).values(),
+  ).sort((a, b) => a.dieNumber.localeCompare(b.dieNumber, undefined, { numeric: true }));
+  const dieOpts = (sel?: string): string =>
+    `<option value="">—</option>` +
+    dies
+      .map(
+        (d) =>
+          `<option value="${escapeHtml(d.dieNumber)}"${d.dieNumber === sel ? ' selected' : ''}>${escapeHtml(
+            d.dieNumber,
+          )}${d.die ? ` — ${escapeHtml(d.die)}` : ''}</option>`,
+      )
+      .join('');
+  const setterNames = Array.from(
+    new Set([S!.selOperator, ...S!.operators.map((o) => o.operatorName)].filter(Boolean)),
+  );
+  const setterOpts = setterNames
+    .map((n) => `<option${n === S!.selOperator ? ' selected' : ''}>${escapeHtml(n)}</option>`)
+    .join('');
+  const co = (label: string, checked: boolean): string =>
+    `<label class="dcl-co"><input type="checkbox" value="${escapeHtml(label)}"${checked ? ' checked' : ''}>${escapeHtml(label)}</label>`;
+  const compRows = DIE_COMPONENTS.map(
+    (c) => `<div class="dcl-comp" data-dcl-comp="${c.key}">
+      <span class="dcl-comp-name">${escapeHtml(c.label)}</span>
+      <span class="dcl-seg">${(['good', 'worn', 'damaged'] as const)
+        .map(
+          (k) =>
+            `<button type="button" class="dcl-opt ${DIE_CONDITION_META[k].cls}${
+              k === 'good' ? ' a' : ''
+            }" data-cond="${k}" title="${escapeHtml(DIE_CONDITION_META[k].label)}">${DIE_CONDITION_META[k].short}</button>`,
+        )
+        .join('')}</span>
+    </div>`,
+  ).join('');
+  const day = sid().slice(0, 10);
+  const mc = openModal(`<div class="bd-modal dcl-modal">
+    <h2 class="bd-title">🔁 Die Change Log</h2>
+    <p class="bd-sub">${escapeHtml(S!.mc)} · ${escapeHtml(day)} · ${escapeHtml(S!.shiftCode)} shift · job ${escapeHtml(
+      S!.selJob,
+    )} — condition check while the die is out. <b>1</b> Good work order · <b>2</b> Operational but worn · <b>3</b> Damaged / can't be used.</p>
+    <div class="dcl-row">
+      <label>Die setter<select data-dcl="setter">${setterOpts}</select></label>
+      <span class="dcl-cos">Change over ${co('Die', trigger === 'D')}${co('Insert', trigger === 'I')}${co('Space In', false)}${co('SpaceOut', false)}</span>
+    </div>
+    <div class="dcl-row">
+      <label>Die OUT<select data-dcl="out">${dieOpts(dieOut?.dieNumber)}</select></label>
+      <label>Die IN<select data-dcl="in">${dieOpts(dieIn?.dieNumber)}</select></label>
+    </div>
+    <div class="dcl-comps">${compRows}</div>
+    <label class="dcl-prob">Problem description (needed when anything is 2 or 3)
+      <textarea data-dcl="prob" rows="2" placeholder="What's worn / damaged, which cavity…"></textarea></label>
+    <div class="bd-actions">
+      <button class="btn-primary-big" data-dcl-save>Save Die Change Log</button>
+      <button class="btn-ghost-big" data-dcl-skip>Skip</button>
+    </div>
+  </div>`);
+  mc.querySelectorAll<HTMLButtonElement>('.dcl-opt').forEach((b) =>
+    b.addEventListener('click', () => {
+      b.parentElement!.querySelectorAll('.dcl-opt').forEach((x) => x.classList.remove('a'));
+      b.classList.add('a');
+    }),
+  );
+  mc.querySelector('[data-dcl-skip]')?.addEventListener('click', () => closeModal());
+  mc.querySelector<HTMLButtonElement>('[data-dcl-save]')?.addEventListener('click', () => {
+    void (async () => {
+      const val = (k: string): string =>
+        (mc.querySelector<HTMLSelectElement | HTMLTextAreaElement>(`[data-dcl="${k}"]`)?.value ?? '').trim();
+      const components: Record<string, DieComponentCondition> = {};
+      let flagged = 0;
+      mc.querySelectorAll<HTMLElement>('[data-dcl-comp]').forEach((row) => {
+        const cond = (row.querySelector<HTMLElement>('.dcl-opt.a')?.dataset.cond ??
+          '') as DieComponentCondition;
+        components[row.dataset.dclComp!] = cond;
+        if (cond === 'worn' || cond === 'damaged') flagged++;
+      });
+      const prob = val('prob');
+      if (flagged > 0 && !prob) {
+        toast('Describe the worn / damaged component(s) first', 'warn');
+        return;
+      }
+      const changeOver = Array.from(
+        mc.querySelectorAll<HTMLInputElement>('.dcl-co input:checked'),
+      ).map((c) => c.value);
+      const outDie = dies.find((d) => d.dieNumber === val('out'));
+      const inDie = dies.find((d) => d.dieNumber === val('in'));
+      const btn = mc.querySelector<HTMLButtonElement>('[data-dcl-save]');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
+      }
+      try {
+        await dalRef.createDieChangeLog!({
+          date: day,
+          shift: S!.shiftCode,
+          dieSetter: val('setter'),
+          machineCode: S!.mc,
+          changeOver,
+          jobNumber: S!.selJob,
+          dieNumberOut: outDie?.dieNumber ?? '',
+          dieDescriptionOut: outDie?.die ?? '',
+          dieNumberIn: inDie?.dieNumber ?? '',
+          dieDescriptionIn: inDie?.die ?? '',
+          components,
+          problemDescription: prob,
+        });
+        closeModal();
+        toast(
+          flagged > 0
+            ? `Die Change Log saved — ${flagged} component${flagged === 1 ? '' : 's'} flagged`
+            : 'Die Change Log saved — all components good',
+          'ok',
+        );
+      } catch (e) {
+        console.error('[pmd] die change log save failed:', e);
+        toast(`Could not save: ${e instanceof Error ? e.message : e}`, 'err');
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Save Die Change Log';
+        }
+      }
+    })();
+  });
 }
 
 /**
@@ -3493,7 +3666,7 @@ export async function renderOperator(
   const dieColors = new Map(
     dieColorList.map((c) => [
       c.partNumber.trim().toUpperCase(),
-      { hex: c.hex, name: c.name, dieNumber: c.dieNumber, coRun: c.coRun },
+      { hex: c.hex, name: c.name, dieNumber: c.dieNumber, die: c.die, coRun: c.coRun },
     ]),
   );
   const cs = currentShift(now);

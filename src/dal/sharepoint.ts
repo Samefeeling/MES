@@ -1,5 +1,6 @@
 import type {
   BdCode,
+  DieChangeLog,
   DieMaintenanceRequest,
   DieMaster,
   Machine,
@@ -25,7 +26,13 @@ import { bdCategoryOf, bdLabelFor, BD_TAXONOMY } from '../core/breakdown';
 import { shiftBounds, slotClock } from '../core/shifts';
 import { shiftTargetFor } from '../core/targets';
 import { retroJobLeftFixes, sumGoodStartedBefore } from '../core/jobgood';
-import { parseToolStatus, TOOL_STATUS_META } from '../core/die';
+import {
+  DIE_COMPONENTS,
+  DIE_CONDITION_META,
+  parseDieCondition,
+  parseToolStatus,
+  TOOL_STATUS_META,
+} from '../core/die';
 
 // =====================================================================
 // SharePointDataLayer — Resero Operations AU site.
@@ -65,6 +72,10 @@ const LISTS = {
    *  the site (2026-07). Read-only from the app; the toolroom maintains
    *  ToolStatus / cavities / changeover facts directly in SharePoint. */
   dieMaster: 'PMD_DieMaster',
+  /** Die-change condition reports (created by hand 2026-07 — internal
+   *  names verified against the list schema export). The operator sheet
+   *  writes here when a Die/Insert Change is first marked. */
+  dieChangeLog: 'PMD_DieChangeLog',
   rdoRoster: 'RDO Roster 2026-2030',
 } as const;
 
@@ -308,6 +319,23 @@ const DEFAULT_FIELDS = {
     dateStamp: 'DateStamp',
     lastServiceDate: 'LastServiceDate',
     toolStatus: 'ToolStatus',
+  },
+  dieChangeLog: {
+    // Internal names straight from the list schema export (2026-07).
+    // Date is DateOnly; DieNumberOut/In are Number columns; ChangeOver is
+    // MultiChoice (Die / Insert / Space In / SpaceOut); the 13 component
+    // columns are Choice with the three "1./2./3." condition strings.
+    date: 'Date',
+    shift: 'Shift',
+    dieSetter: 'DieSetter',
+    machine: 'Machine',
+    changeOver: 'ChangeOver',
+    jobNumber: 'JobNumber',
+    dieNumberOut: 'DieNumberOut',
+    dieDescriptionOut: 'DieDescriptionOut',
+    dieNumberIn: 'DieNumberIn',
+    dieDescriptionIn: 'DieDescriptionIn',
+    problemDescription: 'ProblemDescription',
   },
   dieMaintenance: {
     // Title = DieNumber (natural key into PMD_ProductDieColor.DieNumber).
@@ -1122,6 +1150,72 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
   }
 
+  // ---- die change log (PMD_DieChangeLog) -------------------------------
+
+  async listDieChangeLog(): Promise<DieChangeLog[]> {
+    const F = this.F.dieChangeLog;
+    try {
+      const rows = await this.getAllItems<Record<string, unknown>>(LISTS.dieChangeLog);
+      return rows
+        .map((r) => ({
+          id: getId(r),
+          date: dateOnly(r[F.date]),
+          shift: str(r[F.shift]).trim(),
+          dieSetter: str(r[F.dieSetter]).trim(),
+          machineCode: str(r[F.machine]).trim(),
+          changeOver: multiChoice(r[F.changeOver]),
+          jobNumber: str(r[F.jobNumber]).trim(),
+          dieNumberOut: str(r[F.dieNumberOut]).trim(),
+          dieDescriptionOut: str(r[F.dieDescriptionOut]).trim(),
+          dieNumberIn: str(r[F.dieNumberIn]).trim(),
+          dieDescriptionIn: str(r[F.dieDescriptionIn]).trim(),
+          components: Object.fromEntries(
+            DIE_COMPONENTS.map((c) => [c.key, parseDieCondition(str(r[c.key]))]),
+          ),
+          problemDescription: str(r[F.problemDescription]),
+          createdAt: str(r['Created']),
+        }))
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    } catch (e) {
+      console.warn('[pmd] PMD_DieChangeLog unavailable:', e);
+      return [];
+    }
+  }
+
+  async createDieChangeLog(log: Omit<DieChangeLog, 'id' | 'createdAt'>): Promise<DieChangeLog> {
+    const F = this.F.dieChangeLog;
+    const body: Record<string, unknown> = {
+      __metadata: { type: await this.itemType(LISTS.dieChangeLog) },
+      Title: `${log.machineCode} ${log.date} · Die ${log.dieNumberOut || '?'} → ${log.dieNumberIn || '?'}`,
+      // DateOnly column: midnight UTC keeps the calendar date stable in
+      // every positive-offset regional setting (same rule as
+      // shiftDateMarker — see that comment).
+      [F.date]: log.date ? `${log.date}T00:00:00.000Z` : null,
+      [F.shift]: log.shift,
+      [F.dieSetter]: log.dieSetter,
+      [F.machine]: log.machineCode,
+      [F.changeOver]: { __metadata: { type: 'Collection(Edm.String)' }, results: log.changeOver },
+      [F.jobNumber]: log.jobNumber,
+      // Number columns — null when the die number isn't numeric/known.
+      [F.dieNumberOut]: numOrNull(log.dieNumberOut),
+      [F.dieDescriptionOut]: log.dieDescriptionOut,
+      [F.dieNumberIn]: numOrNull(log.dieNumberIn),
+      [F.dieDescriptionIn]: log.dieDescriptionIn,
+      [F.problemDescription]: log.problemDescription,
+    };
+    for (const c of DIE_COMPONENTS) {
+      const cond = log.components[c.key];
+      if (cond) body[c.key] = DIE_CONDITION_META[cond].label;
+    }
+    const res = await this.post(`${this.listUrl(LISTS.dieChangeLog)}/items`, body);
+    const j = (await res.json()) as { d?: { ID?: number; Id?: number; Created?: string } };
+    return {
+      ...log,
+      id: j.d?.ID ?? j.d?.Id ?? 0,
+      createdAt: j.d?.Created ?? new Date().toISOString(),
+    };
+  }
+
   // ---- planning -------------------------------------------------------
 
   // ---- die maintenance (PMD_DieMaintenance) ---------------------------
@@ -1129,6 +1223,12 @@ export class SharePointDataLayer implements PmdDataLayer {
   /** Set true once the list is known to exist so the ensure probe runs at
    *  most once per page load. */
   private dieMaintEnsured = false;
+  /** Which source the last listDieMaintenance() served (diagnostics). */
+  private woSource: 'mango-csv' | 'list' | null = null;
+
+  workOrderSource(): 'mango-csv' | 'list' | null {
+    return this.woSource;
+  }
 
   /**
    * Make sure PMD_DieMaintenance exists, creating it (plus its columns)
@@ -1207,6 +1307,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           '[pmd] Mango work-order CSV:', orders.length, 'orders ·',
           matched, 'matched to a die number',
         );
+        this.woSource = 'mango-csv';
         return orders;
       } catch (e) {
         console.warn(
@@ -1214,6 +1315,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         );
       }
     }
+    this.woSource = 'list';
     const F = this.F.dieMaintenance;
     try {
       const rows = await this.getAllItems<Record<string, unknown>>(LISTS.dieMaintenance);
@@ -3467,6 +3569,20 @@ function nullOrNum(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** "280" → 280 for SP Number columns; null for blank / non-numeric. */
+function numOrNull(s: string): number | null {
+  const n = Number(s.trim());
+  return s.trim() !== '' && Number.isFinite(n) ? n : null;
+}
+
+/** SP MultiChoice read: verbose {results:[…]} or a plain array. */
+function multiChoice(v: unknown): string[] {
+  if (Array.isArray(v)) return v.map((x) => str(x)).filter(Boolean);
+  if (v && typeof v === 'object' && Array.isArray((v as { results?: unknown[] }).results))
+    return (v as { results: unknown[] }).results.map((x) => str(x)).filter(Boolean);
+  return [];
+}
+
 function bool(v: unknown): boolean | undefined {
   if (typeof v === 'boolean') return v;
   if (typeof v === 'string') return /^(true|yes|y|1)$/i.test(v);
@@ -4204,6 +4320,9 @@ const MANGO_CSV_COLUMNS: Record<string, string[]> = {
     'createddate', 'datecreated', 'created', 'dateraised', 'raiseddate',
     'datelogged', 'loggeddate', 'requestdate', 'daterequested', 'date',
   ],
+  // "To be completed by" — the promised completion date; for open orders
+  // this is when the die becomes AVAILABLE again (Die tab's Available col).
+  dueDate: ['tobecompletedby', 'duedate', 'targetdate', 'requiredby', 'completeby'],
   // The Minto export has NO completion-date column — closure is recovered
   // from the "Actions taken" stage log instead (see below). These stay for
   // report layouts that do carry one.
@@ -4296,7 +4415,8 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
   // vary by report — don't cry wolf over any of them.
   const optional = new Set([
     'priority', 'closedAt', 'actionsLog', 'downtime', 'labourHours',
-    'issueDetail', 'workSummary', 'correctiveAction', 'preventativeAction', 'cost',
+    'issueDetail', 'workSummary', 'correctiveAction', 'preventativeAction',
+    'cost', 'dueDate',
   ]);
   for (const field of Object.keys(MANGO_CSV_COLUMNS)) {
     idx[field] = colIdx(field);
@@ -4363,6 +4483,7 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
       correctiveAction: cell(row, 'correctiveAction') || undefined,
       preventativeAction: cell(row, 'preventativeAction') || undefined,
       cost: cell(row, 'cost') || undefined,
+      dueDate: csvDateToIso(cell(row, 'dueDate')) || undefined,
     });
   }
   return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));

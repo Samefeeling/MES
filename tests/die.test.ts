@@ -7,6 +7,7 @@ import {
   dieServiceStatus,
   machineTonnage,
   nextPlannedFor,
+  parseDieCondition,
   parseToolStatus,
   serviceIntervalFor,
   TOOL_STATUS_META,
@@ -91,8 +92,8 @@ describe('aggregateDies', () => {
     expect(d2.rejectPct).toBeNull();
     // Per-day series for the trend sparkline, day-ascending.
     expect(d1.daily).toEqual([
-      { day: '2026-07-08', rejects: 4, pieces: 200, shots: 100 },
-      { day: '2026-07-09', rejects: 0, pieces: 50, shots: 50 },
+      { day: '2026-07-08', rejects: 4, pieces: 200, shots: 100, rejByStatus: { R: 4 } },
+      { day: '2026-07-09', rejects: 0, pieces: 50, shots: 50, rejByStatus: {} },
     ]);
   });
 
@@ -147,6 +148,34 @@ describe('tonnage service rule', () => {
     expect(serviceIntervalFor(850).shots).toBe(10_000); // 650T-850T
     expect(serviceIntervalFor(1000).shots).toBe(8_000); // 1000T+
     expect(serviceIntervalFor(1600).shots).toBe(8_000); // extended band
+  });
+
+  it('computes median run size and splits rejects by machine status', () => {
+    const master = [dc('P-A', 'DIE-1')];
+    const mk = (job: string, slot: number, st: string, shots: number | null, rej = '') =>
+      rec({
+        machineCode: '850T', shiftId: '2026-07-08-Day', jobNumber: job, slotIndex: slot,
+        statusCode: st as never, partNumber: 'P-A',
+        countStart: slot === 0 && shots != null ? 0 : null,
+        countEnd: slot === 0 && shots != null ? shots : null,
+        rejects: rej,
+      });
+    const records = [
+      // Run J1: 1000 shots; startup scrap on the S slot, run scrap on R.
+      mk('J1', 0, 'S', 1000, '{"D01":5}'),
+      mk('J1', 1, 'R', null, '{"D01":2}'),
+      // Runs J2/J3 give shots 3000 / 2000 → median of [1000,3000,2000] = 2000.
+      rec({ machineCode: '850T', shiftId: '2026-07-09-Day', jobNumber: 'J2', slotIndex: 0, statusCode: 'R', partNumber: 'P-A', countStart: 0, countEnd: 3000 }),
+      rec({ machineCode: '850T', shiftId: '2026-07-10-Day', jobNumber: 'J3', slotIndex: 0, statusCode: 'R', partNumber: 'P-A', countStart: 0, countEnd: 2000 }),
+    ];
+    const [d1] = aggregateDies(master, records, []);
+    expect(d1.medianRunShots).toBe(2000);
+    const day8 = d1.daily.find((x) => x.day === '2026-07-08')!;
+    expect(day8.rejByStatus).toEqual({ S: 5, R: 2 });
+    // …and the trend buckets carry the split through.
+    const buckets = buildDieTrend(d1.daily, '2026-07-08', '2026-07-10');
+    expect(buckets[0].rejByStatus).toEqual({ S: 5, R: 2 });
+    expect(buckets[1].rejByStatus).toEqual({});
   });
 
   it('records the most recent die change (status D slots) per die', () => {
@@ -454,6 +483,34 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
     expect(d3597.lifeCycle).toBe(1_000_000);
     // The recently serviced die carries a LastServiceDate.
     expect(master.find((m) => m.dieNumber === 'DIE-1422')!.lastServiceDate).not.toBe('');
+  });
+
+  it('die change log: create + list round-trip, condition parsing', async () => {
+    const dal = new MemoryDataLayer();
+    const created = await dal.createDieChangeLog({
+      date: '2026-07-14',
+      shift: 'Day',
+      dieSetter: 'Anil Pattarath',
+      machineCode: '1600T',
+      changeOver: ['Die'],
+      jobNumber: 'SFM507001',
+      dieNumberOut: '280',
+      dieDescriptionOut: 'Postura Max 430 & 460',
+      dieNumberIn: '254',
+      dieDescriptionIn: 'Postura Chair +460/510 mm',
+      components: { Bolts: 'good', Venting: 'worn', OilLeaks: 'damaged' },
+      problemDescription: 'Oil weep on the top cylinder; vents crusted.',
+    });
+    expect(created.id).toBeGreaterThan(0);
+    const all = await dal.listDieChangeLog();
+    expect(all[0].dieNumberOut).toBe('280');
+    expect(all[0].components.OilLeaks).toBe('damaged');
+    // Choice-string parser used by the SharePoint read path.
+    expect(parseDieCondition('1. Good work order')).toBe('good');
+    expect(parseDieCondition('2. Operational but worn')).toBe('worn');
+    expect(parseDieCondition('3. Damaged or can’t be used')).toBe('damaged');
+    expect(parseDieCondition('')).toBe('');
+    expect(parseDieCondition('banana')).toBe('');
   });
 
   it('updateDieMaster changes ToolStatus and stamps the audit dates', async () => {

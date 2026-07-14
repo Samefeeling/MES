@@ -1,5 +1,6 @@
 import type {
   BdCode,
+  DieChangeLog,
   DieMaintenanceRequest,
   DieMaster,
   Machine,
@@ -63,6 +64,18 @@ export interface PmdDataLayer {
     id: number,
     patch: Partial<Pick<DieMaintenanceRequest, 'status' | 'mangoTicket' | 'closedAt'>>,
   ): Promise<void>;
+  /** Which source the most recent listDieMaintenance() actually served:
+   *  'mango-csv' (report mirror) or 'list' (PMD_DieMaintenance
+   *  fallback); null before the first read. Diagnostics only — the Die
+   *  tab's chip uses it to say why history might be missing. */
+  workOrderSource?(): 'mango-csv' | 'list' | null;
+
+  // Die change log (PMD_DieChangeLog) — the operator's die-change
+  // condition report, popped up on the first D/I status of a tuple.
+  /** All die-change reports, newest first. */
+  listDieChangeLog?(): Promise<DieChangeLog[]>;
+  /** Persist a new report (id/createdAt assigned by the backend). */
+  createDieChangeLog?(log: Omit<DieChangeLog, 'id' | 'createdAt'>): Promise<DieChangeLog>;
 
   // Planning (read-only — the Epicor → Planning.csv pipeline owns writes)
   listPlanning(filter: PlanningFilter): Promise<PlanningOrder[]>;

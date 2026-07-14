@@ -718,6 +718,15 @@ th.die-sort.a{color:#1d4ed8}
 /* Service (🔧) markers on the big trend chart */
 .die-trend-col.svc em{color:#9a3412;font-style:normal;font-weight:800}
 .die-trend-col.svc .die-trend-bar{box-shadow:inset 0 -3px 0 #fdba74}
+/* Machine-status letters above trend bars (same colours as the
+   operator timeline's status cells) */
+.die-trend-stl{display:flex;justify-content:center;gap:1px;min-height:13px}
+.die-trend-stl i{font-style:normal;font-size:9px;font-weight:800;line-height:11px;padding:0 3px;border-radius:3px;border:1px solid transparent}
+/* Available column */
+.die-avail{white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:700;font-size:12px}
+.die-avail.now{color:#15803d}
+.die-avail.maint{color:#FFA500}
+.die-avail.late{color:var(--rd)}
 /* Work-order history rows in the die detail */
 .die-hist-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;padding:6px 0;border-bottom:1px dashed var(--bd);list-style:none}
 .die-hist-row .die-hist-span{font-variant-numeric:tabular-nums;color:#334155;font-weight:600;font-size:12px}
@@ -732,6 +741,25 @@ th.die-sort.a{color:#1d4ed8}
 /* Last die change record */
 .die-dc{background:#fff7ed;border:1px solid #fdba74;border-radius:10px;padding:8px 12px;font-size:13px;color:#7c2d12;margin-top:6px}
 .die-dc.none{background:#f8fafc;border-color:var(--bd);color:var(--mu)}
+/* Die Change Log popup (operator sheet, first D/I of a tuple) */
+.mdl:has(.dcl-modal){max-width:min(720px,94vw)}
+.dcl-modal .bd-sub b{color:#0c4a6e}
+.dcl-row{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:end;margin-top:10px}
+.dcl-row label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:700;color:var(--mu)}
+.dcl-row select{font-size:15px;padding:8px;border:2px solid var(--bd);border-radius:8px;min-width:180px;background:#fff}
+.dcl-cos{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center;font-size:13px;font-weight:700;color:var(--mu)}
+.dcl-co{display:inline-flex;align-items:center;gap:5px;font-size:14px;font-weight:600;color:#334155}
+.dcl-co input{width:18px;height:18px}
+.dcl-comps{margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:6px 18px}
+.dcl-comp{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px dashed var(--bd)}
+.dcl-comp-name{font-size:14px;color:#334155}
+.dcl-seg{display:inline-flex;gap:4px}
+.dcl-opt{width:40px;min-height:34px;border:2px solid var(--bd);border-radius:8px;background:#fff;font-size:15px;font-weight:800;color:var(--mu);cursor:pointer}
+.dcl-opt.green.a{background:#dcfce7;border-color:#16a34a;color:#14532d}
+.dcl-opt.amber.a{background:#fef3c7;border-color:#FFA500;color:#78350f}
+.dcl-opt.red.a{background:#fee2e2;border-color:#dc2626;color:#7f1d1d}
+.dcl-prob{display:block;margin-top:12px;font-size:13px;font-weight:700;color:var(--mu)}
+.dcl-prob textarea{width:100%;margin-top:4px;font-family:inherit;font-size:15px;padding:8px;border:2px solid var(--bd);border-radius:8px;resize:vertical}
 /* Defect-trend sparkline: one bar per bucket, height = reject qty,
    colour = that bucket's reject-% band. */
 .die-trend-cell{min-width:150px}
@@ -816,7 +844,7 @@ th.die-sort.a{color:#1d4ed8}
 .die-detail-stats .g b{color:var(--gn)}.die-detail-stats .r b{color:var(--rd)}
 .die-detail-stats .green b{color:var(--gn)}.die-detail-stats .amber b{color:#FFA500}.die-detail-stats .red b{color:var(--rd)}
 /* Full-size defect trend in the die detail popup. */
-.die-trend-lg{display:flex;align-items:flex-end;gap:2px;height:96px;background:#f8fafc;border:1px solid var(--bd);border-radius:8px;padding:6px 8px 2px}
+.die-trend-lg{display:flex;align-items:flex-end;gap:2px;height:112px;background:#f8fafc;border:1px solid var(--bd);border-radius:8px;padding:6px 8px 2px}
 .die-trend-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;min-width:0}
 .die-trend-col b{font-size:10px;color:#991b1b;line-height:1;font-variant-numeric:tabular-nums}
 .die-trend-bar{flex:1;width:100%;max-width:18px;display:flex;align-items:flex-end;margin-top:1px}

@@ -1,5 +1,6 @@
 import type {
   BdCode,
+  DieChangeLog,
   DieMaintenanceRequest,
   DieMaster,
   Machine,
@@ -47,6 +48,8 @@ export class MemoryDataLayer implements PmdDataLayer {
   private dieColors: ProductDieColor[];
   private dieMaster: DieMaster[];
   private dieMaintenance: DieMaintenanceRequest[];
+  private dieChangeLogs: DieChangeLog[] = [];
+  private nextDclId = 1;
   private nextMaintId: number;
   private nextProdId: number;
   /** Tuples currently unlocked from a signed-off state (parity with the
@@ -130,6 +133,26 @@ export class MemoryDataLayer implements PmdDataLayer {
       closedAt: '',
     });
     this.dieMaintenance.push(created);
+    return MemoryDataLayer.clone(created);
+  }
+
+  workOrderSource(): 'mango-csv' | 'list' | null {
+    return 'list';
+  }
+
+  async listDieChangeLog(): Promise<DieChangeLog[]> {
+    return MemoryDataLayer.clone(
+      [...this.dieChangeLogs].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
+    );
+  }
+
+  async createDieChangeLog(log: Omit<DieChangeLog, 'id' | 'createdAt'>): Promise<DieChangeLog> {
+    const created: DieChangeLog = MemoryDataLayer.clone({
+      ...log,
+      id: this.nextDclId++,
+      createdAt: new Date().toISOString(),
+    });
+    this.dieChangeLogs.push(created);
     return MemoryDataLayer.clone(created);
   }
 
