@@ -141,26 +141,37 @@ function requestsFor(dieNumber: string): DieMaintenanceRequest[] {
   return S!.requests.filter((r) => r.dieNumber.trim().toUpperCase() === key);
 }
 
-/** When is this die back from maintenance? Now = no open work orders;
- *  otherwise the latest "To be completed by" among its open orders. */
+/** Availability comes from the toolroom's own record (PMD_DieMaster),
+ *  driven by ToolStatus:
+ *    Problems   → Unavailable (can't run at all)
+ *    In service → the maintenance-confirmed return date from the
+ *                 DieMaster Available column; 'In maint' until the
+ *                 toolroom fills it in, ⚠ once that date has passed
+ *    otherwise  → Available */
 function availableFor(d: DieAgg): { html: string; sort: string | null } {
-  const open = requestsFor(d.dieNumber).filter((r) => r.status !== 'done');
-  if (open.length === 0)
+  const m = masterFor(d.dieNumber);
+  const st = m?.toolStatus ?? '';
+  if (st === 'problems')
     return {
-      html: '<span class="die-avail now" title="No open work orders — the die is available">Now</span>',
-      sort: '0000-00-00',
-    };
-  const dues = open.map((r) => (r.dueDate ?? '').slice(0, 10)).filter(Boolean).sort();
-  const due = dues[dues.length - 1];
-  if (!due)
-    return {
-      html: `<span class="die-avail maint" title="${open.length} open work order${open.length === 1 ? '' : 's'} with no promised date in Mango">In maint</span>`,
+      html: '<span class="die-avail late" title="ToolStatus is Problems — the die cannot be used">Unavailable</span>',
       sort: '9999-99-99',
     };
-  const late = due < isoDay(new Date());
+  if (st === 'in-service') {
+    const back = (m?.availableDate ?? '').slice(0, 10);
+    if (!back)
+      return {
+        html: '<span class="die-avail maint" title="In service — maintenance hasn\'t confirmed a return date yet (PMD_DieMaster Available column is empty)">In maint</span>',
+        sort: '9998-99-99',
+      };
+    const late = back < isoDay(new Date());
+    return {
+      html: `<span class="die-avail${late ? ' late' : ''}" title="Return date confirmed by the maintenance team (PMD_DieMaster Available)${late ? ' — DATE HAS PASSED, chase the toolroom' : ''}">${late ? '⚠ ' : ''}${escapeHtml(back.slice(5))}</span>`,
+      sort: back,
+    };
+  }
   return {
-    html: `<span class="die-avail${late ? ' late' : ''}" title="Mango 'To be completed by' on the open work order${open.length === 1 ? '' : 's'}${late ? ' — OVERDUE' : ''}">${late ? '⚠ ' : ''}${escapeHtml(due.slice(5))}</span>`,
-    sort: due,
+    html: '<span class="die-avail now" title="ToolStatus is not In service / Problems — the die is available">Available</span>',
+    sort: '0000-00-00',
   };
 }
 
@@ -384,7 +395,8 @@ const SORT_ACCESSORS: Record<Exclude<DieSortKey, 'smart'>, (d: DieAgg) => string
   rejPct: (d) => d.rejectPct,
   lastRun: (d) => d.lastRun || null,
   scheduled: (d) => S!.planByDie.get(d.dieNumber)?.start ?? null,
-  // 'Now' (0000…) sorts first, then promised dates, then dateless maint.
+  // Available (0000…) first, then confirmed return dates, then dateless
+  // In-maint (9998…), Unavailable (9999…) last.
   available: (d) => availableFor(d).sort,
 };
 
@@ -640,7 +652,7 @@ function renderDieTable(): string {
       ${th('', 'Defect trend', 'Rejects per day (per week on long windows); bar colour = that day’s reject-% band — tap for the code Pareto')}
       ${th('lastRun', 'Last run')}
       ${th('scheduled', 'Scheduled', 'Next planned production (Epicor JobHead_StartDate). ▶ Now = running per plan · Free = not scheduled, safe to pull for service')}
-      ${th('available', 'Available', "When the die is back from maintenance: Now = no open work orders · a date = Mango's 'To be completed by' on its open orders · ⚠ = that promise has passed")}
+      ${th('available', 'Available', 'From ToolStatus + PMD_DieMaster: Available = ready to run · a date = maintenance-confirmed return (Available column) while In service · In maint = in service, no date confirmed yet · ⚠ = confirmed date has passed · Unavailable = ToolStatus Problems')}
       ${th('', 'Maint')}
     </tr></thead>
     <tbody>${rows}</tbody>
@@ -854,6 +866,7 @@ function renderMasterSection(d: DieAgg): string {
       ${cell('Injector plate', m.toolInjectorPlate)}
       ${cell('Life cycle', m.lifeCycle, ' shots')}
       ${cell('Last service', m.lastServiceDate ? m.lastServiceDate.slice(0, 10) : '')}
+      ${cell('Back from maint', m.availableDate ? m.availableDate.slice(0, 10) : '')}
       ${cell('Updated', m.dateStamp ? m.dateStamp.slice(0, 10) : '')}
     </div>`;
 }

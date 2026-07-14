@@ -35,6 +35,35 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
     expect(released.every((p) => p.released)).toBe(true);
   });
 
+  it('createManualOrder adds a pickable Manual order and rejects duplicates', async () => {
+    const created = await dal.createManualOrder({
+      jobNumber: 'SFM999001',
+      partNumber: '400.410.70',
+      partDescription: 'Rush job missing from the extract',
+      orderQty: 500,
+    });
+    expect(created.source).toBe('Manual');
+    expect(created.manuallyAdded).toBe(true);
+    expect(created.orderQty).toBe(500);
+    expect(created.jobRequired).toBe(500);
+    const all = await dal.listPlanning({});
+    expect(all.some((o) => o.jobNumber === 'SFM999001')).toBe(true);
+    // Same job again (case-insensitive) → rejected, no duplicate.
+    await expect(
+      dal.createManualOrder({
+        jobNumber: ' sfm999001 ',
+        partNumber: '',
+        partDescription: '',
+        orderQty: 1,
+      }),
+    ).rejects.toThrow(/already/);
+    expect(
+      (await dal.listPlanning({})).filter(
+        (o) => o.jobNumber.trim().toUpperCase() === 'SFM999001',
+      ).length,
+    ).toBe(1);
+  });
+
   it('does not leak internal state to callers (deep copy)', async () => {
     const a = await dal.listMachines();
     a[0].displayName = 'MUTATED';

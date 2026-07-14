@@ -760,6 +760,12 @@ th.die-sort.a{color:#1d4ed8}
 .dcl-opt.red.a{background:#fee2e2;border-color:#dc2626;color:#7f1d1d}
 .dcl-prob{display:block;margin-top:12px;font-size:13px;font-weight:700;color:var(--mu)}
 .dcl-prob textarea{width:100%;margin-top:4px;font-family:inherit;font-size:15px;padding:8px;border:2px solid var(--bd);border-radius:8px;resize:vertical}
+/* Manual order entry (supervisor only): ＋ next to Job#, small form modal. */
+.m-add-order{width:30px;height:30px;margin-left:4px;border:2px dashed var(--bd);border-radius:8px;background:#fff;font-size:16px;font-weight:800;color:#0369a1;cursor:pointer;line-height:1;vertical-align:middle}
+.m-add-order:hover{border-color:#0369a1;background:#f0f9ff}
+.mdl:has(.add-ord-modal){max-width:min(560px,94vw)}
+.add-ord-modal .dcl-row label{flex:1 1 200px}
+.add-ord-modal input{font-size:15px;padding:8px;border:2px solid var(--bd);border-radius:8px;width:100%;font-family:inherit}
 /* Defect-trend sparkline: one bar per bucket, height = reject qty,
    colour = that bucket's reject-% band. */
 .die-trend-cell{min-width:150px}

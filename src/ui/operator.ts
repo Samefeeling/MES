@@ -1,5 +1,6 @@
 import type { PmdDataLayer } from '../dal';
 import type {
+  DieChangeLog,
   DieComponentCondition,
   Machine,
   Operator,
@@ -1621,7 +1622,9 @@ function buildMeta(): string {
       const when = isFinite(d.getTime())
         ? ` · ${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
         : '';
-      const tag = ord.manuallyAdded ? ' (history)' : '';
+      // id > 0 = a real PMD_ManualOrders row (supervisor-added); id 0 =
+      // the synthetic order rebuilt from PMD_Production history.
+      const tag = ord.manuallyAdded ? (ord.id > 0 ? ' (manual)' : ' (history)') : '';
       return `<option value="${escapeHtml(ord.jobNumber)}"${
         ord.jobNumber === S!.selJob ? ' selected' : ''
       }>${escapeHtml(`${ord.jobNumber}${when}${tag}`)}</option>`;
@@ -1722,9 +1725,16 @@ function buildMeta(): string {
     S!.selJob && !isPastShift() && !jobInPlanning(S!.selJob)
       ? `<span class="m-job-warn" title="This Job# is not in the planning list (Planning.csv). Check you didn't type the item / part number instead of the Job#.">⚠ Not in planning — is this the Job# or an item number?</span>`
       : '';
+  // Supervisor-only escape hatch for a job missing from the Epicor
+  // extract (rush order / extract lag): add it by hand so the operator
+  // can pick it. Hidden for everyone else.
+  const addOrderBtn =
+    isSupervisor() && dalRef.createManualOrder
+      ? `<button type="button" class="m-add-order" data-add-order title="Add an order that's missing from the Epicor planning extract (supervisor only)">＋</button>`
+      : '';
   return `<div class="op-meta">
     <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
-    <label class="m-job">Job# ${jobField}${coRunBadge}${jobWarn}</label>
+    <label class="m-job">Job# ${jobField}${addOrderBtn}${coRunBadge}${jobWarn}</label>
     <label class="m-orderqty">Order Qty <input type="text" disabled value="${escapeHtml(String(orderQty))}"></label>
     <label class="m-part"><span class="m-part-title">Part# ${swatch}</span><input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
     <label class="m-desc"><span class="m-desc-title">Product Description${dieNumberLabel}</span><input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
@@ -2429,6 +2439,11 @@ function wire(): void {
   app.querySelectorAll<HTMLElement>('[data-meta]').forEach((el) => {
     el.addEventListener('change', () => onMetaChange(el));
   });
+  // ＋ next to Job# (supervisor only) — manual order entry for jobs the
+  // Epicor extract is missing.
+  app
+    .querySelector<HTMLButtonElement>('[data-add-order]')
+    ?.addEventListener('click', () => openAddOrderModal());
   // ⛓ Co-Run chips — one-tap hop to a co-running order. Switching between
   // co-runners is exempt from the sign-off-before-leaving gate, so this skips
   // straight to the reload that swaps the per-job view.
@@ -3180,62 +3195,116 @@ async function multiFillApply(
 }
 
 // ---------------------------------------------------------------------
-// Die Change Log (PMD_DieChangeLog) — pops up the FIRST time the
-// operator marks a Die Change (D) or Insert Change (I) on a tuple's
-// timeline. Date / shift / setter / machine / job / die-out / die-in are
+// Manual order entry (PMD_ManualOrders) — supervisor-only escape hatch
+// for a job the Epicor planning extract doesn't carry yet (rush order,
+// extract lag). The order persists to SharePoint so every press's Job#
+// dropdown sees it; once Epicor picks the job up, the ERP row wins.
+
+function openAddOrderModal(): void {
+  if (!isSupervisor() || !dalRef.createManualOrder) return;
+  const mc = openModal(`<div class="bd-modal add-ord-modal">
+    <h2 class="bd-title">➕ Add order manually</h2>
+    <p class="bd-sub">For a job that's missing from the Epicor planning extract. It appears in every press's Job# list until Epicor catches up — then the ERP row takes over automatically.</p>
+    <div class="dcl-row">
+      <label>Job # *<input type="text" data-ao="job" placeholder="e.g. SFM507147" autocomplete="off"></label>
+      <label>Part #<input type="text" data-ao="part" placeholder="e.g. 400.410.70" autocomplete="off"></label>
+    </div>
+    <div class="dcl-row">
+      <label>Product description<input type="text" data-ao="desc" autocomplete="off"></label>
+      <label>Order Qty *<input type="number" data-ao="qty" min="1" step="1" inputmode="numeric"></label>
+    </div>
+    <div class="bd-actions">
+      <button class="btn-primary-big" data-ao-save>Add order</button>
+      <button class="btn-ghost-big" data-ao-cancel>Cancel</button>
+    </div>
+  </div>`);
+  mc.querySelector('[data-ao-cancel]')?.addEventListener('click', () => closeModal());
+  mc.querySelector<HTMLButtonElement>('[data-ao-save]')?.addEventListener('click', () => {
+    void (async () => {
+      const v = (k: string): string =>
+        (mc.querySelector<HTMLInputElement>(`[data-ao="${k}"]`)?.value ?? '').trim();
+      const job = v('job');
+      const qty = Math.floor(Number(v('qty')) || 0);
+      if (!job) {
+        toast('Job # is required', 'warn');
+        return;
+      }
+      if (S!.planning.some((o) => o.jobNumber.trim().toUpperCase() === job.toUpperCase())) {
+        toast(`${job} is already in the order list — pick it from the Job# dropdown`, 'warn');
+        return;
+      }
+      if (qty <= 0) {
+        toast('Order Qty must be a positive number', 'warn');
+        return;
+      }
+      const btn = mc.querySelector<HTMLButtonElement>('[data-ao-save]');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Adding…';
+      }
+      try {
+        const created = await dalRef.createManualOrder!({
+          jobNumber: job,
+          partNumber: v('part'),
+          partDescription: v('desc'),
+          orderQty: qty,
+        });
+        S!.planning.push(created);
+        S!.selJob = created.jobNumber;
+        saveView();
+        closeModal();
+        toast(`Order ${created.jobNumber} added — it's now selectable on every press`, 'ok');
+        void reload();
+      } catch (e) {
+        console.error('[pmd] manual order add failed:', e);
+        toast(`Could not add: ${e instanceof Error ? e.message : e}`, 'err');
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Add order';
+        }
+      }
+    })();
+  });
+}
+
+// ---------------------------------------------------------------------
+// Die Change Log (PMD_DieChangeLog) — pops up whenever the operator
+// marks a Die Change (D) or Insert Change (I) on a tuple's timeline.
+// Date / shift / setter / machine / job / die-out / die-in are
 // prefilled; the setter's real work is the 13-component condition
 // check (1 Good · 2 Worn · 3 Damaged) that builds the die's health
-// history for the toolroom. Skipping is allowed (once per tuple per
-// session) — the log can still be added in SharePoint later.
-
-const dieLogPrompted = new Set<string>();
-
-// One Die Change Log per (machine + date + shift + job). The in-memory set
-// stops a re-prompt within a session; the persisted set (localStorage) makes
-// that guarantee survive a PAGE RELOAD, so a refresh mid-shift never re-opens
-// the popup for a change already logged — the source of duplicate
-// PMD_DieChangeLog rows. The DAL create is also idempotent on the same key as
-// a server-side backstop (see sharepoint/memory createDieChangeLog).
-const DCL_SAVED_KEY = 'pmd.dieChangeLog.saved';
-
-/** Unique id for one die change: machine + shiftId (date+shift) + job. */
-function dieChangeLogKey(): string {
-  return `${S!.mc}|${sid()}|${S!.selJob}`;
-}
-
-function savedDieLogKeys(): Set<string> {
-  try {
-    const raw = localStorage.getItem(DCL_SAVED_KEY);
-    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
-  } catch {
-    return new Set();
-  }
-}
-
-/** Record a saved die change so neither this session nor a later reload
- *  re-prompts (and re-creates a row) for the same tuple. */
-function markDieLogSaved(key: string): void {
-  dieLogPrompted.add(key);
-  try {
-    const s = savedDieLogKeys();
-    s.add(key);
-    // Keep the store bounded — only the last ~200 tuples matter.
-    const arr = [...s].slice(-200);
-    localStorage.setItem(DCL_SAVED_KEY, JSON.stringify(arr));
-  } catch {
-    /* storage disabled — the in-memory guard still holds for this session */
-  }
-}
+// history for the toolroom. If the tuple (machine + date + shift + job)
+// was already logged, the popup re-opens PREFILLED from the saved row
+// and saving UPDATES it — createDieChangeLog is idempotent on that key
+// in every backend, so re-entry / correction is always possible and a
+// duplicate row never is. Skip just closes without saving.
 
 function maybeOpenDieChangeLog(code: StatusCode): void {
   if (!dalRef.createDieChangeLog || !S!.selJob) return;
-  const key = dieChangeLogKey();
-  if (dieLogPrompted.has(key) || savedDieLogKeys().has(key)) return;
-  dieLogPrompted.add(key);
-  openDieChangeLogModal(code);
+  void openDieChangeLogModal(code);
 }
 
-function openDieChangeLogModal(trigger: StatusCode): void {
+/** The already-saved log for the current (machine, date+shift, job), if
+ *  any — the popup prefills from it and the save updates it in place. */
+async function existingDieChangeLog(): Promise<DieChangeLog | undefined> {
+  if (!dalRef.listDieChangeLog) return undefined;
+  const norm = (s: string): string => s.trim().toUpperCase();
+  const day = sid().slice(0, 10);
+  try {
+    return (await dalRef.listDieChangeLog()).find(
+      (r) =>
+        norm(r.machineCode) === norm(S!.mc) &&
+        r.date === day &&
+        norm(r.shift) === norm(S!.shiftCode) &&
+        norm(r.jobNumber) === norm(S!.selJob),
+    );
+  } catch {
+    return undefined; // list unreadable — treat as a fresh entry
+  }
+}
+
+async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
+  const existing = await existingDieChangeLog();
   const dieByPart = (part?: string): { dieNumber: string; die: string } | undefined =>
     part ? S!.dieColors.get(part.trim().toUpperCase()) : undefined;
   const partIn =
@@ -3273,46 +3342,65 @@ function openDieChangeLogModal(trigger: StatusCode): void {
           )}${d.die ? ` — ${escapeHtml(d.die)}` : ''}</option>`,
       )
       .join('');
+  // Edit mode: everything prefills from the saved row so the setter can
+  // correct a rating or add detail; the save MERGEs the same record.
+  const selSetter = existing?.dieSetter || S!.selOperator;
   const setterNames = Array.from(
-    new Set([S!.selOperator, ...S!.operators.map((o) => o.operatorName)].filter(Boolean)),
+    new Set(
+      [selSetter, S!.selOperator, ...S!.operators.map((o) => o.operatorName)].filter(Boolean),
+    ),
   );
   const setterOpts = setterNames
-    .map((n) => `<option${n === S!.selOperator ? ' selected' : ''}>${escapeHtml(n)}</option>`)
+    .map((n) => `<option${n === selSetter ? ' selected' : ''}>${escapeHtml(n)}</option>`)
     .join('');
+  const coChecked = (label: string, fallback: boolean): boolean =>
+    existing ? existing.changeOver.includes(label) : fallback;
   const co = (label: string, checked: boolean): string =>
     `<label class="dcl-co"><input type="checkbox" value="${escapeHtml(label)}"${checked ? ' checked' : ''}>${escapeHtml(label)}</label>`;
-  const compRows = DIE_COMPONENTS.map(
-    (c) => `<div class="dcl-comp" data-dcl-comp="${c.key}">
+  const compRows = DIE_COMPONENTS.map((c) => {
+    const sel: DieComponentCondition = existing?.components[c.key] || 'good';
+    return `<div class="dcl-comp" data-dcl-comp="${c.key}">
       <span class="dcl-comp-name">${escapeHtml(c.label)}</span>
       <span class="dcl-seg">${(['good', 'worn', 'damaged'] as const)
         .map(
           (k) =>
             `<button type="button" class="dcl-opt ${DIE_CONDITION_META[k].cls}${
-              k === 'good' ? ' a' : ''
+              k === sel ? ' a' : ''
             }" data-cond="${k}" title="${escapeHtml(DIE_CONDITION_META[k].label)}">${DIE_CONDITION_META[k].short}</button>`,
         )
         .join('')}</span>
-    </div>`,
-  ).join('');
+    </div>`;
+  }).join('');
   const day = sid().slice(0, 10);
+  // A saved die number may be typed differently to PMD_ProductDieColor's
+  // ("280" vs "280 ") — normalise the select match.
+  const dieSel = (saved: string | undefined, fallback?: string): string | undefined => {
+    if (!saved) return fallback;
+    const norm = saved.trim().toUpperCase();
+    return dies.find((d) => d.dieNumber.trim().toUpperCase() === norm)?.dieNumber ?? fallback;
+  };
   const mc = openModal(`<div class="bd-modal dcl-modal">
-    <h2 class="bd-title">🔁 Die Change Log</h2>
+    <h2 class="bd-title">🔁 Die Change Log${existing ? ' — edit' : ''}</h2>
     <p class="bd-sub">${escapeHtml(S!.mc)} · ${escapeHtml(day)} · ${escapeHtml(S!.shiftCode)} shift · job ${escapeHtml(
       S!.selJob,
-    )} — condition check while the die is out. <b>1</b> Good work order · <b>2</b> Operational but worn · <b>3</b> Damaged / can't be used.</p>
+    )} — condition check while the die is out. <b>1</b> Good work order · <b>2</b> Operational but worn · <b>3</b> Damaged / can't be used.${
+      existing
+        ? ' <b>Already logged for this change</b> — saving updates the same record.'
+        : ''
+    }</p>
     <div class="dcl-row">
       <label>Die setter<select data-dcl="setter">${setterOpts}</select></label>
-      <span class="dcl-cos">Change over ${co('Die', trigger === 'D')}${co('Insert', trigger === 'I')}${co('Space In', false)}${co('SpaceOut', false)}</span>
+      <span class="dcl-cos">Change over ${co('Die', coChecked('Die', trigger === 'D'))}${co('Insert', coChecked('Insert', trigger === 'I'))}${co('Space In', coChecked('Space In', false))}${co('SpaceOut', coChecked('SpaceOut', false))}</span>
     </div>
     <div class="dcl-row">
-      <label>Die OUT<select data-dcl="out">${dieOpts(dieOut?.dieNumber)}</select></label>
-      <label>Die IN<select data-dcl="in">${dieOpts(dieIn?.dieNumber)}</select></label>
+      <label>Die OUT<select data-dcl="out">${dieOpts(dieSel(existing?.dieNumberOut, dieOut?.dieNumber))}</select></label>
+      <label>Die IN<select data-dcl="in">${dieOpts(dieSel(existing?.dieNumberIn, dieIn?.dieNumber))}</select></label>
     </div>
     <div class="dcl-comps">${compRows}</div>
     <label class="dcl-prob">Problem description (needed when anything is 2 or 3)
-      <textarea data-dcl="prob" rows="2" placeholder="What's worn / damaged, which cavity…"></textarea></label>
+      <textarea data-dcl="prob" rows="2" placeholder="What's worn / damaged, which cavity…">${escapeHtml(existing?.problemDescription ?? '')}</textarea></label>
     <div class="bd-actions">
-      <button class="btn-primary-big" data-dcl-save>Save Die Change Log</button>
+      <button class="btn-primary-big" data-dcl-save>${existing ? 'Update' : 'Save'} Die Change Log</button>
       <button class="btn-ghost-big" data-dcl-skip>Skip</button>
     </div>
   </div>`);
@@ -3365,12 +3453,11 @@ function openDieChangeLogModal(trigger: StatusCode): void {
           components,
           problemDescription: prob,
         });
-        markDieLogSaved(dieChangeLogKey());
         closeModal();
         toast(
           flagged > 0
-            ? `Die Change Log saved — ${flagged} component${flagged === 1 ? '' : 's'} flagged`
-            : 'Die Change Log saved — all components good',
+            ? `Die Change Log ${existing ? 'updated' : 'saved'} — ${flagged} component${flagged === 1 ? '' : 's'} flagged`
+            : `Die Change Log ${existing ? 'updated' : 'saved'} — all components good`,
           'ok',
         );
       } catch (e) {
@@ -3378,7 +3465,7 @@ function openDieChangeLogModal(trigger: StatusCode): void {
         toast(`Could not save: ${e instanceof Error ? e.message : e}`, 'err');
         if (btn) {
           btn.disabled = false;
-          btn.textContent = 'Save Die Change Log';
+          btn.textContent = `${existing ? 'Update' : 'Save'} Die Change Log`;
         }
       }
     })();

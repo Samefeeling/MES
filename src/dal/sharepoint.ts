@@ -53,6 +53,9 @@ const LISTS = {
   operator: 'PMD_Operator',
   supervisor: 'PMD_Supervisor',
   planning: 'PMD_Planning',
+  /** Supervisor-added orders missing from the Epicor extract. Title =
+   *  JobNumber; auto-provisioned on first add (see createManualOrder). */
+  manualOrders: 'PMD_ManualOrders',
   production: 'PMD_Production',
   /** Transient "in-progress" mirror of PMD_Production. pushLiveSnapshot
    *  writes here every poll tick; Sign Off & Save copies the row into
@@ -318,6 +321,7 @@ const DEFAULT_FIELDS = {
     lifeCycle: 'LifeCycle',
     dateStamp: 'DateStamp',
     lastServiceDate: 'LastServiceDate',
+    availableDate: 'Available',
     toolStatus: 'ToolStatus',
   },
   dieChangeLog: {
@@ -1047,6 +1051,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         lifeCycle: resolve(F.lifeCycle),
         dateStamp: resolve(F.dateStamp),
         lastServiceDate: resolve(F.lastServiceDate),
+        availableDate: resolve(F.availableDate),
         toolStatus: resolve(F.toolStatus),
       };
       console.info('[pmd] PMD_DieMaster field resolution:', K);
@@ -1083,6 +1088,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           lifeCycle: nullOrNum(r[K.lifeCycle]),
           dateStamp: str(r[K.dateStamp]),
           lastServiceDate: str(r[K.lastServiceDate]),
+          availableDate: str(r[K.availableDate]),
           toolStatus: parseToolStatus(str(r[K.toolStatus])),
         }))
         .filter((m) => m.dieNumber);
@@ -1409,6 +1415,18 @@ export class SharePointDataLayer implements PmdDataLayer {
   }
 
   async listPlanning(_filter: PlanningFilter): Promise<PlanningOrder[]> {
+    // ERP orders + supervisor-added manual orders, ERP winning on a job
+    // number collision (once Epicor picks the job up, its row takes over).
+    const [erp, manual] = await Promise.all([
+      this.listErpPlanning(),
+      this.listManualOrders(),
+    ]);
+    if (manual.length === 0) return erp;
+    const known = new Set(erp.map((o) => o.jobNumber.trim().toUpperCase()));
+    return [...erp, ...manual.filter((m) => !known.has(m.jobNumber.trim().toUpperCase()))];
+  }
+
+  private async listErpPlanning(): Promise<PlanningOrder[]> {
     // Two sources, picked by config:
     //  1. CSV file in a doc library (PREFERRED) — written by PowerShell on
     //     the shop-floor PC and uploaded via OneDrive sync. No SP write
@@ -1474,6 +1492,112 @@ export class SharePointDataLayer implements PmdDataLayer {
 
   private async loadPlanningCsv(rawPath: string): Promise<PlanningOrder[]> {
     return parsePlanningCsv(await this.fetchSiteFile(rawPath, 'Planning CSV'));
+  }
+
+  // ---- manual orders (PMD_ManualOrders) --------------------------------
+
+  /** Set true once the list is known to exist so the ensure probe runs
+   *  at most once per page load (same pattern as PMD_DieMaintenance). */
+  private manualOrdersEnsured = false;
+
+  private static manualPlanningOrder(o: {
+    id: number;
+    jobNumber: string;
+    partNumber: string;
+    partDescription: string;
+    orderQty: number;
+  }): PlanningOrder {
+    return {
+      id: o.id,
+      jobNumber: o.jobNumber,
+      machineCode: '',
+      originalMachine: '',
+      partNumber: o.partNumber,
+      partDescription: o.partDescription,
+      plannedStart: '',
+      plannedEnd: '',
+      orderQty: o.orderQty,
+      jobRequired: o.orderQty,
+      qtyPerHr: 0,
+      duration: 0,
+      released: true,
+      isDieChange: false,
+      manuallyAdded: true,
+      source: 'Manual',
+    };
+  }
+
+  /** Supervisor-added orders as PlanningOrder rows; [] when the list
+   *  hasn't been created yet (nothing manual to merge). */
+  private async listManualOrders(): Promise<PlanningOrder[]> {
+    try {
+      const rows = await this.getAllItems<Record<string, unknown>>(LISTS.manualOrders);
+      this.manualOrdersEnsured = true;
+      return rows
+        .map((r) =>
+          SharePointDataLayer.manualPlanningOrder({
+            id: getId(r),
+            jobNumber: str(r['Title']).trim(),
+            partNumber: str(r['PartNumber']).trim(),
+            partDescription: str(r['PartDescription']).trim(),
+            orderQty: num(r['OrderQty']) || 0,
+          }),
+        )
+        .filter((o) => o.jobNumber);
+    } catch {
+      return []; // no list yet — created on the first add
+    }
+  }
+
+  private async ensureManualOrdersList(): Promise<void> {
+    if (this.manualOrdersEnsured) return;
+    try {
+      await this.getJson(`${this.listUrl(LISTS.manualOrders)}?$select=Title`);
+      this.manualOrdersEnsured = true;
+      return;
+    } catch {
+      /* not there — create it */
+    }
+    await this.post(`${this.siteUrl}/_api/web/lists`, {
+      __metadata: { type: 'SP.List' },
+      Title: LISTS.manualOrders,
+      BaseTemplate: 100, // generic list
+      Description:
+        'Orders added by a supervisor on the PMD Operator Sheet when a job is missing from the Epicor planning extract. Title holds the JobNumber.',
+    });
+    const fieldsUrl = `${this.listUrl(LISTS.manualOrders)}/fields`;
+    for (const title of ['PartNumber', 'PartDescription']) {
+      await this.post(fieldsUrl, {
+        __metadata: { type: 'SP.Field' },
+        Title: title,
+        FieldTypeKind: 2, // single-line text
+      });
+    }
+    await this.post(fieldsUrl, {
+      __metadata: { type: 'SP.Field' },
+      Title: 'OrderQty',
+      FieldTypeKind: 9, // number
+    });
+    console.info('[pmd] PMD_ManualOrders list created (auto-provisioned)');
+    this.manualOrdersEnsured = true;
+  }
+
+  async createManualOrder(o: {
+    jobNumber: string;
+    partNumber: string;
+    partDescription: string;
+    orderQty: number;
+  }): Promise<PlanningOrder> {
+    await this.ensureManualOrdersList();
+    const res = await this.post(`${this.listUrl(LISTS.manualOrders)}/items`, {
+      __metadata: { type: await this.itemType(LISTS.manualOrders) },
+      Title: o.jobNumber,
+      PartNumber: o.partNumber,
+      PartDescription: o.partDescription,
+      OrderQty: o.orderQty,
+    });
+    const j = (await res.json()) as { d?: { ID?: number; Id?: number } };
+    return SharePointDataLayer.manualPlanningOrder({ id: j.d?.ID ?? j.d?.Id ?? 0, ...o });
   }
 
   // ---- management Pareto aggregations --------------------------------

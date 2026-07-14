@@ -80,6 +80,18 @@ export interface PmdDataLayer {
   // Planning (read-only — the Epicor → Planning.csv pipeline owns writes)
   listPlanning(filter: PlanningFilter): Promise<PlanningOrder[]>;
 
+  /** Persist an order the Epicor extract is missing (rush job, extract
+   *  lag) so the operator can pick it. Supervisor-only in the UI. Stored
+   *  outside the planning pipeline (PMD_ManualOrders on SharePoint) and
+   *  merged into listPlanning with source 'Manual' — an ERP row for the
+   *  same job number wins once Epicor catches up. Optional. */
+  createManualOrder?(o: {
+    jobNumber: string;
+    partNumber: string;
+    partDescription: string;
+    orderQty: number;
+  }): Promise<PlanningOrder>;
+
   /** Reject quantity per defect code over a date range, for the KPI
    *  Reject Pareto. SharePoint reads PMD_Rejects directly (RejectCode +
    *  RejectCategory + RejectNumber); the memory backend derives it from

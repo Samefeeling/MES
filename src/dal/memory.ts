@@ -176,6 +176,37 @@ export class MemoryDataLayer implements PmdDataLayer {
     if (patch.closedAt !== undefined) row.closedAt = patch.closedAt;
   }
 
+  async createManualOrder(o: {
+    jobNumber: string;
+    partNumber: string;
+    partDescription: string;
+    orderQty: number;
+  }): Promise<PlanningOrder> {
+    const norm = o.jobNumber.trim().toUpperCase();
+    if (this.planning.some((p) => p.jobNumber.trim().toUpperCase() === norm))
+      throw new Error(`Job ${o.jobNumber} is already in the order list`);
+    const created: PlanningOrder = {
+      id: 900_000 + this.planning.length,
+      jobNumber: o.jobNumber.trim(),
+      machineCode: '',
+      originalMachine: '',
+      partNumber: o.partNumber,
+      partDescription: o.partDescription,
+      plannedStart: '',
+      plannedEnd: '',
+      orderQty: o.orderQty,
+      jobRequired: o.orderQty,
+      qtyPerHr: 0,
+      duration: 0,
+      released: true,
+      isDieChange: false,
+      manuallyAdded: true,
+      source: 'Manual',
+    };
+    this.planning.push(created);
+    return MemoryDataLayer.clone(created);
+  }
+
   async listPlanning(filter: PlanningFilter): Promise<PlanningOrder[]> {
     let rows = this.planning;
     if (filter.machineCode) rows = rows.filter((p) => p.machineCode === filter.machineCode);

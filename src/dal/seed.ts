@@ -174,6 +174,7 @@ export function seedDieMaster(now: Date): DieMaster[] {
     toolStatus: DieMaster['toolStatus'],
     daysAgo: number,
     lastServiceDaysAgo: number | null,
+    availableInDays: number | null = null,
   ): DieMaster => ({
     dieNumber,
     description,
@@ -188,11 +189,14 @@ export function seedDieMaster(now: Date): DieMaster[] {
     lifeCycle,
     dateStamp: stamp(daysAgo),
     lastServiceDate: lastServiceDaysAgo == null ? '' : stamp(lastServiceDaysAgo),
+    availableDate: availableInDays == null ? '' : stamp(-availableInDays),
     toolStatus,
   });
   return [
     row('DIE-3597', 'Viva Backrest/Armrest 2-cav', 2, 28.5, 780, 1_000_000, 'problems', 1, 45),
-    row('DIE-0689', 'Integra Chair Shell', 1, 41.0, 1450, 800_000, 'in-service', 3, 60),
+    // In service, with a maintenance-confirmed return date 5 days out —
+    // exercises the Available column's date path.
+    row('DIE-0689', 'Integra Chair Shell', 1, 41.0, 1450, 800_000, 'in-service', 3, 60, 5),
     row('DIE-1422', 'Battery Tray Lid 4-cav', 4, 19.8, 260, 1_200_000, 'serviced', 4, 4),
     row('DIE-0091', 'HS Pallet Insert 8-cav', 8, 7.4, 190, 2_000_000, 'to-be-serviced', 9, null),
   ];

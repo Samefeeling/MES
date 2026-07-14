@@ -103,6 +103,10 @@ export interface DieMaster {
    *  also the preferred reset point for the tonnage service counter.
    *  '' when never recorded. */
   lastServiceDate: string;
+  /** Available column — while the die is In service, the date the
+   *  maintenance team has confirmed it comes back. Drives the Die tab's
+   *  Available column. '' when not set. */
+  availableDate: string;
   /** '' when the ToolStatus cell is empty / unrecognised. */
   toolStatus: ToolStatus | '';
 }
