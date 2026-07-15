@@ -1186,18 +1186,34 @@ function openDieDetail(dieNumber: string): void {
   </div>`);
   const mc = document.getElementById('mc')!;
   mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
-  // Print just this drilldown: a body flag flips on the print stylesheet
-  // (see styles.css @media print) that hides the app and the header
-  // buttons, leaving the die's page. The flag only affects @media print,
-  // so a stray afterprint miss is harmless on screen; still cleaned up.
+  // Print just this drilldown. The app can be mounted deep inside the host
+  // page (SPFx web-part container, not a direct child of <body>), so a
+  // "hide every sibling of the modal" rule would hide the modal too and
+  // print a blank page. Instead CLONE the die page into a print area that
+  // IS a direct child of <body>, and the @media print rule hides everything
+  // else. Cleaned up on afterprint (+ a fallback in case it never fires).
   mc.querySelector('[data-die-print]')?.addEventListener('click', () => {
+    const detail = mc.querySelector('.die-detail');
+    if (!detail) return;
+    document.getElementById('die-print-area')?.remove();
+    const area = document.createElement('div');
+    area.id = 'die-print-area';
+    const clone = detail.cloneNode(true) as HTMLElement;
+    clone.querySelector('.die-detail-head-actions')?.remove(); // no buttons on paper
+    area.appendChild(clone);
+    document.body.appendChild(area);
+    let cleaned = false;
     const done = (): void => {
+      if (cleaned) return;
+      cleaned = true;
+      area.remove();
       document.body.classList.remove('die-printing');
       window.removeEventListener('afterprint', done);
     };
     window.addEventListener('afterprint', done);
     document.body.classList.add('die-printing');
     window.print();
+    setTimeout(done, 60_000); // belt-and-braces if afterprint is missed
   });
 }
 

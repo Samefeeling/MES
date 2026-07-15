@@ -358,6 +358,7 @@ const DEFAULT_FIELDS = {
     jobNumber: 'JobNumber',
     mangoTicket: 'MangoTicket',
     closedAt: 'ClosedAt',
+    dueDate: 'DueDate',
   },
 } as const;
 
@@ -1340,10 +1341,18 @@ export class SharePointDataLayer implements PmdDataLayer {
         );
         const orders = parseMangoWorkOrdersCsv(text);
         const matched = orders.filter((o) => known.has(o.dieNumber.toUpperCase())).length;
+        const withDue = orders.filter((o) => o.dueDate).length;
         console.info(
           '[pmd] Mango work-order CSV:', orders.length, 'orders ·',
-          matched, 'matched to a die number',
+          matched, 'matched to a die number ·', withDue, "with a 'To be completed by' date",
         );
+        if (orders.length > 0 && withDue === 0) {
+          console.warn(
+            "[pmd] Mango CSV: NO order has a 'To be completed by' date — the Maint",
+            'traffic-light needs it. Check that column is present + filled in the export.',
+            'Sample row dueDate:', JSON.stringify(orders[0]?.dueDate),
+          );
+        }
         this.woSource = 'mango-csv';
         return orders;
       } catch (e) {
@@ -1372,6 +1381,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           mangoTicket: str(r[F.mangoTicket]),
           createdAt: str(r['Created']),
           closedAt: str(r[F.closedAt]),
+          dueDate: isoDate(r[F.dueDate]) || undefined,
         }))
         .filter((r) => r.dieNumber)
         .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
