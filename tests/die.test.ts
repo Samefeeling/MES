@@ -533,6 +533,20 @@ describe('parseMangoWorkOrdersCsv (Mango report → work-order mirror)', () => {
     expect(out[0].mangoTicket).toBe('MWO 02038');
   });
 
+  it("parses the 'To be completed by' d/m/yyyy date into dueDate (drives the Maint traffic light)", () => {
+    // Column 10 (index 9) is 'To be completed by' — fill it on a Die row.
+    const withDue = [
+      MINTO_HEADER,
+      // Number,Downtime,Labour,Stage,Plant,Brief,Employee,Created,Branch,TBCB,Type,...
+      'MWO 03001,,2,Stage 1 Coordinator Assessing,AU - Die 171 Podium Seat,Sprue gate wear,Karl Stevens,3/07/2026,Resero - Minto,31/07/2026,2. Breakdown,,3/07/2026,7,AM,Day,,"",AU,Moulding,Karl Stevens,,,,,,',
+    ].join('\n');
+    const out = parseMangoWorkOrdersCsv(withDue);
+    expect(out.length).toBe(1);
+    expect(out[0].dieNumber).toBe('171');
+    expect(out[0].status).toBe('open'); // Stage 1 → open
+    expect(out[0].dueDate?.slice(0, 10)).toBe('2026-07-31'); // 31/07/2026, d/m
+  });
+
   it("recovers the closure date from the Actions-taken log's 'to Stage 4 Closed' line", () => {
     const out = parseMangoWorkOrdersCsv(csv);
     const closed = out.find((o) => o.mangoTicket === 'MWO 02029')!;

@@ -227,8 +227,42 @@ export function seedDieMaintenance(now: Date): DieMaintenanceRequest[] {
       mangoTicket: '',
       createdAt: daysAgo(6),
       closedAt: '',
-      // Mango "To be completed by" already passed → shows OVERDUE in Maint.
+      // Mango "To be completed by" already passed → red (overdue) in Maint.
       dueDate: daysAgo(2),
+    },
+    {
+      id: 3,
+      dieNumber: 'DIE-0689',
+      status: 'in-progress',
+      maintType: 'inspection',
+      priority: 'normal',
+      description: 'Hot-runner temperature drift — schedule a check.',
+      contact: 'Toolroom Team',
+      requestedBy: 'Karl Stevens',
+      machineCode: '1600T',
+      jobNumber: '',
+      mangoTicket: '',
+      createdAt: daysAgo(1),
+      closedAt: '',
+      // Due in a few days → amber (due soon).
+      dueDate: daysAgo(-3),
+    },
+    {
+      id: 4,
+      dieNumber: 'DIE-0091',
+      status: 'open',
+      maintType: 'cleaning',
+      priority: 'low',
+      description: 'Routine vent clean booked for next campaign.',
+      contact: 'Maintenance Team',
+      requestedBy: 'Jeff Penn',
+      machineCode: 'HS',
+      jobNumber: '',
+      mangoTicket: '',
+      createdAt: daysAgo(1),
+      closedAt: '',
+      // Plenty of runway → green (on track).
+      dueDate: daysAgo(-20),
     },
     {
       id: 2,

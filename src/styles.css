@@ -790,9 +790,13 @@ th.die-sort.a{color:#1d4ed8}
 .die-link{background:none;border:none;color:#1d4ed8;font-weight:800;font-size:14px;cursor:pointer;text-decoration:underline;padding:0}
 .die-maint-badge{background:#fff7ed;border:1px solid #fdba74;color:#9a3412;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:800;cursor:pointer;font-family:inherit}
 button.die-maint-badge:hover{background:#fed7aa;border-color:#fb923c}
-/* Open work order past its Mango 'To be completed by' date. */
-.die-maint-badge.overdue{background:#fef2f2;border-color:#fca5a5;color:#b91c1c}
-button.die-maint-badge.overdue:hover{background:#fee2e2;border-color:#f87171}
+/* Traffic-light by the open WO's Mango 'To be completed by' date. */
+.die-maint-badge.wo-overdue{background:#fef2f2;border-color:#fca5a5;color:#b91c1c}
+button.die-maint-badge.wo-overdue:hover{background:#fee2e2;border-color:#f87171}
+.die-maint-badge.wo-soon{background:#fff7ed;border-color:#FFA500;color:#9a3412}
+button.die-maint-badge.wo-soon:hover{background:#ffedd5;border-color:#f59e0b}
+.die-maint-badge.wo-ok{background:#f0fdf4;border-color:#86efac;color:#15803d}
+button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 /* Open-WO focused popup — a touch narrower than the full drilldown. */
 .mdl:has(.die-wo-modal){max-width:min(720px,94vw)}
 /* Worn / damaged component chips from the latest die-change condition
