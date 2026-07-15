@@ -827,6 +827,9 @@ th.die-sort.a{color:#1d4ed8}
 /* The primary "raise a request" action — Mango is the system of record,
    so this pill is the button that used to open the in-app form. */
 .die-mango-open.lg{padding:12px 18px;font-size:15px;border-width:2px}
+/* Header variant in the drilldown top bar — sits next to Close, same
+   height so the two buttons read as a matched pair. */
+.die-mango-open.hd{padding:8px 14px;font-size:14px;border-width:1.5px}
 .die-req-note{margin:4px 0 10px;font-size:13px;color:var(--mu)}
 /* Tonnage service-rule reminders */
 .die-svc-badge{display:inline-block;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:800;white-space:nowrap;margin-left:4px}
@@ -851,7 +854,16 @@ th.die-sort.a{color:#1d4ed8}
 .mdl:has(.die-detail){max-width:min(880px,94vw)}
 .die-detail h3{margin:0;font-size:18px}
 .die-detail-sub{font-size:13px;color:var(--mu);font-weight:600}
-.die-detail h4{margin:14px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.4px;color:var(--mu)}
+.die-detail h4{margin:16px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.4px;color:var(--mu);border-top:1px solid var(--bd);padding-top:12px}
+.die-detail h4 .die-h4-sub{text-transform:none;letter-spacing:0;font-weight:600;color:#94a3b8;margin-left:6px}
+/* Header row: title left, Request-in-Mango + Close together on the right,
+   sharing one visual weight so the three read as a set. */
+.die-detail-head{align-items:flex-start;gap:14px;border-bottom:1px solid var(--bd);padding-bottom:10px;margin-bottom:4px}
+.die-detail-head-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.die-detail-close{padding:8px 16px;background:#fff;border:1.5px solid var(--bd);color:#475569;border-radius:9px;font-weight:800;font-size:14px;cursor:pointer;white-space:nowrap}
+.die-detail-close:hover{background:#f1f5f9;border-color:#94a3b8}
+/* Top stats: one tidy wrap-row, pill-free, tabular. */
+.die-detail-topstats{gap:6px 18px;padding:2px 0 4px}
 .die-detail-stats{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--mu);margin-top:8px}
 .die-detail-stats b{color:var(--tx);font-variant-numeric:tabular-nums}
 .die-detail-stats .g b{color:var(--gn)}.die-detail-stats .r b{color:var(--rd)}
@@ -881,6 +893,12 @@ th.die-sort.a{color:#1d4ed8}
 .die-detail-hist{margin:4px 0 0;padding-left:20px;font-size:13px}
 .die-detail-hist li{margin-bottom:3px}
 .die-detail-hist .die-req-st{margin-right:4px}
+/* Maintenance Track: In progress + History groups. */
+.die-wo-group{margin-top:6px}
+.die-wo-group + .die-wo-group{margin-top:10px}
+.die-wo-sub{font-size:12px;font-weight:800;color:#475569;display:flex;align-items:center;gap:6px}
+.die-wo-count{background:#eef2f7;border-radius:99px;padding:0 8px;font-size:11px;color:var(--mu)}
+.die-wo-empty{font-size:13px;color:var(--mu);padding:2px 0 2px 4px}
 
 /* ===== toast ===== */
 .toast{position:fixed;top:18px;right:18px;background:#1e293b;color:#fff;padding:14px 22px;border-radius:10px;font-size:17px;font-weight:700;z-index:300;opacity:0;transform:translateY(-10px);transition:.2s;pointer-events:none;max-width:80vw;box-shadow:0 4px 16px rgba(0,0,0,.25)}

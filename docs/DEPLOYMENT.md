@@ -513,6 +513,12 @@ for the Plant/Equipment module):
    (`ExportSelector`).
 2. The app reads that file when **`VITE_MANGO_CSV_PATH`** is set (e.g.
    `/sites/ReseroOperationsAU/Shared Documents/General/Planning/Data/MangoWorkOrders.csv`).
+   **Shortcut:** if `VITE_MANGO_CSV_PATH` is left unset, the app auto-derives
+   it as `MangoWorkOrders.csv` in the **same folder as the Planning CSV**
+   (`VITE_PLANNING_CSV_PATH`'s directory). So dropping the file next to
+   `Planning.csv` is enough — no separate env var needed. (Do NOT point
+   `VITE_PLANNING_CSV_PATH` itself at `MangoWorkOrders.csv` — that variable
+   must stay on the planning file, or planning breaks.)
    The parser is calibrated against the real "AU - Minto Maintenance
    Request" export: it skips the title/ordering lines above the header,
    keeps ONLY rows whose `Plant/Equipment` names a die (the plant-wide

@@ -378,7 +378,7 @@ function renderBody(): string {
   const woChip =
     woSrc === 'mango-csv'
       ? `<span class="die-chip" title="Work orders mirrored from the Mango CSV report">WO <b>Mango CSV · ${S!.requests.length}</b></span>`
-      : `<span class="die-chip is-warn" title="Work orders are coming from the PMD_DieMaintenance list — the Mango CSV mirror is NOT active. Set VITE_MANGO_CSV_PATH to the report file's server-relative path and rebuild; F12 shows '[pmd] Mango work-order CSV' messages.">WO <b>PMD list — no Mango CSV</b></span>`;
+      : `<span class="die-chip is-warn" title="Work orders are coming from the PMD_DieMaintenance list — the Mango CSV mirror is NOT active. Either set VITE_MANGO_CSV_PATH, or drop MangoWorkOrders.csv into the same folder as the Planning CSV (it's auto-found there). Rebuild; F12 shows '[pmd] Mango work-order CSV' messages.">WO <b>PMD list — no Mango CSV</b></span>`;
   const chips = `<div class="die-chips">
     <span class="die-chip">Dies <b>${S!.dies.length}</b></span>
     <span class="die-chip">Ran in window <b>${active}</b></span>
@@ -874,8 +874,8 @@ function trendChart(d: DieAgg): string {
     })
     .join('');
   const legend = svcDays.size
-    ? `<p class="kpi-note">Bar height = rejects that ${buckets[0].span === 1 ? 'day' : 'week'}; colour = the reject-% band. 🔧 = service completed (closed work order / Last service) — rejects that keep climbing after a 🔧 mean the repair didn't take. See <b>Defects by code</b> below for the machine-status split.</p>`
-    : `<p class="kpi-note">Bar height = rejects that ${buckets[0].span === 1 ? 'day' : 'week'}; colour = the reject-% band. See <b>Defects by code</b> below for the machine-status split.</p>`;
+    ? `<p class="kpi-note">Bar height = rejects that ${buckets[0].span === 1 ? 'day' : 'week'}; colour = the reject-% band. 🔧 = service completed (closed work order / Last service) — rejects that keep climbing after a 🔧 mean the repair didn't take. See <b>Defects Cause</b> below for the machine-status split.</p>`
+    : `<p class="kpi-note">Bar height = rejects that ${buckets[0].span === 1 ? 'day' : 'week'}; colour = the reject-% band. See <b>Defects Cause</b> below for the machine-status split.</p>`;
   return `<div class="die-trend-lg">${bars}</div>${legend}`;
 }
 
@@ -884,24 +884,20 @@ function trendChart(d: DieAgg): string {
  *  goes amber at 80% and red past the interval. */
 function renderServiceSection(d: DieAgg): string {
   const s = svcFor(d);
-  const rule =
-    '100-150T: 100k · 210-350T: 50k · 450-560T: 20k · 650-850T: 10k · 1000T+: 8k shots';
   if (!s) {
-    return `<h4>Service (tonnage rule)</h4>
-      <div class="die-svc-none">No shot-based rule applies — the die didn't run on a tonnage press in this window. Rule: ${rule}.</div>`;
+    return `<h4>② Service Plan</h4>
+      <div class="die-svc-none">No shot-based rule — this die didn't run on a tonnage press.</div>`;
   }
   const pctTxt = `${(s.pct * 100).toFixed(0)}%`;
   const width = Math.min(100, Math.round(s.pct * 100));
-  const sinceTxt = s.sinceIsService
-    ? `since service on <b>${escapeHtml(s.since)}</b>`
-    : `since <b>${escapeHtml(s.since)}</b> (window start — no completed service on record, so at least)`;
-  return `<h4>Service (tonnage rule)</h4>
-    <div class="die-svc-line ${s.level}">
-      <span>Rule <b>every ${s.intervalShots.toLocaleString()} shots</b> (${escapeHtml(s.bandLabel)} — strictest press: ${escapeHtml(s.press)})
-      · <b>${s.shotsSince.toLocaleString()}</b> shots ${sinceTxt}</span>
-      <span class="die-svc-bar" title="${escapeHtml(svcTitle(s))}"><i class="${s.level}" style="width:${width}%"></i></span>
+  // Simplified: "12,340 / 20,000 shots" since the last service, with the
+  // full rule / press detail on hover.
+  return `<h4>② Service Plan</h4>
+    <div class="die-svc-line ${s.level}" title="${escapeHtml(svcTitle(s))}">
+      <span><b>${s.shotsSince.toLocaleString()}</b> / ${s.intervalShots.toLocaleString()} shots since ${escapeHtml(s.since)}${s.sinceIsService ? '' : '+'}</span>
+      <span class="die-svc-bar"><i class="${s.level}" style="width:${width}%"></i></span>
       <b class="die-svc-pct ${s.level}">${pctTxt}</b>
-      ${s.level === 'due' ? '<span class="die-svc-flag">🔧 SERVICE DUE</span>' : s.level === 'soon' ? '<span class="die-svc-flag soon">⏳ approaching</span>' : ''}
+      ${s.level === 'due' ? '<span class="die-svc-flag">🔧 DUE</span>' : s.level === 'soon' ? '<span class="die-svc-flag soon">⏳ soon</span>' : ''}
     </div>`;
 }
 
@@ -916,7 +912,7 @@ function renderMasterSection(d: DieAgg): string {
       : `<span>${label} <b>${escapeHtml(
           typeof v === 'number' ? v.toLocaleString() : v,
         )}${suffix}</b></span>`;
-  return `<h4>Die master (PMD_DieMaster)</h4>
+  return `<h4>① Die Master</h4>
     <div class="die-detail-stats die-master-stats">
       ${cell('Cavities', m.cavities)}
       ${cell('Cycle time', m.cycleTime, ' s')}
@@ -974,60 +970,68 @@ function openDieDetail(dieNumber: string): void {
         })
         .join('')
     : `<div class="trace-empty">No rejects recorded for this die in the window. 🎉</div>`;
-  // Work-order history (mirrored from Mango) — the "what have we already
-  // tried on this tool" record that sits next to the defect trend when
-  // judging repair vs run-on. Open orders first, then newest closed.
-  const hist = requestsFor(dieNumber)
-    .sort((a, b) =>
-      (a.status === 'done' ? 1 : 0) - (b.status === 'done' ? 1 : 0) ||
-      (a.createdAt < b.createdAt ? 1 : -1),
-    );
-  const histHtml = hist.length
-    ? hist
-        .map((r) => {
-          const opened = r.createdAt ? r.createdAt.slice(0, 10) : '';
-          const closed = r.closedAt ? r.closedAt.slice(0, 10) : '';
-          const days =
-            opened && closed
-              ? Math.max(
-                  0,
-                  Math.round(
-                    (new Date(`${closed}T00:00:00`).getTime() -
-                      new Date(`${opened}T00:00:00`).getTime()) / 86_400_000,
-                  ),
-                )
-              : null;
-          const span = closed
-            ? `${escapeHtml(opened)} → ${escapeHtml(closed)}${days != null ? ` · ${days === 0 ? '<1' : days} d` : ''}`
-            : `${escapeHtml(opened)} · still open`;
-          // Numbers line: downtime / labour / cost as recorded in Mango.
-          const nums = [
-            r.downtime ? `Downtime <b>${escapeHtml(r.downtime)} h</b>` : '',
-            r.labourHours ? `Labour <b>${escapeHtml(r.labourHours)} h</b>` : '',
-            r.cost ? `Cost <b>${escapeHtml(r.cost)}</b>` : '',
-          ]
-            .filter(Boolean)
-            .join(' · ');
-          // Narrative lines: what was wrong, what was done, what stops
-          // it recurring — the judgement material next to the trend.
-          const line = (label: string, v?: string): string =>
-            v ? `<div class="die-hist-line"><i>${label}</i>${escapeHtml(v)}</div>` : '';
-          return `<li class="die-hist-row">
-            <span class="die-req-st st-${r.status}">${STATUS_LABELS[r.status]}</span>
-            <span class="die-req-type">${TYPE_LABELS[r.maintType]}</span>
-            ${r.mangoTicket ? `<span class="die-mango">🥭 ${escapeHtml(r.mangoTicket)}</span>` : ''}
-            <span class="die-hist-span">${span}</span>
-            ${nums ? `<span class="die-hist-nums">${nums}</span>` : ''}
-            <span class="die-hist-desc">${escapeHtml(r.description || '—')}</span>
-            ${line('Issue', r.issueDetail !== r.description ? r.issueDetail : undefined)}
-            ${line('Work done', r.workSummary)}
-            ${line('Corrective', r.correctiveAction)}
-            ${line('Preventative', r.preventativeAction)}
-            ${r.contact ? `<span class="die-hist-who">→ ${escapeHtml(r.contact)}</span>` : ''}
-          </li>`;
-        })
-        .join('')
-    : '<li>No maintenance work orders on record for this die.</li>';
+  // Work orders mirrored from Mango, split by stage: anything NOT closed
+  // (Stage 1-3) is In progress; Stage 4 Closed → 'done' is History. This is
+  // the "what have we already tried on this tool" record read next to the
+  // defect trend when judging repair vs run-on.
+  const woRow = (r: DieMaintenanceRequest): string => {
+    const opened = r.createdAt ? r.createdAt.slice(0, 10) : '';
+    const closed = r.closedAt ? r.closedAt.slice(0, 10) : '';
+    const days =
+      opened && closed
+        ? Math.max(
+            0,
+            Math.round(
+              (new Date(`${closed}T00:00:00`).getTime() -
+                new Date(`${opened}T00:00:00`).getTime()) / 86_400_000,
+            ),
+          )
+        : null;
+    const span = closed
+      ? `${escapeHtml(opened)} → ${escapeHtml(closed)}${days != null ? ` · ${days === 0 ? '<1' : days} d` : ''}`
+      : `${escapeHtml(opened)} · still open`;
+    // Numbers line: downtime / labour / cost as recorded in Mango.
+    const nums = [
+      r.downtime ? `Downtime <b>${escapeHtml(r.downtime)} h</b>` : '',
+      r.labourHours ? `Labour <b>${escapeHtml(r.labourHours)} h</b>` : '',
+      r.cost ? `Cost <b>${escapeHtml(r.cost)}</b>` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    // Narrative lines: what was wrong, what was done, what stops it
+    // recurring — the judgement material next to the trend.
+    const line = (label: string, v?: string): string =>
+      v ? `<div class="die-hist-line"><i>${label}</i>${escapeHtml(v)}</div>` : '';
+    return `<li class="die-hist-row">
+      <span class="die-req-st st-${r.status}">${STATUS_LABELS[r.status]}</span>
+      <span class="die-req-type">${TYPE_LABELS[r.maintType]}</span>
+      ${r.mangoTicket ? `<span class="die-mango">🥭 ${escapeHtml(r.mangoTicket)}</span>` : ''}
+      <span class="die-hist-span">${span}</span>
+      ${nums ? `<span class="die-hist-nums">${nums}</span>` : ''}
+      <span class="die-hist-desc">${escapeHtml(r.description || '—')}</span>
+      ${line('Issue', r.issueDetail !== r.description ? r.issueDetail : undefined)}
+      ${line('Work done', r.workSummary)}
+      ${line('Corrective', r.correctiveAction)}
+      ${line('Preventative', r.preventativeAction)}
+      ${r.contact ? `<span class="die-hist-who">→ ${escapeHtml(r.contact)}</span>` : ''}
+    </li>`;
+  };
+  const all = requestsFor(dieNumber);
+  const inProgress = all
+    .filter((r) => r.status !== 'done')
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  const history = all
+    .filter((r) => r.status === 'done')
+    .sort((a, b) => ((a.closedAt || a.createdAt) < (b.closedAt || b.createdAt) ? 1 : -1));
+  const woGroup = (label: string, rows: DieMaintenanceRequest[], empty: string): string =>
+    `<div class="die-wo-group">
+      <div class="die-wo-sub">${label} <span class="die-wo-count">${rows.length}</span></div>
+      ${rows.length ? `<ul class="die-detail-hist">${rows.map(woRow).join('')}</ul>` : `<div class="die-wo-empty">${empty}</div>`}
+    </div>`;
+  const maintTrackHtml = all.length
+    ? woGroup('🔧 In progress', inProgress, 'None open — nothing on the bench right now.') +
+      woGroup('📓 History', history, 'No closed work orders yet.')
+    : '<div class="die-wo-empty">No maintenance work orders on record for this die (Mango CSV mirror).</div>';
   // Most recent die change inside the window (status 'D' slots).
   const dcRec = d.lastDieChange;
   const dieChangeHtml = dcRec
@@ -1062,13 +1066,16 @@ function openDieDetail(dieNumber: string): void {
       </div>`;
   const health = dieHealth(d.rejectPct);
   openModal(`<div class="die-detail">
-    <div class="kpi-trace-head">
+    <div class="kpi-trace-head die-detail-head">
       <h3>🛠 ${escapeHtml(d.dieNumber)} <span class="die-detail-sub">${escapeHtml(
         [d.description, d.category].filter(Boolean).join(' · ') || '',
       )} · ${d.parts.length} part${d.parts.length === 1 ? '' : 's'}</span></h3>
-      <button class="btn-ghost-big" data-mod="close">Close</button>
+      <div class="die-detail-head-actions">
+        ${mangoLink('Request in Mango', 'hd')}
+        <button class="die-detail-close" data-mod="close" title="Close">✕ Close</button>
+      </div>
     </div>
-    <div class="die-detail-stats">
+    <div class="die-detail-stats die-detail-topstats">
       <span>Status ${toolStatusBadge(d.dieNumber)}</span>
       <span>Runs <b>${d.runs}</b></span>
       <span>Shots <b>${d.shots.toLocaleString()}</b></span>
@@ -1086,19 +1093,16 @@ function openDieDetail(dieNumber: string): void {
     </div>
     ${renderMasterSection(d)}
     ${renderServiceSection(d)}
-    <h4>Defect trend (${escapeHtml(S!.from)} → ${escapeHtml(S!.to)})</h4>
+    <h4>③ Defect Trend <span class="die-h4-sub">${escapeHtml(S!.from)} → ${escapeHtml(S!.to)}</span></h4>
     ${trendChart(d)}
-    <h4>Defects by code</h4>
+    <h4>④ Defects Cause</h4>
     ${bars}
-    <h4>Maintenance Work Order Detail</h4>
-    <ul class="die-detail-hist">${histHtml}</ul>
-    <h4>Last die change</h4>
+    <h4>⑤ Maintenance Track</h4>
+    ${maintTrackHtml}
+    <h4>⑥ Last Die Change</h4>
     ${dieChangeHtml}
-    <h4>Die condition — latest setter check (PMD_DieChangeLog)</h4>
+    <h4>⑦ Die Condition <span class="die-h4-sub">latest setter check</span></h4>
     ${condHtml}
-    <div class="bd-actions">
-      ${mangoLink('Raise Request in Mango', 'lg')}
-    </div>
   </div>`);
   const mc = document.getElementById('mc')!;
   mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
