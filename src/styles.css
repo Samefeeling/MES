@@ -755,6 +755,9 @@ th.die-sort.a{color:#1d4ed8}
 .dcl-opt.green.a{background:#dcfce7;border-color:#16a34a;color:#14532d}
 .dcl-opt.amber.a{background:#fef3c7;border-color:#FFA500;color:#78350f}
 .dcl-opt.red.a{background:#fee2e2;border-color:#dc2626;color:#7f1d1d}
+.dcl-title{font-size:18px}
+.dcl-legend{font-size:13px;color:var(--mu);margin:4px 0 0}
+.dcl-legend i{color:#0c4a6e;font-style:italic}
 .dcl-prob{display:block;margin-top:12px;font-size:13px;font-weight:700;color:var(--mu)}
 .dcl-prob textarea{width:100%;margin-top:4px;font-family:inherit;font-size:15px;padding:8px;border:2px solid var(--bd);border-radius:8px;resize:vertical}
 /* Manual order entry (supervisor only): ＋ next to Job#, small form modal. */

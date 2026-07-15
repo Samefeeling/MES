@@ -3380,13 +3380,9 @@ async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
     return dies.find((d) => d.dieNumber.trim().toUpperCase() === norm)?.dieNumber ?? fallback;
   };
   const mc = openModal(`<div class="bd-modal dcl-modal">
-    <h2 class="bd-title">🔁 Die Change Log${existing ? ' — edit' : ''}</h2>
-    <p class="bd-sub">${escapeHtml(S!.mc)} · ${escapeHtml(day)} · ${escapeHtml(S!.shiftCode)} shift · job ${escapeHtml(
-      S!.selJob,
-    )} — condition check while the die is out. <b>1</b> Good work order · <b>2</b> Operational but worn · <b>3</b> Damaged / can't be used.${
-      existing
-        ? ' <b>Already logged for this change</b> — saving updates the same record.'
-        : ''
+    <h2 class="bd-title dcl-title">🔁 Die Change Log${existing ? ' — edit' : ''}</h2>
+    <p class="bd-sub dcl-legend"><b>Condition Check:</b> 1. Good work order; 2. Operational but worn; 3. Damaged/Can't be used.${
+      existing ? ' <i>Already logged — saving updates the same record.</i>' : ''
     }</p>
     <div class="dcl-row">
       <label>Die setter<select data-dcl="setter">${setterOpts}</select></label>

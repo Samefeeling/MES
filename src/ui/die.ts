@@ -17,6 +17,7 @@ import type {
   MaintPriority,
   MaintStatus,
   MaintType,
+  PlanningOrder,
   ProductDieColor,
   ToolStatus,
 } from '../types';
@@ -26,6 +27,7 @@ import {
   DIE_CONDITION_META,
   dieHealth,
   dieServiceStatus,
+  goodByJob,
   latestConditionByDie,
   nextPlannedFor,
   TOOL_STATUS_META,
@@ -380,10 +382,16 @@ async function loadAll(): Promise<void> {
     }
   }
   // Scheduled column: what the Epicor plan has lined up for each die.
+  // An order PMD already shows as fully produced (good ≥ order qty) is
+  // treated as finished even if Epicor hasn't dropped it from the plan
+  // yet — so it stops reading "▶ Now" and the die shows the next order.
   const now = new Date();
+  const good = goodByJob(records);
+  const isComplete = (o: PlanningOrder): boolean =>
+    o.orderQty > 0 && (good.get(o.jobNumber.trim()) ?? 0) >= o.orderQty;
   S.planByDie = new Map();
   for (const d of S.dies) {
-    const p = nextPlannedFor(d.parts.map((x) => x.partNumber), planning, now);
+    const p = nextPlannedFor(d.parts.map((x) => x.partNumber), planning, now, isComplete);
     if (p) S.planByDie.set(d.dieNumber, p);
   }
   S.loading = false;

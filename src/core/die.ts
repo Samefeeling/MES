@@ -374,16 +374,53 @@ export interface DiePlanned {
 }
 
 /**
+ * Good pieces produced per job number, from production records — slot-0
+ * canonical counts × cavities, minus rejects charged across the shift.
+ * Used to tell whether a planned order is already FINISHED (good ≥ order
+ * qty) so the Scheduled column doesn't keep showing a completed order as
+ * "running now". Pure + testable.
+ */
+export function goodByJob(records: ProductionRecord[]): Map<string, number> {
+  const pieces = new Map<string, number>();
+  const rejects = new Map<string, number>();
+  for (const r of records) {
+    const job = (r.jobNumber ?? '').trim();
+    if (!job) continue;
+    if (r.slotIndex === 0 && r.countStart != null && r.countEnd != null) {
+      pieces.set(job, (pieces.get(job) ?? 0) + cavityGross(r.countStart, r.countEnd, r.cavities));
+    }
+    let slotRej = 0;
+    try {
+      const obj = r.rejects ? (JSON.parse(r.rejects) as Record<string, number>) : {};
+      for (const v of Object.values(obj)) slotRej += Number(v) || 0;
+    } catch {
+      /* pre-JSON row — fall back to rejectCount below */
+    }
+    if (slotRej === 0 && Number(r.rejectCount) > 0) slotRej = Number(r.rejectCount);
+    if (slotRej > 0) rejects.set(job, (rejects.get(job) ?? 0) + slotRej);
+  }
+  const good = new Map<string, number>();
+  for (const [job, p] of pieces) good.set(job, Math.max(0, p - (rejects.get(job) ?? 0)));
+  return good;
+}
+
+/**
  * Is this die scheduled for production? Finds the die's parts in
  * PMD_Planning (which only carries in-progress / upcoming Epicor orders)
  * and returns the order that matters for maintenance planning: the one
  * running now, else the next one to start. Null = not on the schedule —
  * a safe window to pull the die for service.
+ *
+ * `isComplete` (optional) lets the caller drop orders that PMD shows as
+ * already finished (good ≥ qty) even though Epicor hasn't yet removed
+ * them from the plan — so a completed order stops reading "▶ Now" and
+ * the die correctly shows the next order, or Free.
  */
 export function nextPlannedFor(
   dieParts: string[],
   orders: PlanningOrder[],
   now: Date,
+  isComplete?: (o: PlanningOrder) => boolean,
 ): DiePlanned | null {
   const parts = new Set(dieParts.map((p) => p.trim().toUpperCase()));
   const nowMs = now.getTime();
@@ -394,7 +431,9 @@ export function nextPlannedFor(
       parts.has(o.partNumber.trim().toUpperCase()) &&
       // Skip orders whose planned window is fully behind us; keep ones
       // still running (end in the future) or not started yet.
-      (!o.plannedEnd || new Date(o.plannedEnd).getTime() >= nowMs),
+      (!o.plannedEnd || new Date(o.plannedEnd).getTime() >= nowMs) &&
+      // Skip orders PMD already reports as fully produced.
+      !(isComplete?.(o) ?? false),
   );
   if (mine.length === 0) return null;
   mine.sort(

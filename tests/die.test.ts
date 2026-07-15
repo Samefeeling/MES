@@ -5,6 +5,7 @@ import {
   buildDieTrend,
   dieHealth,
   dieServiceStatus,
+  goodByJob,
   latestConditionByDie,
   machineTonnage,
   nextPlannedFor,
@@ -297,6 +298,35 @@ describe('nextPlannedFor', () => {
     expect(p.jobNumber).toBe('NEXT');
     expect(p.running).toBe(false);
     expect(nextPlannedFor(['P-UNKNOWN'], orders, now)).toBeNull();
+  });
+
+  it('skips an order PMD already reports finished — shows the next one instead', () => {
+    // RUNNING is complete → falls through to NEXT (not yet started).
+    const done = (o: { jobNumber: string }) => o.jobNumber === 'RUNNING';
+    const p = nextPlannedFor(['P-A'], orders, now, done)!;
+    expect(p.jobNumber).toBe('NEXT');
+    expect(p.running).toBe(false);
+    // With no other order for the part, a finished die shows Free (null).
+    const single = [orders[1]]; // just RUNNING
+    expect(nextPlannedFor(['P-A'], single, now, done)).toBeNull();
+  });
+});
+
+describe('goodByJob', () => {
+  it('sums good pieces per job (pieces × cavities − rejects) for completion checks', () => {
+    const recs = [
+      // J1 on 2 cavities: 100 shots slot0 → 200 pieces, 5 reject over two slots.
+      rec({ jobNumber: 'J1', slotIndex: 0, statusCode: 'R', partNumber: 'P-A', countStart: 0, countEnd: 100, cavities: 2, rejects: '{"D01":3}' }),
+      rec({ jobNumber: 'J1', slotIndex: 1, statusCode: 'R', partNumber: 'P-A', rejects: '{"D02":2}' }),
+      // J2 legacy row: rejectCount only.
+      rec({ jobNumber: 'J2', slotIndex: 0, statusCode: 'R', partNumber: 'P-B', countStart: 0, countEnd: 50, cavities: 1, rejectCount: 4 }),
+      // Blank job ignored.
+      rec({ jobNumber: '', slotIndex: 0, statusCode: 'R', partNumber: 'P-C', countStart: 0, countEnd: 10 }),
+    ];
+    const g = goodByJob(recs);
+    expect(g.get('J1')).toBe(195); // 200 − (3+2)
+    expect(g.get('J2')).toBe(46); //  50 − 4
+    expect(g.has('')).toBe(false);
   });
 });
 
