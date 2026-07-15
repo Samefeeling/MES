@@ -1150,6 +1150,7 @@ function openDieDetail(dieNumber: string): void {
         [d.description, d.category].filter(Boolean).join(' · ') || '',
       )} · ${d.parts.length} part${d.parts.length === 1 ? '' : 's'}</span></h3>
       <div class="die-detail-head-actions">
+        <button class="die-detail-print" data-die-print title="Print this die's page">🖨 Print</button>
         ${mangoLink('Request in Mango', 'hd')}
         <button class="die-detail-close" data-mod="close" title="Close">✕ Close</button>
       </div>
@@ -1185,6 +1186,19 @@ function openDieDetail(dieNumber: string): void {
   </div>`);
   const mc = document.getElementById('mc')!;
   mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
+  // Print just this drilldown: a body flag flips on the print stylesheet
+  // (see styles.css @media print) that hides the app and the header
+  // buttons, leaving the die's page. The flag only affects @media print,
+  // so a stray afterprint miss is harmless on screen; still cleaned up.
+  mc.querySelector('[data-die-print]')?.addEventListener('click', () => {
+    const done = (): void => {
+      document.body.classList.remove('die-printing');
+      window.removeEventListener('afterprint', done);
+    };
+    window.addEventListener('afterprint', done);
+    document.body.classList.add('die-printing');
+    window.print();
+  });
 }
 
 // ---------------------------------------------------------------------

@@ -1,4 +1,4 @@
-import { createDataLayer, type PmdDataLayer } from './dal';
+import { createDataLayer, resolveMangoCsvPath, type PmdDataLayer } from './dal';
 import { renderOperator, operatorPollTick, loadSavedOperatorView } from './ui/operator';
 import { renderTrace } from './ui/trace';
 import { renderKpi } from './ui/kpi';
@@ -28,6 +28,8 @@ dal.setLiveGate?.(isTupleConfirmed);
 console.info(
   `[pmd] backend = ${import.meta.env.VITE_BACKEND ?? 'memory'} · site = ${
     import.meta.env.VITE_SITE_URL ?? '(none)'
+  } · mango WO CSV = ${
+    resolveMangoCsvPath(import.meta.env as Record<string, string>) || '(none)'
   }`,
 );
 

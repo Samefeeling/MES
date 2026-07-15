@@ -887,6 +887,25 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .die-detail-head-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
 .die-detail-close{padding:8px 16px;background:#fff;border:1.5px solid var(--bd);color:#475569;border-radius:9px;font-weight:800;font-size:14px;cursor:pointer;white-space:nowrap}
 .die-detail-close:hover{background:#f1f5f9;border-color:#94a3b8}
+.die-detail-print{padding:8px 14px;background:#fff;border:1.5px solid var(--bd);color:#334155;border-radius:9px;font-weight:800;font-size:14px;cursor:pointer;white-space:nowrap}
+.die-detail-print:hover{background:#f1f5f9;border-color:#94a3b8}
+/* Print just the open Die drilldown: hide the app + the header buttons,
+   let the modal flow onto the page at full height with colours intact. */
+@media print {
+  body.die-printing > *:not(#modal){display:none !important}
+  body.die-printing #modal{position:static !important;display:block !important;background:none !important;padding:0 !important;overflow:visible !important}
+  body.die-printing #mc{max-width:none !important;max-height:none !important;width:auto !important;box-shadow:none !important;border-radius:0 !important;overflow:visible !important;padding:0 !important}
+  body.die-printing .die-detail-head-actions{display:none !important}
+  body.die-printing .die-trend-lg,
+  body.die-printing .die-bar-seg,
+  body.die-printing .die-tstat,
+  body.die-printing .die-cond-chip,
+  body.die-printing .die-maint-badge,
+  body.die-printing *{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important}
+  body.die-printing .die-detail h4{break-after:avoid}
+  body.die-printing .die-hist-row,
+  body.die-printing .die-bar-row{break-inside:avoid}
+}
 /* Top stats: one tidy wrap-row, pill-free, tabular. */
 .die-detail-topstats{gap:6px 18px;padding:2px 0 4px}
 .die-detail-stats{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--mu);margin-top:8px}
