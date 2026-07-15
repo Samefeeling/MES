@@ -3381,9 +3381,7 @@ async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
   };
   const mc = openModal(`<div class="bd-modal dcl-modal">
     <h2 class="bd-title dcl-title">🔁 Die Change Log${existing ? ' — edit' : ''}</h2>
-    <p class="bd-sub dcl-legend"><b>Condition Check:</b> 1. Good work order; 2. Operational but worn; 3. Damaged/Can't be used.${
-      existing ? ' <i>Already logged — saving updates the same record.</i>' : ''
-    }</p>
+    ${existing ? '<p class="bd-sub dcl-editnote"><i>Already logged — saving updates the same record.</i></p>' : ''}
     <div class="dcl-row">
       <label>Die setter<select data-dcl="setter">${setterOpts}</select></label>
       <span class="dcl-cos">Change over ${co('Die', coChecked('Die', trigger === 'D'))}${co('Insert', coChecked('Insert', trigger === 'I'))}${co('Space In', coChecked('Space In', false))}${co('SpaceOut', coChecked('SpaceOut', false))}</span>
@@ -3392,6 +3390,7 @@ async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
       <label>Die OUT<select data-dcl="out">${dieOpts(dieSel(existing?.dieNumberOut, dieOut?.dieNumber))}</select></label>
       <label>Die IN<select data-dcl="in">${dieOpts(dieSel(existing?.dieNumberIn, dieIn?.dieNumber))}</select></label>
     </div>
+    <p class="dcl-legend"><b>Condition Check:</b> 1. Good work order; 2. Operational but worn; 3. Damaged/Can't be used.</p>
     <div class="dcl-comps">${compRows}</div>
     <label class="dcl-prob">Problem description (needed when anything is 2 or 3)
       <textarea data-dcl="prob" rows="2" placeholder="What's worn / damaged, which cavity…">${escapeHtml(existing?.problemDescription ?? '')}</textarea></label>

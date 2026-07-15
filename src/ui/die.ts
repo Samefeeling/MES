@@ -156,6 +156,27 @@ function condFor(dieNumber: string): DieConditionSummary | undefined {
   return S!.condByDie.get(dieNumber.trim().toUpperCase());
 }
 
+/** Earliest overdue OPEN work order for a die — one whose Mango "To be
+ *  completed by" date has already passed. Null when nothing's late. */
+function overdueFor(dieNumber: string): { due: string; days: number } | null {
+  const today = isoDay(new Date());
+  const dues = requestsFor(dieNumber)
+    .filter((r) => r.status !== 'done')
+    .map((r) => (r.dueDate ?? '').slice(0, 10))
+    .filter((d) => d && d < today)
+    .sort();
+  if (dues.length === 0) return null;
+  const due = dues[0];
+  const days = Math.max(
+    1,
+    Math.round(
+      (new Date(`${today}T00:00:00`).getTime() - new Date(`${due}T00:00:00`).getTime()) /
+        86_400_000,
+    ),
+  );
+  return { due, days };
+}
+
 /** One work-order row (Mango mirror) — the full detail card used in both
  *  the drilldown's Maintenance Track and the focused open-WO popup. */
 function woRow(r: DieMaintenanceRequest): string {
@@ -717,12 +738,17 @@ function renderDieTable(): string {
               )}">+${cond.flags.length - 2}</span>`
             : '')
         : '';
-      const maint =
-        condChips +
-        (d.openRequests
-          ? `<button class="die-maint-badge" data-die-wo="${escapeHtml(d.dieNumber)}" title="${d.openRequests} open work order${d.openRequests === 1 ? '' : 's'} — tap for details">🛠 ${d.openRequests}</button>`
-          : '') +
-        svcBadge;
+      // Overdue: any OPEN work order whose Mango "To be completed by" date
+      // has already passed. Colours the Maint badge red + shows how late.
+      const od = overdueFor(d.dieNumber);
+      const maintBadge = d.openRequests
+        ? `<button class="die-maint-badge${od ? ' overdue' : ''}" data-die-wo="${escapeHtml(d.dieNumber)}" title="${escapeHtml(
+            od
+              ? `${d.openRequests} open work order${d.openRequests === 1 ? '' : 's'} · OVERDUE — earliest 'To be completed by' was ${od.due} (${od.days} day${od.days === 1 ? '' : 's'} ago). Tap for details.`
+              : `${d.openRequests} open work order${d.openRequests === 1 ? '' : 's'} — tap for details`,
+          )}">🛠 ${d.openRequests}${od ? ` · ⚠ ${od.days}d` : ''}</button>`
+        : '';
+      const maint = condChips + maintBadge + svcBadge;
       const partsTip = d.parts
         .map((p) => `${p.partNumber}${p.name ? ` (${p.name})` : ''}`)
         .join(', ');

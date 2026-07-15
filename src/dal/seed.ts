@@ -225,8 +225,10 @@ export function seedDieMaintenance(now: Date): DieMaintenanceRequest[] {
       machineCode: '320T',
       jobNumber: '',
       mangoTicket: '',
-      createdAt: daysAgo(1),
+      createdAt: daysAgo(6),
       closedAt: '',
+      // Mango "To be completed by" already passed → shows OVERDUE in Maint.
+      dueDate: daysAgo(2),
     },
     {
       id: 2,
