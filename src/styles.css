@@ -781,7 +781,10 @@ th.die-sort.a{color:#1d4ed8}
 .die-table td.amber{color:#FFA500;font-weight:800}
 .die-table td.red{color:var(--rd);font-weight:800}
 .die-link{background:none;border:none;color:#1d4ed8;font-weight:800;font-size:14px;cursor:pointer;text-decoration:underline;padding:0}
-.die-maint-badge{background:#fff7ed;border:1px solid #fdba74;color:#9a3412;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:800}
+.die-maint-badge{background:#fff7ed;border:1px solid #fdba74;color:#9a3412;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:800;cursor:pointer;font-family:inherit}
+button.die-maint-badge:hover{background:#fed7aa;border-color:#fb923c}
+/* Open-WO focused popup — a touch narrower than the full drilldown. */
+.mdl:has(.die-wo-modal){max-width:min(720px,94vw)}
 /* Worn / damaged component chips from the latest die-change condition
    report (PMD_DieChangeLog): 2 = amber, 3 = red. */
 .die-cond-chip{display:inline-block;border-radius:6px;padding:1px 7px;font-size:11px;font-weight:800;white-space:nowrap;margin:1px 3px 1px 0}

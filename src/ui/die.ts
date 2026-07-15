@@ -154,6 +154,84 @@ function condFor(dieNumber: string): DieConditionSummary | undefined {
   return S!.condByDie.get(dieNumber.trim().toUpperCase());
 }
 
+/** One work-order row (Mango mirror) — the full detail card used in both
+ *  the drilldown's Maintenance Track and the focused open-WO popup. */
+function woRow(r: DieMaintenanceRequest): string {
+  const opened = r.createdAt ? r.createdAt.slice(0, 10) : '';
+  const closed = r.closedAt ? r.closedAt.slice(0, 10) : '';
+  const days =
+    opened && closed
+      ? Math.max(
+          0,
+          Math.round(
+            (new Date(`${closed}T00:00:00`).getTime() -
+              new Date(`${opened}T00:00:00`).getTime()) / 86_400_000,
+          ),
+        )
+      : null;
+  const span = closed
+    ? `${escapeHtml(opened)} → ${escapeHtml(closed)}${days != null ? ` · ${days === 0 ? '<1' : days} d` : ''}`
+    : `${escapeHtml(opened)} · still open`;
+  // Numbers line: downtime / labour / cost as recorded in Mango.
+  const nums = [
+    r.downtime ? `Downtime <b>${escapeHtml(r.downtime)} h</b>` : '',
+    r.labourHours ? `Labour <b>${escapeHtml(r.labourHours)} h</b>` : '',
+    r.cost ? `Cost <b>${escapeHtml(r.cost)}</b>` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  // Narrative lines: what was wrong, what was done, what stops it
+  // recurring — the judgement material next to the trend.
+  const line = (label: string, v?: string): string =>
+    v ? `<div class="die-hist-line"><i>${label}</i>${escapeHtml(v)}</div>` : '';
+  return `<li class="die-hist-row">
+    <span class="die-req-st st-${r.status}">${STATUS_LABELS[r.status]}</span>
+    <span class="die-req-type">${TYPE_LABELS[r.maintType]}</span>
+    ${r.priority === 'high' || r.priority === 'urgent' ? `<span class="die-req-pr pr-${r.priority}">${PRIORITY_LABELS[r.priority]}</span>` : ''}
+    ${r.mangoTicket ? `<span class="die-mango">🥭 ${escapeHtml(r.mangoTicket)}</span>` : ''}
+    <span class="die-hist-span">${span}</span>
+    ${nums ? `<span class="die-hist-nums">${nums}</span>` : ''}
+    <span class="die-hist-desc">${escapeHtml(r.description || '—')}</span>
+    ${line('Issue', r.issueDetail !== r.description ? r.issueDetail : undefined)}
+    ${line('Work done', r.workSummary)}
+    ${line('Corrective', r.correctiveAction)}
+    ${line('Preventative', r.preventativeAction)}
+    ${r.requestedBy ? `<span class="die-hist-who">from ${escapeHtml(r.requestedBy)}</span>` : ''}
+    ${r.contact ? `<span class="die-hist-who">→ ${escapeHtml(r.contact)}</span>` : ''}
+  </li>`;
+}
+
+/**
+ * Focused popup listing just the OPEN (not-done) work orders for a die —
+ * opened by tapping the 🛠 badge in the Maint column, so the floor can
+ * read a ticket's full detail without opening the whole die drilldown.
+ */
+function openWorkOrders(dieNumber: string): void {
+  const open = requestsFor(dieNumber)
+    .filter((r) => r.status !== 'done')
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  const m = masterFor(dieNumber);
+  const title = [dieNumber, m?.description].filter(Boolean).join(' · ');
+  openModal(`<div class="die-detail die-wo-modal">
+    <div class="kpi-trace-head die-detail-head">
+      <h3>🛠 Open Work Orders <span class="die-detail-sub">${escapeHtml(title)}</span></h3>
+      <div class="die-detail-head-actions">
+        ${mangoLink('Request in Mango', 'hd')}
+        <button class="die-detail-close" data-mod="close" title="Close">✕ Close</button>
+      </div>
+    </div>
+    ${
+      open.length
+        ? `<div class="die-wo-sub">🔧 In progress <span class="die-wo-count">${open.length}</span></div>
+           <ul class="die-detail-hist">${open.map(woRow).join('')}</ul>`
+        : `<div class="die-wo-empty">No open work orders for this die — it's clear. 🎉</div>`
+    }
+    <p class="kpi-note">Work orders are mirrored read-only from Mango (report sync). Raise or progress them in Mango.</p>
+  </div>`);
+  const mc = document.getElementById('mc')!;
+  mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
+}
+
 /** ToolStatus for DISPLAY: PMD_DieMaster's value, overridden to Problems
  *  when the latest die-change report rated any component "3. Damaged" —
  *  the setter's fresh inspection outranks a stale master row. */
@@ -633,7 +711,9 @@ function renderDieTable(): string {
         : '';
       const maint =
         condChips +
-        (d.openRequests ? `<span class="die-maint-badge">🛠 ${d.openRequests}</span>` : '') +
+        (d.openRequests
+          ? `<button class="die-maint-badge" data-die-wo="${escapeHtml(d.dieNumber)}" title="${d.openRequests} open work order${d.openRequests === 1 ? '' : 's'} — tap for details">🛠 ${d.openRequests}</button>`
+          : '') +
         svcBadge;
       const partsTip = d.parts
         .map((p) => `${p.partNumber}${p.name ? ` (${p.name})` : ''}`)
@@ -974,48 +1054,6 @@ function openDieDetail(dieNumber: string): void {
   // (Stage 1-3) is In progress; Stage 4 Closed → 'done' is History. This is
   // the "what have we already tried on this tool" record read next to the
   // defect trend when judging repair vs run-on.
-  const woRow = (r: DieMaintenanceRequest): string => {
-    const opened = r.createdAt ? r.createdAt.slice(0, 10) : '';
-    const closed = r.closedAt ? r.closedAt.slice(0, 10) : '';
-    const days =
-      opened && closed
-        ? Math.max(
-            0,
-            Math.round(
-              (new Date(`${closed}T00:00:00`).getTime() -
-                new Date(`${opened}T00:00:00`).getTime()) / 86_400_000,
-            ),
-          )
-        : null;
-    const span = closed
-      ? `${escapeHtml(opened)} → ${escapeHtml(closed)}${days != null ? ` · ${days === 0 ? '<1' : days} d` : ''}`
-      : `${escapeHtml(opened)} · still open`;
-    // Numbers line: downtime / labour / cost as recorded in Mango.
-    const nums = [
-      r.downtime ? `Downtime <b>${escapeHtml(r.downtime)} h</b>` : '',
-      r.labourHours ? `Labour <b>${escapeHtml(r.labourHours)} h</b>` : '',
-      r.cost ? `Cost <b>${escapeHtml(r.cost)}</b>` : '',
-    ]
-      .filter(Boolean)
-      .join(' · ');
-    // Narrative lines: what was wrong, what was done, what stops it
-    // recurring — the judgement material next to the trend.
-    const line = (label: string, v?: string): string =>
-      v ? `<div class="die-hist-line"><i>${label}</i>${escapeHtml(v)}</div>` : '';
-    return `<li class="die-hist-row">
-      <span class="die-req-st st-${r.status}">${STATUS_LABELS[r.status]}</span>
-      <span class="die-req-type">${TYPE_LABELS[r.maintType]}</span>
-      ${r.mangoTicket ? `<span class="die-mango">🥭 ${escapeHtml(r.mangoTicket)}</span>` : ''}
-      <span class="die-hist-span">${span}</span>
-      ${nums ? `<span class="die-hist-nums">${nums}</span>` : ''}
-      <span class="die-hist-desc">${escapeHtml(r.description || '—')}</span>
-      ${line('Issue', r.issueDetail !== r.description ? r.issueDetail : undefined)}
-      ${line('Work done', r.workSummary)}
-      ${line('Corrective', r.correctiveAction)}
-      ${line('Preventative', r.preventativeAction)}
-      ${r.contact ? `<span class="die-hist-who">→ ${escapeHtml(r.contact)}</span>` : ''}
-    </li>`;
-  };
   const all = requestsFor(dieNumber);
   const inProgress = all
     .filter((r) => r.status !== 'done')
@@ -1176,6 +1214,12 @@ function wire(): void {
     b.addEventListener('click', (e) => {
       e.stopPropagation();
       openStatusPicker(b.dataset.dieStatus!);
+    }),
+  );
+  h.querySelectorAll<HTMLButtonElement>('[data-die-wo]').forEach((b) =>
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openWorkOrders(b.dataset.dieWo!);
     }),
   );
 }
