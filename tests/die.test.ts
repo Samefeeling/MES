@@ -655,6 +655,60 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
     expect((await dal.listDieChangeLog()).length).toBe(before + 1);
   });
 
+  it('OUT and IN condition rows for one change coexist (keyed by assessed die)', async () => {
+    const dal = new MemoryDataLayer();
+    const ctx = {
+      date: '2026-07-14',
+      shift: 'Day',
+      dieSetter: 'Van Minh Ma',
+      machineCode: '550T',
+      jobNumber: 'SFM507268',
+    };
+    // Row 1: the change record + OUT die (117) condition.
+    await dal.createDieChangeLog({
+      ...ctx,
+      changeOver: ['Die'],
+      dieNumberOut: '117',
+      dieDescriptionOut: 'Proteus Seat',
+      dieNumberIn: '174',
+      dieDescriptionIn: 'Podium Seat',
+      components: { MouldingSurfaces: 'worn' },
+      problemDescription: 'Surface wear near gate.',
+    });
+    // Row 2: the IN die (174) condition — stored under the fitted die.
+    await dal.createDieChangeLog({
+      ...ctx,
+      changeOver: [],
+      dieNumberOut: '174',
+      dieDescriptionOut: 'Podium Seat',
+      dieNumberIn: '174',
+      dieDescriptionIn: 'Podium Seat',
+      components: { Venting: 'damaged' },
+      problemDescription: 'Vent blocked on fitting.',
+    });
+    const mine = (await dal.listDieChangeLog()).filter((r) => r.jobNumber === 'SFM507268');
+    expect(mine.length).toBe(2); // same event, two assessed dies → two rows
+    // latestConditionByDie attributes each to its own die.
+    const cond = latestConditionByDie(mine);
+    expect(cond.get('117')!.flags.map((f) => f.key)).toEqual(['MouldingSurfaces']);
+    expect(cond.get('174')!.flags.map((f) => f.key)).toEqual(['Venting']);
+    expect(cond.get('174')!.hasDamaged).toBe(true);
+    // Re-saving the OUT row (same assessed die) updates in place, no dup.
+    await dal.createDieChangeLog({
+      ...ctx,
+      changeOver: ['Die'],
+      dieNumberOut: '117',
+      dieDescriptionOut: 'Proteus Seat',
+      dieNumberIn: '174',
+      dieDescriptionIn: 'Podium Seat',
+      components: { MouldingSurfaces: 'damaged' },
+      problemDescription: 'Now cracked.',
+    });
+    const after = (await dal.listDieChangeLog()).filter((r) => r.jobNumber === 'SFM507268');
+    expect(after.length).toBe(2);
+    expect(latestConditionByDie(after).get('117')!.hasDamaged).toBe(true);
+  });
+
   it('updateDieMaster changes ToolStatus and stamps the audit dates', async () => {
     const dal = new MemoryDataLayer();
     await dal.updateDieMaster('die-0091', {

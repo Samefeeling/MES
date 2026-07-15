@@ -1190,11 +1190,19 @@ export class SharePointDataLayer implements PmdDataLayer {
 
   async createDieChangeLog(log: Omit<DieChangeLog, 'id' | 'createdAt'>): Promise<DieChangeLog> {
     const F = this.F.dieChangeLog;
-    // Idempotent on machine + date + shift + job: one row per die change even
-    // if the operator's iPad reloaded and the popup re-fired. An existing row
-    // for the same tuple is UPDATED (MERGE) rather than duplicated.
-    const key = (r: { machineCode: string; date: string; shift: string; jobNumber: string }) =>
-      `${r.machineCode.trim().toUpperCase()}|${r.date}|${r.shift.trim().toUpperCase()}|${r.jobNumber.trim().toUpperCase()}`;
+    // Idempotent on machine + date + shift + job + the ASSESSED die
+    // (DieNumberOut). One change event writes up to two rows — the die that
+    // came OUT and the die that went IN each get their own condition row —
+    // so the assessed die is part of the key; a reload re-firing the popup
+    // UPDATES the matching row (MERGE) rather than duplicating it.
+    const key = (r: {
+      machineCode: string;
+      date: string;
+      shift: string;
+      jobNumber: string;
+      dieNumberOut: string;
+    }) =>
+      `${r.machineCode.trim().toUpperCase()}|${r.date}|${r.shift.trim().toUpperCase()}|${r.jobNumber.trim().toUpperCase()}|${r.dieNumberOut.trim().toUpperCase()}`;
     let existing: DieChangeLog | undefined;
     try {
       existing = (await this.listDieChangeLog()).find((r) => key(r) === key(log));
@@ -1203,7 +1211,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
     const body: Record<string, unknown> = {
       __metadata: { type: await this.itemType(LISTS.dieChangeLog) },
-      Title: `${log.machineCode} ${log.date} · Die ${log.dieNumberOut || '?'} → ${log.dieNumberIn || '?'}`,
+      Title:
+        log.dieNumberIn && log.dieNumberIn === log.dieNumberOut
+          ? `${log.machineCode} ${log.date} · Die ${log.dieNumberOut} (fitted) condition`
+          : `${log.machineCode} ${log.date} · Die ${log.dieNumberOut || '?'} → ${log.dieNumberIn || '?'}`,
       // DateOnly column: midnight UTC keeps the calendar date stable in
       // every positive-offset regional setting (same rule as
       // shiftDateMarker — see that comment).

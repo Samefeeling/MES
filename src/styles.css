@@ -762,6 +762,14 @@ th.die-sort.a{color:#1d4ed8}
    scale is read next to the buttons it explains. */
 .dcl-legend{font-size:13px;color:#334155;margin:12px 0 0;padding-top:10px;border-top:1px dashed var(--bd)}
 .dcl-legend b{color:var(--tx)}
+/* OUT / IN condition sections — each its own 13-component check. */
+.dcl-section{margin-top:10px;border:1px solid var(--bd);border-radius:10px;padding:8px 10px 10px}
+.dcl-section+.dcl-section{margin-top:12px}
+.dcl-sec-h{font-size:14px;font-weight:800;color:#334155;display:flex;align-items:baseline;gap:8px}
+.dcl-sec-h.out{color:#9a3412}
+.dcl-sec-h.in{color:#0369a1}
+.dcl-sec-h em{font-style:normal;font-size:12px;font-weight:600;color:var(--mu)}
+.dcl-section .dcl-comps{margin-top:8px}
 .dcl-prob{display:block;margin-top:12px;font-size:13px;font-weight:700;color:var(--mu)}
 .dcl-prob textarea{width:100%;margin-top:4px;font-family:inherit;font-size:15px;padding:8px;border:2px solid var(--bd);border-radius:8px;resize:vertical}
 /* Manual order entry (supervisor only): ＋ next to Job#, small form modal. */

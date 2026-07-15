@@ -150,10 +150,17 @@ export class MemoryDataLayer implements PmdDataLayer {
   }
 
   async createDieChangeLog(log: Omit<DieChangeLog, 'id' | 'createdAt'>): Promise<DieChangeLog> {
-    // One row per machine + date + shift + job — update in place if the tuple
-    // was already logged (a page reload re-firing the popup must not duplicate).
-    const key = (r: { machineCode: string; date: string; shift: string; jobNumber: string }) =>
-      `${r.machineCode.trim().toUpperCase()}|${r.date}|${r.shift.trim().toUpperCase()}|${r.jobNumber.trim().toUpperCase()}`;
+    // One row per machine + date + shift + job + assessed die (DieNumberOut):
+    // a change event logs the OUT die and the IN die as separate condition
+    // rows, and a reload re-firing the popup updates the matching one.
+    const key = (r: {
+      machineCode: string;
+      date: string;
+      shift: string;
+      jobNumber: string;
+      dieNumberOut: string;
+    }) =>
+      `${r.machineCode.trim().toUpperCase()}|${r.date}|${r.shift.trim().toUpperCase()}|${r.jobNumber.trim().toUpperCase()}|${r.dieNumberOut.trim().toUpperCase()}`;
     const existing = this.dieChangeLogs.find((r) => key(r) === key(log));
     if (existing) {
       Object.assign(existing, MemoryDataLayer.clone({ ...log, id: existing.id, createdAt: existing.createdAt }));

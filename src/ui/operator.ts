@@ -3284,14 +3284,16 @@ function maybeOpenDieChangeLog(code: StatusCode): void {
   void openDieChangeLogModal(code);
 }
 
-/** The already-saved log for the current (machine, date+shift, job), if
- *  any — the popup prefills from it and the save updates it in place. */
-async function existingDieChangeLog(): Promise<DieChangeLog | undefined> {
-  if (!dalRef.listDieChangeLog) return undefined;
+/** Every PMD_DieChangeLog row already saved for this change event
+ *  (machine + date + shift + job). One event can hold two rows — the die
+ *  that came OUT and the die that went IN — so the caller separates them
+ *  by shape (OUT-change row: out ≠ in; IN-condition row: out === in). */
+async function eventDieChangeLogs(): Promise<DieChangeLog[]> {
+  if (!dalRef.listDieChangeLog) return [];
   const norm = (s: string): string => s.trim().toUpperCase();
   const day = sid().slice(0, 10);
   try {
-    return (await dalRef.listDieChangeLog()).find(
+    return (await dalRef.listDieChangeLog()).filter(
       (r) =>
         norm(r.machineCode) === norm(S!.mc) &&
         r.date === day &&
@@ -3299,12 +3301,19 @@ async function existingDieChangeLog(): Promise<DieChangeLog | undefined> {
         norm(r.jobNumber) === norm(S!.selJob),
     );
   } catch {
-    return undefined; // list unreadable — treat as a fresh entry
+    return []; // list unreadable — treat as a fresh entry
   }
 }
 
 async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
-  const existing = await existingDieChangeLog();
+  const logs = await eventDieChangeLogs();
+  // The change record (die removed → die fitted) and, if present, the
+  // separate condition row for the die that went IN (out === in).
+  const outChangeRow = logs.find(
+    (l) => l.dieNumberOut && (!l.dieNumberIn || l.dieNumberIn !== l.dieNumberOut),
+  );
+  const inCondRow = logs.find((l) => l.dieNumberIn && l.dieNumberIn === l.dieNumberOut);
+  const existing = logs.length > 0;
   const dieByPart = (part?: string): { dieNumber: string; die: string } | undefined =>
     part ? S!.dieColors.get(part.trim().toUpperCase()) : undefined;
   const partIn =
@@ -3342,9 +3351,9 @@ async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
           )}${d.die ? ` — ${escapeHtml(d.die)}` : ''}</option>`,
       )
       .join('');
-  // Edit mode: everything prefills from the saved row so the setter can
-  // correct a rating or add detail; the save MERGEs the same record.
-  const selSetter = existing?.dieSetter || S!.selOperator;
+  // Edit mode: everything prefills from the saved rows so the setter can
+  // correct a rating or add detail; the save MERGEs the same records.
+  const selSetter = outChangeRow?.dieSetter || inCondRow?.dieSetter || S!.selOperator;
   const setterNames = Array.from(
     new Set(
       [selSetter, S!.selOperator, ...S!.operators.map((o) => o.operatorName)].filter(Boolean),
@@ -3354,23 +3363,28 @@ async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
     .map((n) => `<option${n === selSetter ? ' selected' : ''}>${escapeHtml(n)}</option>`)
     .join('');
   const coChecked = (label: string, fallback: boolean): boolean =>
-    existing ? existing.changeOver.includes(label) : fallback;
+    outChangeRow ? outChangeRow.changeOver.includes(label) : fallback;
   const co = (label: string, checked: boolean): string =>
     `<label class="dcl-co"><input type="checkbox" value="${escapeHtml(label)}"${checked ? ' checked' : ''}>${escapeHtml(label)}</label>`;
-  const compRows = DIE_COMPONENTS.map((c) => {
-    const sel: DieComponentCondition = existing?.components[c.key] || 'good';
-    return `<div class="dcl-comp" data-dcl-comp="${c.key}">
-      <span class="dcl-comp-name">${escapeHtml(c.label)}</span>
-      <span class="dcl-seg">${(['good', 'worn', 'damaged'] as const)
-        .map(
-          (k) =>
-            `<button type="button" class="dcl-opt ${DIE_CONDITION_META[k].cls}${
-              k === sel ? ' a' : ''
-            }" data-cond="${k}" title="${escapeHtml(DIE_CONDITION_META[k].label)}">${DIE_CONDITION_META[k].short}</button>`,
-        )
-        .join('')}</span>
-    </div>`;
-  }).join('');
+  // One 13-component grid for a side (out / in), prefilled from its row.
+  const compGrid = (
+    side: 'out' | 'in',
+    comps: Record<string, DieComponentCondition> | undefined,
+  ): string =>
+    `<div class="dcl-comps" data-dcl-side="${side}">${DIE_COMPONENTS.map((c) => {
+      const sel: DieComponentCondition = comps?.[c.key] || 'good';
+      return `<div class="dcl-comp" data-dcl-comp="${c.key}">
+        <span class="dcl-comp-name">${escapeHtml(c.label)}</span>
+        <span class="dcl-seg">${(['good', 'worn', 'damaged'] as const)
+          .map(
+            (k) =>
+              `<button type="button" class="dcl-opt ${DIE_CONDITION_META[k].cls}${
+                k === sel ? ' a' : ''
+              }" data-cond="${k}" title="${escapeHtml(DIE_CONDITION_META[k].label)}">${DIE_CONDITION_META[k].short}</button>`,
+          )
+          .join('')}</span>
+      </div>`;
+    }).join('')}</div>`;
   const day = sid().slice(0, 10);
   // A saved die number may be typed differently to PMD_ProductDieColor's
   // ("280" vs "280 ") — normalise the select match.
@@ -3381,19 +3395,28 @@ async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
   };
   const mc = openModal(`<div class="bd-modal dcl-modal">
     <h2 class="bd-title dcl-title">🔁 Die Change Log${existing ? ' — edit' : ''}</h2>
-    ${existing ? '<p class="bd-sub dcl-editnote"><i>Already logged — saving updates the same record.</i></p>' : ''}
+    ${existing ? '<p class="bd-sub dcl-editnote"><i>Already logged — saving updates the same records.</i></p>' : ''}
     <div class="dcl-row">
       <label>Die setter<select data-dcl="setter">${setterOpts}</select></label>
       <span class="dcl-cos">Change over ${co('Die', coChecked('Die', trigger === 'D'))}${co('Insert', coChecked('Insert', trigger === 'I'))}${co('Space In', coChecked('Space In', false))}${co('SpaceOut', coChecked('SpaceOut', false))}</span>
     </div>
     <div class="dcl-row">
-      <label>Die OUT<select data-dcl="out">${dieOpts(dieSel(existing?.dieNumberOut, dieOut?.dieNumber))}</select></label>
-      <label>Die IN<select data-dcl="in">${dieOpts(dieSel(existing?.dieNumberIn, dieIn?.dieNumber))}</select></label>
+      <label>Die OUT<select data-dcl="out">${dieOpts(dieSel(outChangeRow?.dieNumberOut, dieOut?.dieNumber))}</select></label>
+      <label>Die IN<select data-dcl="in">${dieOpts(dieSel(outChangeRow?.dieNumberIn, dieIn?.dieNumber))}</select></label>
     </div>
     <p class="dcl-legend"><b>Condition Check:</b> 1. Good work order; 2. Operational but worn; 3. Damaged/Can't be used.</p>
-    <div class="dcl-comps">${compRows}</div>
-    <label class="dcl-prob">Problem description (needed when anything is 2 or 3)
-      <textarea data-dcl="prob" rows="2" placeholder="What's worn / damaged, which cavity…">${escapeHtml(existing?.problemDescription ?? '')}</textarea></label>
+    <div class="dcl-section">
+      <div class="dcl-sec-h out">🔻 Die OUT — condition when removed <em>problems usually show here</em></div>
+      ${compGrid('out', outChangeRow?.components)}
+      <label class="dcl-prob">Die OUT problem (needed when anything is 2 or 3)
+        <textarea data-dcl="probOut" rows="2" placeholder="What's worn / damaged on the die coming out, which cavity…">${escapeHtml(outChangeRow?.problemDescription ?? '')}</textarea></label>
+    </div>
+    <div class="dcl-section">
+      <div class="dcl-sec-h in">🔺 Die IN — condition when fitted</div>
+      ${compGrid('in', inCondRow?.components)}
+      <label class="dcl-prob">Die IN problem (needed when anything is 2 or 3)
+        <textarea data-dcl="probIn" rows="2" placeholder="Any issue with the die going in…">${escapeHtml(inCondRow?.problemDescription ?? '')}</textarea></label>
+    </div>
     <div class="bd-actions">
       <button class="btn-primary-big" data-dcl-save>${existing ? 'Update' : 'Save'} Die Change Log</button>
       <button class="btn-ghost-big" data-dcl-skip>Skip</button>
@@ -3410,17 +3433,28 @@ async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
     void (async () => {
       const val = (k: string): string =>
         (mc.querySelector<HTMLSelectElement | HTMLTextAreaElement>(`[data-dcl="${k}"]`)?.value ?? '').trim();
-      const components: Record<string, DieComponentCondition> = {};
-      let flagged = 0;
-      mc.querySelectorAll<HTMLElement>('[data-dcl-comp]').forEach((row) => {
-        const cond = (row.querySelector<HTMLElement>('.dcl-opt.a')?.dataset.cond ??
-          '') as DieComponentCondition;
-        components[row.dataset.dclComp!] = cond;
-        if (cond === 'worn' || cond === 'damaged') flagged++;
-      });
-      const prob = val('prob');
-      if (flagged > 0 && !prob) {
-        toast('Describe the worn / damaged component(s) first', 'warn');
+      // Collect the 13 ratings for one side, counting worn/damaged flags.
+      const collect = (side: 'out' | 'in'): { comps: Record<string, DieComponentCondition>; flagged: number } => {
+        const comps: Record<string, DieComponentCondition> = {};
+        let flagged = 0;
+        mc.querySelectorAll<HTMLElement>(`[data-dcl-side="${side}"] [data-dcl-comp]`).forEach((row) => {
+          const cond = (row.querySelector<HTMLElement>('.dcl-opt.a')?.dataset.cond ??
+            '') as DieComponentCondition;
+          comps[row.dataset.dclComp!] = cond;
+          if (cond === 'worn' || cond === 'damaged') flagged++;
+        });
+        return { comps, flagged };
+      };
+      const out = collect('out');
+      const inc = collect('in');
+      const probOut = val('probOut');
+      const probIn = val('probIn');
+      if (out.flagged > 0 && !probOut) {
+        toast('Describe the worn / damaged component(s) on the die OUT first', 'warn');
+        return;
+      }
+      if (inc.flagged > 0 && !probIn) {
+        toast('Describe the worn / damaged component(s) on the die IN first', 'warn');
         return;
       }
       const changeOver = Array.from(
@@ -3433,11 +3467,13 @@ async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
         btn.disabled = true;
         btn.textContent = 'Saving…';
       }
+      const setter = val('setter');
       try {
+        // Row 1 — the change record + the OUT die's condition.
         await dalRef.createDieChangeLog!({
           date: day,
           shift: S!.shiftCode,
-          dieSetter: val('setter'),
+          dieSetter: setter,
           machineCode: S!.mc,
           changeOver,
           jobNumber: S!.selJob,
@@ -3445,13 +3481,32 @@ async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
           dieDescriptionOut: outDie?.die ?? '',
           dieNumberIn: inDie?.dieNumber ?? '',
           dieDescriptionIn: inDie?.die ?? '',
-          components,
-          problemDescription: prob,
+          components: out.comps,
+          problemDescription: probOut,
         });
+        // Row 2 — the IN die's condition, stored under the fitted die
+        // (dieNumberOut = IN die) so it surfaces on that die in the Die tab.
+        if (inDie && inDie.dieNumber !== outDie?.dieNumber) {
+          await dalRef.createDieChangeLog!({
+            date: day,
+            shift: S!.shiftCode,
+            dieSetter: setter,
+            machineCode: S!.mc,
+            changeOver: [],
+            jobNumber: S!.selJob,
+            dieNumberOut: inDie.dieNumber,
+            dieDescriptionOut: inDie.die,
+            dieNumberIn: inDie.dieNumber,
+            dieDescriptionIn: inDie.die,
+            components: inc.comps,
+            problemDescription: probIn,
+          });
+        }
         closeModal();
+        const total = out.flagged + inc.flagged;
         toast(
-          flagged > 0
-            ? `Die Change Log ${existing ? 'updated' : 'saved'} — ${flagged} component${flagged === 1 ? '' : 's'} flagged`
+          total > 0
+            ? `Die Change Log ${existing ? 'updated' : 'saved'} — ${total} component${total === 1 ? '' : 's'} flagged (OUT ${out.flagged} · IN ${inc.flagged})`
             : `Die Change Log ${existing ? 'updated' : 'saved'} — all components good`,
           'ok',
         );
