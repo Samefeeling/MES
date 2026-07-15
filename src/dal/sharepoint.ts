@@ -4278,6 +4278,15 @@ function excelDate(v: unknown): Date | null {
   const s = v.trim();
   if (!s) return null;
 
+  // Some exports write a date column as the raw Excel serial *string*
+  // ("46234"). Treat a pure number in the plausible serial range (≈1954+)
+  // as a serial so those dates aren't silently dropped. Small integers
+  // (a "Time" of "7") stay untouched.
+  if (/^\d{5,6}$/.test(s)) {
+    const serial = Number(s);
+    if (serial > 20000 && serial <= 200000) return excelDate(serial);
+  }
+
   // Graph routinely returns ISO 8601 strings like "2026-05-25T12:00:00.000Z"
   // for DateTime cells. Excel has no timezone — the "12:00" the user typed
   // is wall-clock, not UTC. Parsing via `new Date()` would treat the Z as
