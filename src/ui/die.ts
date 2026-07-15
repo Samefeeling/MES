@@ -198,6 +198,14 @@ function woRow(r: DieMaintenanceRequest): string {
   const span = closed
     ? `${escapeHtml(opened)} → ${escapeHtml(closed)}${days != null ? ` · ${days === 0 ? '<1' : days} d` : ''}`
     : `${escapeHtml(opened)} · still open`;
+  // "To be completed by" — the promised completion date (dd/mm/yyyy, the
+  // source format). For a still-open order that's already past, flag it
+  // overdue in red; the Maint column carries the same signal as colour.
+  const dueIso = (r.dueDate ?? '').slice(0, 10);
+  const overdue = dueIso !== '' && r.status !== 'done' && dueIso < isoDay(new Date());
+  const dueTag = dueIso
+    ? `<span class="die-hist-due${overdue ? ' overdue' : ''}">To be completed by <b>${ddmmyyyy(dueIso)}</b>${overdue ? ' · OVERDUE' : ''}</span>`
+    : '';
   // Numbers line: downtime / labour / cost as recorded in Mango.
   const nums = [
     r.downtime ? `Downtime <b>${escapeHtml(r.downtime)} h</b>` : '',
@@ -216,6 +224,7 @@ function woRow(r: DieMaintenanceRequest): string {
     ${r.priority === 'high' || r.priority === 'urgent' ? `<span class="die-req-pr pr-${r.priority}">${PRIORITY_LABELS[r.priority]}</span>` : ''}
     ${r.mangoTicket ? `<span class="die-mango">🥭 ${escapeHtml(r.mangoTicket)}</span>` : ''}
     <span class="die-hist-span">${span}</span>
+    ${dueTag}
     ${nums ? `<span class="die-hist-nums">${nums}</span>` : ''}
     <span class="die-hist-desc">${escapeHtml(r.description || '—')}</span>
     ${line('Issue', r.issueDetail !== r.description ? r.issueDetail : undefined)}
@@ -253,7 +262,6 @@ function openWorkOrders(dieNumber: string): void {
            <ul class="die-detail-hist">${open.map(woRow).join('')}</ul>`
         : `<div class="die-wo-empty">No open work orders for this die — it's clear. 🎉</div>`
     }
-    <p class="kpi-note">Work orders are mirrored read-only from Mango (report sync). Raise or progress them in Mango.</p>
   </div>`);
   const mc = document.getElementById('mc')!;
   mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
@@ -339,6 +347,15 @@ function isoDay(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+/** Present a stored ISO date (yyyy-mm-dd) in the site's dd/mm/yyyy form —
+ *  the same format Mango's "To be completed by" column uses, so the
+ *  operators read dates the way the source file writes them. '' passes
+ *  through unchanged. */
+function ddmmyyyy(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;
 }
 
 /** Mount (or re-mount) the Die Management board into `host`. Owns its
@@ -748,10 +765,10 @@ function renderDieTable(): string {
       const wo = woDueLevel(d.dieNumber);
       const woTip = wo
         ? wo.level === 'overdue'
-          ? `${d.openRequests} open · OVERDUE — 'To be completed by' ${wo.due} (${wo.days}d ago). Tap for details.`
+          ? `${d.openRequests} open · OVERDUE — 'To be completed by' ${ddmmyyyy(wo.due)} (${wo.days}d ago). Tap for details.`
           : wo.level === 'soon'
-            ? `${d.openRequests} open · due soon — 'To be completed by' ${wo.due}. Tap for details.`
-            : `${d.openRequests} open · due ${wo.due}. Tap for details.`
+            ? `${d.openRequests} open · due soon — 'To be completed by' ${ddmmyyyy(wo.due)}. Tap for details.`
+            : `${d.openRequests} open · due ${ddmmyyyy(wo.due)}. Tap for details.`
         : `${d.openRequests} open work order${d.openRequests === 1 ? '' : 's'} — tap for details`;
       const maintBadge = d.openRequests
         ? `<button class="die-maint-badge${wo ? ` wo-${wo.level}` : ''}" data-die-wo="${escapeHtml(d.dieNumber)}" title="${escapeHtml(woTip)}">🛠 ${d.openRequests}</button>`
