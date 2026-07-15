@@ -547,9 +547,26 @@ describe('parseMangoWorkOrdersCsv (Mango report → work-order mirror)', () => {
     expect(out[0].dueDate?.slice(0, 10)).toBe('2026-07-31'); // 31/07/2026, d/m
   });
 
-  it('matches an alternatively-named completion-date column (alias / contains)', () => {
-    // A tenant whose export calls the column "Estimated Completion Date"
-    // still resolves via the broadened aliases + contains fallback.
+  it('maps the outcome columns incl. the trailing Summary column', () => {
+    // The export's last column is "Summary" — the closing note. Fill the
+    // whole outcome group on one Die row and read them back.
+    const withOutcome = [
+      MINTO_HEADER,
+      // …,Summary of work completed,"Cost (parts, labour)",Corrective,Preventative,Summary
+      'MWO 05001,,3,Stage 4 Closed,AU - Die 88 Seat Base,Nozzle drip,Anil,2/10/2025,Resero - Minto,,2. Breakdown,,2/10/2025,7,AM,Day,,"",AU,Moulding,Manuel Taco,,Polished sprue bush.,"$120",Reseated nozzle.,Torque check added.,Monitor next run.',
+    ].join('\n');
+    const out = parseMangoWorkOrdersCsv(withOutcome);
+    expect(out.length).toBe(1);
+    expect(out[0].workSummary).toBe('Polished sprue bush.');
+    expect(out[0].correctiveAction).toBe('Reseated nozzle.');
+    expect(out[0].preventativeAction).toBe('Torque check added.');
+    expect(out[0].summary).toBe('Monitor next run.');
+    expect(out[0].cost).toBe('$120');
+  });
+
+  it('does NOT guess a differently-named completion column (header is fixed)', () => {
+    // The export layout is stable, so mapping is strict/direct: a column
+    // named anything other than "To be completed by" is not the due date.
     const alt = [
       'Number,Current Stage,Plant/Equipment,Brief Description,Employee,Created Date,Estimated Completion Date',
       'MWO 04001,Stage 1 Assessing,AU - Die 309 Lumba,Sprue gate,Karl Stevens,3/07/2026,3/07/2026',
@@ -557,7 +574,7 @@ describe('parseMangoWorkOrdersCsv (Mango report → work-order mirror)', () => {
     const out = parseMangoWorkOrdersCsv(alt);
     expect(out.length).toBe(1);
     expect(out[0].dieNumber).toBe('309');
-    expect(out[0].dueDate?.slice(0, 10)).toBe('2026-07-03');
+    expect(out[0].dueDate).toBeUndefined();
   });
 
   it("recovers the closure date from the Actions-taken log's 'to Stage 4 Closed' line", () => {

@@ -158,6 +158,8 @@ export interface DieMaintenanceRequest {
   correctiveAction?: string;
   /** "Preventative action taken". */
   preventativeAction?: string;
+  /** "Summary" — the closing free-text note (the export's last column). */
+  summary?: string;
   /** "Cost (parts, labour)". */
   cost?: string;
   /** "To be completed by" — Mango's promised completion date. For open

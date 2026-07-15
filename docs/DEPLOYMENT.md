@@ -528,10 +528,16 @@ for the Plant/Equipment module):
    in-progress ("Stage 2/3") / done ("Stage 4 Closed"); the closure
    date is recovered from the "Actions taken" log's "to Stage 4 Closed"
    line since the export has no completion-date column. Columns are
-   matched by tolerant header names (`MANGO_CSV_COLUMNS` in
-   `src/dal/sharepoint.ts` — extend there if a future report layout
-   renames one; a console warning names any essential field that failed
-   to match).
+   mapped DIRECTLY to their exact header names (`MANGO_HEADERS` in
+   `src/dal/sharepoint.ts`): `Plant/Equipment` → die number,
+   `Brief Description` / `Describe the issue` → issue, `Employee` →
+   raised-by, `To be completed by` → due date, `Type of Maintenance` →
+   type, `Assign to Action` → assignee, `Summary of work completed` +
+   `Corrective action taken` + `Preventative action taken` + `Summary`
+   → outcome, `Cost (parts, labour)` + `Downtime` + `Labour Hours` →
+   cost/effort. The report header is fixed, so if Mango ever renames a
+   column update the map there; a console warning names any essential
+   column that stops matching and prints the header row.
 3. Without `VITE_MANGO_CSV_PATH` (or while the file doesn't exist yet)
    the tab falls back to the legacy `PMD_DieMaintenance` list, whose
    schema stays documented below for the sync-less transition period:

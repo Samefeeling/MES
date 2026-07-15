@@ -4451,78 +4451,46 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
 // CSV report is the only machine-readable surface we get.
 // ---------------------------------------------------------------------------
 
-/** Column candidates per logical field, matched against NORMALISED headers
- *  (lowercase, alphanumeric only) — exact match first, then prefix.
- *  Calibrated against the real "AU - Minto Maintenance Request" export
- *  (2026-07: Number · Current Stage · Plant/Equipment · Brief Description
- *  · Employee · Created Date · Type of Maintenance · Assign to Action ·
- *  Actions taken …), with generic CMMS vocabulary kept as fallbacks in
- *  case Mango's report layout changes. Extend here if a column stops
- *  matching (the console warning names the field and shows the headers). */
-const MANGO_CSV_COLUMNS: Record<string, string[]> = {
-  // "Number" → MWO 02022
-  ticket: [
-    'number', 'workorderno', 'workordernumber', 'workorder', 'orderno',
-    'ordernumber', 'requestno', 'requestnumber', 'wonumber', 'wono', 'wo',
-    'referenceno', 'reference', 'ticketno', 'ticket', 'no', 'id',
-  ],
-  // "Plant/Equipment" → AU - Die 280 Postura Max 430 & 460
-  asset: [
-    'plantequipment', 'assetname', 'asset', 'equipmentname', 'equipment',
-    'plant', 'itemname', 'item', 'assetdescription',
-  ],
-  // "Current Stage" → Stage 1 Coordinator Assessing … Stage 4 Closed
-  status: ['currentstage', 'stage', 'status', 'state', 'workorderstatus', 'requeststatus'],
-  // "Type of Maintenance " (trailing space) → 1. Calibration … 5. Employee Suggestion
-  type: ['typeofmaintenance', 'worktype', 'maintenancetype', 'jobtype', 'type', 'category'],
-  priority: ['priority', 'urgency'],
-  // "Brief Description" is the short human line; "Describe the issue" backs it up
-  description: [
-    'briefdescription', 'description', 'describetheissue', 'workdescription',
-    'details', 'detail', 'summary', 'workrequired', 'task', 'subject',
-    'faultdescription',
-  ],
-  // "Employee" raised it; "Identified By" as fallback
-  requestedBy: [
-    'employee', 'identifiedby', 'requestedby', 'raisedby', 'reportedby',
-    'createdby', 'loggedby', 'requestor', 'requester',
-  ],
-  // "Assign to Action" — who's on it
-  contact: ['assignto', 'assignedto', 'assignee', 'allocatedto', 'tradesperson', 'contact', 'owner'],
-  // "Created Date" → 2/10/2025 (en-AU d/m/yyyy)
-  createdAt: [
-    'createddate', 'datecreated', 'created', 'dateraised', 'raiseddate',
-    'datelogged', 'loggeddate', 'requestdate', 'daterequested', 'date',
-  ],
-  // "To be completed by" — the promised completion date; for open orders
-  // this is when the die becomes AVAILABLE again (Die tab's Available col).
-  dueDate: [
-    'tobecompletedby', 'tobecompleted', 'completedby', 'completiondate',
-    'datetobecompleted', 'expectedcompletion', 'targetcompletion',
-    'duedate', 'datedue', 'targetdate', 'requiredby', 'completeby',
-    'duebydate', 'completeddate', 'completby',
-  ],
-  // The Minto export has NO completion-date column — closure is recovered
-  // from the "Actions taken" stage log instead (see below). These stay for
-  // report layouts that do carry one.
-  closedAt: [
-    'datecompleted', 'completeddate', 'completed', 'dateclosed', 'closeddate',
-    'completiondate', 'finishdate', 'finisheddate', 'datefinished',
-  ],
-  // "Actions taken" — the chronological stage/comment log ("Mon,
-  // 13/10/2025, Avila Pushparaj (…): Change Stage from … to Stage 4
-  // Closed"). Source of the closure date.
-  actionsLog: ['actionstaken', 'actionlog', 'actions', 'history', 'comments', 'log'],
-  // ---- work-order DETAIL columns (all optional) — shown in the die
-  // drilldown's Maintenance Work Order Detail section.
-  downtime: ['downtime'],
-  labourHours: ['labourhours', 'laborhours'],
-  issueDetail: ['describetheissue', 'issuedescription', 'faultdetail'],
-  workSummary: ['summaryofworkcompleted', 'worksummary', 'workcompleted'],
-  correctiveAction: ['correctiveactiontaken', 'correctiveaction'],
-  preventativeAction: ['preventativeactiontaken', 'preventiveactiontaken', 'preventativeaction', 'preventiveaction'],
-  cost: ['costpartslabour', 'cost'],
+/** Direct field → EXACT column-name map for the Mango "AU - Minto
+ *  Maintenance Request" export. The report header is fixed and published,
+ *  so each field maps to the one column it comes from — no fuzzy guessing.
+ *  Names are matched after normalising (lowercase, non-alphanumerics
+ *  stripped), so a trailing space in "Type of Maintenance " or the
+ *  punctuation in "Cost (parts, labour)" doesn't matter. If Mango ever
+ *  renames a column the console warning names it and prints the header row.
+ *
+ *  User-confirmed mapping (2026-07):
+ *   Die number  ← Plant/Equipment        Issue       ← Brief Description
+ *   Raised by   ← Employee               Full issue  ← Describe the issue
+ *   Due date    ← To be completed by     Maint type  ← Type of Maintenance
+ *   Assignee    ← Assign to Action       Outcome     ← Summary of work
+ *   completed + Corrective action taken + Preventative action taken +
+ *   Summary     Cost/effort ← Cost (parts, labour) + Downtime + Labour Hours */
+const MANGO_HEADERS: Record<string, string> = {
+  ticket: 'Number',
+  downtime: 'Downtime',
+  labourHours: 'Labour Hours',
+  status: 'Current Stage',
+  asset: 'Plant/Equipment',
+  description: 'Brief Description',
+  requestedBy: 'Employee',
+  createdAt: 'Created Date',
+  dueDate: 'To be completed by',
+  type: 'Type of Maintenance',
+  issueDetail: 'Describe the issue',
+  actionsLog: 'Actions taken',
+  contact: 'Assign to Action',
+  workSummary: 'Summary of work completed',
+  cost: 'Cost (parts, labour)',
+  correctiveAction: 'Corrective action taken',
+  preventativeAction: 'Preventative action taken',
+  summary: 'Summary',
 };
+
+/** Columns whose absence is a real problem (everything else is optional
+ *  detail). Without Plant/Equipment there are no die numbers; without
+ *  Current Stage the lifecycle can't be resolved. */
+const MANGO_REQUIRED = new Set(['asset', 'status']);
 
 /**
  * Parse Mango's work-order CSV report into the app's work-order shape.
@@ -4545,84 +4513,48 @@ const MANGO_CSV_COLUMNS: Record<string, string[]> = {
 export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
   const rows = parseCsv(text.replace(/^﻿/, ''));
   if (rows.length < 2) return [];
-  const normHeader = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const wanted = new Set(Object.values(MANGO_HEADERS).map(norm));
   // Mango prefixes the export with a report-TITLE line ("AU - Minto
   // Maintenance Request 1783728039982" — the number is the export
-  // timestamp, different every time), sometimes followed by blanks.
-  // Locate the real header row by scoring the first rows against the
-  // column vocabulary and taking the earliest best scorer.
+  // timestamp, different every time), sometimes followed by blanks. The
+  // real header is the first row carrying the known column names.
   let headerAt = -1;
   let bestScore = 0;
   for (let i = 0; i < Math.min(rows.length, 10); i++) {
-    const cells = rows[i].map(normHeader);
-    let score = 0;
-    for (const candidates of Object.values(MANGO_CSV_COLUMNS)) {
-      if (
-        cells.some((c) => c && (candidates.includes(c) || candidates.some((k) => c.startsWith(k))))
-      )
-        score++;
-    }
+    const score = rows[i].reduce((n, c) => n + (c && wanted.has(norm(c)) ? 1 : 0), 0);
     if (score > bestScore) {
       bestScore = score;
       headerAt = i;
     }
   }
-  if (headerAt < 0 || bestScore < 2) {
+  if (headerAt < 0 || bestScore < 3) {
     console.warn(
-      '[pmd] Mango CSV: could not locate a header row (best score', bestScore,
+      '[pmd] Mango CSV: could not locate the header row (best score', bestScore,
       ') — first lines:', rows.slice(0, 3).map((r) => r.join(',').slice(0, 120)),
     );
     return [];
   }
-  const header = rows[headerAt].map(normHeader);
-  const colIdx = (field: string): number => {
-    const candidates = MANGO_CSV_COLUMNS[field];
-    for (const c of candidates) {
-      const i = header.indexOf(c);
-      if (i >= 0) return i;
-    }
-    for (const c of candidates) {
-      const i = header.findIndex((h) => h.startsWith(c));
-      if (i >= 0) return i;
-    }
-    // Last resort: a header that merely CONTAINS the candidate token —
-    // catches "Estimated to be completed by", "Date - Due", etc.
-    for (const c of candidates) {
-      const i = header.findIndex((h) => h.includes(c));
-      if (i >= 0) return i;
-    }
-    return -1;
-  };
+  // Direct map: each field takes the column whose header matches its exact
+  // name. The layout is fixed, so no prefix/contains guessing.
+  const header = rows[headerAt].map(norm);
   const idx: Record<string, number> = {};
-  const missing: string[] = [];
-  // The Minto layout legitimately has no priority / completion-date
-  // column (closure comes from the actions log), and the detail columns
-  // vary by report — don't cry wolf over any of them.
-  const optional = new Set([
-    'priority', 'closedAt', 'actionsLog', 'downtime', 'labourHours',
-    'issueDetail', 'workSummary', 'correctiveAction', 'preventativeAction',
-    'cost', 'dueDate',
-  ]);
-  for (const field of Object.keys(MANGO_CSV_COLUMNS)) {
-    idx[field] = colIdx(field);
-    if (idx[field] < 0 && !optional.has(field)) missing.push(field);
+  for (const [field, name] of Object.entries(MANGO_HEADERS)) {
+    idx[field] = header.indexOf(norm(name));
   }
+  const missing = [...MANGO_REQUIRED].filter((f) => idx[f] < 0).map((f) => MANGO_HEADERS[f]);
   if (missing.length > 0) {
     console.warn(
-      '[pmd] Mango CSV: no column matched for', missing.join(', '),
-      '— headers present:', rows[headerAt].join(' | '),
-      '(extend MANGO_CSV_COLUMNS in sharepoint.ts)',
+      "[pmd] Mango CSV: expected column(s) not found —", missing.join(', '),
+      '· header row was:', rows[headerAt].join(' | '),
     );
   }
-  // The due-date column is the one people miss most (it drives the Maint
-  // traffic light). Make its resolution explicit in the console: whether a
-  // column was matched, and — so the real header name is visible without
-  // opening the file — the full header row when it WASN'T matched.
+  // The due-date column drives the Maint traffic light and is the one
+  // people most often forget to fill. Make its resolution explicit.
   if (idx['dueDate'] < 0) {
     console.warn(
-      "[pmd] Mango CSV: no 'To be completed by' / due-date column matched.",
+      "[pmd] Mango CSV: no '" + MANGO_HEADERS.dueDate + "' column in the export.",
       'Header row was:', rows[headerAt].join(' | '),
-      '— tell which column holds the completion date so it can be mapped.',
     );
   } else {
     console.info(
@@ -4682,6 +4614,7 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
       workSummary: cell(row, 'workSummary') || undefined,
       correctiveAction: cell(row, 'correctiveAction') || undefined,
       preventativeAction: cell(row, 'preventativeAction') || undefined,
+      summary: cell(row, 'summary') || undefined,
       cost: cell(row, 'cost') || undefined,
       dueDate: csvDateToIso(cell(row, 'dueDate')) || undefined,
     });

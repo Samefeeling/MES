@@ -222,6 +222,7 @@ function woRow(r: DieMaintenanceRequest): string {
     ${line('Work done', r.workSummary)}
     ${line('Corrective', r.correctiveAction)}
     ${line('Preventative', r.preventativeAction)}
+    ${line('Summary', r.summary)}
     ${r.requestedBy ? `<span class="die-hist-who">from ${escapeHtml(r.requestedBy)}</span>` : ''}
     ${r.contact ? `<span class="die-hist-who">→ ${escapeHtml(r.contact)}</span>` : ''}
   </li>`;
@@ -1007,7 +1008,7 @@ function renderServiceSection(d: DieAgg): string {
   const s = svcFor(d);
   if (!s) {
     return `<h4>② Service Plan</h4>
-      <div class="die-svc-none">No shot-based rule — this die didn't run on a tonnage press.</div>`;
+      <div class="die-svc-none">No running record yet — follow maintenance schedule.</div>`;
   }
   const pctTxt = `${(s.pct * 100).toFixed(0)}%`;
   const width = Math.min(100, Math.round(s.pct * 100));
