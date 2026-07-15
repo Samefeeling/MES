@@ -4487,7 +4487,12 @@ const MANGO_CSV_COLUMNS: Record<string, string[]> = {
   ],
   // "To be completed by" — the promised completion date; for open orders
   // this is when the die becomes AVAILABLE again (Die tab's Available col).
-  dueDate: ['tobecompletedby', 'duedate', 'targetdate', 'requiredby', 'completeby'],
+  dueDate: [
+    'tobecompletedby', 'tobecompleted', 'completedby', 'completiondate',
+    'datetobecompleted', 'expectedcompletion', 'targetcompletion',
+    'duedate', 'datedue', 'targetdate', 'requiredby', 'completeby',
+    'duebydate', 'completeddate', 'completby',
+  ],
   // The Minto export has NO completion-date column — closure is recovered
   // from the "Actions taken" stage log instead (see below). These stay for
   // report layouts that do carry one.
@@ -4571,6 +4576,12 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
       const i = header.findIndex((h) => h.startsWith(c));
       if (i >= 0) return i;
     }
+    // Last resort: a header that merely CONTAINS the candidate token —
+    // catches "Estimated to be completed by", "Date - Due", etc.
+    for (const c of candidates) {
+      const i = header.findIndex((h) => h.includes(c));
+      if (i >= 0) return i;
+    }
     return -1;
   };
   const idx: Record<string, number> = {};
@@ -4592,6 +4603,21 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
       '[pmd] Mango CSV: no column matched for', missing.join(', '),
       '— headers present:', rows[headerAt].join(' | '),
       '(extend MANGO_CSV_COLUMNS in sharepoint.ts)',
+    );
+  }
+  // The due-date column is the one people miss most (it drives the Maint
+  // traffic light). Make its resolution explicit in the console: whether a
+  // column was matched, and — so the real header name is visible without
+  // opening the file — the full header row when it WASN'T matched.
+  if (idx['dueDate'] < 0) {
+    console.warn(
+      "[pmd] Mango CSV: no 'To be completed by' / due-date column matched.",
+      'Header row was:', rows[headerAt].join(' | '),
+      '— tell which column holds the completion date so it can be mapped.',
+    );
+  } else {
+    console.info(
+      "[pmd] Mango CSV: due-date column = '" + rows[headerAt][idx['dueDate']] + "' (index " + idx['dueDate'] + ')',
     );
   }
   const cell = (row: string[], field: string): string =>
@@ -4650,6 +4676,16 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
       cost: cell(row, 'cost') || undefined,
       dueDate: csvDateToIso(cell(row, 'dueDate')) || undefined,
     });
+  }
+  // If the due-date column matched but NOTHING parsed, the cell values are
+  // empty or an unrecognised format — surface a raw sample so the fix is
+  // obvious (empty column vs. a date format excelDate should learn).
+  if (idx['dueDate'] >= 0 && out.length > 0 && out.every((o) => !o.dueDate)) {
+    const firstData = rows.slice(headerAt + 1).find((r) => (r[idx['dueDate']] ?? '').trim());
+    console.warn(
+      "[pmd] Mango CSV: due-date column matched but no value parsed. Raw sample:",
+      JSON.stringify(firstData ? firstData[idx['dueDate']] : '(every cell blank)'),
+    );
   }
   return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }

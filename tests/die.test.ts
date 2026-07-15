@@ -547,6 +547,19 @@ describe('parseMangoWorkOrdersCsv (Mango report → work-order mirror)', () => {
     expect(out[0].dueDate?.slice(0, 10)).toBe('2026-07-31'); // 31/07/2026, d/m
   });
 
+  it('matches an alternatively-named completion-date column (alias / contains)', () => {
+    // A tenant whose export calls the column "Estimated Completion Date"
+    // still resolves via the broadened aliases + contains fallback.
+    const alt = [
+      'Number,Current Stage,Plant/Equipment,Brief Description,Employee,Created Date,Estimated Completion Date',
+      'MWO 04001,Stage 1 Assessing,AU - Die 309 Lumba,Sprue gate,Karl Stevens,3/07/2026,3/07/2026',
+    ].join('\n');
+    const out = parseMangoWorkOrdersCsv(alt);
+    expect(out.length).toBe(1);
+    expect(out[0].dieNumber).toBe('309');
+    expect(out[0].dueDate?.slice(0, 10)).toBe('2026-07-03');
+  });
+
   it("recovers the closure date from the Actions-taken log's 'to Stage 4 Closed' line", () => {
     const out = parseMangoWorkOrdersCsv(csv);
     const closed = out.find((o) => o.mangoTicket === 'MWO 02029')!;
