@@ -1737,19 +1737,20 @@ function renderRejectStatusBadges(slice: ParetoSlice): string {
   return badges ? `<span class="kpi-reject-statuses">${badges}</span>` : '';
 }
 
-/** Same stacked MachineStatus bar used by the Die detail Pareto. Segment
- * widths are each status quantity's share of this reject code, while the
- * timeline colours and hover labels come from STATUS_MAP. */
-function renderRejectStatusBar(slice: ParetoSlice): string {
+/** Same stacked MachineStatus bar used by the Die detail Pareto. The outer
+ * fill is this code's share of all rejects (the adjacent % column); inside
+ * that fill, segment widths are each MachineStatus quantity's share. */
+function renderRejectStatusBar(slice: ParetoSlice, paretoPct: number): string {
   const split = Object.entries(slice.byStatus ?? {})
     .map(([status, qty]) => [status, Number(qty) || 0] as const)
     .filter(([, qty]) => qty > 0)
     .sort((a, b) => b[1] - a[1]);
   const total = split.reduce((sum, [, qty]) => sum + qty, 0);
   if (total <= 0) return '';
-  const tip = split
+  const statusTip = split
     .map(([status, qty]) => `${STATUS_MAP[status]?.label ?? status} ×${qty}`)
     .join(' · ');
+  const tip = `${statusTip} · ${paretoPct.toFixed(1)}% of rejects`;
   const segments = split
     .map(([status, qty]) => {
       const meta = STATUS_MAP[status];
@@ -1764,7 +1765,10 @@ function renderRejectStatusBar(slice: ParetoSlice): string {
     .join('');
   return `<span class="die-bar-track" role="img" aria-label="${escapeHtml(
     tip,
-  )}" title="${escapeHtml(tip)}"><span class="die-bar-fill">${segments}</span></span>`;
+  )}" title="${escapeHtml(tip)}"><span class="die-bar-fill" style="width:${Math.max(
+    0,
+    Math.min(100, paretoPct),
+  )}%">${segments}</span></span>`;
 }
 
 /** Shape slices for renderParetoChart: short code on the x-axis, value
@@ -1818,10 +1822,11 @@ function openParetoDrill(opts: {
   const rows = slices
     .map((s, i) => {
       cum += s.value;
-      const pct = ((s.value / total) * 100).toFixed(1);
+      const pctValue = (s.value / total) * 100;
+      const pct = pctValue.toFixed(1);
       const cumPct = ((cum / total) * 100).toFixed(1);
       const statusCells = opts.showRejectStatus
-        ? `<td>${renderRejectStatusBar(s) || '<span class="muted">—</span>'}</td>`
+        ? `<td>${renderRejectStatusBar(s, pctValue) || '<span class="muted">—</span>'}</td>`
         : '';
       return `<tr>
         <td class="num">${i + 1}</td>

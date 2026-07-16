@@ -666,7 +666,6 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-reject-drill-modal .kpi-drill-table{min-width:900px}
 .kpi-reject-drill-modal .kpi-reject-statuses{margin-left:0;flex-wrap:wrap}
 .kpi-reject-drill-modal .die-bar-track{display:block;min-width:220px}
-.kpi-reject-drill-modal .die-bar-fill{width:100%}
 /* Handover history modal: newest shift groups first, then natural Job #
    order. Notes wrap here instead of being truncated inside the KPI table. */
 .mdl:has(.kpi-handover-modal){max-width:min(900px,96vw)}
