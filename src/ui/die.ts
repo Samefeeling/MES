@@ -195,17 +195,18 @@ function woRow(r: DieMaintenanceRequest): string {
           ),
         )
       : null;
+  // "To be completed by" — the promised completion date (dd/mm/yyyy, the
+  // source format). Shown on the open-order line; when it's already past,
+  // it turns red + OVERDUE — the same signal the Maint column's traffic
+  // light carries (both compare r.dueDate against today).
+  const dueIso = (r.dueDate ?? '').slice(0, 10);
+  const overdue = dueIso !== '' && dueIso < isoDay(new Date());
+  const dueTxt = dueIso
+    ? `<span class="die-hist-due${overdue ? ' overdue' : ''}">To be completed by ${ddmmyyyy(dueIso)}${overdue ? ' · OVERDUE' : ''}</span>`
+    : 'no due date';
   const span = closed
     ? `${escapeHtml(opened)} → ${escapeHtml(closed)}${days != null ? ` · ${days === 0 ? '<1' : days} d` : ''}`
-    : `${escapeHtml(opened)} · still open`;
-  // "To be completed by" — the promised completion date (dd/mm/yyyy, the
-  // source format). For a still-open order that's already past, flag it
-  // overdue in red; the Maint column carries the same signal as colour.
-  const dueIso = (r.dueDate ?? '').slice(0, 10);
-  const overdue = dueIso !== '' && r.status !== 'done' && dueIso < isoDay(new Date());
-  const dueTag = dueIso
-    ? `<span class="die-hist-due${overdue ? ' overdue' : ''}">To be completed by <b>${ddmmyyyy(dueIso)}</b>${overdue ? ' · OVERDUE' : ''}</span>`
-    : '';
+    : `${escapeHtml(opened)} · ${dueTxt} · still open`;
   // Numbers line: downtime / labour / cost as recorded in Mango.
   const nums = [
     r.downtime ? `Downtime <b>${escapeHtml(r.downtime)} h</b>` : '',
@@ -224,7 +225,6 @@ function woRow(r: DieMaintenanceRequest): string {
     ${r.priority === 'high' || r.priority === 'urgent' ? `<span class="die-req-pr pr-${r.priority}">${PRIORITY_LABELS[r.priority]}</span>` : ''}
     ${r.mangoTicket ? `<span class="die-mango">🥭 ${escapeHtml(r.mangoTicket)}</span>` : ''}
     <span class="die-hist-span">${span}</span>
-    ${dueTag}
     ${nums ? `<span class="die-hist-nums">${nums}</span>` : ''}
     <span class="die-hist-desc">${escapeHtml(r.description || '—')}</span>
     ${line('Issue', r.issueDetail !== r.description ? r.issueDetail : undefined)}

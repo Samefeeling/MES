@@ -544,7 +544,8 @@ describe('parseMangoWorkOrdersCsv (Mango report → work-order mirror)', () => {
     expect(out.length).toBe(1);
     expect(out[0].dieNumber).toBe('171');
     expect(out[0].status).toBe('open'); // Stage 1 → open
-    expect(out[0].dueDate?.slice(0, 10)).toBe('2026-07-31'); // 31/07/2026, d/m
+    // 31/07/2026 (d/m) → a stable date, no time, no UTC day-shift.
+    expect(out[0].dueDate).toBe('2026-07-31');
   });
 
   it('maps the outcome columns incl. the trailing Summary column', () => {

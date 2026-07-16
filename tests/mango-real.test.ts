@@ -15,7 +15,11 @@ describe('parseMangoWorkOrdersCsv — user real header', () => {
     const out = parseMangoWorkOrdersCsv([HEADER, dieRow].join('\n'));
     expect(out.length).toBe(1);
     expect(out[0].dieNumber).toBe('171');
-    expect(out[0].dueDate?.slice(0, 10)).toBe('2026-07-31');
+    // Bare dd/mm/yyyy → a stable YYYY-MM-DD with NO time and NO UTC shift.
+    // The old toISOString() path produced '2026-07-31T00:00:00.000Z' (and
+    // rolled the day back in any UTC+ timezone), so exact-equality guards
+    // both regressions at once.
+    expect(out[0].dueDate).toBe('2026-07-31');
   });
 
   it('an empty "To be completed by" cell yields no dueDate (the observed case)', () => {

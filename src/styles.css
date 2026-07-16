@@ -731,11 +731,11 @@ th.die-sort.a{color:#1d4ed8}
 .die-hist-row .die-hist-who{color:var(--mu);font-size:12px}
 .die-hist-row .die-hist-nums{font-size:12px;color:#334155}
 .die-hist-row .die-hist-nums b{font-variant-numeric:tabular-nums}
-/* "To be completed by" due date — a chip; red + bold when the order is
-   past due (same signal the Maint column's traffic light carries). */
-.die-hist-row .die-hist-due{font-size:12px;color:#334155;background:#f1f5f9;border:1px solid var(--bd);border-radius:6px;padding:1px 7px}
-.die-hist-row .die-hist-due b{font-variant-numeric:tabular-nums}
-.die-hist-row .die-hist-due.overdue{color:#fff;background:var(--rd);border-color:var(--rd);font-weight:700}
+/* "To be completed by" due date, inline on the open-order line — red +
+   bold when past due (same signal the Maint column's traffic light
+   carries). */
+.die-hist-row .die-hist-due{font-variant-numeric:tabular-nums}
+.die-hist-row .die-hist-due.overdue{color:var(--rd);font-weight:800}
 /* Narrative detail lines from the Mango report (issue / work done /
    corrective / preventative) */
 .die-hist-line{flex:1 1 100%;font-size:12px;color:#475569;padding-left:10px;border-left:2px solid var(--bd)}

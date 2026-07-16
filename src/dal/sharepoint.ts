@@ -4707,10 +4707,22 @@ function parseCsv(text: string): string[][] {
 
 function csvDateToIso(s: string): string {
   // PowerShell emits ISO; manually-edited CSVs sometimes carry en-AU
-  // dd/mm/yyyy [HH:mm[:ss] [am/pm]] or bare dates. excelDate already
-  // handles all three, including the wall-clock-as-local rule needed
-  // to keep Sydney-typed times from shifting by the UTC offset.
-  return excelDate(s)?.toISOString() ?? '';
+  // dd/mm/yyyy [HH:mm[:ss] [am/pm]] or bare dates. excelDate handles all
+  // three and anchors the value to LOCAL time (Excel/Mango dates are
+  // wall-clock, not UTC).
+  const d = excelDate(s);
+  if (!d) return '';
+  // Serialise from the LOCAL calendar components — never via toISOString(),
+  // which converts to UTC and rolls a bare date back a day in any UTC+
+  // timezone (Sydney: 31/07/2026 → local midnight → 2026-07-30T14:00Z →
+  // "2026-07-30"). A date-only value stays a stable YYYY-MM-DD; a datetime
+  // keeps its wall-clock time with no Z so the day never shifts.
+  const p = (n: number): string => String(n).padStart(2, '0');
+  const date = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  const hasTime = d.getHours() !== 0 || d.getMinutes() !== 0 || d.getSeconds() !== 0;
+  return hasTime
+    ? `${date}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+    : date;
 }
 
 /**
