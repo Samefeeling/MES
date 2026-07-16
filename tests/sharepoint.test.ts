@@ -189,6 +189,14 @@ describe('dateOnly (shiftId UTC→local round-trip)', () => {
   it('handles month boundaries (last day of month, midday shift)', () => {
     expect(roundTrip(2026, 5, 30, 15)).toBe('2026-06-30');
   });
+  it('keeps a midnight-UTC shift marker on its own calendar date', () => {
+    // The exact shape writeRejects / shiftDateMarker stamp rows with —
+    // adding any positive offset (+0…+14) to midnight stays the same day,
+    // so the shift date is recovered in Sydney, Auckland and UTC alike.
+    expect(dateOnly('2026-06-20T00:00:00.000Z')).toBe('2026-06-20');
+    expect(dateOnly('2026-01-01T00:00:00.000Z')).toBe('2026-01-01');
+    expect(dateOnly('2026-12-31T00:00:00.000Z')).toBe('2026-12-31');
+  });
   it('falls back to slice when the value is not a parseable date', () => {
     expect(dateOnly('not-a-date')).toBe('not-a-date');
     expect(dateOnly('')).toBe('');
@@ -2256,11 +2264,19 @@ describe('sanitizeBodyStrings', () => {
 describe('listRejectPareto byShift breakdown', () => {
   it('splits each RejectCode quantity across Day / Afternoon / Night', async () => {
     const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    // Real PMD_Rejects rows are stamped at shiftDateMarker(shiftId) —
+    // midnight UTC of the SHIFT'S calendar date — regardless of the actual
+    // clock time the reject was logged (writeRejects, sharepoint.ts). All
+    // three shifts of 2026-06-20 therefore carry the SAME 00:00:00Z stamp;
+    // using that here keeps the test timezone-independent (an earlier
+    // version stamped T20:00Z / T23:00Z, which dateOnly correctly rolled to
+    // 06-21 under a UTC+ runtime, dropping two shifts).
+    const MARK = '2026-06-20T00:00:00.000Z';
     const rejectRows = [
-      { Title: 'Batt1', Shift: 'Day', Date: '2026-06-20T12:00:00Z', RejectCode: 'D01', RejectCategory: 'Flash', RejectNumber: 5 },
-      { Title: 'Batt1', Shift: 'Afternoon', Date: '2026-06-20T20:00:00Z', RejectCode: 'D01', RejectCategory: 'Flash', RejectNumber: 3 },
-      { Title: 'Batt1', Shift: 'Night', Date: '2026-06-20T23:00:00Z', RejectCode: 'D01', RejectCategory: 'Flash', RejectNumber: 2 },
-      { Title: 'Batt1', Shift: 'Day', Date: '2026-06-20T12:00:00Z', RejectCode: 'D02', RejectCategory: 'Short', RejectNumber: 4 },
+      { Title: 'Batt1', Shift: 'Day', Date: MARK, RejectCode: 'D01', RejectCategory: 'Flash', RejectNumber: 5 },
+      { Title: 'Batt1', Shift: 'Afternoon', Date: MARK, RejectCode: 'D01', RejectCategory: 'Flash', RejectNumber: 3 },
+      { Title: 'Batt1', Shift: 'Night', Date: MARK, RejectCode: 'D01', RejectCategory: 'Flash', RejectNumber: 2 },
+      { Title: 'Batt1', Shift: 'Day', Date: MARK, RejectCode: 'D02', RejectCategory: 'Short', RejectNumber: 4 },
     ];
     const o = dal as unknown as { getAllItems: () => Promise<unknown[]> };
     o.getAllItems = async (): Promise<unknown[]> => rejectRows;
