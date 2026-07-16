@@ -3,6 +3,9 @@
 // physical column names (PascalCase in SharePoint/SQL).
 
 export type StatusCode = 'R' | 'B' | 'C' | 'D' | 'I' | 'M' | 'O' | 'P' | 'S';
+/** PMD_Rejects.RejectCategory captures the machine state at the instant a
+ *  reject happened. Unknown preserves blank/legacy values without guessing. */
+export type RejectMachineStatus = StatusCode | 'Unknown';
 export type ShiftCode = 'Day' | 'Afternoon' | 'Night';
 export type Role = 'operator' | 'supervisor' | 'admin';
 
@@ -351,8 +354,9 @@ export interface ParetoFilter {
 }
 
 /** One bar of a Pareto chart: a code, a human label for the legend, and
- *  the quantity/hours it accounts for. Reject Pareto → RejectCode +
- *  RejectCategory; Downtime Pareto → BDCode + breakdown cause. */
+ *  the quantity/hours it accounts for. Reject Pareto uses RejectCode + its
+ *  PMD_RejectCategories master description (PMD_Rejects.RejectCategory is
+ *  MachineStatus); Downtime Pareto uses BDCode + breakdown cause. */
 export interface ParetoSlice {
   code: string;
   label: string;
@@ -363,4 +367,9 @@ export interface ParetoSlice {
    *  sources without shift attribution (Downtime) leave it undefined and
    *  the chart falls back to a single bar. Sums to `value`. */
   byShift?: Record<ShiftCode, number>;
+  /** Reject quantity split by the MachineStatus snapshot stored in
+   *  PMD_Rejects.RejectCategory. R means the defect occurred during normal
+   *  production and is the key action signal; S and other setup states give
+   *  context for expected startup/changeover scrap. Sums to `value`. */
+  byStatus?: Partial<Record<RejectMachineStatus, number>>;
 }

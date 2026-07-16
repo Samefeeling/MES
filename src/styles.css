@@ -114,7 +114,11 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-machine-head{white-space:nowrap}
 .kpi-toggle-all{width:22px;height:22px;font-size:14px;margin-left:6px;margin-right:0}
 .kpi-table-wrap{background:#fff;border:1px solid var(--bd);border-radius:12px;overflow:auto;max-height:70vh;position:relative}
-.kpi-table{background:#fff;font-variant-numeric:tabular-nums;border:0;border-radius:0;overflow:visible}
+.kpi-table{background:#fff;font-variant-numeric:tabular-nums;border:0;border-radius:0;overflow:visible;min-width:1300px;table-layout:fixed}
+.kpi-col-machine{width:250px}
+.kpi-col-color{width:100px}
+.kpi-col-metric{width:72px}
+.kpi-col-handover{width:230px}
 .kpi-table td.num,.kpi-table th{white-space:nowrap}
 .kpi-table td.green{color:#15803d;font-weight:800}
 .kpi-table td.amber{color:#FFA500;font-weight:800}
@@ -140,12 +144,18 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    the period. ">" collapsed → "⌄" expanded. */
 .kpi-orders-toggle{margin-right:8px;color:#0c4a6e}
 .kpi-mc-name{vertical-align:middle}
-/* Handover column — single-line truncate, tooltip carries the full text. */
-.kpi-ho-head{min-width:240px}
-.kpi-ho-cell{max-width:360px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;color:#475569}
-@media (max-width:1100px){
-  .kpi-ho-cell{max-width:200px}
-}
+/* Handover appears once per machine. A compact button keeps the table width
+   stable; full multi-line notes live in a modal and never influence column
+   sizing when Shift / Order rows are expanded. */
+.kpi-ho-head{width:230px}
+.kpi-ho-cell{white-space:nowrap;overflow:hidden;font-size:12px;color:#475569}
+.kpi-ho-empty{color:transparent}
+.kpi-ho-summary{width:100%;height:24px;display:flex;align-items:center;gap:6px;min-width:0;padding:2px 5px;border:1px solid #bfdbfe;border-radius:6px;background:#eff6ff;color:#1e3a8a;font:inherit;font-weight:700;cursor:pointer;text-align:left}
+.kpi-ho-summary:hover{background:#dbeafe;border-color:#60a5fa}
+.kpi-ho-summary:focus-visible{outline:2px solid var(--theme-dark);outline-offset:1px}
+.kpi-ho-count{flex:0 0 auto;min-width:20px;height:18px;padding:0 5px;border-radius:999px;background:#1d4ed8;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:800}
+.kpi-ho-latest{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kpi-ho-arrow{flex:0 0 auto;font-size:18px;line-height:1;color:#1d4ed8}
 
 /* Trace / search view */
 .trace{display:flex;flex-direction:column;gap:14px}
@@ -634,8 +644,52 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-reject-legend{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12px;color:var(--tx)}
 .kpi-reject-legend li{white-space:nowrap}
 .kpi-reject-legend .kpi-rej-qty{font-weight:800;color:var(--rd);font-variant-numeric:tabular-nums}
+.kpi-reject-statuses{display:inline-flex;align-items:center;gap:4px;margin-left:7px;vertical-align:middle}
+.kpi-reject-status{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border:1px solid #cbd5e1;border-radius:999px;background:#f1f5f9;color:#475569;font-size:11px;font-weight:700;line-height:17px;white-space:nowrap}
+.kpi-reject-status b{font-variant-numeric:tabular-nums}
+/* R means the defect occurred while the press was producing: make it the
+   strongest action signal. S remains visible as useful startup context. */
+.kpi-reject-status.is-running{border-color:#fca5a5;background:#fef2f2;color:#b91c1c}
+.kpi-reject-status.is-startup{border-color:#7dd3fc;background:#f0f9ff;color:#0369a1}
+.kpi-reject-status.is-context{border-color:#fcd34d;background:#fffbeb;color:#92400e}
+.kpi-reject-status.is-unknown{border-color:#cbd5e1;background:#f8fafc;color:#64748b}
+.kpi-reject-signal{display:inline-flex;flex-direction:column;gap:1px;min-width:118px;padding:4px 7px;border-radius:6px;font-size:12px;line-height:1.2}
+.kpi-reject-signal small{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.25px}
+.kpi-reject-signal.is-review{border:1px solid #fca5a5;background:#fef2f2;color:#b91c1c}
+.kpi-reject-signal.is-startup{border:1px solid #7dd3fc;background:#f0f9ff;color:#0369a1}
+.kpi-reject-signal.is-context{border:1px solid #fcd34d;background:#fffbeb;color:#92400e}
+.kpi-reject-signal.is-unknown{border:1px solid #cbd5e1;background:#f8fafc;color:#64748b}
 /* Reject drill-down modal: chart above a ranked Pareto table. */
 .kpi-drill-modal{max-width:760px}
+.mdl:has(.kpi-reject-drill-modal){max-width:min(1080px,96vw)}
+.kpi-reject-drill-modal{max-width:none}
+.kpi-reject-drill-modal .kpi-drill-table{min-width:900px}
+.kpi-reject-drill-modal .kpi-reject-statuses{margin-left:0;flex-wrap:wrap}
+/* Handover history modal: newest shift groups first, then natural Job #
+   order. Notes wrap here instead of being truncated inside the KPI table. */
+.mdl:has(.kpi-handover-modal){max-width:min(900px,96vw)}
+.kpi-handover-modal{gap:12px}
+.kpi-ho-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}
+.kpi-ho-modal-head>div{min-width:0}
+.kpi-ho-modal-head .bd-title{font-size:21px}
+.kpi-ho-close{padding:8px 20px;font-size:14px;min-height:40px;flex:0 0 auto}
+.kpi-ho-history{display:flex;flex-direction:column;gap:12px;max-height:72vh;overflow:auto;padding-right:4px}
+.kpi-ho-group{border:1px solid #cbd5e1;border-radius:10px;overflow:hidden;background:#f8fafc}
+.kpi-ho-shift-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 12px;background:#dbeafe;color:#1e3a8a}
+.kpi-ho-shift-head b{font-size:14px}
+.kpi-ho-shift-head span{font-size:12px;font-weight:700;color:#475569}
+.kpi-ho-jobs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:10px}
+.kpi-ho-job{min-width:0;border:1px solid #e2e8f0;border-left:4px solid #3b82f6;border-radius:8px;background:#fff;padding:10px}
+.kpi-ho-job h3{margin:0 0 8px;font-size:15px;color:#0f172a}
+.kpi-ho-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.kpi-ho-field{min-width:0;background:#f8fafc;border-radius:6px;padding:7px 8px}
+.kpi-ho-field-label{display:block;margin-bottom:3px;color:#64748b;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.35px}
+.kpi-ho-field p{margin:0;color:#334155;font-size:13px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere}
+@media (max-width:700px){
+  .kpi-ho-jobs,.kpi-ho-fields{grid-template-columns:1fr}
+  .kpi-ho-modal-head{align-items:stretch;flex-direction:column}
+  .kpi-ho-close{align-self:flex-end}
+}
 /* Job-number → Trace detail popup: wide enough for the 16-slot timeline,
    scrolls when a job ran across many shifts. */
 .kpi-trace-modal{max-width:none}
@@ -675,21 +729,30 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .die-chip b{color:var(--tx);margin-left:4px}
 .die-chip.is-warn{border-color:#FFA500;background:#fff7ed}
 .die-chip.is-bad{border-color:var(--rd);background:#fef2f2}
-.die-table-wrap{overflow-x:auto;margin-top:10px;background:#fff;border:1px solid var(--bd);border-radius:12px}
+.die-table-wrap{overflow:auto;max-height:70vh;position:relative;margin-top:10px;background:#fff;border:1px solid var(--bd);border-radius:12px}
 /* One size down from the KPI table so the extra Description + trend
    columns fit without a horizontal scroll on the iPad. */
-.die-table{margin:0;font-size:13px}
-.die-table thead th{font-size:12px}
+.die-table{--die-sticky-first-width:90px;margin:0;font-size:13px;table-layout:auto}
+.die-table thead th{font-size:12px;background:#f8fafc;color:#334155}
 .die-table td.num{text-align:right;font-variant-numeric:tabular-nums}
 .die-table td.die-desc{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#334155}
 /* Sortable headers */
 th.die-sort{cursor:pointer;user-select:none;-webkit-user-select:none}
 th.die-sort:hover{background:#eef2f7}
 th.die-sort.a{color:#1d4ed8}
+/* The header and the first two identity columns stay visible in both
+   scroll directions. Description's offset is measured from the rendered
+   Die # width because that column can be resized by the user. */
+.die-table thead th{position:sticky;top:0;z-index:4}
+.die-table th:nth-child(1),.die-table td:nth-child(1){position:sticky;left:0}
+.die-table th:nth-child(2),.die-table td:nth-child(2){position:sticky;left:var(--die-sticky-first-width)}
+.die-table thead th:nth-child(1),.die-table thead th:nth-child(2){z-index:7;background:#f8fafc}
+.die-table tbody td:nth-child(1),.die-table tbody td:nth-child(2){z-index:2;background:#fff}
+.die-table tbody tr:hover td{background:#f1f5f9}
+.die-table th:nth-child(2),.die-table td:nth-child(2){box-shadow:7px 0 9px -9px rgba(15,23,42,.75)}
 /* Column-resize handles: a grab zone on every header's right edge.
    Once the user drags, JS pins the <colgroup> widths, switches the table
    to fixed layout (class .resized) and persists to localStorage. */
-.die-table thead th{position:relative}
 .die-rz{position:absolute;top:0;right:-5px;width:11px;height:100%;cursor:col-resize;touch-action:none;z-index:2}
 .die-rz::after{content:"";position:absolute;left:5px;top:22%;height:56%;width:1px;background:var(--bd)}
 .die-rz:hover::after,.die-rz:active::after{width:3px;left:4px;background:#1d4ed8;border-radius:2px}

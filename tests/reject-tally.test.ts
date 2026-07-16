@@ -7,7 +7,7 @@ import { MemoryDataLayer } from '../src/dal/memory';
 // per-(machine, date-range) filter shape so the KPI page can rely on it.
 
 describe('MemoryDataLayer.listRejectPareto', () => {
-  it('returns code → qty sorted descending, label = RejectCategory', async () => {
+  it('returns code → qty sorted descending, label = RejectCode master description', async () => {
     const dal = new MemoryDataLayer(new Date('2026-06-15T08:00:00'));
     const today = '2026-06-15';
     const past = '2026-06-09'; // covers all seeded production days
@@ -22,6 +22,15 @@ describe('MemoryDataLayer.listRejectPareto', () => {
     // Labels resolved from the seeded reject categories — not the bare code.
     expect(all[0].label.length).toBeGreaterThan(0);
     expect(all[0].label).not.toBe(all[0].code);
+    // The mock preserves the same MachineStatus-at-defect dimension as
+    // PMD_Rejects; its status quantities must reconcile to the code total.
+    expect(
+      all.every(
+        (s) =>
+          Object.values(s.byStatus ?? {}).reduce((sum, qty) => sum + (qty ?? 0), 0) ===
+          s.value,
+      ),
+    ).toBe(true);
   });
 
   it('respects the machine filter — narrowing reduces the slice list', async () => {

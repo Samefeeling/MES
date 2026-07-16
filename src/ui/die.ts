@@ -91,6 +91,7 @@ let S: DieState | null = null;
 let dalRef: PmdDataLayer;
 let hostEl: HTMLElement | null = null;
 let loadVersion = 0;
+let stickyColumnObserver: ResizeObserver | null = null;
 
 const STATUS_LABELS: Record<MaintStatus, string> = {
   open: 'Open',
@@ -492,6 +493,10 @@ function rejLabel(code: string): string {
 
 function render(): void {
   if (!S || !hostEl || !hostEl.isConnected) return;
+  // The table is replaced wholesale on every filter / sort render. Stop
+  // observing the old Die # header before its DOM is detached.
+  stickyColumnObserver?.disconnect();
+  stickyColumnObserver = null;
   hostEl.innerHTML = `
     ${renderHead()}
     ${renderDataErrors(S.errors)}
@@ -687,10 +692,24 @@ function applyColWidths(table: HTMLTableElement): void {
   }
 }
 
+/** Description is the second pinned column, so its `left` offset must
+ * follow the rendered Die # width. That first column is user-resizable
+ * and can also change with viewport / font sizing. */
+function syncStickyColumnOffset(table: HTMLTableElement): void {
+  const first = table.querySelector<HTMLTableCellElement>('thead th:first-child');
+  const width = first?.getBoundingClientRect().width ?? 0;
+  if (width > 0) table.style.setProperty('--die-sticky-first-width', `${width}px`);
+}
+
 function wireColResize(table: HTMLTableElement): void {
   applyColWidths(table);
   const ths = Array.from(table.querySelectorAll<HTMLTableCellElement>('thead th'));
   const cols = Array.from(table.querySelectorAll<HTMLTableColElement>('colgroup col'));
+  syncStickyColumnOffset(table);
+  if (ths[0] && typeof ResizeObserver !== 'undefined') {
+    stickyColumnObserver = new ResizeObserver(() => syncStickyColumnOffset(table));
+    stickyColumnObserver.observe(ths[0]);
+  }
   table.querySelectorAll<HTMLElement>('[data-die-rz]').forEach((rz) => {
     // The handle lives inside a sortable <th> — swallow clicks so a
     // resize never doubles as a sort.
@@ -721,6 +740,7 @@ function wireColResize(table: HTMLTableElement): void {
         const w = Math.max(40, startW + (ev.clientX - startX));
         cols[idx].style.width = `${w}px`;
         table.style.width = `${totalRest + w}px`;
+        syncStickyColumnOffset(table);
       };
       const up = (): void => {
         rz.removeEventListener('pointermove', move);
@@ -908,7 +928,7 @@ function renderDieTable(): string {
     </tr></thead>
     <tbody>${rows}</tbody>
   </table></div>
-  <p class="kpi-note">Usage inside the selected window. <b>Shots</b> = press cycles (Count End − Count Start) — the number that wears the die; <b>Pieces</b> = shots × cavities. <b>Status</b> is the toolroom's verdict from PMD_DieMaster. <b>Defect trend</b>: bar height = reject qty per day, colour = that day's reject-% band — a die drifting 🟡→🔴 left-to-right is due for service. Tap a column header to sort; drag a header's right edge to resize the column (double-tap the edge to reset); tap Die # or the trend for detail.</p>`;
+  <p class="kpi-note">Usage inside the selected window. <b>Shots</b> = press cycles (Count End − Count Start) — the number that wears the die; <b>Pieces</b> = shots × cavities. <b>Status</b> is the toolroom's verdict from PMD_DieMaster. <b>Defect trend</b>: bar height = reject qty per day, colour = that day's reject-% band — a die drifting 🟡→🔴 left-to-right is due for service. The header, <b>Die #</b> and <b>Description</b> stay pinned while scrolling. Tap a column header to sort; drag a header's right edge to resize the column (double-tap the edge to reset); tap Die # or the trend for detail.</p>`;
 }
 
 /** READ-ONLY work-order mirror. Mango owns the lifecycle — this list

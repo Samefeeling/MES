@@ -5,6 +5,7 @@ import type {
   PlanningOrder,
   ProductionRecord,
   ShiftCode,
+  StatusCode,
 } from '../types';
 import { aggregate, countSetupEvents, type Kpi } from '../core/metrics';
 import {
@@ -25,6 +26,7 @@ import {
   renderParetoChart,
 } from './charts';
 import { parseHandover } from '../core/handover';
+import { STATUS_MAP } from '../core/status';
 import { isSupervisor } from './supervisor-auth';
 import { renderJobTraceCards } from './trace';
 
@@ -106,7 +108,7 @@ const PERIODS: Array<{ key: PeriodKey; label: string }> = [
 
 const SHIFT_ORDER: ShiftCode[] = SHIFTS.map((s) => s.code);
 
-interface HandoverEntry {
+export interface HandoverEntry {
   jobNumber: string;
   shiftId: string;
   machine: string;
@@ -126,7 +128,6 @@ interface ShiftAgg {
   colorHrs: number;
   insertHrs: number;
   oee: number | null;
-  handovers: HandoverEntry[];
   /** Planning-driven expected good pieces (see core/standards.ts). null =
    *  not computed for this slice (job rows / category rows) or no cycle
    *  time anywhere in it — the Output cell stays uncoloured. */
@@ -230,6 +231,11 @@ function colorForJob(
 
 interface KpiRow {
   machineCode: string;
+  /** One period-wide Handover collection for this machine. Handover is
+   *  intentionally not part of ShiftAgg: carrying it through every metric
+   *  aggregation made the same note appear on machine, shift, order, job,
+   *  and category rows. */
+  handovers: HandoverEntry[];
   total: ShiftAgg;
   byShift: Record<ShiftCode, ShiftAgg>;
   /** Per (shift, job) breakdown for the 3rd-level expansion. */
@@ -267,8 +273,11 @@ interface KpiState {
    *  Parts without a category land in "Other". */
   catTotals: Array<{ category: string; agg: ShiftAgg }>;
   /** Reject quantity per RejectCode, sliced floor-wide and per machine.
-   *  Sourced from PMD_Rejects directly (label = RejectCategory). Sorted
-   *  value-descending. Empty when the DAL can't supply the data. */
+   *  Quantity + shift come directly from PMD_Rejects; the human label is
+   *  resolved by RejectCode from PMD_RejectCategories. RejectCategory on
+   *  the event row is preserved separately as MachineStatus context so R
+   *  rejects can be distinguished from Startup/changeover scrap. Sorted
+   *  value-descending. */
   rejectPareto: { floor: ParetoSlice[]; byMachine: Map<string, ParetoSlice[]> };
   /** Breakdown downtime hours per BDCode, sliced the same way. Sourced
    *  from PMD_BreakDownlog (label = breakdown cause from the taxonomy). */
@@ -403,10 +412,26 @@ export function collectHandovers(records: ProductionRecord[]): HandoverEntry[] {
     if (!h.machine && !h.mold && !h.material && !h.method) continue;
     out.push({ jobNumber: r.jobNumber, shiftId: r.shiftId, ...h });
   }
-  return out;
+  return sortHandoversNewest(out);
 }
 
-function toAgg(k: Kpi, records: ProductionRecord[]): ShiftAgg {
+/** Newest shift first; Job # uses natural order within the same shift. */
+export function sortHandoversNewest(
+  handovers: ReadonlyArray<HandoverEntry>,
+): HandoverEntry[] {
+  const jobOrder = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+  return [...handovers].sort((a, b) => {
+    const aTime = shiftBounds(a.shiftId)?.start.getTime();
+    const bTime = shiftBounds(b.shiftId)?.start.getTime();
+    if (aTime != null && bTime != null && aTime !== bTime) return bTime - aTime;
+    if (aTime != null && bTime == null) return -1;
+    if (aTime == null && bTime != null) return 1;
+    const shiftOrder = b.shiftId.localeCompare(a.shiftId);
+    return shiftOrder || jobOrder.compare(a.jobNumber, b.jobNumber);
+  });
+}
+
+function toAgg(k: Kpi): ShiftAgg {
   const good = k.output;
   const reject = k.scrap;
   const yieldPct = good + reject > 0 ? (good / (good + reject)) * 100 : 100;
@@ -421,7 +446,6 @@ function toAgg(k: Kpi, records: ProductionRecord[]): ShiftAgg {
     colorHrs: k.colorHrs,
     insertHrs: k.insertHrs,
     oee: k.oee,
-    handovers: collectHandovers(records),
     // Expectation / standards are computed PER SHIFT BUCKET (the runs-of-D
     // counting and the planned-start cut only make sense against one
     // shift's clock window) and summed onto the agg by the caller — a
@@ -445,7 +469,6 @@ function emptyAgg(): ShiftAgg {
     colorHrs: 0,
     insertHrs: 0,
     oee: null,
-    handovers: [],
     expOutput: null,
     dieStdHrs: null,
     colorStdHrs: null,
@@ -736,7 +759,7 @@ async function compute(now = new Date()): Promise<void> {
         if (expPieces != null) cell.exp = (cell.exp ?? 0) + expPieces;
         charts.set(dateKey, cb);
       }
-      byShift[code] = toAgg(aggregate(flat), flat);
+      byShift[code] = toAgg(aggregate(flat));
       for (const s of stdAcc) addStd(byShift[code], s.exp, s.std);
 
       // 3rd-level breakdown: group this shift's records by JobNum,
@@ -754,12 +777,12 @@ async function compute(now = new Date()): Promise<void> {
             jobNumber,
             partDescShort: firstTwoWords(desc),
             color: colorForJob(partNumByJob.get(jobNumber) ?? '', desc, dieColors),
-            agg: toAgg(aggregate(recs), recs),
+            agg: toAgg(aggregate(recs)),
           };
         })
         .sort((a, b2) => b2.agg.output - a.agg.output);
     }
-    const total = toAgg(aggregate(all), all);
+    const total = toAgg(aggregate(all));
     // Machine total = Σ of its shift aggs' expectations / standards.
     for (const code of SHIFT_ORDER) {
       const s = byShift[code];
@@ -787,7 +810,7 @@ async function compute(now = new Date()): Promise<void> {
           jobNumber,
           partDescShort: firstTwoWords(desc),
           color: colorForJob(partNumByJob.get(jobNumber) ?? '', desc, dieColors),
-          agg: toAgg(aggregate(recs), recs),
+          agg: toAgg(aggregate(recs)),
         };
       })
       .sort((a, b2) => b2.agg.output - a.agg.output);
@@ -795,7 +818,14 @@ async function compute(now = new Date()): Promise<void> {
     // Schedule Adherence was retired here — the Output "vs Plan" column
     // now carries plan attainment, judged against the simulated planned-
     // queue expectation rather than a separate scheduled-qty ratio.
-    return { machineCode: m.machineCode, total, byShift, jobsByShift, byJobTotal };
+    return {
+      machineCode: m.machineCode,
+      handovers: collectHandovers(all),
+      total,
+      byShift,
+      jobsByShift,
+      byJobTotal,
+    };
   });
 
   S!.rows = rows;
@@ -836,7 +866,7 @@ async function compute(now = new Date()): Promise<void> {
     }
   }
   S!.catTotals = Array.from(byCategory.entries())
-    .map(([category, recs]) => ({ category, agg: toAgg(aggregate(recs), recs) }))
+    .map(([category, recs]) => ({ category, agg: toAgg(aggregate(recs)) }))
     .sort((a, b2) => b2.agg.output - a.agg.output);
 
   // paretoMachines = ['', ...machineCodes] above; index 0 is the floor,
@@ -845,10 +875,16 @@ async function compute(now = new Date()): Promise<void> {
   const rejectByMachine = new Map<string, ParetoSlice[]>();
   const downtimeByMachine = new Map<string, ParetoSlice[]>();
   S!.machines.forEach((m, i) => {
-    rejectByMachine.set(m.machineCode, rejectParetoBy[i + 1] ?? []);
+    rejectByMachine.set(
+      m.machineCode,
+      applyRejectDescriptions(rejectParetoBy[i + 1] ?? [], S!.rejectDescByCode),
+    );
     downtimeByMachine.set(m.machineCode, downtimeParetoBy[i + 1] ?? []);
   });
-  S!.rejectPareto = { floor: rejectParetoBy[0] ?? [], byMachine: rejectByMachine };
+  S!.rejectPareto = {
+    floor: applyRejectDescriptions(rejectParetoBy[0] ?? [], S!.rejectDescByCode),
+    byMachine: rejectByMachine,
+  };
   S!.downtimePareto = {
     floor: downtimeParetoBy[0] ?? [],
     byMachine: downtimeByMachine,
@@ -909,33 +945,96 @@ function setupCell(actualHrs: number, stdHrs: number | null, stdEachHrs: number,
   return `<td class="num ${cls}" title="${escapeHtml(title)}">${v}</td>`;
 }
 
-function formatHandoverCell(handovers: HandoverEntry[]): string {
+function handoverShiftLabel(shiftId: string, compact = false): string {
+  const p = parseShiftId(shiftId);
+  if (!p) return shiftId || 'Unknown shift';
+  // Midday avoids DST / timezone edge cases when formatting this wall date.
+  const date = new Date(p.year, p.month - 1, p.day, 12).toLocaleDateString('en-AU', {
+    day: '2-digit',
+    month: 'short',
+    ...(compact ? {} : { year: 'numeric' as const }),
+  });
+  return compact ? `${date} · ${p.code}` : `${date} · ${p.code} shift`;
+}
+
+/** One compact entry on the machine row. Detail text never participates in
+ *  the table's width calculation; the button opens the full grouped view. */
+function formatHandoverCell(machineCode: string, handovers: HandoverEntry[]): string {
   if (handovers.length === 0) return '<td class="kpi-ho-cell muted">—</td>';
-  // Compact: one row per job, four emoji-prefixed segments; whitespace
-  // collapsed. Full text available via `title=` tooltip.
-  const compact = handovers
-    .map((h) => {
-      const parts: string[] = [`🕒 ${h.shiftId.slice(0, 10)} ${h.shiftId.slice(11)}`];
-      if (h.machine) parts.push(`🛠 ${h.machine.replace(/\s+/g, ' ').trim()}`);
-      if (h.mold) parts.push(`🧩 ${h.mold.replace(/\s+/g, ' ').trim()}`);
-      if (h.material) parts.push(`📦 ${h.material.replace(/\s+/g, ' ').trim()}`);
-      if (h.method) parts.push(`📋 ${h.method.replace(/\s+/g, ' ').trim()}`);
-      return parts.join(' · ');
-    })
-    .join(' || ');
-  const full = handovers
-    .map((h) => {
-      const lines: string[] = [
-        `${h.shiftId.slice(0, 10)} ${h.shiftId.slice(11)} · Job ${h.jobNumber || '—'}`,
-      ];
-      if (h.machine) lines.push(`  🛠 ${h.machine}`);
-      if (h.mold) lines.push(`  🧩 ${h.mold}`);
-      if (h.material) lines.push(`  📦 ${h.material}`);
-      if (h.method) lines.push(`  📋 ${h.method}`);
-      return lines.join('\n');
-    })
-    .join('\n\n');
-  return `<td class="kpi-ho-cell" title="${escapeHtml(full)}">${escapeHtml(compact)}</td>`;
+  const sorted = sortHandoversNewest(handovers);
+  const latest = sorted[0];
+  const countLabel = `${sorted.length} handover${sorted.length === 1 ? '' : 's'}`;
+  const latestLabel = `${handoverShiftLabel(latest.shiftId, true)} · Job ${latest.jobNumber || '—'}`;
+  return `<td class="kpi-ho-cell">
+    <button type="button" class="kpi-ho-summary" data-handover-machine="${escapeHtml(
+      machineCode,
+    )}" aria-haspopup="dialog" aria-label="View ${escapeHtml(countLabel)} for ${escapeHtml(
+      machineCode,
+    )}" title="${escapeHtml(`${countLabel} · latest: ${latestLabel}`)}">
+      <span class="kpi-ho-count">${sorted.length}</span>
+      <span class="kpi-ho-latest">${escapeHtml(latestLabel)}</span>
+      <span class="kpi-ho-arrow" aria-hidden="true">›</span>
+    </button>
+  </td>`;
+}
+
+/** Expanded hierarchy rows intentionally carry no Handover content. */
+function emptyHandoverCell(): string {
+  return '<td class="kpi-ho-cell kpi-ho-empty" aria-hidden="true"></td>';
+}
+
+function handoverField(icon: string, label: string, value: string): string {
+  if (!value) return '';
+  return `<div class="kpi-ho-field">
+    <span class="kpi-ho-field-label">${icon} ${escapeHtml(label)}</span>
+    <p>${escapeHtml(value)}</p>
+  </div>`;
+}
+
+/** Full Handover history for one machine, grouped newest shift first and
+ *  naturally ordered by Job # inside each shift. */
+function openHandoverDetail(machineCode: string, handovers: HandoverEntry[]): void {
+  const sorted = sortHandoversNewest(handovers);
+  const grouped = new Map<string, HandoverEntry[]>();
+  for (const h of sorted) {
+    const entries = grouped.get(h.shiftId) ?? [];
+    entries.push(h);
+    grouped.set(h.shiftId, entries);
+  }
+  const groups = Array.from(grouped.entries())
+    .map(([shiftId, entries]) => `<section class="kpi-ho-group">
+      <div class="kpi-ho-shift-head">
+        <b>${escapeHtml(handoverShiftLabel(shiftId))}</b>
+        <span>${entries.length} job${entries.length === 1 ? '' : 's'}</span>
+      </div>
+      <div class="kpi-ho-jobs">
+        ${entries
+          .map((h) => `<article class="kpi-ho-job">
+            <h3>Job ${escapeHtml(h.jobNumber || '—')}</h3>
+            <div class="kpi-ho-fields">
+              ${handoverField('🛠', 'Machine', h.machine)}
+              ${handoverField('🧩', 'Mold', h.mold)}
+              ${handoverField('📦', 'Material', h.material)}
+              ${handoverField('📋', 'Method', h.method)}
+            </div>
+          </article>`)
+          .join('')}
+      </div>
+    </section>`)
+    .join('');
+  const mc = openModal(`<div class="bd-modal kpi-handover-modal">
+    <div class="kpi-ho-modal-head">
+      <div>
+        <h2 class="bd-title">📝 Handover — ${escapeHtml(machineCode)}</h2>
+        <p class="bd-sub">${sorted.length} handover${
+          sorted.length === 1 ? '' : 's'
+        } · newest shift first · Job # order within each shift</p>
+      </div>
+      <button type="button" class="btn-primary-big kpi-ho-close" data-handover-close>Close</button>
+    </div>
+    <div class="kpi-ho-history">${groups}</div>
+  </div>`);
+  mc.querySelector('[data-handover-close]')?.addEventListener('click', closeModal);
 }
 
 /** Job-name row header: the job number is a button that opens the Trace
@@ -1022,8 +1121,7 @@ function aggCells(
     ${setupCell(a.colorHrs, a.colorStdHrs, COLOR_CHANGE_STD_HRS, 'Colour change')}
     ${setupCell(a.insertHrs, a.insertStdHrs, INSERT_CHANGE_STD_HRS, 'Insert change')}
     <td class="num ${colourOee ? oc : ''}">${a.oee == null ? '—' : a.oee + '%'}</td>
-    <td class="num ${pc}">${planPct == null ? '—' : planPct + '%'}</td>
-    ${formatHandoverCell(a.handovers)}`;
+    <td class="num ${pc}">${planPct == null ? '—' : planPct + '%'}</td>`;
 }
 
 /**
@@ -1148,6 +1246,7 @@ function render(): void {
           <th>${toggle}${ordersToggle}<span class="kpi-mc-name">${escapeHtml(r.machineCode)}</span></th>
           ${colorCell()}
           ${aggCells(r.total, null, true, r.machineCode, r.machineCode)}
+          ${formatHandoverCell(r.machineCode, r.handovers)}
         </tr>`;
         const orderRows = ordersOpen
           ? r.byJobTotal
@@ -1159,6 +1258,7 @@ function render(): void {
                   ${jobNameTh(j.jobNumber, j.partDescShort, fullDesc)}
                   ${colorCell(j.color)}
                   ${aggCells(j.agg, null, false)}
+                  ${emptyHandoverCell()}
                 </tr>`;
               })
               .join('')
@@ -1181,6 +1281,7 @@ function render(): void {
             <th class="kpi-shift-name">${chev}${escapeHtml(code)}</th>
             ${colorCell()}
             ${aggCells(a, null, false)}
+            ${emptyHandoverCell()}
           </tr>`;
           if (!jobsOpen) return shiftRow;
           const jobRows = jobs
@@ -1192,6 +1293,7 @@ function render(): void {
                 ${jobNameTh(j.jobNumber, j.partDescShort, fullDesc)}
                 ${colorCell(j.color)}
                 ${aggCells(j.agg, null, false)}
+                ${emptyHandoverCell()}
               </tr>`;
             })
             .join('');
@@ -1209,6 +1311,7 @@ function render(): void {
           <th>${escapeHtml(c.category)}</th>
           ${colorCell()}
           ${aggCells(c.agg, null, false)}
+          ${emptyHandoverCell()}
         </tr>`,
       )
       .join('');
@@ -1245,10 +1348,11 @@ function render(): void {
     const oee = logged > 0 ? Math.round((run / logged) * 100) : null;
     return { label: b.label, run, down, setup, oee };
   });
-  // Reject Pareto from PMD_Rejects (RejectCode bars + RejectCategory
-  // legend); Downtime Pareto from PMD_BreakDownlog (BDCode bars + cause
-  // legend). Side by side in the chart strip; either one independently
-  // hides when its source list returns nothing.
+  // Reject Pareto counts + shift/status splits come from PMD_Rejects; its
+  // legend resolves RejectCode through PMD_RejectCategories and displays
+  // RejectCategory separately as MachineStatus context. Downtime Pareto
+  // comes from PMD_BreakDownlog (BDCode bars + cause legend). Either chart
+  // independently hides when its source list returns nothing.
   // Stack the floor Reject Pareto by shift when PMD_Rejects carried the
   // Shift split (SharePoint backend); fall back to the single-colour bar
   // when no slice has a byShift breakdown (memory DAL / older data).
@@ -1257,7 +1361,7 @@ function render(): void {
     ? `<div class="kpi-chart">
           <h4>Reject Pareto — RejectCode${
             rejectHasShiftSplit ? ' by shift' : ''
-          } (click a Reject number in the table to drill)</h4>
+          } · MachineStatus context below (click a Reject number to drill)</h4>
           ${
             rejectHasShiftSplit
               ? renderParetoByShiftChart(toParetoShiftBuckets(S!.rejectPareto.floor))
@@ -1346,6 +1450,12 @@ function render(): void {
       ${stats}
       <div class="kpi-table-wrap">
         <table class="summary-table kpi-table">
+          <colgroup>
+            <col class="kpi-col-machine">
+            <col class="kpi-col-color">
+            <col span="10" class="kpi-col-metric">
+            <col class="kpi-col-handover">
+          </colgroup>
           <thead><tr>
             <th class="kpi-machine-head">Machine
               <button type="button" class="kpi-toggle kpi-toggle-all" data-toggle-all-shifts title="Toggle shift breakdown on every machine">${allShiftsGlyph}</button>
@@ -1469,6 +1579,13 @@ function render(): void {
   app.querySelectorAll<HTMLButtonElement>('[data-job-trace]').forEach((b) =>
     b.addEventListener('click', () => void openJobTrace(b.dataset.jobTrace!)),
   );
+  app.querySelectorAll<HTMLButtonElement>('[data-handover-machine]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const machineCode = b.dataset.handoverMachine!;
+      const row = S!.rows.find((r) => r.machineCode === machineCode);
+      if (row?.handovers.length) openHandoverDetail(machineCode, row.handovers);
+    }),
+  );
   app.querySelectorAll<HTMLButtonElement>('[data-reject-drill]').forEach((b) =>
     b.addEventListener('click', () => openRejectDrill(b.dataset.rejectDrill!)),
   );
@@ -1527,10 +1644,116 @@ function renderParetoLegend(slices: ParetoSlice[], unit = ''): string {
         `<li><b>${escapeHtml(s.code)}</b> ${escapeHtml(s.label)} <span class="kpi-rej-qty">${formatValue(
           s.value,
           unit,
-        )}</span> <span class="muted">(${((s.value / total) * 100).toFixed(0)}%)</span></li>`,
+        )}</span> <span class="muted">(${((s.value / total) * 100).toFixed(0)}%)</span>${renderRejectStatusBadges(
+          s,
+        )}</li>`,
     )
     .join('');
   return `<ul class="kpi-reject-legend">${items}</ul>`;
+}
+
+/** Replace any legacy/misinterpreted PMD_Rejects.RejectCategory label with
+ *  the real RejectCode description. R/B/C/D/I/M/O/P/S stay available in
+ *  `byStatus` as valuable occurrence context; they are simply not defect
+ *  names. Pure and exported for regression tests. */
+export function applyRejectDescriptions(
+  slices: ReadonlyArray<ParetoSlice>,
+  descriptions: ReadonlyMap<string, string>,
+): ParetoSlice[] {
+  const isMachineStatus = (label: string): boolean => /^[RBCDIMOPS]$/.test(label.trim());
+  return slices.map((s) => {
+    const fromMaster = (
+      descriptions.get(s.code) ?? descriptions.get(s.code.trim().toUpperCase())
+    )?.trim();
+    const existing = s.label?.trim() ?? '';
+    const label = fromMaster || (!existing || isMachineStatus(existing) ? s.code : existing);
+    return { ...s, label };
+  });
+}
+
+const REJECT_STATUS_ORDER: Array<StatusCode | 'Unknown'> = [
+  'R',
+  'S',
+  'B',
+  'C',
+  'D',
+  'I',
+  'M',
+  'P',
+  'O',
+  'Unknown',
+];
+
+/** Quantifies the action signal without inventing a plant-specific alarm
+ *  threshold. Managers see the raw R quantity and its share, then decide
+ *  whether the volume warrants Take Action. */
+export function rejectActionContext(slice: ParetoSlice): {
+  runningQty: number;
+  startupQty: number;
+  unknownQty: number;
+  statusTotal: number;
+  runningPct: number | null;
+} {
+  const runningQty = slice.byStatus?.R ?? 0;
+  const startupQty = slice.byStatus?.S ?? 0;
+  const unknownQty = slice.byStatus?.Unknown ?? 0;
+  const statusTotal = Object.values(slice.byStatus ?? {}).reduce(
+    (sum, qty) => sum + (Number(qty) || 0),
+    0,
+  );
+  return {
+    runningQty,
+    startupQty,
+    unknownQty,
+    statusTotal,
+    runningPct: statusTotal > 0 ? Math.round((runningQty / statusTotal) * 100) : null,
+  };
+}
+
+function renderRejectStatusBadges(slice: ParetoSlice): string {
+  const badges = REJECT_STATUS_ORDER.flatMap((code) => {
+    const qty = slice.byStatus?.[code] ?? 0;
+    if (qty <= 0) return [];
+    const label =
+      code === 'Unknown'
+        ? 'Unknown machine status'
+        : code === 'S'
+          ? 'Startup / Shutdown'
+          : STATUS_MAP[code]?.label ?? code;
+    const cls =
+      code === 'R'
+        ? ' is-running'
+        : code === 'S'
+          ? ' is-startup'
+          : code === 'Unknown'
+            ? ' is-unknown'
+            : ' is-context';
+    return [
+      `<span class="kpi-reject-status${cls}" title="${escapeHtml(
+        label,
+      )}">${escapeHtml(code)} <b>${qty}</b></span>`,
+    ];
+  }).join('');
+  return badges ? `<span class="kpi-reject-statuses">${badges}</span>` : '';
+}
+
+function renderRejectActionSignal(slice: ParetoSlice): string {
+  const ctx = rejectActionContext(slice);
+  if (ctx.statusTotal === 0) {
+    return '<span class="kpi-reject-signal is-unknown">Status unavailable</span>';
+  }
+  if (ctx.runningQty > 0) {
+    return `<span class="kpi-reject-signal is-review"><b>R ×${ctx.runningQty}</b><small>${
+      ctx.runningPct ?? 0
+    }% · review</small></span>`;
+  }
+  if (ctx.unknownQty > 0) {
+    return `<span class="kpi-reject-signal is-unknown"><b>Unknown ×${ctx.unknownQty}</b><small>check source</small></span>`;
+  }
+  if (ctx.startupQty === ctx.statusTotal) {
+    return '<span class="kpi-reject-signal is-startup"><b>No R rejects</b><small>Startup / Shutdown context</small></span>';
+  }
+  return '<span class="kpi-reject-signal is-context"><b>No R rejects</b><small>non-running context</small></span>';
 }
 
 /** Shape slices for renderParetoChart: short code on the x-axis, value
@@ -1570,9 +1793,7 @@ function openParetoDrill(opts: {
   valueLabel: string;
   source: { floor: ParetoSlice[]; byMachine: Map<string, ParetoSlice[]> };
   scopeKey: string;
-  /** When set, adds a Description column that spells each code out
-   *  (D01 → "ShortShot"). Used by the Reject drill; downtime omits it. */
-  descByCode?: Map<string, string>;
+  showRejectStatus?: boolean;
 }): void {
   const slices =
     opts.scopeKey === 'FLOOR'
@@ -1581,21 +1802,21 @@ function openParetoDrill(opts: {
   const scopeLabel = opts.scopeKey === 'FLOOR' ? 'All machines' : opts.scopeKey;
   const total = slices.reduce((a, s) => a + s.value, 0);
   if (total === 0) return;
-  const withDesc = !!opts.descByCode;
   let cum = 0;
   const rows = slices
     .map((s, i) => {
       cum += s.value;
       const pct = ((s.value / total) * 100).toFixed(1);
       const cumPct = ((cum / total) * 100).toFixed(1);
-      const descCell = withDesc
-        ? `<td>${escapeHtml(opts.descByCode!.get(s.code) ?? s.label ?? '—')}</td>`
+      const statusCells = opts.showRejectStatus
+        ? `<td>${renderRejectStatusBadges(s) || '<span class="muted">—</span>'}</td>
+           <td>${renderRejectActionSignal(s)}</td>`
         : '';
       return `<tr>
         <td class="num">${i + 1}</td>
         <td><b>${escapeHtml(s.code)}</b></td>
-        ${descCell}
         <td>${escapeHtml(s.label)}</td>
+        ${statusCells}
         <td class="num r">${formatValue(s.value, opts.unit)}</td>
         <td class="num">${pct}%</td>
         <td class="num">${cumPct}%</td>
@@ -1604,16 +1825,25 @@ function openParetoDrill(opts: {
     .join('');
   const chart = renderParetoChart(toParetoBuckets(slices));
   const totalDisplay = formatValue(+total.toFixed(2), opts.unit);
-  const descHead = withDesc ? '<th>Description</th>' : '';
-  const totalSpan = withDesc ? 4 : 3;
-  const mc = openModal(`<div class="bd-modal kpi-drill-modal">
+  const statusHeads = opts.showRejectStatus
+    ? '<th>MachineStatus at defect</th><th>Running signal</th>'
+    : '';
+  const contextNote = opts.showRejectStatus
+    ? ' · R = during production (review volume/ratio) · S = Startup / Shutdown context'
+    : '';
+  const totalSpan = opts.showRejectStatus ? 5 : 3;
+  const mc = openModal(`<div class="bd-modal kpi-drill-modal${
+    opts.showRejectStatus ? ' kpi-reject-drill-modal' : ''
+  }">
     <h2 class="bd-title">🔬 ${escapeHtml(opts.title)} — ${escapeHtml(scopeLabel)}</h2>
     <p class="bd-sub">${totalDisplay} across ${slices.length} code${
       slices.length === 1 ? '' : 's'
-    } · ${escapeHtml(periodRange(S!.period, new Date()).label)}</p>
+    } · ${escapeHtml(periodRange(S!.period, new Date()).label)}${contextNote}</p>
     <div class="kpi-drill-chart">${chart}</div>
     <table class="summary-table kpi-drill-table">
-      <thead><tr><th>#</th><th>Code</th>${descHead}<th>${escapeHtml(opts.valueLabel)}</th><th>Value</th><th>%</th><th>Cum %</th></tr></thead>
+      <thead><tr><th>#</th><th>Code</th><th>${escapeHtml(
+        opts.valueLabel,
+      )}</th>${statusHeads}<th>Value</th><th>%</th><th>Cum %</th></tr></thead>
       <tbody>${rows}</tbody>
       <tfoot><tr class="kpi-total"><th colspan="${totalSpan}">TOTAL</th><td class="num r">${totalDisplay}</td><td class="num">100%</td><td class="num">—</td></tr></tfoot>
     </table>
@@ -1650,12 +1880,13 @@ function openRejectDrill(scopeKey: string): void {
   openParetoDrill({
     title: 'Reject breakdown',
     unit: '',
-    // The old s.label column now reads as the row's RejectCategory
-    // grouping; the new Description column spells the D-code out.
-    valueLabel: 'Category',
+    // PMD_Rejects supplies code/qty/shift AND the occurrence status. The
+    // code label comes from PMD_RejectCategories; R/S remain visible as a
+    // separate context dimension, never mislabelled as the defect itself.
+    valueLabel: 'Reject description',
     source: S!.rejectPareto,
     scopeKey,
-    descByCode: S!.rejectDescByCode,
+    showRejectStatus: true,
   });
 }
 
@@ -1701,7 +1932,9 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
   // Description column. Cheap, changes rarely; load once at mount.
   try {
     const cats = await dal.listRejectCategories();
-    S.rejectDescByCode = new Map(cats.map((c) => [c.code, c.label]));
+    S.rejectDescByCode = new Map(
+      cats.map((c) => [c.code.trim().toUpperCase(), c.label]),
+    );
   } catch (e) {
     console.warn('[pmd] reject categories load failed', e);
     S.catalogErrors = [`Reject categories: ${(e as Error).message || 'read failed'}`];

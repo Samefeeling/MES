@@ -485,6 +485,11 @@ export class SharePointDataLayer implements PmdDataLayer {
    */
   private dieColorCache: ProductDieColor[] | null = null;
   private dieMasterCache: DieMaster[] | null = null;
+  /** Small, read-only RejectCode → description catalogue. Keep the in-flight
+   *  promise too: KPI loads floor + every machine Pareto concurrently, and
+   *  all of them should share one PMD_RejectCategories request. A failed
+   *  request clears the cache so the next refresh can retry. */
+  private rejectCategoryCache: Promise<RejectCategory[]> | null = null;
   /** Resolved PMD_DieMaster internal names + item id per die number,
    *  captured by listDieMaster so updateDieMaster can write directly. */
   private dieMasterMeta: {
@@ -925,12 +930,24 @@ export class SharePointDataLayer implements PmdDataLayer {
   }
 
   async listRejectCategories(): Promise<RejectCategory[]> {
-    const F = this.F.rejectCategories;
-    const rows = await this.getAllItems(LISTS.rejectCategories);
-    return rows.map((r, i) => {
-      const code = str(r[F.code]);
-      return { code, label: str(r[F.description]), sequence: i + 1 };
-    });
+    if (!this.rejectCategoryCache) {
+      const F = this.F.rejectCategories;
+      this.rejectCategoryCache = this.getAllItems(LISTS.rejectCategories)
+        .then((rows) =>
+          rows
+            .map((r, i) => ({
+              code: str(r[F.code]).trim().toUpperCase(),
+              label: str(r[F.description]).trim(),
+              sequence: i + 1,
+            }))
+            .filter((r) => r.code),
+        )
+        .catch((e) => {
+          this.rejectCategoryCache = null;
+          throw e;
+        });
+    }
+    return this.rejectCategoryCache;
   }
 
   async listBdCodes(): Promise<BdCode[]> {
@@ -1733,17 +1750,25 @@ export class SharePointDataLayer implements PmdDataLayer {
   // ---- management Pareto aggregations --------------------------------
 
   /**
-   * Reject Pareto straight from PMD_Rejects — no production-record JSON
-   * round-trip. Groups RejectNumber by RejectCode; each slice's label is
-   * the RejectCategory carried on the rows (the dominant one when a code
-   * spans categories). Server-side lower-bounds the DateTime so the fetch
-   * stays small, then filters the exact [from, to] day window client-side.
+   * Reject Pareto counts straight from PMD_Rejects — no production-record
+   * JSON round-trip. RejectCategory on that event list is intentionally the
+   * slot's MachineStatus (R/S/D/…), NOT a defect description, so labels are
+   * resolved by RejectCode from PMD_RejectCategories instead. Server-side
+   * lower-bounds the DateTime so the fetch stays small, then filters the
+   * exact [from, to] day window client-side.
    */
   async listRejectPareto(filter: ParetoFilter): Promise<ParetoSlice[]> {
     const F = this.F.rejects;
     const parts: string[] = [this.dateLowerBound(F.date, filter.from)];
     if (filter.machineCode) parts.push(`${F.machine} eq '${odataString(filter.machineCode)}'`);
     const qs = '$filter=' + encodeURIComponent(parts.join(' and '));
+    // Start the shared catalogue read alongside the event read. If the
+    // catalogue is temporarily unavailable the Pareto still shows the real
+    // PMD_Rejects counts, labelled by code rather than by a false R/S status.
+    const categoriesPromise = this.listRejectCategories().catch((e) => {
+      console.warn('[pmd] listRejectPareto: PMD_RejectCategories read failed', e);
+      return [] as RejectCategory[];
+    });
     let rows: Record<string, unknown>[] = [];
     try {
       rows = await this.getAllItems(LISTS.rejects, qs);
@@ -1751,28 +1776,34 @@ export class SharePointDataLayer implements PmdDataLayer {
       console.warn('[pmd] listRejectPareto: PMD_Rejects read failed', e);
       throw e;
     }
+    const categories = await categoriesPromise;
+    const labelByCode = new Map(categories.map((c) => [c.code, c.label || c.code]));
     const qty = new Map<string, number>();
-    const catTally = new Map<string, Map<string, number>>();
     // Per-code Day/Afternoon/Night split so the KPI chart can stack the
     // bars by shift. PMD_Rejects.Shift is written from the shiftId at
     // sign-off, so it's always one of the three codes; an unexpected
     // value is simply not attributed to a shift (the bar would then be
     // shorter than `value`, but that doesn't happen with real data).
     const shiftTally = new Map<string, Record<ShiftCode, number>>();
+    const statusTally = new Map<
+      string,
+      Partial<Record<StatusCode | 'Unknown', number>>
+    >();
     for (const r of rows) {
       const day = dateOnly(r[F.date]);
       if (day < filter.from || day > filter.to) continue;
-      const code = str(r[F.rejectCode]).trim();
+      const code = str(r[F.rejectCode]).trim().toUpperCase();
       if (!code) continue;
       const n = num(r[F.rejectNumber]);
       if (n <= 0) continue;
       qty.set(code, (qty.get(code) ?? 0) + n);
-      const cat = str(r[F.rejectCategory]).trim();
-      if (cat) {
-        const m = catTally.get(code) ?? new Map<string, number>();
-        m.set(cat, (m.get(cat) ?? 0) + n);
-        catTally.set(code, m);
-      }
+      // RejectCategory is the status snapshot by design. Keep it as an
+      // independent analytical dimension: R rejects happened during normal
+      // production, while S/C/D/I/P etc provide startup/changeover context.
+      const status = rejectMachineStatus(str(r[F.rejectCategory]));
+      const statuses = statusTally.get(code) ?? {};
+      statuses[status] = (statuses[status] ?? 0) + n;
+      statusTally.set(code, statuses);
       const shift = str(r[F.shift]).trim();
       if (shift === 'Day' || shift === 'Afternoon' || shift === 'Night') {
         const st = shiftTally.get(code) ?? { Day: 0, Afternoon: 0, Night: 0 };
@@ -1782,8 +1813,9 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
     return paretoFrom(
       qty,
-      (code) => dominantKey(catTally.get(code)) || code,
+      (code) => labelByCode.get(code) || code,
       (code) => shiftTally.get(code),
+      (code) => statusTally.get(code),
     );
   }
 
@@ -3863,30 +3895,35 @@ function paretoFrom(
   tally: Map<string, number>,
   labelFor: (code: string) => string,
   byShiftFor?: (code: string) => Record<ShiftCode, number> | undefined,
+  byStatusFor?: (
+    code: string,
+  ) => Partial<Record<StatusCode | 'Unknown', number>> | undefined,
 ): ParetoSlice[] {
   return Array.from(tally.entries())
     .map(([code, value]) => {
       const slice: ParetoSlice = { code, label: labelFor(code), value: +value.toFixed(2) };
       const bs = byShiftFor?.(code);
       if (bs) slice.byShift = bs;
+      const status = byStatusFor?.(code);
+      if (status) slice.byStatus = status;
       return slice;
     })
     .sort((a, b) => b.value - a.value);
 }
 
-/** The key with the largest tallied value (e.g. dominant RejectCategory
- *  for a code), or '' when the map is empty. */
-function dominantKey(m: Map<string, number> | undefined): string {
-  if (!m) return '';
-  let best = '';
-  let bestN = -1;
-  for (const [k, n] of m) {
-    if (n > bestN) {
-      bestN = n;
-      best = k;
-    }
-  }
-  return best;
+function rejectMachineStatus(value: string): StatusCode | 'Unknown' {
+  const code = value.trim().toUpperCase();
+  return code === 'R' ||
+    code === 'B' ||
+    code === 'C' ||
+    code === 'D' ||
+    code === 'I' ||
+    code === 'M' ||
+    code === 'O' ||
+    code === 'P' ||
+    code === 'S'
+    ? code
+    : 'Unknown';
 }
 
 function getId(r: Record<string, unknown>): number {

@@ -2377,7 +2377,7 @@ describe('sanitizeBodyStrings', () => {
 });
 
 describe('listRejectPareto byShift breakdown', () => {
-  it('splits each RejectCode quantity across Day / Afternoon / Night', async () => {
+  it('uses PMD_Rejects for code/qty/shift but resolves labels from the category master', async () => {
     const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
     // Real PMD_Rejects rows are stamped at shiftDateMarker(shiftId) —
     // midnight UTC of the SHIFT'S calendar date — regardless of the actual
@@ -2388,26 +2388,38 @@ describe('listRejectPareto byShift breakdown', () => {
     // 06-21 under a UTC+ runtime, dropping two shifts).
     const MARK = '2026-06-20T00:00:00.000Z';
     const rejectRows = [
-      { Title: 'Batt1', Shift: 'Day', Date: MARK, RejectCode: 'D01', RejectCategory: 'Flash', RejectNumber: 5 },
-      { Title: 'Batt1', Shift: 'Afternoon', Date: MARK, RejectCode: 'D01', RejectCategory: 'Flash', RejectNumber: 3 },
-      { Title: 'Batt1', Shift: 'Night', Date: MARK, RejectCode: 'D01', RejectCategory: 'Flash', RejectNumber: 2 },
-      { Title: 'Batt1', Shift: 'Day', Date: MARK, RejectCode: 'D02', RejectCategory: 'Short', RejectNumber: 4 },
+      // RejectCategory is MachineStatus in the real PMD_Rejects schema. It
+      // must contribute neither the Pareto key nor its human label.
+      { Title: 'Batt1', Shift: 'Day', Date: MARK, RejectCode: 'D05', RejectCategory: 'R', RejectNumber: 5 },
+      { Title: 'Batt1', Shift: 'Afternoon', Date: MARK, RejectCode: 'D05', RejectCategory: 'R', RejectNumber: 3 },
+      { Title: 'Batt1', Shift: 'Night', Date: MARK, RejectCode: 'D05', RejectCategory: 'R', RejectNumber: 2 },
+      { Title: 'Batt1', Shift: 'Night', Date: MARK, RejectCode: 'D09', RejectCategory: 'S', RejectNumber: 4 },
     ];
-    const o = dal as unknown as { getAllItems: () => Promise<unknown[]> };
-    o.getAllItems = async (): Promise<unknown[]> => rejectRows;
+    const categoryRows = [
+      { Title: 'D05', Description: 'Short shot' },
+      { Title: 'D09', Description: 'Black spot' },
+    ];
+    const o = dal as unknown as { getAllItems: (list: string) => Promise<unknown[]> };
+    o.getAllItems = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_RejectCategories' ? categoryRows : rejectRows;
 
     const slices = await dal.listRejectPareto({ from: '2026-06-20', to: '2026-06-20' });
-    const d01 = slices.find((s) => s.code === 'D01')!;
-    expect(d01.value).toBe(10);
-    expect(d01.byShift).toEqual({ Day: 5, Afternoon: 3, Night: 2 });
+    const d05 = slices.find((s) => s.code === 'D05')!;
+    expect(d05.value).toBe(10);
+    expect(d05.label).toBe('Short shot');
+    expect(d05.byShift).toEqual({ Day: 5, Afternoon: 3, Night: 2 });
+    expect(d05.byStatus).toEqual({ R: 10 });
     // Sum of the shift split equals the slice total.
-    const sum = d01.byShift!.Day + d01.byShift!.Afternoon + d01.byShift!.Night;
-    expect(sum).toBe(d01.value);
+    const sum = d05.byShift!.Day + d05.byShift!.Afternoon + d05.byShift!.Night;
+    expect(sum).toBe(d05.value);
 
-    const d02 = slices.find((s) => s.code === 'D02')!;
-    expect(d02.byShift).toEqual({ Day: 4, Afternoon: 0, Night: 0 });
-    // D01 (10) sorts before D02 (4).
-    expect(slices[0].code).toBe('D01');
+    const d09 = slices.find((s) => s.code === 'D09')!;
+    expect(d09.label).toBe('Black spot');
+    expect(d09.byShift).toEqual({ Day: 0, Afternoon: 0, Night: 4 });
+    expect(d09.byStatus).toEqual({ S: 4 });
+    expect(slices.every((s) => s.label !== 'R' && s.label !== 'S')).toBe(true);
+    // D05 (10) sorts before D09 (4).
+    expect(slices[0].code).toBe('D05');
   });
 });
 

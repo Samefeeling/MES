@@ -13,6 +13,7 @@ import type {
   ProductionFilter,
   ProductionRecord,
   RejectCategory,
+  StatusCode,
   Supervisor,
   UserContext,
 } from '../types';
@@ -248,6 +249,10 @@ export class MemoryDataLayer implements PmdDataLayer {
   async listRejectPareto(filter: ParetoFilter): Promise<ParetoSlice[]> {
     const labelByCode = new Map(this.rejectCategories.map((c) => [c.code, c.label]));
     const qty = new Map<string, number>();
+    const statusQty = new Map<
+      string,
+      Partial<Record<StatusCode | 'Unknown', number>>
+    >();
     for (const r of this.inWindow(filter)) {
       let obj: Record<string, number> = {};
       try {
@@ -257,10 +262,19 @@ export class MemoryDataLayer implements PmdDataLayer {
       }
       for (const [code, v] of Object.entries(obj)) {
         const n = Number(v) || 0;
-        if (n > 0) qty.set(code, (qty.get(code) ?? 0) + n);
+        if (n <= 0) continue;
+        qty.set(code, (qty.get(code) ?? 0) + n);
+        const status: StatusCode | 'Unknown' = r.statusCode || 'Unknown';
+        const statuses = statusQty.get(code) ?? {};
+        statuses[status] = (statuses[status] ?? 0) + n;
+        statusQty.set(code, statuses);
       }
     }
-    return paretoSlices(qty, (code) => labelByCode.get(code) ?? code);
+    return paretoSlices(
+      qty,
+      (code) => labelByCode.get(code) ?? code,
+      (code) => statusQty.get(code),
+    );
   }
 
   /** Downtime Pareto derived from B-status slots' bdIssue — the mock
@@ -465,8 +479,16 @@ export class MemoryDataLayer implements PmdDataLayer {
 function paretoSlices(
   tally: Map<string, number>,
   labelFor: (code: string) => string,
+  byStatusFor?: (
+    code: string,
+  ) => Partial<Record<StatusCode | 'Unknown', number>> | undefined,
 ): ParetoSlice[] {
   return Array.from(tally.entries())
-    .map(([code, value]) => ({ code, label: labelFor(code), value: +value.toFixed(2) }))
+    .map(([code, value]) => {
+      const slice: ParetoSlice = { code, label: labelFor(code), value: +value.toFixed(2) };
+      const byStatus = byStatusFor?.(code);
+      if (byStatus) slice.byStatus = byStatus;
+      return slice;
+    })
     .sort((a, b) => b.value - a.value);
 }
