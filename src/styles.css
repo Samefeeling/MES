@@ -949,6 +949,12 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .die-wo-count{background:#eef2f7;border-radius:99px;padding:0 8px;font-size:11px;color:var(--mu)}
 .die-wo-empty{font-size:13px;color:var(--mu);padding:2px 0 2px 4px}
 
+/* A failed source must be visibly different from a genuine zero. Die and
+   KPI views keep rendering successful sources, with this banner naming the
+   incomplete reads instead of silently substituting empty arrays. */
+.data-error-banner{margin:10px 16px;padding:10px 14px;border:1px solid #f59e0b;border-left:5px solid #dc2626;border-radius:8px;background:#fff7ed;color:#7c2d12;font-size:13px;line-height:1.4}
+.data-error-banner b{color:#991b1b}
+
 /* ===== toast ===== */
 .toast{position:fixed;top:18px;right:18px;background:#1e293b;color:#fff;padding:14px 22px;border-radius:10px;font-size:17px;font-weight:700;z-index:300;opacity:0;transform:translateY(-10px);transition:.2s;pointer-events:none;max-width:80vw;box-shadow:0 4px 16px rgba(0,0,0,.25)}
 .toast.show{opacity:1;transform:translateY(0)}

@@ -38,6 +38,19 @@ export const DIE_COMPONENTS: Array<{ key: string; label: string }> = [
   { key: 'WaterLeaks', label: 'Water Leaks' },
 ];
 
+/** Natural key for one continuous D/I block. The start slot is what makes
+ *  two separate changes on the same machine/shift/job independent. */
+export function dieChangeEventKey(
+  machineCode: string,
+  date: string,
+  shift: string,
+  jobNumber: string,
+  eventStartSlot: number,
+): string {
+  const norm = (s: string): string => s.trim().toUpperCase();
+  return `${norm(machineCode)}|${date}|${norm(shift)}|${norm(jobNumber)}|${Math.max(0, Math.floor(eventStartSlot))}`;
+}
+
 /** The EXACT choice strings on the list (note the curly apostrophe in
  *  "can’t" — SharePoint choice validation is literal). */
 export const DIE_CONDITION_META: Record<
@@ -57,8 +70,8 @@ export interface DieConditionFlag {
 }
 
 /** Toolroom summary of the LATEST die-change condition report filed
- *  against a die. Ratings describe the die coming OUT of the press
- *  (DieNumberOut) — the setter inspects it while it's on the bench. */
+ *  against a die. The source can be either side of the event row: the die
+ *  coming OUT or the die going IN. */
 export interface DieConditionSummary {
   date: string;
   shift: string;
@@ -74,8 +87,8 @@ export interface DieConditionSummary {
 }
 
 /**
- * Latest condition report per die (key = DieNumberOut, trimmed +
- * uppercased). "Latest" is by report date, then createdAt — a newer
+ * Latest condition report per die (from either the OUT or IN inspection,
+ * key trimmed + uppercased). "Latest" is by report date, then createdAt — a newer
  * all-good report clears an older worn flag (the die was fixed or the
  * wear was re-judged), which is exactly how the toolroom reads it.
  */
@@ -84,28 +97,64 @@ export function latestConditionByDie(logs: DieChangeLog[]): Map<string, DieCondi
     a.date !== b.date ? (a.date < b.date ? 1 : -1) : a.createdAt < b.createdAt ? 1 : -1,
   );
   const out = new Map<string, DieConditionSummary>();
+  const rank = (c: DieComponentCondition): number =>
+    c === 'damaged' ? 3 : c === 'worn' ? 2 : c === 'good' ? 1 : 0;
   for (const l of sorted) {
-    const die = (l.dieNumberOut ?? '').trim().toUpperCase();
-    if (!die || out.has(die)) continue; // first hit in newest-first order = latest
-    const flags: DieConditionFlag[] = [];
-    for (const c of DIE_COMPONENTS) {
-      const cond = l.components[c.key];
-      if (cond === 'worn' || cond === 'damaged')
-        flags.push({ key: c.key, label: c.label, condition: cond });
+    const reports = [
+      {
+        die: (l.dieNumberOut ?? '').trim().toUpperCase(),
+        components: { ...(l.components ?? {}) },
+        problem: l.problemDescription ?? '',
+      },
+      {
+        die: (l.dieNumberIn ?? '').trim().toUpperCase(),
+        components: { ...(l.componentsIn ?? {}) },
+        problem: l.problemDescriptionIn ?? '',
+      },
+    ];
+    // Insert changes can inspect the same physical die on both sides. Merge
+    // those two inspections onto one worst-condition report instead of the
+    // second side being discarded by the newest-first de-duplication.
+    if (reports[0].die && reports[0].die === reports[1].die) {
+      for (const c of DIE_COMPONENTS) {
+        if (rank(reports[1].components[c.key]) > rank(reports[0].components[c.key]))
+          reports[0].components[c.key] = reports[1].components[c.key];
+      }
+      if (reports[1].problem) {
+        reports[0].problem = [reports[0].problem, reports[1].problem]
+          .filter(Boolean)
+          .join('\n');
+      }
+      reports.pop();
     }
-    flags.sort((a, b) =>
-      a.condition === b.condition ? 0 : a.condition === 'damaged' ? -1 : 1,
-    );
-    out.set(die, {
-      date: l.date,
-      shift: l.shift,
-      machineCode: l.machineCode,
-      dieSetter: l.dieSetter,
-      jobNumber: l.jobNumber,
-      problemDescription: l.problemDescription,
-      flags,
-      hasDamaged: flags.some((f) => f.condition === 'damaged'),
-    });
+    for (const report of reports) {
+      const die = report.die;
+      // An unfilled side is not an inspection and must not clear an older
+      // real report. An explicit all-good assessment still counts because
+      // its component values are non-empty and intentionally clear flags.
+      const assessed =
+        Object.values(report.components).some(Boolean) || report.problem.trim().length > 0;
+      if (!die || !assessed || out.has(die)) continue; // first real hit = latest
+      const flags: DieConditionFlag[] = [];
+      for (const c of DIE_COMPONENTS) {
+        const cond = report.components[c.key];
+        if (cond === 'worn' || cond === 'damaged')
+          flags.push({ key: c.key, label: c.label, condition: cond });
+      }
+      flags.sort((a, b) =>
+        a.condition === b.condition ? 0 : a.condition === 'damaged' ? -1 : 1,
+      );
+      out.set(die, {
+        date: l.date,
+        shift: l.shift,
+        machineCode: l.machineCode,
+        dieSetter: l.dieSetter,
+        jobNumber: l.jobNumber,
+        problemDescription: report.problem,
+        flags,
+        hasDamaged: flags.some((f) => f.condition === 'damaged'),
+      });
+    }
   }
   return out;
 }

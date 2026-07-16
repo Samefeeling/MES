@@ -15,6 +15,7 @@ import type {
   Supervisor,
 } from '../types';
 import { bdAsBdCodes } from '../core/breakdown';
+import { dieChangeEventKey } from '../core/die';
 import { generateDieChanges } from '../core/planning';
 import {
   SLOTS_PER_SHIFT,
@@ -303,6 +304,9 @@ export function seedDieChangeLogs(now: Date): DieChangeLog[] {
   return [
     {
       id: 1,
+      eventKey: dieChangeEventKey('850T', day(2), 'Day', 'SFM506888', 2),
+      eventStartSlot: 2,
+      eventEndSlot: 5,
       date: day(2),
       shift: 'Day',
       dieSetter: 'Anil Pattarath',
@@ -314,11 +318,16 @@ export function seedDieChangeLogs(now: Date): DieChangeLog[] {
       dieNumberIn: 'DIE-1422',
       dieDescriptionIn: 'Battery Tray Lid 4-cav',
       components: { ...allGood(), MouldingSurfaces: 'damaged', GuidePins: 'worn' },
+      componentsIn: {},
       problemDescription: 'Cavity 6 surface gouged near the gate; guide pins showing wear lines.',
+      problemDescriptionIn: '',
       createdAt: new Date(new Date(now).setDate(now.getDate() - 2)).toISOString(),
     },
     {
       id: 2,
+      eventKey: dieChangeEventKey('1600T', day(4), 'Night', 'SFM506811', 4),
+      eventStartSlot: 4,
+      eventEndSlot: 7,
       date: day(4),
       shift: 'Night',
       dieSetter: 'Van Minh Ma',
@@ -330,7 +339,9 @@ export function seedDieChangeLogs(now: Date): DieChangeLog[] {
       dieNumberIn: 'DIE-3597',
       dieDescriptionIn: 'Viva Backrest/Armrest 2-cav',
       components: { ...allGood(), Venting: 'worn' },
+      componentsIn: {},
       problemDescription: 'Vents crusting up — clean at next service.',
+      problemDescriptionIn: '',
       createdAt: new Date(new Date(now).setDate(now.getDate() - 4)).toISOString(),
     },
   ];

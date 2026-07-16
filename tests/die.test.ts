@@ -16,6 +16,7 @@ import {
 } from '../src/core/die';
 import { MemoryDataLayer } from '../src/dal/memory';
 import { parseMangoWorkOrdersCsv } from '../src/dal/sharepoint';
+import { fmtPlanned, woRow } from '../src/ui/die';
 import type { DieChangeLog, DieMaintenanceRequest, ProductDieColor } from '../src/types';
 import { order, rec } from './helpers';
 
@@ -54,6 +55,32 @@ describe('dieHealth', () => {
     expect(dieHealth(2)).toBe('amber');
     expect(dieHealth(5)).toBe('amber');
     expect(dieHealth(5.1)).toBe('red');
+  });
+});
+
+describe('die drill-down date rendering', () => {
+  it('converts zoned planned starts to the viewer local clock', () => {
+    const iso = '2026-07-01T08:00:00+14:00';
+    const d = new Date(iso);
+    const p = (n: number): string => String(n).padStart(2, '0');
+    expect(fmtPlanned(iso)).toBe(
+      `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`,
+    );
+  });
+
+  it('shows the due date on closed work and judges closure, never today-overdue', () => {
+    const html = woRow(
+      req({
+        dieNumber: '280',
+        status: 'done',
+        createdAt: '2026-07-01',
+        dueDate: '2026-07-10',
+        closedAt: '2026-07-12',
+      }),
+    );
+    expect(html).toContain('To be completed by 10/07/2026');
+    expect(html).toContain('Completed late');
+    expect(html).not.toContain('OVERDUE');
   });
 });
 
@@ -374,6 +401,9 @@ describe('MemoryDataLayer die maintenance lifecycle', () => {
 describe('latestConditionByDie (PMD_DieChangeLog → toolroom flags)', () => {
   const log = (over: Partial<DieChangeLog>): DieChangeLog => ({
     id: 1,
+    eventKey: '550T|2026-07-10|DAY|SFM507268|0',
+    eventStartSlot: 0,
+    eventEndSlot: 3,
     date: '2026-07-10',
     shift: 'Day',
     dieSetter: 'Van Minh Ma',
@@ -385,7 +415,9 @@ describe('latestConditionByDie (PMD_DieChangeLog → toolroom flags)', () => {
     dieNumberIn: '174',
     dieDescriptionIn: 'PODIUM SEAT',
     components: {},
+    componentsIn: {},
     problemDescription: '',
+    problemDescriptionIn: '',
     createdAt: '2026-07-10T08:00:00Z',
     ...over,
   });
@@ -584,12 +616,14 @@ describe('parseMangoWorkOrdersCsv (Mango report → work-order mirror)', () => {
     expect(closed.closedAt.slice(0, 10)).toBe('2025-10-13');
   });
 
-  it('returns [] for an empty / header-only / title-only file', () => {
-    expect(parseMangoWorkOrdersCsv('')).toEqual([]);
+  it('accepts a valid header-only report but rejects empty/title-only corruption', () => {
     expect(parseMangoWorkOrdersCsv(`${MINTO_HEADER}\n`)).toEqual([]);
-    expect(
-      parseMangoWorkOrdersCsv('AU - Minto Maintenance Request 1783728039982\nno real header here\n'),
-    ).toEqual([]);
+    expect(() => parseMangoWorkOrdersCsv('')).toThrow(/empty/i);
+    expect(() =>
+      parseMangoWorkOrdersCsv(
+        'AU - Minto Maintenance Request 1783728039982\nno real header here\n',
+      ),
+    ).toThrow(/schema invalid/i);
   });
 });
 
@@ -619,6 +653,9 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
   it('die change log: create + list round-trip, condition parsing', async () => {
     const dal = new MemoryDataLayer();
     const created = await dal.createDieChangeLog({
+      eventKey: '1600T|2026-07-14|DAY|SFM507001|2',
+      eventStartSlot: 2,
+      eventEndSlot: 5,
       date: '2026-07-14',
       shift: 'Day',
       dieSetter: 'Anil Pattarath',
@@ -630,7 +667,9 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
       dieNumberIn: '254',
       dieDescriptionIn: 'Postura Chair +460/510 mm',
       components: { Bolts: 'good', Venting: 'worn', OilLeaks: 'damaged' },
+      componentsIn: { Bolts: 'good' },
       problemDescription: 'Oil weep on the top cylinder; vents crusted.',
+      problemDescriptionIn: '',
     });
     expect(created.id).toBeGreaterThan(0);
     const all = await dal.listDieChangeLog();
@@ -647,6 +686,9 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
   it('die change log is idempotent on machine+date+shift+job (no duplicate on refresh)', async () => {
     const dal = new MemoryDataLayer();
     const base = {
+      eventKey: '1600T|2026-07-14|DAY|SFM507001|2',
+      eventStartSlot: 2,
+      eventEndSlot: 5,
       date: '2026-07-14',
       shift: 'Day',
       dieSetter: 'Anil Pattarath',
@@ -658,7 +700,9 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
       dieNumberIn: '254',
       dieDescriptionIn: 'Postura Chair',
       components: { Venting: 'worn' as const },
+      componentsIn: {},
       problemDescription: 'Vents crusted.',
+      problemDescriptionIn: '',
     };
     const first = await dal.createDieChangeLog(base);
     // A page reload re-fires the popup for the same tuple; the setter fixes a
@@ -686,16 +730,19 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
     expect((await dal.listDieChangeLog()).length).toBe(before + 1);
   });
 
-  it('OUT and IN condition rows for one change coexist (keyed by assessed die)', async () => {
+  it('stores OUT + IN inspections on one continuous-event row, keyed by start slot', async () => {
     const dal = new MemoryDataLayer();
     const ctx = {
+      eventKey: '550T|2026-07-14|DAY|SFM507268|2',
+      eventStartSlot: 2,
+      eventEndSlot: 5,
       date: '2026-07-14',
       shift: 'Day',
       dieSetter: 'Van Minh Ma',
       machineCode: '550T',
       jobNumber: 'SFM507268',
     };
-    // Row 1: the change record + OUT die (117) condition.
+    // One event row owns both sides of the physical change.
     await dal.createDieChangeLog({
       ...ctx,
       changeOver: ['Die'],
@@ -704,27 +751,18 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
       dieNumberIn: '174',
       dieDescriptionIn: 'Podium Seat',
       components: { MouldingSurfaces: 'worn' },
+      componentsIn: { Venting: 'damaged' },
       problemDescription: 'Surface wear near gate.',
-    });
-    // Row 2: the IN die (174) condition — stored under the fitted die.
-    await dal.createDieChangeLog({
-      ...ctx,
-      changeOver: [],
-      dieNumberOut: '174',
-      dieDescriptionOut: 'Podium Seat',
-      dieNumberIn: '174',
-      dieDescriptionIn: 'Podium Seat',
-      components: { Venting: 'damaged' },
-      problemDescription: 'Vent blocked on fitting.',
+      problemDescriptionIn: 'Vent blocked on fitting.',
     });
     const mine = (await dal.listDieChangeLog()).filter((r) => r.jobNumber === 'SFM507268');
-    expect(mine.length).toBe(2); // same event, two assessed dies → two rows
+    expect(mine.length).toBe(1);
     // latestConditionByDie attributes each to its own die.
     const cond = latestConditionByDie(mine);
     expect(cond.get('117')!.flags.map((f) => f.key)).toEqual(['MouldingSurfaces']);
     expect(cond.get('174')!.flags.map((f) => f.key)).toEqual(['Venting']);
     expect(cond.get('174')!.hasDamaged).toBe(true);
-    // Re-saving the OUT row (same assessed die) updates in place, no dup.
+    // Re-saving the same block updates in place, no duplicate.
     await dal.createDieChangeLog({
       ...ctx,
       changeOver: ['Die'],
@@ -733,11 +771,33 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
       dieNumberIn: '174',
       dieDescriptionIn: 'Podium Seat',
       components: { MouldingSurfaces: 'damaged' },
+      componentsIn: { Venting: 'damaged' },
       problemDescription: 'Now cracked.',
+      problemDescriptionIn: 'Vent blocked on fitting.',
     });
     const after = (await dal.listDieChangeLog()).filter((r) => r.jobNumber === 'SFM507268');
-    expect(after.length).toBe(2);
+    expect(after.length).toBe(1);
     expect(latestConditionByDie(after).get('117')!.hasDamaged).toBe(true);
+    // A second disjoint D/I block for the same machine/date/shift/job is a
+    // distinct event because its start slot differs.
+    await dal.createDieChangeLog({
+      ...ctx,
+      eventKey: '550T|2026-07-14|DAY|SFM507268|9',
+      eventStartSlot: 9,
+      eventEndSlot: 10,
+      changeOver: ['Insert'],
+      dieNumberOut: '117',
+      dieDescriptionOut: 'Proteus Seat',
+      dieNumberIn: '117',
+      dieDescriptionIn: 'Proteus Seat',
+      components: { Bolts: 'good' },
+      componentsIn: { Bolts: 'good' },
+      problemDescription: '',
+      problemDescriptionIn: '',
+    });
+    expect(
+      (await dal.listDieChangeLog()).filter((r) => r.jobNumber === 'SFM507268'),
+    ).toHaveLength(2);
   });
 
   it('updateDieMaster changes ToolStatus and stamps the audit dates', async () => {

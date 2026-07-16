@@ -62,7 +62,12 @@ Paste into `.env.local`:
 VITE_BACKEND=sharepoint
 VITE_SITE_URL=https://reseroglobal.sharepoint.com/sites/ReseroOperationsAU
 VITE_PLANNING_PATH=Shared Documents/General/Planning/PMD/PMD Schedule_master_epicor 300424.xlsm
+VITE_SUPERVISOR_PASSWORD=<choose-a-strong-site-specific-password>
 ```
+
+`VITE_SUPERVISOR_PASSWORD` is required. The app intentionally has no default
+Supervisor password; if it is omitted or blank, Supervisor sign-in remains
+disabled until the app is rebuilt with a value.
 
 Then:
 
@@ -567,9 +572,20 @@ ElectricalIssues, GasNeedle, GuidePins, HotRunners, MouldingSurfaces,
 Nozzle, NozzleTip, OilLeaks, Venting, WaterLeaks — as
 *1. Good work order* / *2. Operational but worn* / *3. Damaged or
 can't be used* (defaults to 1; a 2 or 3 requires a problem
-description). Saving writes one row; **Skip** is allowed (the prompt
-fires once per machine+shift+job per session). Writers need Edit
-permission on the list.
+description). Saving writes **one row per continuous D/I timeline block**,
+containing both the Die OUT and Die IN inspections. The block's first slot
+is part of `EventKey`, so two separate changes for the same
+machine/date/shift/job do not overwrite each other; `EventKey` is indexed
+and unique so simultaneous iPad saves converge on one row. **Skip** is
+allowed. Writers need Edit permission on the list.
+
+The app provisions these event-model fields on the first save (the first
+writer therefore also needs Manage Lists once): `EventKey` (Single line,
+indexed, unique), `EventStartSlot` (Number), `EventEndSlot` (Number),
+`ComponentsInJson` (Multiple lines, plain text), and
+`ProblemDescriptionIn` (Multiple lines, plain text). The original 13 Choice
+columns hold the OUT ratings; `ComponentsInJson` holds the IN ratings on the
+same row. If auto-provisioning is disallowed, add these five columns by hand.
 
 ## PMD_DieMaster (die asset register)
 

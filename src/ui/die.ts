@@ -81,11 +81,16 @@ interface DieState {
    *  PMD_DieChangeLog. Worn/damaged components flag priority service. */
   condByDie: Map<string, DieConditionSummary>;
   loading: boolean;
+  /** Read failures for the current range. The board may still render the
+   *  sources that succeeded, but these labels prevent missing data from
+   *  masquerading as genuine zero usage / zero work orders. */
+  errors: string[];
 }
 
 let S: DieState | null = null;
 let dalRef: PmdDataLayer;
 let hostEl: HTMLElement | null = null;
+let loadVersion = 0;
 
 const STATUS_LABELS: Record<MaintStatus, string> = {
   open: 'Open',
@@ -127,8 +132,13 @@ function svcTitle(s: DieServiceStatus): string {
 }
 
 /** "2026-07-12T07:00:00" → "07-12 07:00" (planned starts are local ISO). */
-function fmtPlanned(iso: string): string {
-  const m = /^\d{4}-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(iso);
+export function fmtPlanned(iso: string): string {
+  // Local wall-time strings are deliberately stored without a suffix; read
+  // their components directly. Legacy/foreign values carrying Z or an
+  // explicit offset must go through Date so Sydney sees local time rather
+  // than the UTC digits embedded in the source string.
+  const zoned = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(iso.trim());
+  const m = zoned ? null : /^\d{4}-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(iso);
   if (m) return `${m[1]}-${m[2]} ${m[3]}:${m[4]}`;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso.slice(0, 16);
@@ -182,7 +192,7 @@ function woDueLevel(
 
 /** One work-order row (Mango mirror) — the full detail card used in both
  *  the drilldown's Maintenance Track and the focused open-WO popup. */
-function woRow(r: DieMaintenanceRequest): string {
+export function woRow(r: DieMaintenanceRequest): string {
   const opened = r.createdAt ? r.createdAt.slice(0, 10) : '';
   const closed = r.closedAt ? r.closedAt.slice(0, 10) : '';
   const days =
@@ -195,17 +205,21 @@ function woRow(r: DieMaintenanceRequest): string {
           ),
         )
       : null;
-  // "To be completed by" — the promised completion date (dd/mm/yyyy, the
-  // source format). Shown on the open-order line; when it's already past,
-  // it turns red + OVERDUE — the same signal the Maint column's traffic
-  // light carries (both compare r.dueDate against today).
+  // "To be completed by" — always retain Mango's promised completion date,
+  // including after closure. Open work uses today's overdue signal; closed
+  // work compares the actual closure date with the promise so history says
+  // whether it was completed on time or late (never "OVERDUE" today).
   const dueIso = (r.dueDate ?? '').slice(0, 10);
-  const overdue = dueIso !== '' && dueIso < isoDay(new Date());
+  const overdue = !closed && dueIso !== '' && dueIso < isoDay(new Date());
+  const completion =
+    closed && dueIso
+      ? ` · ${closed > dueIso ? 'Completed late' : 'Completed on time'}`
+      : '';
   const dueTxt = dueIso
-    ? `<span class="die-hist-due${overdue ? ' overdue' : ''}">To be completed by ${ddmmyyyy(dueIso)}${overdue ? ' · OVERDUE' : ''}</span>`
+    ? `<span class="die-hist-due${overdue ? ' overdue' : ''}">To be completed by ${ddmmyyyy(dueIso)}${overdue ? ' · OVERDUE' : completion}</span>`
     : 'no due date';
   const span = closed
-    ? `${escapeHtml(opened)} → ${escapeHtml(closed)}${days != null ? ` · ${days === 0 ? '<1' : days} d` : ''}`
+    ? `${escapeHtml(opened)} → ${escapeHtml(closed)}${days != null ? ` · ${days === 0 ? '<1' : days} d` : ''} · ${dueTxt}`
     : `${escapeHtml(opened)} · ${dueTxt} · still open`;
   // Numbers line: downtime / labour / cost as recorded in Mango.
   const nums = [
@@ -380,6 +394,7 @@ export async function mountDieTab(dal: PmdDataLayer, host: HTMLElement): Promise
     planByDie: new Map(),
     condByDie: new Map(),
     loading: true,
+    errors: [],
   };
   render();
   await loadAll();
@@ -387,39 +402,67 @@ export async function mountDieTab(dal: PmdDataLayer, host: HTMLElement): Promise
 
 async function loadAll(): Promise<void> {
   if (!S) return;
-  S.loading = true;
+  const state = S;
+  const version = ++loadVersion;
+  const from = state.from;
+  const to = state.to;
+  const errors: string[] = [];
+  const safe = async <T>(label: string, promise: Promise<T>, fallback: T): Promise<T> => {
+    try {
+      return await promise;
+    } catch (e) {
+      console.error(`[die] ${label} failed:`, e);
+      errors.push(`${label}: ${(e as Error).message || 'read failed'}`);
+      return fallback;
+    }
+  };
+  state.loading = true;
+  state.errors = [];
   render();
   const [dieColors, requests, rejCats, records, planning, master, changeLogs] = await Promise.all([
-    dalRef.listProductDieColors ? dalRef.listProductDieColors().catch(() => []) : Promise.resolve([]),
-    dalRef.listDieMaintenance ? dalRef.listDieMaintenance().catch(() => []) : Promise.resolve([]),
-    dalRef.listRejectCategories().catch(() => []),
-    dalRef
-      .listProduction({ shiftIdFrom: `${S.from}-`, shiftIdTo: `${S.to}-￿` })
-      .catch(() => []),
-    dalRef.listPlanning({}).catch(() => []),
-    dalRef.listDieMaster ? dalRef.listDieMaster().catch(() => []) : Promise.resolve([]),
-    dalRef.listDieChangeLog ? dalRef.listDieChangeLog().catch(() => []) : Promise.resolve([]),
+    dalRef.listProductDieColors
+      ? safe('Die/part mapping', dalRef.listProductDieColors(), [])
+      : Promise.resolve([]),
+    dalRef.listDieMaintenance
+      ? safe('Maintenance work orders', dalRef.listDieMaintenance(), [])
+      : Promise.resolve([]),
+    safe('Reject categories', dalRef.listRejectCategories(), []),
+    safe(
+      'Production history',
+      dalRef.listProduction({ shiftIdFrom: `${from}-`, shiftIdTo: `${to}-￿` }),
+      [],
+    ),
+    safe('Planning', dalRef.listPlanning({}), []),
+    dalRef.listDieMaster
+      ? safe('Die master', dalRef.listDieMaster(), [])
+      : Promise.resolve([]),
+    dalRef.listDieChangeLog
+      ? safe('Die-change condition logs', dalRef.listDieChangeLog(), [])
+      : Promise.resolve([]),
   ]);
-  if (!S) return;
-  S.dieColors = dieColors;
-  S.masterByDie = new Map(master.map((m) => [m.dieNumber.trim().toUpperCase(), m]));
-  S.condByDie = latestConditionByDie(changeLogs);
-  S.requests = requests;
-  S.rejectLabels = new Map(rejCats.map((c) => [c.code, c.label]));
-  S.dies = aggregateDies(dieColors, records, requests);
+  // A slower response for an old date range must never overwrite the range
+  // the user picked afterwards (or a newly-mounted tab instance).
+  if (version !== loadVersion || S !== state) return;
+  state.dieColors = dieColors;
+  state.masterByDie = new Map(master.map((m) => [m.dieNumber.trim().toUpperCase(), m]));
+  state.condByDie = latestConditionByDie(changeLogs);
+  state.requests = requests;
+  state.rejectLabels = new Map(rejCats.map((c) => [c.code, c.label]));
+  state.dies = aggregateDies(dieColors, records, requests);
+  state.errors = errors;
   // Join health check: master rows loaded but NONE matched a die means
   // the two lists' DieNumber values disagree — dump samples so the
   // mismatch is visible ("280" vs "DIE-280" vs "280.0"…).
   if (master.length > 0) {
-    const matched = S.dies.filter((d) =>
-      S!.masterByDie.has(d.dieNumber.trim().toUpperCase()),
+    const matched = state.dies.filter((d) =>
+      state.masterByDie.has(d.dieNumber.trim().toUpperCase()),
     ).length;
     if (matched === 0) {
       console.warn(
         '[pmd] PMD_DieMaster ↔ PMD_ProductDieColor join matched 0 dies.',
         'DieMaster DieNumbers (first 5):', master.slice(0, 5).map((m) => JSON.stringify(m.dieNumber)),
         '· ProductDieColor DieNumbers (first 5):',
-        S.dies.slice(0, 5).map((d) => JSON.stringify(d.dieNumber)),
+        state.dies.slice(0, 5).map((d) => JSON.stringify(d.dieNumber)),
       );
     }
   }
@@ -431,12 +474,12 @@ async function loadAll(): Promise<void> {
   const good = goodByJob(records);
   const isComplete = (o: PlanningOrder): boolean =>
     o.orderQty > 0 && (good.get(o.jobNumber.trim()) ?? 0) >= o.orderQty;
-  S.planByDie = new Map();
-  for (const d of S.dies) {
+  state.planByDie = new Map();
+  for (const d of state.dies) {
     const p = nextPlannedFor(d.parts.map((x) => x.partNumber), planning, now, isComplete);
-    if (p) S.planByDie.set(d.dieNumber, p);
+    if (p) state.planByDie.set(d.dieNumber, p);
   }
-  S.loading = false;
+  state.loading = false;
   render();
 }
 
@@ -451,9 +494,17 @@ function render(): void {
   if (!S || !hostEl || !hostEl.isConnected) return;
   hostEl.innerHTML = `
     ${renderHead()}
+    ${renderDataErrors(S.errors)}
     ${S.loading ? `<div class="trace-empty">Loading die usage…</div>` : renderBody()}
   `;
   wire();
+}
+
+function renderDataErrors(errors: string[]): string {
+  if (errors.length === 0) return '';
+  return `<div class="data-error-banner" role="alert"><b>⚠ Partial data only.</b> ${errors
+    .map((e) => escapeHtml(e))
+    .join(' · ')}</div>`;
 }
 
 /** Same visual language as the KPI page head: compact preset tabs (the

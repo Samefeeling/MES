@@ -94,6 +94,19 @@ $outPath = $cfg.OutputCsvPath
 $outDir  = Split-Path -Path $outPath -Parent
 if ($outDir -and -not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir -Force | Out-Null }
 $tmpPath = "$outPath.tmp"
+if (Test-Path $tmpPath) { Remove-Item -Path $tmpPath -Force }
 $projected | Export-Csv -Path $tmpPath -NoTypeInformation -Encoding UTF8
+# Never replace the last-known-good planning file with an empty export, an
+# error payload, or a schema Epicor renamed underneath us. The app requires
+# JobHead_JobNum to distinguish "valid zero orders" from "could not parse";
+# Export-Csv emits no header when the pipeline is empty, so that case safely
+# retains the prior file and raises an actionable sync error.
+if (-not (Test-Path $tmpPath)) {
+  throw "Planning export produced no CSV. Previous $outPath remains active."
+}
+$csvHeader = Get-Content -Path $tmpPath -TotalCount 1
+if ([string]::IsNullOrWhiteSpace($csvHeader) -or $csvHeader -notmatch 'JobHead_JobNum') {
+  throw "Planning CSV validation failed: JobHead_JobNum header missing. Kept $tmpPath for inspection; previous $outPath remains active."
+}
 Move-Item -Path $tmpPath -Destination $outPath -Force
 LogMsg "Wrote $($projected.Count) rows to $outPath"

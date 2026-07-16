@@ -172,6 +172,28 @@ if (size < 10) {
   await browser.close();
   fail(1, `Downloaded file is ${size} bytes — Mango likely returned an empty/error report. Kept at ${tmpPath} for inspection.`);
 }
+// Validate before replacing the last-known-good mirror. A login/error HTML
+// page or a changed report layout can easily be much larger than 10 bytes;
+// publishing it would make the app interpret a broken sync as "zero work
+// orders". Keep the .downloading file for diagnosis and leave outPath intact.
+const downloaded = readFileSync(tmpPath, 'utf8').replace(/^﻿/, '');
+if (/<!doctype\s+html|<html\b/i.test(downloaded)) {
+  await browser.close();
+  fail(1, `Mango downloaded HTML instead of CSV. Kept at ${tmpPath}; previous ${outPath} remains active.`);
+}
+const headerOk = downloaded
+  .split(/\r?\n/)
+  .slice(0, 10)
+  .some((line) => {
+    const h = line.toLowerCase();
+    return ['number', 'current stage', 'plant/equipment', 'to be completed by'].every((name) =>
+      h.includes(name),
+    );
+  });
+if (!headerOk) {
+  await browser.close();
+  fail(1, `Mango CSV header is missing required columns. Kept at ${tmpPath}; previous ${outPath} remains active.`);
+}
 try {
   renameSync(tmpPath, outPath); // atomic on the same volume
 } catch {

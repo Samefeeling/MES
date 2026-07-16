@@ -6,6 +6,7 @@ import { closeModal, openModal } from './ui/modal';
 import {
   clearSupervisor,
   isSupervisor,
+  isSupervisorConfigured,
   onSupervisorChange,
   tryEnterSupervisor,
 } from './ui/supervisor-auth';
@@ -176,6 +177,13 @@ function onSupervisorClick(): void {
       clearSupervisor();
       toast('Signed out of Supervisor mode', 'ok');
     }
+    return;
+  }
+  if (!isSupervisorConfigured()) {
+    toast(
+      'Supervisor sign-in is unavailable — set VITE_SUPERVISOR_PASSWORD and rebuild',
+      'err',
+    );
     return;
   }
   promptSupervisorPassword((pwd) => {

@@ -18,6 +18,7 @@ import type {
 } from '../types';
 import type { PmdDataLayer } from './types';
 import { bdLabelFor } from '../core/breakdown';
+import { dieChangeEventKey } from '../core/die';
 import {
   seedBdCodes,
   seedDieChangeLogs,
@@ -150,24 +151,26 @@ export class MemoryDataLayer implements PmdDataLayer {
   }
 
   async createDieChangeLog(log: Omit<DieChangeLog, 'id' | 'createdAt'>): Promise<DieChangeLog> {
-    // One row per machine + date + shift + job + assessed die (DieNumberOut):
-    // a change event logs the OUT die and the IN die as separate condition
-    // rows, and a reload re-firing the popup updates the matching one.
-    const key = (r: {
-      machineCode: string;
-      date: string;
-      shift: string;
-      jobNumber: string;
-      dieNumberOut: string;
-    }) =>
-      `${r.machineCode.trim().toUpperCase()}|${r.date}|${r.shift.trim().toUpperCase()}|${r.jobNumber.trim().toUpperCase()}|${r.dieNumberOut.trim().toUpperCase()}`;
-    const existing = this.dieChangeLogs.find((r) => key(r) === key(log));
+    const eventKey = dieChangeEventKey(
+      log.machineCode,
+      log.date,
+      log.shift,
+      log.jobNumber,
+      log.eventStartSlot,
+    );
+    const clean = {
+      ...log,
+      eventKey,
+      eventStartSlot: Math.max(0, Math.floor(log.eventStartSlot)),
+      eventEndSlot: Math.max(log.eventStartSlot, Math.floor(log.eventEndSlot)),
+    };
+    const existing = this.dieChangeLogs.find((r) => r.eventKey === eventKey);
     if (existing) {
-      Object.assign(existing, MemoryDataLayer.clone({ ...log, id: existing.id, createdAt: existing.createdAt }));
+      Object.assign(existing, MemoryDataLayer.clone({ ...clean, id: existing.id, createdAt: existing.createdAt }));
       return MemoryDataLayer.clone(existing);
     }
     const created: DieChangeLog = MemoryDataLayer.clone({
-      ...log,
+      ...clean,
       id: this.nextDclId++,
       createdAt: new Date().toISOString(),
     });

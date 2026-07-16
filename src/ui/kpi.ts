@@ -108,6 +108,7 @@ const SHIFT_ORDER: ShiftCode[] = SHIFTS.map((s) => s.code);
 
 interface HandoverEntry {
   jobNumber: string;
+  shiftId: string;
   machine: string;
   mold: string;
   material: string;
@@ -275,6 +276,11 @@ interface KpiState {
   /** Reject code → human description (PMD_RejectCategories, e.g. D01 →
    *  "ShortShot"), so the Reject drill spells the codes out. */
   rejectDescByCode: Map<string, string>;
+  /** Failed reads for the current computation. Values from successful
+   *  sources still render, but the banner stops missing rows being read as
+   *  real zero production/reject/downtime. */
+  errors: string[];
+  catalogErrors: string[];
 }
 
 interface ChartBucket {
@@ -284,6 +290,7 @@ interface ChartBucket {
 
 let S: KpiState | null = null;
 let dalRef: PmdDataLayer;
+let computeVersion = 0;
 
 /** The 3 most-recently-ENDED shifts as of `now`, oldest → newest. */
 function lastThreeShifts(now: Date): string[] {
@@ -380,19 +387,21 @@ function inRange(
 // and the KPIs cell agree on every shape (JSON, "People: x\n…", legacy
 // plain text) without each file maintaining its own parser copy.
 
-function collectHandovers(records: ProductionRecord[]): HandoverEntry[] {
+export function collectHandovers(records: ProductionRecord[]): HandoverEntry[] {
   // Handover lives on slotIndex 0 per (machine, shift, job). De-dup by
-  // jobNumber so multiple jobs in a shift produce one row each.
+  // SHIFT + job, because the same job can carry a different handover on
+  // successive shifts. Job-only de-dup silently discarded all but one.
   const seen = new Set<string>();
   const out: HandoverEntry[] = [];
   for (const r of records) {
     if (r.slotIndex !== 0) continue;
     if (!r.handoverNote) continue;
-    if (seen.has(r.jobNumber)) continue;
-    seen.add(r.jobNumber);
+    const key = `${r.shiftId}|${r.jobNumber}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     const h = parseHandover(r.handoverNote);
     if (!h.machine && !h.mold && !h.material && !h.method) continue;
-    out.push({ jobNumber: r.jobNumber, ...h });
+    out.push({ jobNumber: r.jobNumber, shiftId: r.shiftId, ...h });
   }
   return out;
 }
@@ -475,7 +484,17 @@ function firstTwoWords(s: string): string {
  *  under an "Unspecified" bucket when the JSON is absent/unparseable so
  *  no scrap silently vanishes from the Pareto. */
 async function compute(now = new Date()): Promise<void> {
-  const { from, to, shiftIds } = periodRange(S!.period, now);
+  if (!S) return;
+  const state = S;
+  const version = ++computeVersion;
+  const errors: string[] = [];
+  const recordError = (label: string, err: unknown): void => {
+    console.error(`[kpi] ${label} failed:`, err);
+    errors.push(`${label}: ${(err as Error).message || 'read failed'}`);
+  };
+  state.loading = true;
+  state.errors = [];
+  const { from, to, shiftIds } = periodRange(state.period, now);
   // listPlanning and the per-machine production reads have no
   // dependencies on each other — parallelise so the screen render
   // isn't pinned to N×latency. Per-machine errors don't abort the whole
@@ -495,7 +514,7 @@ async function compute(now = new Date()): Promise<void> {
   const [planning, perMachineProd, dieColorList, rejectParetoBy, downtimeParetoBy] =
     await Promise.all([
       dalRef.listPlanning({}).catch((err) => {
-        console.error('[kpi] listPlanning failed:', err);
+        recordError('Planning', err);
         return [] as PlanningOrder[];
       }),
       Promise.all(
@@ -509,13 +528,16 @@ async function compute(now = new Date()): Promise<void> {
             // supervisor has reviewed and signed them off.
             .then((p) => p.filter((r) => r.locked && inRange(r, from, to, shiftIds)))
             .catch((err) => {
-              console.error(`[kpi] listProduction(${m.machineCode}) failed:`, err);
+              recordError(`Production ${m.machineCode}`, err);
               return [] as ProductionRecord[];
             }),
         ),
       ),
       dalRef.listProductDieColors
-        ? dalRef.listProductDieColors().catch(() => [])
+        ? dalRef.listProductDieColors().catch((err) => {
+            recordError('Part/die colours', err);
+            return [];
+          })
         : Promise.resolve([]),
       Promise.all(
         paretoMachines.map((mc) =>
@@ -523,7 +545,7 @@ async function compute(now = new Date()): Promise<void> {
             ? dalRef
                 .listRejectPareto({ from: fromKey, to: toKey, machineCode: mc || undefined })
                 .catch((err) => {
-                  console.warn('[kpi] listRejectPareto failed for', mc || 'floor', err);
+                  recordError(`Reject Pareto ${mc || 'floor'}`, err);
                   return [] as ParetoSlice[];
                 })
             : Promise.resolve([] as ParetoSlice[]),
@@ -535,13 +557,17 @@ async function compute(now = new Date()): Promise<void> {
             ? dalRef
                 .listDowntimePareto({ from: fromKey, to: toKey, machineCode: mc || undefined })
                 .catch((err) => {
-                  console.warn('[kpi] listDowntimePareto failed for', mc || 'floor', err);
+                  recordError(`Downtime Pareto ${mc || 'floor'}`, err);
                   return [] as ParetoSlice[];
                 })
             : Promise.resolve([] as ParetoSlice[]),
         ),
       ),
     ]);
+  // Ignore a response for a range that is no longer active. All mutations
+  // happen below this guard, so an older slow request cannot repaint the
+  // table after the user's newer selection has completed.
+  if (version !== computeVersion || S !== state) return;
   const dieColors = new Map(
     dieColorList.map((c) => [
       c.partNumber.trim().toUpperCase(),
@@ -831,7 +857,8 @@ async function compute(now = new Date()): Promise<void> {
   S!.chartBuckets = Array.from(charts.entries())
     .sort(([a], [b2]) => (a < b2 ? -1 : a > b2 ? 1 : 0))
     .map(([, v]) => v);
-  S!.loading = false;
+  state.errors = errors;
+  state.loading = false;
   render();
 }
 
@@ -888,7 +915,7 @@ function formatHandoverCell(handovers: HandoverEntry[]): string {
   // collapsed. Full text available via `title=` tooltip.
   const compact = handovers
     .map((h) => {
-      const parts: string[] = [];
+      const parts: string[] = [`🕒 ${h.shiftId.slice(0, 10)} ${h.shiftId.slice(11)}`];
       if (h.machine) parts.push(`🛠 ${h.machine.replace(/\s+/g, ' ').trim()}`);
       if (h.mold) parts.push(`🧩 ${h.mold.replace(/\s+/g, ' ').trim()}`);
       if (h.material) parts.push(`📦 ${h.material.replace(/\s+/g, ' ').trim()}`);
@@ -898,7 +925,9 @@ function formatHandoverCell(handovers: HandoverEntry[]): string {
     .join(' || ');
   const full = handovers
     .map((h) => {
-      const lines: string[] = [`Job ${h.jobNumber || '—'}`];
+      const lines: string[] = [
+        `${h.shiftId.slice(0, 10)} ${h.shiftId.slice(11)} · Job ${h.jobNumber || '—'}`,
+      ];
       if (h.machine) lines.push(`  🛠 ${h.machine}`);
       if (h.mold) lines.push(`  🧩 ${h.mold}`);
       if (h.material) lines.push(`  📦 ${h.material}`);
@@ -1021,6 +1050,12 @@ function buildThresholdEditor(): string {
 
 function render(): void {
   const app = document.getElementById('app')!;
+  const dataErrors = [...S!.catalogErrors, ...S!.errors];
+  const errorBanner = dataErrors.length
+    ? `<div class="data-error-banner" role="alert"><b>⚠ Partial data only.</b> ${dataErrors
+        .map((e) => escapeHtml(e))
+        .join(' · ')}</div>`
+    : '';
   const tabs = PERIODS.map(
     (p) =>
       `<button class="shift-btn${p.key === S!.period ? ' a' : ''}" data-period="${p.key}">${escapeHtml(
@@ -1306,6 +1341,7 @@ function render(): void {
           <label>To <input type="date" data-range="to" value="${escapeHtml(toVal)}"></label>
         </div>
       </div>
+      ${errorBanner}
       ${buildThresholdEditor()}
       ${stats}
       <div class="kpi-table-wrap">
@@ -1658,6 +1694,8 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     rejectPareto: { floor: [], byMachine: new Map() },
     downtimePareto: { floor: [], byMachine: new Map() },
     rejectDescByCode: new Map(),
+    errors: [],
+    catalogErrors: [],
   };
   // Reject code → description (D01 → "ShortShot"), for the Reject drill's
   // Description column. Cheap, changes rarely; load once at mount.
@@ -1666,6 +1704,7 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     S.rejectDescByCode = new Map(cats.map((c) => [c.code, c.label]));
   } catch (e) {
     console.warn('[pmd] reject categories load failed', e);
+    S.catalogErrors = [`Reject categories: ${(e as Error).message || 'read failed'}`];
   }
   // No supervisor-change subscription needed here: main.ts already
   // re-routes (→ renderKpi) on every supervisor toggle, so the threshold

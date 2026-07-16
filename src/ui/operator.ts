@@ -37,7 +37,7 @@ import { type Handover, parseHandover as sharedParseHandover } from '../core/han
 import { openBreakdownCascade } from './breakdown';
 import { toast } from './toast';
 import { closeModal, escapeHtml, openModal } from './modal';
-import { DIE_COMPONENTS, DIE_CONDITION_META } from '../core/die';
+import { DIE_COMPONENTS, DIE_CONDITION_META, dieChangeEventKey } from '../core/die';
 import { renderOutputRejectChart } from './charts';
 import { clearSupervisor, isSupervisor } from './supervisor-auth';
 import { isIpadDevice } from '../core/device';
@@ -3275,9 +3275,13 @@ async function multiFillApply(
   // Kick a live snapshot push so other iPads see the new status pattern
   // without waiting up to 60 s for the next poll tick. Fire-and-forget.
   if (dalRef.pushLiveSnapshot) void dalRef.pushLiveSnapshot();
-  // First Die/Insert Change on this (machine, shift, job) → capture the
-  // die-change condition report while the setter is still at the press.
-  if (code === 'D' || code === 'I') maybeOpenDieChangeLog(code);
+  // One report per CONTINUOUS D/I block. Extending an existing block finds
+  // the same start slot and edits the same EventKey; a later, separate block
+  // gets its own row.
+  if (code === 'D' || code === 'I') {
+    const events = dieChangeEventsTouching(slots);
+    if (events.length) maybeOpenDieChangeLog(code, events);
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -3354,52 +3358,70 @@ function openAddOrderModal(): void {
 }
 
 // ---------------------------------------------------------------------
-// Die Change Log (PMD_DieChangeLog) — pops up whenever the operator
-// marks a Die Change (D) or Insert Change (I) on a tuple's timeline.
+// Die Change Log (PMD_DieChangeLog) — one row per continuous D/I block.
 // Date / shift / setter / machine / job / die-out / die-in are
 // prefilled; the setter's real work is the 13-component condition
 // check (1 Good · 2 Worn · 3 Damaged) that builds the die's health
-// history for the toolroom. If the tuple (machine + date + shift + job)
-// was already logged, the popup re-opens PREFILLED from the saved row
-// and saving UPDATES it — createDieChangeLog is idempotent on that key
-// in every backend, so re-entry / correction is always possible and a
-// duplicate row never is. Skip just closes without saving.
+// history for the toolroom. EventKey includes the block's first slot, so a
+// later independent change on the same job does not overwrite this one.
 
-function maybeOpenDieChangeLog(code: StatusCode): void {
-  if (!dalRef.createDieChangeLog || !S!.selJob) return;
-  void openDieChangeLogModal(code);
+interface DieChangeEventRef {
+  start: number;
+  end: number;
+  eventKey: string;
 }
 
-/** Every PMD_DieChangeLog row already saved for this change event
- *  (machine + date + shift + job). One event can hold two rows — the die
- *  that came OUT and the die that went IN — so the caller separates them
- *  by shape (OUT-change row: out ≠ in; IN-condition row: out === in). */
-async function eventDieChangeLogs(): Promise<DieChangeLog[]> {
-  if (!dalRef.listDieChangeLog) return [];
-  const norm = (s: string): string => s.trim().toUpperCase();
+function dieChangeEventsTouching(slots: number[]): DieChangeEventRef[] {
+  const isChange = (slot: number): boolean => {
+    const c = slotRec(slot)?.statusCode;
+    return c === 'D' || c === 'I';
+  };
   const day = sid().slice(0, 10);
+  const byStart = new Map<number, DieChangeEventRef>();
+  for (const slot of slots) {
+    if (!isChange(slot)) continue;
+    let start = slot;
+    let end = slot;
+    while (start > 0 && isChange(start - 1)) start--;
+    while (end + 1 < SLOTS_PER_SHIFT && isChange(end + 1)) end++;
+    byStart.set(start, {
+      start,
+      end,
+      eventKey: dieChangeEventKey(S!.mc, day, S!.shiftCode, S!.selJob, start),
+    });
+  }
+  return [...byStart.values()].sort((a, b) => a.start - b.start);
+}
+
+function maybeOpenDieChangeLog(code: StatusCode, events: DieChangeEventRef[]): void {
+  if (!dalRef.createDieChangeLog || !S!.selJob) return;
+  void (async () => {
+    // A dragged range can skip slots occupied by another job, producing two
+    // disjoint D/I blocks. Prompt for each block in sequence so every
+    // continuous event gets its own row; opening them all at once would make
+    // the shared modal host overwrite all but the last.
+    for (const event of events) await openDieChangeLogModal(code, event);
+  })().catch((e) => {
+      console.error('[pmd] die change log open failed:', e);
+    });
+}
+
+async function eventDieChangeLog(event: DieChangeEventRef): Promise<DieChangeLog | undefined> {
+  if (!dalRef.listDieChangeLog) return undefined;
   try {
-    return (await dalRef.listDieChangeLog()).filter(
-      (r) =>
-        norm(r.machineCode) === norm(S!.mc) &&
-        r.date === day &&
-        norm(r.shift) === norm(S!.shiftCode) &&
-        norm(r.jobNumber) === norm(S!.selJob),
-    );
-  } catch {
-    return []; // list unreadable — treat as a fresh entry
+    return (await dalRef.listDieChangeLog()).find((r) => r.eventKey === event.eventKey);
+  } catch (e) {
+    toast(`Could not read Die Change Log: ${e instanceof Error ? e.message : e}`, 'err');
+    throw e;
   }
 }
 
-async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
-  const logs = await eventDieChangeLogs();
-  // The change record (die removed → die fitted) and, if present, the
-  // separate condition row for the die that went IN (out === in).
-  const outChangeRow = logs.find(
-    (l) => l.dieNumberOut && (!l.dieNumberIn || l.dieNumberIn !== l.dieNumberOut),
-  );
-  const inCondRow = logs.find((l) => l.dieNumberIn && l.dieNumberIn === l.dieNumberOut);
-  const existing = logs.length > 0;
+async function openDieChangeLogModal(
+  trigger: StatusCode,
+  event: DieChangeEventRef,
+): Promise<void> {
+  const saved = await eventDieChangeLog(event);
+  const existing = saved != null;
   const dieByPart = (part?: string): { dieNumber: string; die: string } | undefined =>
     part ? S!.dieColors.get(part.trim().toUpperCase()) : undefined;
   const partIn =
@@ -3439,7 +3461,7 @@ async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
       .join('');
   // Edit mode: everything prefills from the saved rows so the setter can
   // correct a rating or add detail; the save MERGEs the same records.
-  const selSetter = outChangeRow?.dieSetter || inCondRow?.dieSetter || S!.selOperator;
+  const selSetter = saved?.dieSetter || S!.selOperator;
   const setterNames = Array.from(
     new Set(
       [selSetter, S!.selOperator, ...S!.operators.map((o) => o.operatorName)].filter(Boolean),
@@ -3449,7 +3471,7 @@ async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
     .map((n) => `<option${n === selSetter ? ' selected' : ''}>${escapeHtml(n)}</option>`)
     .join('');
   const coChecked = (label: string, fallback: boolean): boolean =>
-    outChangeRow ? outChangeRow.changeOver.includes(label) : fallback;
+    saved ? saved.changeOver.includes(label) : fallback;
   const co = (label: string, checked: boolean): string =>
     `<label class="dcl-co"><input type="checkbox" value="${escapeHtml(label)}"${checked ? ' checked' : ''}>${escapeHtml(label)}</label>`;
   // One 13-component grid for a side (out / in), prefilled from its row.
@@ -3481,40 +3503,62 @@ async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
   };
   const mc = openModal(`<div class="bd-modal dcl-modal">
     <h2 class="bd-title dcl-title">🔁 Die Change Log${existing ? ' — edit' : ''}</h2>
-    ${existing ? '<p class="bd-sub dcl-editnote"><i>Already logged — saving updates the same records.</i></p>' : ''}
+    <p class="bd-sub dcl-editnote"><i>Timeline slots ${event.start + 1}–${event.end + 1} · one SharePoint row for this continuous event${existing ? ' · editing the saved row' : ''}.</i></p>
     <div class="dcl-row">
       <label>Die setter<select data-dcl="setter">${setterOpts}</select></label>
       <span class="dcl-cos">Change over ${co('Die', coChecked('Die', trigger === 'D'))}${co('Insert', coChecked('Insert', trigger === 'I'))}${co('Space In', coChecked('Space In', false))}${co('SpaceOut', coChecked('SpaceOut', false))}</span>
     </div>
     <div class="dcl-row">
-      <label>Die OUT<select data-dcl="out">${dieOpts(dieSel(outChangeRow?.dieNumberOut, dieOut?.dieNumber))}</select></label>
-      <label>Die IN<select data-dcl="in">${dieOpts(dieSel(outChangeRow?.dieNumberIn, dieIn?.dieNumber))}</select></label>
+      <label>Die OUT<select data-dcl="out">${dieOpts(dieSel(saved?.dieNumberOut, dieOut?.dieNumber))}</select></label>
+      <label>Die IN<select data-dcl="in">${dieOpts(dieSel(saved?.dieNumberIn, dieIn?.dieNumber))}</select></label>
     </div>
     <p class="dcl-legend"><b>Condition Check:</b> 1. Good work order; 2. Operational but worn; 3. Damaged/Can't be used.</p>
     <div class="dcl-section">
       <div class="dcl-sec-h out">🔻 Die OUT — condition when removed <em>problems usually show here</em></div>
-      ${compGrid('out', outChangeRow?.components)}
+      ${compGrid('out', saved?.components)}
       <label class="dcl-prob">Die OUT problem (needed when anything is 2 or 3)
-        <textarea data-dcl="probOut" rows="2" placeholder="What's worn / damaged on the die coming out, which cavity…">${escapeHtml(outChangeRow?.problemDescription ?? '')}</textarea></label>
+        <textarea data-dcl="probOut" rows="2" placeholder="What's worn / damaged on the die coming out, which cavity…">${escapeHtml(saved?.problemDescription ?? '')}</textarea></label>
     </div>
     <div class="dcl-section">
       <div class="dcl-sec-h in">🔺 Die IN — condition when fitted</div>
-      ${compGrid('in', inCondRow?.components)}
+      ${compGrid('in', saved?.componentsIn)}
       <label class="dcl-prob">Die IN problem (needed when anything is 2 or 3)
-        <textarea data-dcl="probIn" rows="2" placeholder="Any issue with the die going in…">${escapeHtml(inCondRow?.problemDescription ?? '')}</textarea></label>
+        <textarea data-dcl="probIn" rows="2" placeholder="Any issue with the die going in…">${escapeHtml(saved?.problemDescriptionIn ?? '')}</textarea></label>
     </div>
     <div class="bd-actions">
       <button class="btn-primary-big" data-dcl-save>${existing ? 'Update' : 'Save'} Die Change Log</button>
       <button class="btn-ghost-big" data-dcl-skip>Skip</button>
     </div>
   </div>`);
+  let resolveModal!: () => void;
+  const completed = new Promise<void>((resolve) => {
+    resolveModal = resolve;
+  });
+  let finished = false;
+  const finish = (): void => {
+    if (finished) return;
+    finished = true;
+    resolveModal();
+  };
+  // Backdrop dismissal is equivalent to Skip for queue progression.
+  const backdrop = document.getElementById('modal');
+  if (backdrop) {
+    backdrop.onclick = (e) => {
+      if (e.target !== backdrop) return;
+      closeModal();
+      finish();
+    };
+  }
   mc.querySelectorAll<HTMLButtonElement>('.dcl-opt').forEach((b) =>
     b.addEventListener('click', () => {
       b.parentElement!.querySelectorAll('.dcl-opt').forEach((x) => x.classList.remove('a'));
       b.classList.add('a');
     }),
   );
-  mc.querySelector('[data-dcl-skip]')?.addEventListener('click', () => closeModal());
+  mc.querySelector('[data-dcl-skip]')?.addEventListener('click', () => {
+    closeModal();
+    finish();
+  });
   mc.querySelector<HTMLButtonElement>('[data-dcl-save]')?.addEventListener('click', () => {
     void (async () => {
       const val = (k: string): string =>
@@ -3555,8 +3599,11 @@ async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
       }
       const setter = val('setter');
       try {
-        // Row 1 — the change record + the OUT die's condition.
+        // Exactly one row: event metadata + OUT and IN inspections.
         await dalRef.createDieChangeLog!({
+          eventKey: event.eventKey,
+          eventStartSlot: event.start,
+          eventEndSlot: event.end,
           date: day,
           shift: S!.shiftCode,
           dieSetter: setter,
@@ -3568,27 +3615,12 @@ async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
           dieNumberIn: inDie?.dieNumber ?? '',
           dieDescriptionIn: inDie?.die ?? '',
           components: out.comps,
+          componentsIn: inc.comps,
           problemDescription: probOut,
+          problemDescriptionIn: probIn,
         });
-        // Row 2 — the IN die's condition, stored under the fitted die
-        // (dieNumberOut = IN die) so it surfaces on that die in the Die tab.
-        if (inDie && inDie.dieNumber !== outDie?.dieNumber) {
-          await dalRef.createDieChangeLog!({
-            date: day,
-            shift: S!.shiftCode,
-            dieSetter: setter,
-            machineCode: S!.mc,
-            changeOver: [],
-            jobNumber: S!.selJob,
-            dieNumberOut: inDie.dieNumber,
-            dieDescriptionOut: inDie.die,
-            dieNumberIn: inDie.dieNumber,
-            dieDescriptionIn: inDie.die,
-            components: inc.comps,
-            problemDescription: probIn,
-          });
-        }
         closeModal();
+        finish();
         const total = out.flagged + inc.flagged;
         toast(
           total > 0
@@ -3606,6 +3638,7 @@ async function openDieChangeLogModal(trigger: StatusCode): Promise<void> {
       }
     })();
   });
+  return completed;
 }
 
 /**
@@ -3919,7 +3952,15 @@ export async function renderOperator(
     dal.listOperators(),
     dal.listSupervisors(),
     dal.listRejectCategories(),
-    dal.listProductDieColors ? dal.listProductDieColors() : Promise.resolve([]),
+    dal.listProductDieColors
+      ? dal.listProductDieColors().catch((e) => {
+          // Colour/die metadata is optional on the operator sheet. Keep the
+          // production workflow available, while logging the missing lookup;
+          // management views surface the same failure in their data banner.
+          console.warn('[pmd] operator part/die mapping unavailable:', e);
+          return [];
+        })
+      : Promise.resolve([]),
   ]);
   // Key by upper-trimmed Part # so the swatch lookup is tolerant of
   // case / whitespace drift between PMD_ProductDieColor and

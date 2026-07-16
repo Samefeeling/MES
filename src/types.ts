@@ -172,12 +172,16 @@ export interface DieMaintenanceRequest {
  *  but worn" / "3. Damaged or can't be used". '' = not assessed. */
 export type DieComponentCondition = '' | 'good' | 'worn' | 'damaged';
 
-/** One row of PMD_DieChangeLog — the die-change condition report the
- *  operator fills when they first mark a Die Change (D) or Insert
- *  Change (I) on the timeline. Component keys are the list's column
- *  names (Bolts, Cores, EjectorPins, …, WaterLeaks). */
+/** One row of PMD_DieChangeLog — exactly one continuous D/I block on a
+ *  machine/job timeline. Component keys are the list's column names
+ *  (Bolts, Cores, EjectorPins, …, WaterLeaks). */
 export interface DieChangeLog {
   id: number;
+  /** Stable, server-unique identity for the continuous timeline event. */
+  eventKey: string;
+  /** Inclusive zero-based slot bounds of the continuous D/I block. */
+  eventStartSlot: number;
+  eventEndSlot: number;
   /** Calendar date of the change (YYYY-MM-DD). */
   date: string;
   shift: string;
@@ -191,9 +195,12 @@ export interface DieChangeLog {
   dieDescriptionOut: string;
   dieNumberIn: string;
   dieDescriptionIn: string;
-  /** Component key → condition ('' when not assessed). */
+  /** Die OUT component key → condition ('' when not assessed). */
   components: Record<string, DieComponentCondition>;
+  /** Die IN component key → condition. Kept on the same event row. */
+  componentsIn: Record<string, DieComponentCondition>;
   problemDescription: string;
+  problemDescriptionIn: string;
   createdAt: string; // ISO
 }
 

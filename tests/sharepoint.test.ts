@@ -3,6 +3,7 @@ import {
   dateOnly,
   decimalHoursToHms,
   isStaleLiveHeader,
+  odataString,
   parsePlanningCsv,
   sanitizeBodyStrings,
   SharePointDataLayer,
@@ -115,6 +116,28 @@ describe('parsePlanningCsv', () => {
     expect(new Date(out[0].plannedStart).getHours()).toBe(7);
     expect(new Date(out[1].plannedStart).getHours()).toBe(7);
   });
+
+  it('preserves an explicit midnight as a datetime, not a bare date', () => {
+    const out = parsePlanningCsv(
+      'JobHead_JobNum,JobHead_StartDate\nJ-MID,2026-07-01T00:00:00\n',
+    );
+    expect(out[0].plannedStart).toBe('2026-07-01T00:00:00');
+  });
+
+  it('keeps decimal start times as local wall-clock ISO without a UTC suffix', () => {
+    const out = parsePlanningCsv(
+      'JobHead_JobNum,JobHead_StartDate,JobHead_StartHour\nJ-WALL,2026-07-01,18.68\n',
+    );
+    expect(out[0].plannedStart).toBe('2026-07-01T18:40:48');
+  });
+
+  it('rejects empty, wrong-schema and unterminated CSV instead of returning fake zero orders', () => {
+    expect(() => parsePlanningCsv('')).toThrow(/empty/i);
+    expect(() => parsePlanningCsv('<html>login</html>')).toThrow(/JobHead_JobNum/);
+    expect(() => parsePlanningCsv('JobHead_JobNum,Description\nJ1,"broken')).toThrow(
+      /unterminated/i,
+    );
+  });
 });
 
 describe('decimalHoursToHms', () => {
@@ -164,6 +187,12 @@ describe('toServerRelativePath', () => {
   it('returns empty when given empty', () => {
     expect(toServerRelativePath('')).toBe('');
     expect(toServerRelativePath('   ')).toBe('');
+  });
+});
+
+describe('OData string literals', () => {
+  it('doubles apostrophes before URL encoding', () => {
+    expect(odataString("O'Brien's Job")).toBe("O''Brien''s Job");
   });
 });
 
@@ -1681,6 +1710,40 @@ describe('PMD_Production denormalisation: jobRequired + partDescription survive 
     expect(banned.has('Reopened')).toBe(true);
   });
 
+  it('never strips a core count field to make a sign-off look successful', async () => {
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+      canWrite: () => true,
+    });
+    const posts: Record<string, unknown>[] = [];
+    const o = dal as unknown as {
+      post: (url: string, body: Record<string, unknown>) => Promise<void>;
+      postWithFieldRetry: (
+        list: string,
+        url: string,
+        body: Record<string, unknown>,
+      ) => Promise<void>;
+      rejectedFields: Map<string, Set<string>>;
+    };
+    o.post = async (_url, body): Promise<void> => {
+      posts.push(body);
+      throw new Error(
+        "POST 400 The property 'CountEnd' does not exist on type 'SP.Data.PMD_ProductionListItem'.",
+      );
+    };
+    await expect(
+      o.postWithFieldRetry('PMD_Production', 'https://x/items', {
+        __metadata: { type: 'SP.Data.MockListItem' },
+        Title: 'Batt1',
+        CountStart: 0,
+        CountEnd: 100,
+      }),
+    ).rejects.toThrow(/CountEnd/);
+    expect(posts).toHaveLength(1);
+    expect(posts[0].CountEnd).toBe(100);
+    expect(o.rejectedFields.get('PMD_Production')?.has('CountEnd')).not.toBe(true);
+  });
+
   it('upsertHeaderInto does NOT write jobRequired=0 (would blank a real value via MERGE)', async () => {
     store.clear();
     const dal = new SharePointDataLayer({
@@ -1729,6 +1792,58 @@ describe('PMD_Production denormalisation: jobRequired + partDescription survive 
     });
     expect(writes.length).toBe(1);
     expect('JobRequired' in writes[0]).toBe(false);
+  });
+
+  it('re-reads after create and collapses a concurrent duplicate to the lowest ID', async () => {
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    let reads = 0;
+    const deleted: string[] = [];
+    const o = dal as unknown as {
+      itemType: () => Promise<string>;
+      getAllItems: () => Promise<Record<string, unknown>[]>;
+      postWithFieldRetry: () => Promise<void>;
+      del: (url: string) => Promise<void>;
+      upsertHeaderInto: (list: string, h: Record<string, unknown>) => Promise<void>;
+    };
+    o.itemType = async () => 'SP.Data.MockListItem';
+    o.getAllItems = async () => {
+      reads++;
+      return reads === 1
+        ? []
+        : [
+            { ID: 8, SlotStart_x003a_: '2026-07-14T00:00:00.000Z' },
+            { ID: 7, SlotStart_x003a_: '2026-07-14T00:00:00.000Z' },
+          ];
+    };
+    o.postWithFieldRetry = async () => {};
+    o.del = async (url) => {
+      deleted.push(url);
+    };
+    await o.upsertHeaderInto('PMD_Production', {
+      machineCode: 'Batt1',
+      date: '2026-07-14',
+      shift: 'Day',
+      jobNumber: 'SFM-RACE',
+      partNumber: 'P1',
+      partDescription: 'Widget',
+      jobRequired: 100,
+      cycleTime: 0.1,
+      cavities: 1,
+      timeline: 'R···············',
+      countStart: 0,
+      countEnd: 10,
+      reject: 0,
+      operator: 'Joe',
+      supervisor: 'Sue',
+      runTime: 0.5,
+      downTime: 0,
+      handover: '',
+      qcChecks: '',
+      rejectsBySlot: '',
+    });
+    expect(reads).toBe(2);
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]).toContain('items(8)');
   });
 });
 
@@ -2329,5 +2444,147 @@ describe('listProductDieColors CoRun flag', () => {
     o.getAllItems = async (): Promise<unknown[]> => rows;
     const out = await dal.listProductDieColors!();
     expect(out.find((c) => c.partNumber === 'P9')?.coRun).toBe(true);
+  });
+});
+
+describe('sign-off multi-list write protocol', () => {
+  it('inserts replacement rows before deleting old rows and exposes a restoring rollback', async () => {
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const calls: string[] = [];
+    const posted: Record<string, unknown>[] = [];
+    let nextId = 20;
+    const o = dal as unknown as {
+      getAllItems: () => Promise<Record<string, unknown>[]>;
+      itemType: () => Promise<string>;
+      post: (url: string, body: Record<string, unknown>) => Promise<Response>;
+      del: (url: string) => Promise<void>;
+      replaceRowsWithRollback: (
+        list: string,
+        filter: string,
+        exact: { field: string; date: string },
+        bodies: Record<string, unknown>[],
+        restoreFields: string[],
+      ) => Promise<() => Promise<void>>;
+    };
+    o.getAllItems = async () => [
+      { ID: 10, Date: '2026-07-14T00:00:00.000Z', Value: 'old' },
+    ];
+    o.itemType = async () => 'SP.Data.MockListItem';
+    o.post = async (_url, body) => {
+      posted.push(body);
+      calls.push(body.Value === 'old' ? 'restore-old' : 'insert-new');
+      return new Response(JSON.stringify({ d: { ID: nextId++ } }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    o.del = async (url) => {
+      calls.push(url.includes('(10)') ? 'delete-old' : 'delete-new');
+    };
+    const undo = await o.replaceRowsWithRollback(
+      'Mock',
+      "Title eq 'Batt1'",
+      { field: 'Date', date: '2026-07-14' },
+      [{ Date: '2026-07-14T00:00:00.000Z', Value: 'new' }],
+      ['Date', 'Value'],
+    );
+    expect(calls).toEqual(['insert-new', 'delete-old']);
+    await undo();
+    expect(calls).toEqual(['insert-new', 'delete-old', 'delete-new', 'restore-old']);
+    expect(posted[posted.length - 1]?.Value).toBe('old');
+  });
+
+  function stagedDal(failHeader = false): {
+    dal: SharePointDataLayer;
+    calls: string[];
+    cache: Map<string, unknown[]>;
+    shiftId: string;
+  } {
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+      canWrite: () => true,
+    });
+    const calls: string[] = [];
+    const shiftId = '2026-07-14-Day';
+    const cache = (dal as unknown as { editCache: Map<string, unknown[]> }).editCache;
+    cache.set(`Batt1|${shiftId}|SFM-TX`, [
+      {
+        id: -1,
+        machineCode: 'Batt1',
+        shiftId,
+        jobNumber: 'SFM-TX',
+        partNumber: 'P1',
+        partDescription: 'Widget',
+        slotIndex: 0,
+        statusCode: 'R',
+        countStart: 0,
+        countEnd: 20,
+        rejectCount: 0,
+        rejects: '{}',
+        purgeKg: null,
+        operator: 'Joe',
+        supervisor: 'Sue',
+        bdIssue: '',
+        mangoTicket: '',
+        handoverNote: '',
+        qcBy: '',
+        locked: false,
+        lockedBy: '',
+        lockedAt: '',
+        createdAt: '',
+        updatedAt: '',
+      },
+    ]);
+    const o = dal as unknown as {
+      listPlanning: () => Promise<unknown[]>;
+      replaceBreakdownEvents: () => Promise<() => Promise<void>>;
+      replaceRejectEvents: () => Promise<() => Promise<void>>;
+      upsertProductionHeader: () => Promise<void>;
+      deleteLiveRow: () => Promise<void>;
+    };
+    o.listPlanning = async (): Promise<unknown[]> => [];
+    o.replaceBreakdownEvents = async () => {
+      calls.push('breakdown');
+      return async (): Promise<void> => {
+        calls.push('undo-breakdown');
+      };
+    };
+    o.replaceRejectEvents = async () => {
+      calls.push('rejects');
+      return async (): Promise<void> => {
+        calls.push('undo-rejects');
+      };
+    };
+    o.upsertProductionHeader = async (): Promise<void> => {
+      calls.push('header');
+      if (failHeader) throw new Error('header unavailable');
+    };
+    o.deleteLiveRow = async (): Promise<void> => {
+      calls.push('live-cleanup');
+    };
+    return { dal, calls, cache, shiftId };
+  }
+
+  it('writes both detail lists before publishing the signed header', async () => {
+    const { dal, calls, shiftId } = stagedDal();
+    await dal.lockShift('Batt1', shiftId, 'Sue', 'Joe', 'SFM-TX');
+    expect(calls.slice(0, 4)).toEqual(['breakdown', 'rejects', 'header', 'live-cleanup']);
+  });
+
+  it('rolls both detail replacements back when the final header write fails', async () => {
+    const { dal, calls, cache, shiftId } = stagedDal(true);
+    await expect(
+      dal.lockShift('Batt1', shiftId, 'Sue', 'Joe', 'SFM-TX'),
+    ).rejects.toThrow(/PMD_Production write failed.*header unavailable/);
+    expect(calls).toEqual([
+      'breakdown',
+      'rejects',
+      'header',
+      'undo-rejects',
+      'undo-breakdown',
+    ]);
+    // A failed sign-off remains editable/retryable; cache is cleared only
+    // after every list write succeeds.
+    expect(cache.has(`Batt1|${shiftId}|SFM-TX`)).toBe(true);
   });
 });

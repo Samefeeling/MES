@@ -37,6 +37,10 @@ interface TraceState {
   /** Wall-clock of the last successful live pull — shown on the Live
    *  Status summary strip so a stalled poll is visible at a glance. */
   lastUpdated: Date | null;
+  /** Read failures for the active live/search request. Existing successful
+   *  cards stay on screen, with this warning instead of being replaced by
+   *  fake Idle / no-results states. */
+  errors: string[];
 }
 
 interface TraceRow {
@@ -198,6 +202,8 @@ const LIVE_POLL_MS = 2 * 60_000;
  *  and forth doesn't hammer SharePoint. */
 const LIVE_FOCUS_REFRESH_MIN_GAP_MS = 15_000;
 let lastLiveLoadMs = 0;
+let liveLoadVersion = 0;
+let searchLoadVersion = 0;
 
 export async function renderTrace(dal: PmdDataLayer): Promise<void> {
   dalRef = dal;
@@ -212,6 +218,7 @@ export async function renderTrace(dal: PmdDataLayer): Promise<void> {
     searched: false,
     loading: true,
     lastUpdated: null,
+    errors: [],
   };
   document.body.className = 'shift-day'; // neutral theme on trace page
   render();
@@ -292,7 +299,13 @@ function render(): void {
       : S!.view === 'search'
         ? renderSearchBody()
         : `<div class="die-host"></div>`;
-  app.innerHTML = `<div class="trace">${tabs}${body}</div>`;
+  const errorBanner =
+    S!.view !== 'die' && S!.errors.length
+      ? `<div class="data-error-banner" role="alert"><b>⚠ Data could not be fully refreshed.</b> ${S!.errors
+          .map((e) => escapeHtml(e))
+          .join(' · ')}</div>`
+      : '';
+  app.innerHTML = `<div class="trace">${tabs}${errorBanner}${body}</div>`;
   wire();
   if (S!.view === 'die') {
     const host = app.querySelector<HTMLElement>('.die-host');
@@ -532,6 +545,7 @@ function wire(): void {
       const v = b.dataset.tab as TraceView;
       if (v === S!.view) return;
       S!.view = v;
+      S!.errors = [];
       render();
       if (v === 'live') {
         if (S!.liveRows.length === 0) void loadLive();
@@ -563,22 +577,47 @@ function wire(): void {
  * right now" rather than just listing what already exists.
  */
 async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
+  if (!S) return;
+  const state = S;
+  const version = ++liveLoadVersion;
+  const errors: string[] = [];
   lastLiveLoadMs = Date.now();
   if (!opts.silent) {
-    S!.loading = true;
+    state.loading = true;
+    state.errors = [];
     render();
   }
   const live = currentShift(new Date());
   const [rows, planning, dieList] = await Promise.all([
     dalRef.listProduction({ shiftId: live.shiftId }).catch((err) => {
       console.warn('[pmd] live trace listProduction failed:', err);
-      return [] as ProductionRecord[];
+      errors.push(`Live production: ${(err as Error).message || 'read failed'}`);
+      return null;
     }),
-    dalRef.listPlanning({}).catch(() => [] as PlanningOrder[]),
+    dalRef.listPlanning({}).catch((err) => {
+      console.warn('[pmd] live trace planning failed:', err);
+      errors.push(`Planning: ${(err as Error).message || 'read failed'}`);
+      return [] as PlanningOrder[];
+    }),
     dalRef.listProductDieColors
-      ? dalRef.listProductDieColors().catch(() => [])
+      ? dalRef.listProductDieColors().catch((err) => {
+          console.warn('[pmd] live trace part/die mapping failed:', err);
+          errors.push(`Part/die mapping: ${(err as Error).message || 'read failed'}`);
+          return [];
+        })
       : Promise.resolve([]),
   ]);
+  if (version !== liveLoadVersion || S !== state || state.view !== 'live') return;
+  if (rows == null) {
+    // Keep the last known cards and timestamp. Replacing them with one Idle
+    // placeholder per machine would turn a network failure into a false
+    // operational statement about the floor.
+    state.errors = errors;
+    state.loading = false;
+    render();
+    drawNowLines();
+    return;
+  }
   const planByJob = new Map(planning.map((p) => [p.jobNumber, p]));
   // Part # → die / CoRun, so the board can keep every co-running order
   // visible instead of collapsing the press to one job.
@@ -594,7 +633,11 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
   // count the whole order, not just this shift's output.
   const jobGoodTotals = await loadJobGoodTotals(
     rows.map((r) => r.jobNumber).filter(Boolean),
+    (job, err) => {
+      errors.push(`Job total ${job}: ${(err as Error).message || 'read failed'}`);
+    },
   );
+  if (version !== liveLoadVersion || S !== state || state.view !== 'live') return;
   const byMachine = new Map<string, ProductionRecord[]>();
   for (const r of rows) {
     const arr = byMachine.get(r.machineCode) ?? [];
@@ -606,7 +649,7 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
   // bottom. Within each bucket, keep the physical floor order as a
   // stable tie-break so the same line doesn't jump positions when
   // an order ends.
-  const sortedMachines = S!.machines.slice().sort((a, b) => {
+  const sortedMachines = state.machines.slice().sort((a, b) => {
     const aActive = (byMachine.get(a.machineCode) ?? []).length > 0 ? 0 : 1;
     const bActive = (byMachine.get(b.machineCode) ?? []).length > 0 ? 0 : 1;
     if (aActive !== bActive) return aActive - bActive;
@@ -644,9 +687,10 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
       out.push(latest);
     }
   }
-  S!.liveRows = out;
-  S!.lastUpdated = new Date();
-  S!.loading = false;
+  state.liveRows = out;
+  state.lastUpdated = new Date();
+  state.errors = errors;
+  state.loading = false;
   render();
   drawNowLines();
 }
@@ -929,7 +973,10 @@ async function readSignedOff(filter: {
   return recs.filter((r) => r.locked);
 }
 
-async function loadJobGoodTotals(jobNumbers: string[]): Promise<Map<string, number>> {
+async function loadJobGoodTotals(
+  jobNumbers: string[],
+  onError?: (jobNumber: string, error: unknown) => void,
+): Promise<Map<string, number>> {
   const unique = Array.from(new Set(jobNumbers.filter(Boolean)));
   const out = new Map<string, number>();
   await Promise.all(
@@ -944,6 +991,7 @@ async function loadJobGoodTotals(jobNumbers: string[]): Promise<Map<string, numb
         // render Job Left = full order quantity (see code review of
         // commit c089da5).
         console.warn('[pmd] job good total fetch failed for', job, e);
+        onError?.(job, e);
       }
     }),
   );
@@ -1006,27 +1054,33 @@ export async function renderJobTraceCards(
 }
 
 async function doSearch(): Promise<void> {
-  const q = S!.query;
+  if (!S) return;
+  const state = S;
+  const q = { ...state.query };
   if (!q.jobNumber && !q.dateFrom && !q.dateTo) {
     return;
   }
-  S!.loading = true;
+  const version = ++searchLoadVersion;
+  state.loading = true;
+  state.errors = [];
   render();
 
-  const all: ProductionRecord[] = [];
-  if (q.jobNumber) {
-    all.push(...(await readSignedOff({ jobNumber: q.jobNumber.trim() })));
-  } else {
-    const filter: {
-      shiftIdFrom?: string;
-      shiftIdTo?: string;
-      machineCode?: string;
-    } = {};
-    if (q.dateFrom) filter.shiftIdFrom = `${q.dateFrom}-`;
-    if (q.dateTo) filter.shiftIdTo = `${q.dateTo}-￿`;
-    if (q.machine) filter.machineCode = q.machine;
-    all.push(...(await readSignedOff(filter)));
-  }
+  try {
+    const all: ProductionRecord[] = [];
+    if (q.jobNumber) {
+      all.push(...(await readSignedOff({ jobNumber: q.jobNumber.trim() })));
+    } else {
+      const filter: {
+        shiftIdFrom?: string;
+        shiftIdTo?: string;
+        machineCode?: string;
+      } = {};
+      if (q.dateFrom) filter.shiftIdFrom = `${q.dateFrom}-`;
+      if (q.dateTo) filter.shiftIdTo = `${q.dateTo}-￿`;
+      if (q.machine) filter.machineCode = q.machine;
+      all.push(...(await readSignedOff(filter)));
+    }
+    if (version !== searchLoadVersion || S !== state || state.view !== 'search') return;
 
   // Post-filter for machine + date range (in case the backend ignored some hints).
   const dateFrom = q.dateFrom ? `${q.dateFrom}` : '';
@@ -1039,19 +1093,25 @@ async function doSearch(): Promise<void> {
     return true;
   });
 
-  const planning = await dalRef.listPlanning({});
-  const planByJob = new Map(planning.map((p) => [p.jobNumber, p]));
+    const planning = await dalRef.listPlanning({});
+    if (version !== searchLoadVersion || S !== state || state.view !== 'search') return;
+    const planByJob = new Map(planning.map((p) => [p.jobNumber, p]));
 
   // Job-wide Good totals for Job Left / Shift Target. A Job Number search
   // already pulled that job's complete history into `all`, so total it
   // directly; a date-range search only sees a window, so fetch each job's
   // full history to keep the numbers job-wide rather than window-wide.
-  let jobGoodTotals: Map<string, number>;
-  if (q.jobNumber) {
-    jobGoodTotals = new Map([[q.jobNumber.trim(), goodForRecords(all)]]);
-  } else {
-    jobGoodTotals = await loadJobGoodTotals(filtered.map((r) => r.jobNumber));
-  }
+    let jobGoodTotals: Map<string, number>;
+    if (q.jobNumber) {
+      jobGoodTotals = new Map([[q.jobNumber.trim(), goodForRecords(all)]]);
+    } else {
+      const totalErrors: string[] = [];
+      jobGoodTotals = await loadJobGoodTotals(filtered.map((r) => r.jobNumber), (job, e) => {
+        totalErrors.push(`Job total ${job}: ${(e as Error).message || 'read failed'}`);
+      });
+      if (totalErrors.length) throw new Error(totalErrors.join(' · '));
+    }
+    if (version !== searchLoadVersion || S !== state || state.view !== 'search') return;
 
   const rows = buildTraceRowsFor(filtered, planByJob, jobGoodTotals);
   // Group by machine, then newest shift first within each machine, so a
@@ -1067,8 +1127,18 @@ async function doSearch(): Promise<void> {
         ? 1
         : -1,
   );
-  S!.results = rows;
-  S!.searched = true;
-  S!.loading = false;
-  render();
+    state.results = rows;
+    state.searched = true;
+    state.errors = [];
+    state.loading = false;
+    render();
+  } catch (e) {
+    if (version !== searchLoadVersion || S !== state || state.view !== 'search') return;
+    console.error('[pmd] Trace search failed:', e);
+    state.errors = [`Search: ${(e as Error).message || 'read failed'}`];
+    state.loading = false;
+    // Preserve the previous successful results rather than replacing them
+    // with a false "No production records" conclusion.
+    render();
+  }
 }

@@ -1,6 +1,7 @@
 import type {
   BdCode,
   DieChangeLog,
+  DieComponentCondition,
   DieMaintenanceRequest,
   DieMaster,
   Machine,
@@ -29,6 +30,7 @@ import { retroJobLeftFixes, sumGoodStartedBefore } from '../core/jobgood';
 import {
   DIE_COMPONENTS,
   DIE_CONDITION_META,
+  dieChangeEventKey,
   parseDieCondition,
   parseToolStatus,
   TOOL_STATUS_META,
@@ -340,6 +342,16 @@ const DEFAULT_FIELDS = {
     dieNumberIn: 'DieNumberIn',
     dieDescriptionIn: 'DieDescriptionIn',
     problemDescription: 'ProblemDescription',
+    /** Added by ensureDieChangeLogSchema. EventKey is indexed + unique so
+     *  two iPads cannot create two rows for the same continuous D/I block. */
+    eventKey: 'EventKey',
+    eventStartSlot: 'EventStartSlot',
+    eventEndSlot: 'EventEndSlot',
+    /** The existing 13 Choice columns remain the OUT inspection. The IN
+     *  inspection is JSON because duplicating 13 more Choice fields makes
+     *  the list brittle and hard to provision consistently. */
+    componentsInJson: 'ComponentsInJson',
+    problemDescriptionIn: 'ProblemDescriptionIn',
   },
   dieMaintenance: {
     // Title = DieNumber (natural key into PMD_ProductDieColor.DieNumber).
@@ -399,6 +411,8 @@ export interface SharePointOptions {
    */
   canWrite?: () => boolean;
 }
+
+type RollbackAction = () => Promise<void>;
 
 export class SharePointDataLayer implements PmdDataLayer {
   private digest: { value: string; expires: number } | null = null;
@@ -781,7 +795,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     const qs =
       '$filter=' +
       encodeURIComponent(
-        `${F.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${shift}' and ${F.jobNumber} eq '${jobNumber}'`,
+        `${F.machine} eq '${odataString(machineCode)}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${odataString(shift)}' and ${F.jobNumber} eq '${odataString(jobNumber)}'`,
       );
     const rows = await this.getAllItems<Record<string, unknown>>(LISTS.production, qs);
     const exact = rows.find((r) => dateOnly(r[F.date]) === date) as
@@ -802,7 +816,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     const digest = await this.getDigest();
     // Attachment upload is raw binary, NOT the JSON post() path — SP
     // stores the request body verbatim as the file.
-    const url = `${this.listUrl(LISTS.production)}/items(${id})/AttachmentFiles/add(FileName='${encodeURIComponent(fileName)}')`;
+    const url = `${this.listUrl(LISTS.production)}/items(${id})/AttachmentFiles/add(FileName='${encodeURIComponent(odataString(fileName))}')`;
     const res = await fetch(url, {
       method: 'POST',
       credentials: 'include',
@@ -1004,7 +1018,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       // existing keyword-derived colour on KPIs takes over.
       // Do NOT cache the failure — the next call retries.
       console.warn('[pmd] PMD_ProductDieColor unavailable, swatches disabled:', e);
-      return [];
+      throw e;
     }
   }
 
@@ -1118,7 +1132,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         `space: recreate it on this site (Site contents → New → List → From existing list).`,
         e,
       );
-      return [];
+      throw e;
     }
   }
 
@@ -1159,6 +1173,63 @@ export class SharePointDataLayer implements PmdDataLayer {
 
   // ---- die change log (PMD_DieChangeLog) -------------------------------
 
+  private dieChangeSchemaReady: Promise<void> | null = null;
+
+  /** Add the four event-level columns introduced by the one-row-per-D/I
+   *  model. EventKey is indexed and unique: this is the server-side guard
+   *  that makes two iPads saving the same popup converge on one row. */
+  private async ensureDieChangeLogSchema(): Promise<void> {
+    if (this.dieChangeSchemaReady) return this.dieChangeSchemaReady;
+    this.dieChangeSchemaReady = (async () => {
+      const F = this.F.dieChangeLog;
+      const fieldsUrl = `${this.listUrl(LISTS.dieChangeLog)}/fields`;
+      const readFields = async (): Promise<Set<string>> => {
+        const env = await this.getJson<{
+          d: { results: Array<{ Title: string; InternalName: string }> };
+        }>(`${fieldsUrl}?$filter=Hidden eq false&$select=Title,InternalName`);
+        return new Set(env.d.results.flatMap((f) => [f.Title, f.InternalName]));
+      };
+      let present = await readFields();
+      const required: Array<{
+        name: string;
+        kind: number;
+        unique?: boolean;
+      }> = [
+        { name: F.eventKey, kind: 2, unique: true },
+        { name: F.eventStartSlot, kind: 9 },
+        { name: F.eventEndSlot, kind: 9 },
+        { name: F.componentsInJson, kind: 3 },
+        { name: F.problemDescriptionIn, kind: 3 },
+      ];
+      for (const field of required) {
+        if (present.has(field.name)) continue;
+        try {
+          await this.post(fieldsUrl, {
+            __metadata: { type: 'SP.Field' },
+            Title: field.name,
+            FieldTypeKind: field.kind,
+            ...(field.unique ? { Indexed: true, EnforceUniqueValues: true } : {}),
+          });
+        } catch (e) {
+          // Another device/deploy may have created it between our read and
+          // POST. Re-read once; only fail when it is genuinely still absent.
+          present = await readFields();
+          if (!present.has(field.name)) {
+            throw new Error(
+              `PMD_DieChangeLog needs column '${field.name}' (${(e as Error).message}). ` +
+                'Add the columns documented in docs/DEPLOYMENT.md or grant Manage Lists once.',
+            );
+          }
+        }
+        present.add(field.name);
+      }
+    })().catch((e) => {
+      this.dieChangeSchemaReady = null;
+      throw e;
+    });
+    return this.dieChangeSchemaReady;
+  }
+
   async listDieChangeLog(): Promise<DieChangeLog[]> {
     const F = this.F.dieChangeLog;
     try {
@@ -1166,6 +1237,20 @@ export class SharePointDataLayer implements PmdDataLayer {
       return rows
         .map((r) => ({
           id: getId(r),
+          eventKey:
+            str(r[F.eventKey]).trim() ||
+            dieChangeEventKey(
+              str(r[F.machine]),
+              dateOnly(r[F.date]),
+              str(r[F.shift]),
+              str(r[F.jobNumber]),
+              num(r[F.eventStartSlot]) || 0,
+            ),
+          eventStartSlot: Math.max(0, num(r[F.eventStartSlot]) || 0),
+          eventEndSlot: Math.max(
+            num(r[F.eventStartSlot]) || 0,
+            num(r[F.eventEndSlot]) || num(r[F.eventStartSlot]) || 0,
+          ),
           date: dateOnly(r[F.date]),
           shift: str(r[F.shift]).trim(),
           dieSetter: str(r[F.dieSetter]).trim(),
@@ -1179,61 +1264,66 @@ export class SharePointDataLayer implements PmdDataLayer {
           components: Object.fromEntries(
             DIE_COMPONENTS.map((c) => [c.key, parseDieCondition(str(r[c.key]))]),
           ),
+          componentsIn: parseDieComponentsJson(str(r[F.componentsInJson])),
           problemDescription: str(r[F.problemDescription]),
+          problemDescriptionIn: str(r[F.problemDescriptionIn]),
           createdAt: str(r['Created']),
         }))
         .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
     } catch (e) {
       console.warn('[pmd] PMD_DieChangeLog unavailable:', e);
-      return [];
+      // A caller about to CREATE must be able to distinguish "no rows" from
+      // "the read failed". Returning [] here made transient GET failures
+      // manufacture duplicate rows on the following POST.
+      throw e;
     }
   }
 
   async createDieChangeLog(log: Omit<DieChangeLog, 'id' | 'createdAt'>): Promise<DieChangeLog> {
+    await this.ensureDieChangeLogSchema();
     const F = this.F.dieChangeLog;
-    // Idempotent on machine + date + shift + job + the ASSESSED die
-    // (DieNumberOut). One change event writes up to two rows — the die that
-    // came OUT and the die that went IN each get their own condition row —
-    // so the assessed die is part of the key; a reload re-firing the popup
-    // UPDATES the matching row (MERGE) rather than duplicating it.
-    const key = (r: {
-      machineCode: string;
-      date: string;
-      shift: string;
-      jobNumber: string;
-      dieNumberOut: string;
-    }) =>
-      `${r.machineCode.trim().toUpperCase()}|${r.date}|${r.shift.trim().toUpperCase()}|${r.jobNumber.trim().toUpperCase()}|${r.dieNumberOut.trim().toUpperCase()}`;
-    let existing: DieChangeLog | undefined;
-    try {
-      existing = (await this.listDieChangeLog()).find((r) => key(r) === key(log));
-    } catch {
-      /* list read failed — fall through to a plain insert */
-    }
+    const eventKey = dieChangeEventKey(
+      log.machineCode,
+      log.date,
+      log.shift,
+      log.jobNumber,
+      log.eventStartSlot,
+    );
+    const clean = {
+      ...log,
+      eventKey,
+      eventStartSlot: Math.max(0, Math.floor(log.eventStartSlot)),
+      eventEndSlot: Math.max(log.eventStartSlot, Math.floor(log.eventEndSlot)),
+    };
+    const findExisting = async (): Promise<DieChangeLog | undefined> =>
+      (await this.listDieChangeLog()).find((r) => r.eventKey === eventKey);
+    let existing = await findExisting();
     const body: Record<string, unknown> = {
       __metadata: { type: await this.itemType(LISTS.dieChangeLog) },
-      Title:
-        log.dieNumberIn && log.dieNumberIn === log.dieNumberOut
-          ? `${log.machineCode} ${log.date} · Die ${log.dieNumberOut} (fitted) condition`
-          : `${log.machineCode} ${log.date} · Die ${log.dieNumberOut || '?'} → ${log.dieNumberIn || '?'}`,
+      Title: `${clean.machineCode} ${clean.date} · Die ${clean.dieNumberOut || '?'} → ${clean.dieNumberIn || '?'}`,
+      [F.eventKey]: eventKey,
+      [F.eventStartSlot]: clean.eventStartSlot,
+      [F.eventEndSlot]: clean.eventEndSlot,
       // DateOnly column: midnight UTC keeps the calendar date stable in
       // every positive-offset regional setting (same rule as
       // shiftDateMarker — see that comment).
-      [F.date]: log.date ? `${log.date}T00:00:00.000Z` : null,
-      [F.shift]: log.shift,
-      [F.dieSetter]: log.dieSetter,
-      [F.machine]: log.machineCode,
-      [F.changeOver]: { __metadata: { type: 'Collection(Edm.String)' }, results: log.changeOver },
-      [F.jobNumber]: log.jobNumber,
+      [F.date]: clean.date ? `${clean.date}T00:00:00.000Z` : null,
+      [F.shift]: clean.shift,
+      [F.dieSetter]: clean.dieSetter,
+      [F.machine]: clean.machineCode,
+      [F.changeOver]: { __metadata: { type: 'Collection(Edm.String)' }, results: clean.changeOver },
+      [F.jobNumber]: clean.jobNumber,
       // Number columns — null when the die number isn't numeric/known.
-      [F.dieNumberOut]: numOrNull(log.dieNumberOut),
-      [F.dieDescriptionOut]: log.dieDescriptionOut,
-      [F.dieNumberIn]: numOrNull(log.dieNumberIn),
-      [F.dieDescriptionIn]: log.dieDescriptionIn,
-      [F.problemDescription]: log.problemDescription,
+      [F.dieNumberOut]: numOrNull(clean.dieNumberOut),
+      [F.dieDescriptionOut]: clean.dieDescriptionOut,
+      [F.dieNumberIn]: numOrNull(clean.dieNumberIn),
+      [F.dieDescriptionIn]: clean.dieDescriptionIn,
+      [F.problemDescription]: clean.problemDescription,
+      [F.componentsInJson]: JSON.stringify(clean.componentsIn ?? {}),
+      [F.problemDescriptionIn]: clean.problemDescriptionIn,
     };
     for (const c of DIE_COMPONENTS) {
-      const cond = log.components[c.key];
+      const cond = clean.components[c.key];
       // On update, always write the component (clearing a downgraded flag);
       // on insert, only send a value when set. body[c.key] otherwise stays
       // absent so SharePoint keeps its default.
@@ -1243,14 +1333,33 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (existing) {
       // MERGE the existing row (IF-MATCH '*') — no duplicate created.
       await this.post(`${this.listUrl(LISTS.dieChangeLog)}/items(${existing.id})`, body, '*');
-      return { ...log, id: existing.id, createdAt: existing.createdAt };
+      return { ...clean, id: existing.id, createdAt: existing.createdAt };
     }
-    const res = await this.post(`${this.listUrl(LISTS.dieChangeLog)}/items`, body);
-    const j = (await res.json()) as { d?: { ID?: number; Id?: number; Created?: string } };
+    let res: Response;
+    try {
+      res = await this.post(`${this.listUrl(LISTS.dieChangeLog)}/items`, body);
+    } catch (e) {
+      // EventKey's unique index turns a concurrent create into 409/duplicate.
+      // Re-read and MERGE that winner so both devices report success without
+      // ever leaving two rows behind.
+      existing = await findExisting();
+      if (!existing) throw e;
+      await this.post(`${this.listUrl(LISTS.dieChangeLog)}/items(${existing.id})`, body, '*');
+      return { ...clean, id: existing.id, createdAt: existing.createdAt };
+    }
+    const createdId = await responseItemId(res);
+    if (createdId == null) {
+      // Some SharePoint proxies strip the verbose create body. Resolve the
+      // server row by its unique key instead of reporting a false failure
+      // after the item has already been committed.
+      existing = await findExisting();
+      if (existing) return { ...clean, id: existing.id, createdAt: existing.createdAt };
+      throw new Error('PMD_DieChangeLog create returned no item ID and the saved row could not be re-read');
+    }
     return {
-      ...log,
-      id: j.d?.ID ?? j.d?.Id ?? 0,
-      createdAt: j.d?.Created ?? new Date().toISOString(),
+      ...clean,
+      id: createdId,
+      createdAt: new Date().toISOString(),
     };
   }
 
@@ -1633,14 +1742,14 @@ export class SharePointDataLayer implements PmdDataLayer {
   async listRejectPareto(filter: ParetoFilter): Promise<ParetoSlice[]> {
     const F = this.F.rejects;
     const parts: string[] = [this.dateLowerBound(F.date, filter.from)];
-    if (filter.machineCode) parts.push(`${F.machine} eq '${filter.machineCode}'`);
+    if (filter.machineCode) parts.push(`${F.machine} eq '${odataString(filter.machineCode)}'`);
     const qs = '$filter=' + encodeURIComponent(parts.join(' and '));
     let rows: Record<string, unknown>[] = [];
     try {
       rows = await this.getAllItems(LISTS.rejects, qs);
     } catch (e) {
       console.warn('[pmd] listRejectPareto: PMD_Rejects read failed', e);
-      return [];
+      throw e;
     }
     const qty = new Map<string, number>();
     const catTally = new Map<string, Map<string, number>>();
@@ -1687,14 +1796,14 @@ export class SharePointDataLayer implements PmdDataLayer {
   async listDowntimePareto(filter: ParetoFilter): Promise<ParetoSlice[]> {
     const F = this.F.breakdown;
     const parts: string[] = [this.dateLowerBound(F.date, filter.from)];
-    if (filter.machineCode) parts.push(`${F.machine} eq '${filter.machineCode}'`);
+    if (filter.machineCode) parts.push(`${F.machine} eq '${odataString(filter.machineCode)}'`);
     const qs = '$filter=' + encodeURIComponent(parts.join(' and '));
     let rows: Record<string, unknown>[] = [];
     try {
       rows = await this.getAllItems(LISTS.breakdown, qs);
     } catch (e) {
       console.warn('[pmd] listDowntimePareto: PMD_BreakDownlog read failed', e);
-      return [];
+      throw e;
     }
     const hrs = new Map<string, number>();
     for (const r of rows) {
@@ -2061,14 +2170,14 @@ export class SharePointDataLayer implements PmdDataLayer {
   private async fetchHeaders(list: string, filter: ProductionFilter): Promise<HeaderRow[]> {
     const F = this.F.production;
     const parts: string[] = [];
-    if (filter.machineCode) parts.push(`${F.machine} eq '${filter.machineCode}'`);
-    if (filter.jobNumber) parts.push(`${F.jobNumber} eq '${filter.jobNumber}'`);
+    if (filter.machineCode) parts.push(`${F.machine} eq '${odataString(filter.machineCode)}'`);
+    if (filter.jobNumber) parts.push(`${F.jobNumber} eq '${odataString(filter.jobNumber)}'`);
     // F.date points at SlotStart_x003a_ (DateTime). Filter with datetime'...'
     // and combine with ShiftId for an exact-shift match.
     if (filter.shiftId) {
       const { shift } = parseShiftIdLoose(filter.shiftId);
       parts.push(`(${shiftDateRange(filter.shiftId, F.date)})`);
-      if (shift) parts.push(`${F.shift} eq '${shift}'`);
+      if (shift) parts.push(`${F.shift} eq '${odataString(shift)}'`);
     }
     const fromTo = shiftDateRangeFromTo(filter.shiftIdFrom, filter.shiftIdTo, F.date);
     if (fromTo) parts.push(fromTo);
@@ -2138,22 +2247,17 @@ export class SharePointDataLayer implements PmdDataLayer {
     const F = this.F.breakdown;
     if (!F.statusTimeline) return new Map();
     const parts: string[] = [];
-    if (filter.machineCode) parts.push(`${F.machine} eq '${filter.machineCode}'`);
-    if (filter.jobNumber) parts.push(`${F.jobNum} eq '${filter.jobNumber}'`);
+    if (filter.machineCode) parts.push(`${F.machine} eq '${odataString(filter.machineCode)}'`);
+    if (filter.jobNumber) parts.push(`${F.jobNum} eq '${odataString(filter.jobNumber)}'`);
     if (filter.shiftId) {
       const { shift } = parseShiftIdLoose(filter.shiftId);
       parts.push(`(${shiftDateRange(filter.shiftId, F.date)})`);
-      if (shift) parts.push(`${F.shift} eq '${shift}'`);
+      if (shift) parts.push(`${F.shift} eq '${odataString(shift)}'`);
     }
     const fromTo = shiftDateRangeFromTo(filter.shiftIdFrom, filter.shiftIdTo, F.date);
     if (fromTo) parts.push(fromTo);
     const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
-    let rows: Record<string, unknown>[] = [];
-    try {
-      rows = await this.getAllItems(LISTS.breakdown, qs);
-    } catch {
-      return new Map();
-    }
+    const rows = await this.getAllItems<Record<string, unknown>>(LISTS.breakdown, qs);
     const out = new Map<string, string>();
     for (const r of rows) {
       const mc = str(r[F.machine]);
@@ -2173,22 +2277,17 @@ export class SharePointDataLayer implements PmdDataLayer {
   ): Promise<Map<string, RejectRow[]>> {
     const F = this.F.rejects;
     const parts: string[] = [];
-    if (filter.machineCode) parts.push(`${F.machine} eq '${filter.machineCode}'`);
-    if (filter.jobNumber) parts.push(`${F.jobNum} eq '${filter.jobNumber}'`);
+    if (filter.machineCode) parts.push(`${F.machine} eq '${odataString(filter.machineCode)}'`);
+    if (filter.jobNumber) parts.push(`${F.jobNum} eq '${odataString(filter.jobNumber)}'`);
     // PMD_Rejects.Date is DateTime — use a ±1d window around the shift's
     // date so both new (noon-UTC marker) and legacy (local-start) rows match.
     if (filter.shiftId) {
       const { shift } = parseShiftIdLoose(filter.shiftId);
       parts.push(`(${shiftDateRange(filter.shiftId, F.date)})`);
-      if (shift) parts.push(`${F.shift} eq '${shift}'`);
+      if (shift) parts.push(`${F.shift} eq '${odataString(shift)}'`);
     }
     const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
-    let rows: Record<string, unknown>[] = [];
-    try {
-      rows = await this.getAllItems(LISTS.rejects, qs);
-    } catch {
-      return new Map();
-    }
+    const rows = await this.getAllItems<Record<string, unknown>>(LISTS.rejects, qs);
     const out = new Map<string, RejectRow[]>();
     for (const r of rows) {
       const mc = str(r[F.machine]);
@@ -2629,6 +2728,40 @@ export class SharePointDataLayer implements PmdDataLayer {
           { jobRequired: required, qtyPerHr: cycleTime, isDieChange: false } as PlanningOrder,
           jobLeftSnap,
         ) ?? canon?.shiftTarget ?? null;
+      // SharePoint has no multi-list transaction. Stage both child-list
+      // replacements first and write the signed PMD_Production header LAST.
+      // Each replacement returns a compensating rollback, so a later failure
+      // restores the exact pre-sign-off rows instead of leaving a signed
+      // header with missing/half-written analytic detail.
+      let undoBreakdown: RollbackAction = async () => {};
+      try {
+        undoBreakdown =
+          (await this.replaceBreakdownEvents(
+          {
+            machineCode,
+            date,
+            shift,
+            jobNumber: job,
+            partNumber: partNum,
+            timeline: agg.timeline,
+          },
+          slots,
+          )) ?? undoBreakdown;
+      } catch (e) {
+        throw new Error(`PMD_BreakDownlog write failed (${tag}): ${(e as Error).message}`);
+      }
+      let undoRejects: RollbackAction = async () => {};
+      try {
+        undoRejects =
+          (await this.replaceRejectEvents(
+            { machineCode, date, shift, jobNumber: job },
+            agg.rejectEvents,
+          )) ?? undoRejects;
+      } catch (e) {
+        const rollbackError = await runRollback(undoBreakdown);
+        const suffix = rollbackError ? `; breakdown rollback also failed: ${rollbackError}` : '';
+        throw new Error(`PMD_Rejects write failed (${tag}): ${(e as Error).message}${suffix}`);
+      }
       try {
         await this.upsertProductionHeader({
           signOff: new Date().toISOString(),
@@ -2659,30 +2792,13 @@ export class SharePointDataLayer implements PmdDataLayer {
           rejectsBySlot: agg.rejectsBySlot,
         });
       } catch (e) {
-        throw new Error(`PMD_Production write failed (${tag}): ${(e as Error).message}`);
-      }
-      try {
-        await this.replaceBreakdownEvents(
-          {
-            machineCode,
-            date,
-            shift,
-            jobNumber: job,
-            partNumber: partNum,
-            timeline: agg.timeline,
-          },
-          slots,
-        );
-      } catch (e) {
-        throw new Error(`PMD_BreakDownlog write failed (${tag}): ${(e as Error).message}`);
-      }
-      try {
-        await this.replaceRejectEvents(
-          { machineCode, date, shift, jobNumber: job },
-          agg.rejectEvents,
-        );
-      } catch (e) {
-        throw new Error(`PMD_Rejects write failed (${tag}): ${(e as Error).message}`);
+        const rejectRollbackError = await runRollback(undoRejects);
+        const breakdownRollbackError = await runRollback(undoBreakdown);
+        const rollbackErrors = [rejectRollbackError, breakdownRollbackError].filter(Boolean);
+        const suffix = rollbackErrors.length
+          ? `; detail rollback also failed: ${rollbackErrors.join('; ')}`
+          : '';
+        throw new Error(`PMD_Production write failed (${tag}): ${(e as Error).message}${suffix}`);
       }
       // Sweep the in-progress mirror so other iPads' Live Status drops
       // this row in favour of the new signed-off Production record on
@@ -3014,7 +3130,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     const qs =
       '$filter=' +
       encodeURIComponent(
-        `${F.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${shiftId.slice(11)}' and ${F.jobNumber} eq '${jobNumber}'`,
+        `${F.machine} eq '${odataString(machineCode)}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${odataString(shiftId.slice(11))}' and ${F.jobNumber} eq '${odataString(jobNumber)}'`,
       );
     const windowRows = await this.getAllItems<Record<string, unknown>>(LISTS.production, qs);
     const existing = windowRows.filter((r) => dateOnly(r[F.date]) === date);
@@ -3181,10 +3297,12 @@ export class SharePointDataLayer implements PmdDataLayer {
     const qs =
       '$filter=' +
       encodeURIComponent(
-        `${F.machine} eq '${h.machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${h.shift}' and ${F.jobNumber} eq '${h.jobNumber}'`,
+        `${F.machine} eq '${odataString(h.machineCode)}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${odataString(h.shift)}' and ${F.jobNumber} eq '${odataString(h.jobNumber)}'`,
       );
     const windowRows = await this.getAllItems<Record<string, unknown>>(list, qs);
-    const existing = windowRows.filter((r) => dateOnly(r[F.date]) === h.date);
+    const existing = windowRows
+      .filter((r) => dateOnly(r[F.date]) === h.date)
+      .sort((a, b) => (sharePointItemId(a) ?? Number.MAX_SAFE_INTEGER) - (sharePointItemId(b) ?? Number.MAX_SAFE_INTEGER));
     const idOf = (r: Record<string, unknown>): number | undefined =>
       (r as { ID?: number; Id?: number }).ID ?? (r as { ID?: number; Id?: number }).Id;
     const target =
@@ -3193,28 +3311,40 @@ export class SharePointDataLayer implements PmdDataLayer {
         : `${this.listUrl(list)}/items`;
     const ifMatch = existing.length > 0 ? '*' : undefined;
     await this.postWithFieldRetry(list, target, body, ifMatch);
-    // Self-heal duplicates: a past double-submit (e.g. SFM507208 landed
-    // 11× when a laggy iPad let the supervisor tap Sign Off repeatedly)
-    // leaves several identical rows for the same (machine, shift, job,
-    // date). We just MERGEd the first; delete the rest so the tuple
-    // collapses back to a single canonical row. Best-effort — a failed
-    // delete just leaves a duplicate for the next sign-off to retry.
-    if (existing.length > 1) {
-      console.warn(
-        '[pmd] collapsing',
-        existing.length - 1,
-        'duplicate row(s) on',
-        list,
-        'for',
-        `${h.machineCode}|${shiftId}|${h.jobNumber}`,
-      );
-      for (const dup of existing.slice(1)) {
-        const id = idOf(dup);
-        if (id == null) continue;
-        await this.del(`${this.listUrl(list)}/items(${id})`).catch((e) => {
-          console.warn('[pmd] duplicate-row delete failed (will retry next sign-off):', e);
-        });
+    // Re-read AFTER the write. Cleaning only the pre-write snapshot misses
+    // the exact race that creates duplicates: two iPads both read zero rows,
+    // then both POST. Every writer deterministically keeps the lowest ID, so
+    // concurrent cleanups converge on the same canonical row.
+    try {
+      const afterWindow = await this.getAllItems<Record<string, unknown>>(list, qs);
+      const after = afterWindow
+        .filter((r) => dateOnly(r[F.date]) === h.date)
+        .sort(
+          (a, b) =>
+            (sharePointItemId(a) ?? Number.MAX_SAFE_INTEGER) -
+            (sharePointItemId(b) ?? Number.MAX_SAFE_INTEGER),
+        );
+      if (after.length > 1) {
+        console.warn(
+          '[pmd] collapsing',
+          after.length - 1,
+          'duplicate row(s) on',
+          list,
+          'for',
+          `${h.machineCode}|${shiftId}|${h.jobNumber}`,
+        );
+        for (const dup of after.slice(1)) {
+          const id = idOf(dup);
+          if (id == null) continue;
+          await this.del(`${this.listUrl(list)}/items(${id})`).catch((e) => {
+            console.warn('[pmd] duplicate-row delete failed (will retry next sign-off):', e);
+          });
+        }
       }
+    } catch (e) {
+      // The row itself is already written. Treat convergence as best-effort;
+      // the next writer repeats this post-write check.
+      console.warn('[pmd] post-write duplicate check failed (next write retries):', e);
     }
   }
 
@@ -3224,10 +3354,43 @@ export class SharePointDataLayer implements PmdDataLayer {
    *  doesn't doom every snapshot. */
   private rejectedFields = new Map<string, Set<string>>();
 
+  /** Fields that are denormalised conveniences or backwards-compatible
+   *  extensions. These may be omitted on an older tenant without changing
+   *  the tuple's identity or its authoritative counts. Core key/count fields
+   *  are intentionally absent: silently dropping one of those would turn a
+   *  successful-looking sign-off into corrupted production data. */
+  private isFailSoftHeaderField(list: string, field: string): boolean {
+    if (list !== LISTS.production && list !== LISTS.liveStatus) return false;
+    const F = this.F.production;
+    return new Set<string>([
+      F.machineCodeAlt,
+      F.timeline,
+      F.partNum,
+      F.partDesc,
+      F.jobRequired,
+      F.cycleTime,
+      F.shiftTarget,
+      F.cavities,
+      F.runTime,
+      F.downTime,
+      F.handover,
+      F.totalGood,
+      F.qcChecks,
+      F.rejectsBySlot,
+      F.ownerDevice,
+      F.signOff,
+      F.jobLeft,
+      F.reopened,
+      F.plannedStart,
+    ].filter(Boolean)).has(field);
+  }
+
   private stripRejectedFields(list: string, body: Record<string, unknown>): void {
     const banned = this.rejectedFields.get(list);
     if (!banned) return;
-    for (const k of banned) delete body[k];
+    for (const k of banned) {
+      if (this.isFailSoftHeaderField(list, k)) delete body[k];
+    }
   }
 
   /** POST that retries on two SP errors we can recover from:
@@ -3260,6 +3423,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       const missing = /property\s+'?([A-Za-z0-9_]+)'?\s+does not exist/i.exec(msg);
       if (!missing || !(missing[1] in work)) return false;
       const field = missing[1];
+      if (!this.isFailSoftHeaderField(list, field)) return false;
       const banned = this.rejectedFields.get(list) ?? new Set<string>();
       banned.add(field);
       this.rejectedFields.set(list, banned);
@@ -3325,7 +3489,12 @@ export class SharePointDataLayer implements PmdDataLayer {
     ifMatch: string | undefined,
   ): Promise<string | null> {
     const keys = Object.keys(body)
-      .filter((k) => k !== '__metadata' && (typeof body[k] === 'boolean' || typeof body[k] === 'number'))
+      .filter(
+        (k) =>
+          k !== '__metadata' &&
+          this.isFailSoftHeaderField(list, k) &&
+          (typeof body[k] === 'boolean' || typeof body[k] === 'number'),
+      )
       .sort((a, b) => Number(typeof body[b] === 'boolean') - Number(typeof body[a] === 'boolean'));
     for (const k of keys) {
       const trial = { ...body };
@@ -3363,7 +3532,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     const textKeys = Object.keys(body)
       .filter(
         (k) =>
-          k !== '__metadata' && typeof body[k] === 'string' && (body[k] as string).length > 0,
+          k !== '__metadata' &&
+          this.isFailSoftHeaderField(list, k) &&
+          typeof body[k] === 'string' &&
+          (body[k] as string).length > 0,
       )
       .sort((a, b) => (body[b] as string).length - (body[a] as string).length);
     for (const k of textKeys) {
@@ -3405,7 +3577,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     try {
       await this.deleteByFilter(
         LISTS.liveStatus,
-        `${F.machine} eq '${machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${shift}' and ${F.jobNumber} eq '${jobNumber}'`,
+        `${F.machine} eq '${odataString(machineCode)}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${odataString(shift)}' and ${F.jobNumber} eq '${odataString(jobNumber)}'`,
         { field: F.date, date: shiftId.slice(0, 10) },
       );
     } catch (e) {
@@ -3431,16 +3603,10 @@ export class SharePointDataLayer implements PmdDataLayer {
       timeline: string;
     },
     slots: ProductionRecord[],
-  ): Promise<void> {
+  ): Promise<RollbackAction> {
     const F = this.F.breakdown;
     const shiftId = `${key.date}-${key.shift}`;
     const slotStartIso = shiftDateMarker(shiftId);
-    await this.deleteByFilter(
-      LISTS.breakdown,
-      `${F.machine} eq '${key.machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${key.shift}' and ${F.jobNum} eq '${key.jobNumber}'`,
-      { field: F.date, date: key.date },
-    );
-    const type = await this.itemType(LISTS.breakdown);
     // Count per-status slots across the whole shift; each slot = 0.5h.
     const counts: Record<StatusCode, number> = {
       R: 0, B: 0, C: 0, D: 0, I: 0, M: 0, O: 0, P: 0, S: 0,
@@ -3455,7 +3621,6 @@ export class SharePointDataLayer implements PmdDataLayer {
       (a, b2) => bdTally[b2] - bdTally[a],
     )[0] ?? '';
     const body: Record<string, unknown> = {
-      __metadata: { type },
       [F.machine]: key.machineCode,
       [F.shift]: key.shift,
       [F.jobNum]: key.jobNumber,
@@ -3473,24 +3638,27 @@ export class SharePointDataLayer implements PmdDataLayer {
       [F.s]: counts.S * 0.5,
     };
     if (slotStartIso) body[F.date] = slotStartIso;
-    await this.post(`${this.listUrl(LISTS.breakdown)}/items`, body);
+    return this.replaceRowsWithRollback(
+      LISTS.breakdown,
+      `${F.machine} eq '${odataString(key.machineCode)}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${odataString(key.shift)}' and ${F.jobNum} eq '${odataString(key.jobNumber)}'`,
+      { field: F.date, date: key.date },
+      [body],
+      [
+        F.machine, F.date, F.shift, F.jobNum, F.partNum, F.statusTimeline, F.bdCode,
+        F.r, F.b, F.c, F.d, F.i, F.m, F.o, F.p, F.s,
+      ],
+    );
   }
 
   private async replaceRejectEvents(
     key: { machineCode: string; date: string; shift: string; jobNumber: string },
     events: RejectEvent[],
-  ): Promise<void> {
+  ): Promise<RollbackAction> {
     const F = this.F.rejects;
     const shiftId = `${key.date}-${key.shift}`;
     const slotStartIso = shiftDateMarker(shiftId);
-    await this.deleteByFilter(
-      LISTS.rejects,
-      `${F.machine} eq '${key.machineCode}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${key.shift}' and ${F.jobNum} eq '${key.jobNumber}'`,
-      { field: F.date, date: key.date },
-    );
-    for (const ev of events) {
+    const bodies = events.map((ev) => {
       const body: Record<string, unknown> = {
-        __metadata: { type: await this.itemType(LISTS.rejects) },
         // F.machine is mapped to Title; setting it populates Title with the
         // machine code. No separate Machine column exists.
         [F.machine]: key.machineCode,
@@ -3502,8 +3670,116 @@ export class SharePointDataLayer implements PmdDataLayer {
         [F.rejectNumber]: ev.qty,
       };
       if (slotStartIso) body[F.date] = slotStartIso;
-      await this.post(`${this.listUrl(LISTS.rejects)}/items`, body);
+      return body;
+    });
+    return this.replaceRowsWithRollback(
+      LISTS.rejects,
+      `${F.machine} eq '${odataString(key.machineCode)}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${odataString(key.shift)}' and ${F.jobNum} eq '${odataString(key.jobNumber)}'`,
+      { field: F.date, date: key.date },
+      bodies,
+      [
+        F.machine, F.date, F.shift, F.timeline, F.jobNum,
+        F.rejectCode, F.rejectCategory, F.rejectNumber,
+      ],
+    );
+  }
+
+  /**
+   * Replace a tuple's child rows without the old delete-first data-loss
+   * window. New rows are fully inserted before any old row is removed.
+   * The returned compensating action restores the original snapshot, which
+   * lets lockShift emulate an atomic multi-list sign-off around SharePoint's
+   * otherwise independent REST writes.
+   */
+  private async replaceRowsWithRollback(
+    list: string,
+    filterClause: string,
+    exactDate: { field: string; date: string },
+    bodies: Record<string, unknown>[],
+    restoreFields: string[],
+  ): Promise<RollbackAction> {
+    const readExactRows = async (): Promise<Record<string, unknown>[]> => {
+      const rows = await this.getAllItems<Record<string, unknown>>(
+        list,
+        '$filter=' + encodeURIComponent(filterClause),
+      );
+      return rows.filter((r) => dateOnly(r[exactDate.field]) === exactDate.date);
+    };
+    const oldRows = await readExactRows();
+    const oldIds = new Set(oldRows.map(sharePointItemId).filter((id): id is number => id != null));
+    const createdIds: number[] = [];
+    const deletedOldRows: Record<string, unknown>[] = [];
+    const type = await this.itemType(list);
+    const itemsUrl = `${this.listUrl(list)}/items`;
+
+    const createAndRemember = async (body: Record<string, unknown>): Promise<void> => {
+      const response = await this.post(itemsUrl, { __metadata: { type }, ...body });
+      let id = await responseItemId(response);
+      // Verbose OData normally returns d.ID. Some SharePoint proxies strip
+      // the response body; in that case re-read the tuple and identify the
+      // newly-created ID so rollback remains possible.
+      if (id == null) {
+        const known = new Set([...oldIds, ...createdIds]);
+        const candidates = (await readExactRows())
+          .map(sharePointItemId)
+          .filter((candidate): candidate is number => candidate != null && !known.has(candidate))
+          .sort((a, b) => b - a);
+        id = candidates[0];
+      }
+      if (id == null) {
+        throw new Error(`${list}: create succeeded but SharePoint returned no item ID for rollback`);
+      }
+      createdIds.push(id);
+    };
+
+    const restore = async (rows: Record<string, unknown>[]): Promise<void> => {
+      const failures: string[] = [];
+      for (const row of rows) {
+        const body: Record<string, unknown> = { __metadata: { type } };
+        for (const field of restoreFields) {
+          if (field && Object.prototype.hasOwnProperty.call(row, field)) body[field] = row[field];
+        }
+        try {
+          await this.post(itemsUrl, body);
+        } catch (e) {
+          failures.push((e as Error).message);
+        }
+      }
+      if (failures.length) throw new Error(failures.join('; '));
+    };
+
+    const compensate = async (rowsToRestore: Record<string, unknown>[]): Promise<void> => {
+      const failures: string[] = [];
+      for (const id of createdIds) {
+        try {
+          await this.del(`${itemsUrl}(${id})`);
+        } catch (e) {
+          failures.push(`delete new ${id}: ${(e as Error).message}`);
+        }
+      }
+      try {
+        await restore(rowsToRestore);
+      } catch (e) {
+        failures.push(`restore old rows: ${(e as Error).message}`);
+      }
+      if (failures.length) throw new Error(failures.join('; '));
+    };
+
+    try {
+      for (const body of bodies) await createAndRemember(body);
+      for (const row of oldRows) {
+        const id = sharePointItemId(row);
+        if (id == null) throw new Error(`${list}: existing row has no item ID`);
+        await this.del(`${itemsUrl}(${id})`);
+        deletedOldRows.push(row);
+      }
+    } catch (e) {
+      const rollbackError = await runRollback(() => compensate(deletedOldRows));
+      const suffix = rollbackError ? `; rollback failed: ${rollbackError}` : '';
+      throw new Error(`${(e as Error).message}${suffix}`);
     }
+
+    return async (): Promise<void> => compensate(oldRows);
   }
 
   /**
@@ -3616,6 +3892,46 @@ function dominantKey(m: Map<string, number> | undefined): string {
 function getId(r: Record<string, unknown>): number {
   const v = (r as { ID?: number; Id?: number }).ID ?? (r as { Id?: number }).Id;
   return typeof v === 'number' ? v : 0;
+}
+
+/** Escape a value inside an OData single-quoted string literal. URL
+ * encoding happens afterwards and does not escape apostrophes by itself. */
+export function odataString(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+function sharePointItemId(r: Record<string, unknown>): number | null {
+  const id = (r as { ID?: unknown; Id?: unknown }).ID ?? (r as { Id?: unknown }).Id;
+  const n = Number(id);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+async function responseItemId(response: Response | undefined): Promise<number | null> {
+  if (!response) return null;
+  try {
+    const payload = (await response.json()) as {
+      ID?: unknown;
+      Id?: unknown;
+      d?: { ID?: unknown; Id?: unknown };
+    };
+    const id = payload.d?.ID ?? payload.d?.Id ?? payload.ID ?? payload.Id;
+    const n = Number(id);
+    if (Number.isInteger(n) && n > 0) return n;
+  } catch {
+    // Some proxies return an empty 201 body. Fall through to Location.
+  }
+  const location = response.headers?.get('Location') ?? '';
+  const match = /items\((\d+)\)/i.exec(location);
+  return match ? Number(match[1]) : null;
+}
+
+async function runRollback(action: RollbackAction): Promise<string | null> {
+  try {
+    await action();
+    return null;
+  } catch (e) {
+    return (e as Error).message || String(e);
+  }
 }
 
 // PMD_DieMaintenance stores lifecycle fields as plain text (people also
@@ -3738,6 +4054,21 @@ function nullOrNum(v: unknown): number | null {
 function numOrNull(s: string): number | null {
   const n = Number(s.trim());
   return s.trim() !== '' && Number.isFinite(n) ? n : null;
+}
+
+function parseDieComponentsJson(raw: string): Record<string, DieComponentCondition> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, DieComponentCondition> = {};
+    for (const c of DIE_COMPONENTS) {
+      const cond = parseDieCondition(str(parsed[c.key]));
+      if (cond) out[c.key] = cond;
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 /** SP MultiChoice read: verbose {results:[…]} or a plain array. */
@@ -4352,7 +4683,7 @@ export { bdLabelFor };
 
 export function parsePlanningCsv(text: string): PlanningOrder[] {
   const rows = parseCsv(text.replace(/^﻿/, ''));
-  if (rows.length === 0) return [];
+  if (rows.length === 0) throw new Error('Planning CSV is empty');
   const header = rows[0].map((c) => c.trim());
   const idx = (name: string): number => header.indexOf(name);
   const firstIdx = (...names: string[]): number => {
@@ -4363,6 +4694,11 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
     return -1;
   };
   const iJob = idx('JobHead_JobNum');
+  if (iJob < 0) {
+    throw new Error(
+      `Planning CSV schema invalid: required column 'JobHead_JobNum' is missing (header: ${header.join(' | ')})`,
+    );
+  }
   const iPart = idx('JobHead_PartNum');
   const iDesc = idx('JobHead_PartDescription');
   const iProd = idx('JobHead_ProdQty');
@@ -4413,9 +4749,14 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
     }
     const dueIso = csvDateToIso(row[iDue] ?? '');
     const dur = parseFloat(row[iDur] ?? '0') || 0;
-    const end = startIso && dur > 0
-      ? new Date(new Date(startIso).getTime() + dur * 3600_000).toISOString()
-      : dueIso;
+    let end = dueIso;
+    if (startIso && dur > 0) {
+      const endDate = new Date(startIso);
+      if (Number.isFinite(endDate.getTime())) {
+        endDate.setTime(endDate.getTime() + dur * 3600_000);
+        end = localDateTimeIso(endDate);
+      }
+    }
     out.push({
       id: 0,
       jobNumber: job,
@@ -4514,7 +4855,7 @@ const MANGO_REQUIRED = new Set(['asset', 'status']);
  */
 export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
   const rows = parseCsv(text.replace(/^﻿/, ''));
-  if (rows.length < 2) return [];
+  if (rows.length === 0) throw new Error('Mango CSV is empty');
   const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
   const wanted = new Set(Object.values(MANGO_HEADERS).map(norm));
   // Mango prefixes the export with a report-TITLE line ("AU - Minto
@@ -4531,11 +4872,12 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
     }
   }
   if (headerAt < 0 || bestScore < 3) {
-    console.warn(
-      '[pmd] Mango CSV: could not locate the header row (best score', bestScore,
-      ') — first lines:', rows.slice(0, 3).map((r) => r.join(',').slice(0, 120)),
+    throw new Error(
+      `Mango CSV schema invalid: could not locate the report header (best score ${bestScore}; first lines: ${rows
+        .slice(0, 3)
+        .map((r) => r.join(',').slice(0, 120))
+        .join(' / ')})`,
     );
-    return [];
   }
   // Direct map: each field takes the column whose header matches its exact
   // name. The layout is fixed, so no prefix/contains guessing.
@@ -4546,9 +4888,10 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
   }
   const missing = [...MANGO_REQUIRED].filter((f) => idx[f] < 0).map((f) => MANGO_HEADERS[f]);
   if (missing.length > 0) {
-    console.warn(
-      "[pmd] Mango CSV: expected column(s) not found —", missing.join(', '),
-      '· header row was:', rows[headerAt].join(' | '),
+    throw new Error(
+      `Mango CSV schema invalid: required column(s) missing: ${missing.join(', ')}; header: ${rows[
+        headerAt
+      ].join(' | ')}`,
     );
   }
   // The due-date column drives the Maint traffic light and is the one
@@ -4674,7 +5017,7 @@ function applyDecimalHoursToIso(iso: string, decimalHours: number): string {
   if (!isFinite(d.getTime())) return iso;
   const [hh, mm, ss] = decimalHoursToHms(decimalHours);
   d.setHours(hh, mm, ss, 0);
-  return d.toISOString();
+  return localDateTimeIso(d);
 }
 
 function parseCsv(text: string): string[][] {
@@ -4723,6 +5066,9 @@ function parseCsv(text: string): string[][] {
       fieldStart = false;
     }
   }
+  if (inQuotes) {
+    throw new Error('CSV format invalid: unterminated quoted field');
+  }
   if (field !== '' || row.length > 0) {
     row.push(field);
     out.push(row);
@@ -4744,10 +5090,20 @@ function csvDateToIso(s: string): string {
   // keeps its wall-clock time with no Z so the day never shifts.
   const p = (n: number): string => String(n).padStart(2, '0');
   const date = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-  const hasTime = d.getHours() !== 0 || d.getMinutes() !== 0 || d.getSeconds() !== 0;
+  // Preserve an EXPLICIT midnight as a datetime. Looking only at the Date's
+  // numeric components collapses "2026-07-01T00:00:00" to a bare date and
+  // loses the fact that Epicor actually scheduled the job for midnight.
+  const hasTime = /(?:T|\s)\d{1,2}:\d{2}/i.test(s.trim());
   return hasTime
     ? `${date}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
     : date;
+}
+
+function localDateTimeIso(d: Date): string {
+  const p = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(
+    d.getMinutes(),
+  )}:${p(d.getSeconds())}`;
 }
 
 /**

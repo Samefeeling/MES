@@ -1,15 +1,18 @@
 // Supervisor mode — a session-scoped auth gate for unlock + admin actions.
-// Single shared password (compile-time, falls back to "pmd1234" so the
-// floor can use the app without an env override; rotate by setting
-// VITE_SUPERVISOR_PASSWORD and rebuilding). The "auth" is intentionally
-// light — this is an internal LOB app on a trusted SharePoint site,
-// the gate exists to stop operators from accidentally tapping Unlock,
-// not to defend against an attacker who has the iPad and the network.
+// The shared password is compile-time configuration. There is deliberately
+// no fallback: deployments must set VITE_SUPERVISOR_PASSWORD and rebuild.
+// The "auth" is intentionally light — this is an internal LOB app on a
+// trusted SharePoint site, and the gate exists to stop operators from
+// accidentally tapping Unlock rather than to replace server-side access
+// control.
 
 const KEY = 'pmd_supervisor_mode';
-const PASSWORD =
-  (import.meta.env as Record<string, string | undefined>).VITE_SUPERVISOR_PASSWORD ??
-  'pmd1234';
+
+function configuredPassword(): string | undefined {
+  const value = (import.meta.env as Record<string, string | undefined>)
+    .VITE_SUPERVISOR_PASSWORD;
+  return value && value.trim() ? value : undefined;
+}
 
 type Listener = () => void;
 const listeners = new Set<Listener>();
@@ -31,12 +34,22 @@ export function clearSupervisor(): void {
   notify();
 }
 
+/** Whether this build has a usable supervisor password configured. */
+export function isSupervisorConfigured(): boolean {
+  return configuredPassword() !== undefined;
+}
+
 export function tryEnterSupervisor(password: string): boolean {
-  if (password !== PASSWORD) return false;
+  const expected = configuredPassword();
+  if (!expected || password !== expected) return false;
   try {
     sessionStorage.setItem(KEY, '1');
+    // Storage can be blocked (private mode / policy) or can silently refuse
+    // the write. Never report a successful login when the very next
+    // isSupervisor() check remains false.
+    if (sessionStorage.getItem(KEY) !== '1') return false;
   } catch {
-    /* private mode — caller will still see isSupervisor() === false next read */
+    return false;
   }
   notify();
   return true;
