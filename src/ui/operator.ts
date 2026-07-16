@@ -648,6 +648,24 @@ function isPastShift(): boolean {
   return sid() !== liveShiftId;
 }
 
+const OPERATOR_FUTURE_ORDER_DAYS = 5;
+
+/** Operator Job# visibility by Epicor JobHead_StartDate (`plannedStart`).
+ * There is deliberately no lower bound: an overdue order still present in
+ * Planning is unfinished and must remain selectable. The upper bound is the
+ * end of the fifth day after the selected live/future view date. Missing or
+ * malformed legacy dates remain visible rather than hiding a real order. */
+export function operatorOrderStartVisible(plannedStart: string, anchorDate: Date): boolean {
+  if (!plannedStart) return true;
+  const start = Date.parse(plannedStart);
+  if (!isFinite(start)) return true;
+  const horizon = new Date(anchorDate);
+  horizon.setHours(0, 0, 0, 0);
+  horizon.setDate(horizon.getDate() + OPERATOR_FUTURE_ORDER_DAYS);
+  horizon.setHours(23, 59, 59, 999);
+  return start <= horizon.getTime();
+}
+
 /**
  * The selected shift hasn't started yet — its wall-clock start is still in
  * the future. The classic trap is a Night-shift supervisor working past
@@ -722,8 +740,8 @@ function shiftOrders(): PlanningOrder[] {
     return historicalIds.map(historicalOrder);
   }
 
-  // Active / future shift: keep every planning order scheduled to start
-  // by the end of a 2-day horizon (today + tomorrow on a live shift).
+  // Active / future shift: keep every planning order whose JobHead_StartDate
+  // is in the past or falls within the next five days.
   // We only bound the FUTURE — Epicor releases far more upcoming orders
   // than a press will touch in one shift, and operators were scrolling
   // past dozens of not-yet-relevant entries. The PAST is left open: an
@@ -737,21 +755,9 @@ function shiftOrders(): PlanningOrder[] {
   // through the filter so the operator can still pick them.
   // Sorted plannedStart-ascending so the next-to-run order is at
   // the top of the dropdown.
-  const windowStart = new Date(S!.viewDate);
-  windowStart.setHours(0, 0, 0, 0);
-  const windowEnd = new Date(windowStart);
-  windowEnd.setDate(windowEnd.getDate() + 2);
-  windowEnd.setHours(23, 59, 59, 999);
-  const we = windowEnd.getTime();
   const planned = S!.planning
     .slice()
-    .filter((o) => {
-      if (!o.plannedStart) return true;
-      const s = Date.parse(o.plannedStart);
-      if (!isFinite(s)) return true;
-      // Keep it unless it starts beyond the future horizon.
-      return s <= we;
-    })
+    .filter((o) => operatorOrderStartVisible(o.plannedStart, S!.viewDate))
     .sort(
       (a, b2) =>
         new Date(a.plannedStart).getTime() - new Date(b2.plannedStart).getTime(),
