@@ -1737,23 +1737,34 @@ function renderRejectStatusBadges(slice: ParetoSlice): string {
   return badges ? `<span class="kpi-reject-statuses">${badges}</span>` : '';
 }
 
-function renderRejectActionSignal(slice: ParetoSlice): string {
-  const ctx = rejectActionContext(slice);
-  if (ctx.statusTotal === 0) {
-    return '<span class="kpi-reject-signal is-unknown">Status unavailable</span>';
-  }
-  if (ctx.runningQty > 0) {
-    return `<span class="kpi-reject-signal is-review"><b>R ×${ctx.runningQty}</b><small>${
-      ctx.runningPct ?? 0
-    }% · review</small></span>`;
-  }
-  if (ctx.unknownQty > 0) {
-    return `<span class="kpi-reject-signal is-unknown"><b>Unknown ×${ctx.unknownQty}</b><small>check source</small></span>`;
-  }
-  if (ctx.startupQty === ctx.statusTotal) {
-    return '<span class="kpi-reject-signal is-startup"><b>No R rejects</b><small>Startup / Shutdown context</small></span>';
-  }
-  return '<span class="kpi-reject-signal is-context"><b>No R rejects</b><small>non-running context</small></span>';
+/** Same stacked MachineStatus bar used by the Die detail Pareto. Segment
+ * widths are each status quantity's share of this reject code, while the
+ * timeline colours and hover labels come from STATUS_MAP. */
+function renderRejectStatusBar(slice: ParetoSlice): string {
+  const split = Object.entries(slice.byStatus ?? {})
+    .map(([status, qty]) => [status, Number(qty) || 0] as const)
+    .filter(([, qty]) => qty > 0)
+    .sort((a, b) => b[1] - a[1]);
+  const total = split.reduce((sum, [, qty]) => sum + qty, 0);
+  if (total <= 0) return '';
+  const tip = split
+    .map(([status, qty]) => `${STATUS_MAP[status]?.label ?? status} ×${qty}`)
+    .join(' · ');
+  const segments = split
+    .map(([status, qty]) => {
+      const meta = STATUS_MAP[status];
+      const width = (qty / total) * 100;
+      const paint = meta
+        ? `;background:${meta.color};border-color:${meta.border};color:${meta.text}`
+        : '';
+      return `<i class="die-bar-seg" style="width:${width}%${paint}">${
+        width >= 8 ? escapeHtml(status) : ''
+      }</i>`;
+    })
+    .join('');
+  return `<span class="die-bar-track" role="img" aria-label="${escapeHtml(
+    tip,
+  )}" title="${escapeHtml(tip)}"><span class="die-bar-fill">${segments}</span></span>`;
 }
 
 /** Shape slices for renderParetoChart: short code on the x-axis, value
@@ -1794,6 +1805,7 @@ function openParetoDrill(opts: {
   source: { floor: ParetoSlice[]; byMachine: Map<string, ParetoSlice[]> };
   scopeKey: string;
   showRejectStatus?: boolean;
+  showChart?: boolean;
 }): void {
   const slices =
     opts.scopeKey === 'FLOOR'
@@ -1809,8 +1821,7 @@ function openParetoDrill(opts: {
       const pct = ((s.value / total) * 100).toFixed(1);
       const cumPct = ((cum / total) * 100).toFixed(1);
       const statusCells = opts.showRejectStatus
-        ? `<td>${renderRejectStatusBadges(s) || '<span class="muted">—</span>'}</td>
-           <td>${renderRejectActionSignal(s)}</td>`
+        ? `<td>${renderRejectStatusBar(s) || '<span class="muted">—</span>'}</td>`
         : '';
       return `<tr>
         <td class="num">${i + 1}</td>
@@ -1823,15 +1834,16 @@ function openParetoDrill(opts: {
       </tr>`;
     })
     .join('');
-  const chart = renderParetoChart(toParetoBuckets(slices));
+  const chart =
+    opts.showChart === false
+      ? ''
+      : `<div class="kpi-drill-chart">${renderParetoChart(toParetoBuckets(slices))}</div>`;
   const totalDisplay = formatValue(+total.toFixed(2), opts.unit);
-  const statusHeads = opts.showRejectStatus
-    ? '<th>MachineStatus at defect</th><th>Running signal</th>'
-    : '';
+  const statusHeads = opts.showRejectStatus ? '<th>MachineStatus at defect</th>' : '';
   const contextNote = opts.showRejectStatus
     ? ' · R = during production (review volume/ratio) · S = Startup / Shutdown context'
     : '';
-  const totalSpan = opts.showRejectStatus ? 5 : 3;
+  const totalSpan = opts.showRejectStatus ? 4 : 3;
   const mc = openModal(`<div class="bd-modal kpi-drill-modal${
     opts.showRejectStatus ? ' kpi-reject-drill-modal' : ''
   }">
@@ -1839,7 +1851,7 @@ function openParetoDrill(opts: {
     <p class="bd-sub">${totalDisplay} across ${slices.length} code${
       slices.length === 1 ? '' : 's'
     } · ${escapeHtml(periodRange(S!.period, new Date()).label)}${contextNote}</p>
-    <div class="kpi-drill-chart">${chart}</div>
+    ${chart}
     <table class="summary-table kpi-drill-table">
       <thead><tr><th>#</th><th>Code</th><th>${escapeHtml(
         opts.valueLabel,
@@ -1887,6 +1899,7 @@ function openRejectDrill(scopeKey: string): void {
     source: S!.rejectPareto,
     scopeKey,
     showRejectStatus: true,
+    showChart: false,
   });
 }
 
