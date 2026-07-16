@@ -2219,6 +2219,27 @@ function slotHasOwnStatus(slot: number): boolean {
   );
 }
 
+/** Belt-and-braces guard for D01–D10 reject entry — mirrors the grid's
+ *  disabled state (gridRdo + the reopened per-slot rule) so a signed-off,
+ *  unconfirmed or read-only slot can't take a reject even when the input's
+ *  `disabled` paint is stale: right after a sign-off the row is locked but
+ *  the grid may not have re-rendered yet, and an iPad Edge re-render race, a
+ *  hardware keyboard, paste or devtools can each defeat the attribute. The
+ *  Machine Status and Quality Check pickers already re-check the lock in
+ *  their handlers — this brings the reject row up to parity so a worker
+ *  can't type into the wrong (already-signed) place. */
+function rejectEntryBlocked(slot: number): { blocked: boolean; reason: string } {
+  if (isReadOnlyDevice())
+    return { blocked: true, reason: 'Read only — sign in as supervisor to edit' };
+  if (isJobLocked())
+    return { blocked: true, reason: 'Signed off — sign in as supervisor and Unlock to edit' };
+  if (needsConfirm())
+    return { blocked: true, reason: 'Tap ✅ Confirm first — order, press, operator & supervisor' };
+  if (reopenedForCorrection() && !slotHasOwnStatus(slot))
+    return { blocked: true, reason: 'Re-opened for correction — only the already-signed slots can be edited' };
+  return { blocked: false, reason: '' };
+}
+
 function lockInfo(): { lockedBy: string; lockedAt: string } | null {
   // Lock is scoped to (machine, shift, **job**). A signed-off SFM507017
   // does not lock SFM507018 — the press still has half a shift of run
@@ -2473,6 +2494,17 @@ function wire(): void {
     inp.addEventListener('change', () => {
       const slot = Number(inp.dataset.slot);
       const code = inp.dataset.code!;
+      // Live lock guard — same as the Machine Status / Quality Check
+      // pickers. A signed-off (or unconfirmed / read-only) slot rejects
+      // the edit and reverts the cell, even if its `disabled` attribute is
+      // stale, so a worker can't slip a reject into the wrong place.
+      const guard = rejectEntryBlocked(slot);
+      if (guard.blocked) {
+        const cur = parseRejects(slotRec(slot))[code] ?? 0;
+        inp.value = cur ? String(cur) : '';
+        toast(guard.reason, 'warn');
+        return;
+      }
       const qty = Math.max(0, Math.floor(Number(inp.value) || 0));
       void upsertSlotNoReload(slot, (r) => {
         const obj = parseRejects(r);

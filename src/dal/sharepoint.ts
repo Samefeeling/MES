@@ -4567,6 +4567,10 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
   // after "die" so it never matches.
   const dieRe = /\bdie\b[^0-9a-z]*(\d+)/i;
   const out: DieMaintenanceRequest[] = [];
+  // Per die-row raw "To be completed by" cell — so when a date fails to
+  // surface we can show exactly what the parsed bytes held at that column
+  // (empty file vs. a value the app parsed differently than Excel shows).
+  const dueDiag: { ticket: string; raw: string }[] = [];
   for (let r = headerAt + 1; r < rows.length; r++) {
     const row = rows[r];
     if (row.length === 0 || (row.length === 1 && row[0] === '')) continue;
@@ -4618,15 +4622,22 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
       cost: cell(row, 'cost') || undefined,
       dueDate: csvDateToIso(cell(row, 'dueDate')) || undefined,
     });
+    dueDiag.push({ ticket, raw: idx['dueDate'] >= 0 ? (row[idx['dueDate']] ?? '') : '' });
   }
-  // If the due-date column matched but NOTHING parsed, the cell values are
-  // empty or an unrecognised format — surface a raw sample so the fix is
-  // obvious (empty column vs. a date format excelDate should learn).
-  if (idx['dueDate'] >= 0 && out.length > 0 && out.every((o) => !o.dueDate)) {
-    const firstData = rows.slice(headerAt + 1).find((r) => (r[idx['dueDate']] ?? '').trim());
+  // Diagnostics for the due date that drives the Maint traffic light: for
+  // any die rows whose date didn't surface, print the ticket + the RAW cell
+  // the app parsed at the due-date column. If the raw cell is '' the file
+  // the app loaded has no date there (empty export / stale-or-wrong file —
+  // the value in Excel is from a different copy); if it holds text the app
+  // parsed it wrong and the sample shows exactly what to teach excelDate.
+  const missingDue = out
+    .map((o, i) => ({ o, d: dueDiag[i] }))
+    .filter((x) => !x.o.dueDate);
+  if (idx['dueDate'] >= 0 && missingDue.length > 0) {
     console.warn(
-      "[pmd] Mango CSV: due-date column matched but no value parsed. Raw sample:",
-      JSON.stringify(firstData ? firstData[idx['dueDate']] : '(every cell blank)'),
+      `[pmd] Mango CSV: ${missingDue.length}/${out.length} die rows have no parsed`,
+      `'${rows[headerAt][idx['dueDate']]}' (col ${idx['dueDate']}). Raw cells:`,
+      missingDue.slice(0, 8).map((x) => `${x.d.ticket || '?'}=${JSON.stringify(x.d.raw)}`).join(' · '),
     );
   }
   return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -4669,6 +4680,14 @@ function parseCsv(text: string): string[][] {
   let row: string[] = [];
   let field = '';
   let inQuotes = false;
+  // A double-quote only OPENS a quoted field when it's the field's first
+  // character (RFC 4180). A `"` in the middle of an unquoted field — an
+  // inch mark ("6" tall"), or an unbalanced quote in free-text like
+  // "Actions taken" — is then a literal character, not a delimiter, so it
+  // can't flip the parser into quote mode and swallow the commas / newlines
+  // that follow (which would desync every column after it, blanking cells
+  // like "To be completed by" on later rows).
+  let fieldStart = true;
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
     if (inQuotes) {
@@ -4682,11 +4701,13 @@ function parseCsv(text: string): string[][] {
       } else {
         field += c;
       }
-    } else if (c === '"') {
+    } else if (c === '"' && fieldStart) {
       inQuotes = true;
+      fieldStart = false;
     } else if (c === ',') {
       row.push(field);
       field = '';
+      fieldStart = true;
     } else if (c === '\r') {
       // skip — \n handles the row break
     } else if (c === '\n') {
@@ -4694,8 +4715,10 @@ function parseCsv(text: string): string[][] {
       out.push(row);
       row = [];
       field = '';
+      fieldStart = true;
     } else {
       field += c;
+      fieldStart = false;
     }
   }
   if (field !== '' || row.length > 0) {

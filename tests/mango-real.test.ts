@@ -28,4 +28,19 @@ describe('parseMangoWorkOrdersCsv — user real header', () => {
     expect(out.length).toBe(1);
     expect(out[0].dueDate).toBeUndefined();
   });
+
+  it('survives a stray/unbalanced quote in an unquoted field (no column desync)', () => {
+    // A lone " in free text — an inch mark ("6\" wear") or a mis-typed
+    // quote in Brief Description — must NOT flip the parser into quote mode
+    // and swallow the commas that follow. Before the field-start rule this
+    // desynced every column after it, blanking "To be completed by".
+    const strayQuote =
+      'MWO 02200,,3,Stage 1 Coordinator Assessing,AU - Die 171 Podium Seat,Sprue gate 6" wear on parting line,Karl Stevens,3/07/2026,Resero - Minto,31/07/2026,2. Breakdown,,3/07/2026,7,AM,Day,,"",Minto (AU),Moulding,Karl Stevens,,,,,,';
+    const out = parseMangoWorkOrdersCsv([HEADER, strayQuote].join('\n'));
+    expect(out.length).toBe(1);
+    expect(out[0].dieNumber).toBe('171');
+    expect(out[0].description).toBe('Sprue gate 6" wear on parting line');
+    expect(out[0].requestedBy).toBe('Karl Stevens'); // column 6 still aligned
+    expect(out[0].dueDate).toBe('2026-07-31'); // column 9 survived
+  });
 });
