@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { confirmKey, pruneConfirmedKeys } from '../src/core/confirm';
+import { confirmKey, pressesRunningJobElsewhere, pruneConfirmedKeys } from '../src/core/confirm';
 import { MemoryDataLayer } from '../src/dal/memory';
 import { rec } from './helpers';
 
@@ -47,5 +47,45 @@ describe('MemoryDataLayer.discardUnconfirmedTuple', () => {
     expect(tupleRows[0].locked).toBe(true);
     expect(left.some((r) => r.jobNumber === 'J2')).toBe(true);
     expect(left.some((r) => r.machineCode === 'M2')).toBe(true);
+  });
+});
+
+describe('pressesRunningJobElsewhere (one die = one press)', () => {
+  const r = (machineCode: string, jobNumber: string, extra: Record<string, unknown> = {}) => ({
+    machineCode,
+    jobNumber,
+    ...extra,
+  });
+
+  it('flags another press running the same job with real evidence', () => {
+    const rows = [
+      r('320T', 'SFM900', { statusCode: 'R' }), // other press, running → flag
+      r('125T', 'SFM900', { statusCode: 'R' }), // THIS press → ignore
+    ];
+    expect(pressesRunningJobElsewhere(rows, '125T', 'SFM900')).toEqual(['320T']);
+  });
+
+  it('counts a signed-off (locked) row on another press as running', () => {
+    const rows = [r('1600T', 'SFM900', { locked: true })];
+    expect(pressesRunningJobElsewhere(rows, '125T', 'SFM900')).toEqual(['1600T']);
+  });
+
+  it('ignores a bare browse selection (no status, not locked)', () => {
+    const rows = [r('320T', 'SFM900', {})];
+    expect(pressesRunningJobElsewhere(rows, '125T', 'SFM900')).toEqual([]);
+  });
+
+  it('ignores other jobs and dedupes / sorts multiple presses', () => {
+    const rows = [
+      r('320T', 'SFM900', { statusCode: 'R' }),
+      r('320T', 'SFM900', { statusCode: 'D' }), // same press twice → deduped
+      r('1600T', 'SFM900', { locked: true }),
+      r('90T', 'SFM901', { statusCode: 'R' }), // different job → ignored
+    ];
+    expect(pressesRunningJobElsewhere(rows, '125T', 'SFM900')).toEqual(['1600T', '320T']);
+  });
+
+  it('returns [] for a blank job', () => {
+    expect(pressesRunningJobElsewhere([r('320T', '', { statusCode: 'R' })], '125T', '')).toEqual([]);
   });
 });

@@ -41,7 +41,7 @@ import { DIE_COMPONENTS, DIE_CONDITION_META } from '../core/die';
 import { renderOutputRejectChart } from './charts';
 import { clearSupervisor, isSupervisor } from './supervisor-auth';
 import { isIpadDevice } from '../core/device';
-import { confirmTuple, isTupleConfirmed } from '../core/confirm';
+import { confirmTuple, isTupleConfirmed, pressesRunningJobElsewhere } from '../core/confirm';
 
 /**
  * Device-class write rule (replaces the old per-device OwnerDevice claim
@@ -1313,6 +1313,53 @@ async function prevShiftUnfinishedJob(): Promise<string> {
   }
 }
 
+/** Other presses already running THIS order live this shift. One die =
+ *  one press, so the same job can't legitimately run on two machines at
+ *  once — this backs the confirm-time warning. Reads cross-machine rows
+ *  (listProduction with no machineCode = every press blends the
+ *  PMD_LiveStatus mirror) and keeps only OTHER presses carrying real
+ *  evidence: a machine-status letter or a signed-off lock, never a bare
+ *  browse selection. */
+async function jobRunningElsewhere(job: string): Promise<string[]> {
+  if (!job) return [];
+  try {
+    const rows = await dalRef.listProduction({ shiftId: sid(), jobNumber: job });
+    return pressesRunningJobElsewhere(rows, S!.mc, job);
+  } catch (e) {
+    console.warn('[pmd] cross-machine duplicate-order check failed', e);
+    return [];
+  }
+}
+
+/** Warn that the order is already on another press, and let the worker
+ *  either back out to change it (recommended) or override. Resolves true
+ *  to proceed with the confirmation, false to abort it. */
+function confirmDuplicateOrder(job: string, machines: string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    const list = machines.map((m) => escapeHtml(m)).join('、');
+    const mc = openModal(`<div class="bd-modal">
+      <h3 class="bd-title">⚠️ Order already running on another press</h3>
+      <p class="bd-sub">
+        <b>${escapeHtml(job)}</b> is already confirmed and producing on
+        <b>${list}</b> this shift. A die is unique — the same order can only
+        run on ONE press at a time, so this is almost certainly the wrong
+        order or the wrong press. Change the order (or the press) unless the
+        die has genuinely been moved here.
+      </p>
+      <div class="bd-actions">
+        <button type="button" class="btn-primary-big" data-dup="change">← Change order</button>
+        <button type="button" class="btn-ghost-big" data-dup="anyway">Confirm anyway</button>
+      </div>
+    </div>`);
+    const done = (v: boolean): void => {
+      closeModal();
+      resolve(v);
+    };
+    mc.querySelector('[data-dup="change"]')?.addEventListener('click', () => done(false));
+    mc.querySelector('[data-dup="anyway"]')?.addEventListener('click', () => done(true));
+  });
+}
+
 /** The ✅ Confirm tap: requires Operator AND Supervisor picked, writes
  *  them onto the canonical slot, marks the tuple confirmed, then lets
  *  the deferred start-of-run automation (Count Start carry, co-run
@@ -1322,6 +1369,13 @@ async function confirmCurrentTuple(): Promise<void> {
   if (!S!.selOperator || !S!.selSupervisor) {
     toast('Pick Operator AND Supervisor first — the confirmation records who is running this order', 'warn');
     return;
+  }
+  // One die = one press: block the common mistake of a second press
+  // confirming an order that's already live elsewhere (a wrong pick).
+  const elsewhere = await jobRunningElsewhere(S!.selJob);
+  if (elsewhere.length > 0) {
+    const proceed = await confirmDuplicateOrder(S!.selJob, elsewhere);
+    if (!proceed) return;
   }
   confirmTuple(S!.mc, sid(), S!.selJob);
   await upsertSlotNoReload(0, (r) => {

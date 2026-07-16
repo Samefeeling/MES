@@ -78,3 +78,29 @@ export function confirmTuple(machineCode: string, shiftId: string, jobNumber: st
   keys.add(confirmKey(machineCode, shiftId, jobNumber));
   save(keys);
 }
+
+/** Presses OTHER than `currentMachine` that are already running `job`,
+ *  judged from cross-machine production rows (one shift's worth). A die is
+ *  unique, so the same order can't legitimately run on two presses at once
+ *  — the operator UI warns on confirm when this returns anything. "Running"
+ *  means the row carries real evidence: a machine-status letter or a
+ *  signed-off lock, never a bare browse selection. Pure, deduped, sorted;
+ *  exported for tests. */
+export function pressesRunningJobElsewhere(
+  rows: ReadonlyArray<{
+    machineCode: string;
+    jobNumber: string;
+    statusCode?: string;
+    locked?: boolean;
+  }>,
+  currentMachine: string,
+  job: string,
+): string[] {
+  if (!job) return [];
+  const machines = new Set<string>();
+  for (const r of rows) {
+    if (r.machineCode === currentMachine || r.jobNumber !== job) continue;
+    if (r.statusCode || r.locked) machines.add(r.machineCode);
+  }
+  return [...machines].sort();
+}
