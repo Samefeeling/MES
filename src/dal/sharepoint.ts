@@ -4287,15 +4287,17 @@ function excelDate(v: unknown): Date | null {
     if (serial > 20000 && serial <= 200000) return excelDate(serial);
   }
 
-  // Graph routinely returns ISO 8601 strings like "2026-05-25T12:00:00.000Z"
-  // for DateTime cells. Excel has no timezone — the "12:00" the user typed
-  // is wall-clock, not UTC. Parsing via `new Date()` would treat the Z as
-  // UTC and shift everything by the local offset (Sydney AEST: 10 hours,
-  // which is the "10:00 PM" symptom reported). Extract the components and
-  // anchor them to local time instead. The time portion is optional so
-  // bare "2026-05-25" from a CSV with date-only columns is accepted too.
+  // Year-first dates, EITHER separator:
+  //  · Graph ISO 8601 "2026-05-25T12:00:00.000Z" (dashes, optional time/Z)
+  //  · the Mango/Minto export's "2025/10/10" / "2026/07/31" (slashes,
+  //    year-first — day last, confirmed by values >12 like 31).
+  // Excel has no timezone — the "12:00" the user typed is wall-clock, not
+  // UTC. Parsing via `new Date()` would treat the Z as UTC and shift by the
+  // local offset (Sydney AEST: 10 h, the "10:00 PM" symptom). Extract the
+  // components and anchor them to local time instead. The time portion is
+  // optional so a bare "2026-05-25" / "2025/10/10" date is accepted too.
   const iso =
-    /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?Z?)?$/i.exec(
+    /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?Z?)?$/i.exec(
       s,
     );
   if (iso) {

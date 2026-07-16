@@ -29,6 +29,20 @@ describe('parseMangoWorkOrdersCsv — user real header', () => {
     expect(out[0].dueDate).toBeUndefined();
   });
 
+  it('parses the real yyyy/mm/dd slash date the export actually writes', () => {
+    // The synced CSV writes dates as yyyy/mm/dd with slashes ("2026/07/31",
+    // "2025/10/10") — NOT dd/mm/yyyy. This is the exact format the F12
+    // diagnostic surfaced; every date returned null before it was handled.
+    const ymdRow = dieRow.replace(',31/07/2026,', ',2026/07/31,');
+    const out = parseMangoWorkOrdersCsv([HEADER, ymdRow].join('\n'));
+    expect(out.length).toBe(1);
+    expect(out[0].dueDate).toBe('2026-07-31');
+
+    const oct = dieRow.replace(',31/07/2026,', ',2025/10/10,');
+    const out2 = parseMangoWorkOrdersCsv([HEADER, oct].join('\n'));
+    expect(out2[0].dueDate).toBe('2025-10-10');
+  });
+
   it('survives a stray/unbalanced quote in an unquoted field (no column desync)', () => {
     // A lone " in free text — an inch mark ("6\" wear") or a mis-typed
     // quote in Brief Description — must NOT flip the parser into quote mode
