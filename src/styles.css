@@ -310,28 +310,29 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 /* High-visibility focus ring — operators with reduced eyesight need to
    see at a glance which field the keyboard is going into. */
 .op-meta input:focus,.op-meta select:focus,.op-side .sk input:focus,.ab-date-input:focus,.handover-grid textarea:focus{outline:3px solid var(--theme-dark);outline-offset:1px}
-.op-meta .m-mc select{width:88px}
-/* Job# / Part# match the Operator / Supervisor select width (140px) so
-   the meta row reads as a single flush set of equal-sized fields
-   instead of three differently-sized text inputs. Order Qty and
-   Product Description share the same 140px box; Order Qty is no
-   longer right-aligned so its digits sit under the label like every
-   other field. The shared height already comes from min-height:52px
-   on every .op-meta input/select. */
-/* Job# widened by 10px so the last digit of long SFM job numbers
-   isn't clipped by the datalist's drop-down chevron on Safari. */
-.op-meta .m-job input{width:150px}
+.op-meta .m-mc select{width:100px}
+/* Value widths balance readability against the iPad meta-row space.
+   Product Description remains flexible; fixed identity fields leave room
+   for the larger bold values without clipping. All controls share the 52px
+   height defined above. */
+/* Job# leaves enough room for long SFM numbers at the larger bold size,
+   plus the dropdown chevron on Safari. */
+.op-meta .m-job input{width:170px}
 /* Job# dropdown labels carry the planned start (dd/mm hh:mm) so they run
    longer than the bare JobNum — cap the width so the meta row still fits
    iPad portrait; the selected option ellipsizes. */
-.op-meta .m-job select{min-width:150px;max-width:250px;text-overflow:ellipsis}
+.op-meta .m-job select{min-width:170px;max-width:270px;text-overflow:ellipsis}
 .op-meta .m-part input{width:140px}
 /* Product Description takes whatever width the row has left — it's the
    field the operator actually reads to confirm they're on the right
    part, so don't truncate it to a fixed 140px box. */
 .op-meta .m-desc{flex:1 1 220px;min-width:200px}
 .op-meta .m-desc input{width:100%}
-.op-meta .m-orderqty input{width:80px;font-weight:700}
+.op-meta .m-orderqty input{width:96px}
+/* The four values operators use to confirm the correct press and job are
+   one step larger and strongly weighted for older shop-floor users. Labels
+   stay at 13px so the meta row's overall geometry remains compact. */
+.op-meta .m-mc select,.op-meta .m-job input,.op-meta .m-job select,.op-meta .m-orderqty input,.op-meta .m-desc input{font-size:20px;font-weight:800}
 /* Swatch sits inline next to the "Part#" label, not next to the
    Product Description input. Shrunk to ~12px so it sits on the
    12px-uppercase label baseline without bumping the row's height. */

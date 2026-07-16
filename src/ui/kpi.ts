@@ -1737,10 +1737,21 @@ function renderRejectStatusBadges(slice: ParetoSlice): string {
   return badges ? `<span class="kpi-reject-statuses">${badges}</span>` : '';
 }
 
+/** Standard Pareto bar scale: Top 1 fills the track and every other row is
+ * proportional to it. Exported so the visual rule has a regression test. */
+export function paretoRelativeBarWidth(value: number, topValue: number): number {
+  if (!isFinite(value) || !isFinite(topValue) || value <= 0 || topValue <= 0) return 0;
+  return Math.max(0, Math.min(100, (value / topValue) * 100));
+}
+
 /** Same stacked MachineStatus bar used by the Die detail Pareto. The outer
- * fill is this code's share of all rejects (the adjacent % column); inside
- * that fill, segment widths are each MachineStatus quantity's share. */
-function renderRejectStatusBar(slice: ParetoSlice, paretoPct: number): string {
+ * fill is scaled against the Top-1 reject code; inside that fill, segment
+ * widths are each MachineStatus quantity's share. */
+function renderRejectStatusBar(
+  slice: ParetoSlice,
+  barWidthPct: number,
+  paretoPct: number,
+): string {
   const split = Object.entries(slice.byStatus ?? {})
     .map(([status, qty]) => [status, Number(qty) || 0] as const)
     .filter(([, qty]) => qty > 0)
@@ -1767,7 +1778,7 @@ function renderRejectStatusBar(slice: ParetoSlice, paretoPct: number): string {
     tip,
   )}" title="${escapeHtml(tip)}"><span class="die-bar-fill" style="width:${Math.max(
     0,
-    Math.min(100, paretoPct),
+    Math.min(100, barWidthPct),
   )}%">${segments}</span></span>`;
 }
 
@@ -1818,6 +1829,7 @@ function openParetoDrill(opts: {
   const scopeLabel = opts.scopeKey === 'FLOOR' ? 'All machines' : opts.scopeKey;
   const total = slices.reduce((a, s) => a + s.value, 0);
   if (total === 0) return;
+  const topValue = Math.max(...slices.map((s) => s.value));
   let cum = 0;
   const rows = slices
     .map((s, i) => {
@@ -1826,7 +1838,10 @@ function openParetoDrill(opts: {
       const pct = pctValue.toFixed(1);
       const cumPct = ((cum / total) * 100).toFixed(1);
       const statusCells = opts.showRejectStatus
-        ? `<td>${renderRejectStatusBar(s, pctValue) || '<span class="muted">—</span>'}</td>`
+        ? `<td>${
+            renderRejectStatusBar(s, paretoRelativeBarWidth(s.value, topValue), pctValue) ||
+            '<span class="muted">—</span>'
+          }</td>`
         : '';
       return `<tr>
         <td class="num">${i + 1}</td>

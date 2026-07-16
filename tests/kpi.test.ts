@@ -3,6 +3,7 @@ import {
   applyRejectDescriptions,
   collectHandovers,
   isHotStampMachine,
+  paretoRelativeBarWidth,
   rejectActionContext,
   sortHandoversNewest,
   type HandoverEntry,
@@ -90,6 +91,13 @@ describe('KPI handover collection', () => {
 });
 
 describe('KPI Reject Pareto labels', () => {
+  it('scales MachineStatus bars against Top 1 while preserving the real % separately', () => {
+    expect(paretoRelativeBarWidth(93, 93)).toBe(100);
+    expect(paretoRelativeBarWidth(71, 93)).toBeCloseTo(76.34, 2);
+    expect(paretoRelativeBarWidth(1, 93)).toBeCloseTo(1.075, 2);
+    expect(paretoRelativeBarWidth(0, 93)).toBe(0);
+  });
+
   it('replaces PMD_Rejects MachineStatus R/S with the RejectCode description', () => {
     const slices = [
       {
