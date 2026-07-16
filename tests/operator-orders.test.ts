@@ -14,6 +14,10 @@ describe('Operator planning-order StartDate window', () => {
     expect(operatorOrderStartVisible('2026-07-22T00:00:00', anchor)).toBe(false);
   });
 
+  it('removes the future date limit after the operator requests all orders', () => {
+    expect(operatorOrderStartVisible('2027-07-22T00:00:00', anchor, true)).toBe(true);
+  });
+
   it('keeps missing or malformed legacy StartDate values selectable', () => {
     expect(operatorOrderStartVisible('', anchor)).toBe(true);
     expect(operatorOrderStartVisible('not-a-date', anchor)).toBe(true);

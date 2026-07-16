@@ -84,6 +84,10 @@ interface OpState {
    *  the selected shift's people — see rosterNames(). */
   operators: Operator[];
   supervisors: Operator[];
+  /** Refresh is the operator's explicit escape hatch from the normal
+   *  five-day planning window: once pressed, show every Planning order for
+   *  the rest of this Operator-page session. */
+  showAllPlanningOrders: boolean;
   rejCats: RejectCategory[];
   selOperator: string;
   selSupervisor: string;
@@ -655,7 +659,12 @@ const OPERATOR_FUTURE_ORDER_DAYS = 5;
  * Planning is unfinished and must remain selectable. The upper bound is the
  * end of the fifth day after the selected live/future view date. Missing or
  * malformed legacy dates remain visible rather than hiding a real order. */
-export function operatorOrderStartVisible(plannedStart: string, anchorDate: Date): boolean {
+export function operatorOrderStartVisible(
+  plannedStart: string,
+  anchorDate: Date,
+  showAll = false,
+): boolean {
+  if (showAll) return true;
   if (!plannedStart) return true;
   const start = Date.parse(plannedStart);
   if (!isFinite(start)) return true;
@@ -757,7 +766,9 @@ function shiftOrders(): PlanningOrder[] {
   // the top of the dropdown.
   const planned = S!.planning
     .slice()
-    .filter((o) => operatorOrderStartVisible(o.plannedStart, S!.viewDate))
+    .filter((o) =>
+      operatorOrderStartVisible(o.plannedStart, S!.viewDate, S!.showAllPlanningOrders),
+    )
     .sort(
       (a, b2) =>
         new Date(a.plannedStart).getTime() - new Date(b2.plannedStart).getTime(),
@@ -1653,7 +1664,7 @@ function buildActionBar(): string {
       <button type="button" class="ab-zoom-btn" data-dispzoom="+" aria-label="Larger">+</button>
     </div>
     <div class="ab-right">
-      <button class="btn-load" data-refresh title="Re-pull planning from SharePoint &amp; recompute Job Left">⟳ Refresh</button>
+      <button class="btn-load" data-refresh title="Re-pull planning from SharePoint, show all orders &amp; recompute Job Left">⟳ Refresh</button>
       <button class="btn-save" data-saveclear>✅ Sign off</button>
     </div>
   </div>`;
@@ -2836,10 +2847,18 @@ function parseHandover(r: ProductionRecord | undefined): Handover {
  * even try.
  */
 async function refreshAll(): Promise<void> {
-  S!.planning = await dalRef.listPlanning({});
+  const planning = await dalRef.listPlanning({});
+  S!.planning = planning;
+  S!.showAllPlanningOrders = true;
   summaryCache = null;
   await reload();
-  toast(`Refreshed · ${shiftOrders().length} job(s) for this shift`, 'ok');
+  const visible = shiftOrders().length;
+  toast(
+    isPastShift()
+      ? `Refreshed · ${visible} recorded job(s) for this past shift`
+      : `Refreshed · showing all ${visible} planning job(s)`,
+    'ok',
+  );
 }
 
 /**
@@ -4015,6 +4034,7 @@ export async function renderOperator(
     machines,
     operators,
     supervisors,
+    showAllPlanningOrders: false,
     rejCats: rcats,
     selOperator,
     selSupervisor,
