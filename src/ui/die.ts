@@ -191,6 +191,24 @@ function woDueLevel(
   return { level, due, days: Math.max(0, -diff) };
 }
 
+/** Completed orders remain available in each die's maintenance history,
+ *  but the board-level work-order list is an action queue. */
+export function activeMaintenanceRequests(
+  requests: readonly DieMaintenanceRequest[],
+): DieMaintenanceRequest[] {
+  return requests.filter((r) => r.status !== 'done');
+}
+
+/** Mango keeps the lifecycle status; overdue is a live display status
+ *  derived from its promised completion date. Due today is not overdue. */
+export function isWorkOrderOverdue(
+  request: Pick<DieMaintenanceRequest, 'status' | 'dueDate'>,
+  today = isoDay(new Date()),
+): boolean {
+  const due = (request.dueDate ?? '').slice(0, 10);
+  return request.status !== 'done' && due !== '' && due < today;
+}
+
 /** One work-order row (Mango mirror) — the full detail card used in both
  *  the drilldown's Maintenance Track and the focused open-WO popup. */
 export function woRow(r: DieMaintenanceRequest): string {
@@ -243,6 +261,7 @@ export function woRow(r: DieMaintenanceRequest): string {
     ${nums ? `<span class="die-hist-nums">${nums}</span>` : ''}
     <span class="die-hist-desc">${escapeHtml(r.description || '—')}</span>
     ${line('Issue', r.issueDetail !== r.description ? r.issueDetail : undefined)}
+    ${line('Actions taken', r.actionsTaken)}
     ${line('Work done', r.workSummary)}
     ${line('Corrective', r.correctiveAction)}
     ${line('Preventative', r.preventativeAction)}
@@ -936,30 +955,51 @@ function renderDieTable(): string {
  *  legacy PMD_DieMaintenance rows on tenants without the sync yet). */
 function renderRequests(): string {
   const note = `<p class="die-req-note">Work orders live in <b>Mango</b> — raise and progress them there; this list is a read-only mirror refreshed by the report sync.</p>`;
-  if (S!.requests.length === 0) {
+  const today = isoDay(new Date());
+  const active = activeMaintenanceRequests(S!.requests);
+  if (active.length === 0) {
     return `<div class="die-req-section"><h3>🛠 Maintenance Work Orders ${mangoLink('Mango', 'sm')}</h3>
       ${note}
-      <div class="trace-empty">No work orders on record for these dies yet.</div></div>`;
+      <div class="trace-empty">No open work orders for these dies.</div></div>`;
   }
   const order: Record<MaintStatus, number> = { open: 0, 'in-progress': 1, done: 2 };
-  const rows = [...S!.requests]
-    .sort((a, b) => order[a.status] - order[b.status] || (a.createdAt < b.createdAt ? 1 : -1))
+  const detail = (label: string, value?: string): string =>
+    value
+      ? `<div class="die-req-detail"><b>${label}</b><span>${escapeHtml(value)}</span></div>`
+      : '';
+  const rows = [...active]
+    .sort(
+      (a, b) =>
+        Number(isWorkOrderOverdue(b, today)) - Number(isWorkOrderOverdue(a, today)) ||
+        order[a.status] - order[b.status] ||
+        (a.createdAt < b.createdAt ? 1 : -1),
+    )
     .map((r) => {
+      const overdue = isWorkOrderOverdue(r, today);
+      const displayStatus = overdue ? 'Overdue' : STATUS_LABELS[r.status];
+      const displayClass = overdue ? 'overdue' : r.status;
       const mango = r.mangoTicket
         ? `<span class="die-mango" title="Mango work order">🥭 ${escapeHtml(r.mangoTicket)}</span>`
         : '';
       const when = r.createdAt ? r.createdAt.slice(0, 10) : '';
-      const closed = r.closedAt ? ` · closed ${escapeHtml(r.closedAt.slice(0, 10))}` : '';
-      return `<div class="die-req st-${r.status} pr-${r.priority}">
+      const due = (r.dueDate ?? '').slice(0, 10);
+      const dueText = due
+        ? ` · <span class="die-req-due${overdue ? ' overdue' : ''}">Due ${ddmmyyyy(due)}</span>`
+        : '';
+      return `<div class="die-req st-${displayClass} pr-${r.priority}">
         <div class="die-req-hd">
           <b class="die-req-die">${escapeHtml(r.dieNumber)}</b>
           <span class="die-req-type">${TYPE_LABELS[r.maintType]}</span>
           <span class="die-req-pr pr-${r.priority}">${PRIORITY_LABELS[r.priority]}</span>
-          <span class="die-req-st">${STATUS_LABELS[r.status]}</span>
+          <span class="die-req-st">${displayStatus}</span>
           ${mango}
-          <span class="die-req-meta">${escapeHtml(when)}${closed}</span>
+          <span class="die-req-meta">Opened ${escapeHtml(when || '—')}${dueText}</span>
         </div>
-        <div class="die-req-bd">${escapeHtml(r.description || '—')}</div>
+        <div class="die-req-details">
+          ${detail('Brief description', r.description || '—')}
+          ${detail('Issue', r.issueDetail !== r.description ? r.issueDetail : undefined)}
+          ${detail('Actions taken', r.actionsTaken)}
+        </div>
         <div class="die-req-ft">To <b>${escapeHtml(r.contact || '—')}</b> · from ${escapeHtml(
           r.requestedBy || '—',
         )}${r.machineCode ? ` · on ${escapeHtml(r.machineCode)}` : ''}${

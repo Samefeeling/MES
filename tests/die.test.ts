@@ -16,7 +16,12 @@ import {
 } from '../src/core/die';
 import { MemoryDataLayer } from '../src/dal/memory';
 import { parseMangoWorkOrdersCsv } from '../src/dal/sharepoint';
-import { fmtPlanned, woRow } from '../src/ui/die';
+import {
+  activeMaintenanceRequests,
+  fmtPlanned,
+  isWorkOrderOverdue,
+  woRow,
+} from '../src/ui/die';
 import type { DieChangeLog, DieMaintenanceRequest, ProductDieColor } from '../src/types';
 import { order, rec } from './helpers';
 
@@ -81,6 +86,15 @@ describe('die drill-down date rendering', () => {
     expect(html).toContain('To be completed by 10/07/2026');
     expect(html).toContain('Completed late');
     expect(html).not.toContain('OVERDUE');
+  });
+
+  it('shows only actionable work on the board and derives Overdue from its due date', () => {
+    const open = req({ dieNumber: '280', dueDate: '2026-07-10' });
+    const done = req({ dieNumber: '281', status: 'done', dueDate: '2026-07-01' });
+    expect(activeMaintenanceRequests([open, done])).toEqual([open]);
+    expect(isWorkOrderOverdue(open, '2026-07-11')).toBe(true);
+    expect(isWorkOrderOverdue(open, '2026-07-10')).toBe(false);
+    expect(isWorkOrderOverdue(done, '2026-07-11')).toBe(false);
   });
 });
 
@@ -553,6 +567,7 @@ describe('parseMangoWorkOrdersCsv (Mango report → work-order mirror)', () => {
     expect(closed.labourHours).toBe('4');
     expect(closed.workSummary).toBe('Cleared nozzle leak; purged and polished sprue bush.');
     expect(closed.correctiveAction).toBe('Replaced nozzle seal.');
+    expect(closed.actionsTaken).toContain('to Stage 4 Closed');
     expect(closed.downtime).toBeUndefined(); // empty cell stays undefined
     expect(closed.requestedBy).toBe('Anil Pattarath');
     expect(closed.contact).toBe('Anil Pattarath');

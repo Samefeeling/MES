@@ -155,6 +155,8 @@ export interface DieMaintenanceRequest {
   labourHours?: string;
   /** "Describe the issue" — the requester's full fault description. */
   issueDetail?: string;
+  /** "Actions taken" — Mango's stage/comment history for the order. */
+  actionsTaken?: string;
   /** "Summary of work completed". */
   workSummary?: string;
   /** "Corrective action taken". */

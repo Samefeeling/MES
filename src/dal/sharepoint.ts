@@ -4858,7 +4858,7 @@ const MANGO_HEADERS: Record<string, string> = {
   dueDate: 'To be completed by',
   type: 'Type of Maintenance',
   issueDetail: 'Describe the issue',
-  actionsLog: 'Actions taken',
+  actionsTaken: 'Actions taken',
   contact: 'Assign to Action',
   workSummary: 'Summary of work completed',
   cost: 'Cost (parts, labour)',
@@ -4972,7 +4972,7 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
     // the log's last date (entries are chronological).
     let closedAt = csvDateToIso(cell(row, 'closedAt'));
     if (!closedAt && status === 'done') {
-      const log = cell(row, 'actionsLog');
+      const log = cell(row, 'actionsTaken');
       const toClosed = Array.from(
         log.matchAll(/(\d{1,2}\/\d{1,2}\/\d{4})[^\n]*to\s+stage\s*4\s*closed/gi),
       ).pop();
@@ -4997,6 +4997,7 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
       downtime: cell(row, 'downtime') || undefined,
       labourHours: cell(row, 'labourHours') || undefined,
       issueDetail: cell(row, 'issueDetail') || undefined,
+      actionsTaken: cell(row, 'actionsTaken') || undefined,
       workSummary: cell(row, 'workSummary') || undefined,
       correctiveAction: cell(row, 'correctiveAction') || undefined,
       preventativeAction: cell(row, 'preventativeAction') || undefined,
