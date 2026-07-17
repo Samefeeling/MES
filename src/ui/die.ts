@@ -209,6 +209,57 @@ export function isWorkOrderOverdue(
   return request.status !== 'done' && due !== '' && due < today;
 }
 
+export interface MangoActionComment {
+  date: string;
+  comment: string;
+}
+
+/** Turn Mango's verbose audit trail into the useful operator comments.
+ *  Lifecycle noise (Created / Completed / Change Stage and the stage in
+ *  parentheses) has no Comment: marker, so it is deliberately omitted. */
+export function parseMangoActionComments(actionsTaken?: string): MangoActionComment[] {
+  if (!actionsTaken?.trim()) return [];
+  const entryHeader = /(?:^|\r?\n)\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s*(\d{1,2})\/(\d{1,2})\/(\d{4}),[^\r\n]*?:[ \t]*/gi;
+  const headers = Array.from(actionsTaken.matchAll(entryHeader));
+  return headers
+    .map((header, index) => {
+      const bodyStart = (header.index ?? 0) + header[0].length;
+      const bodyEnd = headers[index + 1]?.index ?? actionsTaken.length;
+      const body = actionsTaken.slice(bodyStart, bodyEnd);
+      const marker = /(?:^|\r?\n)\s*Comment:\s*/i.exec(body);
+      if (!marker) return null;
+      const comment = body
+        .slice(marker.index + marker[0].length)
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!comment) return null;
+      const day = Number(header[1]);
+      const month = Number(header[2]);
+      const year = Number(header[3]);
+      if (day < 1 || day > 31 || month < 1 || month > 12) return null;
+      return {
+        date: `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`,
+        comment,
+        sortKey: year * 10_000 + month * 100 + day,
+        sourceIndex: index,
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .sort((a, b) => b.sortKey - a.sortKey || b.sourceIndex - a.sourceIndex)
+    .map(({ date, comment }) => ({ date, comment }));
+}
+
+function actionCommentsHtml(actionsTaken?: string): string {
+  const comments = parseMangoActionComments(actionsTaken);
+  if (comments.length === 0) return '';
+  return `<ol class="die-action-comments">${comments
+    .map(
+      (entry) =>
+        `<li><time>${escapeHtml(entry.date)}:</time><span>${escapeHtml(entry.comment)}</span></li>`,
+    )
+    .join('')}</ol>`;
+}
+
 /** One work-order row (Mango mirror) — the full detail card used in both
  *  the drilldown's Maintenance Track and the focused open-WO popup. */
 export function woRow(r: DieMaintenanceRequest): string {
@@ -252,6 +303,7 @@ export function woRow(r: DieMaintenanceRequest): string {
   // recurring — the judgement material next to the trend.
   const line = (label: string, v?: string): string =>
     v ? `<div class="die-hist-line"><i>${label}</i>${escapeHtml(v)}</div>` : '';
+  const actionComments = actionCommentsHtml(r.actionsTaken);
   return `<li class="die-hist-row">
     <span class="die-req-st st-${r.status}">${STATUS_LABELS[r.status]}</span>
     <span class="die-req-type">${TYPE_LABELS[r.maintType]}</span>
@@ -261,7 +313,7 @@ export function woRow(r: DieMaintenanceRequest): string {
     ${nums ? `<span class="die-hist-nums">${nums}</span>` : ''}
     <span class="die-hist-desc">${escapeHtml(r.description || '—')}</span>
     ${line('Issue', r.issueDetail !== r.description ? r.issueDetail : undefined)}
-    ${line('Actions taken', r.actionsTaken)}
+    ${actionComments ? `<div class="die-hist-line die-hist-actions"><i>Actions taken</i>${actionComments}</div>` : ''}
     ${line('Work done', r.workSummary)}
     ${line('Corrective', r.correctiveAction)}
     ${line('Preventative', r.preventativeAction)}
@@ -967,6 +1019,12 @@ function renderRequests(): string {
     value
       ? `<div class="die-req-detail"><b>${label}</b><span>${escapeHtml(value)}</span></div>`
       : '';
+  const actionDetail = (value?: string): string => {
+    const comments = actionCommentsHtml(value);
+    return comments
+      ? `<div class="die-req-detail die-req-actions"><b>Actions taken</b>${comments}</div>`
+      : '';
+  };
   const rows = [...active]
     .sort(
       (a, b) =>
@@ -998,7 +1056,7 @@ function renderRequests(): string {
         <div class="die-req-details">
           ${detail('Brief description', r.description || '—')}
           ${detail('Issue', r.issueDetail !== r.description ? r.issueDetail : undefined)}
-          ${detail('Actions taken', r.actionsTaken)}
+          ${actionDetail(r.actionsTaken)}
         </div>
         <div class="die-req-ft">To <b>${escapeHtml(r.contact || '—')}</b> · from ${escapeHtml(
           r.requestedBy || '—',

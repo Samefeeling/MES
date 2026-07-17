@@ -20,6 +20,7 @@ import {
   activeMaintenanceRequests,
   fmtPlanned,
   isWorkOrderOverdue,
+  parseMangoActionComments,
   woRow,
 } from '../src/ui/die';
 import type { DieChangeLog, DieMaintenanceRequest, ProductDieColor } from '../src/types';
@@ -95,6 +96,29 @@ describe('die drill-down date rendering', () => {
     expect(isWorkOrderOverdue(open, '2026-07-11')).toBe(true);
     expect(isWorkOrderOverdue(open, '2026-07-10')).toBe(false);
     expect(isWorkOrderOverdue(done, '2026-07-11')).toBe(false);
+  });
+
+  it('reduces Mango Actions taken to newest-first dated comments', () => {
+    const raw = [
+      'Sun, 30/11/2025, Avila Pushparaj (Stage 1 Coordinator Assessing):\nComment: Please attend',
+      'Wed, 14/01/2026, Avila Pushparaj (Stage 1 Coordinator Assessing): Change Stage from Stage 1 Coordinator Assessing to Stage 2 Being Investigated',
+      'Wed, 22/04/2026, Avila Pushparaj (Stage 3 Coordinator Reviewing):\nComment: Date extended as requested',
+      'Wed, 27/05/2026, Peter McMillan (Stage 2 Being Investigated): Completed',
+      'Wed, 27/05/2026, Peter McMillan (Stage 2 Being Investigated):\nComment: This issue relates to the internal bridge cutter.',
+      'Thu, 28/05/2026, Avila Pushparaj (Stage 3 Coordinator Reviewing):\nComment: Spare parts acquired.',
+    ].join('\n');
+    expect(parseMangoActionComments(raw)).toEqual([
+      { date: '28/05/2026', comment: 'Spare parts acquired.' },
+      { date: '27/05/2026', comment: 'This issue relates to the internal bridge cutter.' },
+      { date: '22/04/2026', comment: 'Date extended as requested' },
+      { date: '30/11/2025', comment: 'Please attend' },
+    ]);
+    const html = woRow(req({ dieNumber: '309', actionsTaken: raw }));
+    expect(html).toContain('28/05/2026:');
+    expect(html).toContain('Spare parts acquired.');
+    expect(html).not.toContain('Stage 1 Coordinator Assessing');
+    expect(html).not.toContain('Change Stage');
+    expect(html).not.toContain('Completed');
   });
 });
 
