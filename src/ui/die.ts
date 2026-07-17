@@ -1,4 +1,4 @@
-// 🛠 Die Management — third tab on the Trace page. A Fabrico-style
+// 🛠 Tool / Die Management — dedicated top-level tool board. A Fabrico-style
 // tool-management board for the die shop:
 //   · per-die usage rolled up from production history (shots / pieces /
 //     good / rejects, joined via PMD_ProductDieColor's DieNumber),
@@ -445,7 +445,7 @@ function ddmmyyyy(iso: string): string {
 }
 
 /** Mount (or re-mount) the Die Management board into `host`. Owns its
- *  own state + re-render loop; the Trace page just provides the div. */
+ *  own state + re-render loop; the Tool route provides the div. */
 export async function mountDieTab(dal: PmdDataLayer, host: HTMLElement): Promise<void> {
   dalRef = dal;
   hostEl = host;

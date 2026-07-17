@@ -1,7 +1,8 @@
 import { createDataLayer, resolveMangoCsvPath, type PmdDataLayer } from './dal';
 import { renderOperator, operatorPollTick, loadSavedOperatorView } from './ui/operator';
-import { renderTrace } from './ui/trace';
+import { unmountTracePanel } from './ui/trace';
 import { renderKpi } from './ui/kpi';
+import { mountDieTab } from './ui/die';
 import { closeModal, openModal } from './ui/modal';
 import {
   clearSupervisor,
@@ -124,13 +125,15 @@ function updateMirrorBadge(): void {
 updateMirrorBadge();
 
 interface Route {
-  view: 'operator' | 'trace' | 'kpi';
+  view: 'operator' | 'tool' | 'kpi';
   machineCode?: string;
 }
 
 function parseRoute(): Route {
   const h = window.location.hash || '#/';
-  if (h.startsWith('#/trace')) return { view: 'trace' };
+  // Keep the old #/trace URL working for saved bookmarks, but the page is
+  // now the dedicated Tool board rather than a three-view Trace shell.
+  if (h.startsWith('#/tool') || h.startsWith('#/trace')) return { view: 'tool' };
   if (h.startsWith('#/kpi')) return { view: 'kpi' };
   const m = /^#\/op\/(.+)$/.exec(h);
   if (m) return { view: 'operator', machineCode: decodeURIComponent(m[1]) };
@@ -160,7 +163,7 @@ function ensureNav(): void {
     // other links land below its baseline. ✏️ matches the "filling in
     // the sheet" mental model the operator already has.
     '<a href="#/" data-nav>\u{270F}\u{FE0F} Operator</a>' +
-    '<a href="#/trace" data-nav>\u{1F50D} Trace</a>' +
+    '<a href="#/tool" data-nav>\u{1F6E0}Tool</a>' +
     '<a href="#/kpi" data-nav>\u{1F4CA} KPIs</a>' +
     `<button type="button" class="nav-btn sv-toggle${sv ? ' on' : ''}" data-supervisor title="${
       sv ? 'Supervisor mode is on — tap to sign out' : 'Sign in as supervisor to unlock signed-off shifts'
@@ -236,14 +239,20 @@ onSupervisorChange(() => {
 });
 
 async function route(): Promise<void> {
+  // Stop an embedded KPI Live Status poll before replacing #app. KPI will
+  // mount a fresh panel if the destination is #/kpi/live.
+  unmountTracePanel();
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = undefined;
   }
   try {
     const r = parseRoute();
-    if (r.view === 'trace') {
-      await renderTrace(dal);
+    if (r.view === 'tool') {
+      document.body.className = 'shift-day';
+      const app = document.getElementById('app')!;
+      app.innerHTML = '<div class="die-host"></div>';
+      await mountDieTab(dal, app.querySelector<HTMLElement>('.die-host')!);
     } else if (r.view === 'kpi') {
       await renderKpi(dal);
     } else {

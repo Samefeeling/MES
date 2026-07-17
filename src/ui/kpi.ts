@@ -28,7 +28,12 @@ import {
 import { parseHandover } from '../core/handover';
 import { STATUS_MAP } from '../core/status';
 import { isSupervisor } from './supervisor-auth';
-import { renderJobTraceCards } from './trace';
+import {
+  mountTracePanel,
+  renderJobTraceCards,
+  unmountTracePanel,
+  type TracePanelView,
+} from './trace';
 
 /**
  * The hot-stamping ("Hstamp") press is a distinct secondary process, so its
@@ -96,6 +101,7 @@ function saveThresholds(t: KpiThresholds): void {
 // breakdown (Day / Afternoon / Night) under each machine row.
 
 type PeriodKey = 'last3' | 'thisWeek' | 'lastWeek' | 'thisMonth' | 'lastMonth' | 'custom';
+type KpiPageView = 'metrics' | TracePanelView;
 
 // Two presets the meetings actually use; any other window is picked
 // directly on the always-visible From/To inputs (which is what 'custom'
@@ -103,7 +109,7 @@ type PeriodKey = 'last3' | 'thisWeek' | 'lastWeek' | 'thisMonth' | 'lastMonth' |
 // nothing breaks if one comes back.
 const PERIODS: Array<{ key: PeriodKey; label: string }> = [
   { key: 'last3', label: 'Last 24h' },
-  { key: 'thisWeek', label: 'This week' },
+  { key: 'thisWeek', label: 'This Week' },
 ];
 
 const SHIFT_ORDER: ShiftCode[] = SHIFTS.map((s) => s.code);
@@ -246,6 +252,8 @@ interface KpiRow {
 }
 
 interface KpiState {
+  /** KPI periods plus the two operational panels moved from Trace. */
+  view: KpiPageView;
   period: PeriodKey;
   /** Custom range bounds (YYYY-MM-DD), used only when period === 'custom'.
    *  Default to a sensible last-7-days window so the first render isn't
@@ -1146,6 +1154,39 @@ function buildThresholdEditor(): string {
   </div>`;
 }
 
+function setKpiHash(view: KpiPageView): void {
+  const hash = view === 'metrics' ? '#/kpi' : `#/kpi/${view}`;
+  window.history.replaceState(null, '', hash);
+}
+
+/** Wire the four same-level KPI buttons. Period tabs compute signed-off
+ *  metrics; Live Status and Job Search mount their operational panels. */
+function wireKpiNavigation(app: HTMLElement): void {
+  app.querySelectorAll<HTMLButtonElement>('[data-period]').forEach((b) =>
+    b.addEventListener('click', () => {
+      computeVersion++; // cancel a previous range computation, if any
+      unmountTracePanel();
+      S!.view = 'metrics';
+      S!.period = b.dataset.period as PeriodKey;
+      S!.loading = true;
+      setKpiHash('metrics');
+      render();
+      void compute();
+    }),
+  );
+  app.querySelectorAll<HTMLButtonElement>('[data-kpi-view]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const view = b.dataset.kpiView as TracePanelView;
+      if (S!.view === view) return;
+      computeVersion++; // a slow KPI read must not remount over this panel
+      unmountTracePanel();
+      S!.view = view;
+      setKpiHash(view);
+      render();
+    }),
+  );
+}
+
 function render(): void {
   const app = document.getElementById('app')!;
   const dataErrors = [...S!.catalogErrors, ...S!.errors];
@@ -1156,10 +1197,26 @@ function render(): void {
     : '';
   const tabs = PERIODS.map(
     (p) =>
-      `<button class="shift-btn${p.key === S!.period ? ' a' : ''}" data-period="${p.key}">${escapeHtml(
+      `<button class="shift-btn${S!.view === 'metrics' && p.key === S!.period ? ' a' : ''}" data-period="${p.key}">${escapeHtml(
         p.label,
       )}</button>`,
-  ).join('');
+  ).join('') +
+    `<button class="shift-btn${S!.view === 'live' ? ' a' : ''}" data-kpi-view="live">📡 Live Status</button>` +
+    `<button class="shift-btn${S!.view === 'search' ? ' a' : ''}" data-kpi-view="search">🔍 Job Search</button>`;
+
+  // Live and Search share the KPI toolbar but own their content/data.
+  // They do not need the KPI period range, threshold editor or charts.
+  if (S!.view !== 'metrics') {
+    const panelView = S!.view;
+    app.innerHTML = `<div class="kpi">
+      <div class="kpi-head"><div class="shift-tabs">${tabs}</div></div>
+      <div class="kpi-trace-host"></div>
+    </div>`;
+    wireKpiNavigation(app);
+    const host = app.querySelector<HTMLElement>('.kpi-trace-host');
+    if (host) void mountTracePanel(dalRef, host, panelView);
+    return;
+  }
   // Global toggles live in the Machine column header — one click flips
   // every machine instead of N clicks per row.
   //  • "+" mirrors the per-row + / – (shift breakdown)
@@ -1520,14 +1577,7 @@ function render(): void {
       </div>
     </div>`;
 
-  app.querySelectorAll<HTMLButtonElement>('[data-period]').forEach((b) =>
-    b.addEventListener('click', () => {
-      S!.period = b.dataset.period as PeriodKey;
-      S!.loading = true;
-      render();
-      void compute();
-    }),
-  );
+  wireKpiNavigation(app);
   app.querySelectorAll<HTMLInputElement>('[data-range]').forEach((el) =>
     el.addEventListener('change', () => {
       const v = el.value;
@@ -1943,6 +1993,11 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
   const weekAgo = new Date(today);
   weekAgo.setDate(today.getDate() - 6);
   S = {
+    view: window.location.hash.startsWith('#/kpi/live')
+      ? 'live'
+      : window.location.hash.startsWith('#/kpi/search')
+        ? 'search'
+        : 'metrics',
     period: 'last3',
     customFrom: dateKey(weekAgo),
     customTo: dateKey(today),
@@ -1976,5 +2031,5 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
   // re-routes (→ renderKpi) on every supervisor toggle, so the threshold
   // editor appears/disappears on unlock without a page reload.
   render();
-  await compute();
+  if (S.view === 'metrics') await compute();
 }

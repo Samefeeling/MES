@@ -18,12 +18,11 @@ import {
   shiftTargetFor,
 } from './operator';
 import { escapeHtml } from './modal';
-import { mountDieTab } from './die';
 
-type TraceView = 'live' | 'search' | 'die';
+export type TracePanelView = 'live' | 'search';
 
 interface TraceState {
-  view: TraceView;
+  view: TracePanelView;
   query: { jobNumber: string; dateFrom: string; dateTo: string; machine: string };
   machines: Machine[];
   /** Search results (populated when view === 'search'). */
@@ -186,9 +185,10 @@ function activityFor(r: TraceRow): Activity {
 
 let S: TraceState | null = null;
 let dalRef: PmdDataLayer;
-/** Auto-refresh + now-line ticker. Cleared on renderTrace re-entry and
- *  whenever the user switches to the search tab so we don't leak
- *  fetches when no one is looking. */
+let hostEl: HTMLElement | null = null;
+let mountVersion = 0;
+/** Auto-refresh + now-line ticker. Cleared whenever KPI changes panel or
+ *  route so we don't leak fetches when no one is looking. */
 let livePollTimer: ReturnType<typeof setInterval> | undefined;
 let nowLineTimer: ReturnType<typeof setInterval> | undefined;
 /** How often Live Status re-pulls from PMD_LiveStatus / PMD_Production.
@@ -205,34 +205,60 @@ let lastLiveLoadMs = 0;
 let liveLoadVersion = 0;
 let searchLoadVersion = 0;
 
-export async function renderTrace(dal: PmdDataLayer): Promise<void> {
+/** Mount Live Status or Job Search inside the KPI page. The KPI toolbar
+ *  owns navigation; this module owns the selected panel's data and poll. */
+export async function mountTracePanel(
+  dal: PmdDataLayer,
+  host: HTMLElement,
+  view: TracePanelView,
+): Promise<void> {
+  const version = ++mountVersion;
   dalRef = dal;
   stopLivePoll();
-  const machines = await dal.listMachines();
+  hostEl = host;
+  let machines: Machine[] = [];
+  const errors: string[] = [];
+  try {
+    machines = await dal.listMachines();
+  } catch (e) {
+    console.warn('[pmd] Trace machine list failed:', e);
+    errors.push(`Machines: ${(e as Error).message || 'read failed'}`);
+  }
+  if (version !== mountVersion || !host.isConnected) return;
   S = {
-    view: 'live',
+    view,
     query: { jobNumber: '', dateFrom: '', dateTo: '', machine: '' },
     machines,
     results: [],
     liveRows: [],
     searched: false,
-    loading: true,
+    loading: view === 'live',
     lastUpdated: null,
-    errors: [],
+    errors,
   };
-  document.body.className = 'shift-day'; // neutral theme on trace page
   render();
-  await loadLive();
-  startLivePoll();
+  if (view === 'live') {
+    await loadLive();
+    if (version === mountVersion && host.isConnected) startLivePoll();
+  }
+}
+
+/** Cancel pending mounts and timers when KPI changes panel or route. */
+export function unmountTracePanel(): void {
+  mountVersion++;
+  liveLoadVersion++;
+  searchLoadVersion++;
+  stopLivePoll();
+  hostEl = null;
+  S = null;
 }
 
 function startLivePoll(): void {
   stopLivePoll();
   livePollTimer = setInterval(() => {
-    // Bail (and self-cancel) when the user has routed away from
-    // trace — renderOperator / renderKpi blow away the `.trace`
-    // container, so its absence is a reliable navigation signal.
-    if (!document.querySelector('.trace')) {
+    // KPI navigation replaces the host; its disconnection is a reliable
+    // signal that this panel no longer owns a visible page.
+    if (!hostEl?.isConnected) {
       stopLivePoll();
       return;
     }
@@ -242,7 +268,7 @@ function startLivePoll(): void {
   // Refresh the now-line every 30 s so the red line walks across the
   // timeline in real time even when no new data has arrived.
   nowLineTimer = setInterval(() => {
-    if (!document.querySelector('.trace')) {
+    if (!hostEl?.isConnected) {
       stopLivePoll();
       return;
     }
@@ -266,13 +292,7 @@ function stopLivePoll(): void {
  */
 function refreshLiveOnReturn(): void {
   if (document.visibilityState !== 'visible') return;
-  // Only when the Live board is the ACTIVE page — scope the `.trace`
-  // probe to #app. The KPI job-number popup also mounts a `.trace`
-  // element (in the modal host #mc), which used to satisfy a bare
-  // document-wide query and re-render Trace over whatever page was
-  // showing on the next tab-return.
-  const mounted = document.getElementById('app')?.querySelector('.trace');
-  if (!mounted || !S || S.view !== 'live') return;
+  if (!hostEl?.isConnected || !S || S.view !== 'live') return;
   if (Date.now() - lastLiveLoadMs < LIVE_FOCUS_REFRESH_MIN_GAP_MS) return;
   void loadLive({ silent: true });
 }
@@ -284,33 +304,17 @@ if (typeof document !== 'undefined') {
 }
 
 function render(): void {
-  const app = document.getElementById('app')!;
-  const tabs = `
-    <div class="trace-tabs">
-      <button class="shift-btn${S!.view === 'live' ? ' a' : ''}" data-tab="live">📡 Live Status</button>
-      <button class="shift-btn${S!.view === 'search' ? ' a' : ''}" data-tab="search">🔍 Job Number Search</button>
-      <button class="shift-btn${S!.view === 'die' ? ' a' : ''}" data-tab="die">🛠 Die Management</button>
-    </div>`;
-  // The Die tab owns its own state + render loop (ui/die.ts) — Trace just
-  // provides a host div and mounts it after the shell lands in the DOM.
-  const body =
-    S!.view === 'live'
-      ? renderLiveBody()
-      : S!.view === 'search'
-        ? renderSearchBody()
-        : `<div class="die-host"></div>`;
+  const host = hostEl;
+  if (!host?.isConnected || !S) return;
+  const body = S.view === 'live' ? renderLiveBody() : renderSearchBody();
   const errorBanner =
-    S!.view !== 'die' && S!.errors.length
+    S.errors.length
       ? `<div class="data-error-banner" role="alert"><b>⚠ Data could not be fully refreshed.</b> ${S!.errors
           .map((e) => escapeHtml(e))
           .join(' · ')}</div>`
       : '';
-  app.innerHTML = `<div class="trace">${tabs}${errorBanner}${body}</div>`;
+  host.innerHTML = `<div class="trace">${errorBanner}${body}</div>`;
   wire();
-  if (S!.view === 'die') {
-    const host = app.querySelector<HTMLElement>('.die-host');
-    if (host) void mountDieTab(dalRef, host);
-  }
 }
 
 function renderLiveBody(): string {
@@ -344,8 +348,6 @@ function renderLiveBody(): string {
 function renderSearchBody(): string {
   return `
     <div class="trace-search">
-      <h2>🔍 Production Traceability</h2>
-      <p class="bd-sub">Search by Job Number or date range to see what each machine was doing slot-by-slot.</p>
       <div class="trace-form">
         <label>Job Number<input type="text" data-q="jobNumber" placeholder="SFM…" value="${escapeHtml(S!.query.jobNumber)}"></label>
         <label>Date from<input type="date" data-q="dateFrom" value="${escapeHtml(S!.query.dateFrom)}"></label>
@@ -539,31 +541,16 @@ function renderJobDayCard(machineCode: string, date: string, rows: TraceRow[]): 
 }
 
 function wire(): void {
-  const app = document.getElementById('app')!;
-  app.querySelectorAll<HTMLButtonElement>('[data-tab]').forEach((b) =>
-    b.addEventListener('click', () => {
-      const v = b.dataset.tab as TraceView;
-      if (v === S!.view) return;
-      S!.view = v;
-      S!.errors = [];
-      render();
-      if (v === 'live') {
-        if (S!.liveRows.length === 0) void loadLive();
-        else drawNowLines();
-        startLivePoll();
-      } else {
-        stopLivePoll();
-      }
-    }),
-  );
-  app.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-q]').forEach((el) =>
+  const host = hostEl;
+  if (!host) return;
+  host.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-q]').forEach((el) =>
     el.addEventListener('change', () => {
       const k = el.dataset.q as keyof TraceState['query'];
       (S!.query as Record<string, string>)[k] = (el as HTMLInputElement).value;
     }),
   );
-  app.querySelector('[data-search]')?.addEventListener('click', () => void doSearch());
-  app.querySelectorAll<HTMLInputElement>('input[data-q="jobNumber"]').forEach((el) =>
+  host.querySelector('[data-search]')?.addEventListener('click', () => void doSearch());
+  host.querySelectorAll<HTMLInputElement>('input[data-q="jobNumber"]').forEach((el) =>
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') void doSearch();
     }),
@@ -712,7 +699,7 @@ function drawNowLines(): void {
     Math.min(1, (Date.now() - b.start.getTime()) / (b.end.getTime() - b.start.getTime())),
   );
   const pct = (frac * 100).toFixed(2);
-  document.querySelectorAll<HTMLElement>('.trace-card.is-live .trace-timeline').forEach((tl) => {
+  hostEl?.querySelectorAll<HTMLElement>('.trace-card.is-live .trace-timeline').forEach((tl) => {
     let line = tl.querySelector<HTMLElement>('.trace-now-line');
     if (!line) {
       line = document.createElement('div');
