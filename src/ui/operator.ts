@@ -28,8 +28,18 @@ import { cavityGross } from '../core/metrics';
 import { ordersCoRun } from '../core/corun';
 // Re-exported so existing importers (Trace view, tests) can keep pulling
 // these from ./operator while the canonical definitions live in core.
-import { jobLeftPiecesFor, shiftTargetFor } from '../core/targets';
-export { jobLeftPiecesFor, shiftTargetFor } from '../core/targets';
+import {
+  jobLeftPiecesFor,
+  shiftTargetFor,
+  SHIFT_TARGET_WARNING_RATIO,
+  totalGoodExceedsShiftTarget,
+} from '../core/targets';
+export {
+  jobLeftPiecesFor,
+  shiftTargetFor,
+  SHIFT_TARGET_WARNING_RATIO,
+  totalGoodExceedsShiftTarget,
+} from '../core/targets';
 import { sumOtherShiftGood, unsignedEarlierTuples } from '../core/jobgood';
 import { bdLabelFor } from '../core/breakdown';
 import { compareOrdersByStart } from '../core/planning';
@@ -1510,6 +1520,25 @@ function shiftTarget(): number | null {
   return shiftTargetFor(o, jl);
 }
 
+interface ShiftOutputWarning {
+  target: number;
+  limit: number;
+  message: string;
+}
+
+/** Build the one warning used by the live side panel and sign-off gate. */
+function shiftOutputWarning(totalGood: number): ShiftOutputWarning | null {
+  const target = shiftTarget();
+  if (!totalGoodExceedsShiftTarget(totalGood, target) || target == null) return null;
+  const limit = Math.floor(target * SHIFT_TARGET_WARNING_RATIO);
+  const n = (value: number): string => value.toLocaleString('en-AU');
+  return {
+    target,
+    limit,
+    message: `⚠ Total Good ${n(totalGood)} is above 130% of Shift Target ${n(target)} (maximum ${n(limit)}). Check and change Count Start or Count End.`,
+  };
+}
+
 /**
  * Job Left = JobRequired − sum(Good) across all OTHER shifts of this job.
  * The current (S!.mc, sid()) tuple is EXCLUDED here because jobLeftPieces()
@@ -1591,6 +1620,25 @@ async function refreshJobTotalAndPaintSide(): Promise<void> {
   set('jobLeft', jobLeft == null ? null : String(jobLeft));
   set('totalGood', String(good));
   set('totalReject', String(totalReject));
+  const outputWarning = shiftOutputWarning(good);
+  const outputWarnEl = document.querySelector<HTMLElement>(
+    '.op-side [data-live="outputWarn"]',
+  );
+  if (outputWarnEl) {
+    outputWarnEl.hidden = !outputWarning;
+    outputWarnEl.textContent = outputWarning?.message ?? '';
+  }
+  document
+    .querySelectorAll<HTMLInputElement>(
+      '.op-side input[data-meta="cstart"],.op-side input[data-meta="cend"]',
+    )
+    .forEach((input) => {
+      input.classList.toggle('count-invalid', Boolean(outputWarning));
+      input.setAttribute('aria-invalid', outputWarning ? 'true' : 'false');
+    });
+  document
+    .querySelector<HTMLElement>('.op-side [data-live="totalGood"]')
+    ?.classList.toggle('count-invalid', Boolean(outputWarning));
   const warnEl = document.querySelector<HTMLElement>('.op-side [data-live="jlWarn"]');
   if (warnEl) {
     warnEl.style.display = S!.unsignedEarlier.length ? '' : 'none';
@@ -2036,6 +2084,7 @@ function buildSide(): string {
   // shiftTarget() for the rule — either a full 8h run at cycle time, or
   // just the remainder of the job if it'll finish in under 8h.
   const tgt = shiftTarget();
+  const outputWarning = shiftOutputWarning(good);
   const targetDisplay = tgt == null ? '—' : String(tgt);
   const targetTitle = tgt == null
     ? 'No JobOper_ProdStandard on the planning row — Shift Target cannot be computed.'
@@ -2044,8 +2093,8 @@ function buildSide(): string {
     <div class="side-title">Shift counters</div>
     <div class="sk"><label>Job left</label><b data-live="jobLeft">${jobLeft}</b><span class="jl-warn" data-live="jlWarn" title="${escapeHtml(jobLeftWarnTitle())}"${S!.unsignedEarlier.length ? '' : ' style="display:none"'}>⚠</span></div>
     <div class="sk"><label title="${escapeHtml(targetTitle)}">Shift Target</label><b title="${escapeHtml(targetTitle)}">${targetDisplay}</b></div>
-    <div class="sk"><label>Count Start</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cstart" value="${cs}" ${rdo}${rdoTitle}></div>
-    <div class="sk"><label>Count End</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cend" value="${ce}" ${rdo}${rdoTitle}></div>
+    <div class="sk"><label>Count Start</label><input class="count-input${outputWarning ? ' count-invalid' : ''}" type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cstart" value="${cs}" aria-invalid="${outputWarning ? 'true' : 'false'}" ${rdo}${rdoTitle}></div>
+    <div class="sk"><label>Count End</label><input class="count-input${outputWarning ? ' count-invalid' : ''}" type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cend" value="${ce}" aria-invalid="${outputWarning ? 'true' : 'false'}" ${rdo}${rdoTitle}></div>
     ${
       machineHasCavityOption(S!.mc)
         ? `<div class="sk sk-cavity"><label title="Number of identical cavities on the die — pieces produced per press cycle. Total Good = (Count End − Count Start) × cavities − Reject.">Cavities</label><select class="cavity-sel" data-meta="cavity" ${rdo}${rdoTitle}>${CAVITY_OPTIONS.map(
@@ -2054,7 +2103,8 @@ function buildSide(): string {
         : ''
     }
     <div class="sk"><label>Total Reject</label><b class="r" data-live="totalReject">${totalReject}</b></div>
-    <div class="sk"><label${cav > 1 ? ` title="(Count End − Count Start) × ${cav} cavities − Reject"` : ''}>Total Good${cav > 1 ? ` <span class="cavity-tag">×${cav}</span>` : ''}</label><b class="g" data-live="totalGood">${good}</b></div>
+    <div class="sk"><label${cav > 1 ? ` title="(Count End − Count Start) × ${cav} cavities − Reject"` : ''}>Total Good${cav > 1 ? ` <span class="cavity-tag">×${cav}</span>` : ''}</label><b class="g${outputWarning ? ' count-invalid' : ''}" data-live="totalGood">${good}</b></div>
+    <div class="count-warning" data-live="outputWarn" role="alert"${outputWarning ? '' : ' hidden'}>${outputWarning ? escapeHtml(outputWarning.message) : ''}</div>
     <div class="sk"><label>Purge (kg)</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="purge" value="${purge}" ${rdo}${rdoTitle}></div>
     <div class="photos">
       <div class="photos-title">📷 Photos</div>
@@ -2872,6 +2922,8 @@ async function refreshAll(): Promise<void> {
  *     is valid data ("counter reset / no parts"); a blank field is
  *     not, because we can't tell "no parts" from "forgot to fill in".
  *   - countEnd >= countStart
+ *   - Total Good must not exceed 130% of Shift Target; a likely counter
+ *     typo must be corrected before the shift can be locked
  * Confirming locks the shift records and clears the in-form selection.
  */
 function openSaveSignoffModal(): void {
@@ -2927,6 +2979,16 @@ function openSaveSignoffModal(): void {
   const cav = cavities();
   const totalRej = jobTotals();
   const good = Math.max(0, (ce - cs) * cav - totalRej);
+  const outputWarning = shiftOutputWarning(good);
+  if (outputWarning) {
+    toast(outputWarning.message, 'err');
+    const countEnd = document.querySelector<HTMLInputElement>(
+      '.op-side input[data-meta="cend"]',
+    );
+    countEnd?.focus();
+    countEnd?.select();
+    return;
+  }
   const o = selectedOrder();
 
   const mc = openModal(`<div class="bd-modal">

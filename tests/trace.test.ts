@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { goodForRecords, syntheticOrderFromRecord } from '../src/ui/trace';
-import { jobLeftPiecesFor, shiftTargetFor } from '../src/ui/operator';
+import {
+  jobLeftPiecesFor,
+  shiftTargetFor,
+  totalGoodExceedsShiftTarget,
+} from '../src/ui/operator';
 import { order, rec } from './helpers';
 
 // Job Left / Shift Target are pure formulas owned by the operator module
@@ -51,6 +55,18 @@ describe('shiftTargetFor (shared with operator side panel)', () => {
   it('returns null when no cycle time is on the planning row', () => {
     const o = order({ jobNumber: 'J1', qtyPerHr: 0 });
     expect(shiftTargetFor(o, 100)).toBeNull();
+  });
+});
+
+describe('Total Good vs Shift Target warning', () => {
+  it('warns only when Total Good is strictly above 130% of target', () => {
+    expect(totalGoodExceedsShiftTarget(130, 100)).toBe(false);
+    expect(totalGoodExceedsShiftTarget(131, 100)).toBe(true);
+    expect(totalGoodExceedsShiftTarget(1, 0)).toBe(true);
+  });
+
+  it('does not guess when Shift Target cannot be calculated', () => {
+    expect(totalGoodExceedsShiftTarget(9999, null)).toBe(false);
   });
 });
 

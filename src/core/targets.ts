@@ -45,3 +45,23 @@ export function shiftTargetFor(o: PlanningOrder, jobLeft: number): number | null
   const ct = o.qtyPerHr; // hours per piece
   return jobLeft * ct >= 8 ? Math.floor(8 / ct) : jobLeft;
 }
+
+/** A count more than 30% above the shift target is much more likely to be
+ *  a Count Start / Count End entry error than genuine production. */
+export const SHIFT_TARGET_WARNING_RATIO = 1.3;
+
+export function totalGoodExceedsShiftTarget(
+  totalGood: number,
+  shiftTarget: number | null,
+): boolean {
+  if (
+    shiftTarget == null ||
+    !Number.isFinite(shiftTarget) ||
+    shiftTarget < 0 ||
+    !Number.isFinite(totalGood) ||
+    totalGood < 0
+  ) {
+    return false;
+  }
+  return totalGood > shiftTarget * SHIFT_TARGET_WARNING_RATIO;
+}
