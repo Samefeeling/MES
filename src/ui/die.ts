@@ -19,26 +19,33 @@ import type {
   MaintType,
   PlanningOrder,
   ProductDieColor,
+  ProductionCounterRecord,
+  ToolMaintenanceLevel,
   ToolStatus,
 } from '../types';
 import {
+  aggregateDieServiceUsage,
   aggregateDies,
   buildDieTrend,
+  DEFAULT_TOOL_MAINTENANCE_LEVEL,
   DIE_CONDITION_META,
   dieHealth,
   dieServiceStatus,
   goodByJob,
   latestConditionByDie,
   nextPlannedFor,
+  TOOL_MAINTENANCE_RULES,
   TOOL_STATUS_META,
   type DieAgg,
   type DieConditionSummary,
   type DiePlanned,
+  type DieServiceUsage,
   type DieServiceStatus,
 } from '../core/die';
 import { closeModal, escapeHtml, openModal } from './modal';
 import { toast } from './toast';
 import { STATUS_MAP } from '../core/status';
+import { isSupervisor } from './supervisor-auth';
 
 /** 'smart' = the aggregate's attention-first order (open requests, then
  *  reject-%, then shots). Any other key is a user-picked column sort. */
@@ -80,6 +87,11 @@ interface DieState {
   /** Die (trimmed, UPPERCASED) → latest die-change condition report from
    *  PMD_DieChangeLog. Worn/damaged components flag priority service. */
   condByDie: Map<string, DieConditionSummary>;
+  /** Independent rolling service ledger (not tied to the visible 7/30/90
+   *  day analysis range), keyed by normalised DieNumber. */
+  serviceUsageByDie: Map<string, DieServiceUsage>;
+  serviceHistoryFrom: string;
+  serviceHistoryAvailable: boolean;
   loading: boolean;
   /** Read failures for the current range. The board may still render the
    *  sources that succeeded, but these labels prevent missing data from
@@ -119,17 +131,30 @@ const MANGO_REQUEST_URL = 'https://my.mangolive.com/plant-equipment/request-main
 const mangoLink = (label: string, cls = ''): string =>
   `<a class="die-mango-open${cls ? ' ' + cls : ''}" href="${MANGO_REQUEST_URL}" target="_blank" rel="noopener" title="Open Mango — Request Maintenance (new tab)">🥭 ${label} ↗</a>`;
 
-/** Service-rule position for a die. The counter resets at the newer of
- *  the last DONE work order and PMD_DieMaster.LastServiceDate. */
+/** Service-rule position for a die. Usage comes from the independent
+ *  maintenance ledger, never the visible analysis window. */
 function svcFor(d: DieAgg): DieServiceStatus | null {
-  return dieServiceStatus(d, S!.requests, masterFor(d.dieNumber)?.lastServiceDate || undefined);
+  const key = d.dieNumber.trim().toUpperCase();
+  const m = masterFor(d.dieNumber);
+  const usage = S!.serviceUsageByDie.get(key) ?? d;
+  return dieServiceStatus(
+    usage,
+    S!.requests,
+    m?.lastServiceDate || undefined,
+    m?.maintenanceLevel || DEFAULT_TOOL_MAINTENANCE_LEVEL,
+    (condFor(d.dieNumber)?.flags.length ?? 0) > 0,
+    isoDay(new Date()),
+  );
 }
 
 function svcTitle(s: DieServiceStatus): string {
   const sinceTxt = s.sinceIsService
     ? `since service on ${s.since}`
-    : `since ${s.since} (window start — no completed service on record, so this is AT LEAST)`;
-  return `${s.shotsSince.toLocaleString()} shots ${sinceTxt} · rule ${s.bandLabel}: service every ${s.intervalShots.toLocaleString()} shots (strictest press it ran: ${s.press}) · ${(s.pct * 100).toFixed(0)}% of interval`;
+    : `since ${s.since} (first ledger record — no completed service on record, so this is AT LEAST)`;
+  const override = s.conditionTriggered
+    ? ` · Die Change Log rating >1 forces Level C (configured Level ${s.configuredLevel})`
+    : '';
+  return `Level ${s.maintenanceLevel}: ${s.intervalMonths} month${s.intervalMonths === 1 ? '' : 's'} OR ${s.intervalShots.toLocaleString()} shots, whichever comes first · ${s.shotsSince.toLocaleString()} shots ${sinceTxt} (${(s.shotPct * 100).toFixed(0)}%) · calendar due ${s.dueDate} (${(s.timePct * 100).toFixed(0)}%)${override}`;
 }
 
 /** "2026-07-12T07:00:00" → "07-12 07:00" (planned starts are local ISO). */
@@ -465,6 +490,9 @@ export async function mountDieTab(dal: PmdDataLayer, host: HTMLElement): Promise
     masterByDie: new Map(),
     planByDie: new Map(),
     condByDie: new Map(),
+    serviceUsageByDie: new Map(),
+    serviceHistoryFrom: '',
+    serviceHistoryAvailable: false,
     loading: true,
     errors: [],
   };
@@ -491,7 +519,35 @@ async function loadAll(): Promise<void> {
   state.loading = true;
   state.errors = [];
   render();
-  const [dieColors, requests, rejCats, records, planning, master, changeLogs] = await Promise.all([
+  // Maintenance is independent of the visible 7/30/90-day analysis. A
+  // 400-day ledger covers the full Level-A annual interval plus a buffer;
+  // a service older than that is already calendar-due, so older shot detail
+  // cannot change the action.
+  const serviceFromDate = new Date();
+  serviceFromDate.setDate(serviceFromDate.getDate() - 399);
+  const serviceFrom = isoDay(serviceFromDate);
+  const serviceTo = isoDay(new Date());
+  const serviceCountersPromise: Promise<ProductionCounterRecord[]> =
+    dalRef.listProductionCounters
+      ? safe(
+          'Service shot history',
+          dalRef.listProductionCounters({
+            shiftIdFrom: `${serviceFrom}-`,
+            shiftIdTo: `${serviceTo}-￿`,
+          }),
+          [],
+        )
+      : safe(
+          'Service shot history',
+          dalRef
+            .listProduction({
+              shiftIdFrom: `${serviceFrom}-`,
+              shiftIdTo: `${serviceTo}-￿`,
+            })
+            .then((rows) => rows.filter((r) => r.slotIndex === 0)),
+          [],
+        );
+  const [dieColors, requests, rejCats, records, planning, master, changeLogs, serviceCounters] = await Promise.all([
     dalRef.listProductDieColors
       ? safe('Die/part mapping', dalRef.listProductDieColors(), [])
       : Promise.resolve([]),
@@ -511,6 +567,7 @@ async function loadAll(): Promise<void> {
     dalRef.listDieChangeLog
       ? safe('Die-change condition logs', dalRef.listDieChangeLog(), [])
       : Promise.resolve([]),
+    serviceCountersPromise,
   ]);
   // A slower response for an old date range must never overwrite the range
   // the user picked afterwards (or a newly-mounted tab instance).
@@ -518,6 +575,9 @@ async function loadAll(): Promise<void> {
   state.dieColors = dieColors;
   state.masterByDie = new Map(master.map((m) => [m.dieNumber.trim().toUpperCase(), m]));
   state.condByDie = latestConditionByDie(changeLogs);
+  state.serviceUsageByDie = aggregateDieServiceUsage(dieColors, serviceCounters);
+  state.serviceHistoryFrom = serviceFrom;
+  state.serviceHistoryAvailable = !errors.some((e) => e.startsWith('Service shot history:'));
   state.requests = requests;
   state.rejectLabels = new Map(rejCats.map((c) => [c.code, c.label]));
   state.dies = aggregateDies(dieColors, records, requests);
@@ -638,7 +698,7 @@ function renderBody(): string {
     <span class="die-chip">Dies <b>${S!.dies.length}</b></span>
     <span class="die-chip">Ran in window <b>${active}</b></span>
     <span class="die-chip${attention ? ' is-bad' : ''}">High reject <b>${attention}</b></span>
-    <span class="die-chip${svcDue ? ' is-bad' : ''}" title="Past the tonnage service rule (100-150T: 100k · 210-350T: 50k · 450-560T: 20k · 650-850T: 10k · 1000T+: 8k shots)">Service due <b>${svcDue}</b></span>
+    <span class="die-chip${svcDue ? ' is-bad' : ''}" title="Dual-trigger tool policy — A: yearly OR 50,000 shots · B: quarterly OR 15,000 · C: monthly OR 5,000. The first limit reached wins; any latest Die Change Log rating above 1 forces Level C.">Service due <b>${svcDue}</b></span>
     <span class="die-chip${open.length ? ' is-warn' : ''}">Open requests <b>${open.length}</b></span>
     ${statusChip}
     ${woChip}
@@ -1072,7 +1132,7 @@ function renderRequests(): string {
 // ---------------------------------------------------------------------
 // ToolStatus picker — tap the badge, pick the tool's new condition. The
 // change writes straight to PMD_DieMaster (ToolStatus + DateStamp), and
-// setting "Serviced" also stamps LastServiceDate so the tonnage service
+// setting "Serviced" also stamps LastServiceDate so the A/B/C service
 // counter restarts from today.
 
 function openStatusPicker(dieNumber: string): void {
@@ -1106,12 +1166,17 @@ function openStatusPicker(dieNumber: string): void {
     b.addEventListener('click', () => {
       const st = b.dataset.dieSt as keyof typeof TOOL_STATUS_META;
       void (async () => {
-        const now = new Date().toISOString();
+        const changedAt = new Date();
+        const now = changedAt.toISOString();
         const patch: { toolStatus: typeof st; dateStamp: string; lastServiceDate?: string } = {
           toolStatus: st,
           dateStamp: now,
         };
-        if (st === 'serviced') patch.lastServiceDate = now;
+        // LastServiceDate is a calendar-day reset, not an instant. Stamp
+        // midnight UTC of the Sydney/browser day so an early-morning
+        // service does not become "yesterday" when ISO is sliced.
+        if (st === 'serviced')
+          patch.lastServiceDate = `${isoDay(changedAt)}T00:00:00.000Z`;
         const prev = { toolStatus: m.toolStatus, dateStamp: m.dateStamp, lastServiceDate: m.lastServiceDate };
         // Optimistic — the row updates immediately; a failed write rolls back.
         m.toolStatus = st;
@@ -1126,6 +1191,67 @@ function openStatusPicker(dieNumber: string): void {
           Object.assign(m, prev);
           render();
           console.error('[pmd] ToolStatus update failed:', e);
+          toast(`Could not update: ${e instanceof Error ? e.message : e}`, 'err');
+        }
+      })();
+    }),
+  );
+}
+
+// ---------------------------------------------------------------------
+// Preventive-maintenance policy picker. Unlike ordinary floor actions,
+// changing the A/B/C policy is Supervisor-only and is enforced here even
+// if somebody manufactures a data attribute in DevTools.
+
+function openMaintenanceLevelPicker(dieNumber: string): void {
+  if (!isSupervisor()) {
+    toast('Supervisor mode is required to change a maintenance level.', 'err');
+    return;
+  }
+  const m = masterFor(dieNumber);
+  if (!m || !dalRef.updateDieMaster) {
+    toast(`${dieNumber} is not registered in PMD_DieMaster.`, 'err');
+    return;
+  }
+  const current = m.maintenanceLevel || DEFAULT_TOOL_MAINTENANCE_LEVEL;
+  const opts = (['A', 'B', 'C'] as ToolMaintenanceLevel[])
+    .map((level) => {
+      const rule = TOOL_MAINTENANCE_RULES[level];
+      const isCurrent = current === level;
+      return `<button class="die-st-opt die-maint-opt${isCurrent ? ' cur' : ''}" data-die-maint-choice="${level}">
+        <span class="die-maint-level level-${level.toLowerCase()}">Level ${level}</span>
+        <em>${rule.months === 12 ? 'Annual' : rule.months === 3 ? 'Quarterly' : 'Monthly'} OR ${rule.shots.toLocaleString()} shots — first limit wins</em>
+        ${isCurrent ? `<b>${m.maintenanceLevel ? 'current' : 'default'}</b>` : ''}
+      </button>`;
+    })
+    .join('');
+  openModal(`<div class="die-st-pick die-maint-pick">
+    <div class="kpi-trace-head">
+      <h3>🛠 ${escapeHtml(dieNumber)} — Maintenance Level</h3>
+      <button class="btn-ghost-big" data-mod="close">Cancel</button>
+    </div>
+    <p class="die-req-note">Supervisor setting stored in <b>PMD_DieMaster.MaintenanceLevel</b>. A latest Die Change Log rating above 1 still forces the effective policy to Level C until a newer all-good inspection clears it.</p>
+    ${opts}
+  </div>`);
+  const mc = document.getElementById('mc')!;
+  mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
+  mc.querySelectorAll<HTMLButtonElement>('[data-die-maint-choice]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const maintenanceLevel = b.dataset.dieMaintChoice as ToolMaintenanceLevel;
+      void (async () => {
+        const previous = { maintenanceLevel: m.maintenanceLevel, dateStamp: m.dateStamp };
+        const dateStamp = new Date().toISOString();
+        m.maintenanceLevel = maintenanceLevel;
+        m.dateStamp = dateStamp;
+        closeModal();
+        render();
+        try {
+          await dalRef.updateDieMaster!(dieNumber, { maintenanceLevel, dateStamp });
+          toast(`${dieNumber} maintenance → Level ${maintenanceLevel}`, 'ok');
+        } catch (e) {
+          Object.assign(m, previous);
+          render();
+          console.error('[pmd] MaintenanceLevel update failed:', e);
           toast(`Could not update: ${e instanceof Error ? e.message : e}`, 'err');
         }
       })();
@@ -1187,25 +1313,64 @@ function trendChart(d: DieAgg): string {
   return `<div class="die-trend-lg">${bars}</div>${legend}`;
 }
 
-/** Preventive-maintenance position in the detail popup: the governing
- *  tonnage rule, shots since the counter start, and a progress bar that
- *  goes amber at 80% and red past the interval. */
+/** Dual-trigger preventive-maintenance position in the detail popup.
+ *  Shots and calendar age have separate bars; the worse one governs. */
 function renderServiceSection(d: DieAgg): string {
   const s = svcFor(d);
+  const m = masterFor(d.dieNumber);
+  const condTriggered = (condFor(d.dieNumber)?.flags.length ?? 0) > 0;
+  const configured = m?.maintenanceLevel || DEFAULT_TOOL_MAINTENANCE_LEVEL;
+  const effective: ToolMaintenanceLevel = condTriggered ? 'C' : configured;
+  const rule = TOOL_MAINTENANCE_RULES[effective];
+  const edit =
+    isSupervisor() && m && dalRef.updateDieMaster
+      ? `<button class="die-maint-edit" data-die-maint-level="${escapeHtml(d.dieNumber)}" title="Supervisor: assign this tool's normal maintenance policy">Change level ▾</button>`
+      : '';
+  const h = `<h4 class="die-svc-head">② Service Plan
+      <span class="die-maint-level level-${effective.toLowerCase()}">Level ${effective}</span>
+      ${edit}
+    </h4>`;
   if (!s) {
-    return `<h4>② Service Plan</h4>
-      <div class="die-svc-none">No running record yet — follow maintenance schedule.</div>`;
+    return `${h}
+      <div class="die-svc-none"><b>${escapeHtml(rule.label)}</b> — ${S!.serviceHistoryAvailable ? `no completed-service baseline and no production in the independent ${escapeHtml(S!.serviceHistoryFrom)} → today shot ledger` : 'the independent shot ledger could not be loaded (see the data-source warning above)'}. Set Status to <b>Serviced</b> when maintenance is completed to start the calendar counter.</div>`;
   }
-  const pctTxt = `${(s.pct * 100).toFixed(0)}%`;
-  const width = Math.min(100, Math.round(s.pct * 100));
-  // Simplified: "12,340 / 20,000 shots" since the last service, with the
-  // full rule / press detail on hover.
-  return `<h4>② Service Plan</h4>
-    <div class="die-svc-line ${s.level}" title="${escapeHtml(svcTitle(s))}">
-      <span><b>${s.shotsSince.toLocaleString()}</b> / ${s.intervalShots.toLocaleString()} shots since ${escapeHtml(s.since)}${s.sinceIsService ? '' : '+'}</span>
-      <span class="die-svc-bar"><i class="${s.level}" style="width:${width}%"></i></span>
-      <b class="die-svc-pct ${s.level}">${pctTxt}</b>
-      ${s.level === 'due' ? '<span class="die-svc-flag">🔧 DUE</span>' : s.level === 'soon' ? '<span class="die-svc-flag soon">⏳ soon</span>' : ''}
+  const shotWidth = Math.min(100, Math.round(s.shotPct * 100));
+  const timeWidth = Math.min(100, Math.round(s.timePct * 100));
+  const row = (label: string, detail: string, pct: number, width: number): string => {
+    const level = pct >= 1 ? 'due' : pct >= 0.8 ? 'soon' : 'ok';
+    return `<div class="die-svc-metric">
+      <span class="die-svc-kind">${label}</span>
+      <span class="die-svc-detail">${detail}</span>
+      <span class="die-svc-bar"><i class="${level}" style="width:${width}%"></i></span>
+      <b class="die-svc-pct ${level}">${(pct * 100).toFixed(0)}%</b>
+    </div>`;
+  };
+  const trigger =
+    s.level === 'due'
+      ? '<span class="die-svc-flag">🔧 DUE — first limit reached</span>'
+      : s.level === 'soon'
+        ? '<span class="die-svc-flag soon">⏳ Service soon</span>'
+        : '<span class="die-svc-ok">Within plan</span>';
+  const conditionNote = s.conditionTriggered
+    ? `<div class="die-svc-condition">⚠ Latest Die Change Log has a worn/damaged rating (&gt;1), so Level ${s.configuredLevel} is temporarily overridden by <b>Level C</b>.</div>`
+    : '';
+  return `${h}
+    <div class="die-svc-panel ${s.level}" title="${escapeHtml(svcTitle(s))}">
+      <div class="die-svc-rule"><b>${escapeHtml(TOOL_MAINTENANCE_RULES[s.maintenanceLevel].label)}</b><span>whichever comes first</span>${trigger}</div>
+      ${row(
+        'Shots',
+        `<b>${s.shotsSince.toLocaleString()}</b> / ${s.intervalShots.toLocaleString()} since ${escapeHtml(ddmmyyyy(s.since))}${s.sinceIsService ? '' : '+'}`,
+        s.shotPct,
+        shotWidth,
+      )}
+      ${row(
+        'Calendar',
+        `${escapeHtml(ddmmyyyy(s.since))} → due <b>${escapeHtml(ddmmyyyy(s.dueDate))}</b>`,
+        s.timePct,
+        timeWidth,
+      )}
+      ${conditionNote}
+      <div class="die-svc-foot">${S!.serviceHistoryAvailable ? 'Shot counter uses a separate 400-day production ledger.' : '⚠ Independent shot history failed; this temporary value falls back to the visible analysis range.'} Production recorded on the service date is included conservatively because service time-of-day is not stored.</div>
     </div>`;
 }
 
@@ -1373,6 +1538,10 @@ function openDieDetail(dieNumber: string): void {
   </div>`);
   const mc = document.getElementById('mc')!;
   mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
+  mc.querySelector<HTMLButtonElement>('[data-die-maint-level]')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openMaintenanceLevelPicker(d.dieNumber);
+  });
   // Print just this drilldown. The app can be mounted deep inside the host
   // page (SPFx web-part container, not a direct child of <body>), so a
   // "hide every sibling of the modal" rule would hide the modal too and

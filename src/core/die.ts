@@ -13,7 +13,9 @@ import type {
   DieMaintenanceRequest,
   PlanningOrder,
   ProductDieColor,
+  ProductionCounterRecord,
   ProductionRecord,
+  ToolMaintenanceLevel,
   ToolStatus,
 } from '../types';
 import { cavityGross } from './metrics';
@@ -252,103 +254,206 @@ export interface DieAgg {
 }
 
 // ---------------------------------------------------------------------
-// Preventive-maintenance rule (furniture mould service intervals, by
-// press tonnage — bigger presses hammer the die harder per cycle):
-//   100T-150T  → every 100,000 shots
-//   210T-350T  → every  50,000 shots
-//   450T-560T  → every  20,000 shots
-//   650T-850T  → every  10,000 shots
-//   1000T+     → every   8,000 shots
-// Band edges are extended to cover in-between tonnages (e.g. 1300T,
-// 1600T fall in the 1000T+ band) so no press is ever rule-less.
+// Moulding-tool preventive maintenance. This is a dual-trigger policy:
+// calendar age catches low-use tools whose seals/lubrication still age,
+// while press-cycle count catches high-use tools early. Whichever limit
+// is reached first governs. Level B is the site default for legacy rows;
+// a latest Die Change Log rating of 2/3 forces the effective rule to C.
 
-const SERVICE_BANDS: Array<{ max: number; shots: number; label: string }> = [
-  { max: 200, shots: 100_000, label: '100T-150T' },
-  { max: 400, shots: 50_000, label: '210T-350T' },
-  { max: 600, shots: 20_000, label: '450T-560T' },
-  { max: 900, shots: 10_000, label: '650T-850T' },
-  { max: Infinity, shots: 8_000, label: '1000T+' },
-];
-
-/** Tonnage from a machine code ("850T" → 850, "320C" → 320); null for
- *  non-tonnage lines (Batt1, HS) which have no shot-based rule. */
-export function machineTonnage(code: string): number | null {
-  const m = /^(\d+)\s*[TC]/i.exec(code.trim());
-  return m ? Number(m[1]) : null;
+export interface ToolMaintenanceRule {
+  level: ToolMaintenanceLevel;
+  label: string;
+  months: number;
+  shots: number;
 }
 
-/** Service interval (shots) for a press tonnage. */
-export function serviceIntervalFor(tonnage: number): { shots: number; label: string } {
-  const band = SERVICE_BANDS.find((b) => tonnage <= b.max)!;
-  return { shots: band.shots, label: band.label };
+export const TOOL_MAINTENANCE_RULES: Record<ToolMaintenanceLevel, ToolMaintenanceRule> = {
+  A: { level: 'A', label: 'Annual / 50,000 shots', months: 12, shots: 50_000 },
+  B: { level: 'B', label: 'Quarterly / 15,000 shots', months: 3, shots: 15_000 },
+  C: { level: 'C', label: 'Monthly / 5,000 shots', months: 1, shots: 5_000 },
+};
+
+export const DEFAULT_TOOL_MAINTENANCE_LEVEL: ToolMaintenanceLevel = 'B';
+
+/** Free text ("Level B", "b", "Quarterly") → the closed A/B/C union. */
+export function parseToolMaintenanceLevel(raw: string): ToolMaintenanceLevel | '' {
+  const s = raw.trim().toLowerCase();
+  if (!s) return '';
+  if (/^(?:level\s*)?a$/.test(s) || s.includes('annual')) return 'A';
+  if (/^(?:level\s*)?b$/.test(s) || s.includes('quarter')) return 'B';
+  if (/^(?:level\s*)?c$/.test(s) || s.includes('month')) return 'C';
+  return '';
+}
+
+/** Minimal per-die shot ledger used by the service counter. */
+export interface DieServiceUsage {
+  dieNumber: string;
+  daily: Array<{ day: string; shots: number }>;
+}
+
+/** Join canonical production counters to Part → Die and collapse them to
+ *  one daily shot total per physical tool. Tuple de-duplication prevents
+ *  a signed header plus a live mirror from double-counting wear. */
+export function aggregateDieServiceUsage(
+  dieColors: ProductDieColor[],
+  records: ProductionCounterRecord[],
+): Map<string, DieServiceUsage> {
+  const partToDie = new Map<string, { key: string; display: string }>();
+  for (const c of dieColors) {
+    const display = c.dieNumber.trim();
+    if (!display || !c.partNumber.trim()) continue;
+    partToDie.set(c.partNumber.trim().toUpperCase(), {
+      key: display.toUpperCase(),
+      display,
+    });
+  }
+  const tuples = new Map<string, { dieKey: string; display: string; day: string; shots: number }>();
+  for (const r of records) {
+    const die = partToDie.get(r.partNumber.trim().toUpperCase());
+    const day = r.shiftId.slice(0, 10);
+    if (!die || !/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+    const shots =
+      r.countStart == null || r.countEnd == null
+        ? 0
+        : Math.max(0, r.countEnd - r.countStart);
+    const tupleKey = `${die.key}|${r.machineCode.trim().toUpperCase()}|${r.shiftId}|${r.jobNumber.trim().toUpperCase()}`;
+    // A tuple should be canonical already; max is a defensive choice for
+    // duplicate snapshots of the same growing counter, never a sum.
+    const prev = tuples.get(tupleKey);
+    if (!prev || shots >= prev.shots)
+      tuples.set(tupleKey, { dieKey: die.key, display: die.display, day, shots });
+  }
+  const dailyByDie = new Map<string, Map<string, number>>();
+  const displayByDie = new Map<string, string>();
+  for (const t of tuples.values()) {
+    displayByDie.set(t.dieKey, t.display);
+    const days = dailyByDie.get(t.dieKey) ?? new Map<string, number>();
+    days.set(t.day, (days.get(t.day) ?? 0) + t.shots);
+    dailyByDie.set(t.dieKey, days);
+  }
+  return new Map(
+    [...dailyByDie.entries()].map(([key, days]) => [
+      key,
+      {
+        dieNumber: displayByDie.get(key) ?? key,
+        daily: [...days.entries()]
+          .map(([day, shots]) => ({ day, shots }))
+          .sort((a, b) => (a.day < b.day ? -1 : 1)),
+      },
+    ]),
+  );
 }
 
 export interface DieServiceStatus {
   /** Shots accumulated since the last COMPLETED maintenance (or since
-   *  the window start when the die has never been serviced). */
+   *  the first available ledger day when never serviced). */
   shotsSince: number;
   /** Day the counter starts from (YYYY-MM-DD) and why. */
   since: string;
   sinceIsService: boolean;
-  /** The governing interval — the STRICTEST rule among the presses the
-   *  die ran on (a die that visits the 1600T wears at the 1000T+ rate). */
+  /** Level saved on PMD_DieMaster (or B for a legacy blank). */
+  configuredLevel: ToolMaintenanceLevel;
+  /** Effective policy. A worn/damaged latest inspection forces C. */
+  maintenanceLevel: ToolMaintenanceLevel;
+  conditionTriggered: boolean;
   intervalShots: number;
-  bandLabel: string;
-  /** Press the strictest rule came from. */
-  press: string;
-  /** shotsSince ÷ interval. */
+  intervalMonths: number;
+  dueDate: string;
+  /** Independent progress against the two OR limits. */
+  shotPct: number;
+  timePct: number;
+  /** max(shotPct, timePct): whichever trigger is closest governs. */
   pct: number;
   level: 'ok' | 'soon' | 'due';
 }
 
+function localIsoDay(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Calendar-month addition with month-end clamping (31 Jan + 1 month =
+ *  28/29 Feb), evaluated in UTC so DST cannot move the due date. */
+function addCalendarMonths(day: string, months: number): string {
+  const [year, month, date] = day.split('-').map(Number);
+  const target = new Date(Date.UTC(year, month - 1 + months, 1));
+  const last = new Date(
+    Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+  target.setUTCDate(Math.min(date, last));
+  return target.toISOString().slice(0, 10);
+}
+
+function dayMs(day: string): number {
+  return Date.parse(`${day}T00:00:00.000Z`);
+}
+
 /**
- * Where a die sits against its preventive-maintenance rule. Returns null
- * when none of the presses the die ran on carries a tonnage rule (Batt /
- * HS lines) or the die didn't run at all. The counter resets at the most
- * recent SERVICE EVENT — the newer of the last DONE work order's closed
- * date and PMD_DieMaster.LastServiceDate (the toolroom's own record,
- * stamped when ToolStatus is set to Serviced). Dies with no service on
- * record count from the window start (an under-count — flagged via
- * sinceIsService=false so the UI can say "at least").
+ * Where a die sits against its dual-trigger preventive-maintenance rule.
+ * The counter resets at the most recent SERVICE EVENT — the newer of the
+ * last DONE work order's closed date and PMD_DieMaster.LastServiceDate.
+ * Date-only production on that SAME day is deliberately included: PMD has
+ * no service timestamp, so excluding the whole day silently lost valid
+ * post-service production (the Die #280 case). Dies with no service on
+ * record count from the first ledger day and are labelled "at least".
  */
 export function dieServiceStatus(
-  agg: DieAgg,
+  agg: { dieNumber: string; daily: Array<{ day: string; shots: number }> },
   requests: DieMaintenanceRequest[],
   lastServiceDate?: string,
+  configuredLevel: ToolMaintenanceLevel | '' = DEFAULT_TOOL_MAINTENANCE_LEVEL,
+  conditionTriggered = false,
+  today = localIsoDay(new Date()),
 ): DieServiceStatus | null {
-  let interval: { shots: number; label: string } | null = null;
-  let press = '';
-  for (const m of agg.machines) {
-    const t = machineTonnage(m);
-    if (t == null) continue;
-    const rule = serviceIntervalFor(t);
-    if (!interval || rule.shots < interval.shots) {
-      interval = rule;
-      press = m;
-    }
-  }
-  if (!interval || agg.daily.length === 0) return null;
   const dieKey = agg.dieNumber.trim().toUpperCase();
   const lastDone = requests
     .filter((r) => r.dieNumber.trim().toUpperCase() === dieKey && r.status === 'done' && r.closedAt)
     .map((r) => r.closedAt.slice(0, 10))
+    .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
     .sort()
     .pop();
-  const master = lastServiceDate?.slice(0, 10) || undefined;
+  const masterDay = lastServiceDate?.slice(0, 10) || '';
+  const master = /^\d{4}-\d{2}-\d{2}$/.test(masterDay) ? masterDay : undefined;
   const lastService =
     lastDone && master ? (lastDone > master ? lastDone : master) : lastDone ?? master;
+  const firstProduction = [...agg.daily]
+    .map((d) => d.day)
+    .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+    .sort()[0];
+  const since = lastService ?? firstProduction;
+  if (!since) return null;
   const shotsSince = agg.daily
-    .filter((d) => !lastService || d.day > lastService)
+    // Include the service calendar day conservatively because the source
+    // stores only a date, not the time the tool returned to production.
+    .filter((d) => !lastService || d.day >= lastService)
     .reduce((a, d) => a + d.shots, 0);
-  if (shotsSince === 0) return null;
-  const pct = shotsSince / interval.shots;
+  const savedLevel = configuredLevel || DEFAULT_TOOL_MAINTENANCE_LEVEL;
+  const maintenanceLevel: ToolMaintenanceLevel = conditionTriggered ? 'C' : savedLevel;
+  const rule = TOOL_MAINTENANCE_RULES[maintenanceLevel];
+  const dueDate = addCalendarMonths(since, rule.months);
+  const shotPct = shotsSince / rule.shots;
+  const startMs = dayMs(since);
+  const dueMs = dayMs(dueDate);
+  const nowMs = dayMs(today);
+  const timePct =
+    Number.isFinite(startMs) && Number.isFinite(dueMs) && dueMs > startMs
+      ? Math.max(0, (nowMs - startMs) / (dueMs - startMs))
+      : 0;
+  const pct = Math.max(shotPct, timePct);
   return {
     shotsSince,
-    since: lastService ?? agg.daily[0].day,
+    since,
     sinceIsService: !!lastService,
-    intervalShots: interval.shots,
-    bandLabel: interval.label,
-    press,
+    configuredLevel: savedLevel,
+    maintenanceLevel,
+    conditionTriggered,
+    intervalShots: rule.shots,
+    intervalMonths: rule.months,
+    dueDate,
+    shotPct,
+    timePct,
     pct,
     level: pct >= 1 ? 'due' : pct >= 0.8 ? 'soon' : 'ok',
   };

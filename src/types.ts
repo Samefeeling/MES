@@ -76,6 +76,11 @@ export interface ProductDieColor {
  *  Problems (red — known defect / do not run without checking). */
 export type ToolStatus = 'serviced' | 'in-service' | 'to-be-serviced' | 'problems';
 
+/** Preventive-maintenance policy assigned to one physical moulding tool.
+ *  The service is due at whichever limit is reached first: calendar age
+ *  or accumulated press cycles (shots). */
+export type ToolMaintenanceLevel = 'A' | 'B' | 'C';
+
 /** One row of PMD_DieMaster — the die ASSET register (one row per
  *  physical tool), maintained by the toolroom directly in SharePoint.
  *  PMD_ProductDieColor stays the part→die MAPPING; this list carries the
@@ -103,7 +108,7 @@ export interface DieMaster {
   dateStamp: string;
   /** LastServiceDate column — when the tool last came back from service.
    *  Stamped automatically when the app sets ToolStatus to Serviced;
-   *  also the preferred reset point for the tonnage service counter.
+   *  also the preferred reset point for the A/B/C service counter.
    *  '' when never recorded. */
   lastServiceDate: string;
   /** Available column — while the die is In service, the date the
@@ -112,6 +117,9 @@ export interface DieMaster {
   availableDate: string;
   /** '' when the ToolStatus cell is empty / unrecognised. */
   toolStatus: ToolStatus | '';
+  /** Supervisor-assigned preventive-maintenance policy. Empty on legacy
+   *  rows; the app applies the conservative site default (Level B). */
+  maintenanceLevel: ToolMaintenanceLevel | '';
 }
 
 /** Lifecycle of a die maintenance request (Fabrico-style work order):
@@ -327,6 +335,19 @@ export interface ProductionRecord {
   reopened?: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Lightweight canonical production header used by the mould service
+ *  counter. It deliberately excludes timelines/rejects so the Tool page
+ *  can load a year of shot history without downloading every slot event. */
+export interface ProductionCounterRecord {
+  machineCode: string;
+  shiftId: string;
+  jobNumber: string;
+  partNumber: string;
+  countStart: number | null;
+  countEnd: number | null;
+  cavities?: number;
 }
 
 export interface UserContext {

@@ -932,14 +932,30 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
    height so the two buttons read as a matched pair. */
 .die-mango-open.hd{padding:8px 14px;font-size:14px;border-width:1.5px}
 .die-req-note{margin:4px 0 10px;font-size:13px;color:var(--mu)}
-/* Tonnage service-rule reminders */
+/* Dual-trigger mould service plan (calendar OR shots). */
 .die-svc-badge{display:inline-block;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:800;white-space:nowrap;margin-left:4px}
 .die-svc-badge.due{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c}
 .die-svc-badge.soon{background:#fff7ed;border:1px solid #fdba74;color:#9a3412}
-.die-svc-none{font-size:13px;color:var(--mu)}
-.die-svc-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;background:#f8fafc;border:1px solid var(--bd);border-radius:8px;padding:8px 10px}
-.die-svc-line.due{border-color:#fecaca;background:#fef2f2}
-.die-svc-line.soon{border-color:#fdba74;background:#fff7ed}
+.die-svc-head{display:flex;align-items:center;gap:8px}
+.die-svc-head::first-letter{text-transform:none}
+.die-maint-level{display:inline-flex;align-items:center;border-radius:999px;padding:2px 9px;font-size:11px;font-weight:900;letter-spacing:.2px;text-transform:none;white-space:nowrap}
+.die-maint-level.level-a{background:#dbeafe;border:1px solid #93c5fd;color:#1e40af}
+.die-maint-level.level-b{background:#dcfce7;border:1px solid #86efac;color:#166534}
+.die-maint-level.level-c{background:#ffedd5;border:1px solid #fdba74;color:#9a3412}
+.die-maint-edit{margin-left:auto;border:1px solid #94a3b8;border-radius:7px;background:#fff;color:#334155;padding:4px 9px;font-size:11px;font-weight:800;cursor:pointer;text-transform:none;letter-spacing:0}
+.die-maint-edit:hover{background:#f1f5f9;border-color:#475569}
+.die-maint-opt .die-maint-level{font-size:13px;flex:0 0 auto}
+.die-maint-opt em{flex:1}
+.die-svc-none{font-size:13px;color:var(--mu);background:#f8fafc;border:1px solid var(--bd);border-radius:8px;padding:10px 12px;line-height:1.45}
+.die-svc-panel{display:grid;gap:8px;font-size:13px;background:#f8fafc;border:1px solid var(--bd);border-radius:10px;padding:10px 12px}
+.die-svc-panel.due{border-color:#fecaca;background:#fef2f2}
+.die-svc-panel.soon{border-color:#fdba74;background:#fff7ed}
+.die-svc-rule{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-bottom:4px;border-bottom:1px dashed var(--bd)}
+.die-svc-rule>span:not(.die-svc-flag):not(.die-svc-ok){color:var(--mu)}
+.die-svc-rule .die-svc-flag,.die-svc-rule .die-svc-ok{margin-left:auto}
+.die-svc-metric{display:grid;grid-template-columns:64px minmax(235px,auto) minmax(120px,1fr) 48px;gap:10px;align-items:center}
+.die-svc-kind{font-weight:900;color:#334155}
+.die-svc-detail{font-variant-numeric:tabular-nums;color:#475569}
 .die-svc-bar{flex:1;min-width:120px;height:12px;background:#e2e8f0;border-radius:6px;overflow:hidden}
 .die-svc-bar i{display:block;height:100%;border-radius:6px}
 .die-svc-bar i.ok{background:var(--gn)}
@@ -949,6 +965,14 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .die-svc-pct.due{color:var(--rd)}.die-svc-pct.soon{color:#b45309}.die-svc-pct.ok{color:var(--gn)}
 .die-svc-flag{font-weight:900;color:#b91c1c;font-size:12px;letter-spacing:.4px}
 .die-svc-flag.soon{color:#9a3412}
+.die-svc-ok{font-weight:800;color:var(--gn);font-size:12px}
+.die-svc-condition{border-left:3px solid #f59e0b;background:#fff7ed;color:#7c2d12;padding:6px 9px;border-radius:4px;line-height:1.4}
+.die-svc-foot{font-size:11px;color:var(--mu);line-height:1.35}
+@media(max-width:700px){
+  .die-svc-metric{grid-template-columns:58px 1fr 44px}
+  .die-svc-metric .die-svc-detail{grid-column:2/4}
+  .die-svc-metric .die-svc-bar{grid-column:2}
+}
 .die-req-details{display:grid;gap:5px;margin-top:7px}
 .die-req-detail{display:grid;grid-template-columns:112px minmax(0,1fr);gap:8px;font-size:13px;line-height:1.4}
 .die-req-detail b{color:var(--mu);font-size:11px;text-transform:uppercase;letter-spacing:.35px}

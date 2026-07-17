@@ -550,14 +550,13 @@ for the Plant/Equipment module):
    (Multi-line), `Contact`, `RequestedBy`, `Machine`, `JobNumber`,
    `MangoTicket`, `ClosedAt` (ISO text) — all free text, normalised on
    read.
-- **Preventive-service reminders** follow the furniture-mould tonnage
-  rule (100-150T: 100k · 210-350T: 50k · 450-560T: 20k · 650-850T: 10k ·
-  1000T+: 8k shots — bands in `src/core/die.ts` `SERVICE_BANDS`). The
-  shot counter resets at the newest **Done** maintenance request's
-  closed date, uses the strictest band among the presses the die ran
-  on, and goes ⏳ amber at 80% / 🔧 red past the interval. Dies never
-  serviced count from the window start (shown as "at least"). The
-  Done-request reset reads the mirrored Mango orders too (their
+- **Preventive-service reminders** use the A/B/C dual-trigger policy
+  documented under `PMD_DieMaster` below. The counter resets at the newer
+  of `LastServiceDate` and the newest **Done** maintenance request's
+  closed date, and goes ⏳ amber at 80% / 🔧 red when either its calendar
+  or shot limit is reached. A die never serviced counts from the first
+  day available in the independent maintenance ledger (shown as "at
+  least"). The Done-request reset reads mirrored Mango orders too (their
   completed date fills `closedAt`).
 
 ## PMD_DieChangeLog (die-change condition reports)
@@ -590,14 +589,16 @@ same row. If auto-provisioning is disallowed, add these five columns by hand.
 ## PMD_DieMaster (die asset register)
 
 Optional list, created by hand (2026-07), that feeds the Die Management
-table's **Status** column and the "Die master" block in the die detail
-popup. One row per physical tool; the toolroom maintains it directly in
-SharePoint (the app only reads it — a hard reload picks up edits).
+table's **Status** column, preventive-maintenance policy and the "Die
+master" block in the die detail popup. One row per physical tool; the
+toolroom maintains the asset facts in SharePoint. The app writes Status
+and Supervisor maintenance-policy changes.
 
 - Columns: `DieNumber` (may live in `Title` — both are probed),
   `DieDescription`, `Cavities`, `CycleTime`, `DieWeightKG`, `LeanReady`
   (Yes/No), `ToolInjectorPlate`, `ChangeOverIn`, `ChangeOverOut`,
-  `LifeCycle`, `DateStamp`, `ToolStatus`. Internal column names are
+  `LifeCycle`, `DateStamp`, `LastServiceDate`, `Available`, `ToolStatus`,
+  `MaintenanceLevel` (Single line text). Internal column names are
   resolved at read time from the list's own field map (display title →
   internal name), so renamed / re-created columns keep working — the
   resolution is logged to the console (`PMD_DieMaster field resolution`).
@@ -605,6 +606,34 @@ SharePoint (the app only reads it — a hard reload picks up edits).
   (green), **In service** (blue), **To be Serviced** (orange),
   **Problems** (red). Anything else / empty shows as "—". Sorting the
   Status column surfaces Problems first.
+- `MaintenanceLevel` values: **Level A** (12 months OR 50,000 shots),
+  **Level B** (3 months OR 15,000 shots), **Level C** (1 month OR 5,000
+  shots). The first limit reached is due. Blank legacy rows default to
+  Level B. Supervisors can change this value in the Die detail Service
+  Plan; the app creates the text column on the first save if it is absent
+  (that first Supervisor needs Manage Lists once). If auto-provisioning is
+  disallowed, add the column by hand.
+- Any component rated **2 (worn)** or **3 (damaged)** in the latest
+  `PMD_DieChangeLog` inspection overrides the configured policy to Level C
+  until a newer all-good inspection clears it.
+- The service shot counter reads a separate rolling 400-day production
+  header ledger, independent of the Tool page's 7/30/90-day analysis
+  filter. A service older than 400 days is already due under Level A, so
+  older shot detail cannot change the action. Production on the same
+  calendar date as `LastServiceDate` is included conservatively because
+  the source does not store service time-of-day.
+
+The exact A/B/C thresholds above are Resero's site policy. The model
+behind them is evidence-based rather than a claim that every mould has one
+universal interval: a 2025 injection-moulding case study recommends
+unit-specific preventive intervals based on reliability/availability data
+([Muhiu, Wakiru & Muchiri, DOI 10.24867/IJIEM-368](https://ijiemjournal.uns.ac.rs/index.php/ijiem/article/view/1526)),
+while Husky's OEM service model uses production/process monitoring and
+proactive diagnostics to act before performance loss
+([Husky services](https://www.husky.co/en/services/)). PMD operationalises
+that approach with usage (shots), elapsed time, and the latest physical
+condition inspection; review the thresholds against actual failure and
+service history after enough local data has accumulated.
 - A die missing from this list still shows in the table (usage comes
   from `PMD_ProductDieColor` + production) — only its Status is "—".
 

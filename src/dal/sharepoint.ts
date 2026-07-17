@@ -14,6 +14,7 @@ import type {
   PlanningFilter,
   PlanningOrder,
   ProductDieColor,
+  ProductionCounterRecord,
   ProductionFilter,
   ProductionRecord,
   RejectCategory,
@@ -32,6 +33,7 @@ import {
   DIE_CONDITION_META,
   dieChangeEventKey,
   parseDieCondition,
+  parseToolMaintenanceLevel,
   parseToolStatus,
   TOOL_STATUS_META,
 } from '../core/die';
@@ -325,6 +327,7 @@ const DEFAULT_FIELDS = {
     lastServiceDate: 'LastServiceDate',
     availableDate: 'Available',
     toolStatus: 'ToolStatus',
+    maintenanceLevel: 'MaintenanceLevel',
   },
   dieChangeLog: {
     // Internal names straight from the list schema export (2026-07).
@@ -495,7 +498,9 @@ export class SharePointDataLayer implements PmdDataLayer {
   private dieMasterMeta: {
     keys: Record<string, string>;
     idByDie: Map<string, number>;
+    maintenanceLevelExists: boolean;
   } | null = null;
+  private dieMasterMaintenanceLevelReady: Promise<void> | null = null;
   /**
    * Short-TTL `jobNumber → partNumber` map used by pushLiveSnapshot to
    * stamp PartNum onto every PMD_LiveStatus mirror. Without the cache,
@@ -1085,6 +1090,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         lastServiceDate: resolve(F.lastServiceDate),
         availableDate: resolve(F.availableDate),
         toolStatus: resolve(F.toolStatus),
+        maintenanceLevel: resolve(F.maintenanceLevel),
       };
       console.info('[pmd] PMD_DieMaster field resolution:', K);
       const rows = await this.getAllItems<Record<string, unknown>>(LISTS.dieMaster);
@@ -1105,6 +1111,8 @@ export class SharePointDataLayer implements PmdDataLayer {
             .map((r) => [str(r[dieKey]).trim().toUpperCase(), getId(r)] as const)
             .filter(([die, id]) => die && id > 0),
         ),
+        maintenanceLevelExists:
+          internals.has(F.maintenanceLevel) || byTitle.has(normName(F.maintenanceLevel)),
       };
       const out = rows
         .map((r) => ({
@@ -1122,6 +1130,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           lastServiceDate: str(r[K.lastServiceDate]),
           availableDate: str(r[K.availableDate]),
           toolStatus: parseToolStatus(str(r[K.toolStatus])),
+          maintenanceLevel: parseToolMaintenanceLevel(str(r[K.maintenanceLevel])),
         }))
         .filter((m) => m.dieNumber);
       const withStatus = out.filter((m) => m.toolStatus).length;
@@ -1153,9 +1162,65 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
   }
 
+  /** MaintenanceLevel was introduced after the hand-built DieMaster
+   *  list. Create the single-line field on the first Supervisor save so
+   *  existing deployments upgrade in place; if Manage Lists is blocked,
+   *  surface an actionable error instead of pretending the policy stuck. */
+  private async ensureDieMasterMaintenanceLevelField(): Promise<void> {
+    if (this.dieMasterMeta?.maintenanceLevelExists) return;
+    if (this.dieMasterMaintenanceLevelReady) return this.dieMasterMaintenanceLevelReady;
+    this.dieMasterMaintenanceLevelReady = (async () => {
+      const meta = this.dieMasterMeta;
+      if (!meta) throw new Error('PMD_DieMaster metadata is not loaded');
+      const wanted = this.F.dieMaster.maintenanceLevel;
+      const fieldsUrl = `${this.listUrl(LISTS.dieMaster)}/fields`;
+      const read = async (): Promise<Array<{ Title: string; InternalName: string }>> => {
+        const env = await this.getJson<{
+          d: { results: Array<{ Title: string; InternalName: string }> };
+        }>(`${fieldsUrl}?$filter=Hidden eq false&$select=Title,InternalName`);
+        return env.d.results;
+      };
+      const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const resolve = (fields: Array<{ Title: string; InternalName: string }>): string | null =>
+        fields.find((f) => f.InternalName === wanted)?.InternalName ??
+        fields.find((f) => norm(f.Title) === norm(wanted))?.InternalName ??
+        null;
+      let internal = resolve(await read());
+      if (!internal) {
+        try {
+          await this.post(fieldsUrl, {
+            __metadata: { type: 'SP.Field' },
+            Title: wanted,
+            FieldTypeKind: 2, // single-line text: "Level A" / B / C
+          });
+        } catch (e) {
+          // Another session may have created it between GET and POST.
+          internal = resolve(await read());
+          if (!internal) {
+            throw new Error(
+              `PMD_DieMaster needs a single-line '${wanted}' column (${(e as Error).message}). ` +
+                'Add it in List settings or grant Manage Lists once.',
+            );
+          }
+        }
+        internal ??= resolve(await read());
+      }
+      if (!internal) throw new Error(`PMD_DieMaster column '${wanted}' could not be resolved`);
+      meta.keys.maintenanceLevel = internal;
+      meta.maintenanceLevelExists = true;
+      console.info(`[pmd] PMD_DieMaster '${wanted}' column ready as ${internal}`);
+    })().catch((e) => {
+      this.dieMasterMaintenanceLevelReady = null;
+      throw e;
+    });
+    return this.dieMasterMaintenanceLevelReady;
+  }
+
   async updateDieMaster(
     dieNumber: string,
-    patch: Partial<Pick<DieMaster, 'toolStatus' | 'dateStamp' | 'lastServiceDate'>>,
+    patch: Partial<
+      Pick<DieMaster, 'toolStatus' | 'dateStamp' | 'lastServiceDate' | 'maintenanceLevel'>
+    >,
   ): Promise<void> {
     // listDieMaster resolves the internal names + item ids; make sure it
     // has run (it caches, so this is a no-op after the first call).
@@ -1164,6 +1229,9 @@ export class SharePointDataLayer implements PmdDataLayer {
     const key = dieNumber.trim().toUpperCase();
     const id = meta?.idByDie.get(key);
     if (!meta || !id) throw new Error(`No PMD_DieMaster row for die ${dieNumber}`);
+    if (patch.maintenanceLevel !== undefined && !meta.maintenanceLevelExists) {
+      await this.ensureDieMasterMaintenanceLevelField();
+    }
     const body: Record<string, unknown> = {
       __metadata: { type: await this.itemType(LISTS.dieMaster) },
     };
@@ -1175,6 +1243,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (patch.dateStamp !== undefined) body[meta.keys.dateStamp] = patch.dateStamp;
     if (patch.lastServiceDate !== undefined)
       body[meta.keys.lastServiceDate] = patch.lastServiceDate;
+    if (patch.maintenanceLevel !== undefined)
+      body[meta.keys.maintenanceLevel] = patch.maintenanceLevel
+        ? `Level ${patch.maintenanceLevel}`
+        : '';
     await this.post(`${this.listUrl(LISTS.dieMaster)}/items(${id})`, body, '*');
     // Keep the read cache coherent so a re-mount shows the new state
     // without a hard reload.
@@ -1184,6 +1256,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         if (patch.toolStatus !== undefined) row.toolStatus = patch.toolStatus;
         if (patch.dateStamp !== undefined) row.dateStamp = patch.dateStamp;
         if (patch.lastServiceDate !== undefined) row.lastServiceDate = patch.lastServiceDate;
+        if (patch.maintenanceLevel !== undefined) row.maintenanceLevel = patch.maintenanceLevel;
       }
     }
   }
@@ -1867,6 +1940,91 @@ export class SharePointDataLayer implements PmdDataLayer {
 
   private cacheKey(mc: string, sid: string, job: string): string {
     return `${mc}|${sid}|${job}`;
+  }
+
+  /** Lightweight production-header read for the mould service planner.
+   *  It applies the same signed-over-live precedence as listProduction,
+   *  but intentionally skips PMD_Rejects, breakdown timelines and the
+   *  16-slot expansion. That makes a 400-day shot ledger practical. */
+  async listProductionCounters(filter: ProductionFilter): Promise<ProductionCounterRecord[]> {
+    const [prodHeaders, liveHeaders] = await Promise.all([
+      this.fetchHeaders(LISTS.production, filter),
+      this.fetchHeaders(LISTS.liveStatus, filter).catch((e) => {
+        console.warn('[pmd] service counters: PMD_LiveStatus read failed:', e);
+        return [] as HeaderRow[];
+      }),
+    ]);
+    const matches = (h: HeaderRow): boolean => {
+      const sid = `${h.date}-${h.shift}`;
+      if (filter.shiftId && sid !== filter.shiftId) return false;
+      if (filter.shiftIdFrom && sid < filter.shiftIdFrom) return false;
+      if (filter.shiftIdTo && sid > filter.shiftIdTo) return false;
+      if (filter.machineCode && h.machineCode !== filter.machineCode) return false;
+      if (filter.jobNumber && h.jobNumber !== filter.jobNumber) return false;
+      return true;
+    };
+    const signed = new Map<string, HeaderRow>();
+    const chosen = new Map<string, HeaderRow>();
+    for (const h of prodHeaders) {
+      if (!matches(h)) continue;
+      const key = this.cacheKey(h.machineCode, `${h.date}-${h.shift}`, h.jobNumber);
+      signed.set(key, h);
+      chosen.set(key, h);
+    }
+    const now = new Date();
+    for (const h of liveHeaders) {
+      if (!matches(h)) continue;
+      const sid = `${h.date}-${h.shift}`;
+      const key = this.cacheKey(h.machineCode, sid, h.jobNumber);
+      if (
+        !this.unlockedTuples.has(key) &&
+        (shiftEndedLongAgo(sid, now, LIVE_HARD_CAP_MS) || isStaleLiveHeader(h, now))
+      )
+        continue;
+      const prod = signed.get(key);
+      if (!prod) {
+        chosen.set(key, h);
+        continue;
+      }
+      // A fresh live correction may replace its Reopened signed header;
+      // an ordinary live shadow never double-counts a signed tuple.
+      const pmod = prod.modified ? Date.parse(prod.modified) : NaN;
+      const lmod = h.modified ? Date.parse(h.modified) : NaN;
+      if (prod.reopened && !Number.isNaN(lmod) && (Number.isNaN(pmod) || lmod > pmod))
+        chosen.set(key, h);
+    }
+    const counters = new Map<string, ProductionCounterRecord>();
+    for (const [key, h] of chosen) {
+      counters.set(key, {
+        machineCode: h.machineCode,
+        shiftId: `${h.date}-${h.shift}`,
+        jobNumber: h.jobNumber,
+        partNumber: h.partNumber,
+        countStart: h.countStart,
+        countEnd: h.countEnd,
+        cavities: h.cavities,
+      });
+    }
+    // Counts being edited on this device can be newer than the 60-second
+    // live mirror. Only locally-authored/unlocked tuples may override;
+    // spectator cache copies are deliberately ignored.
+    for (const rows of this.editCache.values()) {
+      const r = rows.find((x) => x.slotIndex === 0);
+      if (!r || !productionMatches(r, filter)) continue;
+      const key = this.cacheKey(r.machineCode, r.shiftId, r.jobNumber);
+      if (!this.dirtyTuples.has(key) && !this.unlockedTuples.has(key)) continue;
+      if (signed.has(key) && !this.unlockedTuples.has(key)) continue;
+      counters.set(key, {
+        machineCode: r.machineCode,
+        shiftId: r.shiftId,
+        jobNumber: r.jobNumber,
+        partNumber: r.partNumber,
+        countStart: r.countStart,
+        countEnd: r.countEnd,
+        cavities: r.cavities,
+      });
+    }
+    return [...counters.values()];
   }
 
   async listProduction(filter: ProductionFilter): Promise<ProductionRecord[]> {

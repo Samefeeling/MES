@@ -10,6 +10,7 @@ import type {
   PlanningFilter,
   PlanningOrder,
   ProductDieColor,
+  ProductionCounterRecord,
   ProductionFilter,
   ProductionRecord,
   RejectCategory,
@@ -43,7 +44,9 @@ export interface PmdDataLayer {
    *  Status badge is display-only. */
   updateDieMaster?(
     dieNumber: string,
-    patch: Partial<Pick<DieMaster, 'toolStatus' | 'dateStamp' | 'lastServiceDate'>>,
+    patch: Partial<
+      Pick<DieMaster, 'toolStatus' | 'dateStamp' | 'lastServiceDate' | 'maintenanceLevel'>
+    >,
   ): Promise<void>;
 
   // Die maintenance (Trace → 🛠 Die Management). Backed by the
@@ -106,6 +109,10 @@ export interface PmdDataLayer {
 
   // Production (hot path)
   listProduction(filter: ProductionFilter): Promise<ProductionRecord[]>;
+  /** Canonical slot-0 counters only. The Tool service planner uses this
+   *  lightweight path for its rolling annual ledger so it does not have
+   *  to download a year of status/reject event detail. */
+  listProductionCounters?(filter: ProductionFilter): Promise<ProductionCounterRecord[]>;
   /** Signed-off history only — reads PMD_Production exclusively, with no
    *  in-progress PMD_LiveStatus mirror and no local editCache blended in.
    *  The Trace "Job Number Search" uses this so a historical lookup

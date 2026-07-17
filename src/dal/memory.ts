@@ -10,6 +10,7 @@ import type {
   PlanningFilter,
   PlanningOrder,
   ProductDieColor,
+  ProductionCounterRecord,
   ProductionFilter,
   ProductionRecord,
   RejectCategory,
@@ -110,7 +111,9 @@ export class MemoryDataLayer implements PmdDataLayer {
 
   async updateDieMaster(
     dieNumber: string,
-    patch: Partial<Pick<DieMaster, 'toolStatus' | 'dateStamp' | 'lastServiceDate'>>,
+    patch: Partial<
+      Pick<DieMaster, 'toolStatus' | 'dateStamp' | 'lastServiceDate' | 'maintenanceLevel'>
+    >,
   ): Promise<void> {
     const key = dieNumber.trim().toUpperCase();
     const row = this.dieMaster.find((m) => m.dieNumber.trim().toUpperCase() === key);
@@ -118,6 +121,7 @@ export class MemoryDataLayer implements PmdDataLayer {
     if (patch.toolStatus !== undefined) row.toolStatus = patch.toolStatus;
     if (patch.dateStamp !== undefined) row.dateStamp = patch.dateStamp;
     if (patch.lastServiceDate !== undefined) row.lastServiceDate = patch.lastServiceDate;
+    if (patch.maintenanceLevel !== undefined) row.maintenanceLevel = patch.maintenanceLevel;
   }
 
   // ---- die maintenance (PMD_DieMaintenance parity) ---------------------
@@ -241,6 +245,24 @@ export class MemoryDataLayer implements PmdDataLayer {
     if (filter.shiftIdFrom) rows = rows.filter((r) => r.shiftId >= filter.shiftIdFrom!);
     if (filter.shiftIdTo) rows = rows.filter((r) => r.shiftId <= filter.shiftIdTo!);
     return MemoryDataLayer.clone(rows);
+  }
+
+  async listProductionCounters(filter: ProductionFilter): Promise<ProductionCounterRecord[]> {
+    const rows = await this.listProduction(filter);
+    const byTuple = new Map<string, ProductionRecord>();
+    for (const r of rows) {
+      if (r.slotIndex !== 0) continue;
+      byTuple.set(`${r.machineCode}|${r.shiftId}|${r.jobNumber}`, r);
+    }
+    return [...byTuple.values()].map((r) => ({
+      machineCode: r.machineCode,
+      shiftId: r.shiftId,
+      jobNumber: r.jobNumber,
+      partNumber: r.partNumber,
+      countStart: r.countStart,
+      countEnd: r.countEnd,
+      cavities: r.cavities,
+    }));
   }
 
   /** Reject Pareto derived from the in-memory records' per-code reject

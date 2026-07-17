@@ -1,17 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  aggregateDieServiceUsage,
   aggregateDies,
   buildDieTrend,
   dieHealth,
   dieServiceStatus,
   goodByJob,
   latestConditionByDie,
-  machineTonnage,
   nextPlannedFor,
   parseDieCondition,
+  parseToolMaintenanceLevel,
   parseToolStatus,
-  serviceIntervalFor,
+  TOOL_MAINTENANCE_RULES,
   TOOL_STATUS_META,
 } from '../src/core/die';
 import { MemoryDataLayer } from '../src/dal/memory';
@@ -199,22 +200,15 @@ describe('aggregateDies', () => {
   });
 });
 
-describe('tonnage service rule', () => {
-  it('parses tonnage from machine codes (T and C suffixes, none for lines)', () => {
-    expect(machineTonnage('850T')).toBe(850);
-    expect(machineTonnage('320C')).toBe(320);
-    expect(machineTonnage('1600T')).toBe(1600);
-    expect(machineTonnage('Batt1')).toBeNull();
-    expect(machineTonnage('HS')).toBeNull();
-  });
-
-  it('maps tonnages onto the service-interval bands', () => {
-    expect(serviceIntervalFor(125).shots).toBe(100_000); // 100T-150T
-    expect(serviceIntervalFor(320).shots).toBe(50_000); // 210T-350T
-    expect(serviceIntervalFor(550).shots).toBe(20_000); // 450T-560T
-    expect(serviceIntervalFor(850).shots).toBe(10_000); // 650T-850T
-    expect(serviceIntervalFor(1000).shots).toBe(8_000); // 1000T+
-    expect(serviceIntervalFor(1600).shots).toBe(8_000); // extended band
+describe('moulding-tool service policy', () => {
+  it('defines and parses the Supervisor A/B/C rules', () => {
+    expect(TOOL_MAINTENANCE_RULES.A).toMatchObject({ months: 12, shots: 50_000 });
+    expect(TOOL_MAINTENANCE_RULES.B).toMatchObject({ months: 3, shots: 15_000 });
+    expect(TOOL_MAINTENANCE_RULES.C).toMatchObject({ months: 1, shots: 5_000 });
+    expect(parseToolMaintenanceLevel('Level A')).toBe('A');
+    expect(parseToolMaintenanceLevel('quarterly')).toBe('B');
+    expect(parseToolMaintenanceLevel('Monthly')).toBe('C');
+    expect(parseToolMaintenanceLevel('legacy nonsense')).toBe('');
   });
 
   it('computes median run size and splits rejects by machine status', () => {
@@ -270,7 +264,7 @@ describe('tonnage service rule', () => {
     expect(dies.find((d) => d.dieNumber === 'DIE-2')!.lastDieChange).toBeNull();
   });
 
-  it('counts shots since the last DONE service and flags soon/due', () => {
+  it('counts the service day, uses the newest reset source, and applies either trigger', () => {
     const master = [dc('P-A', 'DIE-1')];
     const mkRec = (day: string, shots: number) =>
       rec({
@@ -283,61 +277,108 @@ describe('tonnage service rule', () => {
         countStart: 0,
         countEnd: shots,
       });
-    // 6k shots before the service, 9k after → counter must read 9k.
-    const records = [mkRec('2026-07-01', 6000), mkRec('2026-07-05', 4000), mkRec('2026-07-08', 5000)];
+    // 6k before service, 4k on the service date, 1k after. PMD stores no
+    // service time-of-day, so the service date must be included instead of
+    // disappearing as Die #280 did.
+    const records = [mkRec('2026-07-01', 6000), mkRec('2026-07-05', 4000), mkRec('2026-07-08', 1000)];
     const done = req({
       id: 9,
       dieNumber: 'DIE-1',
       status: 'done',
-      closedAt: '2026-07-02T10:00:00Z',
+      closedAt: '2026-07-05T10:00:00Z',
     });
     const [d1] = aggregateDies(master, records, [done]);
-    const s = dieServiceStatus(d1, [done])!;
-    expect(s.intervalShots).toBe(10_000); // 850T band
-    expect(s.shotsSince).toBe(9000);
+    const s = dieServiceStatus(d1, [done], undefined, 'B', false, '2026-07-10')!;
+    expect(s.intervalShots).toBe(15_000);
+    expect(s.intervalMonths).toBe(3);
+    expect(s.shotsSince).toBe(5000);
     expect(s.sinceIsService).toBe(true);
-    expect(s.since).toBe('2026-07-02');
-    expect(s.level).toBe('soon'); // 90% of 10k
+    expect(s.since).toBe('2026-07-05');
+    expect(s.level).toBe('ok');
 
-    // No completed service → counts everything, flagged as window-start.
-    const s2 = dieServiceStatus(d1, [])!;
-    expect(s2.shotsSince).toBe(15_000);
-    expect(s2.sinceIsService).toBe(false);
-    expect(s2.level).toBe('due');
+    // The same 5k is immediately due under Level C's shot trigger.
+    const c = dieServiceStatus(d1, [done], undefined, 'C', false, '2026-07-10')!;
+    expect(c.shotPct).toBe(1);
+    expect(c.level).toBe('due');
 
     // PMD_DieMaster.LastServiceDate NEWER than the work order wins:
-    // counter restarts there (only the 07-08 run of 5k remains).
-    const s3 = dieServiceStatus(d1, [done], '2026-07-06T00:00:00Z')!;
-    expect(s3.shotsSince).toBe(5000);
+    // counter restarts there (only the 07-08 run of 1k remains).
+    const s3 = dieServiceStatus(d1, [done], '2026-07-06T00:00:00Z', 'B', false, '2026-07-10')!;
+    expect(s3.shotsSince).toBe(1000);
     expect(s3.since).toBe('2026-07-06');
     expect(s3.sinceIsService).toBe(true);
 
     // …and an OLDER LastServiceDate defers to the newer work order.
-    const s4 = dieServiceStatus(d1, [done], '2026-06-20T00:00:00Z')!;
-    expect(s4.since).toBe('2026-07-02');
-    expect(s4.shotsSince).toBe(9000);
+    const s4 = dieServiceStatus(d1, [done], '2026-06-20T00:00:00Z', 'B', false, '2026-07-10')!;
+    expect(s4.since).toBe('2026-07-05');
+    expect(s4.shotsSince).toBe(5000);
 
-    // LastServiceDate alone (no work orders) is a real service marker.
-    const s5 = dieServiceStatus(d1, [], '2026-07-06T00:00:00Z')!;
-    expect(s5.shotsSince).toBe(5000);
-    expect(s5.sinceIsService).toBe(true);
+    // No service marker means the first ledger date is an "at least" base.
+    const s5 = dieServiceStatus(d1, [], undefined, 'B', false, '2026-07-10')!;
+    expect(s5.shotsSince).toBe(11_000);
+    expect(s5.since).toBe('2026-07-01');
+    expect(s5.sinceIsService).toBe(false);
   });
 
-  it('uses the STRICTEST band among the presses the die ran on and skips no-rule lines', () => {
-    const master = [dc('P-A', 'DIE-1'), dc('P-B', 'DIE-2')];
-    const records = [
-      // DIE-1 ran on 125T (100k rule) AND 1600T (8k rule) → 8k governs.
-      rec({ machineCode: '125T', shiftId: '2026-07-08-Day', jobNumber: 'J1', slotIndex: 0, statusCode: 'R', partNumber: 'P-A', countStart: 0, countEnd: 5000 }),
-      rec({ machineCode: '1600T', shiftId: '2026-07-09-Day', jobNumber: 'J2', slotIndex: 0, statusCode: 'R', partNumber: 'P-A', countStart: 0, countEnd: 4000 }),
-      // DIE-2 only ran on Batt1 → no tonnage rule → null.
-      rec({ machineCode: 'Batt1', shiftId: '2026-07-09-Day', jobNumber: 'J3', slotIndex: 0, statusCode: 'R', partNumber: 'P-B', countStart: 0, countEnd: 9999 }),
-    ];
-    const dies = aggregateDies(master, records, []);
-    const s1 = dieServiceStatus(dies.find((d) => d.dieNumber === 'DIE-1')!, [])!;
-    expect(s1.intervalShots).toBe(8_000);
-    expect(s1.press).toBe('1600T');
-    expect(s1.level).toBe('due'); // 9k ≥ 8k
-    expect(dieServiceStatus(dies.find((d) => d.dieNumber === 'DIE-2')!, [])).toBeNull();
+  it('keeps calendar tracking with zero production and clamps month-end due dates', () => {
+    const zero = { dieNumber: '280', daily: [] };
+    const quarterly = dieServiceStatus(
+      zero,
+      [],
+      '2026-04-10T00:00:00Z',
+      'B',
+      false,
+      '2026-07-10',
+    )!;
+    expect(quarterly.shotsSince).toBe(0);
+    expect(quarterly.dueDate).toBe('2026-07-10');
+    expect(quarterly.timePct).toBe(1);
+    expect(quarterly.level).toBe('due');
+
+    const monthEnd = dieServiceStatus(
+      zero,
+      [],
+      '2026-01-31T00:00:00Z',
+      'C',
+      false,
+      '2026-02-28',
+    )!;
+    expect(monthEnd.dueDate).toBe('2026-02-28');
+    expect(monthEnd.level).toBe('due');
+  });
+
+  it('forces Level C when the latest condition has any rating above 1', () => {
+    const usage = { dieNumber: '117', daily: [{ day: '2026-07-01', shots: 4000 }] };
+    const normal = dieServiceStatus(usage, [], undefined, 'A', false, '2026-07-10')!;
+    expect(normal.maintenanceLevel).toBe('A');
+    expect(normal.level).toBe('ok');
+    const forced = dieServiceStatus(usage, [], undefined, 'A', true, '2026-07-10')!;
+    expect(forced.configuredLevel).toBe('A');
+    expect(forced.maintenanceLevel).toBe('C');
+    expect(forced.conditionTriggered).toBe(true);
+    expect(forced.intervalShots).toBe(5000);
+    expect(forced.level).toBe('soon'); // 4k / 5k = 80%
+  });
+
+  it('builds an independent daily shot ledger and de-duplicates tuple snapshots', () => {
+    const usage = aggregateDieServiceUsage(
+      [dc('P-A', '280')],
+      [
+        { machineCode: '1600T', shiftId: '2026-07-05-Day', jobNumber: 'J1', partNumber: 'P-A', countStart: 0, countEnd: 3000 },
+        // Same canonical tuple seen twice: take the fresher/larger counter,
+        // never sum both snapshots.
+        { machineCode: '1600T', shiftId: '2026-07-05-Day', jobNumber: 'J1', partNumber: 'P-A', countStart: 0, countEnd: 4000 },
+        { machineCode: 'Batt1', shiftId: '2026-07-06-Night', jobNumber: 'J2', partNumber: 'P-A', countStart: 100, countEnd: 600 },
+      ],
+    );
+    expect(usage.get('280')?.daily).toEqual([
+      { day: '2026-07-05', shots: 4000 },
+      { day: '2026-07-06', shots: 500 },
+    ]);
+  });
+
+  it('returns null only when both service baseline and production are absent', () => {
+    expect(dieServiceStatus({ dieNumber: 'EMPTY', daily: [] }, [])).toBeNull();
   });
 });
 
@@ -685,6 +726,7 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
     expect(d3597.cavities).toBe(2);
     expect(d3597.toolStatus).toBe('problems');
     expect(d3597.lifeCycle).toBe(1_000_000);
+    expect(d3597.maintenanceLevel).toBe('C');
     // The recently serviced die carries a LastServiceDate.
     expect(master.find((m) => m.dieNumber === 'DIE-1422')!.lastServiceDate).not.toBe('');
   });
@@ -846,12 +888,14 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
       toolStatus: 'serviced',
       dateStamp: '2026-07-13T02:00:00Z',
       lastServiceDate: '2026-07-13T02:00:00Z',
+      maintenanceLevel: 'A',
     });
     const master = await dal.listDieMaster();
     const row = master.find((m) => m.dieNumber === 'DIE-0091')!;
     expect(row.toolStatus).toBe('serviced');
     expect(row.dateStamp).toBe('2026-07-13T02:00:00Z');
     expect(row.lastServiceDate).toBe('2026-07-13T02:00:00Z');
+    expect(row.maintenanceLevel).toBe('A');
     await expect(dal.updateDieMaster('NOPE', { toolStatus: 'problems' })).rejects.toThrow();
   });
 });
