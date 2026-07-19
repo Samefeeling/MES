@@ -33,7 +33,6 @@ import {
   DIE_CONDITION_META,
   dieChangeEventKey,
   parseDieCondition,
-  parseToolMaintenanceLevel,
   parseToolStatus,
   TOOL_STATUS_META,
 } from '../core/die';
@@ -327,6 +326,8 @@ const DEFAULT_FIELDS = {
     lastServiceDate: 'LastServiceDate',
     availableDate: 'Available',
     toolStatus: 'ToolStatus',
+    // Multi-line text: the die's customised multi-level PM plan
+    // (`L2 | 10,000 shots | task; task` per line). Empty = default plan.
     maintenanceLevel: 'MaintenanceLevel',
   },
   dieChangeLog: {
@@ -1130,7 +1131,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           lastServiceDate: str(r[K.lastServiceDate]),
           availableDate: str(r[K.availableDate]),
           toolStatus: parseToolStatus(str(r[K.toolStatus])),
-          maintenanceLevel: parseToolMaintenanceLevel(str(r[K.maintenanceLevel])),
+          maintenanceLevel: str(r[K.maintenanceLevel]),
         }))
         .filter((m) => m.dieNumber);
       const withStatus = out.filter((m) => m.toolStatus).length;
@@ -1163,9 +1164,9 @@ export class SharePointDataLayer implements PmdDataLayer {
   }
 
   /** MaintenanceLevel was introduced after the hand-built DieMaster
-   *  list. Create the single-line field on the first Supervisor save so
-   *  existing deployments upgrade in place; if Manage Lists is blocked,
-   *  surface an actionable error instead of pretending the policy stuck. */
+   *  list. Create the multi-line text field on the first Supervisor save
+   *  so existing deployments upgrade in place; if Manage Lists is blocked,
+   *  surface an actionable error instead of pretending the plan stuck. */
   private async ensureDieMasterMaintenanceLevelField(): Promise<void> {
     if (this.dieMasterMeta?.maintenanceLevelExists) return;
     if (this.dieMasterMaintenanceLevelReady) return this.dieMasterMaintenanceLevelReady;
@@ -1191,14 +1192,14 @@ export class SharePointDataLayer implements PmdDataLayer {
           await this.post(fieldsUrl, {
             __metadata: { type: 'SP.Field' },
             Title: wanted,
-            FieldTypeKind: 2, // single-line text: "Level A" / B / C
+            FieldTypeKind: 3, // Note (multi-line text): one PM level per line
           });
         } catch (e) {
           // Another session may have created it between GET and POST.
           internal = resolve(await read());
           if (!internal) {
             throw new Error(
-              `PMD_DieMaster needs a single-line '${wanted}' column (${(e as Error).message}). ` +
+              `PMD_DieMaster needs a multi-line text '${wanted}' column (${(e as Error).message}). ` +
                 'Add it in List settings or grant Manage Lists once.',
             );
           }
@@ -1244,9 +1245,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (patch.lastServiceDate !== undefined)
       body[meta.keys.lastServiceDate] = patch.lastServiceDate;
     if (patch.maintenanceLevel !== undefined)
-      body[meta.keys.maintenanceLevel] = patch.maintenanceLevel
-        ? `Level ${patch.maintenanceLevel}`
-        : '';
+      body[meta.keys.maintenanceLevel] = patch.maintenanceLevel;
     await this.post(`${this.listUrl(LISTS.dieMaster)}/items(${id})`, body, '*');
     // Keep the read cache coherent so a re-mount shows the new state
     // without a hard reload.

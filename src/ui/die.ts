@@ -20,7 +20,6 @@ import type {
   PlanningOrder,
   ProductDieColor,
   ProductionCounterRecord,
-  ToolMaintenanceLevel,
   ToolStatus,
 } from '../types';
 import {
@@ -28,12 +27,15 @@ import {
   aggregateDies,
   buildDieTrend,
   DEFAULT_TOOL_MAINTENANCE_LEVEL,
+  defaultPmPlanText,
   DIE_CONDITION_META,
   dieHealth,
   dieServiceStatus,
   goodByJob,
   latestConditionByDie,
   nextPlannedFor,
+  parsePmPlan,
+  pmShotLevel,
   TOOL_MAINTENANCE_RULES,
   TOOL_STATUS_META,
   type DieAgg,
@@ -44,8 +46,8 @@ import {
 } from '../core/die';
 import { closeModal, escapeHtml, openModal } from './modal';
 import { toast } from './toast';
-import { STATUS_MAP } from '../core/status';
 import { isSupervisor } from './supervisor-auth';
+import { STATUS_MAP } from '../core/status';
 
 /** 'smart' = the aggregate's attention-first order (open requests, then
  *  reject-%, then shots). Any other key is a user-picked column sort. */
@@ -137,11 +139,14 @@ function svcFor(d: DieAgg): DieServiceStatus | null {
   const key = d.dieNumber.trim().toUpperCase();
   const m = masterFor(d.dieNumber);
   const usage = S!.serviceUsageByDie.get(key) ?? d;
+  // MaintenanceLevel now stores the multi-level PM plan text, so the
+  // dual-trigger rule always starts from the site baseline; a worn/
+  // damaged latest inspection still escalates it.
   return dieServiceStatus(
     usage,
     S!.requests,
     m?.lastServiceDate || undefined,
-    m?.maintenanceLevel || DEFAULT_TOOL_MAINTENANCE_LEVEL,
+    DEFAULT_TOOL_MAINTENANCE_LEVEL,
     (condFor(d.dieNumber)?.flags.length ?? 0) > 0,
     isoDay(new Date()),
   );
@@ -152,9 +157,9 @@ function svcTitle(s: DieServiceStatus): string {
     ? `since service on ${s.since}`
     : `since ${s.since} (first ledger record — no completed service on record, so this is AT LEAST)`;
   const override = s.conditionTriggered
-    ? ` · Die Change Log rating >1 forces Level C (configured Level ${s.configuredLevel})`
+    ? ` · Die Change Log rating >1 escalates the rule to ${TOOL_MAINTENANCE_RULES.C.label}`
     : '';
-  return `Level ${s.maintenanceLevel}: ${s.intervalMonths} month${s.intervalMonths === 1 ? '' : 's'} OR ${s.intervalShots.toLocaleString()} shots, whichever comes first · ${s.shotsSince.toLocaleString()} shots ${sinceTxt} (${(s.shotPct * 100).toFixed(0)}%) · calendar due ${s.dueDate} (${(s.timePct * 100).toFixed(0)}%)${override}`;
+  return `Service rule: ${s.intervalMonths} month${s.intervalMonths === 1 ? '' : 's'} OR ${s.intervalShots.toLocaleString()} shots, whichever comes first · ${s.shotsSince.toLocaleString()} shots ${sinceTxt} (${(s.shotPct * 100).toFixed(0)}%) · calendar due ${s.dueDate} (${(s.timePct * 100).toFixed(0)}%)${override}`;
 }
 
 /** "2026-07-12T07:00:00" → "07-12 07:00" (planned starts are local ISO). */
@@ -1199,67 +1204,6 @@ function openStatusPicker(dieNumber: string): void {
 }
 
 // ---------------------------------------------------------------------
-// Preventive-maintenance policy picker. Unlike ordinary floor actions,
-// changing the A/B/C policy is Supervisor-only and is enforced here even
-// if somebody manufactures a data attribute in DevTools.
-
-function openMaintenanceLevelPicker(dieNumber: string): void {
-  if (!isSupervisor()) {
-    toast('Supervisor mode is required to change a maintenance level.', 'err');
-    return;
-  }
-  const m = masterFor(dieNumber);
-  if (!m || !dalRef.updateDieMaster) {
-    toast(`${dieNumber} is not registered in PMD_DieMaster.`, 'err');
-    return;
-  }
-  const current = m.maintenanceLevel || DEFAULT_TOOL_MAINTENANCE_LEVEL;
-  const opts = (['A', 'B', 'C'] as ToolMaintenanceLevel[])
-    .map((level) => {
-      const rule = TOOL_MAINTENANCE_RULES[level];
-      const isCurrent = current === level;
-      return `<button class="die-st-opt die-maint-opt${isCurrent ? ' cur' : ''}" data-die-maint-choice="${level}">
-        <span class="die-maint-level level-${level.toLowerCase()}">Level ${level}</span>
-        <em>${rule.months === 12 ? 'Annual' : rule.months === 3 ? 'Quarterly' : 'Monthly'} OR ${rule.shots.toLocaleString()} shots — first limit wins</em>
-        ${isCurrent ? `<b>${m.maintenanceLevel ? 'current' : 'default'}</b>` : ''}
-      </button>`;
-    })
-    .join('');
-  openModal(`<div class="die-st-pick die-maint-pick">
-    <div class="kpi-trace-head">
-      <h3>🛠 ${escapeHtml(dieNumber)} — Maintenance Level</h3>
-      <button class="btn-ghost-big" data-mod="close">Cancel</button>
-    </div>
-    <p class="die-req-note">Supervisor setting stored in <b>PMD_DieMaster.MaintenanceLevel</b>. A latest Die Change Log rating above 1 still forces the effective policy to Level C until a newer all-good inspection clears it.</p>
-    ${opts}
-  </div>`);
-  const mc = document.getElementById('mc')!;
-  mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
-  mc.querySelectorAll<HTMLButtonElement>('[data-die-maint-choice]').forEach((b) =>
-    b.addEventListener('click', () => {
-      const maintenanceLevel = b.dataset.dieMaintChoice as ToolMaintenanceLevel;
-      void (async () => {
-        const previous = { maintenanceLevel: m.maintenanceLevel, dateStamp: m.dateStamp };
-        const dateStamp = new Date().toISOString();
-        m.maintenanceLevel = maintenanceLevel;
-        m.dateStamp = dateStamp;
-        closeModal();
-        render();
-        try {
-          await dalRef.updateDieMaster!(dieNumber, { maintenanceLevel, dateStamp });
-          toast(`${dieNumber} maintenance → Level ${maintenanceLevel}`, 'ok');
-        } catch (e) {
-          Object.assign(m, previous);
-          render();
-          console.error('[pmd] MaintenanceLevel update failed:', e);
-          toast(`Could not update: ${e instanceof Error ? e.message : e}`, 'err');
-        }
-      })();
-    }),
-  );
-}
-
-// ---------------------------------------------------------------------
 // die detail popup
 
 /** Full-size defect trend for the detail popup: same buckets as the row
@@ -1314,25 +1258,16 @@ function trendChart(d: DieAgg): string {
 }
 
 /** Dual-trigger preventive-maintenance position in the detail popup.
- *  Shots and calendar age have separate bars; the worse one governs. */
+ *  Shots and calendar age have separate bars; the worse one governs.
+ *  Below it, the die's multi-level PM plan block (renderPmPlan). */
 function renderServiceSection(d: DieAgg): string {
   const s = svcFor(d);
-  const m = masterFor(d.dieNumber);
-  const condTriggered = (condFor(d.dieNumber)?.flags.length ?? 0) > 0;
-  const configured = m?.maintenanceLevel || DEFAULT_TOOL_MAINTENANCE_LEVEL;
-  const effective: ToolMaintenanceLevel = condTriggered ? 'C' : configured;
-  const rule = TOOL_MAINTENANCE_RULES[effective];
-  const edit =
-    isSupervisor() && m && dalRef.updateDieMaster
-      ? `<button class="die-maint-edit" data-die-maint-level="${escapeHtml(d.dieNumber)}" title="Supervisor: assign this tool's normal maintenance policy">Change level ▾</button>`
-      : '';
-  const h = `<h4 class="die-svc-head">② Service Plan
-      <span class="die-maint-level level-${effective.toLowerCase()}">Level ${effective}</span>
-      ${edit}
-    </h4>`;
+  const h = `<h4>② Service Plan</h4>`;
   if (!s) {
+    const condTriggered = (condFor(d.dieNumber)?.flags.length ?? 0) > 0;
+    const rule = TOOL_MAINTENANCE_RULES[condTriggered ? 'C' : DEFAULT_TOOL_MAINTENANCE_LEVEL];
     return `${h}
-      <div class="die-svc-none"><b>${escapeHtml(rule.label)}</b> — ${S!.serviceHistoryAvailable ? `no completed-service baseline and no production in the independent ${escapeHtml(S!.serviceHistoryFrom)} → today shot ledger` : 'the independent shot ledger could not be loaded (see the data-source warning above)'}. Set Status to <b>Serviced</b> when maintenance is completed to start the calendar counter.</div>`;
+      <div class="die-svc-none"><b>${escapeHtml(rule.label)}</b> — ${S!.serviceHistoryAvailable ? `no completed-service baseline and no production in the independent ${escapeHtml(S!.serviceHistoryFrom)} → today shot ledger` : 'the independent shot ledger could not be loaded (see the data-source warning above)'}. Set Status to <b>Serviced</b> when maintenance is completed to start the calendar counter.</div>${renderPmPlan(d, s)}`;
   }
   const shotWidth = Math.min(100, Math.round(s.shotPct * 100));
   const timeWidth = Math.min(100, Math.round(s.timePct * 100));
@@ -1352,7 +1287,7 @@ function renderServiceSection(d: DieAgg): string {
         ? '<span class="die-svc-flag soon">⏳ Service soon</span>'
         : '<span class="die-svc-ok">Within plan</span>';
   const conditionNote = s.conditionTriggered
-    ? `<div class="die-svc-condition">⚠ Latest Die Change Log has a worn/damaged rating (&gt;1), so Level ${s.configuredLevel} is temporarily overridden by <b>Level C</b>.</div>`
+    ? `<div class="die-svc-condition">⚠ Latest Die Change Log has a worn/damaged rating (&gt;1), so the service rule is escalated to <b>${escapeHtml(TOOL_MAINTENANCE_RULES.C.label)}</b> until a newer all-good inspection clears it.</div>`
     : '';
   return `${h}
     <div class="die-svc-panel ${s.level}" title="${escapeHtml(svcTitle(s))}">
@@ -1371,7 +1306,101 @@ function renderServiceSection(d: DieAgg): string {
       )}
       ${conditionNote}
       <div class="die-svc-foot">${S!.serviceHistoryAvailable ? 'Shot counter uses a separate 400-day production ledger.' : '⚠ Independent shot history failed; this temporary value falls back to the visible analysis range.'} Production recorded on the service date is included conservatively because service time-of-day is not stored.</div>
-    </div>`;
+    </div>${renderPmPlan(d, s)}`;
+}
+
+/** The die's multi-level PM plan (L1 in-press wipe-down · L2 general bench
+ *  service · L3 major teardown). Custom text from
+ *  PMD_DieMaster.MaintenanceLevel when the toolroom has tuned this die;
+ *  otherwise the default template with L2 = the die's governing
+ *  dual-trigger shot interval and L3 at 10×. Shot-based levels get their
+ *  own progress against the same 400-day ledger counter the headline
+ *  rule uses. Supervisor ON + writable backend → ✎ Edit. */
+function renderPmPlan(d: DieAgg, s: DieServiceStatus | null): string {
+  const m = masterFor(d.dieNumber);
+  const custom = (m?.maintenanceLevel ?? '').trim();
+  const planText = custom || defaultPmPlanText(s?.intervalShots ?? 10_000);
+  const levels = parsePmPlan(planText);
+  const canEdit = isSupervisor() && !!m && !!dalRef.updateDieMaster;
+  const editBtn = canEdit
+    ? `<button class="die-pm-edit" data-die-pm="${escapeHtml(d.dieNumber)}" title="Customise this die's PM plan — writes PMD_DieMaster.MaintenanceLevel">✎ Edit plan</button>`
+    : '';
+  const srcChip = custom
+    ? `<span class="die-pm-src custom" title="Customised for this die — PMD_DieMaster.MaintenanceLevel">custom plan</span>`
+    : `<span class="die-pm-src" title="Industry-standard 3-level mould PM baseline (L1 in-press / L2 general / L3 major teardown). L2 from the die's governing service rule${s ? ` (${s.intervalShots.toLocaleString()} shots)` : ''}, L3 at 10×. ${canEdit ? 'Tap ✎ Edit plan to customise for this die.' : 'Turn Supervisor ON to customise per die.'}">default template</span>`;
+  const noMaster =
+    !m && custom === ''
+      ? `<div class="die-pm-note">No PMD_DieMaster row for this die yet — add one to save a customised plan.</div>`
+      : '';
+  const rows = levels.length
+    ? levels
+        .map((lv) => {
+          const st = lv.intervalShots && s ? pmShotLevel(s.shotsSince, lv.intervalShots) : null;
+          const prog = st
+            ? `<span class="die-pm-prog ${st.level}" title="${s!.shotsSince.toLocaleString()} shots since ${escapeHtml(s!.since)} vs this level's ${lv.intervalShots!.toLocaleString()}-shot interval">${s!.shotsSince.toLocaleString()} / ${lv.intervalShots!.toLocaleString()} · ${Math.round(st.pct * 100)}%${st.level === 'due' ? ' · 🔧 DUE' : st.level === 'soon' ? ' · ⏳ soon' : ''}</span>`
+            : '';
+          return `<div class="die-pm-row${st ? ` ${st.level}` : ''}">
+            <span class="die-pm-lv l${lv.level}">L${lv.level}</span>
+            <span class="die-pm-int">${escapeHtml(lv.interval || 'as required')}</span>
+            ${prog}
+            <ul class="die-pm-tasks">${lv.tasks.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>
+          </div>`;
+        })
+        .join('')
+    : // Free-form custom text (no recognisable L<n> lines) — show verbatim
+      // rather than dropping what the supervisor wrote.
+      `<div class="die-pm-free">${escapeHtml(custom)}</div>`;
+  return `<div class="die-pm-plan">
+    <div class="die-pm-head"><b>PM levels</b>${srcChip}${editBtn}</div>
+    ${noMaster}${rows}
+  </div>`;
+}
+
+/** Supervisor editor for the die's PM plan. Prefilled with the custom
+ *  text (or the default template ready to tune); Save writes
+ *  PMD_DieMaster.MaintenanceLevel and re-opens the drilldown. */
+function openPmPlanEditor(dieNumber: string): void {
+  const m = masterFor(dieNumber);
+  if (!m || !dalRef.updateDieMaster) return;
+  const d = S!.dies.find((x) => x.dieNumber === dieNumber);
+  const s = d ? svcFor(d) : null;
+  const dflt = defaultPmPlanText(s?.intervalShots ?? 10_000);
+  const cur = (m.maintenanceLevel ?? '').trim() || dflt;
+  openModal(`<div class="bd-modal die-pm-editor">
+    <h3 class="bd-title">✎ ${escapeHtml(dieNumber)} — PM plan (maintenance levels)</h3>
+    <p class="bd-sub">One level per line: <code>L2 | 10,000 shots | task; task; task</code> — separate tasks with “;”.
+      Shot-based levels track against the die's shot counter; “every die change” levels are event-based.
+      Saved to <b>PMD_DieMaster.MaintenanceLevel</b>, so the toolroom sees the same text in SharePoint.</p>
+    <textarea class="die-pm-text" rows="9" spellcheck="false">${escapeHtml(cur)}</textarea>
+    <div class="bd-actions">
+      <button class="btn-ghost-big" data-pm-default title="Replace the text with the standard 3-level template (L2 from the die's governing service interval)">↺ Default template</button>
+      <button class="btn-ghost-big" data-pm-cancel>Cancel</button>
+      <button class="btn-primary-big" data-pm-save>💾 Save plan</button>
+    </div>
+  </div>`);
+  const mc = document.getElementById('mc')!;
+  const ta = mc.querySelector<HTMLTextAreaElement>('.die-pm-text')!;
+  mc.querySelector('[data-pm-default]')?.addEventListener('click', () => {
+    ta.value = dflt;
+    ta.focus();
+  });
+  mc.querySelector('[data-pm-cancel]')?.addEventListener('click', () => openDieDetail(dieNumber));
+  mc.querySelector('[data-pm-save]')?.addEventListener('click', () => {
+    const text = ta.value.trim();
+    void (async () => {
+      const prev = m.maintenanceLevel;
+      m.maintenanceLevel = text; // optimistic — rolled back on failure
+      try {
+        await dalRef.updateDieMaster!(dieNumber, { maintenanceLevel: text });
+        toast(`${dieNumber} PM plan saved`, 'ok');
+      } catch (e) {
+        m.maintenanceLevel = prev;
+        console.error('[pmd] PM plan save failed:', e);
+        toast(`Could not save PM plan: ${e instanceof Error ? e.message : e}`, 'err');
+      }
+      openDieDetail(dieNumber);
+    })();
+  });
 }
 
 /** Asset facts from the die's PMD_DieMaster row, shown in the detail
@@ -1538,10 +1567,10 @@ function openDieDetail(dieNumber: string): void {
   </div>`);
   const mc = document.getElementById('mc')!;
   mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
-  mc.querySelector<HTMLButtonElement>('[data-die-maint-level]')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    openMaintenanceLevelPicker(d.dieNumber);
-  });
+  // Supervisor's ✎ Edit plan in the Service Plan section.
+  mc.querySelectorAll<HTMLButtonElement>('[data-die-pm]').forEach((b) =>
+    b.addEventListener('click', () => openPmPlanEditor(b.dataset.diePm!)),
+  );
   // Print just this drilldown. The app can be mounted deep inside the host
   // page (SPFx web-part container, not a direct child of <body>), so a
   // "hide every sibling of the modal" rule would hide the modal too and

@@ -76,9 +76,11 @@ export interface ProductDieColor {
  *  Problems (red — known defect / do not run without checking). */
 export type ToolStatus = 'serviced' | 'in-service' | 'to-be-serviced' | 'problems';
 
-/** Preventive-maintenance policy assigned to one physical moulding tool.
- *  The service is due at whichever limit is reached first: calendar age
- *  or accumulated press cycles (shots). */
+/** Intensity band of the dual-trigger service rule (core/die.ts
+ *  TOOL_MAINTENANCE_RULES). The service is due at whichever limit is
+ *  reached first: calendar age or accumulated press cycles (shots).
+ *  B is the site baseline; C is the condition-escalated band applied
+ *  while the latest Die Change Log reports worn/damaged components. */
 export type ToolMaintenanceLevel = 'A' | 'B' | 'C';
 
 /** One row of PMD_DieMaster — the die ASSET register (one row per
@@ -117,9 +119,12 @@ export interface DieMaster {
   availableDate: string;
   /** '' when the ToolStatus cell is empty / unrecognised. */
   toolStatus: ToolStatus | '';
-  /** Supervisor-assigned preventive-maintenance policy. Empty on legacy
-   *  rows; the app applies the conservative site default (Level B). */
-  maintenanceLevel: ToolMaintenanceLevel | '';
+  /** MaintenanceLevel column (multi-line text) — this die's customised
+   *  multi-level PM plan, one level per line
+   *  (`L2 | 10,000 shots | task; task`). '' = not customised: the app
+   *  shows the default 3-tier template (core/die.ts defaultPmPlanText)
+   *  until a supervisor edits it from the drilldown. */
+  maintenanceLevel: string;
 }
 
 /** Lifecycle of a die maintenance request (Fabrico-style work order):

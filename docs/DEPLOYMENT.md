@@ -598,7 +598,7 @@ and Supervisor maintenance-policy changes.
   `DieDescription`, `Cavities`, `CycleTime`, `DieWeightKG`, `LeanReady`
   (Yes/No), `ToolInjectorPlate`, `ChangeOverIn`, `ChangeOverOut`,
   `LifeCycle`, `DateStamp`, `LastServiceDate`, `Available`, `ToolStatus`,
-  `MaintenanceLevel` (Single line text). Internal column names are
+  `MaintenanceLevel` (multi-line text). Internal column names are
   resolved at read time from the list's own field map (display title →
   internal name), so renamed / re-created columns keep working — the
   resolution is logged to the console (`PMD_DieMaster field resolution`).
@@ -606,34 +606,42 @@ and Supervisor maintenance-policy changes.
   (green), **In service** (blue), **To be Serviced** (orange),
   **Problems** (red). Anything else / empty shows as "—". Sorting the
   Status column surfaces Problems first.
-- `MaintenanceLevel` values: **Level A** (12 months OR 50,000 shots),
-  **Level B** (3 months OR 15,000 shots), **Level C** (1 month OR 5,000
-  shots). The first limit reached is due. Blank legacy rows default to
-  Level B. Supervisors can change this value in the Die detail Service
-  Plan; the app creates the text column on the first save if it is absent
-  (that first Supervisor needs Manage Lists once). If auto-provisioning is
-  disallowed, add the column by hand.
-- Any component rated **2 (worn)** or **3 (damaged)** in the latest
-  `PMD_DieChangeLog` inspection overrides the configured policy to Level C
-  until a newer all-good inspection clears it.
+- `MaintenanceLevel` holds the die's customised multi-level PM plan, one
+  level per line — `L2 | 10,000 shots | task; task; task` (tasks split on
+  `;`). Shot-based levels track against the die's shot counter in the
+  drilldown's **② Service Plan**; `every die change` levels are
+  event-based. An empty cell shows the built-in 3-level template (L1
+  in-press wipe-down every die change · L2 general bench service at the
+  die's governing dual-trigger shot interval · L3 major teardown at 10×
+  L2 — the ToolingDocs-style maintenance-level model). Supervisors edit
+  the plan from the drilldown (✎ Edit plan, Supervisor mode ON); the same
+  text is editable directly in SharePoint. The app creates the multi-line
+  text column on the first save if it is absent (that first Supervisor
+  needs Manage Lists once); if auto-provisioning is disallowed, add the
+  column by hand.
+- The headline service rule is dual-trigger: **3 months OR 15,000 shots**,
+  whichever limit is reached first (site baseline). Any component rated
+  **2 (worn)** or **3 (damaged)** in the latest `PMD_DieChangeLog`
+  inspection escalates the rule to **1 month OR 5,000 shots** until a
+  newer all-good inspection clears it.
 - The service shot counter reads a separate rolling 400-day production
   header ledger, independent of the Tool page's 7/30/90-day analysis
-  filter. A service older than 400 days is already due under Level A, so
-  older shot detail cannot change the action. Production on the same
-  calendar date as `LastServiceDate` is included conservatively because
-  the source does not store service time-of-day.
+  filter. A service older than 400 days is already well past the calendar
+  trigger, so older shot detail cannot change the action. Production on
+  the same calendar date as `LastServiceDate` is included conservatively
+  because the source does not store service time-of-day.
 
-The exact A/B/C thresholds above are Resero's site policy. The model
-behind them is evidence-based rather than a claim that every mould has one
-universal interval: a 2025 injection-moulding case study recommends
-unit-specific preventive intervals based on reliability/availability data
+The dual-trigger baseline and the per-die PM tiers are evidence-based
+rather than a claim that every mould has one universal interval: a 2025
+injection-moulding case study recommends unit-specific preventive
+intervals based on reliability/availability data
 ([Muhiu, Wakiru & Muchiri, DOI 10.24867/IJIEM-368](https://ijiemjournal.uns.ac.rs/index.php/ijiem/article/view/1526)),
 while Husky's OEM service model uses production/process monitoring and
 proactive diagnostics to act before performance loss
 ([Husky services](https://www.husky.co/en/services/)). PMD operationalises
 that approach with usage (shots), elapsed time, and the latest physical
-condition inspection; review the thresholds against actual failure and
-service history after enough local data has accumulated.
+condition inspection — tune each die's PM plan from the drilldown as
+local failure and service history accumulates.
 - A die missing from this list still shows in the table (usage comes
   from `PMD_ProductDieColor` + production) — only its Status is "—".
 

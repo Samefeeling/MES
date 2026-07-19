@@ -4,14 +4,16 @@ import {
   aggregateDieServiceUsage,
   aggregateDies,
   buildDieTrend,
+  defaultPmPlanText,
   dieHealth,
   dieServiceStatus,
   goodByJob,
   latestConditionByDie,
   nextPlannedFor,
   parseDieCondition,
-  parseToolMaintenanceLevel,
+  parsePmPlan,
   parseToolStatus,
+  pmShotLevel,
   TOOL_MAINTENANCE_RULES,
   TOOL_STATUS_META,
 } from '../src/core/die';
@@ -201,14 +203,10 @@ describe('aggregateDies', () => {
 });
 
 describe('moulding-tool service policy', () => {
-  it('defines and parses the Supervisor A/B/C rules', () => {
+  it('defines the A/B/C dual-trigger rule bands', () => {
     expect(TOOL_MAINTENANCE_RULES.A).toMatchObject({ months: 12, shots: 50_000 });
     expect(TOOL_MAINTENANCE_RULES.B).toMatchObject({ months: 3, shots: 15_000 });
     expect(TOOL_MAINTENANCE_RULES.C).toMatchObject({ months: 1, shots: 5_000 });
-    expect(parseToolMaintenanceLevel('Level A')).toBe('A');
-    expect(parseToolMaintenanceLevel('quarterly')).toBe('B');
-    expect(parseToolMaintenanceLevel('Monthly')).toBe('C');
-    expect(parseToolMaintenanceLevel('legacy nonsense')).toBe('');
   });
 
   it('computes median run size and splits rejects by machine status', () => {
@@ -726,7 +724,10 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
     expect(d3597.cavities).toBe(2);
     expect(d3597.toolStatus).toBe('problems');
     expect(d3597.lifeCycle).toBe(1_000_000);
-    expect(d3597.maintenanceLevel).toBe('C');
+    // DIE-3597 seeds a CUSTOMISED multi-level PM plan (the other rows
+    // stay '' and fall back to the default template).
+    expect(parsePmPlan(d3597.maintenanceLevel).map((l) => l.level)).toEqual([1, 2, 3]);
+    expect(parsePmPlan(d3597.maintenanceLevel)[1].intervalShots).toBe(8_000);
     // The recently serviced die carries a LastServiceDate.
     expect(master.find((m) => m.dieNumber === 'DIE-1422')!.lastServiceDate).not.toBe('');
   });
@@ -897,5 +898,63 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
     expect(row.lastServiceDate).toBe('2026-07-13T02:00:00Z');
     expect(row.maintenanceLevel).toBe('A');
     await expect(dal.updateDieMaster('NOPE', { toolStatus: 'problems' })).rejects.toThrow();
+  });
+});
+
+describe('parsePmPlan (PMD_DieMaster.MaintenanceLevel → PM tiers)', () => {
+  it('parses the default 3-level template with shot intervals', () => {
+    const levels = parsePmPlan(defaultPmPlanText(10_000));
+    expect(levels.map((l) => l.level)).toEqual([1, 2, 3]);
+    expect(levels[0].intervalShots).toBeNull(); // "every die change" — event-based
+    expect(levels[1].intervalShots).toBe(10_000);
+    expect(levels[2].intervalShots).toBe(100_000); // 10× L2
+    expect(levels[0].tasks).toContain('Blow out vents');
+    expect(levels[2].tasks.some((t) => /ultrasonic/i.test(t))).toBe(true);
+  });
+
+  it('the default L2 follows the governing service interval', () => {
+    const levels = parsePmPlan(defaultPmPlanText(15_000));
+    expect(levels[1].intervalShots).toBe(15_000);
+    expect(levels[2].intervalShots).toBe(150_000);
+  });
+
+  it('tolerates "Level 2:" headers, k-suffix shots and full-width separators', () => {
+    const text = [
+      'Level 1: every die change | Wipe parting line；Blow vents',
+      'Level 2 - 8k shots ｜ Polish vent land； Grease pins',
+      'L3｜80,000 cycles｜Full strip',
+    ].join('\n');
+    const levels = parsePmPlan(text);
+    expect(levels.length).toBe(3);
+    expect(levels[0].intervalShots).toBeNull();
+    expect(levels[0].tasks).toEqual(['Wipe parting line', 'Blow vents']);
+    expect(levels[1].intervalShots).toBe(8_000);
+    expect(levels[1].tasks).toEqual(['Polish vent land', 'Grease pins']);
+    expect(levels[2].intervalShots).toBe(80_000);
+  });
+
+  it('a bare-number interval reads as shots', () => {
+    const levels = parsePmPlan('L2 | 12000 | Clean vents');
+    expect(levels[0].intervalShots).toBe(12_000);
+  });
+
+  it('continuation lines extend the previous level; free-form text yields []', () => {
+    const cont = parsePmPlan('L2 | 10,000 shots | First task\nSecond task; Third task');
+    expect(cont[0].tasks).toEqual(['First task', 'Second task', 'Third task']);
+    // Nothing level-shaped at all → [] so the UI shows the raw text.
+    expect(parsePmPlan('Grease everything monthly, ask Dave.')).toEqual([]);
+    expect(parsePmPlan('')).toEqual([]);
+  });
+
+  it('sorts levels regardless of line order', () => {
+    const levels = parsePmPlan('L3 | 100k shots | Teardown\nL1 | every die change | Wipe');
+    expect(levels.map((l) => l.level)).toEqual([1, 3]);
+  });
+
+  it('pmShotLevel bands match the tonnage rule (80% soon / 100% due)', () => {
+    expect(pmShotLevel(7_999, 10_000).level).toBe('ok');
+    expect(pmShotLevel(8_000, 10_000).level).toBe('soon');
+    expect(pmShotLevel(10_000, 10_000).level).toBe('due');
+    expect(pmShotLevel(5_000, 10_000).pct).toBeCloseTo(0.5);
   });
 });
