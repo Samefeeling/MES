@@ -110,7 +110,9 @@ export class MemoryDataLayer implements PmdDataLayer {
 
   async updateDieMaster(
     dieNumber: string,
-    patch: Partial<Pick<DieMaster, 'toolStatus' | 'dateStamp' | 'lastServiceDate'>>,
+    patch: Partial<
+      Pick<DieMaster, 'toolStatus' | 'dateStamp' | 'lastServiceDate' | 'maintenanceLevel'>
+    >,
   ): Promise<void> {
     const key = dieNumber.trim().toUpperCase();
     const row = this.dieMaster.find((m) => m.dieNumber.trim().toUpperCase() === key);
@@ -118,6 +120,7 @@ export class MemoryDataLayer implements PmdDataLayer {
     if (patch.toolStatus !== undefined) row.toolStatus = patch.toolStatus;
     if (patch.dateStamp !== undefined) row.dateStamp = patch.dateStamp;
     if (patch.lastServiceDate !== undefined) row.lastServiceDate = patch.lastServiceDate;
+    if (patch.maintenanceLevel !== undefined) row.maintenanceLevel = patch.maintenanceLevel;
   }
 
   // ---- die maintenance (PMD_DieMaintenance parity) ---------------------

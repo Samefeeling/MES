@@ -597,14 +597,25 @@ SharePoint (the app only reads it — a hard reload picks up edits).
 - Columns: `DieNumber` (may live in `Title` — both are probed),
   `DieDescription`, `Cavities`, `CycleTime`, `DieWeightKG`, `LeanReady`
   (Yes/No), `ToolInjectorPlate`, `ChangeOverIn`, `ChangeOverOut`,
-  `LifeCycle`, `DateStamp`, `ToolStatus`. Internal column names are
-  resolved at read time from the list's own field map (display title →
-  internal name), so renamed / re-created columns keep working — the
-  resolution is logged to the console (`PMD_DieMaster field resolution`).
+  `LifeCycle`, `DateStamp`, `ToolStatus`, `MaintenanceLevel` (multi-line
+  text). Internal column names are resolved at read time from the list's
+  own field map (display title → internal name), so renamed / re-created
+  columns keep working — the resolution is logged to the console
+  (`PMD_DieMaster field resolution`).
 - `ToolStatus` values (free text, tolerantly parsed): **Serviced**
   (green), **In service** (blue), **To be Serviced** (orange),
   **Problems** (red). Anything else / empty shows as "—". Sorting the
   Status column surfaces Problems first.
+- `MaintenanceLevel` holds the die's customised multi-level PM plan, one
+  level per line — `L2 | 10,000 shots | task; task; task` (tasks split on
+  `;`). Shot-based levels track against the die's shot counter in the
+  drilldown's **② Service Plan**; `every die change` levels are
+  event-based. An empty cell shows the built-in 3-level template (L1
+  in-press wipe-down every die change · L2 general bench service at the
+  press-band shot interval · L3 major teardown at 10× L2 — the
+  ToolingDocs-style maintenance-level model). Supervisors edit the plan
+  from the drilldown (✎ Edit plan, Supervisor mode ON); the same text is
+  editable directly in SharePoint.
 - A die missing from this list still shows in the table (usage comes
   from `PMD_ProductDieColor` + production) — only its Status is "—".
 

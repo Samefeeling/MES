@@ -24,12 +24,15 @@ import type {
 import {
   aggregateDies,
   buildDieTrend,
+  defaultPmPlanText,
   DIE_CONDITION_META,
   dieHealth,
   dieServiceStatus,
   goodByJob,
   latestConditionByDie,
   nextPlannedFor,
+  parsePmPlan,
+  pmShotLevel,
   TOOL_STATUS_META,
   type DieAgg,
   type DieConditionSummary,
@@ -38,6 +41,7 @@ import {
 } from '../core/die';
 import { closeModal, escapeHtml, openModal } from './modal';
 import { toast } from './toast';
+import { isSupervisor } from './supervisor-auth';
 import { STATUS_MAP } from '../core/status';
 
 /** 'smart' = the aggregate's attention-first order (open requests, then
@@ -1094,21 +1098,115 @@ function trendChart(d: DieAgg): string {
  *  goes amber at 80% and red past the interval. */
 function renderServiceSection(d: DieAgg): string {
   const s = svcFor(d);
+  let shotLine: string;
   if (!s) {
-    return `<h4>② Service Plan</h4>
-      <div class="die-svc-none">No running record yet — follow maintenance schedule.</div>`;
-  }
-  const pctTxt = `${(s.pct * 100).toFixed(0)}%`;
-  const width = Math.min(100, Math.round(s.pct * 100));
-  // Simplified: "12,340 / 20,000 shots" since the last service, with the
-  // full rule / press detail on hover.
-  return `<h4>② Service Plan</h4>
-    <div class="die-svc-line ${s.level}" title="${escapeHtml(svcTitle(s))}">
+    shotLine = `<div class="die-svc-none">No running record yet — follow maintenance schedule.</div>`;
+  } else {
+    const pctTxt = `${(s.pct * 100).toFixed(0)}%`;
+    const width = Math.min(100, Math.round(s.pct * 100));
+    // Simplified: "12,340 / 20,000 shots" since the last service, with the
+    // full rule / press detail on hover.
+    shotLine = `<div class="die-svc-line ${s.level}" title="${escapeHtml(svcTitle(s))}">
       <span><b>${s.shotsSince.toLocaleString()}</b> / ${s.intervalShots.toLocaleString()} shots since ${escapeHtml(s.since)}${s.sinceIsService ? '' : '+'}</span>
       <span class="die-svc-bar"><i class="${s.level}" style="width:${width}%"></i></span>
       <b class="die-svc-pct ${s.level}">${pctTxt}</b>
       ${s.level === 'due' ? '<span class="die-svc-flag">🔧 DUE</span>' : s.level === 'soon' ? '<span class="die-svc-flag soon">⏳ soon</span>' : ''}
     </div>`;
+  }
+  return `<h4>② Service Plan</h4>${shotLine}${renderPmPlan(d, s)}`;
+}
+
+/** The die's multi-level PM plan (L1 in-press wipe-down · L2 general bench
+ *  service · L3 major teardown). Custom text from
+ *  PMD_DieMaster.MaintenanceLevel when the toolroom has tuned this die;
+ *  otherwise the default template with L2 = the press-band rule and L3 at
+ *  10×. Shot-based levels get their own progress against the same counter
+ *  the tonnage rule uses. Supervisor ON + writable backend → ✎ Edit. */
+function renderPmPlan(d: DieAgg, s: DieServiceStatus | null): string {
+  const m = masterFor(d.dieNumber);
+  const custom = (m?.maintenanceLevel ?? '').trim();
+  const planText = custom || defaultPmPlanText(s?.intervalShots ?? 10_000);
+  const levels = parsePmPlan(planText);
+  const canEdit = isSupervisor() && !!m && !!dalRef.updateDieMaster;
+  const editBtn = canEdit
+    ? `<button class="die-pm-edit" data-die-pm="${escapeHtml(d.dieNumber)}" title="Customise this die's PM plan — writes PMD_DieMaster.MaintenanceLevel">✎ Edit plan</button>`
+    : '';
+  const srcChip = custom
+    ? `<span class="die-pm-src custom" title="Customised for this die — PMD_DieMaster.MaintenanceLevel">custom plan</span>`
+    : `<span class="die-pm-src" title="Industry-standard 3-level mould PM baseline (L1 in-press / L2 general / L3 major teardown). L2 from the press-band rule${s ? ` (${s.bandLabel})` : ''}, L3 at 10×. ${canEdit ? 'Tap ✎ Edit plan to customise for this die.' : 'Turn Supervisor ON to customise per die.'}">default template</span>`;
+  const noMaster =
+    !m && custom === ''
+      ? `<div class="die-pm-note">No PMD_DieMaster row for this die yet — add one to save a customised plan.</div>`
+      : '';
+  const rows = levels.length
+    ? levels
+        .map((lv) => {
+          const st = lv.intervalShots && s ? pmShotLevel(s.shotsSince, lv.intervalShots) : null;
+          const prog = st
+            ? `<span class="die-pm-prog ${st.level}" title="${s!.shotsSince.toLocaleString()} shots since ${escapeHtml(s!.since)} vs this level's ${lv.intervalShots!.toLocaleString()}-shot interval">${s!.shotsSince.toLocaleString()} / ${lv.intervalShots!.toLocaleString()} · ${Math.round(st.pct * 100)}%${st.level === 'due' ? ' · 🔧 DUE' : st.level === 'soon' ? ' · ⏳ soon' : ''}</span>`
+            : '';
+          return `<div class="die-pm-row${st ? ` ${st.level}` : ''}">
+            <span class="die-pm-lv l${lv.level}">L${lv.level}</span>
+            <span class="die-pm-int">${escapeHtml(lv.interval || 'as required')}</span>
+            ${prog}
+            <ul class="die-pm-tasks">${lv.tasks.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>
+          </div>`;
+        })
+        .join('')
+    : // Free-form custom text (no recognisable L<n> lines) — show verbatim
+      // rather than dropping what the supervisor wrote.
+      `<div class="die-pm-free">${escapeHtml(custom)}</div>`;
+  return `<div class="die-pm-plan">
+    <div class="die-pm-head"><b>PM levels</b>${srcChip}${editBtn}</div>
+    ${noMaster}${rows}
+  </div>`;
+}
+
+/** Supervisor editor for the die's PM plan. Prefilled with the custom
+ *  text (or the default template ready to tune); Save writes
+ *  PMD_DieMaster.MaintenanceLevel and re-opens the drilldown. */
+function openPmPlanEditor(dieNumber: string): void {
+  const m = masterFor(dieNumber);
+  if (!m || !dalRef.updateDieMaster) return;
+  const d = S!.dies.find((x) => x.dieNumber === dieNumber);
+  const s = d ? svcFor(d) : null;
+  const dflt = defaultPmPlanText(s?.intervalShots ?? 10_000);
+  const cur = (m.maintenanceLevel ?? '').trim() || dflt;
+  openModal(`<div class="bd-modal die-pm-editor">
+    <h3 class="bd-title">✎ ${escapeHtml(dieNumber)} — PM plan (maintenance levels)</h3>
+    <p class="bd-sub">One level per line: <code>L2 | 10,000 shots | task; task; task</code> — separate tasks with “;”.
+      Shot-based levels track against the die's shot counter; “every die change” levels are event-based.
+      Saved to <b>PMD_DieMaster.MaintenanceLevel</b>, so the toolroom sees the same text in SharePoint.</p>
+    <textarea class="die-pm-text" rows="9" spellcheck="false">${escapeHtml(cur)}</textarea>
+    <div class="bd-actions">
+      <button class="btn-ghost-big" data-pm-default title="Replace the text with the standard 3-level template (L2 from the press band)">↺ Default template</button>
+      <button class="btn-ghost-big" data-pm-cancel>Cancel</button>
+      <button class="btn-primary-big" data-pm-save>💾 Save plan</button>
+    </div>
+  </div>`);
+  const mc = document.getElementById('mc')!;
+  const ta = mc.querySelector<HTMLTextAreaElement>('.die-pm-text')!;
+  mc.querySelector('[data-pm-default]')?.addEventListener('click', () => {
+    ta.value = dflt;
+    ta.focus();
+  });
+  mc.querySelector('[data-pm-cancel]')?.addEventListener('click', () => openDieDetail(dieNumber));
+  mc.querySelector('[data-pm-save]')?.addEventListener('click', () => {
+    const text = ta.value.trim();
+    void (async () => {
+      const prev = m.maintenanceLevel;
+      m.maintenanceLevel = text; // optimistic — rolled back on failure
+      try {
+        await dalRef.updateDieMaster!(dieNumber, { maintenanceLevel: text });
+        toast(`${dieNumber} PM plan saved`, 'ok');
+      } catch (e) {
+        m.maintenanceLevel = prev;
+        console.error('[pmd] PM plan save failed:', e);
+        toast(`Could not save PM plan: ${e instanceof Error ? e.message : e}`, 'err');
+      }
+      openDieDetail(dieNumber);
+    })();
+  });
 }
 
 /** Asset facts from the die's PMD_DieMaster row, shown in the detail
@@ -1275,6 +1373,10 @@ function openDieDetail(dieNumber: string): void {
   </div>`);
   const mc = document.getElementById('mc')!;
   mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
+  // Supervisor's ✎ Edit plan in the Service Plan section.
+  mc.querySelectorAll<HTMLButtonElement>('[data-die-pm]').forEach((b) =>
+    b.addEventListener('click', () => openPmPlanEditor(b.dataset.diePm!)),
+  );
   // Print just this drilldown. The app can be mounted deep inside the host
   // page (SPFx web-part container, not a direct child of <body>), so a
   // "hide every sibling of the modal" rule would hide the modal too and

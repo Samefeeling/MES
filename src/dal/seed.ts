@@ -194,9 +194,20 @@ export function seedDieMaster(now: Date): DieMaster[] {
     lastServiceDate: lastServiceDaysAgo == null ? '' : stamp(lastServiceDaysAgo),
     availableDate: availableInDays == null ? '' : stamp(-availableInDays),
     toolStatus,
+    maintenanceLevel: '',
   });
+  const custom = row(
+    'DIE-3597', 'Viva Backrest/Armrest 2-cav', 2, 28.5, 780, 1_000_000, 'problems', 1, 45,
+  );
+  // One die carries a CUSTOMISED plan so the demo shows the per-die
+  // override path (the others fall back to the default template).
+  custom.maintenanceLevel = [
+    'L1 | every die change | Wipe parting line; Blow out vents; Check armrest slide gibs',
+    'L2 | 8,000 shots | Polish vent land on cav 2 (flash history); Grease ejector & guide pins; Flow-test both water circuits',
+    'L3 | 80,000 shots | Full strip & ultrasonic clean; Re-spot parting line (flash zone); Replace O-rings; Check backrest core for wash',
+  ].join('\n');
   return [
-    row('DIE-3597', 'Viva Backrest/Armrest 2-cav', 2, 28.5, 780, 1_000_000, 'problems', 1, 45),
+    custom,
     // In service, with a maintenance-confirmed return date 5 days out —
     // exercises the Available column's date path.
     row('DIE-0689', 'Integra Chair Shell', 1, 41.0, 1450, 800_000, 'in-service', 3, 60, 5),

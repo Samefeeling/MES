@@ -325,6 +325,9 @@ const DEFAULT_FIELDS = {
     lastServiceDate: 'LastServiceDate',
     availableDate: 'Available',
     toolStatus: 'ToolStatus',
+    // Multi-line text: the die's customised multi-level PM plan
+    // (`L2 | 10,000 shots | task; task` per line). Empty = default plan.
+    maintenanceLevel: 'MaintenanceLevel',
   },
   dieChangeLog: {
     // Internal names straight from the list schema export (2026-07).
@@ -1085,6 +1088,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         lastServiceDate: resolve(F.lastServiceDate),
         availableDate: resolve(F.availableDate),
         toolStatus: resolve(F.toolStatus),
+        maintenanceLevel: resolve(F.maintenanceLevel),
       };
       console.info('[pmd] PMD_DieMaster field resolution:', K);
       const rows = await this.getAllItems<Record<string, unknown>>(LISTS.dieMaster);
@@ -1122,6 +1126,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           lastServiceDate: str(r[K.lastServiceDate]),
           availableDate: str(r[K.availableDate]),
           toolStatus: parseToolStatus(str(r[K.toolStatus])),
+          maintenanceLevel: str(r[K.maintenanceLevel]),
         }))
         .filter((m) => m.dieNumber);
       const withStatus = out.filter((m) => m.toolStatus).length;
@@ -1155,7 +1160,9 @@ export class SharePointDataLayer implements PmdDataLayer {
 
   async updateDieMaster(
     dieNumber: string,
-    patch: Partial<Pick<DieMaster, 'toolStatus' | 'dateStamp' | 'lastServiceDate'>>,
+    patch: Partial<
+      Pick<DieMaster, 'toolStatus' | 'dateStamp' | 'lastServiceDate' | 'maintenanceLevel'>
+    >,
   ): Promise<void> {
     // listDieMaster resolves the internal names + item ids; make sure it
     // has run (it caches, so this is a no-op after the first call).
@@ -1175,6 +1182,8 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (patch.dateStamp !== undefined) body[meta.keys.dateStamp] = patch.dateStamp;
     if (patch.lastServiceDate !== undefined)
       body[meta.keys.lastServiceDate] = patch.lastServiceDate;
+    if (patch.maintenanceLevel !== undefined)
+      body[meta.keys.maintenanceLevel] = patch.maintenanceLevel;
     await this.post(`${this.listUrl(LISTS.dieMaster)}/items(${id})`, body, '*');
     // Keep the read cache coherent so a re-mount shows the new state
     // without a hard reload.
@@ -1184,6 +1193,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         if (patch.toolStatus !== undefined) row.toolStatus = patch.toolStatus;
         if (patch.dateStamp !== undefined) row.dateStamp = patch.dateStamp;
         if (patch.lastServiceDate !== undefined) row.lastServiceDate = patch.lastServiceDate;
+        if (patch.maintenanceLevel !== undefined) row.maintenanceLevel = patch.maintenanceLevel;
       }
     }
   }

@@ -941,6 +941,31 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .die-svc-pct.due{color:var(--rd)}.die-svc-pct.soon{color:#b45309}.die-svc-pct.ok{color:var(--gn)}
 .die-svc-flag{font-weight:900;color:#b91c1c;font-size:12px;letter-spacing:.4px}
 .die-svc-flag.soon{color:#9a3412}
+/* Multi-level PM plan (PMD_DieMaster.MaintenanceLevel) */
+.die-pm-plan{margin-top:8px;border:1px solid var(--bd);border-radius:10px;padding:8px 10px;background:#fff}
+.die-pm-head{display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px}
+.die-pm-src{font-size:11px;font-weight:700;color:var(--mu);background:#f1f5f9;border:1px solid var(--bd);border-radius:999px;padding:1px 8px}
+.die-pm-src.custom{color:#1d4ed8;background:#eff6ff;border-color:#bfdbfe}
+.die-pm-edit{margin-left:auto;font-size:12px;font-weight:700;padding:4px 10px;border:1px solid var(--bd);border-radius:8px;background:#fff;cursor:pointer;color:#334155}
+.die-pm-edit:hover{background:#f1f5f9}
+.die-pm-note{font-size:12px;color:var(--mu);margin-bottom:6px}
+.die-pm-row{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 10px;padding:6px 0;border-top:1px dashed var(--bd)}
+.die-pm-row.due{background:#fef2f2;border-radius:8px;padding-left:6px;padding-right:6px}
+.die-pm-row.soon{background:#fff7ed;border-radius:8px;padding-left:6px;padding-right:6px}
+.die-pm-lv{font-weight:900;font-size:12px;border-radius:6px;padding:1px 8px;color:#fff;background:#64748b}
+.die-pm-lv.l1{background:#15803d}
+.die-pm-lv.l2{background:#b45309}
+.die-pm-lv.l3{background:#b91c1c}
+.die-pm-int{font-size:12.5px;font-weight:700;color:#334155}
+.die-pm-prog{font-size:12px;font-variant-numeric:tabular-nums;color:var(--mu)}
+.die-pm-prog.soon{color:#9a3412;font-weight:700}
+.die-pm-prog.due{color:#b91c1c;font-weight:800}
+.die-pm-tasks{flex:1 1 100%;margin:2px 0 0;padding-left:20px;font-size:12.5px;color:#475569;columns:2;column-gap:24px}
+.die-pm-tasks li{break-inside:avoid;margin:1px 0}
+.die-pm-free{font-size:12.5px;color:#475569;white-space:pre-wrap;border-top:1px dashed var(--bd);padding-top:6px}
+.die-pm-editor .die-pm-text{width:100%;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;border:1px solid var(--bd);border-radius:8px;padding:10px;resize:vertical;white-space:pre;overflow-x:auto}
+.die-pm-editor code{background:#f1f5f9;border:1px solid var(--bd);border-radius:4px;padding:0 4px}
+@media (max-width:700px){.die-pm-tasks{columns:1}}
 .die-req-bd{margin-top:5px;font-size:14px}
 .die-req-ft{margin-top:4px;font-size:12px;color:var(--mu)}
 /* Die detail modal */

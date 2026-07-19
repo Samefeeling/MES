@@ -112,6 +112,12 @@ export interface DieMaster {
   availableDate: string;
   /** '' when the ToolStatus cell is empty / unrecognised. */
   toolStatus: ToolStatus | '';
+  /** MaintenanceLevel column (multi-line text) — this die's customised
+   *  multi-level PM plan, one level per line
+   *  (`L2 | 10,000 shots | task; task`). '' = not customised: the app
+   *  shows the default 3-tier template (core/die.ts defaultPmPlanText)
+   *  until a supervisor edits it from the drilldown. */
+  maintenanceLevel: string;
 }
 
 /** Lifecycle of a die maintenance request (Fabrico-style work order):

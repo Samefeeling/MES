@@ -354,6 +354,128 @@ export function dieServiceStatus(
   };
 }
 
+// ---------------------------------------------------------------------
+// Multi-level preventive-maintenance plan (PMD_DieMaster.MaintenanceLevel)
+//
+// The industry-standard structure for injection-mould PM is a tiered
+// "maintenance level" system — the model taught by ToolingDocs / Steve
+// Johnson (*The Care and Maintenance of Injection Molds*; Plastics
+// Technology's long-running mold-maintenance series) and consistent with
+// the SPI / PLASTICS mold classifications (Class 101-105), which tie a
+// tool's build class and expected life to how intensively it must be
+// maintained. The tiers:
+//
+//   L1 — IN-PRESS / wipe-down service, every die change: parting line
+//        wiped & inspected, vents blown out, water fittings checked,
+//        slides + guide pins greased, ejector return confirmed. Catches
+//        the everyday killers (rust, vent gas build-up, blocked cooling)
+//        before they mark the steel.
+//   L2 — GENERAL bench service on a SHOT interval: vents & gates
+//        re-polished, ejection system cleaned and greased, wear plates /
+//        bushings measured, cooling circuits flow-tested. The interval is
+//        cycle-count based (Progressive Components' CVe counter practice:
+//        schedule PM on actual cycles, not calendar) and starts from the
+//        press-band rule this app already tracks (SERVICE_BANDS), then
+//        gets tuned per tool from its wear history.
+//   L3 — MAJOR teardown at roughly 10× the L2 interval: full strip and
+//        ultrasonic clean, cores / cavities / shut-offs inspected for
+//        wear and cracking, O-rings & seals replaced, hot-runner service,
+//        dimensional check against spec, parting line re-spotted.
+//
+// PMD_DieMaster.MaintenanceLevel (multi-line text) stores the plan one
+// level per line — `L2 | 10,000 shots | task; task; task` — so the
+// toolroom can read/edit it in SharePoint too. Supervisors edit it from
+// the die drilldown; an empty cell falls back to the default template so
+// every tool starts from this professional baseline.
+// ---------------------------------------------------------------------
+
+/** One tier of a die's PM plan. */
+export interface DiePmLevel {
+  level: number;
+  /** The interval as written ("every die change" · "10,000 shots"). */
+  interval: string;
+  /** Parsed shot interval; null for event/calendar-based tiers (L1). */
+  intervalShots: number | null;
+  tasks: string[];
+}
+
+/** Shot count from an interval string: "10,000 shots" / "10k shots" /
+ *  "50k cycles" / a bare "10000". Null when the interval is event- or
+ *  calendar-based ("every die change", "6 months"). */
+function pmShotsFrom(interval: string): number | null {
+  const t = interval.trim();
+  if (!t) return null;
+  const m =
+    /^([\d][\d,.\s]*)\s*(k\b)?\s*(?:shots?|cycles?)?\s*$/i.exec(t) ??
+    /([\d][\d,.\s]*)\s*(k\b)?\s*(?:shots?|cycles?)/i.exec(t);
+  if (!m) return null;
+  const n = parseFloat(m[1].replace(/[,\s]/g, ''));
+  if (!isFinite(n) || n <= 0) return null;
+  return Math.round(m[2] ? n * 1000 : n);
+}
+
+/**
+ * Parse the MaintenanceLevel multi-line text into PM tiers. One level per
+ * line: `L<n> | <interval> | task; task` — `Level 2:` headers, `：`/`；`
+ * full-width separators and missing interval segments are tolerated.
+ * A line that doesn't start a level continues the PREVIOUS level's task
+ * list (SharePoint multi-line edits wrap). Returns [] when no line looks
+ * like a level at all — the caller then shows the raw text as a free-form
+ * plan rather than dropping what the supervisor wrote.
+ */
+export function parsePmPlan(text: string): DiePmLevel[] {
+  const out: DiePmLevel[] = [];
+  const splitTasks = (s: string): string[] =>
+    s
+      .split(/[;；]/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const head = /^L(?:evel)?\s*(\d+)\s*[|｜:：\-–—]\s*(.*)$/i.exec(line);
+    if (!head) {
+      // Continuation of the previous level's tasks.
+      if (out.length > 0) out[out.length - 1].tasks.push(...splitTasks(line));
+      continue;
+    }
+    const segs = head[2].split(/\s*[|｜]\s*/);
+    const interval = segs.length > 1 ? segs[0].trim() : '';
+    const tasks = splitTasks(segs.length > 1 ? segs.slice(1).join(';') : head[2]);
+    out.push({
+      level: Number(head[1]),
+      interval,
+      intervalShots: pmShotsFrom(interval),
+      tasks,
+    });
+  }
+  return out.sort((a, b) => a.level - b.level);
+}
+
+/** The professional 3-tier baseline, with the L2 shot interval taken from
+ *  the die's governing press-band rule (SERVICE_BANDS) and L3 at 10× L2.
+ *  Returned as MaintenanceLevel-format text so it can prefill the editor
+ *  and parse through parsePmPlan. */
+export function defaultPmPlanText(l2Shots = 10_000): string {
+  const l3 = l2Shots * 10;
+  const fmt = (n: number): string => n.toLocaleString('en-US');
+  return [
+    'L1 | every die change | Wipe & inspect parting line; Blow out vents; Check water fittings for leaks; Grease slides & guide pins; Confirm ejector return',
+    `L2 | ${fmt(l2Shots)} shots | Bench clean vents & gate area; Clean & grease ejector and guide system; Check wear plates & bushings; Flow-test cooling circuits; Check hot-runner / electrical connections`,
+    `L3 | ${fmt(l3)} shots | Full teardown & ultrasonic clean; Inspect cores, cavities & shut-offs for wear / cracking; Replace O-rings & seals; Hot-runner service; Dimensional check against spec; Re-spot parting line`,
+  ].join('\n');
+}
+
+/** Where the die sits against ONE shot-based PM tier (same 80% / 100%
+ *  bands as the tonnage service rule). */
+export function pmShotLevel(
+  shotsSince: number,
+  intervalShots: number,
+): { pct: number; level: 'ok' | 'soon' | 'due' } {
+  const pct = intervalShots > 0 ? shotsSince / intervalShots : 0;
+  return { pct, level: pct >= 1 ? 'due' : pct >= 0.8 ? 'soon' : 'ok' };
+}
+
 /** One bar of the defect-trend sparkline. */
 export interface DieTrendBucket {
   /** First day of the bucket (YYYY-MM-DD). Daily buckets = the day. */

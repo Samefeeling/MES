@@ -36,14 +36,18 @@ export interface PmdDataLayer {
    *  toolroom edits the list in SharePoint). Optional — a tenant without
    *  the list returns an empty array and the Status column shows "—". */
   listDieMaster?(): Promise<DieMaster[]>;
-  /** Change a tool's condition verdict (and its audit dates) on the die
-   *  asset register. The UI stamps dateStamp on every change and
-   *  lastServiceDate when the new status is 'serviced'. Optional — only
-   *  backends that can write PMD_DieMaster implement it; without it the
-   *  Status badge is display-only. */
+  /** Change a tool's condition verdict (and its audit dates) or its
+   *  customised PM plan (MaintenanceLevel) on the die asset register. The
+   *  UI stamps dateStamp on every change and lastServiceDate when the new
+   *  status is 'serviced'; maintenanceLevel is supervisor-edited from the
+   *  drilldown's Service Plan section. Optional — only backends that can
+   *  write PMD_DieMaster implement it; without it the Status badge and PM
+   *  plan are display-only. */
   updateDieMaster?(
     dieNumber: string,
-    patch: Partial<Pick<DieMaster, 'toolStatus' | 'dateStamp' | 'lastServiceDate'>>,
+    patch: Partial<
+      Pick<DieMaster, 'toolStatus' | 'dateStamp' | 'lastServiceDate' | 'maintenanceLevel'>
+    >,
   ): Promise<void>;
 
   // Die maintenance (Trace → 🛠 Die Management). Backed by the
