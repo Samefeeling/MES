@@ -1,5 +1,10 @@
 import { createDataLayer, resolveMangoCsvPath, type PmdDataLayer } from './dal';
-import { renderOperator, operatorPollTick, loadSavedOperatorView } from './ui/operator';
+import {
+  renderOperator,
+  operatorPollTick,
+  loadSavedOperatorView,
+  loadDeviceMachine,
+} from './ui/operator';
 import { unmountTracePanel } from './ui/trace';
 import { renderKpi } from './ui/kpi';
 import { mountDieTab } from './ui/die';
@@ -238,7 +243,16 @@ onSupervisorChange(() => {
   void route();
 });
 
+// True only for the very first route() of this page load. A hash present
+// THEN is whatever URL the page was (re)opened with — a stale bookmark,
+// the SPFx wrapper's baked link, or a pre-switch URL — not a press the
+// worker just tapped, so the device's own memory may override it. Every
+// later route() is user navigation and the hash is honoured as-is.
+let initialNav = true;
+
 async function route(): Promise<void> {
+  const firstNav = initialNav;
+  initialNav = false;
   // Stop an embedded KPI Live Status poll before replacing #app. KPI will
   // mount a fresh panel if the destination is #/kpi/live.
   unmountTracePanel();
@@ -257,18 +271,34 @@ async function route(): Promise<void> {
       await renderKpi(dal);
     } else {
       let mc = r.machineCode ?? '';
+      // The press this device was last WORKING on: the per-tab state
+      // (exact, survives an in-tab reload) first, then the per-device
+      // localStorage memory (survives Safari killing the tab and asset
+      // redeploys — the auto-updater never touches localStorage).
+      const remembered = loadSavedOperatorView()?.mc || loadDeviceMachine();
       if (!mc) {
-        // Operator nav link is bare `#/`. Prefer the machine the user
-        // was on last (from sessionStorage) so a KPI→Operator round-trip
-        // doesn't drop them on machines[0]. Falls back to the first
-        // machine when there's no saved state (fresh tab).
-        const saved = loadSavedOperatorView();
+        // Operator nav link is bare `#/`. Prefer the remembered press so
+        // a KPI→Operator round-trip (or a fresh tab on a floor iPad)
+        // doesn't drop the worker on machines[0]. First machine only
+        // when this device has no memory at all (fresh device).
         const machines = await dal.listMachines();
-        const savedStillValid =
-          saved?.mc && machines.some((m) => m.machineCode === saved.mc);
-        mc = savedStillValid ? saved!.mc : machines[0]?.machineCode ?? '';
+        const rememberedValid =
+          !!remembered && machines.some((m) => m.machineCode === remembered);
+        mc = rememberedValid ? remembered : machines[0]?.machineCode ?? '';
         if (mc) {
           window.location.hash = `#/op/${encodeURIComponent(mc)}`;
+          return; // hashchange re-enters route()
+        }
+      } else if (firstNav && remembered && remembered !== mc) {
+        // Page (re)opened with an explicit #/op/<press> that is NOT the
+        // press this device last worked on — a stale bookmark or the URL
+        // from before a dropdown switch. The device's memory wins so a
+        // redeploy/reload can never flip a floor iPad onto the wrong
+        // press mid-shift; tapping the Machine dropdown still switches
+        // freely (that path is user navigation and updates the memory).
+        const machines = await dal.listMachines();
+        if (machines.some((m) => m.machineCode === remembered)) {
+          window.location.hash = `#/op/${encodeURIComponent(remembered)}`;
           return; // hashchange re-enters route()
         }
       }

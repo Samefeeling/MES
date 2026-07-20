@@ -140,6 +140,16 @@ let signoffInFlight = false;
 // today's live shift — and an iPad operator who'd been reviewing 02/06
 // loses their place every time they tap a top-nav link by accident.
 const UI_KEY = 'pmd_op_view_v1';
+// Per-DEVICE memory of the press this iPad last worked on. sessionStorage
+// dies with the tab, so an iPad whose Safari tab was killed (or that
+// reopens the sheet from a bookmark carrying a stale #/op/… hash) used to
+// land on machines[0] — every floor iPad snapped back to 1600T after an
+// asset redeploy and workers typed into the wrong press. localStorage
+// survives tab death and redeploys (the auto-updater never touches it);
+// main.ts consults it on boot. Only the MACHINE is remembered at device
+// scope — date / shift / job deliberately reset to the live defaults so
+// yesterday's context can't leak into a fresh day.
+const DEVICE_MC_KEY = 'pmd_op_mc_v1';
 interface PersistedView {
   mc: string;
   viewDateIso: string;
@@ -154,6 +164,14 @@ export function loadSavedOperatorView(): PersistedView | null {
     return raw ? (JSON.parse(raw) as PersistedView) : null;
   } catch {
     return null;
+  }
+}
+/** The press this DEVICE last had open ('' when never saved / blocked). */
+export function loadDeviceMachine(): string {
+  try {
+    return localStorage.getItem(DEVICE_MC_KEY) ?? '';
+  } catch {
+    return '';
   }
 }
 function loadView(): PersistedView | null {
@@ -173,6 +191,11 @@ function saveView(): void {
         selSupervisor: S.selSupervisor,
       }),
     );
+  } catch {
+    /* storage blocked — best effort */
+  }
+  try {
+    localStorage.setItem(DEVICE_MC_KEY, S.mc);
   } catch {
     /* storage blocked — best effort */
   }
@@ -2789,6 +2812,18 @@ function onMetaChange(el: HTMLElement): void {
       // machines tends to mask the empty grid rather than help.
       S!.selJob = '';
       summaryCache = null; // cache is per-machine
+      // Keep the URL hash truthful WITHOUT a router remount (replaceState
+      // fires no hashchange). The dropdown used to leave the old
+      // #/op/<press> in the URL, so any reload — notably the auto-updater
+      // applying a new build — re-entered the route on the press the tab
+      // first OPENED with, not the one on screen: exactly how iPads
+      // snapped back to 1600T after a deploy and workers logged the
+      // wrong machine.
+      try {
+        history.replaceState(null, '', `#/op/${encodeURIComponent(val)}`);
+      } catch {
+        /* about:blank / sandboxed host — state is still saved by saveView */
+      }
       void reload();
       break;
     case 'job':
