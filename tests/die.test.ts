@@ -203,10 +203,10 @@ describe('aggregateDies', () => {
 });
 
 describe('moulding-tool service policy', () => {
-  it('defines the A/B/C dual-trigger rule bands', () => {
-    expect(TOOL_MAINTENANCE_RULES.A).toMatchObject({ months: 12, shots: 50_000 });
-    expect(TOOL_MAINTENANCE_RULES.B).toMatchObject({ months: 3, shots: 15_000 });
-    expect(TOOL_MAINTENANCE_RULES.C).toMatchObject({ months: 1, shots: 5_000 });
+  it('defines the A/B/C shot-only rule bands', () => {
+    expect(TOOL_MAINTENANCE_RULES.A).toEqual({ level: 'A', label: '50,000 shots', shots: 50_000 });
+    expect(TOOL_MAINTENANCE_RULES.B).toEqual({ level: 'B', label: '15,000 shots', shots: 15_000 });
+    expect(TOOL_MAINTENANCE_RULES.C).toEqual({ level: 'C', label: '5,000 shots', shots: 5_000 });
   });
 
   it('computes median run size and splits rejects by machine status', () => {
@@ -262,7 +262,7 @@ describe('moulding-tool service policy', () => {
     expect(dies.find((d) => d.dieNumber === 'DIE-2')!.lastDieChange).toBeNull();
   });
 
-  it('counts the service day, uses the newest reset source, and applies either trigger', () => {
+  it('counts the service day, uses the newest reset source, and applies the shot trigger', () => {
     const master = [dc('P-A', 'DIE-1')];
     const mkRec = (day: string, shots: number) =>
       rec({
@@ -286,71 +286,57 @@ describe('moulding-tool service policy', () => {
       closedAt: '2026-07-05T10:00:00Z',
     });
     const [d1] = aggregateDies(master, records, [done]);
-    const s = dieServiceStatus(d1, [done], undefined, 'B', false, '2026-07-10')!;
+    const s = dieServiceStatus(d1, [done], undefined, 'B', false)!;
     expect(s.intervalShots).toBe(15_000);
-    expect(s.intervalMonths).toBe(3);
     expect(s.shotsSince).toBe(5000);
     expect(s.sinceIsService).toBe(true);
     expect(s.since).toBe('2026-07-05');
     expect(s.level).toBe('ok');
 
     // The same 5k is immediately due under Level C's shot trigger.
-    const c = dieServiceStatus(d1, [done], undefined, 'C', false, '2026-07-10')!;
+    const c = dieServiceStatus(d1, [done], undefined, 'C', false)!;
     expect(c.shotPct).toBe(1);
     expect(c.level).toBe('due');
 
     // PMD_DieMaster.LastServiceDate NEWER than the work order wins:
     // counter restarts there (only the 07-08 run of 1k remains).
-    const s3 = dieServiceStatus(d1, [done], '2026-07-06T00:00:00Z', 'B', false, '2026-07-10')!;
+    const s3 = dieServiceStatus(d1, [done], '2026-07-06T00:00:00Z', 'B', false)!;
     expect(s3.shotsSince).toBe(1000);
     expect(s3.since).toBe('2026-07-06');
     expect(s3.sinceIsService).toBe(true);
 
     // …and an OLDER LastServiceDate defers to the newer work order.
-    const s4 = dieServiceStatus(d1, [done], '2026-06-20T00:00:00Z', 'B', false, '2026-07-10')!;
+    const s4 = dieServiceStatus(d1, [done], '2026-06-20T00:00:00Z', 'B', false)!;
     expect(s4.since).toBe('2026-07-05');
     expect(s4.shotsSince).toBe(5000);
 
     // No service marker means the first ledger date is an "at least" base.
-    const s5 = dieServiceStatus(d1, [], undefined, 'B', false, '2026-07-10')!;
+    const s5 = dieServiceStatus(d1, [], undefined, 'B', false)!;
     expect(s5.shotsSince).toBe(11_000);
     expect(s5.since).toBe('2026-07-01');
     expect(s5.sinceIsService).toBe(false);
   });
 
-  it('keeps calendar tracking with zero production and clamps month-end due dates', () => {
+  it('does not make an idle die due merely because calendar time passes', () => {
     const zero = { dieNumber: '280', daily: [] };
-    const quarterly = dieServiceStatus(
+    const idle = dieServiceStatus(
       zero,
       [],
       '2026-04-10T00:00:00Z',
       'B',
       false,
-      '2026-07-10',
     )!;
-    expect(quarterly.shotsSince).toBe(0);
-    expect(quarterly.dueDate).toBe('2026-07-10');
-    expect(quarterly.timePct).toBe(1);
-    expect(quarterly.level).toBe('due');
-
-    const monthEnd = dieServiceStatus(
-      zero,
-      [],
-      '2026-01-31T00:00:00Z',
-      'C',
-      false,
-      '2026-02-28',
-    )!;
-    expect(monthEnd.dueDate).toBe('2026-02-28');
-    expect(monthEnd.level).toBe('due');
+    expect(idle.shotsSince).toBe(0);
+    expect(idle.shotPct).toBe(0);
+    expect(idle.level).toBe('ok');
   });
 
   it('forces Level C when the latest condition has any rating above 1', () => {
     const usage = { dieNumber: '117', daily: [{ day: '2026-07-01', shots: 4000 }] };
-    const normal = dieServiceStatus(usage, [], undefined, 'A', false, '2026-07-10')!;
+    const normal = dieServiceStatus(usage, [], undefined, 'A', false)!;
     expect(normal.maintenanceLevel).toBe('A');
     expect(normal.level).toBe('ok');
-    const forced = dieServiceStatus(usage, [], undefined, 'A', true, '2026-07-10')!;
+    const forced = dieServiceStatus(usage, [], undefined, 'A', true)!;
     expect(forced.configuredLevel).toBe('A');
     expect(forced.maintenanceLevel).toBe('C');
     expect(forced.conditionTriggered).toBe(true);

@@ -76,9 +76,9 @@ export interface ProductDieColor {
  *  Problems (red — known defect / do not run without checking). */
 export type ToolStatus = 'serviced' | 'in-service' | 'to-be-serviced' | 'problems';
 
-/** Intensity band of the dual-trigger service rule (core/die.ts
- *  TOOL_MAINTENANCE_RULES). The service is due at whichever limit is
- *  reached first: calendar age or accumulated press cycles (shots).
+/** Intensity band of the shot-based service rule (core/die.ts
+ *  TOOL_MAINTENANCE_RULES). Service is due only from accumulated press
+ *  cycles (shots); calendar age does not advance the PM status.
  *  B is the site baseline; C is the condition-escalated band applied
  *  while the latest Die Change Log reports worn/damaged components. */
 export type ToolMaintenanceLevel = 'A' | 'B' | 'C';

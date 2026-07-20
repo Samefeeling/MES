@@ -140,7 +140,7 @@ function svcFor(d: DieAgg): DieServiceStatus | null {
   const m = masterFor(d.dieNumber);
   const usage = S!.serviceUsageByDie.get(key) ?? d;
   // MaintenanceLevel now stores the multi-level PM plan text, so the
-  // dual-trigger rule always starts from the site baseline; a worn/
+  // shot-based rule always starts from the site baseline; a worn/
   // damaged latest inspection still escalates it.
   return dieServiceStatus(
     usage,
@@ -148,7 +148,6 @@ function svcFor(d: DieAgg): DieServiceStatus | null {
     m?.lastServiceDate || undefined,
     DEFAULT_TOOL_MAINTENANCE_LEVEL,
     (condFor(d.dieNumber)?.flags.length ?? 0) > 0,
-    isoDay(new Date()),
   );
 }
 
@@ -159,7 +158,7 @@ function svcTitle(s: DieServiceStatus): string {
   const override = s.conditionTriggered
     ? ` · Die Change Log rating >1 escalates the rule to ${TOOL_MAINTENANCE_RULES.C.label}`
     : '';
-  return `Service rule: ${s.intervalMonths} month${s.intervalMonths === 1 ? '' : 's'} OR ${s.intervalShots.toLocaleString()} shots, whichever comes first · ${s.shotsSince.toLocaleString()} shots ${sinceTxt} (${(s.shotPct * 100).toFixed(0)}%) · calendar due ${s.dueDate} (${(s.timePct * 100).toFixed(0)}%)${override}`;
+  return `Service rule: ${s.intervalShots.toLocaleString()} shots · ${s.shotsSince.toLocaleString()} shots ${sinceTxt} (${(s.shotPct * 100).toFixed(0)}%)${override}`;
 }
 
 /** "2026-07-12T07:00:00" → "07-12 07:00" (planned starts are local ISO). */
@@ -1257,8 +1256,7 @@ function trendChart(d: DieAgg): string {
   return `<div class="die-trend-lg">${bars}</div>${legend}`;
 }
 
-/** Dual-trigger preventive-maintenance position in the detail popup.
- *  Shots and calendar age have separate bars; the worse one governs.
+/** Shot-based preventive-maintenance position in the detail popup.
  *  Below it, the die's multi-level PM plan block (renderPmPlan). */
 function renderServiceSection(d: DieAgg): string {
   const s = svcFor(d);
@@ -1267,10 +1265,9 @@ function renderServiceSection(d: DieAgg): string {
     const condTriggered = (condFor(d.dieNumber)?.flags.length ?? 0) > 0;
     const rule = TOOL_MAINTENANCE_RULES[condTriggered ? 'C' : DEFAULT_TOOL_MAINTENANCE_LEVEL];
     return `${h}
-      <div class="die-svc-none"><b>${escapeHtml(rule.label)}</b> — ${S!.serviceHistoryAvailable ? `no completed-service baseline and no production in the independent ${escapeHtml(S!.serviceHistoryFrom)} → today shot ledger` : 'the independent shot ledger could not be loaded (see the data-source warning above)'}. Set Status to <b>Serviced</b> when maintenance is completed to start the calendar counter.</div>${renderPmPlan(d, s)}`;
+      <div class="die-svc-none"><b>${escapeHtml(rule.label)}</b> — ${S!.serviceHistoryAvailable ? `no completed-service baseline and no production in the independent ${escapeHtml(S!.serviceHistoryFrom)} → today shot ledger` : 'the independent shot ledger could not be loaded (see the data-source warning above)'}. Set Status to <b>Serviced</b> when maintenance is completed to reset the shot counter.</div>${renderPmPlan(d, s)}`;
   }
   const shotWidth = Math.min(100, Math.round(s.shotPct * 100));
-  const timeWidth = Math.min(100, Math.round(s.timePct * 100));
   const row = (label: string, detail: string, pct: number, width: number): string => {
     const level = pct >= 1 ? 'due' : pct >= 0.8 ? 'soon' : 'ok';
     return `<div class="die-svc-metric">
@@ -1282,7 +1279,7 @@ function renderServiceSection(d: DieAgg): string {
   };
   const trigger =
     s.level === 'due'
-      ? '<span class="die-svc-flag">🔧 DUE — first limit reached</span>'
+      ? '<span class="die-svc-flag">🔧 DUE — shot limit reached</span>'
       : s.level === 'soon'
         ? '<span class="die-svc-flag soon">⏳ Service soon</span>'
         : '<span class="die-svc-ok">Within plan</span>';
@@ -1291,18 +1288,12 @@ function renderServiceSection(d: DieAgg): string {
     : '';
   return `${h}
     <div class="die-svc-panel ${s.level}" title="${escapeHtml(svcTitle(s))}">
-      <div class="die-svc-rule"><b>${escapeHtml(TOOL_MAINTENANCE_RULES[s.maintenanceLevel].label)}</b><span>whichever comes first</span>${trigger}</div>
+      <div class="die-svc-rule"><b>${escapeHtml(TOOL_MAINTENANCE_RULES[s.maintenanceLevel].label)}</b>${trigger}</div>
       ${row(
         'Shots',
         `<b>${s.shotsSince.toLocaleString()}</b> / ${s.intervalShots.toLocaleString()} since ${escapeHtml(ddmmyyyy(s.since))}${s.sinceIsService ? '' : '+'}`,
         s.shotPct,
         shotWidth,
-      )}
-      ${row(
-        'Calendar',
-        `${escapeHtml(ddmmyyyy(s.since))} → due <b>${escapeHtml(ddmmyyyy(s.dueDate))}</b>`,
-        s.timePct,
-        timeWidth,
       )}
       ${conditionNote}
       <div class="die-svc-foot">${S!.serviceHistoryAvailable ? 'Shot counter uses a separate 400-day production ledger.' : '⚠ Independent shot history failed; this temporary value falls back to the visible analysis range.'} Production recorded on the service date is included conservatively because service time-of-day is not stored.</div>
@@ -1313,7 +1304,7 @@ function renderServiceSection(d: DieAgg): string {
  *  service · L3 major teardown). Custom text from
  *  PMD_DieMaster.MaintenanceLevel when the toolroom has tuned this die;
  *  otherwise the default template with L2 = the die's governing
- *  dual-trigger shot interval and L3 at 10×. Shot-based levels get their
+ *  shot interval and L3 at 10×. Shot-based levels get their
  *  own progress against the same 400-day ledger counter the headline
  *  rule uses. Supervisor ON + writable backend → ✎ Edit. */
 function renderPmPlan(d: DieAgg, s: DieServiceStatus | null): string {

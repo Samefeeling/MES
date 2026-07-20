@@ -254,10 +254,8 @@ export interface DieAgg {
 }
 
 // ---------------------------------------------------------------------
-// Moulding-tool preventive maintenance. This is a dual-trigger policy:
-// calendar age catches low-use tools whose seals/lubrication still age,
-// while press-cycle count catches high-use tools early. Whichever limit
-// is reached first governs. Level B is the site baseline; a latest Die
+// Moulding-tool preventive maintenance. PM status is driven only by the
+// press-cycle (shot) counter. Level B is the site baseline; a latest Die
 // Change Log rating of 2/3 escalates the effective rule to C. (The
 // PMD_DieMaster.MaintenanceLevel column stores the multi-level PM plan
 // text below, not this band.)
@@ -265,14 +263,13 @@ export interface DieAgg {
 export interface ToolMaintenanceRule {
   level: ToolMaintenanceLevel;
   label: string;
-  months: number;
   shots: number;
 }
 
 export const TOOL_MAINTENANCE_RULES: Record<ToolMaintenanceLevel, ToolMaintenanceRule> = {
-  A: { level: 'A', label: 'Annual / 50,000 shots', months: 12, shots: 50_000 },
-  B: { level: 'B', label: 'Quarterly / 15,000 shots', months: 3, shots: 15_000 },
-  C: { level: 'C', label: 'Monthly / 5,000 shots', months: 1, shots: 5_000 },
+  A: { level: 'A', label: '50,000 shots', shots: 50_000 },
+  B: { level: 'B', label: '15,000 shots', shots: 15_000 },
+  C: { level: 'C', label: '5,000 shots', shots: 5_000 },
 };
 
 export const DEFAULT_TOOL_MAINTENANCE_LEVEL: ToolMaintenanceLevel = 'B';
@@ -349,41 +346,14 @@ export interface DieServiceStatus {
   maintenanceLevel: ToolMaintenanceLevel;
   conditionTriggered: boolean;
   intervalShots: number;
-  intervalMonths: number;
-  dueDate: string;
-  /** Independent progress against the two OR limits. */
+  /** Progress against the shot limit. */
   shotPct: number;
-  timePct: number;
-  /** max(shotPct, timePct): whichever trigger is closest governs. */
   pct: number;
   level: 'ok' | 'soon' | 'due';
 }
 
-function localIsoDay(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-/** Calendar-month addition with month-end clamping (31 Jan + 1 month =
- *  28/29 Feb), evaluated in UTC so DST cannot move the due date. */
-function addCalendarMonths(day: string, months: number): string {
-  const [year, month, date] = day.split('-').map(Number);
-  const target = new Date(Date.UTC(year, month - 1 + months, 1));
-  const last = new Date(
-    Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0),
-  ).getUTCDate();
-  target.setUTCDate(Math.min(date, last));
-  return target.toISOString().slice(0, 10);
-}
-
-function dayMs(day: string): number {
-  return Date.parse(`${day}T00:00:00.000Z`);
-}
-
 /**
- * Where a die sits against its dual-trigger preventive-maintenance rule.
+ * Where a die sits against its shot-based preventive-maintenance rule.
  * The counter resets at the most recent SERVICE EVENT — the newer of the
  * last DONE work order's closed date and PMD_DieMaster.LastServiceDate.
  * Date-only production on that SAME day is deliberately included: PMD has
@@ -397,7 +367,6 @@ export function dieServiceStatus(
   lastServiceDate?: string,
   configuredLevel: ToolMaintenanceLevel | '' = DEFAULT_TOOL_MAINTENANCE_LEVEL,
   conditionTriggered = false,
-  today = localIsoDay(new Date()),
 ): DieServiceStatus | null {
   const dieKey = agg.dieNumber.trim().toUpperCase();
   const lastDone = requests
@@ -424,16 +393,8 @@ export function dieServiceStatus(
   const savedLevel = configuredLevel || DEFAULT_TOOL_MAINTENANCE_LEVEL;
   const maintenanceLevel: ToolMaintenanceLevel = conditionTriggered ? 'C' : savedLevel;
   const rule = TOOL_MAINTENANCE_RULES[maintenanceLevel];
-  const dueDate = addCalendarMonths(since, rule.months);
   const shotPct = shotsSince / rule.shots;
-  const startMs = dayMs(since);
-  const dueMs = dayMs(dueDate);
-  const nowMs = dayMs(today);
-  const timePct =
-    Number.isFinite(startMs) && Number.isFinite(dueMs) && dueMs > startMs
-      ? Math.max(0, (nowMs - startMs) / (dueMs - startMs))
-      : 0;
-  const pct = Math.max(shotPct, timePct);
+  const pct = shotPct;
   return {
     shotsSince,
     since,
@@ -442,10 +403,7 @@ export function dieServiceStatus(
     maintenanceLevel,
     conditionTriggered,
     intervalShots: rule.shots,
-    intervalMonths: rule.months,
-    dueDate,
     shotPct,
-    timePct,
     pct,
     level: pct >= 1 ? 'due' : pct >= 0.8 ? 'soon' : 'ok',
   };
@@ -472,7 +430,7 @@ export function dieServiceStatus(
 //        bushings measured, cooling circuits flow-tested. The interval is
 //        cycle-count based (Progressive Components' CVe counter practice:
 //        schedule PM on actual cycles, not calendar) and starts from the
-//        die's governing dual-trigger shot interval
+//        die's governing shot interval
 //        (TOOL_MAINTENANCE_RULES), then gets tuned per tool from its
 //        wear history.
 //   L3 — MAJOR teardown at roughly 10× the L2 interval: full strip and
@@ -551,7 +509,7 @@ export function parsePmPlan(text: string): DiePmLevel[] {
 }
 
 /** The professional 3-tier baseline, with the L2 shot interval taken from
- *  the die's governing dual-trigger service rule and L3 at 10× L2.
+ *  the die's governing shot-based service rule and L3 at 10× L2.
  *  Returned as MaintenanceLevel-format text so it can prefill the editor
  *  and parse through parsePmPlan. */
 export function defaultPmPlanText(l2Shots = 10_000): string {
