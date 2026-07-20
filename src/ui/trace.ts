@@ -13,6 +13,7 @@ import { bdLabelFor } from '../core/breakdown';
 import { cavityGross } from '../core/metrics';
 import { ordersCoRun, type DieCoRun } from '../core/corun';
 import {
+  hoursUnavailableFor,
   jobLeftPiecesFor,
   qcCellPresentation,
   shiftTargetFor,
@@ -798,10 +799,19 @@ function buildTraceRowsFor(
   jobGoodTotals: Map<string, number>,
 ): TraceRow[] {
   const groups = new Map<string, ProductionRecord[]>();
+  // All jobs' rows per (machine, shift) — the Shift Target recompute
+  // deducts the press hours other orders / changeovers held. A Job
+  // Number search only loads that job's own rows, so there the
+  // deduction naturally sees just the job's own changeover slots (the
+  // persisted ShiftTarget column covers signed tuples anyway).
+  const byMachineShift = new Map<string, ProductionRecord[]>();
   for (const r of records) {
     const key = `${r.machineCode}|${r.shiftId}|${r.jobNumber}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(r);
+    const msKey = `${r.machineCode}|${r.shiftId}`;
+    if (!byMachineShift.has(msKey)) byMachineShift.set(msKey, []);
+    byMachineShift.get(msKey)!.push(r);
   }
   const out: TraceRow[] = [];
   for (const [key, list] of groups) {
@@ -875,7 +885,14 @@ function buildTraceRowsFor(
       signedTuple && canonical?.shiftTarget != null
         ? canonical.shiftTarget
         : plan && jobLeft != null
-          ? shiftTargetFor(plan, jobLeft)
+          ? shiftTargetFor(
+              plan,
+              jobLeft,
+              hoursUnavailableFor(
+                byMachineShift.get(`${machineCode}|${shiftId}`) ?? [],
+                jobNumber,
+              ),
+            )
           : null;
     const qcBySlot = Array.from({ length: SLOTS_PER_SHIFT }, (_, i) => {
       const rec = list.find((r) => r.slotIndex === i);

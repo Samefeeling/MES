@@ -26,7 +26,7 @@ import type {
 import type { PmdDataLayer } from './types';
 import { bdCategoryOf, bdLabelFor, BD_TAXONOMY } from '../core/breakdown';
 import { shiftBounds, slotClock } from '../core/shifts';
-import { shiftTargetFor } from '../core/targets';
+import { hoursUnavailableFor, shiftTargetFor } from '../core/targets';
 import { retroJobLeftFixes, sumGoodStartedBefore } from '../core/jobgood';
 import {
   DIE_COMPONENTS,
@@ -2843,6 +2843,24 @@ export class SharePointDataLayer implements PmdDataLayer {
       if (fromCache) return fromCache;
       return orders.find((o) => o.jobNumber === job)?.plannedStart ?? '';
     };
+    // Every job's slots on this (machine, shift) — the Shift Target
+    // deduction needs the WHOLE press picture (a previous order's
+    // footprint, a die-change pseudo-order's D block), not just the
+    // tuple being signed. Blended read = the same signed+live+cache view
+    // the operator side panel computed its target from, so the stamped
+    // column matches what the sheet showed. On a read failure fall back
+    // to this device's cached tuples for the shift rather than aborting
+    // the sign-off.
+    let shiftRows: ProductionRecord[];
+    try {
+      shiftRows = await this.listProduction({ machineCode, shiftId });
+    } catch (e) {
+      console.warn('[pmd] shift-wide read for Shift Target failed, using cache:', e);
+      shiftRows = [];
+      for (const [key, list] of this.editCache) {
+        if (key.startsWith(`${machineCode}|${shiftId}|`)) shiftRows.push(...list);
+      }
+    }
     for (const slots of myTuples) {
       const job = slots[0]?.jobNumber ?? jobNumber ?? '';
       const agg = aggregateSlots(slots);
@@ -2908,14 +2926,18 @@ export class SharePointDataLayer implements PmdDataLayer {
               : Math.max(0, required - tupleGood);
       }
       // Shift Target column: recompute from the at-start Job Left (same
-      // signed-rows source as jobLeftSnap). A value stamped on the
-      // canonical slot is legacy client-frozen data — contaminated by
-      // whatever that device saw at freeze time — and is only used when
-      // the recompute produced nothing.
+      // signed-rows source as jobLeftSnap) over the hours actually left
+      // to this job — 8h minus other orders' recorded footprint on this
+      // press/shift minus this job's own changeover slots (see
+      // hoursUnavailableFor). A value stamped on the canonical slot is
+      // legacy client-frozen data — contaminated by whatever that device
+      // saw at freeze time — and is only used when the recompute
+      // produced nothing.
       const shiftTargetSnap =
         shiftTargetFor(
-          { jobRequired: required, qtyPerHr: cycleTime, isDieChange: false } as PlanningOrder,
+          { qtyPerHr: cycleTime },
           jobLeftSnap,
+          hoursUnavailableFor(shiftRows, job),
         ) ?? canon?.shiftTarget ?? null;
       // SharePoint has no multi-list transaction. Stage both child-list
       // replacements first and write the signed PMD_Production header LAST.

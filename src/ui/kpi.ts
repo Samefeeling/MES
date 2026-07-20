@@ -14,6 +14,7 @@ import {
   INSERT_CHANGE_STD_HRS,
   expectedShiftOutput,
   expectedShiftOutputFromPlanning,
+  expectedShiftOutputFromTargets,
   setupJudgement,
   setupStandardHours,
 } from '../core/standards';
@@ -750,7 +751,16 @@ async function compute(now = new Date()): Promise<void> {
           std.dieStdHrs + std.colorStdHrs + std.insertStdHrs,
           smokoHrs,
         );
+        // Primary model: Σ Shift Targets of the orders that ran — the
+        // SAME per-job number the operator sheet showed and sign-off
+        // stamped (min(JobLeft, hours-left-after-earlier-orders-and-
+        // changeover ÷ ProdStandard), core/targets.ts), so Output "/n"
+        // and vs Plan judge against the target the floor was actually
+        // given. Buckets whose rows lack the denormalised JobLeft /
+        // CycleTime (legacy sign-offs) fall back to the planned-queue
+        // simulation, then the records-footprint model.
         const expPieces =
+          expectedShiftOutputFromTargets(recs, ctByJob) ??
           fromPlan.pieces ??
           expectedShiftOutput(bShiftId, recs, ctByJob, psByJob).pieces;
         stdAcc.push({ exp: expPieces, std });
@@ -932,7 +942,7 @@ function outputCell(a: ShiftAgg): string {
   if (a.expOutput == null || a.expOutput <= 0) return `<td class="num">${n}</td>`;
   const pct = Math.round((a.output / a.expOutput) * 100);
   const cls = planColourClass(pct, S!.thresholds);
-  const title = `Expected ≈ ${a.expOutput} pcs from the planned order queue (StartDate+StartHour sequence, capped by remaining qty, at JobOper_ProdStandard; changeover standards deducted: die 4h, colour/insert 30min) — actual ${a.output} = ${pct}%`;
+  const title = `Expected ≈ ${a.expOutput} pcs = Σ Shift Target of the orders run (per job: the smaller of Job Left and the shift hours left after earlier orders + changeover, ÷ JobOper_ProdStandard — the same target the operator sheet showed). Shifts without recorded targets use the planned order queue instead (capped by remaining qty; changeover standards deducted: die 4h, colour/insert 30min) — actual ${a.output} = ${pct}%`;
   return `<td class="num ${cls}" title="${escapeHtml(title)}">${n} <span class="kpi-exp">/${a.expOutput}</span></td>`;
 }
 
@@ -1523,7 +1533,7 @@ function render(): void {
             <th title="D — Die change">Die h</th>
             <th title="C — Colour change">Colour h</th>
             <th title="I — Insert change">Insert h</th>
-            <th>Efficiency*</th><th title="Total Good ÷ planning expectation">vs Plan</th>
+            <th>Efficiency*</th><th title="Total Good ÷ expected (Σ Shift Targets of the orders run; planning fallback)">vs Plan</th>
             <th class="kpi-ho-head">Handover</th>
           </tr></thead>
           <tbody>${body}</tbody>
@@ -1568,10 +1578,10 @@ function render(): void {
       ${charts}
       <div class="kpi-note">
         <div>Every metric uses one traffic-light language: <b>🟢 met · 🟡 close · 🔴 short</b>.</div>
-        <div><b>Output 🟢🟡🔴</b> = Σ Total Good vs expected (the small “/n”). Expected: simulate the machine's planned order queue over the shift — window = 8 h − Σ changeover standards − smoko; per order, hours needed = RemainingLaborHrs (else Remaining × ProdStandard); order finishes → all its remaining pieces, else ⌊hours used ÷ ProdStandard⌋. Remaining = the signed shift's own Job Left when the order ran, else planning.csv.</div>
+        <div><b>Output 🟢🟡🔴</b> = Σ Total Good vs expected (the small “/n”). Expected = Σ Shift Target of the orders run that shift — per job the smaller of its Job Left at shift start and ⌊(8 h − hours held by earlier orders − changeover D/C/I) ÷ ProdStandard⌋, i.e. the very target the operator sheet showed. Shifts signed before Job Left / CycleTime were recorded fall back to simulating the machine's planned order queue (window = 8 h − Σ changeover standards − smoko; per order capped by its remaining qty).</div>
         <div><b>Yield%</b> = Good ÷ (Good + Reject).</div>
         <div><b>Efficiency*</b> = Run slots ÷ all filled slots.</div>
-        <div><b>vs Plan 🟢🟡🔴</b> = Total Good ÷ the same planning expectation the Output cell shows — the percentage form of Output's “/n”.</div>
+        <div><b>vs Plan 🟢🟡🔴</b> = Total Good ÷ the same expectation the Output cell shows (Σ Shift Targets, planning fallback) — the percentage form of Output's “/n”.</div>
         <div><b>Die / Colour / Insert h 🟢🟡🔴</b> = hours in D / C / I blocks vs standard = occurrences × (die 4 h · colour 0.5 h · insert 0.5 h); 🟢 ≤ std, 🟡 ≤ std + 0.5 h, 🔴 above.</div>
         <div>Colour thresholds for Output / Yield / Efficiency are editable in the panel above. Shift sub-rows show each shift's contribution to the period total.</div>
       </div>

@@ -29,12 +29,14 @@ import { ordersCoRun } from '../core/corun';
 // Re-exported so existing importers (Trace view, tests) can keep pulling
 // these from ./operator while the canonical definitions live in core.
 import {
+  hoursUnavailableFor,
   jobLeftPiecesFor,
   shiftTargetFor,
   SHIFT_TARGET_WARNING_RATIO,
   totalGoodExceedsShiftTarget,
 } from '../core/targets';
 export {
+  hoursUnavailableFor,
   jobLeftPiecesFor,
   shiftTargetFor,
   SHIFT_TARGET_WARNING_RATIO,
@@ -1509,15 +1511,25 @@ function cavities(): number {
  * Shift Target = pieces the operator should aim for this shift, from the
  * job demand AT SHIFT START (signed cross-shift good only — goodThis is
  * deliberately excluded, otherwise the target would shrink as the shift
- * produces). Stable through the shift without any frozen snapshot, and
- * the same formula lockShift persists to the ShiftTarget column.
+ * produces) over the press hours actually AVAILABLE to this job:
+ *
+ *   target = min(Job Left,
+ *                (8h − hours held by earlier orders this shift
+ *                    − this job's changeover D/C/I time) ÷ ProdStandard)
+ *
+ * S!.prod carries every job's slots for this (machine, shift), so the
+ * deduction sees the previous order's footprint and any die-change
+ * pseudo-order timeline (co-run mirrors are exempt — see
+ * hoursUnavailableFor). Stable while the job runs (its own R slots never
+ * deduct); it only steps down when a changeover is logged. Same formula
+ * lockShift persists to the ShiftTarget column.
  */
 function shiftTarget(): number | null {
   const o = selectedOrder();
   if (!o) return null;
   const jl = jobLeftPiecesFor(o, S!.jobTotalGood);
   if (jl == null) return null;
-  return shiftTargetFor(o, jl);
+  return shiftTargetFor(o, jl, hoursUnavailableFor(S!.prod, S!.selJob));
 }
 
 interface ShiftOutputWarning {
@@ -2081,14 +2093,14 @@ function buildSide(): string {
         ? ' title="Tap ✅ Confirm above to start logging this order on this press"'
         : '';
   // Shift Target: pieces the operator should aim for this shift. See
-  // shiftTarget() for the rule — either a full 8h run at cycle time, or
-  // just the remainder of the job if it'll finish in under 8h.
+  // shiftTarget() for the rule — the hours left after earlier orders and
+  // any changeover, at cycle time, capped by the job's remainder.
   const tgt = shiftTarget();
   const outputWarning = shiftOutputWarning(good);
   const targetDisplay = tgt == null ? '—' : String(tgt);
   const targetTitle = tgt == null
     ? 'No JobOper_ProdStandard on the planning row — Shift Target cannot be computed.'
-    : `Shift Target = if Job Left × ${o!.qtyPerHr} h/piece ≥ 8h then 8 ÷ ${o!.qtyPerHr}, else Job Left.`;
+    : `Shift Target = the smaller of Job Left and (8h − hours used by earlier orders this shift − changeover time) ÷ ${o!.qtyPerHr} h/piece.`;
   return `<aside class="op-side">
     <div class="side-title">Shift counters</div>
     <div class="sk"><label>Job left</label><b data-live="jobLeft">${jobLeft}</b><span class="jl-warn" data-live="jlWarn" title="${escapeHtml(jobLeftWarnTitle())}"${S!.unsignedEarlier.length ? '' : ' style="display:none"'}>⚠</span></div>

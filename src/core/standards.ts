@@ -1,6 +1,7 @@
 import type { ProductionRecord } from '../types';
 import { countSetupEvents } from './metrics';
 import { SLOTS_PER_SHIFT, SLOT_MINUTES, shiftBounds } from './shifts';
+import { hoursUnavailableFor, shiftTargetFor } from './targets';
 
 /**
  * Changeover standards + planning-driven expected output (floor-stated):
@@ -154,6 +155,51 @@ export function expectedShiftOutputFromPlanning(
     if (cursor >= windowEnd) break;
   }
   return { pieces: jobsUsed.length ? expected : null, jobsUsed };
+}
+
+/**
+ * Expected output for ONE (machine, calendar date, shift) bucket as the
+ * SUM OF THE SHIFT TARGETS of the orders recorded on it — the very
+ * number the operator side panel showed and lockShift stamped into the
+ * ShiftTarget column (core/targets.ts):
+ *
+ *   target(job) = min(JobLeft at shift start,
+ *                     (8h − hours held by the other orders
+ *                         − the job's changeover D/C/I) ÷ ProdStandard)
+ *
+ * Recomputed here from the denormalised per-row facts (JobLeft +
+ * CycleTime stamped at sign-off, `ctByJob` planning fallback) rather
+ * than trusting the stored ShiftTarget column, so rows signed before
+ * the multi-order fix judge by the corrected formula too.
+ *
+ * Returns null — caller falls back to the planned-queue / footprint
+ * models — when the bucket has no jobs, any job's JobLeft or cycle time
+ * is unknown (a partially-computable Σ would understate the bar and
+ * flatter vs Plan), or the Σ is 0 (nothing was demanded: only
+ * die-change pseudo-orders, which carry JobLeft 0, ran).
+ */
+export function expectedShiftOutputFromTargets(
+  records: ProductionRecord[],
+  ctByJob: Map<string, number>,
+): number | null {
+  const jobs = new Set<string>();
+  for (const r of records) if (r.jobNumber) jobs.add(r.jobNumber);
+  if (jobs.size === 0) return null;
+  let sum = 0;
+  for (const job of jobs) {
+    const canon = records.find((r) => r.jobNumber === job && r.slotIndex === 0);
+    const jobLeft = canon?.jobLeft;
+    if (jobLeft == null) return null;
+    if (jobLeft <= 0) continue; // nothing demanded (die-change pseudo-order)
+    const ct =
+      canon?.cycleTime && canon.cycleTime > 0
+        ? canon.cycleTime
+        : (ctByJob.get(job) ?? 0);
+    const target = shiftTargetFor({ qtyPerHr: ct }, jobLeft, hoursUnavailableFor(records, job));
+    if (target == null) return null;
+    sum += target;
+  }
+  return sum > 0 ? sum : null;
 }
 
 export interface ExpectedOutput {
