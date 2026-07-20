@@ -932,7 +932,7 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
    height so the two buttons read as a matched pair. */
 .die-mango-open.hd{padding:8px 14px;font-size:14px;border-width:1.5px}
 .die-req-note{margin:4px 0 10px;font-size:13px;color:var(--mu)}
-/* Dual-trigger mould service plan (calendar OR shots). */
+/* Shot-triggered mould service plan. */
 .die-svc-badge{display:inline-block;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:800;white-space:nowrap;margin-left:4px}
 .die-svc-badge.due{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c}
 .die-svc-badge.soon{background:#fff7ed;border:1px solid #fdba74;color:#9a3412}
