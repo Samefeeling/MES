@@ -675,16 +675,23 @@ function blankRecordForJob(slot: number, job: string): ProductionRecord {
 }
 
 function isPastShift(): boolean {
-  // A shift is "past" if its calendar date is strictly before today, OR
-  // if it's today but earlier than the live shift. The Job# dropdown for
+  // The RUNNING shift is never past — decisive for Night after midnight,
+  // whose ShiftId date is YESTERDAY: the date-only rule below classified
+  // the live 00:00–07:00 stretch as a past shift, which emptied the Job#
+  // dropdown of planning orders (no new order could be started in the
+  // early-morning hours) and made the sign-off gap gate demand all 16
+  // slots mid-shift.
+  const liveShiftId = currentShift(new Date()).shiftId;
+  if (sid() === liveShiftId) return false;
+  // Otherwise a shift is "past" if its calendar date is strictly before
+  // today, or if it's today but not the live shift. The Job# dropdown for
   // past shifts is restricted to jobs that were actually worked on, since
   // the planning list only reflects the current Epicor state.
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   if (S!.viewDate < today) return true;
   if (S!.viewDate > today) return false;
-  const liveShiftId = currentShift(new Date()).shiftId;
-  return sid() !== liveShiftId;
+  return true;
 }
 
 const OPERATOR_FUTURE_ORDER_DAYS = 5;
@@ -2970,7 +2977,12 @@ async function refreshAll(): Promise<void> {
  *     not, because we can't tell "no parts" from "forgot to fill in".
  *   - countEnd >= countStart
  *   - Total Good must not exceed 130% of Shift Target; a likely counter
- *     typo must be corrected before the shift can be locked
+ *     typo must be corrected before the shift can be locked. A signed-in
+ *     SUPERVISOR may sign off anyway (same bypass rule as the slot-gaps
+ *     gate below): genuine over-target output happens — a better cycle
+ *     than the standard, an extra cavity — and the supervisor vouching
+ *     for the figures is exactly what sign-off means. The modal repeats
+ *     the warning so the override is a conscious decision.
  * Confirming locks the shift records and clears the in-form selection.
  */
 function openSaveSignoffModal(): void {
@@ -3027,8 +3039,15 @@ function openSaveSignoffModal(): void {
   const totalRej = jobTotals();
   const good = Math.max(0, (ce - cs) * cav - totalRej);
   const outputWarning = shiftOutputWarning(good);
-  if (outputWarning) {
-    toast(outputWarning.message, 'err');
+  // Over-130% output hard-blocks the OPERATOR (almost always a Count
+  // Start / Count End typo). A signed-in supervisor proceeds to the
+  // modal instead, which repeats the warning — approving it is theirs
+  // to do, the same way they can bypass the slot-gaps gate above.
+  if (outputWarning && !isSupervisor()) {
+    toast(
+      `${outputWarning.message} Or ask a supervisor to sign in and approve this output.`,
+      'err',
+    );
     const countEnd = document.querySelector<HTMLInputElement>(
       '.op-side input[data-meta="cend"]',
     );
@@ -3050,6 +3069,13 @@ function openSaveSignoffModal(): void {
       <div><span>Good (this shift)</span><b class="g">${good}</b></div>
       <div><span>Total Reject</span><b class="r">${totalRej}</b></div>
     </div>
+    ${
+      outputWarning
+        ? `<div class="count-warning" role="alert">${escapeHtml(
+            outputWarning.message,
+          )} Signing off as supervisor approves this output as genuine.</div>`
+        : ''
+    }
     <p class="bd-sub">By signing off you confirm the above figures are correct and lock the shift records.</p>
     <div class="bd-actions">
       <button class="btn-ghost-big" data-cancel>Cancel</button>

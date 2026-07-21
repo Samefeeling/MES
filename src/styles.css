@@ -481,6 +481,10 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .op-side .sk input.count-invalid{border-color:var(--rd);background:#fef2f2;color:#991b1b;box-shadow:0 0 0 2px #fecaca}
 .op-side .sk b.g.count-invalid{color:var(--rd)}
 .count-warning{padding:9px 10px;border:2px solid var(--rd);border-radius:8px;background:#fef2f2;color:#991b1b;font-size:12px;font-weight:800;line-height:1.35;text-transform:none;letter-spacing:0}
+/* Same warning inside the Sign off & Save modal (supervisor override) —
+   the side panel's 12px is sized for its narrow column; the modal has
+   room, and this is the line a supervisor is vouching over. */
+.bd-modal .count-warning{font-size:14px}
 
 /* §6 — Handover / Journey: 2x2 grid of textareas for People / Plant / Machine / Material. */
 /* 📷 defect photos — queued shots (amber ⏳, ✕ discards) upload to the
