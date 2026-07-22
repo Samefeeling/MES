@@ -209,8 +209,10 @@ export function seedDieMaster(now: Date): DieMaster[] {
   return [
     custom,
     // In service, with a maintenance-confirmed return date 5 days out —
-    // exercises the Available column's date path.
-    row('DIE-0689', 'Integra Chair Shell', 1, 41.0, 1450, 800_000, 'in-service', 3, 60, 5),
+    // exercises the Available column's date path. The DieDescription
+    // deliberately differs from PMD_ProductDieColor's Die text so the
+    // demo shows the board preferring the toolroom's own name.
+    row('DIE-0689', 'INTEGRA CHAIR SHELL 1-CAV', 1, 41.0, 1450, 800_000, 'in-service', 3, 60, 5),
     row('DIE-1422', 'Battery Tray Lid 4-cav', 4, 19.8, 260, 1_200_000, 'serviced', 4, 4),
     row('DIE-0091', 'HS Pallet Insert 8-cav', 8, 7.4, 190, 2_000_000, 'to-be-serviced', 9, null),
   ];

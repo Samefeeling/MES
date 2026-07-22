@@ -21,6 +21,7 @@ import { MemoryDataLayer } from '../src/dal/memory';
 import { parseMangoWorkOrdersCsv } from '../src/dal/sharepoint';
 import {
   activeMaintenanceRequests,
+  dieNumberSortKey,
   fmtPlanned,
   isWorkOrderOverdue,
   parseMangoActionComments,
@@ -458,6 +459,43 @@ describe('MemoryDataLayer die maintenance lifecycle', () => {
     const colors = await dal.listProductDieColors();
     expect(colors.length).toBeGreaterThan(0);
     expect(colors.every((c) => c.dieNumber)).toBe(true);
+  });
+
+  it('updateDieMaster stamps the In-service return date (availableDate)', async () => {
+    const dal = new MemoryDataLayer();
+    const first = (await dal.listDieMaster())[0];
+    await dal.updateDieMaster(first.dieNumber, {
+      toolStatus: 'in-service',
+      dateStamp: '2026-07-22T01:00:00.000Z',
+      availableDate: '2026-08-01T00:00:00.000Z',
+    });
+    const again = (await dal.listDieMaster()).find((m) => m.dieNumber === first.dieNumber)!;
+    expect(again.toolStatus).toBe('in-service');
+    expect(again.availableDate).toBe('2026-08-01T00:00:00.000Z');
+    // The rest of the row is untouched.
+    expect(again.description).toBe(first.description);
+    expect(again.lastServiceDate).toBe(first.lastServiceDate);
+  });
+});
+
+describe('dieNumberSortKey (Die # column sorts numerically)', () => {
+  it('orders plain numeric die numbers by value, not first digit', () => {
+    const sorted = ['1050', '280', '9', '75'].sort((a, b) =>
+      dieNumberSortKey(a) < dieNumberSortKey(b) ? -1 : 1,
+    );
+    expect(sorted).toEqual(['9', '75', '280', '1050']);
+  });
+
+  it('keeps prefixed/suffixed numbers in natural order', () => {
+    const sorted = ['DIE-1050', 'DIE-280', '280A', '280'].sort((a, b) =>
+      dieNumberSortKey(a) < dieNumberSortKey(b) ? -1 : 1,
+    );
+    expect(sorted).toEqual(['280', '280A', 'DIE-280', 'DIE-1050']);
+  });
+
+  it('is trim- and case-insensitive like the rest of the die joins', () => {
+    expect(dieNumberSortKey(' 280 ')).toBe(dieNumberSortKey('280'));
+    expect(dieNumberSortKey('die-7')).toBe(dieNumberSortKey('DIE-7'));
   });
 });
 

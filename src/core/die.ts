@@ -199,7 +199,9 @@ export function parseToolStatus(raw: string): ToolStatus | '' {
 /** Aggregated usage + quality picture for one physical die. */
 export interface DieAgg {
   dieNumber: string;
-  /** Human name of the tool (PMD_ProductDieColor's `Die` column). */
+  /** Human name of the tool. Seeded from PMD_ProductDieColor's `Die`
+   *  column; the Die board overwrites it with PMD_DieMaster's
+   *  DieDescription when the tool is registered there. */
   description: string;
   /** Every Part # that runs on this die (from PMD_ProductDieColor). */
   parts: Array<{ partNumber: string; name: string; category: string; coRun: boolean }>;

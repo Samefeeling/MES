@@ -1220,7 +1220,10 @@ export class SharePointDataLayer implements PmdDataLayer {
   async updateDieMaster(
     dieNumber: string,
     patch: Partial<
-      Pick<DieMaster, 'toolStatus' | 'dateStamp' | 'lastServiceDate' | 'maintenanceLevel'>
+      Pick<
+        DieMaster,
+        'toolStatus' | 'dateStamp' | 'lastServiceDate' | 'availableDate' | 'maintenanceLevel'
+      >
     >,
   ): Promise<void> {
     // listDieMaster resolves the internal names + item ids; make sure it
@@ -1244,6 +1247,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (patch.dateStamp !== undefined) body[meta.keys.dateStamp] = patch.dateStamp;
     if (patch.lastServiceDate !== undefined)
       body[meta.keys.lastServiceDate] = patch.lastServiceDate;
+    if (patch.availableDate !== undefined) body[meta.keys.availableDate] = patch.availableDate;
     if (patch.maintenanceLevel !== undefined)
       body[meta.keys.maintenanceLevel] = patch.maintenanceLevel;
     await this.post(`${this.listUrl(LISTS.dieMaster)}/items(${id})`, body, '*');
@@ -1255,6 +1259,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         if (patch.toolStatus !== undefined) row.toolStatus = patch.toolStatus;
         if (patch.dateStamp !== undefined) row.dateStamp = patch.dateStamp;
         if (patch.lastServiceDate !== undefined) row.lastServiceDate = patch.lastServiceDate;
+        if (patch.availableDate !== undefined) row.availableDate = patch.availableDate;
         if (patch.maintenanceLevel !== undefined) row.maintenanceLevel = patch.maintenanceLevel;
       }
     }

@@ -112,7 +112,10 @@ export class MemoryDataLayer implements PmdDataLayer {
   async updateDieMaster(
     dieNumber: string,
     patch: Partial<
-      Pick<DieMaster, 'toolStatus' | 'dateStamp' | 'lastServiceDate' | 'maintenanceLevel'>
+      Pick<
+        DieMaster,
+        'toolStatus' | 'dateStamp' | 'lastServiceDate' | 'availableDate' | 'maintenanceLevel'
+      >
     >,
   ): Promise<void> {
     const key = dieNumber.trim().toUpperCase();
@@ -121,6 +124,7 @@ export class MemoryDataLayer implements PmdDataLayer {
     if (patch.toolStatus !== undefined) row.toolStatus = patch.toolStatus;
     if (patch.dateStamp !== undefined) row.dateStamp = patch.dateStamp;
     if (patch.lastServiceDate !== undefined) row.lastServiceDate = patch.lastServiceDate;
+    if (patch.availableDate !== undefined) row.availableDate = patch.availableDate;
     if (patch.maintenanceLevel !== undefined) row.maintenanceLevel = patch.maintenanceLevel;
   }
 

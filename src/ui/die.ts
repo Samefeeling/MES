@@ -413,7 +413,7 @@ function availableFor(d: DieAgg): { html: string; sort: string | null } {
     const back = (m?.availableDate ?? '').slice(0, 10);
     if (!back)
       return {
-        html: '<span class="die-avail maint" title="In service — maintenance hasn\'t confirmed a return date yet (PMD_DieMaster Available column is empty)">In maint</span>',
+        html: '<span class="die-avail maint" title="In service — no return date on record (PMD_DieMaster Available column is empty; this row predates the mandatory date). Tap the Status badge and re-pick In service to record it">In maint</span>',
         sort: '9998-99-99',
       };
     const late = back < isoDay(new Date());
@@ -585,6 +585,14 @@ async function loadAll(): Promise<void> {
   state.requests = requests;
   state.rejectLabels = new Map(rejCats.map((c) => [c.code, c.label]));
   state.dies = aggregateDies(dieColors, records, requests);
+  // Description: PMD_DieMaster's DieDescription is the toolroom's own name
+  // for the tool — prefer it wherever a master row exists. The
+  // PMD_ProductDieColor Die text stays as the fallback for dies the
+  // toolroom hasn't registered yet.
+  for (const d of state.dies) {
+    const masterDesc = state.masterByDie.get(d.dieNumber.trim().toUpperCase())?.description;
+    if (masterDesc?.trim()) d.description = masterDesc.trim();
+  }
   state.errors = errors;
   // Join health check: master rows loaded but NONE matched a die means
   // the two lists' DieNumber values disagree — dump samples so the
@@ -722,10 +730,22 @@ function filteredDies(): DieAgg[] {
   );
 }
 
+/** Natural sort key for die numbers: every digit run is zero-padded to a
+ *  fixed width, so "280" comes before "1050" (numeric value) while any
+ *  prefix/suffix ("DIE-280", "280A") still compares alphabetically around
+ *  the digits. A plain string compare put 1050 ahead of 280 — die numbers
+ *  are numbers to the toolroom, so the column sorts them that way. */
+export function dieNumberSortKey(dieNumber: string): string {
+  return dieNumber
+    .trim()
+    .toUpperCase()
+    .replace(/\d+/g, (run) => run.padStart(12, '0'));
+}
+
 /** Column sort accessors. Strings compare case-insensitively; numeric
  *  nulls (a die that never ran) always sink to the bottom. */
 const SORT_ACCESSORS: Record<Exclude<DieSortKey, 'smart'>, (d: DieAgg) => string | number | null> = {
-  die: (d) => d.dieNumber.toUpperCase(),
+  die: (d) => dieNumberSortKey(d.dieNumber),
   description: (d) => (d.description || '￿').toUpperCase(),
   // Worst-first rank (Problems 0 → Serviced 3), on the EFFECTIVE status
   // (incl. the damaged-component override); unregistered dies last.
@@ -1043,7 +1063,7 @@ function renderDieTable(): string {
     ${colgroup}
     <thead><tr>
       ${th('die', 'Die #')}
-      ${th('description', 'Description', "The tool's name — PMD_ProductDieColor's Die column")}
+      ${th('description', 'Description', "The tool's name — PMD_DieMaster's DieDescription (falls back to PMD_ProductDieColor's Die text when the tool isn't registered there)")}
       ${th('toolStatus', 'Status', 'Tool condition from PMD_DieMaster.ToolStatus: 🔴 Problems · 🟠 To be Serviced · 🔵 In service · 🟢 Serviced — tap a badge to change it')}
       ${th('lastService', 'Last service', 'PMD_DieMaster.LastServiceDate — stamped automatically when Status is set to Serviced. Sorting ascending puts the longest-unserviced tools first')}
       ${th('parts', 'Parts', 'Part numbers that run on this die')}
@@ -1137,7 +1157,10 @@ function renderRequests(): string {
 // ToolStatus picker — tap the badge, pick the tool's new condition. The
 // change writes straight to PMD_DieMaster (ToolStatus + DateStamp), and
 // setting "Serviced" also stamps LastServiceDate so the A/B/C service
-// counter restarts from today.
+// counter restarts from today. "In service" is a two-field event — the
+// toolroom must also give the Available (return) date and is reminded
+// that the Mango work order is required — so it detours through
+// openInServiceStep instead of writing straight away.
 
 function openStatusPicker(dieNumber: string): void {
   const m = masterFor(dieNumber);
@@ -1152,6 +1175,7 @@ function openStatusPicker(dieNumber: string): void {
       return `<button class="die-st-opt${current ? ' cur' : ''}" data-die-st="${st}">
         <span class="die-tstat ${meta.cls}">● ${meta.label}</span>
         ${st === 'serviced' ? '<em>stamps Last service = today</em>' : ''}
+        ${st === 'in-service' ? '<em>asks for the return date · Mango ticket required</em>' : ''}
         ${current ? '<b>current</b>' : ''}
       </button>`;
     })
@@ -1169,37 +1193,111 @@ function openStatusPicker(dieNumber: string): void {
   mc.querySelectorAll<HTMLButtonElement>('[data-die-st]').forEach((b) =>
     b.addEventListener('click', () => {
       const st = b.dataset.dieSt as keyof typeof TOOL_STATUS_META;
-      void (async () => {
-        const changedAt = new Date();
-        const now = changedAt.toISOString();
-        const patch: { toolStatus: typeof st; dateStamp: string; lastServiceDate?: string } = {
-          toolStatus: st,
-          dateStamp: now,
-        };
-        // LastServiceDate is a calendar-day reset, not an instant. Stamp
-        // midnight UTC of the Sydney/browser day so an early-morning
-        // service does not become "yesterday" when ISO is sliced.
-        if (st === 'serviced')
-          patch.lastServiceDate = `${isoDay(changedAt)}T00:00:00.000Z`;
-        const prev = { toolStatus: m.toolStatus, dateStamp: m.dateStamp, lastServiceDate: m.lastServiceDate };
-        // Optimistic — the row updates immediately; a failed write rolls back.
-        m.toolStatus = st;
-        m.dateStamp = now;
-        if (patch.lastServiceDate) m.lastServiceDate = patch.lastServiceDate;
-        closeModal();
-        render();
-        try {
-          await dalRef.updateDieMaster!(dieNumber, patch);
-          toast(`${dieNumber} → ${TOOL_STATUS_META[st].label}`, 'ok');
-        } catch (e) {
-          Object.assign(m, prev);
-          render();
-          console.error('[pmd] ToolStatus update failed:', e);
-          toast(`Could not update: ${e instanceof Error ? e.message : e}`, 'err');
-        }
-      })();
+      if (st === 'in-service') {
+        openInServiceStep(dieNumber);
+        return;
+      }
+      void applyToolStatus(dieNumber, st);
     }),
   );
+}
+
+/** Write a ToolStatus change to PMD_DieMaster, optimistically updating
+ *  the cached master row (rolled back on failure). `availableDate`
+ *  accompanies the 'in-service' transition — see openInServiceStep. */
+async function applyToolStatus(
+  dieNumber: string,
+  st: keyof typeof TOOL_STATUS_META,
+  availableDate?: string,
+): Promise<void> {
+  const m = masterFor(dieNumber);
+  if (!m || !dalRef.updateDieMaster) return;
+  const changedAt = new Date();
+  const now = changedAt.toISOString();
+  const patch: Partial<
+    Pick<DieMaster, 'toolStatus' | 'dateStamp' | 'lastServiceDate' | 'availableDate'>
+  > = { toolStatus: st, dateStamp: now };
+  // LastServiceDate is a calendar-day reset, not an instant. Stamp
+  // midnight UTC of the Sydney/browser day so an early-morning
+  // service does not become "yesterday" when ISO is sliced.
+  if (st === 'serviced') patch.lastServiceDate = `${isoDay(changedAt)}T00:00:00.000Z`;
+  if (availableDate !== undefined) patch.availableDate = availableDate;
+  const prev = {
+    toolStatus: m.toolStatus,
+    dateStamp: m.dateStamp,
+    lastServiceDate: m.lastServiceDate,
+    availableDate: m.availableDate,
+  };
+  // Optimistic — the row updates immediately; a failed write rolls back.
+  m.toolStatus = st;
+  m.dateStamp = now;
+  if (patch.lastServiceDate) m.lastServiceDate = patch.lastServiceDate;
+  if (patch.availableDate !== undefined) m.availableDate = patch.availableDate;
+  closeModal();
+  render();
+  try {
+    await dalRef.updateDieMaster(dieNumber, patch);
+    const back = availableDate ? ` · back ${ddmmyyyy(availableDate.slice(0, 10))}` : '';
+    toast(`${dieNumber} → ${TOOL_STATUS_META[st].label}${back}`, 'ok');
+  } catch (e) {
+    Object.assign(m, prev);
+    render();
+    console.error('[pmd] ToolStatus update failed:', e);
+    toast(`Could not update: ${e instanceof Error ? e.message : e}`, 'err');
+  }
+}
+
+/** Second step when the toolroom sets a die to In service: the Available
+ *  (return) date is REQUIRED — it feeds the board's Available column so
+ *  planning sees when the tool comes back instead of a dateless
+ *  "In maint" — and the Mango work order reminder is front and centre
+ *  (Mango is the system of record for the maintenance job itself).
+ *  Re-picking In service on a die already in service reopens this step,
+ *  which is the repair path for legacy dateless rows. */
+function openInServiceStep(dieNumber: string): void {
+  const m = masterFor(dieNumber);
+  if (!m || !dalRef.updateDieMaster) return;
+  const meta = TOOL_STATUS_META['in-service'];
+  const today = isoDay(new Date());
+  const cur = (m.availableDate ?? '').slice(0, 10);
+  openModal(`<div class="die-st-pick die-insvc">
+    <div class="kpi-trace-head">
+      <h3>🛠 ${escapeHtml(dieNumber)} — <span class="die-tstat ${meta.cls}">● ${meta.label}</span></h3>
+      <button class="btn-ghost-big" data-mod="close">Cancel</button>
+    </div>
+    <div class="die-insvc-mango" role="alert">🥭 <b>Mango Ticket Required</b> — raise the maintenance
+      work order in Mango before the tool goes in. ${mangoLink('Open Mango')}</div>
+    <label class="die-insvc-date">Available — when will maintenance have the die back?
+      <input type="date" data-insvc-date min="${today}" value="${escapeHtml(cur >= today ? cur : '')}" required>
+    </label>
+    <p class="die-req-note">Required. The Die board's <b>Available</b> column shows this date so
+      planning knows when the tool returns (writes PMD_DieMaster ToolStatus + Available + DateStamp).</p>
+    <div class="bd-actions">
+      <button class="btn-ghost-big" data-insvc-back>← Back</button>
+      <button class="btn-primary-big" data-insvc-save>✓ Set In service</button>
+    </div>
+  </div>`);
+  const mc = document.getElementById('mc')!;
+  mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
+  mc.querySelector('[data-insvc-back]')?.addEventListener('click', () => openStatusPicker(dieNumber));
+  const input = mc.querySelector<HTMLInputElement>('[data-insvc-date]')!;
+  input.focus();
+  mc.querySelector('[data-insvc-save]')?.addEventListener('click', () => {
+    const date = input.value;
+    if (!date) {
+      toast('Enter the Available date — when maintenance will have the die back.', 'err');
+      input.focus();
+      return;
+    }
+    if (date < today) {
+      toast('That Available date has already passed — pick today or later.', 'err');
+      input.focus();
+      return;
+    }
+    // Midnight UTC of the picked day, same convention as LastServiceDate,
+    // so slicing the ISO string always returns the day the toolroom chose.
+    void applyToolStatus(dieNumber, 'in-service', `${date}T00:00:00.000Z`);
+  });
 }
 
 // ---------------------------------------------------------------------

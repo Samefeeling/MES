@@ -799,6 +799,12 @@ th.die-sort.a{color:#1d4ed8}
 .die-st-pick .die-st-opt .die-tstat{font-size:14px}
 .die-st-pick .die-st-opt em{color:var(--mu);font-size:12px;font-style:normal}
 .die-st-pick .die-st-opt b{margin-left:auto;color:#1d4ed8;font-size:12px}
+/* In-service step: Mango ticket reminder + the mandatory return date */
+.die-insvc-mango{margin-top:10px;padding:10px 12px;background:#fff7ed;border:1px solid #fdba74;border-radius:10px;font-size:14px;color:#9a3412;line-height:1.5}
+.die-insvc-mango .die-mango-open{margin-left:4px;white-space:nowrap}
+.die-insvc-date{display:block;margin-top:14px;font-size:14px;font-weight:700}
+.die-insvc-date input{display:block;margin-top:6px;padding:10px 12px;font-size:16px;border:2px solid var(--bd);border-radius:8px;background:#fff;min-width:200px}
+.die-insvc .bd-actions{margin-top:14px}
 /* Service (🔧) markers on the big trend chart */
 .die-trend-col.svc em{color:#9a3412;font-style:normal;font-weight:800}
 .die-trend-col.svc .die-trend-bar{box-shadow:inset 0 -3px 0 #fdba74}
