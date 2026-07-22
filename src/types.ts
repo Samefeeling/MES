@@ -333,8 +333,10 @@ export interface ProductionRecord {
   lockedBy: string;
   lockedAt: string;
   /** Signed-off then re-opened by a supervisor for correction
-   *  (PMD_Production.Reopened = Yes). The row is editable again — but only
-   *  its already-signed slots and counts, not new time periods — and every
+   *  (PMD_Production.Reopened = Yes). The row is editable again: its
+   *  already-signed slots and counts everywhere; NEW time periods only
+   *  while the shift is still running or with a supervisor signed in
+   *  (an ended shift must not sprout after-the-fact production). Every
    *  device sees the same reopened state because the flag is on the server,
    *  not device-local. Cleared back to false on the next sign-off. */
   reopened?: boolean;

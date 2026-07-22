@@ -2043,18 +2043,17 @@ function buildGrid(): string {
       : needsConfirm()
         ? ' disabled title="Tap ✅ Confirm above to start logging this order on this press"'
         : '';
-  // In reopened-for-correction mode, reject inputs are editable only on the
-  // already-signed slots — an empty slot can't sprout rejects any more than it
-  // can sprout a status letter.
-  const reopened = reopenedForCorrection();
+  // In reopened-for-correction mode, reject inputs on slots outside the
+  // signed timeline follow the same rule as the status grid: blocked on an
+  // ended shift unless a supervisor is signed in — a running shift's
+  // timeline is still growing and stays editable.
   const rejRows = S!.rejCats
     .map((cat) => {
       const cells = recs
         .map((r, i) => {
           const v = parseRejects(r)[cat.code] ?? 0;
           const now = nowSlot === i ? ' is-now-col' : '';
-          const cellRdo =
-            gridRdo || (reopened && !slotHasOwnStatus(i) ? ' disabled' : '');
+          const cellRdo = gridRdo || (reopenedBlocksNewPeriod(i) ? ' disabled' : '');
           return `<td class="num-cell${now}"><input type="text" inputmode="numeric" pattern="[0-9]*" class="rej-input" data-row="named" data-code="${escapeHtml(
             cat.code,
           )}" data-slot="${i}" value="${v || ''}"${cellRdo}></td>`;
@@ -2366,10 +2365,9 @@ function isJobLocked(): boolean {
 
 /** The selected order has been signed off and re-opened for correction
  *  (PMD_Production.Reopened = Yes). In this mode the floor may fix the
- *  already-signed slots and the counts, but NOT add status to new (empty)
- *  time periods — that keeps a re-opened order from sprouting fresh
- *  production across devices. Read off the canonical slot, so every device
- *  that sees the server flag agrees. */
+ *  already-signed slots and the counts; adding status to new (empty) time
+ *  periods is governed by reopenedBlocksNewPeriod below. Read off the
+ *  canonical slot, so every device that sees the server flag agrees. */
 function reopenedForCorrection(): boolean {
   return canonical()?.reopened === true;
 }
@@ -2380,6 +2378,20 @@ function slotHasOwnStatus(slot: number): boolean {
   return S!.prod.some(
     (r) => r.jobNumber === S!.selJob && r.slotIndex === slot && !!r.statusCode,
   );
+}
+
+/** Does reopened-for-correction mode block giving this (empty) slot a NEW
+ *  status? Slots outside the signed timeline are protected from
+ *  after-the-fact fabrication — but only on ENDED shifts, and a signed-in
+ *  supervisor may still add them there. While the shift is RUNNING the
+ *  timeline is genuinely still growing: sign-off no longer demands future
+ *  slots (see isPastShift), so an order signed off mid-shift — the normal
+ *  post-midnight Night case — legitimately has real production after the
+ *  signed range, and an unlock must let the floor record it. Without this
+ *  exception those periods could never be added at all. */
+function reopenedBlocksNewPeriod(slot: number): boolean {
+  if (!reopenedForCorrection() || slotHasOwnStatus(slot)) return false;
+  return isPastShift() && !isSupervisor();
 }
 
 /** Belt-and-braces guard for D01–D10 reject entry — mirrors the grid's
@@ -2398,8 +2410,8 @@ function rejectEntryBlocked(slot: number): { blocked: boolean; reason: string } 
     return { blocked: true, reason: 'Signed off — sign in as supervisor and Unlock to edit' };
   if (needsConfirm())
     return { blocked: true, reason: 'Tap ✅ Confirm first — order, press, operator & supervisor' };
-  if (reopenedForCorrection() && !slotHasOwnStatus(slot))
-    return { blocked: true, reason: 'Re-opened for correction — only the already-signed slots can be edited' };
+  if (reopenedBlocksNewPeriod(slot))
+    return { blocked: true, reason: 'Re-opened for correction — this slot wasn\'t part of the signed timeline. Sign in as supervisor to add it' };
   return { blocked: false, reason: '' };
 }
 
@@ -2419,13 +2431,19 @@ function lockInfo(): { lockedBy: string; lockedAt: string } | null {
   return null;
 }
 
-/** Notice shown while a signed order is re-opened for correction, so the floor
- *  understands why only the signed slots/counts are editable. */
+/** Notice shown while a signed order is re-opened for correction. The text
+ *  states the rule that applies RIGHT NOW on this device: a running shift
+ *  (or a signed-in supervisor) may also add missed time periods; an ended
+ *  shift without a supervisor is limited to the signed slots and counts. */
 function buildReopenedBanner(): string {
   if (!reopenedForCorrection()) return '';
+  const canAddPeriods = !isPastShift() || isSupervisor();
+  const scope = canAddPeriods
+    ? 'Fix the signed slots and the counts — you can also add time periods that were missed — then sign off again.'
+    : 'Fix the already-signed slots and the counts, then sign off again. Adding new time periods to an ended shift needs a supervisor signed in.';
   return `<div class="reopened-banner">
     <b>🔓 Re-opened for correction</b>
-    <span>Fix the already-signed slots and the counts, then sign off again. New time periods can't be added.</span>
+    <span>${scope}</span>
   </div>`;
 }
 
@@ -3015,7 +3033,11 @@ function openSaveSignoffModal(): void {
   // are that job's responsibility and don't count as gaps here.
   // A signed-in supervisor bypasses the gate — they can sign off an
   // exceptional / partially-recorded shift when correcting data.
-  const gaps = isSupervisor() ? [] : slotGapsForSignoff();
+  // A reopened-for-correction order is also exempt: its timeline was
+  // already accepted by the original sign-off, and re-signing later
+  // (e.g. after the shift ended) must not demand MORE slots than that
+  // acceptance did — slots the correction mode may not even allow adding.
+  const gaps = isSupervisor() || reopenedForCorrection() ? [] : slotGapsForSignoff();
   if (gaps.length) {
     const list = gaps.map((i) => i + 1).join(', ');
     toast(
@@ -3132,11 +3154,11 @@ function wireStatusPicker(): void {
     S!.selSet = new Set<number>();
     // Skip slots already held by another job — drag-range across a
     // signed-off run mustn't sweep its slots into the selection. In
-    // reopened-for-correction mode also skip empty slots (only the signed
-    // slots may be edited).
+    // reopened-for-correction mode also skip slots the mode blocks
+    // (empty slots of an ended shift without a supervisor).
     for (let i = lo; i <= hi; i++) {
       if (occupyingOtherJob(i)) continue;
-      if (reopenedForCorrection() && !slotHasOwnStatus(i)) continue;
+      if (reopenedBlocksNewPeriod(i)) continue;
       S!.selSet.add(i);
     }
     paintSelection();
@@ -3170,10 +3192,11 @@ function wireStatusPicker(): void {
       toast('Tap ✅ Confirm first — confirm the order, press, operator & supervisor to start logging', 'warn');
       return;
     }
-    // Reopened-for-correction: only the already-signed slots are editable.
-    // Tapping an empty slot to add a new time period is blocked.
-    if (reopenedForCorrection() && !slotHasOwnStatus(slot)) {
-      toast('Reopened for correction — fix the signed slots & counts; new time periods can\'t be added', 'warn');
+    // Reopened-for-correction: on an ENDED shift, empty slots need a
+    // supervisor — the running shift's timeline is still growing and
+    // stays editable (an early sign-off mustn't strand real production).
+    if (reopenedBlocksNewPeriod(slot)) {
+      toast('Reopened for correction — fix the signed slots & counts. Adding new time periods to an ended shift needs a supervisor signed in.', 'warn');
       return;
     }
     anchor = slot;
