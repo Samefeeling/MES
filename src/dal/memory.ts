@@ -26,7 +26,6 @@ import {
   seedDieChangeLogs,
   seedDieMaintenance,
   seedDieMaster,
-  seedMachineMaintenance,
   seedMachines,
   seedOperators,
   seedPlanning,
@@ -53,7 +52,6 @@ export class MemoryDataLayer implements PmdDataLayer {
   private dieColors: ProductDieColor[];
   private dieMaster: DieMaster[];
   private dieMaintenance: DieMaintenanceRequest[];
-  private machineMaintenance: DieMaintenanceRequest[];
   private dieChangeLogs: DieChangeLog[] = [];
   private nextDclId = 1;
   private nextMaintId: number;
@@ -76,7 +74,6 @@ export class MemoryDataLayer implements PmdDataLayer {
     this.dieColors = seedProductDieColors();
     this.dieMaster = seedDieMaster(now);
     this.dieMaintenance = seedDieMaintenance(now);
-    this.machineMaintenance = seedMachineMaintenance(now);
     this.dieChangeLogs = seedDieChangeLogs(now);
     this.nextDclId = Math.max(0, ...this.dieChangeLogs.map((r) => r.id)) + 1;
     this.nextMaintId = Math.max(0, ...this.dieMaintenance.map((r) => r.id)) + 1;
@@ -136,12 +133,6 @@ export class MemoryDataLayer implements PmdDataLayer {
   async listDieMaintenance(): Promise<DieMaintenanceRequest[]> {
     return MemoryDataLayer.clone(
       [...this.dieMaintenance].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
-    );
-  }
-
-  async listMachineMaintenance(): Promise<DieMaintenanceRequest[]> {
-    return MemoryDataLayer.clone(
-      [...this.machineMaintenance].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
     );
   }
 

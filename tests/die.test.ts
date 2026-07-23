@@ -10,6 +10,7 @@ import {
   dieServiceStatus,
   goodByJob,
   latestConditionByDie,
+  machineCodeForAsset,
   machineWorkOrderLevel,
   machineWorkOrdersFor,
   nextPlannedFor,
@@ -502,57 +503,39 @@ describe('dieNumberSortKey (Die # column sorts numerically)', () => {
   });
 });
 
-describe('assetNamesMachine (Machine column ↔ Mango Plant/Equipment)', () => {
-  // The site's REAL Plant/Equipment names (as exported by Mango).
-  const REAL = [
-    'AU - 125T Superjack Injection Molding Machine',
-    'AU - 1300T LS Mtron Injection Molding Machine',
-    'AU - 150T Borche  Injection Molding Machine',
-    'AU - 1600T Toshiba Injection Molding Machine',
-    'AU - 320T Macosys Injection Molding Machine',
-    'AU - 550T Meiki Injection Molding Machine',
-    'AU - 850T Meiki Injection Molding Machine',
-    'AU - Batt-1 BattenFeld Injection Molding Machine (1000T)',
-    'AU - Batt-2 BattenFeld Injection Molding Machine (1000T Modified Screw & Barrel)',
-  ];
-  const find = (code: string): string | undefined => REAL.find((a) => assetNamesMachine(a, code));
-
-  it('matches every real press code to exactly its own asset', () => {
-    expect(find('125T')).toBe('AU - 125T Superjack Injection Molding Machine');
-    expect(find('150T')).toBe('AU - 150T Borche  Injection Molding Machine');
-    expect(find('320T')).toBe('AU - 320T Macosys Injection Molding Machine');
-    expect(find('550T')).toBe('AU - 550T Meiki Injection Molding Machine');
-    expect(find('850T')).toBe('AU - 850T Meiki Injection Molding Machine');
-    expect(find('1300T')).toBe('AU - 1300T LS Mtron Injection Molding Machine');
-    expect(find('1600T')).toBe('AU - 1600T Toshiba Injection Molding Machine');
-  });
-
-  it('matches the hyphenated Batt-1 / Batt-2 assets to the glued Batt1 / Batt2 codes', () => {
-    expect(assetNamesMachine('AU - Batt-1 BattenFeld Injection Molding Machine (1000T)', 'Batt1')).toBe(true);
+describe('assetNamesMachine / machineCodeForAsset (explicit Plant/Equipment map)', () => {
+  it('maps every registered Mango asset to its Machine-column code', () => {
+    expect(machineCodeForAsset('AU - 125T Superjack Injection Molding Machine')).toBe('125T');
+    expect(machineCodeForAsset('AU - 1300T LS Mtron Injection Molding Machine')).toBe('1300T');
+    expect(machineCodeForAsset('AU - 150T Borche Injection Molding Machine')).toBe('150T');
+    expect(machineCodeForAsset('AU - 1600T Toshiba Injection Molding Machine')).toBe('1600T');
+    expect(machineCodeForAsset('AU - 320T Macosys Injection Molding Machine')).toBe('320T');
+    expect(machineCodeForAsset('AU - 550T Meiki Injection Molding Machine')).toBe('550T');
+    expect(machineCodeForAsset('AU - 850T Meiki Injection Molding Machine')).toBe('850T');
+    expect(machineCodeForAsset('AU - Batt-1 BattenFeld Injection Molding Machine (1000T)')).toBe('Batt1');
     expect(
-      assetNamesMachine('AU - Batt-2 BattenFeld Injection Molding Machine (1000T Modified Screw & Barrel)', 'Batt2'),
-    ).toBe(true);
-    // …and Batt-1 must NOT be claimed by Batt2 (or vice-versa).
+      machineCodeForAsset('AU - Batt-2 BattenFeld Injection Molding Machine (1000T Modified Screw & Barrel)'),
+    ).toBe('Batt2');
+  });
+
+  it('is trim- and whitespace-insensitive (Mango sometimes doubles a space)', () => {
+    // The real "150T Borche" row ships with two spaces before "Injection".
+    expect(machineCodeForAsset('AU - 150T Borche  Injection Molding Machine')).toBe('150T');
+    expect(machineCodeForAsset('  AU - 550T Meiki Injection Molding Machine  ')).toBe('550T');
+  });
+
+  it('returns no code for an unregistered asset', () => {
+    expect(machineCodeForAsset('AU - Forklift 7')).toBe('');
+    expect(machineCodeForAsset('AU - 999T Nonexistent Press')).toBe('');
+    expect(machineCodeForAsset('')).toBe('');
+  });
+
+  it('assetNamesMachine is the exact-map predicate', () => {
+    expect(assetNamesMachine('AU - Batt-1 BattenFeld Injection Molding Machine (1000T)', 'Batt1')).toBe(true);
     expect(assetNamesMachine('AU - Batt-1 BattenFeld Injection Molding Machine (1000T)', 'Batt2')).toBe(false);
-  });
-
-  it('never confuses one tonnage for another across the real list', () => {
-    // 150T must not match the 1500-ish / 1600T rows; 125T not the 1300T row.
-    expect(assetNamesMachine('AU - 1600T Toshiba Injection Molding Machine', '150T')).toBe(false);
-    expect(assetNamesMachine('AU - 1300T LS Mtron Injection Molding Machine', '125T')).toBe(false);
     expect(assetNamesMachine('AU - 550T Meiki Injection Molding Machine', '850T')).toBe(false);
-  });
-
-  it('still honours the code-token and tonnage-in-words spellings', () => {
-    expect(assetNamesMachine('AU - 850 Tonne Press', '850T')).toBe(true); // words fallback
-    expect(assetNamesMachine('AU - HS High-Speed Press', 'HS')).toBe(true);
-    expect(assetNamesMachine('AU - High-Speed Press', 'HS')).toBe(false); // HS not inside HIGH
-    expect(assetNamesMachine('AU - 1125T Press', '125T')).toBe(false); // distinct number token
-  });
-
-  it('is empty-safe', () => {
+    expect(assetNamesMachine('AU - 550T Meiki Injection Molding Machine', '')).toBe(false);
     expect(assetNamesMachine('', '850T')).toBe(false);
-    expect(assetNamesMachine('AU - 850T Meiki Injection Molding Machine', '')).toBe(false);
   });
 });
 
@@ -574,10 +557,10 @@ describe('machineWorkOrder grouping + colour level', () => {
     ...over,
   });
   const reqs = [
-    wo({ id: 1, asset: 'AU - 850 Tonne Press', status: 'open', dueDate: '2026-08-10' }),
-    wo({ id: 2, asset: 'AU - 850 Tonne Press', status: 'done', closedAt: '2026-07-05T00:00:00Z' }),
-    wo({ id: 3, asset: 'AU - 1600T Injection Moulding Machine', status: 'in-progress', dueDate: '2026-07-01' }),
-    wo({ id: 4, asset: 'AU - 550 Tonne Press', status: 'done', closedAt: '2026-07-02T00:00:00Z' }),
+    wo({ id: 1, asset: 'AU - 850T Meiki Injection Molding Machine', status: 'open', dueDate: '2026-08-10' }),
+    wo({ id: 2, asset: 'AU - 850T Meiki Injection Molding Machine', status: 'done', closedAt: '2026-07-05T00:00:00Z' }),
+    wo({ id: 3, asset: 'AU - 1600T Toshiba Injection Molding Machine', status: 'in-progress', dueDate: '2026-07-01' }),
+    wo({ id: 4, asset: 'AU - 550T Meiki Injection Molding Machine', status: 'done', closedAt: '2026-07-02T00:00:00Z' }),
   ];
   const today = '2026-07-23';
 
@@ -627,22 +610,6 @@ describe('parseMangoMachineWorkOrdersCsv (machine half of the report)', () => {
   });
 });
 
-describe('MemoryDataLayer machine work orders', () => {
-  it('seeds machine work orders that colour the presses green/red/blue', async () => {
-    const dal = new MemoryDataLayer();
-    const reqs = await dal.listMachineMaintenance();
-    expect(reqs.length).toBeGreaterThan(0);
-    // Every seeded machine order carries a raw asset (the match key).
-    expect(reqs.every((r) => (r.asset ?? '').length > 0)).toBe(true);
-    const today = new Date().toISOString().slice(0, 10);
-    // 550T open + on time → green; 1600T open + overdue → red; Batt1 open
-    // (hyphenated "Batt-1" asset) → green; 850T closed only → blue.
-    expect(machineWorkOrderLevel('550T', reqs, today)).toBe('open');
-    expect(machineWorkOrderLevel('1600T', reqs, today)).toBe('overdue');
-    expect(machineWorkOrderLevel('Batt1', reqs, today)).toBe('open');
-    expect(machineWorkOrderLevel('850T', reqs, today)).toBeNull();
-  });
-});
 
 describe('latestConditionByDie (PMD_DieChangeLog → toolroom flags)', () => {
   const log = (over: Partial<DieChangeLog>): DieChangeLog => ({

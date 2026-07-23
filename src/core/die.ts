@@ -912,66 +912,44 @@ export function aggregateDies(
 // Machine work orders (Die board's Machine column ↔ Mango Plant/Equipment)
 //
 // Mango's report covers the whole plant. The die parser keeps the die
-// rows; the machine parser keeps the rest, preserving the raw asset. The
-// Die board matches a press to its work orders by CODE here, so it never
-// needs to know Mango's exact machine-naming convention.
+// rows; the machine parser keeps the rest, preserving the raw asset. Each
+// press's work orders are found by an explicit Plant/Equipment → machine
+// code map — no guessing. Register a new machine by adding a row here.
 
-/** Break a string into comparison tokens: uppercase, split on every run of
- *  non-alphanumerics, then split each piece again at letter↔digit
- *  boundaries. So "550T" → ["550","T"], "Batt-1" → ["BATT","1"], and
- *  "AU - 1600T Toshiba" → ["AU","1600","T","TOSHIBA"]. Splitting the
- *  letter/digit boundary is what lets a code written glued ("Batt1") match
- *  an asset that hyphenates it ("Batt-1"), and vice-versa. */
-function machineTokens(s: string): string[] {
-  return s
-    .toUpperCase()
-    .split(/[^A-Z0-9]+/)
-    .flatMap((t) => t.match(/\d+|[A-Z]+/g) ?? []);
+/** Mango Plant/Equipment name → the Machine-column code it belongs to.
+ *  This is the whole join: a machine work order lights up / drills down a
+ *  press only when its asset is listed here. When Mango registers a new
+ *  machine, add its exact Plant/Equipment string and the code. Matching is
+ *  trim- and whitespace-insensitive (Mango occasionally doubles a space). */
+export const MACHINE_ASSET_TO_CODE: ReadonlyArray<readonly [string, string]> = [
+  ['AU - 125T Superjack Injection Molding Machine', '125T'],
+  ['AU - 1300T LS Mtron Injection Molding Machine', '1300T'],
+  ['AU - 150T Borche Injection Molding Machine', '150T'],
+  ['AU - 1600T Toshiba Injection Molding Machine', '1600T'],
+  ['AU - 320T Macosys Injection Molding Machine', '320T'],
+  ['AU - 550T Meiki Injection Molding Machine', '550T'],
+  ['AU - 850T Meiki Injection Molding Machine', '850T'],
+  ['AU - Batt-1 BattenFeld Injection Molding Machine (1000T)', 'Batt1'],
+  ['AU - Batt-2 BattenFeld Injection Molding Machine (1000T Modified Screw & Barrel)', 'Batt2'],
+];
+
+const normaliseAsset = (s: string): string => s.trim().replace(/\s+/g, ' ').toUpperCase();
+
+const ASSET_CODE_LOOKUP = new Map<string, string>(
+  MACHINE_ASSET_TO_CODE.map(([asset, code]) => [normaliseAsset(asset), code]),
+);
+
+/** The Machine-column code a Mango Plant/Equipment asset maps to, or '' if
+ *  the asset isn't a registered machine (see MACHINE_ASSET_TO_CODE). */
+export function machineCodeForAsset(asset: string): string {
+  return ASSET_CODE_LOOKUP.get(normaliseAsset(asset)) ?? '';
 }
 
-/** Is `needle` a run of consecutive elements inside `hay`? */
-function tokenRunIncluded(hay: string[], needle: string[]): boolean {
-  if (needle.length === 0) return false;
-  for (let i = 0; i + needle.length <= hay.length; i++) {
-    let ok = true;
-    for (let j = 0; j < needle.length; j++) {
-      if (hay[i + j] !== needle[j]) {
-        ok = false;
-        break;
-      }
-    }
-    if (ok) return true;
-  }
-  return false;
-}
-
-/** Does a Mango Plant/Equipment asset string name this machine? The site's
- *  real convention is "AU - <code> <make> Injection Molding Machine"
- *  ("AU - 550T Meiki …", "AU - Batt-1 BattenFeld … (1000T)"), so the match
- *  is: the machine code appears as a run of consecutive tokens in the
- *  asset, comparing on letter/digit-split tokens so "Batt1" ↔ "Batt-1" and
- *  "550T" ↔ "550T"/"550 T" all resolve. "125T" still never matches
- *  "1125T" (distinct number tokens) and "HS" never matches inside
- *  "High-Speed". A tonnage-in-words fallback ("850 Tonne Press") is kept
- *  for any asset that uses that older spelling. */
+/** Does this Mango Plant/Equipment asset name the given machine? */
 export function assetNamesMachine(asset: string, machineCode: string): boolean {
   const code = machineCode.trim();
-  if (!code || !asset) return false;
-  const codeTokens = machineTokens(code);
-  if (codeTokens.length === 0) return false;
-  const assetTokens = machineTokens(asset);
-  if (tokenRunIncluded(assetTokens, codeTokens)) return true;
-  // Tonnage press written in words: "850T" ↔ an "850" token immediately
-  // followed by a Tonne/T token.
-  const ton = /^(\d+)T$/i.exec(code);
-  if (ton) {
-    for (let i = 0; i < assetTokens.length; i++) {
-      if (assetTokens[i] !== ton[1]) continue;
-      const next = assetTokens[i + 1] ?? '';
-      if (next === 'T' || next === 'TON' || next.startsWith('TONNE')) return true;
-    }
-  }
-  return false;
+  if (!code) return false;
+  return machineCodeForAsset(asset).toUpperCase() === code.toUpperCase();
 }
 
 /** Work orders (from listMachineMaintenance) that belong to this machine,
