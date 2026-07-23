@@ -1059,10 +1059,16 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .die-note-body{font-size:14px;line-height:1.45;color:#1e293b;white-space:pre-wrap;overflow-wrap:anywhere}
 .die-note-nobody{color:var(--mu);font-style:italic}
 .die-note-empty{list-style:none;font-size:13px;color:var(--mu);padding:6px 2px}
-/* Add-note dialog. */
-.die-note-editor .die-note-fields{display:grid;grid-template-columns:repeat(2,1fr);gap:8px 12px;margin:6px 0 10px}
-.die-note-editor .die-note-fields label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:700;color:var(--mu)}
-.die-note-editor .die-note-fields input{padding:8px 10px;font-size:15px;font-weight:600;color:#1e293b;border:1px solid var(--bd);border-radius:8px;background:#fff}
+/* Add-note dialog. Compact: 20px title, no subtitle, context on one row. */
+.die-note-editor .bd-title.die-note-title{font-size:20px}
+.die-note-editor .die-note-fields{display:flex;gap:8px;margin:2px 0 10px}
+.die-note-editor .die-note-fields label{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:700;color:var(--mu)}
+.die-note-editor .die-note-fields input{width:100%;box-sizing:border-box;min-width:0;padding:8px 10px;font-size:15px;font-weight:600;color:#1e293b;border:1px solid var(--bd);border-radius:8px;background:#fff}
+/* Past-notes reference panel inside the dialog — search the die's SOC log
+   while composing a new note. */
+.die-note-past-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;font-weight:800;color:var(--mu);margin-bottom:8px}
+.die-note-past .die-note-search{flex:1;min-width:180px;margin-bottom:0}
+.die-note-past .die-note-list{max-height:170px}
 .die-note-body-wrap{position:relative}
 .die-note-editor .die-note-text{width:100%;box-sizing:border-box;font:15px/1.5 inherit;border:1px solid var(--bd);border-radius:8px;padding:10px 46px 10px 10px;resize:vertical}
 .die-note-mic{position:absolute;top:8px;right:8px;width:34px;height:34px;border:1px solid var(--bd);border-radius:8px;background:#fff;font-size:16px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}

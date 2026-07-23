@@ -1662,6 +1662,26 @@ function renderNotesSection(d: DieAgg): string {
     </div>`;
 }
 
+/** Wire a SOC-notes keyword search (the drilldown panel and the Add-note
+ *  dialog share the same `data-note-*` markup): filter the list in place so
+ *  typing never loses focus. Re-reads the live notes each keystroke. */
+function wireNoteSearch(mc: HTMLElement, dieNumber: string): void {
+  const search = mc.querySelector<HTMLInputElement>('[data-note-search]');
+  if (!search) return;
+  search.addEventListener('input', () => {
+    const kw = search.value;
+    const filtered = parseDieNotes(masterFor(dieNumber)?.notes ?? '', kw);
+    const list = mc.querySelector('[data-note-list]');
+    if (list)
+      list.innerHTML = noteListHtml(
+        filtered,
+        kw.trim() ? `No notes match “${kw.trim()}”.` : NOTES_EMPTY,
+      );
+    const count = mc.querySelector('[data-note-count]');
+    if (count) count.textContent = String(filtered.length);
+  });
+}
+
 // --- voice-to-text (Web Speech API where the browser supports it) ---------
 
 interface SpeechRecognitionLike {
@@ -1751,10 +1771,9 @@ function openAddNoteDialog(dieNumber: string): void {
   const shift = ctx?.shift ?? '';
   const machine = ctx?.machine ?? '';
   const operator = ctx?.operator ?? '';
+  const past = parseDieNotes(m.notes ?? '');
   openModal(`<div class="bd-modal die-note-editor">
-    <h3 class="bd-title">📝 ${escapeHtml(dieNumber)} — add SOC note</h3>
-    <p class="bd-sub">Log a setting change (colour, temperature, speed, pressure…) to
-      <b>PMD_DieMaster.Notes</b>. The shift context below stamps the note.</p>
+    <h3 class="bd-title die-note-title">📝 ${escapeHtml(dieNumber)} — add SOC note</h3>
     <div class="die-note-fields">
       <label>Date<input type="date" data-nf="date" value="${escapeHtml(date)}"></label>
       <label>Shift<input type="text" data-nf="shift" value="${escapeHtml(shift)}" placeholder="Day / Night"></label>
@@ -1766,6 +1785,17 @@ function openAddNoteDialog(dieNumber: string): void {
         placeholder="What changed and why — e.g. Colour → grey; barrel temp 210°C; injection speed 45%; hold pressure 60 bar"></textarea>
       <button type="button" class="die-note-mic" data-note-mic title="Voice input — tap and speak, or use the microphone on your keyboard">🎤</button>
     </div>
+    ${
+      past.length
+        ? `<div class="die-note-past">
+      <div class="die-note-past-head">🔎 Past notes <span class="die-wo-count" data-note-count>${past.length}</span>
+        <input type="search" class="die-note-search" data-note-search
+          placeholder="Search colour, temperature, speed, pressure…" aria-label="Search past SOC notes">
+      </div>
+      <ul class="die-note-list" data-note-list>${noteListHtml(past, NOTES_EMPTY)}</ul>
+    </div>`
+        : ''
+    }
     <div class="bd-actions">
       <button class="btn-ghost-big" data-note-cancel>Cancel</button>
       <button class="btn-primary-big" data-note-save>💾 Save note</button>
@@ -1777,6 +1807,8 @@ function openAddNoteDialog(dieNumber: string): void {
     mc.querySelector<HTMLInputElement>(`[data-nf="${k}"]`)?.value ?? '';
   ta.focus();
   wireNoteMic(mc.querySelector<HTMLButtonElement>('[data-note-mic]')!, ta, speechRecognitionCtor());
+  // Search the die's past SOC notes without leaving the compose dialog.
+  wireNoteSearch(mc, dieNumber);
   mc.querySelector('[data-note-cancel]')?.addEventListener('click', () => openDieDetail(dieNumber));
   mc.querySelector('[data-note-save]')?.addEventListener('click', () => {
     const body = ta.value.trim();
@@ -1956,21 +1988,7 @@ function openDieDetail(dieNumber: string): void {
   mc.querySelector('[data-die-note]')?.addEventListener('click', () => openAddNoteDialog(dieNumber));
   // SOC-notes keyword search — filter the list in place (re-rendering the
   // whole drilldown would drop the input focus mid-type).
-  const noteSearch = mc.querySelector<HTMLInputElement>('[data-note-search]');
-  if (noteSearch) {
-    noteSearch.addEventListener('input', () => {
-      const kw = noteSearch.value;
-      const filtered = parseDieNotes(masterFor(dieNumber)?.notes ?? '', kw);
-      const list = mc.querySelector('[data-note-list]');
-      if (list)
-        list.innerHTML = noteListHtml(
-          filtered,
-          kw.trim() ? `No notes match “${kw.trim()}”.` : NOTES_EMPTY,
-        );
-      const count = mc.querySelector('[data-note-count]');
-      if (count) count.textContent = String(filtered.length);
-    });
-  }
+  wireNoteSearch(mc, dieNumber);
   // Supervisor's ✎ Edit plan in the Service Plan section.
   mc.querySelectorAll<HTMLButtonElement>('[data-die-pm]').forEach((b) =>
     b.addEventListener('click', () => openPmPlanEditor(b.dataset.diePm!)),
