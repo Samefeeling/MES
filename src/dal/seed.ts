@@ -306,12 +306,14 @@ export function seedDieMaintenance(now: Date): DieMaintenanceRequest[] {
 /** The machine/plant half of the Mango work-order mirror — the rows whose
  *  Plant/Equipment names a PRESS rather than a die. Feeds the Die board's
  *  Machine column, which colours a press by its open work orders (green =
- *  open, red = overdue) and drills down into its history. Asset strings
- *  follow the site's "AU - …" convention; the matcher keys a press to its
- *  work orders by code (assetNamesMachine), so both "850 Tonne Press" and
- *  "1600T Injection Moulding Machine" resolve. Covers all three states:
- *  550T open on time (green), 1600T open+overdue (red), 850T closed-only
- *  (stays blue); the remaining presses have none (blue). */
+ *  open, red = overdue) and drills down into its history. Asset strings use
+ *  the site's real convention — "AU - <code> <make> Injection Molding
+ *  Machine", e.g. "AU - 550T Meiki …", and the hyphenated "AU - Batt-1
+ *  BattenFeld … (1000T)" — so the code↔asset matcher (assetNamesMachine) is
+ *  exercised on the shapes it meets in production. Covers all states: 550T
+ *  open on time (green), 1600T open+overdue (red), Batt-1 open (green, and
+ *  proves the hyphen match), 850T closed-only (stays blue); the remaining
+ *  presses have none (blue). */
 export function seedMachineMaintenance(now: Date): DieMaintenanceRequest[] {
   const daysAgo = (n: number): string => {
     const d = new Date(now);
@@ -322,7 +324,7 @@ export function seedMachineMaintenance(now: Date): DieMaintenanceRequest[] {
     {
       id: 101,
       dieNumber: '',
-      asset: 'AU - 550 Tonne Press',
+      asset: 'AU - 550T Meiki Injection Molding Machine',
       status: 'open',
       maintType: 'inspection',
       priority: 'normal',
@@ -341,7 +343,7 @@ export function seedMachineMaintenance(now: Date): DieMaintenanceRequest[] {
     {
       id: 102,
       dieNumber: '',
-      asset: 'AU - 1600T Injection Moulding Machine',
+      asset: 'AU - 1600T Toshiba Injection Molding Machine',
       status: 'in-progress',
       maintType: 'repair',
       priority: 'high',
@@ -359,9 +361,29 @@ export function seedMachineMaintenance(now: Date): DieMaintenanceRequest[] {
       dueDate: daysAgo(3),
     },
     {
+      id: 104,
+      dieNumber: '',
+      asset: 'AU - Batt-1 BattenFeld Injection Molding Machine (1000T)',
+      status: 'open',
+      maintType: 'repair',
+      priority: 'normal',
+      description: 'Screw tip wear — inconsistent shot weight on the battery line.',
+      contact: 'Maintenance Team',
+      requestedBy: 'Jeff Penn',
+      machineCode: 'Batt1',
+      jobNumber: '',
+      mangoTicket: 'MWO 02333',
+      createdAt: daysAgo(1),
+      closedAt: '',
+      issueDetail: 'Shot weight drifting; check non-return valve and screw tip.',
+      // Open, on time → GREEN, and its hyphenated "Batt-1" asset proves the
+      // code↔asset match tolerates the hyphen the app code (Batt1) omits.
+      dueDate: daysAgo(-6),
+    },
+    {
       id: 103,
       dieNumber: '',
-      asset: 'AU - 850 Tonne Press',
+      asset: 'AU - 850T Meiki Injection Molding Machine',
       status: 'done',
       maintType: 'cleaning',
       priority: 'low',

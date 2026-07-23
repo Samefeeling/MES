@@ -503,31 +503,56 @@ describe('dieNumberSortKey (Die # column sorts numerically)', () => {
 });
 
 describe('assetNamesMachine (Machine column ↔ Mango Plant/Equipment)', () => {
-  it('matches the tonnage-in-words press spelling', () => {
-    expect(assetNamesMachine('AU - 850 Tonne Press', '850T')).toBe(true);
-    expect(assetNamesMachine('AU - 550 Tonne Press', '550T')).toBe(true);
+  // The site's REAL Plant/Equipment names (as exported by Mango).
+  const REAL = [
+    'AU - 125T Superjack Injection Molding Machine',
+    'AU - 1300T LS Mtron Injection Molding Machine',
+    'AU - 150T Borche  Injection Molding Machine',
+    'AU - 1600T Toshiba Injection Molding Machine',
+    'AU - 320T Macosys Injection Molding Machine',
+    'AU - 550T Meiki Injection Molding Machine',
+    'AU - 850T Meiki Injection Molding Machine',
+    'AU - Batt-1 BattenFeld Injection Molding Machine (1000T)',
+    'AU - Batt-2 BattenFeld Injection Molding Machine (1000T Modified Screw & Barrel)',
+  ];
+  const find = (code: string): string | undefined => REAL.find((a) => assetNamesMachine(a, code));
+
+  it('matches every real press code to exactly its own asset', () => {
+    expect(find('125T')).toBe('AU - 125T Superjack Injection Molding Machine');
+    expect(find('150T')).toBe('AU - 150T Borche  Injection Molding Machine');
+    expect(find('320T')).toBe('AU - 320T Macosys Injection Molding Machine');
+    expect(find('550T')).toBe('AU - 550T Meiki Injection Molding Machine');
+    expect(find('850T')).toBe('AU - 850T Meiki Injection Molding Machine');
+    expect(find('1300T')).toBe('AU - 1300T LS Mtron Injection Molding Machine');
+    expect(find('1600T')).toBe('AU - 1600T Toshiba Injection Molding Machine');
   });
 
-  it('matches the code-token press spelling', () => {
-    expect(assetNamesMachine('AU - 1600T Injection Moulding Machine', '1600T')).toBe(true);
-    expect(assetNamesMachine('AU - 850T Press', '850T')).toBe(true);
+  it('matches the hyphenated Batt-1 / Batt-2 assets to the glued Batt1 / Batt2 codes', () => {
+    expect(assetNamesMachine('AU - Batt-1 BattenFeld Injection Molding Machine (1000T)', 'Batt1')).toBe(true);
+    expect(
+      assetNamesMachine('AU - Batt-2 BattenFeld Injection Molding Machine (1000T Modified Screw & Barrel)', 'Batt2'),
+    ).toBe(true);
+    // …and Batt-1 must NOT be claimed by Batt2 (or vice-versa).
+    expect(assetNamesMachine('AU - Batt-1 BattenFeld Injection Molding Machine (1000T)', 'Batt2')).toBe(false);
   });
 
-  it('matches non-tonnage machine codes as whole tokens', () => {
+  it('never confuses one tonnage for another across the real list', () => {
+    // 150T must not match the 1500-ish / 1600T rows; 125T not the 1300T row.
+    expect(assetNamesMachine('AU - 1600T Toshiba Injection Molding Machine', '150T')).toBe(false);
+    expect(assetNamesMachine('AU - 1300T LS Mtron Injection Molding Machine', '125T')).toBe(false);
+    expect(assetNamesMachine('AU - 550T Meiki Injection Molding Machine', '850T')).toBe(false);
+  });
+
+  it('still honours the code-token and tonnage-in-words spellings', () => {
+    expect(assetNamesMachine('AU - 850 Tonne Press', '850T')).toBe(true); // words fallback
     expect(assetNamesMachine('AU - HS High-Speed Press', 'HS')).toBe(true);
-    expect(assetNamesMachine('AU - Batt1 Battery Cell Line', 'Batt1')).toBe(true);
-  });
-
-  it('does not confuse different tonnages or substrings', () => {
-    expect(assetNamesMachine('AU - 1600T Injection Moulding Machine', '850T')).toBe(false);
-    expect(assetNamesMachine('AU - 1125T Press', '125T')).toBe(false); // not a substring match
     expect(assetNamesMachine('AU - High-Speed Press', 'HS')).toBe(false); // HS not inside HIGH
-    expect(assetNamesMachine('AU - Die 850 Something', '850T')).toBe(false); // 850 without Tonne/T
+    expect(assetNamesMachine('AU - 1125T Press', '125T')).toBe(false); // distinct number token
   });
 
   it('is empty-safe', () => {
     expect(assetNamesMachine('', '850T')).toBe(false);
-    expect(assetNamesMachine('AU - 850 Tonne Press', '')).toBe(false);
+    expect(assetNamesMachine('AU - 850T Meiki Injection Molding Machine', '')).toBe(false);
   });
 });
 
@@ -582,12 +607,12 @@ describe('parseMangoMachineWorkOrdersCsv (machine half of the report)', () => {
   const dieRow =
     'MWO 001,,4,Stage 1 Coordinator Assessing,AU - Die 171 Podium Seat,Sprue gate wear,Karl Stevens,3/07/2026,Resero - Minto,31/07/2026,2. Breakdown,,3/07/2026,7,AM,Day,,,Minto (AU),Moulding,Karl Stevens,,,,,,';
   const pressRow =
-    'MWO 002,,3,Stage 2 In Progress,AU - 850 Tonne Press,Hydraulic filter change,Jeff Penn,3/07/2026,Resero - Minto,10/08/2026,1. Preventative,,3/07/2026,7,AM,Day,,,Minto (AU),Maintenance,Maintenance Team,,,,,,';
+    'MWO 002,,3,Stage 2 In Progress,AU - 850T Meiki Injection Molding Machine,Hydraulic filter change,Jeff Penn,3/07/2026,Resero - Minto,10/08/2026,1. Preventative,,3/07/2026,7,AM,Day,,,Minto (AU),Maintenance,Maintenance Team,,,,,,';
 
   it('keeps the machine row and drops the die row, preserving the raw asset', () => {
     const out = parseMangoMachineWorkOrdersCsv([HEADER, dieRow, pressRow].join('\n'));
     expect(out.length).toBe(1);
-    expect(out[0].asset).toBe('AU - 850 Tonne Press');
+    expect(out[0].asset).toBe('AU - 850T Meiki Injection Molding Machine');
     expect(out[0].dieNumber).toBe(''); // machine rows carry no die number
     expect(out[0].dueDate).toBe('2026-08-10');
     // …and it resolves to the press by code.
@@ -598,7 +623,7 @@ describe('parseMangoMachineWorkOrdersCsv (machine half of the report)', () => {
     const dies = parseMangoWorkOrdersCsv([HEADER, dieRow, pressRow].join('\n'));
     const machines = parseMangoMachineWorkOrdersCsv([HEADER, dieRow, pressRow].join('\n'));
     expect(dies.map((r) => r.dieNumber)).toEqual(['171']);
-    expect(machines.map((r) => r.asset)).toEqual(['AU - 850 Tonne Press']);
+    expect(machines.map((r) => r.asset)).toEqual(['AU - 850T Meiki Injection Molding Machine']);
   });
 });
 
@@ -610,10 +635,11 @@ describe('MemoryDataLayer machine work orders', () => {
     // Every seeded machine order carries a raw asset (the match key).
     expect(reqs.every((r) => (r.asset ?? '').length > 0)).toBe(true);
     const today = new Date().toISOString().slice(0, 10);
-    // 550T open + on time → green; 1600T open + overdue → red; 850T
-    // closed only → blue.
+    // 550T open + on time → green; 1600T open + overdue → red; Batt1 open
+    // (hyphenated "Batt-1" asset) → green; 850T closed only → blue.
     expect(machineWorkOrderLevel('550T', reqs, today)).toBe('open');
     expect(machineWorkOrderLevel('1600T', reqs, today)).toBe('overdue');
+    expect(machineWorkOrderLevel('Batt1', reqs, today)).toBe('open');
     expect(machineWorkOrderLevel('850T', reqs, today)).toBeNull();
   });
 });

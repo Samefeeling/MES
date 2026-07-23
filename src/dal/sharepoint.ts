@@ -1606,8 +1606,14 @@ export class SharePointDataLayer implements PmdDataLayer {
       const text = await this.fetchSiteFile(this.mangoCsvPath, 'Mango work-order CSV');
       const orders = parseMangoMachineWorkOrdersCsv(text);
       const open = orders.filter((o) => o.status !== 'done').length;
+      // Distinct assets — the Die board matches these to a press by code, so
+      // surfacing them here makes a naming mismatch diagnosable from F12.
+      const sampleAssets = Array.from(
+        new Set(orders.map((o) => o.asset ?? '').filter(Boolean)),
+      ).slice(0, 12);
       console.info(
-        '[pmd] Mango machine work orders:', orders.length, 'plant/equipment orders ·', open, 'open',
+        '[pmd] Mango machine work orders:', orders.length, 'plant/equipment orders ·', open, 'open ·',
+        'sample assets:', sampleAssets,
       );
       return orders;
     } catch (e) {

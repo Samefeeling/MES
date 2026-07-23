@@ -689,6 +689,39 @@ async function loadAll(): Promise<void> {
       );
     }
   }
+  // Machine column ↔ Mango join health. The column colours a press from its
+  // OPEN machine work orders, matched by CODE (assetNamesMachine). If the
+  // presses stay blue, this says why: how many machine work orders loaded,
+  // how many press codes matched, and — the actionable bit — the distinct
+  // machine-WO assets that matched NO press code (a naming the matcher
+  // doesn't recognise) so the mismatch is visible without reading the CSV.
+  const pressCodes = Array.from(new Set(state.dies.flatMap((d) => d.machines))).sort();
+  if (machineRequests.length || pressCodes.length) {
+    const openTotal = machineRequests.filter((r) => r.status !== 'done').length;
+    const matchedCodes = pressCodes.filter(
+      (mc) => machineWorkOrdersFor(mc, machineRequests).length > 0,
+    );
+    const matchedAssets = new Set<string>();
+    for (const mc of pressCodes)
+      for (const r of machineWorkOrdersFor(mc, machineRequests))
+        if (r.asset) matchedAssets.add(r.asset);
+    const unmatchedAssets = Array.from(
+      new Set(machineRequests.map((r) => r.asset ?? '').filter(Boolean)),
+    ).filter((a) => !matchedAssets.has(a));
+    console.info(
+      `[pmd] Machine column: ${machineRequests.length} machine work order(s) (${openTotal} open) ·`,
+      `${matchedCodes.length}/${pressCodes.length} press codes matched`,
+      matchedCodes.length ? `(${matchedCodes.join(', ')})` : '',
+    );
+    if (unmatchedAssets.length) {
+      console.warn(
+        `[pmd] Machine column: ${unmatchedAssets.length} machine work-order asset(s) matched no press code —`,
+        'their Plant/Equipment naming differs from the machine codes. Samples:',
+        unmatchedAssets.slice(0, 12),
+        '· press codes in the table:', pressCodes,
+      );
+    }
+  }
   // Scheduled column: what the Epicor plan has lined up for each die.
   // An order PMD already shows as fully produced (good ≥ order qty) is
   // treated as finished even if Epicor hasn't dropped it from the plan
