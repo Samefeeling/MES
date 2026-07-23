@@ -303,6 +303,83 @@ export function seedDieMaintenance(now: Date): DieMaintenanceRequest[] {
   ];
 }
 
+/** The machine/plant half of the Mango work-order mirror — the rows whose
+ *  Plant/Equipment names a PRESS rather than a die. Feeds the Die board's
+ *  Machine column, which colours a press by its open work orders (green =
+ *  open, red = overdue) and drills down into its history. Asset strings
+ *  follow the site's "AU - …" convention; the matcher keys a press to its
+ *  work orders by code (assetNamesMachine), so both "850 Tonne Press" and
+ *  "1600T Injection Moulding Machine" resolve. Covers all three states:
+ *  550T open on time (green), 1600T open+overdue (red), 850T closed-only
+ *  (stays blue); the remaining presses have none (blue). */
+export function seedMachineMaintenance(now: Date): DieMaintenanceRequest[] {
+  const daysAgo = (n: number): string => {
+    const d = new Date(now);
+    d.setDate(d.getDate() - n);
+    return d.toISOString();
+  };
+  return [
+    {
+      id: 101,
+      dieNumber: '',
+      asset: 'AU - 550 Tonne Press',
+      status: 'open',
+      maintType: 'inspection',
+      priority: 'normal',
+      description: 'Platen tie-bar torque check due before the next long run.',
+      contact: 'Maintenance Team',
+      requestedBy: 'Karl Stevens',
+      machineCode: '550T',
+      jobNumber: '',
+      mangoTicket: 'MWO 02310',
+      createdAt: daysAgo(2),
+      closedAt: '',
+      issueDetail: 'Routine tie-bar torque + guard interlock inspection.',
+      // Comfortably ahead → the press name shows GREEN (open, on time).
+      dueDate: daysAgo(-9),
+    },
+    {
+      id: 102,
+      dieNumber: '',
+      asset: 'AU - 1600T Injection Moulding Machine',
+      status: 'in-progress',
+      maintType: 'repair',
+      priority: 'high',
+      description: 'Barrel heater zone 3 intermittent — temperature alarms during nights.',
+      contact: 'Maintenance Team',
+      requestedBy: 'Christopher King',
+      machineCode: '1600T',
+      jobNumber: '',
+      mangoTicket: 'MWO 02288',
+      createdAt: daysAgo(7),
+      closedAt: '',
+      issueDetail: 'Zone 3 thermocouple reads erratically; suspect loose gland.',
+      actionsTaken: `Mon, ${new Date(daysAgo(5)).toLocaleDateString('en-GB')}, Karl Stevens (Stage 2): Comment: replaced thermocouple, monitoring`,
+      // Promise already passed → the press name shows RED (overdue).
+      dueDate: daysAgo(3),
+    },
+    {
+      id: 103,
+      dieNumber: '',
+      asset: 'AU - 850 Tonne Press',
+      status: 'done',
+      maintType: 'cleaning',
+      priority: 'low',
+      description: 'Hydraulic filter change at scheduled service.',
+      contact: 'Maintenance Team',
+      requestedBy: 'Jeff Penn',
+      machineCode: '850T',
+      jobNumber: '',
+      mangoTicket: 'MWO 02201',
+      createdAt: daysAgo(12),
+      closedAt: daysAgo(10),
+      workSummary: 'Replaced return-line filter element, topped up hydraulic oil, no leaks.',
+      // Closed-only → no OPEN order, so 850T stays the default BLUE link.
+      dueDate: daysAgo(11),
+    },
+  ];
+}
+
 /** Two setter condition reports (PMD_DieChangeLog) so the demo shows the
  *  Maint-column flags + Status override: DIE-0091 has a DAMAGED moulding
  *  surface (→ effective Status Problems, priority service), DIE-0689 is

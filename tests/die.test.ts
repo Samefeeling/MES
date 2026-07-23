@@ -3,12 +3,15 @@ import { describe, expect, it } from 'vitest';
 import {
   aggregateDieServiceUsage,
   aggregateDies,
+  assetNamesMachine,
   buildDieTrend,
   defaultPmPlanText,
   dieHealth,
   dieServiceStatus,
   goodByJob,
   latestConditionByDie,
+  machineWorkOrderLevel,
+  machineWorkOrdersFor,
   nextPlannedFor,
   parseDieCondition,
   parsePmPlan,
@@ -18,7 +21,7 @@ import {
   TOOL_STATUS_META,
 } from '../src/core/die';
 import { MemoryDataLayer } from '../src/dal/memory';
-import { parseMangoWorkOrdersCsv } from '../src/dal/sharepoint';
+import { parseMangoMachineWorkOrdersCsv, parseMangoWorkOrdersCsv } from '../src/dal/sharepoint';
 import {
   activeMaintenanceRequests,
   dieNumberSortKey,
@@ -496,6 +499,122 @@ describe('dieNumberSortKey (Die # column sorts numerically)', () => {
   it('is trim- and case-insensitive like the rest of the die joins', () => {
     expect(dieNumberSortKey(' 280 ')).toBe(dieNumberSortKey('280'));
     expect(dieNumberSortKey('die-7')).toBe(dieNumberSortKey('DIE-7'));
+  });
+});
+
+describe('assetNamesMachine (Machine column ↔ Mango Plant/Equipment)', () => {
+  it('matches the tonnage-in-words press spelling', () => {
+    expect(assetNamesMachine('AU - 850 Tonne Press', '850T')).toBe(true);
+    expect(assetNamesMachine('AU - 550 Tonne Press', '550T')).toBe(true);
+  });
+
+  it('matches the code-token press spelling', () => {
+    expect(assetNamesMachine('AU - 1600T Injection Moulding Machine', '1600T')).toBe(true);
+    expect(assetNamesMachine('AU - 850T Press', '850T')).toBe(true);
+  });
+
+  it('matches non-tonnage machine codes as whole tokens', () => {
+    expect(assetNamesMachine('AU - HS High-Speed Press', 'HS')).toBe(true);
+    expect(assetNamesMachine('AU - Batt1 Battery Cell Line', 'Batt1')).toBe(true);
+  });
+
+  it('does not confuse different tonnages or substrings', () => {
+    expect(assetNamesMachine('AU - 1600T Injection Moulding Machine', '850T')).toBe(false);
+    expect(assetNamesMachine('AU - 1125T Press', '125T')).toBe(false); // not a substring match
+    expect(assetNamesMachine('AU - High-Speed Press', 'HS')).toBe(false); // HS not inside HIGH
+    expect(assetNamesMachine('AU - Die 850 Something', '850T')).toBe(false); // 850 without Tonne/T
+  });
+
+  it('is empty-safe', () => {
+    expect(assetNamesMachine('', '850T')).toBe(false);
+    expect(assetNamesMachine('AU - 850 Tonne Press', '')).toBe(false);
+  });
+});
+
+describe('machineWorkOrder grouping + colour level', () => {
+  const wo = (over: Partial<DieMaintenanceRequest> & { asset: string }): DieMaintenanceRequest => ({
+    id: 1,
+    dieNumber: '',
+    status: 'open',
+    maintType: 'repair',
+    priority: 'normal',
+    description: '',
+    contact: '',
+    requestedBy: '',
+    machineCode: '',
+    jobNumber: '',
+    mangoTicket: '',
+    createdAt: '2026-07-01T00:00:00Z',
+    closedAt: '',
+    ...over,
+  });
+  const reqs = [
+    wo({ id: 1, asset: 'AU - 850 Tonne Press', status: 'open', dueDate: '2026-08-10' }),
+    wo({ id: 2, asset: 'AU - 850 Tonne Press', status: 'done', closedAt: '2026-07-05T00:00:00Z' }),
+    wo({ id: 3, asset: 'AU - 1600T Injection Moulding Machine', status: 'in-progress', dueDate: '2026-07-01' }),
+    wo({ id: 4, asset: 'AU - 550 Tonne Press', status: 'done', closedAt: '2026-07-02T00:00:00Z' }),
+  ];
+  const today = '2026-07-23';
+
+  it('groups work orders to the press that owns them', () => {
+    expect(machineWorkOrdersFor('850T', reqs).map((r) => r.id)).toEqual([1, 2]);
+    expect(machineWorkOrdersFor('1600T', reqs).map((r) => r.id)).toEqual([3]);
+    expect(machineWorkOrdersFor('125T', reqs)).toEqual([]);
+  });
+
+  it('colours a press green for an on-time open order', () => {
+    expect(machineWorkOrderLevel('850T', reqs, today)).toBe('open');
+  });
+
+  it('colours a press red when an open order is overdue', () => {
+    expect(machineWorkOrderLevel('1600T', reqs, today)).toBe('overdue');
+  });
+
+  it('leaves a press blue (null) when it has only closed orders or none', () => {
+    expect(machineWorkOrderLevel('550T', reqs, today)).toBeNull(); // done only
+    expect(machineWorkOrderLevel('125T', reqs, today)).toBeNull(); // none
+  });
+});
+
+describe('parseMangoMachineWorkOrdersCsv (machine half of the report)', () => {
+  const HEADER =
+    'Number,Downtime,Labour Hours,Current Stage,Plant/Equipment,Brief Description,Employee,Created Date,Branch,To be completed by,Type of Maintenance ,Identified By,Date identified,Time,AM/PM,Work shift,Describe the issue,Actions taken,Region,Department,Assign to Action,Work can be done to,Summary of work completed,"Cost (parts, labour)",Corrective action taken,Preventative action taken,Summary';
+  const dieRow =
+    'MWO 001,,4,Stage 1 Coordinator Assessing,AU - Die 171 Podium Seat,Sprue gate wear,Karl Stevens,3/07/2026,Resero - Minto,31/07/2026,2. Breakdown,,3/07/2026,7,AM,Day,,,Minto (AU),Moulding,Karl Stevens,,,,,,';
+  const pressRow =
+    'MWO 002,,3,Stage 2 In Progress,AU - 850 Tonne Press,Hydraulic filter change,Jeff Penn,3/07/2026,Resero - Minto,10/08/2026,1. Preventative,,3/07/2026,7,AM,Day,,,Minto (AU),Maintenance,Maintenance Team,,,,,,';
+
+  it('keeps the machine row and drops the die row, preserving the raw asset', () => {
+    const out = parseMangoMachineWorkOrdersCsv([HEADER, dieRow, pressRow].join('\n'));
+    expect(out.length).toBe(1);
+    expect(out[0].asset).toBe('AU - 850 Tonne Press');
+    expect(out[0].dieNumber).toBe(''); // machine rows carry no die number
+    expect(out[0].dueDate).toBe('2026-08-10');
+    // …and it resolves to the press by code.
+    expect(assetNamesMachine(out[0].asset ?? '', '850T')).toBe(true);
+  });
+
+  it('is the complement of the die parser on the same file', () => {
+    const dies = parseMangoWorkOrdersCsv([HEADER, dieRow, pressRow].join('\n'));
+    const machines = parseMangoMachineWorkOrdersCsv([HEADER, dieRow, pressRow].join('\n'));
+    expect(dies.map((r) => r.dieNumber)).toEqual(['171']);
+    expect(machines.map((r) => r.asset)).toEqual(['AU - 850 Tonne Press']);
+  });
+});
+
+describe('MemoryDataLayer machine work orders', () => {
+  it('seeds machine work orders that colour the presses green/red/blue', async () => {
+    const dal = new MemoryDataLayer();
+    const reqs = await dal.listMachineMaintenance();
+    expect(reqs.length).toBeGreaterThan(0);
+    // Every seeded machine order carries a raw asset (the match key).
+    expect(reqs.every((r) => (r.asset ?? '').length > 0)).toBe(true);
+    const today = new Date().toISOString().slice(0, 10);
+    // 550T open + on time → green; 1600T open + overdue → red; 850T
+    // closed only → blue.
+    expect(machineWorkOrderLevel('550T', reqs, today)).toBe('open');
+    expect(machineWorkOrderLevel('1600T', reqs, today)).toBe('overdue');
+    expect(machineWorkOrderLevel('850T', reqs, today)).toBeNull();
   });
 });
 

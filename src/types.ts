@@ -139,8 +139,15 @@ export type MaintPriority = 'low' | 'normal' | 'high' | 'urgent';
  *  into Mango, its ticket id lands here so the two systems cross-link. */
 export interface DieMaintenanceRequest {
   id: number;
-  /** Physical die this request is about (PMD_ProductDieColor.DieNumber). */
+  /** Physical die this request is about (PMD_ProductDieColor.DieNumber).
+   *  Empty on a machine/plant work order (see `asset`). */
   dieNumber: string;
+  /** Raw Mango Plant/Equipment string this work order was raised against
+   *  ("AU - Die 171 Podium Seat", "AU - 850 Tonne Press", …). Preserved so
+   *  the Die board can match a machine work order to a press by its code
+   *  without knowing Mango's exact asset-naming convention. Only the CSV
+   *  mirror fills it; PMD_DieMaintenance rows leave it undefined. */
+  asset?: string;
   status: MaintStatus;
   maintType: MaintType;
   priority: MaintPriority;

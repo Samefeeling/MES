@@ -63,6 +63,12 @@ export interface PmdDataLayer {
   /** All maintenance requests, newest first. Empty when the list doesn't
    *  exist yet (nothing has been requested). */
   listDieMaintenance?(): Promise<DieMaintenanceRequest[]>;
+  /** The machine/plant half of the same Mango report: work orders whose
+   *  Plant/Equipment names a press or other equipment rather than a die,
+   *  with the raw asset on `asset` so the Die board's Machine column can
+   *  match them to a press by code. Only the CSV mirror serves these;
+   *  returns [] on backends/tenants without it. Newest first. */
+  listMachineMaintenance?(): Promise<DieMaintenanceRequest[]>;
   /** Persist a new request (id/createdAt assigned by the backend). */
   createDieMaintenance?(
     req: Omit<DieMaintenanceRequest, 'id' | 'createdAt' | 'closedAt'>,

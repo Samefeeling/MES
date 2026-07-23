@@ -892,6 +892,13 @@ th.die-sort.a{color:#1d4ed8}
 .die-table td.amber{color:#FFA500;font-weight:800}
 .die-table td.red{color:var(--rd);font-weight:800}
 .die-link{background:none;border:none;color:#1d4ed8;font-weight:800;font-size:14px;cursor:pointer;text-decoration:underline;padding:0}
+/* Machine column: each press is a drill-down link like Die #. Default is
+   the same blue; an OPEN Mango work order tints it green, an OVERDUE one
+   red — the colour is the signal. Codes wrap with a small gap. */
+.die-mc-cell{line-height:1.7}
+.mc-link{font-size:13px;white-space:nowrap}
+.mc-link.wo-open{color:#15803d}
+.mc-link.wo-overdue{color:#b91c1c}
 .die-maint-badge{background:#fff7ed;border:1px solid #fdba74;color:#9a3412;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:800;cursor:pointer;font-family:inherit}
 button.die-maint-badge:hover{background:#fed7aa;border-color:#fb923c}
 /* Traffic-light by the open WO's Mango 'To be completed by' date. */

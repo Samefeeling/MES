@@ -1596,6 +1596,26 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
   }
 
+  async listMachineMaintenance(): Promise<DieMaintenanceRequest[]> {
+    // The machine/plant half of the same Mango report the Die board reads
+    // for dies. Only available from the CSV mirror — the legacy
+    // PMD_DieMaintenance list is die-scoped, so there's nothing to fall
+    // back to. Returns [] when the CSV isn't configured / can't be read.
+    if (!this.mangoCsvPath) return [];
+    try {
+      const text = await this.fetchSiteFile(this.mangoCsvPath, 'Mango work-order CSV');
+      const orders = parseMangoMachineWorkOrdersCsv(text);
+      const open = orders.filter((o) => o.status !== 'done').length;
+      console.info(
+        '[pmd] Mango machine work orders:', orders.length, 'plant/equipment orders ·', open, 'open',
+      );
+      return orders;
+    } catch (e) {
+      console.warn('[pmd] Mango machine work orders unavailable:', e);
+      return [];
+    }
+  }
+
   async createDieMaintenance(
     req: Omit<DieMaintenanceRequest, 'id' | 'createdAt' | 'closedAt'>,
   ): Promise<DieMaintenanceRequest> {
@@ -5059,13 +5079,15 @@ const MANGO_REQUIRED = new Set(['asset', 'status']);
 /**
  * Parse Mango's work-order CSV report into the app's work-order shape.
  *
- * The report covers the WHOLE plant (forklifts, presses, dock levelers…);
- * only rows whose Plant/Equipment names a die belong to Die Management,
- * so everything else is dropped. Die assets follow the site convention
- * "AU - Die 280 Postura Max 430 & 460" — the number after the word "Die"
- * IS the PMD_ProductDieColor DieNumber, so it's extracted directly
- * (word-boundary match: "Diesel" never qualifies). A die row whose
- * number can't be extracted keeps the asset name so it stays visible.
+ * The report covers the WHOLE plant (forklifts, presses, dock levelers…).
+ * Rows whose Plant/Equipment names a DIE belong to Die Management: the die
+ * assets follow the site convention "AU - Die 280 Postura Max 430 & 460" —
+ * the number after the word "Die" IS the PMD_ProductDieColor DieNumber, so
+ * it's extracted directly (word-boundary match: "Diesel" never qualifies).
+ * A die row whose number can't be extracted keeps the asset name so it
+ * stays visible. Every other row is a machine/plant work order, surfaced
+ * separately by parseMangoMachineWorkOrdersCsv for the Die board's Machine
+ * column (matched to a press by code — see assetNamesMachine).
  *
  * Status maps the Mango stages (Stage 1 Assessing → open · Stage 2/3 →
  * in-progress · Stage 4 Closed → done); cancelled/declined orders are
@@ -5075,6 +5097,19 @@ const MANGO_REQUIRED = new Set(['asset', 'status']);
  * synthetic (the UI is read-only against this source).
  */
 export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
+  return parseMangoReport(text, 'die');
+}
+
+/** The machine/plant half of the same Mango report: every work order whose
+ *  Plant/Equipment does NOT name a die. The raw asset is preserved on
+ *  `asset` so the Die board can match a row to a press by its code; the
+ *  synthetic-die `dieNumber` is left empty. Same header detection, cell
+ *  mapping, status/closure logic as the die parser. */
+export function parseMangoMachineWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
+  return parseMangoReport(text, 'machine');
+}
+
+function parseMangoReport(text: string, mode: 'die' | 'machine'): DieMaintenanceRequest[] {
   const rows = parseCsv(text.replace(/^﻿/, ''));
   if (rows.length === 0) throw new Error('Mango CSV is empty');
   const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -5141,13 +5176,17 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
     const row = rows[r];
     if (row.length === 0 || (row.length === 1 && row[0] === '')) continue;
     const asset = cell(row, 'asset');
-    // Die rows only — the rest of the plant's work orders are Mango's
-    // business, not the Die Management tab's.
+    // Split the plant into dies vs everything else. Die mode keeps the die
+    // assets ("AU - Die 171 …"); machine mode keeps the rest (presses,
+    // forklifts, …) so the Die board's Machine column can match a press to
+    // its work orders by code (assetNamesMachine).
     const dieMatch = dieRe.exec(asset);
-    if (!dieMatch && !/\bdies?\b/i.test(asset)) continue;
+    const isDieAsset = !!dieMatch || /\bdies?\b/i.test(asset);
+    if (mode === 'die' ? !isDieAsset : isDieAsset) continue;
     const ticket = cell(row, 'ticket');
     const description = cell(row, 'description');
     if (!asset && !description && !ticket) continue;
+    if (mode === 'machine' && !asset) continue; // machine WOs match on the asset
     const rawStatus = cell(row, 'status');
     if (/cancel|declin|reject|void/i.test(rawStatus)) continue;
     const status = normaliseMaintStatus(rawStatus);
@@ -5166,7 +5205,8 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
     }
     out.push({
       id: 1_000_000 + r, // synthetic — this source is read-only in the UI
-      dieNumber: dieMatch ? dieMatch[1] : asset,
+      dieNumber: mode === 'machine' ? '' : dieMatch ? dieMatch[1] : asset,
+      asset,
       status,
       maintType: normaliseMaintType(cell(row, 'type')),
       priority: normaliseMaintPriority(cell(row, 'priority')),
@@ -5192,7 +5232,7 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
     dueDiag.push({ ticket, raw: idx['dueDate'] >= 0 ? (row[idx['dueDate']] ?? '') : '' });
   }
   // Diagnostics for the due date that drives the Maint traffic light: for
-  // any die rows whose date didn't surface, print the ticket + the RAW cell
+  // any rows whose date didn't surface, print the ticket + the RAW cell
   // the app parsed at the due-date column. If the raw cell is '' the file
   // the app loaded has no date there (empty export / stale-or-wrong file —
   // the value in Excel is from a different copy); if it holds text the app
@@ -5200,7 +5240,7 @@ export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
   const missingDue = out
     .map((o, i) => ({ o, d: dueDiag[i] }))
     .filter((x) => !x.o.dueDate);
-  if (idx['dueDate'] >= 0 && missingDue.length > 0) {
+  if (mode === 'die' && idx['dueDate'] >= 0 && missingDue.length > 0) {
     console.warn(
       `[pmd] Mango CSV: ${missingDue.length}/${out.length} die rows have no parsed`,
       `'${rows[headerAt][idx['dueDate']]}' (col ${idx['dueDate']}). Raw cells:`,

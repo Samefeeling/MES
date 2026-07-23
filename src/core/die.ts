@@ -907,3 +907,63 @@ export function aggregateDies(
     return b.shots - a.shots;
   });
 }
+
+// ---------------------------------------------------------------------
+// Machine work orders (Die board's Machine column ↔ Mango Plant/Equipment)
+//
+// Mango's report covers the whole plant. The die parser keeps the die
+// rows; the machine parser keeps the rest, preserving the raw asset. The
+// Die board matches a press to its work orders by CODE here, so it never
+// needs to know Mango's exact machine-naming convention.
+
+/** Does a Mango Plant/Equipment asset string name this machine? Tolerant
+ *  of the site's two press spellings — the code as a token
+ *  ("AU - 1600T Injection Moulding Machine") and the tonnage-in-words form
+ *  ("AU - 850 Tonne Press", where "850T" ↔ "850" + "Tonne"). Matching is
+ *  token-based (split on non-alphanumerics), so "HS" never matches inside
+ *  "High-Speed" and "125T" never matches "1125T". */
+export function assetNamesMachine(asset: string, machineCode: string): boolean {
+  const code = machineCode.trim().toUpperCase();
+  if (!code || !asset) return false;
+  const tokens = asset.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
+  // Exact code token — "850T", "HS", "BATT1".
+  if (tokens.includes(code)) return true;
+  // Tonnage press written in words: "850T" ↔ a "850" token immediately
+  // followed by a Tonne/T token.
+  const ton = /^(\d+)T$/.exec(code);
+  if (ton) {
+    for (let i = 0; i < tokens.length; i++) {
+      if (tokens[i] !== ton[1]) continue;
+      const next = tokens[i + 1] ?? '';
+      if (next === 'T' || next === 'TON' || next.startsWith('TONNE')) return true;
+    }
+  }
+  return false;
+}
+
+/** Work orders (from listMachineMaintenance) that belong to this machine,
+ *  newest first — the input order is already createdAt-descending. */
+export function machineWorkOrdersFor(
+  machineCode: string,
+  requests: readonly DieMaintenanceRequest[],
+): DieMaintenanceRequest[] {
+  return requests.filter((r) => assetNamesMachine(r.asset ?? '', machineCode));
+}
+
+/** Colour a machine name by its OPEN work orders, matching the Die
+ *  board's rule: any open order that's past its Mango "To be completed by"
+ *  date → 'overdue' (red); any other open order → 'open' (green); no open
+ *  order → null (the default blue link). Closed orders never colour it. */
+export function machineWorkOrderLevel(
+  machineCode: string,
+  requests: readonly DieMaintenanceRequest[],
+  today: string,
+): 'open' | 'overdue' | null {
+  const open = machineWorkOrdersFor(machineCode, requests).filter((r) => r.status !== 'done');
+  if (open.length === 0) return null;
+  const overdue = open.some((r) => {
+    const due = (r.dueDate ?? '').slice(0, 10);
+    return due !== '' && due < today;
+  });
+  return overdue ? 'overdue' : 'open';
+}

@@ -33,6 +33,8 @@ import {
   dieServiceStatus,
   goodByJob,
   latestConditionByDie,
+  machineWorkOrderLevel,
+  machineWorkOrdersFor,
   nextPlannedFor,
   parsePmPlan,
   pmShotLevel,
@@ -79,6 +81,9 @@ interface DieState {
   dies: DieAgg[];
   requests: DieMaintenanceRequest[];
   rejectLabels: Map<string, string>;
+  /** Machine/plant work orders (Mango mirror), for the Machine column's
+   *  per-press colour + drilldown. Empty on backends without the CSV. */
+  machineRequests: DieMaintenanceRequest[];
   dieColors: ProductDieColor[];
   /** Die (trimmed, UPPERCASED) → its PMD_DieMaster row (asset facts +
    *  ToolStatus). Absent = the toolroom hasn't registered the tool. */
@@ -382,6 +387,75 @@ function openWorkOrders(dieNumber: string): void {
   mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
 }
 
+/** The Machine column's cell: each press that ran the die, rendered as a
+ *  drill-down link the same way Die # is. A press with an OPEN Mango work
+ *  order is coloured (green, or red when one is overdue); otherwise it's
+ *  the default blue link. Tapping opens that press's work-order history. */
+function machineCellHtml(d: DieAgg): string {
+  if (d.machines.length === 0) return '<span class="die-tstat none">—</span>';
+  const today = isoDay(new Date());
+  return d.machines
+    .map((mc) => {
+      const level = machineWorkOrderLevel(mc, S!.machineRequests, today);
+      const openCount = machineWorkOrdersFor(mc, S!.machineRequests).filter(
+        (r) => r.status !== 'done',
+      ).length;
+      const cls =
+        level === 'overdue' ? ' wo-overdue' : level === 'open' ? ' wo-open' : '';
+      const tip = level
+        ? `${mc} · ${openCount} open work order${openCount === 1 ? '' : 's'}${
+            level === 'overdue' ? ' · OVERDUE' : ''
+          } — tap for machine work-order history`
+        : `${mc} — tap for machine work-order history`;
+      return `<button class="die-link mc-link${cls}" data-machine-wo="${escapeHtml(
+        mc,
+      )}" title="${escapeHtml(tip)}">${escapeHtml(mc)}</button>`;
+    })
+    .join(' ');
+}
+
+/**
+ * Machine work-order history popup — opened by tapping a press in the
+ * Machine column. Mirrors the die drilldown's Maintenance Track: OPEN
+ * (in-progress) orders first, then closed History, all from the Mango
+ * machine mirror (matched to the press by code — see assetNamesMachine).
+ */
+function openMachineWorkOrders(machineCode: string): void {
+  const all = machineWorkOrdersFor(machineCode, S!.machineRequests);
+  const open = all
+    .filter((r) => r.status !== 'done')
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  const history = all
+    .filter((r) => r.status === 'done')
+    .sort((a, b) => ((a.closedAt || a.createdAt) < (b.closedAt || b.createdAt) ? 1 : -1));
+  // Show the plant name Mango uses for this press (first matched asset), so
+  // the toolroom can confirm the code resolved to the right equipment.
+  const assetName = all.find((r) => r.asset)?.asset ?? '';
+  const title = [machineCode, assetName].filter(Boolean).join(' · ');
+  const group = (label: string, rows: DieMaintenanceRequest[], empty: string): string =>
+    `<div class="die-wo-group">
+      <div class="die-wo-sub">${label} <span class="die-wo-count">${rows.length}</span></div>
+      ${rows.length ? `<ul class="die-detail-hist">${rows.map(woRow).join('')}</ul>` : `<div class="die-wo-empty">${empty}</div>`}
+    </div>`;
+  openModal(`<div class="die-detail die-wo-modal">
+    <div class="kpi-trace-head die-detail-head">
+      <h3>🏭 Machine Work Orders <span class="die-detail-sub">${escapeHtml(title)}</span></h3>
+      <div class="die-detail-head-actions">
+        ${mangoLink('Request in Mango', 'hd')}
+        <button class="die-detail-close" data-mod="close" title="Close">✕ Close</button>
+      </div>
+    </div>
+    ${
+      all.length
+        ? group('🔧 In progress', open, 'None open — nothing on this machine right now.') +
+          group('📓 History', history, 'No closed work orders yet.')
+        : `<div class="die-wo-empty">No Mango work orders on record for <b>${escapeHtml(machineCode)}</b>. (The Machine column matches a press to Mango's Plant/Equipment by code.)</div>`
+    }
+  </div>`);
+  const mc = document.getElementById('mc')!;
+  mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
+}
+
 /** ToolStatus for DISPLAY: PMD_DieMaster's value, overridden to Problems
  *  when the latest die-change report rated any component "3. Damaged" —
  *  the setter's fresh inspection outranks a stale master row. */
@@ -490,6 +564,7 @@ export async function mountDieTab(dal: PmdDataLayer, host: HTMLElement): Promise
     dies: [],
     requests: [],
     rejectLabels: new Map(),
+    machineRequests: [],
     dieColors: [],
     masterByDie: new Map(),
     planByDie: new Map(),
@@ -551,12 +626,15 @@ async function loadAll(): Promise<void> {
             .then((rows) => rows.filter((r) => r.slotIndex === 0)),
           [],
         );
-  const [dieColors, requests, rejCats, records, planning, master, changeLogs, serviceCounters] = await Promise.all([
+  const [dieColors, requests, machineRequests, rejCats, records, planning, master, changeLogs, serviceCounters] = await Promise.all([
     dalRef.listProductDieColors
       ? safe('Die/part mapping', dalRef.listProductDieColors(), [])
       : Promise.resolve([]),
     dalRef.listDieMaintenance
       ? safe('Maintenance work orders', dalRef.listDieMaintenance(), [])
+      : Promise.resolve([]),
+    dalRef.listMachineMaintenance
+      ? safe('Machine work orders', dalRef.listMachineMaintenance(), [])
       : Promise.resolve([]),
     safe('Reject categories', dalRef.listRejectCategories(), []),
     safe(
@@ -583,6 +661,7 @@ async function loadAll(): Promise<void> {
   state.serviceHistoryFrom = serviceFrom;
   state.serviceHistoryAvailable = !errors.some((e) => e.startsWith('Service shot history:'));
   state.requests = requests;
+  state.machineRequests = machineRequests;
   state.rejectLabels = new Map(rejCats.map((c) => [c.code, c.label]));
   state.dies = aggregateDies(dieColors, records, requests);
   // Description: PMD_DieMaster's DieDescription is the toolroom's own name
@@ -1003,10 +1082,6 @@ function renderDieTable(): string {
       const partsTip = d.parts
         .map((p) => `${p.partNumber}${p.name ? ` (${p.name})` : ''}`)
         .join(', ');
-      const machines =
-        d.machines.length > 3
-          ? `${d.machines.length} machines`
-          : d.machines.join(', ') || '—';
       // Scheduled: is the die on the Epicor plan? Running now / next
       // start / free. A free die is the safe one to pull for service.
       const plan = S!.planByDie.get(d.dieNumber);
@@ -1029,7 +1104,7 @@ function renderDieTable(): string {
             : '<span class="die-tstat none">—</span>';
         })()}</td>
         <td title="${escapeHtml(partsTip)}">${d.parts.length}</td>
-        <td title="${escapeHtml(d.machines.join(', '))}">${escapeHtml(machines)}</td>
+        <td class="die-mc-cell">${machineCellHtml(d)}</td>
         <td class="num">${d.runs}</td>
         <td class="num">${d.medianRunShots == null ? '—' : d.medianRunShots.toLocaleString()}</td>
         <td class="num">${d.shots.toLocaleString()}</td>
@@ -1067,7 +1142,7 @@ function renderDieTable(): string {
       ${th('toolStatus', 'Status', 'Tool condition from PMD_DieMaster.ToolStatus: 🔴 Problems · 🟠 To be Serviced · 🔵 In service · 🟢 Serviced — tap a badge to change it')}
       ${th('lastService', 'Last service', 'PMD_DieMaster.LastServiceDate — stamped automatically when Status is set to Serviced. Sorting ascending puts the longest-unserviced tools first')}
       ${th('parts', 'Parts', 'Part numbers that run on this die')}
-      ${th('machines', 'Machines')}
+      ${th('machines', 'Machines', "Presses this die ran on. Each is a link to that machine's Mango work-order history — 🟢 green = an open order, 🔴 red = an open order overdue, blue = no open order")}
       ${th('runs', 'Runs', '(machine, shift, job) runs in the window')}
       ${th('medRun', 'Med run', 'Median shots per run — the typical campaign size, for planning how big a service window needs to be')}
       ${th('shots', 'Shots', 'Press cycles = Σ (Count End − Count Start) — the die-wear number')}
@@ -1765,6 +1840,12 @@ function wire(): void {
     b.addEventListener('click', (e) => {
       e.stopPropagation();
       openWorkOrders(b.dataset.dieWo!);
+    }),
+  );
+  h.querySelectorAll<HTMLButtonElement>('[data-machine-wo]').forEach((b) =>
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openMachineWorkOrders(b.dataset.machineWo!);
     }),
   );
 }
