@@ -360,6 +360,11 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    background / border). Tabular numerals so multi-digit die numbers
    align nicely. */
 .m-die-num{color:#c2410c;font-variant-numeric:tabular-nums}
+/* Die# as a button — deep-links into the Tool board drilldown. Reset the
+   button chrome so it reads as a link in the Product Description title. */
+.m-die-jump{border:none;background:none;padding:0;font:inherit;font-variant-numeric:tabular-nums;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.m-die-jump:hover{color:#9a3412}
+.m-die-jump:active{color:#7c2d12}
 /* ⛓ Co-Run chips under Job# — purple to match the Trace co-run badge. The
    chip is a one-tap hop to the linked simultaneous order. */
 .op-meta .m-corun{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px;font-size:12px;font-weight:800;color:#6d28d9;text-transform:none;letter-spacing:0}
@@ -1041,6 +1046,30 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .die-detail-close:hover{background:#f1f5f9;border-color:#94a3b8}
 .die-detail-print{padding:8px 14px;background:#fff;border:1.5px solid var(--bd);color:#334155;border-radius:9px;font-weight:800;font-size:14px;cursor:pointer;white-space:nowrap}
 .die-detail-print:hover{background:#f1f5f9;border-color:#94a3b8}
+/* 📝 Add note — accent the SOC-log action so it stands out from Print/Close. */
+.die-detail-note{padding:8px 14px;background:#eef2ff;border:1.5px solid #c7d2fe;color:#3730a3;border-radius:9px;font-weight:800;font-size:14px;cursor:pointer;white-space:nowrap}
+.die-detail-note:hover{background:#e0e7ff;border-color:#a5b4fc}
+/* SOC notes panel — sits above ① Die Master in the drilldown. */
+.die-notes-h4{margin-bottom:6px}
+.die-notes{margin:0 0 6px;border:1px solid var(--bd);border-radius:10px;background:#fafbfc;padding:10px}
+.die-note-search{width:100%;box-sizing:border-box;padding:8px 10px;font-size:14px;border:1px solid var(--bd);border-radius:8px;background:#fff;margin-bottom:8px}
+.die-note-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;max-height:320px;overflow-y:auto}
+.die-note{border:1px solid var(--bd);border-left:3px solid #6366f1;border-radius:8px;background:#fff;padding:8px 10px}
+.die-note-meta{font-size:12px;font-weight:700;color:var(--mu);margin-bottom:3px}
+.die-note-body{font-size:14px;line-height:1.45;color:#1e293b;white-space:pre-wrap;overflow-wrap:anywhere}
+.die-note-nobody{color:var(--mu);font-style:italic}
+.die-note-empty{list-style:none;font-size:13px;color:var(--mu);padding:6px 2px}
+/* Add-note dialog. */
+.die-note-editor .die-note-fields{display:grid;grid-template-columns:repeat(2,1fr);gap:8px 12px;margin:6px 0 10px}
+.die-note-editor .die-note-fields label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:700;color:var(--mu)}
+.die-note-editor .die-note-fields input{padding:8px 10px;font-size:15px;font-weight:600;color:#1e293b;border:1px solid var(--bd);border-radius:8px;background:#fff}
+.die-note-body-wrap{position:relative}
+.die-note-editor .die-note-text{width:100%;box-sizing:border-box;font:15px/1.5 inherit;border:1px solid var(--bd);border-radius:8px;padding:10px 46px 10px 10px;resize:vertical}
+.die-note-mic{position:absolute;top:8px;right:8px;width:34px;height:34px;border:1px solid var(--bd);border-radius:8px;background:#fff;font-size:16px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.die-note-mic:hover{background:#f1f5f9}
+.die-note-mic.recording{background:#fee2e2;border-color:#fca5a5;animation:die-mic-pulse 1s ease-in-out infinite}
+.die-note-mic.unavailable{opacity:.6}
+@keyframes die-mic-pulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.5)}50%{box-shadow:0 0 0 5px rgba(239,68,68,0)}}
 /* The print clone lives outside the modal, hidden on screen; only the
    @media print rules below reveal it (see openDieDetail's print handler). */
 #die-print-area{display:none}
@@ -1056,7 +1085,12 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
   #die-print-area .die-hist-row,
   #die-print-area .die-bar-row,
   #die-print-area .die-wo-group,
-  #die-print-area .die-cond{break-inside:avoid}
+  #die-print-area .die-cond,
+  #die-print-area .die-note{break-inside:avoid}
+  /* Print the whole SOC log; the on-screen search box / scroll cap are
+     screen-only chrome. */
+  #die-print-area .die-note-search{display:none !important}
+  #die-print-area .die-note-list{max-height:none !important;overflow:visible !important}
 }
 /* Top stats: one tidy wrap-row, pill-free, tabular. */
 .die-detail-topstats{gap:6px 18px;padding:2px 0 4px}

@@ -132,13 +132,21 @@ updateMirrorBadge();
 interface Route {
   view: 'operator' | 'tool' | 'kpi';
   machineCode?: string;
+  /** Die to auto-open in the Tool board's drilldown, from a
+   *  `#/tool/die/<dieNumber>` deep link (the operator sheet's Die# pill). */
+  openDie?: string;
 }
 
 function parseRoute(): Route {
   const h = window.location.hash || '#/';
   // Keep the old #/trace URL working for saved bookmarks, but the page is
   // now the dedicated Tool board rather than a three-view Trace shell.
-  if (h.startsWith('#/tool') || h.startsWith('#/trace')) return { view: 'tool' };
+  if (h.startsWith('#/tool') || h.startsWith('#/trace')) {
+    // Deep link from the operator sheet: open this die's drilldown once the
+    // board has loaded.
+    const d = /^#\/tool\/die\/(.+)$/.exec(h);
+    return { view: 'tool', openDie: d ? decodeURIComponent(d[1]) : undefined };
+  }
   if (h.startsWith('#/kpi')) return { view: 'kpi' };
   const m = /^#\/op\/(.+)$/.exec(h);
   if (m) return { view: 'operator', machineCode: decodeURIComponent(m[1]) };
@@ -266,7 +274,7 @@ async function route(): Promise<void> {
       document.body.className = 'shift-day';
       const app = document.getElementById('app')!;
       app.innerHTML = '<div class="die-host"></div>';
-      await mountDieTab(dal, app.querySelector<HTMLElement>('.die-host')!);
+      await mountDieTab(dal, app.querySelector<HTMLElement>('.die-host')!, r.openDie);
     } else if (r.view === 'kpi') {
       await renderKpi(dal);
     } else {

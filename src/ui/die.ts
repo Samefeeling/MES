@@ -25,23 +25,27 @@ import type {
 import {
   aggregateDieServiceUsage,
   aggregateDies,
+  appendDieNote,
   buildDieTrend,
   DEFAULT_TOOL_MAINTENANCE_LEVEL,
   defaultPmPlanText,
   DIE_CONDITION_META,
   dieHealth,
   dieServiceStatus,
+  formatDieNoteLine,
   goodByJob,
   latestConditionByDie,
   machineWorkOrderLevel,
   machineWorkOrdersFor,
   nextPlannedFor,
+  parseDieNotes,
   parsePmPlan,
   pmShotLevel,
   TOOL_MAINTENANCE_RULES,
   TOOL_STATUS_META,
   type DieAgg,
   type DieConditionSummary,
+  type DieNote,
   type DiePlanned,
   type DieServiceUsage,
   type DieServiceStatus,
@@ -49,7 +53,9 @@ import {
 import { closeModal, escapeHtml, openModal } from './modal';
 import { toast } from './toast';
 import { isSupervisor } from './supervisor-auth';
+import { peekDieNoteContext } from './nav-context';
 import { STATUS_MAP } from '../core/status';
+import { dateKey } from '../core/shifts';
 
 /** 'smart' = the aggregate's attention-first order (open requests, then
  *  reject-%, then shots). Any other key is a user-picked column sort. */
@@ -549,7 +555,11 @@ function ddmmyyyy(iso: string): string {
 
 /** Mount (or re-mount) the Die Management board into `host`. Owns its
  *  own state + re-render loop; the Tool route provides the div. */
-export async function mountDieTab(dal: PmdDataLayer, host: HTMLElement): Promise<void> {
+export async function mountDieTab(
+  dal: PmdDataLayer,
+  host: HTMLElement,
+  openDie?: string,
+): Promise<void> {
   dalRef = dal;
   hostEl = host;
   const to = new Date();
@@ -577,6 +587,14 @@ export async function mountDieTab(dal: PmdDataLayer, host: HTMLElement): Promise
   };
   render();
   await loadAll();
+  // Deep link from the operator sheet's Die# pill — open this die's
+  // drilldown now that its data has loaded. Reset the hash to the plain
+  // board (no route re-entry: replaceState doesn't fire hashchange) so a
+  // refresh or Back doesn't reopen it.
+  if (openDie && hostEl === host && S && S.dies.some((x) => x.dieNumber === openDie)) {
+    history.replaceState(null, document.title, '#/tool');
+    openDieDetail(openDie);
+  }
 }
 
 async function loadAll(): Promise<void> {
@@ -1594,6 +1612,203 @@ function renderMasterSection(d: DieAgg): string {
     </div>`;
 }
 
+// ---------------------------------------------------------------------
+// SOC notes — the running change log on PMD_DieMaster.Notes, shown above
+// the Die Master block in the drilldown and appended to from the operator
+// sheet (tap Die# → this drilldown → Add note).
+
+/** One note as a list item: the captured context on top, the body below. */
+function renderNoteItem(n: DieNote): string {
+  const meta = [n.date, n.shift, n.machine, n.operator]
+    .filter(Boolean)
+    .map(escapeHtml)
+    .join(' · ');
+  return `<li class="die-note">
+      ${meta ? `<div class="die-note-meta">${meta}</div>` : ''}
+      <div class="die-note-body">${
+        escapeHtml(n.body) || '<span class="die-note-nobody">(no text)</span>'
+      }</div>
+    </li>`;
+}
+
+/** Inner HTML of the notes list — the note items, or an empty-state line
+ *  (used both on first render and when the keyword search filters). */
+function noteListHtml(notes: DieNote[], emptyMsg: string): string {
+  return notes.length
+    ? notes.map(renderNoteItem).join('')
+    : `<li class="die-note-empty">${escapeHtml(emptyMsg)}</li>`;
+}
+
+const NOTES_EMPTY = 'No SOC notes yet — tap “📝 Add note” to log a setting change.';
+
+/** The SOC-notes panel shown above ① Die Master. Rendered whenever the die
+ *  has a PMD_DieMaster row (so notes have a home); the search box appears
+ *  once there's at least one note to filter. */
+function renderNotesSection(d: DieAgg): string {
+  const m = masterFor(d.dieNumber);
+  if (!m) return '';
+  const canNote = !!dalRef.updateDieMaster;
+  const notes = parseDieNotes(m.notes ?? '');
+  if (notes.length === 0 && !canNote) return '';
+  const search = notes.length
+    ? `<input type="search" class="die-note-search" data-note-search
+        placeholder="Search notes — colour, temperature, speed, pressure…"
+        aria-label="Search SOC notes">`
+    : '';
+  return `<h4 class="die-notes-h4">📝 SOC Notes <span class="die-wo-count" data-note-count>${notes.length}</span></h4>
+    <div class="die-notes">
+      ${search}
+      <ul class="die-note-list" data-note-list>${noteListHtml(notes, NOTES_EMPTY)}</ul>
+    </div>`;
+}
+
+// --- voice-to-text (Web Speech API where the browser supports it) ---------
+
+interface SpeechRecognitionLike {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  onresult: ((e: SpeechResultEventLike) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start(): void;
+  stop(): void;
+}
+interface SpeechResultEventLike {
+  results: ArrayLike<ArrayLike<{ transcript: string }>>;
+}
+type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
+
+function speechRecognitionCtor(): SpeechRecognitionCtor | null {
+  const w = window as unknown as {
+    SpeechRecognition?: SpeechRecognitionCtor;
+    webkitSpeechRecognition?: SpeechRecognitionCtor;
+  };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+
+/** Wire the 🎤 button to dictate into the note textarea. With the Web Speech
+ *  API (desktop Chrome/Edge) the button records and appends the transcript;
+ *  without it (iPad Safari) it points the operator at the keyboard's own
+ *  dictation mic, which fills the focused textarea just the same. */
+function wireNoteMic(
+  btn: HTMLButtonElement,
+  ta: HTMLTextAreaElement,
+  ctor: SpeechRecognitionCtor | null,
+): void {
+  if (!ctor) {
+    btn.classList.add('unavailable');
+    btn.addEventListener('click', () => {
+      ta.focus();
+      toast('Tap the 🎤 on your keyboard to dictate into the note', 'ok');
+    });
+    return;
+  }
+  let rec: SpeechRecognitionLike | null = null;
+  const stop = (): void => {
+    rec?.stop();
+    rec = null;
+    btn.classList.remove('recording');
+  };
+  btn.addEventListener('click', () => {
+    if (rec) {
+      stop();
+      return;
+    }
+    const r = new ctor();
+    rec = r;
+    r.interimResults = false;
+    r.continuous = false;
+    r.onresult = (e) => {
+      let text = '';
+      for (let i = 0; i < e.results.length; i++) text += e.results[i][0]?.transcript ?? '';
+      text = text.trim();
+      if (text) {
+        const sep = ta.value && !/\s$/.test(ta.value) ? ' ' : '';
+        ta.value = ta.value + sep + text;
+      }
+    };
+    r.onerror = () => stop();
+    r.onend = () => stop();
+    btn.classList.add('recording');
+    try {
+      r.start();
+    } catch {
+      stop();
+    }
+  });
+}
+
+/** Add-note dialog: four context fields (prefilled from the operator sheet
+ *  when the drilldown was reached via a Die# deep link, else today's date +
+ *  blanks), a free-text body with voice input, and Save that appends a
+ *  formatted line to PMD_DieMaster.Notes and re-opens the drilldown. */
+function openAddNoteDialog(dieNumber: string): void {
+  const m = masterFor(dieNumber);
+  if (!m || !dalRef.updateDieMaster) return;
+  const ctx = peekDieNoteContext();
+  const date = ctx?.date || dateKey(new Date());
+  const shift = ctx?.shift ?? '';
+  const machine = ctx?.machine ?? '';
+  const operator = ctx?.operator ?? '';
+  openModal(`<div class="bd-modal die-note-editor">
+    <h3 class="bd-title">📝 ${escapeHtml(dieNumber)} — add SOC note</h3>
+    <p class="bd-sub">Log a setting change (colour, temperature, speed, pressure…) to
+      <b>PMD_DieMaster.Notes</b>. The shift context below stamps the note.</p>
+    <div class="die-note-fields">
+      <label>Date<input type="date" data-nf="date" value="${escapeHtml(date)}"></label>
+      <label>Shift<input type="text" data-nf="shift" value="${escapeHtml(shift)}" placeholder="Day / Night"></label>
+      <label>Machine<input type="text" data-nf="machine" value="${escapeHtml(machine)}" placeholder="e.g. 550T"></label>
+      <label>Operator<input type="text" data-nf="operator" value="${escapeHtml(operator)}" placeholder="Name"></label>
+    </div>
+    <div class="die-note-body-wrap">
+      <textarea class="die-note-text" data-nf="body" rows="4" spellcheck="true"
+        placeholder="What changed and why — e.g. Colour → grey; barrel temp 210°C; injection speed 45%; hold pressure 60 bar"></textarea>
+      <button type="button" class="die-note-mic" data-note-mic title="Voice input — tap and speak, or use the microphone on your keyboard">🎤</button>
+    </div>
+    <div class="bd-actions">
+      <button class="btn-ghost-big" data-note-cancel>Cancel</button>
+      <button class="btn-primary-big" data-note-save>💾 Save note</button>
+    </div>
+  </div>`);
+  const mc = document.getElementById('mc')!;
+  const ta = mc.querySelector<HTMLTextAreaElement>('.die-note-text')!;
+  const field = (k: string): string =>
+    mc.querySelector<HTMLInputElement>(`[data-nf="${k}"]`)?.value ?? '';
+  ta.focus();
+  wireNoteMic(mc.querySelector<HTMLButtonElement>('[data-note-mic]')!, ta, speechRecognitionCtor());
+  mc.querySelector('[data-note-cancel]')?.addEventListener('click', () => openDieDetail(dieNumber));
+  mc.querySelector('[data-note-save]')?.addEventListener('click', () => {
+    const body = ta.value.trim();
+    if (!body) {
+      toast('Type or dictate the note first', 'err');
+      ta.focus();
+      return;
+    }
+    const line = formatDieNoteLine({
+      date: field('date'),
+      shift: field('shift'),
+      machine: field('machine'),
+      operator: field('operator'),
+      body,
+    });
+    void (async () => {
+      const prev = m.notes;
+      const next = appendDieNote(m.notes ?? '', line);
+      m.notes = next; // optimistic — rolled back on failure
+      try {
+        await dalRef.updateDieMaster!(dieNumber, { notes: next });
+        toast(`Note added to ${dieNumber}`, 'ok');
+      } catch (e) {
+        m.notes = prev;
+        console.error('[pmd] SOC note save failed:', e);
+        toast(`Could not save note: ${e instanceof Error ? e.message : e}`, 'err');
+      }
+      openDieDetail(dieNumber);
+    })();
+  });
+}
+
 function openDieDetail(dieNumber: string): void {
   const d = S!.dies.find((x) => x.dieNumber === dieNumber);
   if (!d) return;
@@ -1695,6 +1910,11 @@ function openDieDetail(dieNumber: string): void {
         [d.description, d.category].filter(Boolean).join(' · ') || '',
       )} · ${d.parts.length} part${d.parts.length === 1 ? '' : 's'}</span></h3>
       <div class="die-detail-head-actions">
+        ${
+          masterFor(d.dieNumber) && dalRef.updateDieMaster
+            ? '<button class="die-detail-note" data-die-note title="Add a SOC change note to this die\'s log (PMD_DieMaster.Notes)">📝 Add note</button>'
+            : ''
+        }
         <button class="die-detail-print" data-die-print title="Print this die's page">🖨 Print</button>
         ${mangoLink('Request in Mango', 'hd')}
         <button class="die-detail-close" data-mod="close" title="Close">✕ Close</button>
@@ -1716,6 +1936,7 @@ function openDieDetail(dieNumber: string): void {
         return `${p.running ? '▶ Now · ' : ''}${escapeHtml(fmtPlanned(p.start))} (${escapeHtml(p.jobNumber)})`;
       })()}</b></span>
     </div>
+    ${renderNotesSection(d)}
     ${renderMasterSection(d)}
     ${renderServiceSection(d)}
     <h4>③ Defect Trend <span class="die-h4-sub">${escapeHtml(S!.from)} → ${escapeHtml(S!.to)}</span></h4>
@@ -1731,6 +1952,25 @@ function openDieDetail(dieNumber: string): void {
   </div>`);
   const mc = document.getElementById('mc')!;
   mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
+  // 📝 Add note — the SOC change log.
+  mc.querySelector('[data-die-note]')?.addEventListener('click', () => openAddNoteDialog(dieNumber));
+  // SOC-notes keyword search — filter the list in place (re-rendering the
+  // whole drilldown would drop the input focus mid-type).
+  const noteSearch = mc.querySelector<HTMLInputElement>('[data-note-search]');
+  if (noteSearch) {
+    noteSearch.addEventListener('input', () => {
+      const kw = noteSearch.value;
+      const filtered = parseDieNotes(masterFor(dieNumber)?.notes ?? '', kw);
+      const list = mc.querySelector('[data-note-list]');
+      if (list)
+        list.innerHTML = noteListHtml(
+          filtered,
+          kw.trim() ? `No notes match “${kw.trim()}”.` : NOTES_EMPTY,
+        );
+      const count = mc.querySelector('[data-note-count]');
+      if (count) count.textContent = String(filtered.length);
+    });
+  }
   // Supervisor's ✎ Edit plan in the Service Plan section.
   mc.querySelectorAll<HTMLButtonElement>('[data-die-pm]').forEach((b) =>
     b.addEventListener('click', () => openPmPlanEditor(b.dataset.diePm!)),

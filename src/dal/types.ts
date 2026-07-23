@@ -50,7 +50,12 @@ export interface PmdDataLayer {
     patch: Partial<
       Pick<
         DieMaster,
-        'toolStatus' | 'dateStamp' | 'lastServiceDate' | 'availableDate' | 'maintenanceLevel'
+        | 'toolStatus'
+        | 'dateStamp'
+        | 'lastServiceDate'
+        | 'availableDate'
+        | 'maintenanceLevel'
+        | 'notes'
       >
     >,
   ): Promise<void>;

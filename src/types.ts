@@ -125,6 +125,12 @@ export interface DieMaster {
    *  shows the default 3-tier template (core/die.ts defaultPmPlanText)
    *  until a supervisor edits it from the drilldown. */
   maintenanceLevel: string;
+  /** Notes column (multi-line text) — the running SOC change log for this
+   *  die: one note per line, each formatted
+   *  `Date/Shift/Machine/Operator: body` (see core/die.ts formatDieNoteLine).
+   *  Appended from the die drilldown's "Add note" action; '' when the die
+   *  has no notes yet. */
+  notes: string;
 }
 
 /** Lifecycle of a die maintenance request (Fabrico-style work order):

@@ -978,3 +978,81 @@ export function machineWorkOrderLevel(
   });
   return overdue ? 'overdue' : 'open';
 }
+
+// ---------------------------------------------------------------------
+// SOC notes — the running change log kept on PMD_DieMaster.Notes. The
+// column is one note per line, each line `Date/Shift/Machine/Operator: body`
+// (the meta is captured from the operator sheet the note was raised from).
+// Storing one note per line keeps the log trivially searchable and lets the
+// drilldown filter by any keyword (colour / temperature / speed / pressure…).
+
+/** One parsed SOC note. `raw` is the whole line, kept for keyword search. */
+export interface DieNote {
+  date: string;
+  shift: string;
+  machine: string;
+  operator: string;
+  body: string;
+  raw: string;
+}
+
+/** The four context fields plus the free-text body of a new SOC note. */
+export interface DieNoteInput {
+  date: string;
+  shift: string;
+  machine: string;
+  operator: string;
+  body: string;
+}
+
+/** Compose one PMD_DieMaster.Notes line from a note's fields. The meta is
+ *  `Date/Shift/Machine/Operator` (any '/' inside a field is neutralised so
+ *  the four parts stay unambiguous) and the body follows a `: ` delimiter
+ *  with its own newlines collapsed to spaces, so every note is exactly one
+ *  line. */
+export function formatDieNoteLine(n: DieNoteInput): string {
+  const meta = [n.date, n.shift, n.machine, n.operator]
+    .map((s) => (s ?? '').replace(/[/\n\r]+/g, ' ').trim())
+    .join('/');
+  const body = (n.body ?? '').replace(/\s*[\r\n]+\s*/g, ' ').trim();
+  return `${meta}: ${body}`;
+}
+
+/** Split one stored Notes line back into a DieNote. The body may itself
+ *  contain ': ', so the meta is only the text BEFORE the first ': '. */
+export function parseDieNoteLine(line: string): DieNote {
+  const raw = line;
+  const idx = line.indexOf(': ');
+  const metaStr = idx >= 0 ? line.slice(0, idx) : '';
+  const body = idx >= 0 ? line.slice(idx + 2) : line;
+  const [date = '', shift = '', machine = '', operator = ''] = metaStr.split('/');
+  return {
+    date: date.trim(),
+    shift: shift.trim(),
+    machine: machine.trim(),
+    operator: operator.trim(),
+    body: body.trim(),
+    raw: raw.trim(),
+  };
+}
+
+/** Parse a PMD_DieMaster.Notes blob into notes, NEWEST FIRST (notes are
+ *  appended chronologically). A non-empty `keyword` keeps only notes whose
+ *  line contains it (case-insensitive) — the drilldown's SOC search. */
+export function parseDieNotes(raw: string, keyword = ''): DieNote[] {
+  const notes = (raw ?? '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map(parseDieNoteLine);
+  notes.reverse(); // newest first
+  const k = keyword.trim().toLowerCase();
+  return k ? notes.filter((n) => n.raw.toLowerCase().includes(k)) : notes;
+}
+
+/** Append a new note line to the existing Notes blob (chronological order,
+ *  newest last). Returns the value to write back to PMD_DieMaster.Notes. */
+export function appendDieNote(existing: string, line: string): string {
+  const base = (existing ?? '').replace(/[\s\r\n]+$/, '');
+  return base ? `${base}\n${line}` : line;
+}

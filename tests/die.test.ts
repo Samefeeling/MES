@@ -3,11 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
   aggregateDieServiceUsage,
   aggregateDies,
+  appendDieNote,
   assetNamesMachine,
   buildDieTrend,
   defaultPmPlanText,
   dieHealth,
   dieServiceStatus,
+  formatDieNoteLine,
   goodByJob,
   latestConditionByDie,
   machineCodeForAsset,
@@ -15,6 +17,7 @@ import {
   machineWorkOrdersFor,
   nextPlannedFor,
   parseDieCondition,
+  parseDieNotes,
   parsePmPlan,
   parseToolStatus,
   pmShotLevel,
@@ -1034,6 +1037,94 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
     expect(row.lastServiceDate).toBe('2026-07-13T02:00:00Z');
     expect(row.maintenanceLevel).toBe('A');
     await expect(dal.updateDieMaster('NOPE', { toolStatus: 'problems' })).rejects.toThrow();
+  });
+
+  it('updateDieMaster appends SOC notes to the Notes column', async () => {
+    const dal = new MemoryDataLayer();
+    const die = (await dal.listDieMaster())[0].dieNumber;
+    const first = formatDieNoteLine({
+      date: '2026-07-23',
+      shift: 'Day',
+      machine: '550T',
+      operator: 'Karl Stevens',
+      body: 'Colour changed to grey; barrel temp 210°C',
+    });
+    await dal.updateDieMaster(die, { notes: appendDieNote('', first) });
+    const second = formatDieNoteLine({
+      date: '2026-07-23',
+      shift: 'Night',
+      machine: '550T',
+      operator: 'Jo Lee',
+      body: 'Injection speed 45%',
+    });
+    const row0 = (await dal.listDieMaster()).find((m) => m.dieNumber === die)!;
+    await dal.updateDieMaster(die, { notes: appendDieNote(row0.notes, second) });
+    const row = (await dal.listDieMaster()).find((m) => m.dieNumber === die)!;
+    // Two notes stored, newest-first when parsed.
+    const notes = parseDieNotes(row.notes);
+    expect(notes).toHaveLength(2);
+    expect(notes[0].body).toBe('Injection speed 45%');
+    expect(notes[0].shift).toBe('Night');
+    expect(notes[1].body).toBe('Colour changed to grey; barrel temp 210°C');
+    // Keyword search reaches into the body and the captured context.
+    expect(parseDieNotes(row.notes, 'temp')).toHaveLength(1);
+    expect(parseDieNotes(row.notes, 'jo lee')).toHaveLength(1);
+    expect(parseDieNotes(row.notes, 'pressure')).toHaveLength(0);
+  });
+});
+
+describe('SOC note helpers (PMD_DieMaster.Notes)', () => {
+  it('formats a note as one Date/Shift/Machine/Operator: body line', () => {
+    expect(
+      formatDieNoteLine({
+        date: '2026-07-23',
+        shift: 'Day',
+        machine: '550T',
+        operator: 'Karl Stevens',
+        body: 'Hold pressure 60 bar',
+      }),
+    ).toBe('2026-07-23/Day/550T/Karl Stevens: Hold pressure 60 bar');
+  });
+
+  it('collapses newlines in the body so every note stays one line', () => {
+    const line = formatDieNoteLine({
+      date: '2026-07-23',
+      shift: 'Day',
+      machine: '550T',
+      operator: 'Ann',
+      body: 'Temp up\nSpeed down',
+    });
+    expect(line).not.toContain('\n');
+    expect(line).toBe('2026-07-23/Day/550T/Ann: Temp up Speed down');
+  });
+
+  it('round-trips a note whose body itself contains ": "', () => {
+    const line = formatDieNoteLine({
+      date: '2026-07-23',
+      shift: 'Night',
+      machine: '850T',
+      operator: 'Bob',
+      body: 'Note: raise the temp',
+    });
+    const [note] = parseDieNotes(line);
+    expect(note.machine).toBe('850T');
+    expect(note.operator).toBe('Bob');
+    expect(note.body).toBe('Note: raise the temp');
+  });
+
+  it('parses blank lines away and orders newest-first', () => {
+    const blob = ['2026-07-01/Day/550T/A: one', '', '2026-07-02/Day/550T/B: two'].join('\n');
+    const notes = parseDieNotes(blob);
+    expect(notes.map((n) => n.body)).toEqual(['two', 'one']);
+  });
+
+  it('appendDieNote starts a blob and then adds newline-separated lines', () => {
+    const a = appendDieNote('', 'x: 1');
+    expect(a).toBe('x: 1');
+    const b = appendDieNote(a, 'y: 2');
+    expect(b).toBe('x: 1\ny: 2');
+    // Trailing whitespace on the existing blob doesn't produce a blank note.
+    expect(parseDieNotes(appendDieNote('x: 1\n', 'y: 2'))).toHaveLength(2);
   });
 });
 

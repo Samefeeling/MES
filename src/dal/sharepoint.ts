@@ -329,6 +329,9 @@ const DEFAULT_FIELDS = {
     // Multi-line text: the die's customised multi-level PM plan
     // (`L2 | 10,000 shots | task; task` per line). Empty = default plan.
     maintenanceLevel: 'MaintenanceLevel',
+    // Multi-line text: the running SOC change log, one note per line
+    // (`Date/Shift/Machine/Operator: body`). Empty = no notes yet.
+    notes: 'Notes',
   },
   dieChangeLog: {
     // Internal names straight from the list schema export (2026-07).
@@ -500,8 +503,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     keys: Record<string, string>;
     idByDie: Map<string, number>;
     maintenanceLevelExists: boolean;
+    notesExists: boolean;
   } | null = null;
   private dieMasterMaintenanceLevelReady: Promise<void> | null = null;
+  private dieMasterNotesReady: Promise<void> | null = null;
   /**
    * Short-TTL `jobNumber → partNumber` map used by pushLiveSnapshot to
    * stamp PartNum onto every PMD_LiveStatus mirror. Without the cache,
@@ -1092,6 +1097,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         availableDate: resolve(F.availableDate),
         toolStatus: resolve(F.toolStatus),
         maintenanceLevel: resolve(F.maintenanceLevel),
+        notes: resolve(F.notes),
       };
       console.info('[pmd] PMD_DieMaster field resolution:', K);
       const rows = await this.getAllItems<Record<string, unknown>>(LISTS.dieMaster);
@@ -1114,6 +1120,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         ),
         maintenanceLevelExists:
           internals.has(F.maintenanceLevel) || byTitle.has(normName(F.maintenanceLevel)),
+        notesExists: internals.has(F.notes) || byTitle.has(normName(F.notes)),
       };
       const out = rows
         .map((r) => ({
@@ -1132,6 +1139,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           availableDate: str(r[K.availableDate]),
           toolStatus: parseToolStatus(str(r[K.toolStatus])),
           maintenanceLevel: str(r[K.maintenanceLevel]),
+          notes: str(r[K.notes]),
         }))
         .filter((m) => m.dieNumber);
       const withStatus = out.filter((m) => m.toolStatus).length;
@@ -1217,12 +1225,71 @@ export class SharePointDataLayer implements PmdDataLayer {
     return this.dieMasterMaintenanceLevelReady;
   }
 
+  /** Notes (the SOC change log) is also newer than the hand-built list.
+   *  Create the multi-line text column on the first note save so existing
+   *  deployments upgrade in place — same self-provisioning pattern as
+   *  MaintenanceLevel above. */
+  private async ensureDieMasterNotesField(): Promise<void> {
+    if (this.dieMasterMeta?.notesExists) return;
+    if (this.dieMasterNotesReady) return this.dieMasterNotesReady;
+    this.dieMasterNotesReady = (async () => {
+      const meta = this.dieMasterMeta;
+      if (!meta) throw new Error('PMD_DieMaster metadata is not loaded');
+      const wanted = this.F.dieMaster.notes;
+      const fieldsUrl = `${this.listUrl(LISTS.dieMaster)}/fields`;
+      const read = async (): Promise<Array<{ Title: string; InternalName: string }>> => {
+        const env = await this.getJson<{
+          d: { results: Array<{ Title: string; InternalName: string }> };
+        }>(`${fieldsUrl}?$filter=Hidden eq false&$select=Title,InternalName`);
+        return env.d.results;
+      };
+      const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const resolve = (fields: Array<{ Title: string; InternalName: string }>): string | null =>
+        fields.find((f) => f.InternalName === wanted)?.InternalName ??
+        fields.find((f) => norm(f.Title) === norm(wanted))?.InternalName ??
+        null;
+      let internal = resolve(await read());
+      if (!internal) {
+        try {
+          await this.post(fieldsUrl, {
+            __metadata: { type: 'SP.Field' },
+            Title: wanted,
+            FieldTypeKind: 3, // Note (multi-line text): one SOC note per line
+          });
+        } catch (e) {
+          // Another session may have created it between GET and POST.
+          internal = resolve(await read());
+          if (!internal) {
+            throw new Error(
+              `PMD_DieMaster needs a multi-line text '${wanted}' column (${(e as Error).message}). ` +
+                'Add it in List settings or grant Manage Lists once.',
+            );
+          }
+        }
+        internal ??= resolve(await read());
+      }
+      if (!internal) throw new Error(`PMD_DieMaster column '${wanted}' could not be resolved`);
+      meta.keys.notes = internal;
+      meta.notesExists = true;
+      console.info(`[pmd] PMD_DieMaster '${wanted}' column ready as ${internal}`);
+    })().catch((e) => {
+      this.dieMasterNotesReady = null;
+      throw e;
+    });
+    return this.dieMasterNotesReady;
+  }
+
   async updateDieMaster(
     dieNumber: string,
     patch: Partial<
       Pick<
         DieMaster,
-        'toolStatus' | 'dateStamp' | 'lastServiceDate' | 'availableDate' | 'maintenanceLevel'
+        | 'toolStatus'
+        | 'dateStamp'
+        | 'lastServiceDate'
+        | 'availableDate'
+        | 'maintenanceLevel'
+        | 'notes'
       >
     >,
   ): Promise<void> {
@@ -1235,6 +1302,9 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (!meta || !id) throw new Error(`No PMD_DieMaster row for die ${dieNumber}`);
     if (patch.maintenanceLevel !== undefined && !meta.maintenanceLevelExists) {
       await this.ensureDieMasterMaintenanceLevelField();
+    }
+    if (patch.notes !== undefined && !meta.notesExists) {
+      await this.ensureDieMasterNotesField();
     }
     const body: Record<string, unknown> = {
       __metadata: { type: await this.itemType(LISTS.dieMaster) },
@@ -1250,6 +1320,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (patch.availableDate !== undefined) body[meta.keys.availableDate] = patch.availableDate;
     if (patch.maintenanceLevel !== undefined)
       body[meta.keys.maintenanceLevel] = patch.maintenanceLevel;
+    if (patch.notes !== undefined) body[meta.keys.notes] = patch.notes;
     await this.post(`${this.listUrl(LISTS.dieMaster)}/items(${id})`, body, '*');
     // Keep the read cache coherent so a re-mount shows the new state
     // without a hard reload.
@@ -1261,6 +1332,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         if (patch.lastServiceDate !== undefined) row.lastServiceDate = patch.lastServiceDate;
         if (patch.availableDate !== undefined) row.availableDate = patch.availableDate;
         if (patch.maintenanceLevel !== undefined) row.maintenanceLevel = patch.maintenanceLevel;
+        if (patch.notes !== undefined) row.notes = patch.notes;
       }
     }
   }

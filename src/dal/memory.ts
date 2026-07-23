@@ -114,7 +114,12 @@ export class MemoryDataLayer implements PmdDataLayer {
     patch: Partial<
       Pick<
         DieMaster,
-        'toolStatus' | 'dateStamp' | 'lastServiceDate' | 'availableDate' | 'maintenanceLevel'
+        | 'toolStatus'
+        | 'dateStamp'
+        | 'lastServiceDate'
+        | 'availableDate'
+        | 'maintenanceLevel'
+        | 'notes'
       >
     >,
   ): Promise<void> {
@@ -126,6 +131,7 @@ export class MemoryDataLayer implements PmdDataLayer {
     if (patch.lastServiceDate !== undefined) row.lastServiceDate = patch.lastServiceDate;
     if (patch.availableDate !== undefined) row.availableDate = patch.availableDate;
     if (patch.maintenanceLevel !== undefined) row.maintenanceLevel = patch.maintenanceLevel;
+    if (patch.notes !== undefined) row.notes = patch.notes;
   }
 
   // ---- die maintenance (PMD_DieMaintenance parity) ---------------------

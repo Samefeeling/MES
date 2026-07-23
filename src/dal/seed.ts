@@ -195,6 +195,7 @@ export function seedDieMaster(now: Date): DieMaster[] {
     availableDate: availableInDays == null ? '' : stamp(-availableInDays),
     toolStatus,
     maintenanceLevel: '',
+    notes: '',
   });
   const custom = row(
     'DIE-3597', 'Viva Backrest/Armrest 2-cav', 2, 28.5, 780, 1_000_000, 'problems', 1, 45,

@@ -50,6 +50,7 @@ import { openBreakdownCascade } from './breakdown';
 import { toast } from './toast';
 import { closeModal, escapeHtml, openModal } from './modal';
 import { DIE_COMPONENTS, DIE_CONDITION_META, dieChangeEventKey } from '../core/die';
+import { setDieNoteContext } from './nav-context';
 import { renderOutputRejectChart } from './charts';
 import { clearSupervisor, isSupervisor } from './supervisor-auth';
 import { isIpadDevice } from '../core/device';
@@ -1861,7 +1862,16 @@ function buildMeta(): string {
   // part — silently hiding it made an empty cell indistinguishable from
   // a missing column.
   const dieNumber = die?.dieNumber || '';
-  const dieNumberLabel = ` <span class="m-die-num" title="Die # for this part (from PMD_ProductDieColor.DieNumber)">Die# ${escapeHtml(dieNumber || '—')}</span>`;
+  // The Die# pill deep-links into the Tool board's drilldown for this die so
+  // the operator can read its SOC change log and add a note. A button only
+  // when there's a die to open; a plain pill (em-dash) when the part has none.
+  const dieNumberLabel = dieNumber
+    ? ` <button type="button" class="m-die-num m-die-jump" data-die-jump="${escapeHtml(
+        dieNumber,
+      )}" title="Open die ${escapeHtml(
+        dieNumber,
+      )} in the Tool board — read its SOC notes or add one">Die# ${escapeHtml(dieNumber)}</button>`
+    : ` <span class="m-die-num" title="Die # for this part (from PMD_ProductDieColor.DieNumber)">Die# —</span>`;
   // ⛓ Co-Run chips: jobs sharing this die that are both flagged CoRun=Yes in
   // PMD_ProductDieColor. They run simultaneously, so the floor needs to enter
   // each one's counts and sees their machine status mirrored. The chip is a
@@ -2658,6 +2668,20 @@ function wire(): void {
       saveView();
       void reload();
     });
+  });
+  // Die# pill — deep-link into the Tool board's drilldown for this die.
+  // Stash the current shift context first so the drilldown's Add-note dialog
+  // can stamp Date / Shift / Machine / Operator without re-deriving them.
+  app.querySelector<HTMLButtonElement>('[data-die-jump]')?.addEventListener('click', (e) => {
+    const die = (e.currentTarget as HTMLButtonElement).dataset.dieJump;
+    if (!die) return;
+    setDieNoteContext({
+      date: dateKey(S!.viewDate),
+      shift: S!.shiftCode,
+      machine: S!.mc,
+      operator: S!.selOperator,
+    });
+    window.location.hash = `#/tool/die/${encodeURIComponent(die)}`;
   });
   app
     .querySelector<HTMLTextAreaElement>('textarea[data-meta="comments"]')
