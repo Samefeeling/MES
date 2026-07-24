@@ -33,6 +33,7 @@ import {
   dieHealth,
   dieServiceStatus,
   formatDieNoteLine,
+  formatToolStatusNotice,
   goodByJob,
   latestConditionByDie,
   machineWorkOrderLevel,
@@ -43,6 +44,7 @@ import {
   pmShotLevel,
   TOOL_MAINTENANCE_RULES,
   TOOL_STATUS_META,
+  TOOL_STATUS_NOTICE_TO,
   type DieAgg,
   type DieConditionSummary,
   type DieNote,
@@ -1321,6 +1323,9 @@ async function applyToolStatus(
     lastServiceDate: m.lastServiceDate,
     availableDate: m.availableDate,
   };
+  // Only a genuine status change triggers the toolroom notice — re-picking
+  // the same status (or re-saving an in-service date) must not spam mail.
+  const statusChanged = prev.toolStatus !== st;
   // Optimistic — the row updates immediately; a failed write rolls back.
   m.toolStatus = st;
   m.dateStamp = now;
@@ -1332,6 +1337,25 @@ async function applyToolStatus(
     await dalRef.updateDieMaster(dieNumber, patch);
     const back = availableDate ? ` · back ${ddmmyyyy(availableDate.slice(0, 10))}` : '';
     toast(`${dieNumber} → ${TOOL_STATUS_META[st].label}${back}`, 'ok');
+    // Notify the toolroom lead of the status change. Fire-and-forget: the
+    // status write already succeeded, so a mail failure must not undo it —
+    // surface it as a secondary toast (not silent) and move on.
+    if (statusChanged && dalRef.sendNotice) {
+      const notice = formatToolStatusNotice({
+        dieNumber,
+        description: m.description,
+        from: prev.toolStatus,
+        to: st,
+        availableDate,
+        changedAt: now,
+      });
+      void dalRef
+        .sendNotice({ to: [TOOL_STATUS_NOTICE_TO], subject: notice.subject, body: notice.body })
+        .catch((e) => {
+          console.warn('[pmd] status-change notice failed:', e);
+          toast('Status saved, but the email notice to the toolroom failed', 'err');
+        });
+    }
   } catch (e) {
     Object.assign(m, prev);
     render();

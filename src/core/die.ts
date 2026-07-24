@@ -1056,3 +1056,58 @@ export function appendDieNote(existing: string, line: string): string {
   const base = (existing ?? '').replace(/[\s\r\n]+$/, '');
   return base ? `${base}\n${line}` : line;
 }
+
+// ---------------------------------------------------------------------
+// Tool-status change notice — the toolroom lead is emailed whenever a die's
+// ToolStatus changes on the board (management ask, 2026-07).
+
+/** Recipient of the ToolStatus-change notice. Centralised here so it's a
+ *  one-line change if the owner moves on. */
+export const TOOL_STATUS_NOTICE_TO = 'Lanny.Puspitawati@reserogroup.com';
+
+const escapeNoticeText = (s: string): string =>
+  (s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/** dd/mm/yyyy hh:mm from an ISO timestamp (site-local reading of the browser
+ *  clock); returns the raw input when it isn't a parseable date. */
+const noticeDateTime = (iso: string): string => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const p = (n: number): string => String(n).padStart(2, '0');
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
+/** dd/mm/yyyy from an ISO date (or ISO datetime — only the date is used). */
+const noticeDay = (iso: string): string => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec((iso ?? '').trim());
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : (iso ?? '').slice(0, 10);
+};
+
+/** Subject + HTML body for the ToolStatus-change notice. Pure, so the exact
+ *  wording is unit-testable. `from` is '' when the die had no status before;
+ *  `availableDate` is only shown for the In-service transition. */
+export function formatToolStatusNotice(n: {
+  dieNumber: string;
+  description?: string;
+  from: ToolStatus | '';
+  to: ToolStatus;
+  availableDate?: string;
+  changedAt: string;
+  changedBy?: string;
+}): { subject: string; body: string } {
+  const toLabel = TOOL_STATUS_META[n.to].label;
+  const fromLabel = n.from ? TOOL_STATUS_META[n.from].label : '(none)';
+  const subject = `PMD Tool Status: ${n.dieNumber} → ${toLabel}`;
+  const rows: string[] = [
+    `<li><b>Die:</b> ${escapeNoticeText(n.dieNumber)}${
+      n.description ? ` — ${escapeNoticeText(n.description)}` : ''
+    }</li>`,
+    `<li><b>Status:</b> ${escapeNoticeText(fromLabel)} → ${escapeNoticeText(toLabel)}</li>`,
+  ];
+  if (n.to === 'in-service' && n.availableDate)
+    rows.push(`<li><b>Available (back from maintenance):</b> ${noticeDay(n.availableDate)}</li>`);
+  rows.push(`<li><b>Changed at:</b> ${noticeDateTime(n.changedAt)}</li>`);
+  if (n.changedBy) rows.push(`<li><b>Changed by:</b> ${escapeNoticeText(n.changedBy)}</li>`);
+  const body = `<p>The tool status was changed on the PMD Tool board.</p><ul>${rows.join('')}</ul>`;
+  return { subject, body };
+}

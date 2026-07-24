@@ -1337,6 +1337,24 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
   }
 
+  /** Send a notice email via SharePoint's own mailer. SP.Utilities.Utility
+   *  .SendEmail reaches recipients inside the tenant (the toolroom lead is
+   *  internal) with no extra permissions — it rides the same cookie + digest
+   *  as every other write. The Body is delivered as HTML. */
+  async sendNotice(notice: { to: string[]; subject: string; body: string }): Promise<void> {
+    const to = notice.to.map((s) => s.trim()).filter(Boolean);
+    if (to.length === 0) return;
+    await this.post(`${this.siteUrl}/_api/SP.Utilities.Utility.SendEmail`, {
+      properties: {
+        __metadata: { type: 'SP.Utilities.EmailProperties' },
+        To: { results: to },
+        Subject: notice.subject,
+        Body: notice.body,
+      },
+    });
+    console.info('[pmd] notice email sent to', to.join(', '), '·', notice.subject);
+  }
+
   // ---- die change log (PMD_DieChangeLog) -------------------------------
 
   private dieChangeSchemaReady: Promise<void> | null = null;

@@ -60,6 +60,13 @@ export interface PmdDataLayer {
     >,
   ): Promise<void>;
 
+  /** Fire a notice email. Used by the Die board to alert the toolroom lead
+   *  when a tool's ToolStatus changes. Optional — only backends that can
+   *  send mail implement it (SharePoint via SP.Utilities.Utility.SendEmail,
+   *  which reaches internal recipients). The UI calls it fire-and-forget so
+   *  a mail failure never blocks or rolls back the status write. */
+  sendNotice?(notice: { to: string[]; subject: string; body: string }): Promise<void>;
+
   // Die maintenance (Trace → 🛠 Die Management). Backed by the
   // PMD_DieMaintenance list on SharePoint (auto-provisioned on first
   // write — see the SharePoint DAL); MangoTicket on each request is the
