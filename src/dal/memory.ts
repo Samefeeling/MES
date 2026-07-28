@@ -139,6 +139,7 @@ export class MemoryDataLayer implements PmdDataLayer {
     subject: string;
     body: string;
     text?: string;
+    source?: string;
   }): Promise<void> {
     // No mail server in the demo backend — just record the intent so the
     // fire-and-forget path is observable in dev / tests.

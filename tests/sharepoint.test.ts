@@ -2602,6 +2602,9 @@ describe('sign-off multi-list write protocol', () => {
 });
 
 describe('sendNotice (status-change email)', () => {
+  // SP.Utilities.Utility.SendEmail was retired by Microsoft ("The SendEmail
+  // api has been retired", 400) — notices are now rows in PMD_Notices that a
+  // Power Automate flow mails out.
   const realFetch = globalThis.fetch;
   const store = new Map<string, string>();
   beforeAll(() => {
@@ -2619,74 +2622,101 @@ describe('sendNotice (status-change email)', () => {
     delete (globalThis as { localStorage?: unknown }).localStorage;
   });
 
-  /** Stub the digest + SendEmail endpoints; `verdict` decides per attempt
-   *  whether SharePoint accepts that Body. Returns the bodies it received. */
-  const stubMail = (verdict: (body: string) => string | null): string[] => {
-    const sent: string[] = [];
-    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+  interface Posted { url: string; body: Record<string, unknown> }
+
+  /** Stub the digest + list endpoints. `listExists` decides whether
+   *  PMD_Notices is already on the site. Returns every POST made. */
+  const stubSp = (listExists: boolean): Posted[] => {
+    const posts: Posted[] = [];
+    const ok = (json: unknown): Response =>
+      ({ ok: true, status: 200, json: async () => json, text: async () => '' }) as unknown as Response;
+    globalThis.fetch = (async (url: unknown, init?: { method?: string; body?: string }) => {
       const u = String(url);
       if (u.includes('/_api/contextinfo'))
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            d: {
-              GetContextWebInformation: {
-                FormDigestValue: 'digest',
-                FormDigestTimeoutSeconds: 1800,
-              },
-            },
-          }),
-        } as unknown as Response;
-      if (u.includes('SP.Utilities.Utility.SendEmail')) {
-        const body = (JSON.parse(String(init?.body)) as { properties: { Body: string } })
-          .properties.Body;
-        sent.push(body);
-        const err = verdict(body);
-        return (
-          err === null
-            ? { ok: true, status: 200, text: async () => '' }
-            : {
-                ok: false,
-                status: 400,
-                text: async () => JSON.stringify({ error: { message: { value: err } } }),
-              }
-        ) as unknown as Response;
+        return ok({
+          d: { GetContextWebInformation: { FormDigestValue: 'digest', FormDigestTimeoutSeconds: 1800 } },
+        });
+      if (init?.method === 'POST') {
+        posts.push({ url: u, body: JSON.parse(String(init.body)) as Record<string, unknown> });
+        return ok({ d: { ID: 7 } });
+      }
+      // GETs: the existence probe and the ListItemEntityTypeFullName lookup.
+      if (u.includes("getbytitle('PMD_Notices')")) {
+        if (!listExists) throw new Error('GET ... → 404');
+        return ok({ d: { Title: 'PMD_Notices', ListItemEntityTypeFullName: 'SP.Data.PMD_NoticesListItem' } });
       }
       throw new Error(`unexpected fetch ${u}`);
     }) as unknown as typeof fetch;
-    return sent;
+    return posts;
   };
 
   const dal = (): SharePointDataLayer =>
     new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
 
-  it('sends the HTML body when the tenant accepts it', async () => {
-    const sent = stubMail(() => null);
-    await dal().sendNotice({ to: ['a@x.com'], subject: 'S', body: '<p>hi</p>', text: 'hi' });
-    expect(sent).toEqual(['<p>hi</p>']); // no retry needed
+  it('queues a notice as a PMD_Notices row when the list already exists', async () => {
+    const posts = stubSp(true);
+    await dal().sendNotice({
+      to: ['a@x.com', ' b@x.com '],
+      subject: 'PMD Tool Status: DIE-1 → Serviced',
+      body: '<p>hi</p>',
+      text: 'hi',
+      source: 'die-status',
+    });
+    expect(posts).toHaveLength(1); // no list creation needed
+    expect(posts[0].url).toContain("getbytitle('PMD_Notices')/items");
+    expect(posts[0].body).toMatchObject({
+      Title: 'PMD Tool Status: DIE-1 → Serviced',
+      Recipient: 'a@x.com; b@x.com', // trimmed and joined
+      Body: 'hi', // plain text, so the SharePoint list stays readable
+      BodyHtml: '<p>hi</p>',
+      Source: 'die-status',
+    });
   });
 
-  it('retries as plain text when the HTML body is rejected', async () => {
-    // Some tenants' mail path refuses an HTML body. Losing the notice over
-    // formatting would be silly when the same content sends fine as text.
-    const sent = stubMail((b) => (b.includes('<') ? 'HTML not allowed' : null));
-    await dal().sendNotice({ to: ['a@x.com'], subject: 'S', body: '<p>hi</p>', text: 'hi' });
-    expect(sent).toEqual(['<p>hi</p>', 'hi']);
+  it('creates PMD_Notices with its columns on the first notice', async () => {
+    const posts = stubSp(false);
+    await dal().sendNotice({ to: ['a@x.com'], subject: 'S', body: '<p>b</p>', text: 'b' });
+    const list = posts.find((p) => p.url.endsWith('/_api/web/lists'));
+    expect(list?.body).toMatchObject({ Title: 'PMD_Notices', BaseTemplate: 100 });
+    const fields = posts.filter((p) => p.url.includes('/fields'));
+    expect(fields.map((f) => f.body.Title)).toEqual(['Recipient', 'Source', 'Body', 'BodyHtml']);
+    // Body/BodyHtml must be multi-line notes (3), the rest single-line (2).
+    expect(fields.map((f) => f.body.FieldTypeKind)).toEqual([2, 2, 3, 3]);
+    // …and the item is still written after provisioning.
+    expect(posts[posts.length - 1].url).toContain('/items');
   });
 
-  it('throws with both SharePoint messages when the retry fails too', async () => {
-    // The Die board prints this string on screen, so it has to say what the
-    // server actually objected to — for both attempts.
-    stubMail(() => 'The e-mail message cannot be sent. Make sure the e-mail has a valid recipient.');
-    await expect(
-      dal().sendNotice({ to: ['a@x.com'], subject: 'S', body: '<p>hi</p>', text: 'hi' }),
-    ).rejects.toThrow(/HTML body:.*valid recipient.*plain-text retry:.*valid recipient/s);
+  it('falls back to the HTML body when no plain text is supplied', async () => {
+    const posts = stubSp(true);
+    await dal().sendNotice({ to: ['a@x.com'], subject: 'S', body: '<p>b</p>' });
+    expect(posts[0].body).toMatchObject({ Body: '<p>b</p>', Source: 'pmd' });
   });
 
-  it('does not call SharePoint at all when every recipient is blank', async () => {
-    const sent = stubMail(() => null);
+  it('writes nothing when every recipient is blank', async () => {
+    const posts = stubSp(true);
     await dal().sendNotice({ to: ['', '  '], subject: 'S', body: 'b', text: 'b' });
-    expect(sent).toEqual([]);
+    expect(posts).toEqual([]);
+  });
+
+  it('propagates SharePoint\'s message so the board can show it', async () => {
+    globalThis.fetch = (async (url: unknown, init?: { method?: string }) => {
+      const u = String(url);
+      if (u.includes('/_api/contextinfo'))
+        return ({ ok: true, status: 200, json: async () => ({
+          d: { GetContextWebInformation: { FormDigestValue: 'd', FormDigestTimeoutSeconds: 1800 } },
+        }) }) as unknown as Response;
+      if (init?.method === 'POST')
+        return ({
+          ok: false,
+          status: 403,
+          text: async () => JSON.stringify({ error: { message: { value: 'Access denied.' } } }),
+        }) as unknown as Response;
+      return ({ ok: true, status: 200, json: async () => ({
+        d: { Title: 'PMD_Notices', ListItemEntityTypeFullName: 'SP.Data.PMD_NoticesListItem' },
+      }) }) as unknown as Response;
+    }) as unknown as typeof fetch;
+    await expect(
+      dal().sendNotice({ to: ['a@x.com'], subject: 'S', body: 'b', text: 'b' }),
+    ).rejects.toThrow(/Access denied/);
   });
 });

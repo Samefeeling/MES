@@ -60,18 +60,26 @@ export interface PmdDataLayer {
     >,
   ): Promise<void>;
 
-  /** Fire a notice email. Used by the Die board to alert the toolroom lead
-   *  when a tool's ToolStatus changes. Optional — only backends that can
-   *  send mail implement it (SharePoint via SP.Utilities.Utility.SendEmail,
-   *  which reaches internal recipients). The UI calls it fire-and-forget so
-   *  a mail failure never blocks or rolls back the status write. */
+  /** Queue a notice email. Used by the Die board to alert the toolroom lead
+   *  when a tool's ToolStatus changes. Optional — only backends with an
+   *  outbound path implement it.
+   *
+   *  Resolving means ACCEPTED FOR DELIVERY, not delivered: the SharePoint
+   *  backend writes a PMD_Notices row that a Power Automate flow turns into
+   *  mail (SP.Utilities.Utility.SendEmail, the old direct route, was retired
+   *  by Microsoft). The UI calls it fire-and-forget so a failure here never
+   *  blocks or rolls back the write the notice is about. */
   sendNotice?(notice: {
     to: string[];
     subject: string;
+    /** HTML body. */
     body: string;
-    /** Same content as `body` without markup. Backends whose mail path
-     *  rejects HTML fall back to this rather than dropping the notice. */
+    /** Same content as `body` without markup, for plain-text delivery and
+     *  so a queue row stays readable in SharePoint. */
     text?: string;
+    /** Which feature raised it (e.g. 'die-status') — lets one flow serve
+     *  several notice types. */
+    source?: string;
   }): Promise<void>;
 
   // Die maintenance (Trace → 🛠 Die Management). Backed by the

@@ -1307,6 +1307,11 @@ function openStatusPicker(dieNumber: string): void {
 // every attempt is now recorded, the failure text is SharePoint's own, and
 // both are readable without a console — same reasoning as the Status/WO
 // source chips above.
+//
+// Note the vocabulary: the app QUEUES a notice (a PMD_Notices row) and a
+// Power Automate flow sends it. Nothing here can observe delivery, so
+// nothing here claims it — see the DAL's sendNotice for why the direct
+// send is gone.
 
 interface NoticeAttempt {
   at: number;
@@ -1318,7 +1323,7 @@ interface NoticeAttempt {
 
 let lastNotice: NoticeAttempt | null = null;
 
-/** Send a notice and record how it went. Never throws: the caller has
+/** Queue a notice and record how it went. Never throws: the caller has
  *  already committed the change the notice is about. */
 async function deliverNotice(
   notice: { subject: string; body: string; text: string },
@@ -1331,6 +1336,7 @@ async function deliverNotice(
       subject: notice.subject,
       body: notice.body,
       text: notice.text,
+      source: 'die-status',
     });
     lastNotice = { at: Date.now(), subject: notice.subject, ok: true };
   } catch (e) {
@@ -1338,7 +1344,7 @@ async function deliverNotice(
     lastNotice = { at: Date.now(), subject: notice.subject, ok: false, error };
     console.warn('[pmd] status-change notice failed:', e);
     toast(
-      `${what} IS saved — but the email to ${TOOL_STATUS_NOTICE_TO} failed.\n\n${error}\n\n(tap to dismiss · details on the “Status email” chip)`,
+      `${what} IS saved — but the notice to ${TOOL_STATUS_NOTICE_TO} could not be queued.\n\n${error}\n\n(tap to dismiss · details on the “Status email” chip)`,
       'err',
       { sticky: true },
     );
@@ -1346,28 +1352,30 @@ async function deliverNotice(
   if (hostEl) render();
 }
 
-/** Chip for the board header: is the toolroom actually being emailed? */
+/** Chip for the board header: is the toolroom actually being told? */
 function noticeChip(): string {
   if (!dalRef.sendNotice) return '';
   const to = escapeHtml(TOOL_STATUS_NOTICE_TO);
   if (!lastNotice)
-    return `<span class="die-chip die-chip-btn" data-die-mail title="Every ToolStatus change emails ${to}. Nothing has been sent yet in this session — tap for details or to send a test.">Status email <b>${escapeHtml(TOOL_STATUS_NOTICE_TO.split(/[.@]/)[0])}</b></span>`;
+    return `<span class="die-chip die-chip-btn" data-die-mail title="Every ToolStatus change queues an email to ${to}. Nothing has been queued yet in this session — tap for details or to send a test.">Status email <b>${escapeHtml(TOOL_STATUS_NOTICE_TO.split(/[.@]/)[0])}</b></span>`;
   const hhmm = new Date(lastNotice.at).toTimeString().slice(0, 5);
   return lastNotice.ok
-    ? `<span class="die-chip die-chip-btn" data-die-mail title="Last notice to ${to} was accepted by SharePoint at ${hhmm}. Tap for details.">Status email <b>sent ${hhmm}</b></span>`
+    ? `<span class="die-chip die-chip-btn" data-die-mail title="Last notice to ${to} was queued at ${hhmm}. Queued ≠ delivered — tap for details.">Status email <b>queued ${hhmm}</b></span>`
     : `<span class="die-chip is-bad die-chip-btn" data-die-mail title="${escapeHtml(lastNotice.error ?? '')}">Status email <b>⚠ failed</b></span>`;
 }
 
-/** What the “Status email” chip opens: who gets the mail, how it is sent,
- *  what the last attempt did, and a test send so the link can be proven
+/** What the “Status email” chip opens: who gets the mail, how it travels,
+ *  what the last attempt did, and a test notice so the chain can be proven
  *  without flipping a real die's status. */
 function openNoticeDiagModal(): void {
   const l = lastNotice;
   const outcome = !l
-    ? '<p class="die-mail-line">No status change has been made in this session yet.</p>'
+    ? '<p class="die-mail-line">Nothing has been queued in this session yet.</p>'
     : l.ok
-      ? `<p class="die-mail-line is-ok">✓ SharePoint accepted the last notice — <b>${escapeHtml(l.subject)}</b></p>`
-      : `<p class="die-mail-line is-bad">✗ The last notice was rejected — <b>${escapeHtml(l.subject)}</b></p>
+      ? `<p class="die-mail-line is-ok">✓ Queued — <b>${escapeHtml(l.subject)}</b></p>
+         <p class="die-req-note">Queued means the row was written. If it never arrives, the
+           flow is the thing to check — not this board.</p>`
+      : `<p class="die-mail-line is-bad">✗ Could not be queued — <b>${escapeHtml(l.subject)}</b></p>
          <pre class="die-mail-err">${escapeHtml(l.error ?? '')}</pre>`;
   openModal(`<div class="die-st-pick die-mail-diag">
     <div class="kpi-trace-head">
@@ -1376,17 +1384,18 @@ function openNoticeDiagModal(): void {
     </div>
     <p class="die-mail-line"><b>To:</b> ${escapeHtml(TOOL_STATUS_NOTICE_TO)}</p>
     <p class="die-mail-line"><b>When:</b> every time a die's Status actually changes on this
-      board (re-picking the same status sends nothing).</p>
-    <p class="die-mail-line"><b>How:</b> SharePoint sends it for us
-      (<code>SP.Utilities.Utility.SendEmail</code>) — which only delivers to people inside the
-      tenant, and only if the site is allowed to send mail.</p>
+      board (re-picking the same status queues nothing).</p>
+    <p class="die-mail-line"><b>How:</b> the board writes a row to the
+      <b>PMD_Notices</b> list; a Power Automate flow on “When an item is created” sends the
+      email. Microsoft retired SharePoint's own send-mail API, so a page like this one can no
+      longer post mail directly.</p>
     ${outcome}
     ${
       isSupervisor()
         ? `<div class="bd-actions">
-             <button class="btn-primary-big" data-die-mail-test>Send test email</button>
+             <button class="btn-primary-big" data-die-mail-test>Queue a test notice</button>
            </div>`
-        : '<p class="die-req-note">Supervisor mode can send a test email from here.</p>'
+        : '<p class="die-req-note">Supervisor mode can queue a test notice from here.</p>'
     }
   </div>`);
   const mc = document.getElementById('mc')!;
@@ -1394,19 +1403,19 @@ function openNoticeDiagModal(): void {
   const testBtn = mc.querySelector<HTMLButtonElement>('[data-die-mail-test]');
   testBtn?.addEventListener('click', () => {
     testBtn.disabled = true;
-    testBtn.textContent = 'Sending…';
+    testBtn.textContent = 'Queueing…';
     const stamp = new Date().toLocaleString();
     void deliverNotice(
       {
-        subject: 'PMD Tool Status — test email (please ignore)',
-        body: `<p>Test from the PMD Tool board at ${escapeHtml(stamp)}. If this arrived, die status-change notices will arrive too.</p>`,
-        text: `Test from the PMD Tool board at ${stamp}. If this arrived, die status-change notices will arrive too.`,
+        subject: 'PMD Tool Status — test notice (please ignore)',
+        body: `<p>Test from the PMD Tool board at ${escapeHtml(stamp)}. If this arrived as an email, die status-change notices will too.</p>`,
+        text: `Test from the PMD Tool board at ${stamp}. If this arrived as an email, die status-change notices will too.`,
       },
-      'Test email',
+      'Test notice',
     ).then(() => {
       if (lastNotice?.ok) {
         closeModal();
-        toast(`Test email accepted by SharePoint — check ${TOOL_STATUS_NOTICE_TO}`, 'ok');
+        toast(`Test notice queued — it reaches ${TOOL_STATUS_NOTICE_TO} once the flow runs`, 'ok');
       } else {
         openNoticeDiagModal();
       }
