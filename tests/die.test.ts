@@ -1145,6 +1145,37 @@ describe('formatToolStatusNotice (ToolStatus-change email)', () => {
     expect(body).not.toContain('Available');
   });
 
+  it('carries a markup-free copy of the same content for the plain-text retry', () => {
+    const { body, text } = formatToolStatusNotice({
+      dieNumber: 'DIE-0689',
+      description: 'Postura Plus Linking Chair',
+      from: 'to-be-serviced',
+      to: 'in-service',
+      availableDate: '2026-08-10T00:00:00.000Z',
+      changedAt: '2026-07-24T05:32:00.000Z',
+      changedBy: 'A. Toolmaker',
+    });
+    expect(text).not.toMatch(/[<>]/); // no tags survive into the text part
+    // Every field the HTML body carries is in the text body too.
+    expect(text).toContain('Die: DIE-0689 — Postura Plus Linking Chair');
+    expect(text).toContain('Status: To be Serviced → In service');
+    expect(text).toContain('Available (back from maintenance): 10/08/2026');
+    expect(text).toContain('Changed by: A. Toolmaker');
+    expect(body).toContain('Changed by:</b> A. Toolmaker');
+  });
+
+  it('escapes markup in die text so a stray < cannot break the HTML body', () => {
+    const { body, text } = formatToolStatusNotice({
+      dieNumber: 'DIE-1',
+      description: 'Bracket <A&B>',
+      from: '',
+      to: 'problems',
+      changedAt: '2026-07-24T05:32:00.000Z',
+    });
+    expect(body).toContain('Bracket &lt;A&amp;B&gt;');
+    expect(text).toContain('Bracket <A&B>'); // plain text stays plain
+  });
+
   it('shows the Available return date only on the In-service transition', () => {
     const { subject, body } = formatToolStatusNotice({
       dieNumber: 'DIE-3597',

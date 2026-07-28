@@ -2600,3 +2600,93 @@ describe('sign-off multi-list write protocol', () => {
     expect(cache.has(`Batt1|${shiftId}|SFM-TX`)).toBe(true);
   });
 });
+
+describe('sendNotice (status-change email)', () => {
+  const realFetch = globalThis.fetch;
+  const store = new Map<string, string>();
+  beforeAll(() => {
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string): string | null => store.get(k) ?? null,
+      setItem: (k: string, v: string): void => { store.set(k, v); },
+      removeItem: (k: string): void => { store.delete(k); },
+      clear: (): void => { store.clear(); },
+      key: (): string | null => null,
+      length: 0,
+    };
+  });
+  afterAll(() => {
+    globalThis.fetch = realFetch;
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+
+  /** Stub the digest + SendEmail endpoints; `verdict` decides per attempt
+   *  whether SharePoint accepts that Body. Returns the bodies it received. */
+  const stubMail = (verdict: (body: string) => string | null): string[] => {
+    const sent: string[] = [];
+    globalThis.fetch = (async (url: unknown, init?: { body?: string }) => {
+      const u = String(url);
+      if (u.includes('/_api/contextinfo'))
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            d: {
+              GetContextWebInformation: {
+                FormDigestValue: 'digest',
+                FormDigestTimeoutSeconds: 1800,
+              },
+            },
+          }),
+        } as unknown as Response;
+      if (u.includes('SP.Utilities.Utility.SendEmail')) {
+        const body = (JSON.parse(String(init?.body)) as { properties: { Body: string } })
+          .properties.Body;
+        sent.push(body);
+        const err = verdict(body);
+        return (
+          err === null
+            ? { ok: true, status: 200, text: async () => '' }
+            : {
+                ok: false,
+                status: 400,
+                text: async () => JSON.stringify({ error: { message: { value: err } } }),
+              }
+        ) as unknown as Response;
+      }
+      throw new Error(`unexpected fetch ${u}`);
+    }) as unknown as typeof fetch;
+    return sent;
+  };
+
+  const dal = (): SharePointDataLayer =>
+    new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+
+  it('sends the HTML body when the tenant accepts it', async () => {
+    const sent = stubMail(() => null);
+    await dal().sendNotice({ to: ['a@x.com'], subject: 'S', body: '<p>hi</p>', text: 'hi' });
+    expect(sent).toEqual(['<p>hi</p>']); // no retry needed
+  });
+
+  it('retries as plain text when the HTML body is rejected', async () => {
+    // Some tenants' mail path refuses an HTML body. Losing the notice over
+    // formatting would be silly when the same content sends fine as text.
+    const sent = stubMail((b) => (b.includes('<') ? 'HTML not allowed' : null));
+    await dal().sendNotice({ to: ['a@x.com'], subject: 'S', body: '<p>hi</p>', text: 'hi' });
+    expect(sent).toEqual(['<p>hi</p>', 'hi']);
+  });
+
+  it('throws with both SharePoint messages when the retry fails too', async () => {
+    // The Die board prints this string on screen, so it has to say what the
+    // server actually objected to — for both attempts.
+    stubMail(() => 'The e-mail message cannot be sent. Make sure the e-mail has a valid recipient.');
+    await expect(
+      dal().sendNotice({ to: ['a@x.com'], subject: 'S', body: '<p>hi</p>', text: 'hi' }),
+    ).rejects.toThrow(/HTML body:.*valid recipient.*plain-text retry:.*valid recipient/s);
+  });
+
+  it('does not call SharePoint at all when every recipient is blank', async () => {
+    const sent = stubMail(() => null);
+    await dal().sendNotice({ to: ['', '  '], subject: 'S', body: 'b', text: 'b' });
+    expect(sent).toEqual([]);
+  });
+});

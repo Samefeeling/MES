@@ -1083,9 +1083,14 @@ const noticeDay = (iso: string): string => {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : (iso ?? '').slice(0, 10);
 };
 
-/** Subject + HTML body for the ToolStatus-change notice. Pure, so the exact
- *  wording is unit-testable. `from` is '' when the die had no status before;
- *  `availableDate` is only shown for the In-service transition. */
+/** Subject + HTML body for the ToolStatus-change notice, plus the same
+ *  content as plain text. Pure, so the exact wording is unit-testable.
+ *  `from` is '' when the die had no status before; `availableDate` is only
+ *  shown for the In-service transition.
+ *
+ *  Why both formats: some tenants' mail path rejects or mangles an HTML
+ *  body, so the SharePoint DAL retries with `text` before giving up (see
+ *  sendNotice). Both are rendered from one field list so they can't drift. */
 export function formatToolStatusNotice(n: {
   dieNumber: string;
   description?: string;
@@ -1094,20 +1099,23 @@ export function formatToolStatusNotice(n: {
   availableDate?: string;
   changedAt: string;
   changedBy?: string;
-}): { subject: string; body: string } {
+}): { subject: string; body: string; text: string } {
   const toLabel = TOOL_STATUS_META[n.to].label;
   const fromLabel = n.from ? TOOL_STATUS_META[n.from].label : '(none)';
   const subject = `PMD Tool Status: ${n.dieNumber} → ${toLabel}`;
-  const rows: string[] = [
-    `<li><b>Die:</b> ${escapeNoticeText(n.dieNumber)}${
-      n.description ? ` — ${escapeNoticeText(n.description)}` : ''
-    }</li>`,
-    `<li><b>Status:</b> ${escapeNoticeText(fromLabel)} → ${escapeNoticeText(toLabel)}</li>`,
+  const fields: Array<[string, string]> = [
+    ['Die', `${n.dieNumber}${n.description ? ` — ${n.description}` : ''}`],
+    ['Status', `${fromLabel} → ${toLabel}`],
   ];
   if (n.to === 'in-service' && n.availableDate)
-    rows.push(`<li><b>Available (back from maintenance):</b> ${noticeDay(n.availableDate)}</li>`);
-  rows.push(`<li><b>Changed at:</b> ${noticeDateTime(n.changedAt)}</li>`);
-  if (n.changedBy) rows.push(`<li><b>Changed by:</b> ${escapeNoticeText(n.changedBy)}</li>`);
-  const body = `<p>The tool status was changed on the PMD Tool board.</p><ul>${rows.join('')}</ul>`;
-  return { subject, body };
+    fields.push(['Available (back from maintenance)', noticeDay(n.availableDate)]);
+  fields.push(['Changed at', noticeDateTime(n.changedAt)]);
+  if (n.changedBy) fields.push(['Changed by', n.changedBy]);
+  const intro = 'The tool status was changed on the PMD Tool board.';
+  const rows = fields
+    .map(([k, v]) => `<li><b>${escapeNoticeText(k)}:</b> ${escapeNoticeText(v)}</li>`)
+    .join('');
+  const body = `<p>${intro}</p><ul>${rows}</ul>`;
+  const text = `${intro}\n\n${fields.map(([k, v]) => `${k}: ${v}`).join('\n')}`;
+  return { subject, body, text };
 }

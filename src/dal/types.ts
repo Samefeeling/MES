@@ -65,7 +65,14 @@ export interface PmdDataLayer {
    *  send mail implement it (SharePoint via SP.Utilities.Utility.SendEmail,
    *  which reaches internal recipients). The UI calls it fire-and-forget so
    *  a mail failure never blocks or rolls back the status write. */
-  sendNotice?(notice: { to: string[]; subject: string; body: string }): Promise<void>;
+  sendNotice?(notice: {
+    to: string[];
+    subject: string;
+    body: string;
+    /** Same content as `body` without markup. Backends whose mail path
+     *  rejects HTML fall back to this rather than dropping the notice. */
+    text?: string;
+  }): Promise<void>;
 
   // Die maintenance (Trace → 🛠 Die Management). Backed by the
   // PMD_DieMaintenance list on SharePoint (auto-provisioned on first

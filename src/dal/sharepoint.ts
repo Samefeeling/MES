@@ -1338,20 +1338,46 @@ export class SharePointDataLayer implements PmdDataLayer {
   }
 
   /** Send a notice email via SharePoint's own mailer. SP.Utilities.Utility
-   *  .SendEmail reaches recipients inside the tenant (the toolroom lead is
-   *  internal) with no extra permissions — it rides the same cookie + digest
-   *  as every other write. The Body is delivered as HTML. */
-  async sendNotice(notice: { to: string[]; subject: string; body: string }): Promise<void> {
+   *  .SendEmail reaches recipients inside the tenant with no extra
+   *  permissions — it rides the same cookie + digest as every other write.
+   *
+   *  Two things it will NOT do, and both surface as a 400/500 from the
+   *  service rather than a silent drop:
+   *   - external addresses (the recipient must be a user in the tenant), and
+   *   - in some tenants an HTML body, which is why a failed HTML send is
+   *     retried once as plain text before we give up.
+   *  The thrown message carries SharePoint's own wording (both attempts)
+   *  because the Die board shows it on screen — the floor can't open F12. */
+  async sendNotice(notice: {
+    to: string[];
+    subject: string;
+    body: string;
+    text?: string;
+  }): Promise<void> {
     const to = notice.to.map((s) => s.trim()).filter(Boolean);
     if (to.length === 0) return;
-    await this.post(`${this.siteUrl}/_api/SP.Utilities.Utility.SendEmail`, {
-      properties: {
-        __metadata: { type: 'SP.Utilities.EmailProperties' },
-        To: { results: to },
-        Subject: notice.subject,
-        Body: notice.body,
-      },
-    });
+    const url = `${this.siteUrl}/_api/SP.Utilities.Utility.SendEmail`;
+    const send = (body: string): Promise<Response> =>
+      this.post(url, {
+        properties: {
+          __metadata: { type: 'SP.Utilities.EmailProperties' },
+          To: { results: to },
+          Subject: notice.subject,
+          Body: body,
+        },
+      });
+    const msgOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+    try {
+      await send(notice.body);
+    } catch (first) {
+      if (!notice.text) throw new Error(`HTML body: ${msgOf(first)}`);
+      try {
+        await send(notice.text);
+        console.warn('[pmd] notice sent as plain text — HTML body rejected:', msgOf(first));
+      } catch (second) {
+        throw new Error(`HTML body: ${msgOf(first)} · plain-text retry: ${msgOf(second)}`);
+      }
+    }
     console.info('[pmd] notice email sent to', to.join(', '), '·', notice.subject);
   }
 

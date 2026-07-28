@@ -813,6 +813,7 @@ function renderBody(): string {
     <span class="die-chip${open.length ? ' is-warn' : ''}">Open requests <b>${open.length}</b></span>
     ${statusChip}
     ${woChip}
+    ${noticeChip()}
   </div>`;
   return `${chips}${renderDieTable()}${renderRequests()}`;
 }
@@ -1297,6 +1298,122 @@ function openStatusPicker(dieNumber: string): void {
   );
 }
 
+// ---------------------------------------------------------------------
+// Status-change email notice + its on-page diagnostics.
+//
+// The notice is fire-and-forget (a mail failure must never undo a saved
+// status), which is exactly how the first attempt at this went unnoticed:
+// a 3-second red toast said "the notice failed" and nothing said WHY. So
+// every attempt is now recorded, the failure text is SharePoint's own, and
+// both are readable without a console — same reasoning as the Status/WO
+// source chips above.
+
+interface NoticeAttempt {
+  at: number;
+  subject: string;
+  ok: boolean;
+  /** SharePoint's message, verbatim. Only set when ok === false. */
+  error?: string;
+}
+
+let lastNotice: NoticeAttempt | null = null;
+
+/** Send a notice and record how it went. Never throws: the caller has
+ *  already committed the change the notice is about. */
+async function deliverNotice(
+  notice: { subject: string; body: string; text: string },
+  what: string,
+): Promise<void> {
+  if (!dalRef.sendNotice) return;
+  try {
+    await dalRef.sendNotice({
+      to: [TOOL_STATUS_NOTICE_TO],
+      subject: notice.subject,
+      body: notice.body,
+      text: notice.text,
+    });
+    lastNotice = { at: Date.now(), subject: notice.subject, ok: true };
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    lastNotice = { at: Date.now(), subject: notice.subject, ok: false, error };
+    console.warn('[pmd] status-change notice failed:', e);
+    toast(
+      `${what} IS saved — but the email to ${TOOL_STATUS_NOTICE_TO} failed.\n\n${error}\n\n(tap to dismiss · details on the “Status email” chip)`,
+      'err',
+      { sticky: true },
+    );
+  }
+  if (hostEl) render();
+}
+
+/** Chip for the board header: is the toolroom actually being emailed? */
+function noticeChip(): string {
+  if (!dalRef.sendNotice) return '';
+  const to = escapeHtml(TOOL_STATUS_NOTICE_TO);
+  if (!lastNotice)
+    return `<span class="die-chip die-chip-btn" data-die-mail title="Every ToolStatus change emails ${to}. Nothing has been sent yet in this session — tap for details or to send a test.">Status email <b>${escapeHtml(TOOL_STATUS_NOTICE_TO.split(/[.@]/)[0])}</b></span>`;
+  const hhmm = new Date(lastNotice.at).toTimeString().slice(0, 5);
+  return lastNotice.ok
+    ? `<span class="die-chip die-chip-btn" data-die-mail title="Last notice to ${to} was accepted by SharePoint at ${hhmm}. Tap for details.">Status email <b>sent ${hhmm}</b></span>`
+    : `<span class="die-chip is-bad die-chip-btn" data-die-mail title="${escapeHtml(lastNotice.error ?? '')}">Status email <b>⚠ failed</b></span>`;
+}
+
+/** What the “Status email” chip opens: who gets the mail, how it is sent,
+ *  what the last attempt did, and a test send so the link can be proven
+ *  without flipping a real die's status. */
+function openNoticeDiagModal(): void {
+  const l = lastNotice;
+  const outcome = !l
+    ? '<p class="die-mail-line">No status change has been made in this session yet.</p>'
+    : l.ok
+      ? `<p class="die-mail-line is-ok">✓ SharePoint accepted the last notice — <b>${escapeHtml(l.subject)}</b></p>`
+      : `<p class="die-mail-line is-bad">✗ The last notice was rejected — <b>${escapeHtml(l.subject)}</b></p>
+         <pre class="die-mail-err">${escapeHtml(l.error ?? '')}</pre>`;
+  openModal(`<div class="die-st-pick die-mail-diag">
+    <div class="kpi-trace-head">
+      <h3>📧 Status email</h3>
+      <button class="btn-ghost-big" data-mod="close">Close</button>
+    </div>
+    <p class="die-mail-line"><b>To:</b> ${escapeHtml(TOOL_STATUS_NOTICE_TO)}</p>
+    <p class="die-mail-line"><b>When:</b> every time a die's Status actually changes on this
+      board (re-picking the same status sends nothing).</p>
+    <p class="die-mail-line"><b>How:</b> SharePoint sends it for us
+      (<code>SP.Utilities.Utility.SendEmail</code>) — which only delivers to people inside the
+      tenant, and only if the site is allowed to send mail.</p>
+    ${outcome}
+    ${
+      isSupervisor()
+        ? `<div class="bd-actions">
+             <button class="btn-primary-big" data-die-mail-test>Send test email</button>
+           </div>`
+        : '<p class="die-req-note">Supervisor mode can send a test email from here.</p>'
+    }
+  </div>`);
+  const mc = document.getElementById('mc')!;
+  mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
+  const testBtn = mc.querySelector<HTMLButtonElement>('[data-die-mail-test]');
+  testBtn?.addEventListener('click', () => {
+    testBtn.disabled = true;
+    testBtn.textContent = 'Sending…';
+    const stamp = new Date().toLocaleString();
+    void deliverNotice(
+      {
+        subject: 'PMD Tool Status — test email (please ignore)',
+        body: `<p>Test from the PMD Tool board at ${escapeHtml(stamp)}. If this arrived, die status-change notices will arrive too.</p>`,
+        text: `Test from the PMD Tool board at ${stamp}. If this arrived, die status-change notices will arrive too.`,
+      },
+      'Test email',
+    ).then(() => {
+      if (lastNotice?.ok) {
+        closeModal();
+        toast(`Test email accepted by SharePoint — check ${TOOL_STATUS_NOTICE_TO}`, 'ok');
+      } else {
+        openNoticeDiagModal();
+      }
+    });
+  });
+}
+
 /** Write a ToolStatus change to PMD_DieMaster, optimistically updating
  *  the cached master row (rolled back on failure). `availableDate`
  *  accompanies the 'in-service' transition — see openInServiceStep. */
@@ -1349,12 +1466,7 @@ async function applyToolStatus(
         availableDate,
         changedAt: now,
       });
-      void dalRef
-        .sendNotice({ to: [TOOL_STATUS_NOTICE_TO], subject: notice.subject, body: notice.body })
-        .catch((e) => {
-          console.warn('[pmd] status-change notice failed:', e);
-          toast('Status saved, but the email notice to the toolroom failed', 'err');
-        });
+      void deliverNotice(notice, `${dieNumber} → ${TOOL_STATUS_META[st].label}`);
     }
   } catch (e) {
     Object.assign(m, prev);
@@ -2062,6 +2174,9 @@ function wire(): void {
     S!.to = (e.target as HTMLInputElement).value;
     void loadAll();
   });
+  h.querySelector<HTMLElement>('[data-die-mail]')?.addEventListener('click', () =>
+    openNoticeDiagModal(),
+  );
   h.querySelectorAll<HTMLButtonElement>('[data-die-preset]').forEach((b) =>
     b.addEventListener('click', () => {
       const days = Number(b.dataset.diePreset);
