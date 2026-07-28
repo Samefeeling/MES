@@ -60,28 +60,6 @@ export interface PmdDataLayer {
     >,
   ): Promise<void>;
 
-  /** Queue a notice email. Used by the Die board to alert the toolroom lead
-   *  when a tool's ToolStatus changes. Optional — only backends with an
-   *  outbound path implement it.
-   *
-   *  Resolving means ACCEPTED FOR DELIVERY, not delivered: the SharePoint
-   *  backend writes a PMD_Notices row that a Power Automate flow turns into
-   *  mail (SP.Utilities.Utility.SendEmail, the old direct route, was retired
-   *  by Microsoft). The UI calls it fire-and-forget so a failure here never
-   *  blocks or rolls back the write the notice is about. */
-  sendNotice?(notice: {
-    to: string[];
-    subject: string;
-    /** HTML body. */
-    body: string;
-    /** Same content as `body` without markup, for plain-text delivery and
-     *  so a queue row stays readable in SharePoint. */
-    text?: string;
-    /** Which feature raised it (e.g. 'die-status') — lets one flow serve
-     *  several notice types. */
-    source?: string;
-  }): Promise<void>;
-
   // Die maintenance (Trace → 🛠 Die Management). Backed by the
   // PMD_DieMaintenance list on SharePoint (auto-provisioned on first
   // write — see the SharePoint DAL); MangoTicket on each request is the

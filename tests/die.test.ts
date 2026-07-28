@@ -10,7 +10,6 @@ import {
   dieHealth,
   dieServiceStatus,
   formatDieNoteLine,
-  formatToolStatusNotice,
   goodByJob,
   latestConditionByDie,
   machineCodeForAsset,
@@ -1126,76 +1125,6 @@ describe('SOC note helpers (PMD_DieMaster.Notes)', () => {
     expect(b).toBe('x: 1\ny: 2');
     // Trailing whitespace on the existing blob doesn't produce a blank note.
     expect(parseDieNotes(appendDieNote('x: 1\n', 'y: 2'))).toHaveLength(2);
-  });
-});
-
-describe('formatToolStatusNotice (ToolStatus-change email)', () => {
-  it('names the die and the from→to transition in the subject and body', () => {
-    const { subject, body } = formatToolStatusNotice({
-      dieNumber: 'DIE-0689',
-      description: 'Postura Plus Linking Chair',
-      from: 'to-be-serviced',
-      to: 'serviced',
-      changedAt: '2026-07-24T05:32:00.000Z',
-    });
-    expect(subject).toBe('PMD Tool Status: DIE-0689 → Serviced');
-    expect(body).toContain('DIE-0689 — Postura Plus Linking Chair');
-    expect(body).toContain('To be Serviced → Serviced');
-    // A non-in-service change carries no Available line.
-    expect(body).not.toContain('Available');
-  });
-
-  it('carries a markup-free copy of the same content for the plain-text retry', () => {
-    const { body, text } = formatToolStatusNotice({
-      dieNumber: 'DIE-0689',
-      description: 'Postura Plus Linking Chair',
-      from: 'to-be-serviced',
-      to: 'in-service',
-      availableDate: '2026-08-10T00:00:00.000Z',
-      changedAt: '2026-07-24T05:32:00.000Z',
-      changedBy: 'A. Toolmaker',
-    });
-    expect(text).not.toMatch(/[<>]/); // no tags survive into the text part
-    // Every field the HTML body carries is in the text body too.
-    expect(text).toContain('Die: DIE-0689 — Postura Plus Linking Chair');
-    expect(text).toContain('Status: To be Serviced → In service');
-    expect(text).toContain('Available (back from maintenance): 10/08/2026');
-    expect(text).toContain('Changed by: A. Toolmaker');
-    expect(body).toContain('Changed by:</b> A. Toolmaker');
-  });
-
-  it('escapes markup in die text so a stray < cannot break the HTML body', () => {
-    const { body, text } = formatToolStatusNotice({
-      dieNumber: 'DIE-1',
-      description: 'Bracket <A&B>',
-      from: '',
-      to: 'problems',
-      changedAt: '2026-07-24T05:32:00.000Z',
-    });
-    expect(body).toContain('Bracket &lt;A&amp;B&gt;');
-    expect(text).toContain('Bracket <A&B>'); // plain text stays plain
-  });
-
-  it('shows the Available return date only on the In-service transition', () => {
-    const { subject, body } = formatToolStatusNotice({
-      dieNumber: 'DIE-3597',
-      from: 'problems',
-      to: 'in-service',
-      availableDate: '2026-08-10T00:00:00.000Z',
-      changedAt: '2026-07-24T05:32:00.000Z',
-    });
-    expect(subject).toBe('PMD Tool Status: DIE-3597 → In service');
-    expect(body).toContain('Available (back from maintenance):</b> 10/08/2026');
-  });
-
-  it('renders "(none)" when the die had no prior status', () => {
-    const { body } = formatToolStatusNotice({
-      dieNumber: 'DIE-1',
-      from: '',
-      to: 'problems',
-      changedAt: '2026-07-24T05:32:00.000Z',
-    });
-    expect(body).toContain('(none) → Problems');
   });
 });
 

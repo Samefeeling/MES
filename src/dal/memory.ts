@@ -134,18 +134,6 @@ export class MemoryDataLayer implements PmdDataLayer {
     if (patch.notes !== undefined) row.notes = patch.notes;
   }
 
-  async sendNotice(notice: {
-    to: string[];
-    subject: string;
-    body: string;
-    text?: string;
-    source?: string;
-  }): Promise<void> {
-    // No mail server in the demo backend — just record the intent so the
-    // fire-and-forget path is observable in dev / tests.
-    console.info('[pmd] (memory) notice →', notice.to.join(', '), '·', notice.subject);
-  }
-
   // ---- die maintenance (PMD_DieMaintenance parity) ---------------------
 
   async listDieMaintenance(): Promise<DieMaintenanceRequest[]> {

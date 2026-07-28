@@ -82,12 +82,6 @@ const LISTS = {
    *  names verified against the list schema export). The operator sheet
    *  writes here when a Die/Insert Change is first marked. */
   dieChangeLog: 'PMD_DieChangeLog',
-  /** Outbound notice queue. The app writes one row per notice; a Power
-   *  Automate flow ("When an item is created" → "Send an email") turns it
-   *  into mail. Created automatically by ensureNoticeList() on the first
-   *  notice. This replaced SP.Utilities.Utility.SendEmail, which Microsoft
-   *  retired — see sendNotice. */
-  notices: 'PMD_Notices',
   rdoRoster: 'RDO Roster 2026-2030',
 } as const;
 
@@ -384,16 +378,6 @@ const DEFAULT_FIELDS = {
     mangoTicket: 'MangoTicket',
     closedAt: 'ClosedAt',
     dueDate: 'DueDate',
-  },
-  notice: {
-    // Title = the email subject. Body is plain text so the list itself
-    // reads properly in SharePoint; BodyHtml is the same content marked up,
-    // for a flow that wants a nicer email.
-    subject: 'Title',
-    recipient: 'Recipient',
-    body: 'Body',
-    bodyHtml: 'BodyHtml',
-    source: 'Source',
   },
 } as const;
 
@@ -1351,91 +1335,6 @@ export class SharePointDataLayer implements PmdDataLayer {
         if (patch.notes !== undefined) row.notes = patch.notes;
       }
     }
-  }
-
-  private noticeListEnsured = false;
-
-  /**
-   * Create PMD_Notices on first use. Same self-provisioning pattern as
-   * ensureDieMaintenanceList: everything is Text/Note so nothing fights
-   * SharePoint's column validation, and a denied creation surfaces
-   * SharePoint's own message to the caller.
-   */
-  private async ensureNoticeList(): Promise<void> {
-    if (this.noticeListEnsured) return;
-    try {
-      await this.getJson(`${this.listUrl(LISTS.notices)}?$select=Title`);
-      this.noticeListEnsured = true;
-      return;
-    } catch {
-      /* not there — create it */
-    }
-    await this.post(`${this.siteUrl}/_api/web/lists`, {
-      __metadata: { type: 'SP.List' },
-      Title: LISTS.notices,
-      BaseTemplate: 100, // generic list
-      Description:
-        'Outbound notices from the PMD dashboard (e.g. die ToolStatus changes). ' +
-        'A Power Automate flow on "When an item is created" emails Recipient with ' +
-        'Title as the subject and Body (or BodyHtml) as the message.',
-    });
-    const F = this.F.notice;
-    const fieldsUrl = `${this.listUrl(LISTS.notices)}/fields`;
-    for (const title of [F.recipient, F.source]) {
-      await this.post(fieldsUrl, {
-        __metadata: { type: 'SP.Field' },
-        Title: title,
-        FieldTypeKind: 2, // single-line text
-      });
-    }
-    for (const title of [F.body, F.bodyHtml]) {
-      await this.post(fieldsUrl, {
-        __metadata: { type: 'SP.Field' },
-        Title: title,
-        FieldTypeKind: 3, // multi-line note
-      });
-    }
-    this.noticeListEnsured = true;
-    console.info(`[pmd] created ${LISTS.notices} — add the Power Automate flow to send the mail.`);
-  }
-
-  /**
-   * Queue a notice for delivery by writing a row to PMD_Notices.
-   *
-   * This used to call SP.Utilities.Utility.SendEmail directly, which
-   * Microsoft has since RETIRED — it now answers every request with
-   * "The SendEmail api has been retired" (400, System.InvalidOperationException).
-   * There is no in-browser replacement: Graph's /me/sendMail needs a token
-   * this cookie-authenticated page can't obtain without an app registration
-   * and admin consent.
-   *
-   * So the app writes what it wants sent, and a Power Automate flow —
-   * "When an item is created (PMD_Notices)" → "Send an email (V2)" — does
-   * the sending. Setup is in docs/DEPLOYMENT.md § Notices. Consequences the
-   * UI must be honest about: a resolved promise means QUEUED, not
-   * delivered, and with no flow running the row is written and no mail
-   * goes out. The list doubles as the log of every notice raised.
-   */
-  async sendNotice(notice: {
-    to: string[];
-    subject: string;
-    body: string;
-    text?: string;
-    source?: string;
-  }): Promise<void> {
-    const to = notice.to.map((s) => s.trim()).filter(Boolean);
-    if (to.length === 0) return;
-    await this.ensureNoticeList();
-    const F = this.F.notice;
-    await this.post(`${this.listUrl(LISTS.notices)}/items`, {
-      __metadata: { type: await this.itemType(LISTS.notices) },
-      [F.subject]: notice.subject,
-      [F.recipient]: to.join('; '),
-      [F.body]: notice.text ?? notice.body,
-      [F.bodyHtml]: notice.body,
-      [F.source]: notice.source ?? 'pmd',
-    });
-    console.info('[pmd] notice queued for', to.join(', '), '·', notice.subject);
   }
 
   // ---- die change log (PMD_DieChangeLog) -------------------------------

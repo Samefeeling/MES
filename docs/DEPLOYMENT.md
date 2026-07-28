@@ -647,53 +647,6 @@ local failure and service history accumulates.
 
 ---
 
-## PMD_Notices + the email flow (die status-change notices)
-
-Every time a die's **Status** changes on the Tool board, the toolroom lead
-(`TOOL_STATUS_NOTICE_TO` in `src/core/die.ts`) gets an email. The board
-cannot send that email itself: Microsoft **retired**
-`SP.Utilities.Utility.SendEmail`, which now answers every call with
-*"The SendEmail api has been retired"*
-([support article](https://support.microsoft.com/en-us/office/retirement-of-the-sharepoint-sendemail-api-b35bbab1-7d09-455f-8737-c2de63fe0821)),
-and a cookie-authenticated page has no Graph token to use `/me/sendMail`
-instead.
-
-So delivery is split in two:
-
-1. **The app writes a row** to the `PMD_Notices` list. The list is created
-   automatically on the first notice (needs Manage Lists once, same as the
-   other self-provisioned lists) with these columns:
-
-   | Column | Type | Holds |
-   |---|---|---|
-   | `Title` | (built-in) | Email subject |
-   | `Recipient` | Single line | Address(es), `; `-separated |
-   | `Body` | Multiple lines (plain) | Message as plain text |
-   | `BodyHtml` | Multiple lines (plain) | Same message as HTML |
-   | `Source` | Single line | Which feature raised it — `die-status` |
-
-2. **A Power Automate flow sends it.** Build once, ~3 minutes:
-   - flow.microsoft.com → **Create** → **Automated cloud flow**
-   - Trigger: **When an item is created (SharePoint)** → this site →
-     list `PMD_Notices`
-   - Action: **Send an email (V2)** (Office 365 Outlook) with
-     **To** = `Recipient`, **Subject** = `Title`, **Body** = `BodyHtml`
-     (click </> on the body box to keep it as HTML — or use `Body` for
-     plain text)
-   - Save. The flow sends as whoever owns the connection, so use a shared
-     mailbox or service account if the mail shouldn't come from a person.
-
-**Until the flow exists, nothing is emailed** — the rows still pile up in
-`PMD_Notices`, so no notice is lost and the list doubles as the audit log
-of every status change. The board says **queued**, never *sent*, for
-exactly this reason: it can see the row being written and nothing beyond.
-
-Check it from the floor: the Tool board's **Status email** chip shows
-`queued HH:MM` or a red `⚠ failed` (tap it for the full server message and,
-in supervisor mode, a **Queue a test notice** button).
-
----
-
 ## Troubleshooting checklist
 
 | Symptom | Likely cause | Fix |
@@ -703,8 +656,6 @@ in supervisor mode, a **Queue a test notice** button).
 | Sign off fails with `POST 500 Invalid text value. A text field contains invalid data.` and console says `column 'QualityChecks' / 'RejectsBySlot' / 'Handover' … value is N chars` | That column was provisioned as **Single line** text (255-char limit); a full-shift JSON payload overflows | In SharePoint list settings → that column → Change column type to **Multiple lines of text** (plain text, not enhanced). Existing data is preserved. The sign-off retry path keeps the rest of the row writing in the meantime, so only that one column is blank until you change the type and re-sign-off. |
 | Sign off fails with `POST 500 Invalid text value` and console flags a value < 255 chars | Operator pasted from Excel/Word and a hidden control char / line separator landed in a handover textarea | `sanitizeBodyStrings` strips most of these before they hit SP. If you still see this, clear and retype the flagged field (the column name and value are in the warning) and sign off again. |
 | Refresh button does nothing, console says `graphToken: pass …` | MSAL/SPFx token provider not wired | In SPFx: confirm `onInit()` sets `window.__pmdGraphToken`. In dev: install MSAL per `docs/LOCAL_DEV_WITH_SHAREPOINT.md` |
-| Die Status changed but no email arrived; board says `queued` | The Power Automate flow on `PMD_Notices` isn't built (or is turned off) | See § PMD_Notices above — the row is in the list, so nothing is lost; build/enable the flow and it sends from then on |
-| Status email chip is red, error says `The SendEmail api has been retired` | Running an old build from before the flow-based transport | `npm run deploy` and hard-refresh the iPad |
 | `403` from any list GET | Operator doesn't have Edit on that list | SharePoint Site Settings → Permissions → ensure they're in `PMD-Members` (or whatever Edit group you used) |
 | Sign off & Save writes nothing | No supervisor selected, or count end < count start | Toast tells you; check console |
 | Smoke test fails on `lockShift` 500 | One of the 3 production lists' column missing or required | Check the failed list's settings → which column was required? |

@@ -756,19 +756,6 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .die-chip b{color:var(--tx);margin-left:4px}
 .die-chip.is-warn{border-color:#FFA500;background:#fff7ed}
 .die-chip.is-bad{border-color:var(--rd);background:#fef2f2}
-/* Chips that open something (the Status-email diagnostics) look tappable. */
-.die-chip-btn{cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px}
-.die-chip-btn:active{transform:scale(.97)}
-/* Status-email diagnostics dialog */
-.die-mail-diag{max-width:560px}
-.die-mail-line{margin:8px 0;font-size:14px;color:var(--mu);line-height:1.5}
-.die-mail-line b{color:var(--tx)}
-.die-mail-line code{background:#f1f5f9;border-radius:4px;padding:1px 5px;font-size:13px}
-.die-mail-line.is-ok{color:var(--gn);font-weight:700}
-.die-mail-line.is-bad{color:var(--rd);font-weight:700}
-.die-mail-err{margin:6px 0 0;padding:10px 12px;background:#fef2f2;border:1px solid var(--rd);border-radius:8px;
-  font-size:13px;line-height:1.45;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;
-  -webkit-user-select:text;user-select:text}
 .die-table-wrap{overflow:auto;max-height:70vh;position:relative;margin-top:10px;background:#fff;border:1px solid var(--bd);border-radius:12px}
 /* One size down from the KPI table so the extra Description + trend
    columns fit without a horizontal scroll on the iPad. */
@@ -1159,11 +1146,6 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .toast{position:fixed;top:18px;right:18px;background:#1e293b;color:#fff;padding:14px 22px;border-radius:10px;font-size:17px;font-weight:700;z-index:300;opacity:0;transform:translateY(-10px);transition:.2s;pointer-events:none;max-width:80vw;box-shadow:0 4px 16px rgba(0,0,0,.25)}
 .toast.show{opacity:1;transform:translateY(0)}
 .toast.ok{background:var(--gn)}.toast.err{background:var(--rd)}.toast.warn{background:var(--am)}
-/* Sticky toast: stays until tapped, so a server error can actually be read
-   (and selected) instead of flashing past in 3 seconds. */
-.toast.sticky{pointer-events:auto;cursor:pointer;white-space:pre-line;text-align:left;font-size:14px;
-  font-weight:600;line-height:1.5;max-width:min(560px,86vw);max-height:70vh;overflow:auto;
-  -webkit-user-select:text;user-select:text}
 
 /* ===== iPad-narrow tweaks ===== */
 @media (max-width:900px){

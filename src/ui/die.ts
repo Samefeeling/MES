@@ -33,7 +33,6 @@ import {
   dieHealth,
   dieServiceStatus,
   formatDieNoteLine,
-  formatToolStatusNotice,
   goodByJob,
   latestConditionByDie,
   machineWorkOrderLevel,
@@ -44,7 +43,6 @@ import {
   pmShotLevel,
   TOOL_MAINTENANCE_RULES,
   TOOL_STATUS_META,
-  TOOL_STATUS_NOTICE_TO,
   type DieAgg,
   type DieConditionSummary,
   type DieNote,
@@ -813,7 +811,6 @@ function renderBody(): string {
     <span class="die-chip${open.length ? ' is-warn' : ''}">Open requests <b>${open.length}</b></span>
     ${statusChip}
     ${woChip}
-    ${noticeChip()}
   </div>`;
   return `${chips}${renderDieTable()}${renderRequests()}`;
 }
@@ -1298,131 +1295,6 @@ function openStatusPicker(dieNumber: string): void {
   );
 }
 
-// ---------------------------------------------------------------------
-// Status-change email notice + its on-page diagnostics.
-//
-// The notice is fire-and-forget (a mail failure must never undo a saved
-// status), which is exactly how the first attempt at this went unnoticed:
-// a 3-second red toast said "the notice failed" and nothing said WHY. So
-// every attempt is now recorded, the failure text is SharePoint's own, and
-// both are readable without a console — same reasoning as the Status/WO
-// source chips above.
-//
-// Note the vocabulary: the app QUEUES a notice (a PMD_Notices row) and a
-// Power Automate flow sends it. Nothing here can observe delivery, so
-// nothing here claims it — see the DAL's sendNotice for why the direct
-// send is gone.
-
-interface NoticeAttempt {
-  at: number;
-  subject: string;
-  ok: boolean;
-  /** SharePoint's message, verbatim. Only set when ok === false. */
-  error?: string;
-}
-
-let lastNotice: NoticeAttempt | null = null;
-
-/** Queue a notice and record how it went. Never throws: the caller has
- *  already committed the change the notice is about. */
-async function deliverNotice(
-  notice: { subject: string; body: string; text: string },
-  what: string,
-): Promise<void> {
-  if (!dalRef.sendNotice) return;
-  try {
-    await dalRef.sendNotice({
-      to: [TOOL_STATUS_NOTICE_TO],
-      subject: notice.subject,
-      body: notice.body,
-      text: notice.text,
-      source: 'die-status',
-    });
-    lastNotice = { at: Date.now(), subject: notice.subject, ok: true };
-  } catch (e) {
-    const error = e instanceof Error ? e.message : String(e);
-    lastNotice = { at: Date.now(), subject: notice.subject, ok: false, error };
-    console.warn('[pmd] status-change notice failed:', e);
-    toast(
-      `${what} IS saved — but the notice to ${TOOL_STATUS_NOTICE_TO} could not be queued.\n\n${error}\n\n(tap to dismiss · details on the “Status email” chip)`,
-      'err',
-      { sticky: true },
-    );
-  }
-  if (hostEl) render();
-}
-
-/** Chip for the board header: is the toolroom actually being told? */
-function noticeChip(): string {
-  if (!dalRef.sendNotice) return '';
-  const to = escapeHtml(TOOL_STATUS_NOTICE_TO);
-  if (!lastNotice)
-    return `<span class="die-chip die-chip-btn" data-die-mail title="Every ToolStatus change queues an email to ${to}. Nothing has been queued yet in this session — tap for details or to send a test.">Status email <b>${escapeHtml(TOOL_STATUS_NOTICE_TO.split(/[.@]/)[0])}</b></span>`;
-  const hhmm = new Date(lastNotice.at).toTimeString().slice(0, 5);
-  return lastNotice.ok
-    ? `<span class="die-chip die-chip-btn" data-die-mail title="Last notice to ${to} was queued at ${hhmm}. Queued ≠ delivered — tap for details.">Status email <b>queued ${hhmm}</b></span>`
-    : `<span class="die-chip is-bad die-chip-btn" data-die-mail title="${escapeHtml(lastNotice.error ?? '')}">Status email <b>⚠ failed</b></span>`;
-}
-
-/** What the “Status email” chip opens: who gets the mail, how it travels,
- *  what the last attempt did, and a test notice so the chain can be proven
- *  without flipping a real die's status. */
-function openNoticeDiagModal(): void {
-  const l = lastNotice;
-  const outcome = !l
-    ? '<p class="die-mail-line">Nothing has been queued in this session yet.</p>'
-    : l.ok
-      ? `<p class="die-mail-line is-ok">✓ Queued — <b>${escapeHtml(l.subject)}</b></p>
-         <p class="die-req-note">Queued means the row was written. If it never arrives, the
-           flow is the thing to check — not this board.</p>`
-      : `<p class="die-mail-line is-bad">✗ Could not be queued — <b>${escapeHtml(l.subject)}</b></p>
-         <pre class="die-mail-err">${escapeHtml(l.error ?? '')}</pre>`;
-  openModal(`<div class="die-st-pick die-mail-diag">
-    <div class="kpi-trace-head">
-      <h3>📧 Status email</h3>
-      <button class="btn-ghost-big" data-mod="close">Close</button>
-    </div>
-    <p class="die-mail-line"><b>To:</b> ${escapeHtml(TOOL_STATUS_NOTICE_TO)}</p>
-    <p class="die-mail-line"><b>When:</b> every time a die's Status actually changes on this
-      board (re-picking the same status queues nothing).</p>
-    <p class="die-mail-line"><b>How:</b> the board writes a row to the
-      <b>PMD_Notices</b> list; a Power Automate flow on “When an item is created” sends the
-      email. Microsoft retired SharePoint's own send-mail API, so a page like this one can no
-      longer post mail directly.</p>
-    ${outcome}
-    ${
-      isSupervisor()
-        ? `<div class="bd-actions">
-             <button class="btn-primary-big" data-die-mail-test>Queue a test notice</button>
-           </div>`
-        : '<p class="die-req-note">Supervisor mode can queue a test notice from here.</p>'
-    }
-  </div>`);
-  const mc = document.getElementById('mc')!;
-  mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
-  const testBtn = mc.querySelector<HTMLButtonElement>('[data-die-mail-test]');
-  testBtn?.addEventListener('click', () => {
-    testBtn.disabled = true;
-    testBtn.textContent = 'Queueing…';
-    const stamp = new Date().toLocaleString();
-    void deliverNotice(
-      {
-        subject: 'PMD Tool Status — test notice (please ignore)',
-        body: `<p>Test from the PMD Tool board at ${escapeHtml(stamp)}. If this arrived as an email, die status-change notices will too.</p>`,
-        text: `Test from the PMD Tool board at ${stamp}. If this arrived as an email, die status-change notices will too.`,
-      },
-      'Test notice',
-    ).then(() => {
-      if (lastNotice?.ok) {
-        closeModal();
-        toast(`Test notice queued — it reaches ${TOOL_STATUS_NOTICE_TO} once the flow runs`, 'ok');
-      } else {
-        openNoticeDiagModal();
-      }
-    });
-  });
-}
-
 /** Write a ToolStatus change to PMD_DieMaster, optimistically updating
  *  the cached master row (rolled back on failure). `availableDate`
  *  accompanies the 'in-service' transition — see openInServiceStep. */
@@ -1449,9 +1321,6 @@ async function applyToolStatus(
     lastServiceDate: m.lastServiceDate,
     availableDate: m.availableDate,
   };
-  // Only a genuine status change triggers the toolroom notice — re-picking
-  // the same status (or re-saving an in-service date) must not spam mail.
-  const statusChanged = prev.toolStatus !== st;
   // Optimistic — the row updates immediately; a failed write rolls back.
   m.toolStatus = st;
   m.dateStamp = now;
@@ -1463,20 +1332,6 @@ async function applyToolStatus(
     await dalRef.updateDieMaster(dieNumber, patch);
     const back = availableDate ? ` · back ${ddmmyyyy(availableDate.slice(0, 10))}` : '';
     toast(`${dieNumber} → ${TOOL_STATUS_META[st].label}${back}`, 'ok');
-    // Notify the toolroom lead of the status change. Fire-and-forget: the
-    // status write already succeeded, so a mail failure must not undo it —
-    // surface it as a secondary toast (not silent) and move on.
-    if (statusChanged && dalRef.sendNotice) {
-      const notice = formatToolStatusNotice({
-        dieNumber,
-        description: m.description,
-        from: prev.toolStatus,
-        to: st,
-        availableDate,
-        changedAt: now,
-      });
-      void deliverNotice(notice, `${dieNumber} → ${TOOL_STATUS_META[st].label}`);
-    }
   } catch (e) {
     Object.assign(m, prev);
     render();
@@ -2183,9 +2038,6 @@ function wire(): void {
     S!.to = (e.target as HTMLInputElement).value;
     void loadAll();
   });
-  h.querySelector<HTMLElement>('[data-die-mail]')?.addEventListener('click', () =>
-    openNoticeDiagModal(),
-  );
   h.querySelectorAll<HTMLButtonElement>('[data-die-preset]').forEach((b) =>
     b.addEventListener('click', () => {
       const days = Number(b.dataset.diePreset);
