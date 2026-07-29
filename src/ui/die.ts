@@ -82,6 +82,9 @@ interface DieState {
   from: string; // YYYY-MM-DD inclusive
   to: string;
   filter: string;
+  /** ToolStatus chip filter — '' shows every die. Set by tapping one of
+   *  the four status chips above the table; tapping it again clears it. */
+  statusFilter: ToolStatus | '';
   sortKey: DieSortKey;
   sortDir: 1 | -1;
   dies: DieAgg[];
@@ -569,6 +572,7 @@ export async function mountDieTab(
     from: isoDay(from),
     to: isoDay(to),
     filter: '',
+    statusFilter: '',
     sortKey: 'smart',
     sortDir: 1,
     dies: [],
@@ -781,50 +785,50 @@ function renderHead(): string {
 
 function renderBody(): string {
   const open = S!.requests.filter((r) => r.status !== 'done');
-  const active = S!.dies.filter((d) => d.runs > 0).length;
-  const attention = S!.dies.filter((d) => dieHealth(d.rejectPct) === 'red').length;
-  const svcDue = S!.dies.filter((d) => svcFor(d)?.level === 'due').length;
-  // Status-source health chip: makes a broken PMD_DieMaster hookup
-  // visible ON the page (the floor doesn't open F12). Three states:
-  // list unreachable/empty → warn; loaded but zero DieNumbers match →
-  // warn with counts; healthy → matched count, no drama.
-  const masterLoaded = S!.masterByDie.size;
-  const matched = S!.dies.filter((d) => masterFor(d.dieNumber)).length;
-  const statusChip =
-    masterLoaded === 0
-      ? `<span class="die-chip is-bad" title="PMD_DieMaster returned no rows, so every Status shows '—'. Most common cause: the list was created under 'My lists' in the Lists app (personal space) instead of on THIS SharePoint site — recreate it via Site contents → New → List on the site. Details in the F12 console ([pmd] PMD_DieMaster…).">Status source <b>⚠ no data</b></span>`
-      : matched === 0
-        ? `<span class="die-chip is-warn" title="PMD_DieMaster loaded ${masterLoaded} tools but not one DieNumber matches PMD_ProductDieColor's — compare the two columns' values (e.g. '280' vs 'DIE-280'). The F12 console logs 5 samples from each side.">Status join <b>0/${masterLoaded}</b></span>`
-        : `<span class="die-chip" title="Dies with a PMD_DieMaster ToolStatus">Status <b>${matched}/${S!.dies.length}</b></span>`;
-  // Work-order source chip: is the Mango CSV mirror actually feeding
-  // this page, or are we on the PMD_DieMaintenance fallback?
-  const woSrc = dalRef.workOrderSource ? dalRef.workOrderSource() : null;
-  const woChip =
-    woSrc === 'mango-csv'
-      ? `<span class="die-chip" title="Work orders mirrored from the Mango CSV report">WO <b>Mango CSV · ${S!.requests.length}</b></span>`
-      : `<span class="die-chip is-warn" title="Work orders are coming from the PMD_DieMaintenance list — the Mango CSV mirror is NOT active. Either set VITE_MANGO_CSV_PATH, or drop MangoWorkOrders.csv into the same folder as the Planning CSV (it's auto-found there). Rebuild; F12 shows '[pmd] Mango work-order CSV' messages.">WO <b>PMD list — no Mango CSV</b></span>`;
+  // The chips are the board's filter bar: one per ToolStatus, tapped to
+  // narrow the table to those tools (tapped again to clear). Order is the
+  // toolroom's own escalation order, worst first — same as TOOL_STATUS_META
+  // ranks the Status column.
+  const statusChip = (st: ToolStatus): string => {
+    const meta = TOOL_STATUS_META[st];
+    const n = S!.dies.filter((d) => effectiveStatus(d.dieNumber).st === st).length;
+    const on = S!.statusFilter === st;
+    return `<button type="button" class="die-chip die-chip-st ${meta.cls}${on ? ' on' : ''}"
+      data-die-status-chip="${st}" aria-pressed="${on}"
+      title="${on ? 'Showing' : 'Show'} only dies whose PMD_DieMaster Status is ${meta.label}${on ? ' — tap again to show all' : ''}"
+      >${meta.label} <b>${n}</b></button>`;
+  };
+  // With a filter on, the count says how many of the total are showing —
+  // "Dies 91" above a two-row table reads like a bug.
+  const shown = filteredDies().length;
+  const total = S!.dies.length;
   const chips = `<div class="die-chips">
-    <span class="die-chip">Dies <b>${S!.dies.length}</b></span>
-    <span class="die-chip">Ran in window <b>${active}</b></span>
-    <span class="die-chip${attention ? ' is-bad' : ''}">High reject <b>${attention}</b></span>
-    <span class="die-chip${svcDue ? ' is-bad' : ''}" title="Dual-trigger tool policy — A: yearly OR 50,000 shots · B: quarterly OR 15,000 · C: monthly OR 5,000. The first limit reached wins; any latest Die Change Log rating above 1 forces Level C.">Service due <b>${svcDue}</b></span>
-    <span class="die-chip${open.length ? ' is-warn' : ''}">Open requests <b>${open.length}</b></span>
-    ${statusChip}
-    ${woChip}
+    <span class="die-chip" title="Dies in PMD_ProductDieColor${shown === total ? '' : ' · filtered'}">Dies <b>${shown === total ? total : `${shown} of ${total}`}</b></span>
+    ${(['problems', 'to-be-serviced', 'in-service', 'serviced'] as ToolStatus[]).map(statusChip).join('')}
+    <button type="button" class="die-chip die-chip-btn${open.length ? ' is-warn' : ''}"
+      data-die-wo-jump title="Jump to the Maintenance Work Orders list below"
+      >Open Work Order <b>${open.length}</b></button>
   </div>`;
   return `${chips}${renderDieTable()}${renderRequests()}`;
 }
 
 function filteredDies(): DieAgg[] {
   const f = S!.filter.trim().toUpperCase();
-  if (!f) return S!.dies;
-  return S!.dies.filter(
-    (d) =>
+  const st = S!.statusFilter;
+  // Both narrow the table and they stack: a status chip plus typed text
+  // answers "which of the tools waiting on service is this part's?".
+  // Status matches on the EFFECTIVE status — what the Status column shows,
+  // damaged-override included — so a chip's count is the rows you get.
+  return S!.dies.filter((d) => {
+    if (st && effectiveStatus(d.dieNumber).st !== st) return false;
+    if (!f) return true;
+    return (
       d.dieNumber.toUpperCase().includes(f) ||
       d.parts.some(
         (p) => p.partNumber.toUpperCase().includes(f) || p.name.toUpperCase().includes(f),
-      ),
-  );
+      )
+    );
+  });
 }
 
 /** Natural sort key for die numbers: every digit run is zero-padded to a
@@ -1187,7 +1191,7 @@ function renderRequests(): string {
   const today = isoDay(new Date());
   const active = activeMaintenanceRequests(S!.requests);
   if (active.length === 0) {
-    return `<div class="die-req-section"><h3>🛠 Maintenance Work Orders ${mangoLink('Mango', 'sm')}</h3>
+    return `<div class="die-req-section" data-die-wo-section><h3>🛠 Maintenance Work Orders ${mangoLink('Mango', 'sm')}</h3>
       ${note}
       <div class="trace-empty">No open work orders for these dies.</div></div>`;
   }
@@ -1243,7 +1247,7 @@ function renderRequests(): string {
       </div>`;
     })
     .join('');
-  return `<div class="die-req-section"><h3>🛠 Maintenance Work Orders ${mangoLink('Mango', 'sm')}</h3>${note}${rows}</div>`;
+  return `<div class="die-req-section" data-die-wo-section><h3>🛠 Maintenance Work Orders ${mangoLink('Mango', 'sm')}</h3>${note}${rows}</div>`;
 }
 
 // ---------------------------------------------------------------------
@@ -2037,6 +2041,21 @@ function wire(): void {
   h.querySelector<HTMLInputElement>('[data-die-to]')?.addEventListener('change', (e) => {
     S!.to = (e.target as HTMLInputElement).value;
     void loadAll();
+  });
+  h.querySelectorAll<HTMLButtonElement>('[data-die-status-chip]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const st = b.dataset.dieStatusChip as ToolStatus;
+      S!.statusFilter = S!.statusFilter === st ? '' : st; // tap again = show all
+      render();
+      hostEl
+        ?.querySelector('.die-table-wrap')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }),
+  );
+  h.querySelector<HTMLButtonElement>('[data-die-wo-jump]')?.addEventListener('click', () => {
+    hostEl
+      ?.querySelector('[data-die-wo-section]')
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
   h.querySelectorAll<HTMLButtonElement>('[data-die-preset]').forEach((b) =>
     b.addEventListener('click', () => {
