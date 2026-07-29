@@ -1241,6 +1241,42 @@ async function reload(preferLiveJob = false): Promise<void> {
 }
 
 /**
+ * Re-read the whole shift before anything decides what the press was
+ * doing in a given half-hour.
+ *
+ * S.prod holds every job on this (machine, shift), but it is a SNAPSHOT:
+ * reload() runs on mount and when the machine / job / date changes, and
+ * filling in Machine Status deliberately skips it (see upsertSlot) — the
+ * 30 s tick only redraws the now-line. So an order signed off on another
+ * iPad after this page loaded stays invisible here, occupyingOtherJob()
+ * reports its half-hours as free, and both users of that answer go wrong:
+ *   - slotGapsForSignoff() counts the other order's slots as MY gaps and
+ *     the sign-off gate demands they be filled, and
+ *   - 🏁 End order / shift auto-paints R over them.
+ * That is how 550T/29-07 ended up with SFM507363 recording 10:00–12:00,
+ * which was 507381's run.
+ *
+ * Best effort by design: a failed read must not strand a finished shift,
+ * so we say so and let the sign-off proceed on what we already have.
+ *
+ * Deliberately NOT debounced. The obvious floor sequence is "gate fires →
+ * fill the missing slots → tap Sign off again", and any time window short
+ * enough to spare the 🏁 End-order path its second read is also short
+ * enough to skip that retry's read — which is the one that matters.
+ */
+async function refreshPressState(): Promise<void> {
+  try {
+    await reload();
+  } catch (e) {
+    console.warn('[pmd] pre-sign-off refresh failed:', e);
+    toast(
+      "Couldn't re-check the other orders on this press — continuing with the data already loaded",
+      'warn',
+    );
+  }
+}
+
+/**
  * When the operator opens an order that shares a die with one already
  * running this shift but has no machine status of its own yet, copy the
  * co-runner's timeline into it — they run together off the same die, so
@@ -2825,9 +2861,9 @@ function wire(): void {
   // another device, or the last upload died mid-flight) — throttled so
   // per-keystroke re-renders don't hammer SP with row lookups.
   if (Date.now() - lastPhotoFlushAt > 60_000) void flushPhotoQueue();
-  app.querySelector('[data-signoff-now]')?.addEventListener('click', () => openSaveSignoffModal());
+  app.querySelector('[data-signoff-now]')?.addEventListener('click', () => void openSaveSignoffModal());
   app.querySelector('[data-refresh]')?.addEventListener('click', () => void refreshAll());
-  app.querySelector('[data-saveclear]')?.addEventListener('click', () => openSaveSignoffModal());
+  app.querySelector('[data-saveclear]')?.addEventListener('click', () => void openSaveSignoffModal());
   app.querySelector('[data-unlock]')?.addEventListener('click', () => openUnlockModal());
   wireStatusPicker();
 }
@@ -3027,7 +3063,7 @@ async function refreshAll(): Promise<void> {
  *     the warning so the override is a conscious decision.
  * Confirming locks the shift records and clears the in-form selection.
  */
-function openSaveSignoffModal(): void {
+async function openSaveSignoffModal(): Promise<void> {
   // A shift that hasn't started can't have real production — block sign-off
   // outright (supervisor included) so this morning's Night work never gets
   // locked onto tonight's not-yet-started shift. The banner above offers the
@@ -3043,6 +3079,9 @@ function openSaveSignoffModal(): void {
     toast('Pick a Supervisor before signing off', 'err');
     return;
   }
+  // Local gates are done; everything below reads the press's shared
+  // timeline, so re-read it from the server first.
+  await refreshPressState();
   const hasStatus = S!.prod.some(
     (r) => r.jobNumber === S!.selJob && r.statusCode,
   );
@@ -3872,12 +3911,16 @@ async function endOrderAndSignoff(): Promise<void> {
     toast('Tap ✅ Confirm first — order, press, operator & supervisor', 'warn');
     return;
   }
+  // This paints R onto the gaps, so the gaps had better be real: re-read
+  // the press first or a half-hour another order already recorded gets a
+  // second, contradicting R written over it.
+  await refreshPressState();
   // In reopened-for-correction mode the order already ran and was signed —
   // don't paint R onto empty slots (that would add new production). Just route
   // to sign-off so the corrected counts/slots can be re-locked.
   const gaps = reopenedForCorrection() ? [] : slotGapsForSignoff();
   if (gaps.length) await multiFillApply(gaps, 'R' as StatusCode, '', '');
-  openSaveSignoffModal();
+  await openSaveSignoffModal();
 }
 
 /** Like upsertSlot but doesn't call reload — caller batches the final render. */
