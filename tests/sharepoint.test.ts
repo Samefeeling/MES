@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { aggregate, cavityGross } from '../src/core/metrics';
+import type { ProductionRecord } from '../src/types';
 import {
   dateOnly,
   decimalHoursToHms,
@@ -2598,5 +2600,92 @@ describe('sign-off multi-list write protocol', () => {
     // A failed sign-off remains editable/retryable; cache is cleared only
     // after every list write succeeds.
     expect(cache.has(`Batt1|${shiftId}|SFM-TX`)).toBe(true);
+  });
+});
+
+describe('listProduction carries Cavities onto the canonical slot', () => {
+  // 507381 on 550T (29/07 Day) ran 10:00-12:00 off a 2-cavity die: sign-off
+  // stored TotalGood 212 in PMD_Production, but KPI, the operator sheet and
+  // Trace all read 106. Cause: expandHeaderToSlots only copied Cavities in
+  // the branch that patches an EXISTING slot 0 — an order that starts later
+  // in the shift leaves 07:00 blank, so slot 0 is synthesised instead and
+  // came back with cavities undefined, which cavityGross treats as 1.
+  const realFetch = globalThis.fetch;
+  const store = new Map<string, string>();
+  beforeAll(() => {
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string): string | null => store.get(k) ?? null,
+      setItem: (k: string, v: string): void => { store.set(k, v); },
+      removeItem: (k: string): void => { store.delete(k); },
+      clear: (): void => { store.clear(); },
+      key: (): string | null => null,
+      length: 0,
+    };
+  });
+  afterAll(() => {
+    globalThis.fetch = realFetch;
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+
+  /** Serve one signed PMD_Production row with the given 16-char timeline;
+   *  every other list reads back empty. */
+  const stubShift = (timeline: string): void => {
+    globalThis.fetch = (async (url: unknown) => {
+      const u = String(url);
+      const json = (v: unknown): Response =>
+        ({ ok: true, status: 200, json: async () => v, text: async () => '' }) as unknown as Response;
+      if (u.includes("getbytitle('PMD_Production')/items")) {
+        return json({
+          d: {
+            results: [
+              {
+                ID: 1,
+                Title: '550T',
+                MachineCode: timeline, // this tenant keeps the timeline here
+                'SlotStart_x003a_': '2026-07-29T07:00:00Z',
+                ShiftId: 'Day',
+                JobNumber: '507381',
+                JobHead_PartNum: 'V11308-PINELIME',
+                CountStart: 0,
+                CountEnd: 106,
+                Cavities: 2,
+                Reject: 0,
+                Operator: 'Tony Lee',
+                Supervisor: 'Christopher King',
+              },
+            ],
+          },
+        });
+      }
+      return json({ d: { results: [] } });
+    }) as unknown as typeof fetch;
+  };
+
+  const read = async (): Promise<ProductionRecord[]> => {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    return dal.listProduction({ machineCode: '550T', shiftId: '2026-07-29-Day' });
+  };
+
+  it('keeps Cavities when the order starts LATER in the shift (slot 0 blank)', async () => {
+    // 07:00-09:30 belong to another order, so this row's slot 0 is synthesised.
+    stubShift('······RRRRR·····');
+    const rows = await read();
+    const canon = rows.find((r) => r.slotIndex === 0);
+    expect(canon).toBeDefined();
+    expect(canon!.cavities).toBe(2);
+    // The number the floor actually reads: 106 cycles × 2 − 0 rejects.
+    expect(cavityGross(canon!.countStart, canon!.countEnd, canon!.cavities)).toBe(212);
+    // ...which is exactly the number KPI.ts prints as Output.
+    expect(aggregate(rows).output).toBe(212);
+  });
+
+  it('keeps Cavities when the order runs from the start of the shift', async () => {
+    // The path that already worked — guard it so the two can't diverge again.
+    stubShift('RRRRRRRRRRR·····');
+    const rows = await read();
+    const canon = rows.find((r) => r.slotIndex === 0)!;
+    expect(canon.cavities).toBe(2);
+    expect(aggregate(rows).output).toBe(212);
   });
 });

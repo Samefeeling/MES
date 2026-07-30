@@ -2720,9 +2720,6 @@ export class SharePointDataLayer implements PmdDataLayer {
       // CycleTime rides along on the canonical slot so a past-shift
       // review (synthetic order) can recompute Shift Target.
       slots[0].cycleTime = h.cycleTime;
-      // Cavities likewise — every Good computation multiplies the tuple's
-      // gross by it, so it must reach the canonical record on read.
-      slots[0].cavities = h.cavities;
       // And the reject total: the per-status loop initialises
       // rejectCount to 0. Only stamp the column total when there are NO
       // PMD_Rejects events — when events exist they are the source of
@@ -2731,6 +2728,15 @@ export class SharePointDataLayer implements PmdDataLayer {
       // shadowing the real event total on read.
       if (rejects.length === 0) slots[0].rejectCount = h.reject;
     }
+    // Cavities MUST reach the canonical slot whichever way it was created:
+    // every Good figure multiplies the tuple's gross by it (cavityGross),
+    // so losing it silently halves a 2-cavity order. It used to be set only
+    // in the branch above — the one that runs when the timeline already
+    // filled slot 0 — so an order that started later in the shift (blank
+    // 07:00, nothing to materialise slot 0) came back with cavities
+    // undefined: 507381 on 550T 29/07 ran 10:00-12:00 with 2 cavities,
+    // stored Good 212 in PMD_Production, and read back as 106 everywhere.
+    slots[0].cavities = h.cavities;
     // Frozen-at-start Job Left / Shift Target ride on the canonical slot
     // so Trace can read demand-at-start per row. -1 sentinel = column
     // absent / never written (legacy or live-without-freeze rows); 0 is a
