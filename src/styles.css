@@ -225,24 +225,44 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    cadence cells (slots 1/7/13) wear an amber tint + side-rails just
    like the operator grid so the 3 required supervisor columns are
    obvious. Signed cells go green; unsigned show a muted "—". */
-.trace-qc-row{display:grid;grid-template-columns:repeat(16,1fr);gap:2px;margin:2px 0 1px}
-.trace-qc-slot{height:18px;border:1px solid var(--bd);border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;background:#f8fafc;color:#94a3b8;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-.trace-qc-slot.qc-supervisor{background:#fef3c7;border-left:3px solid #f59e0b;border-right:3px solid #f59e0b;color:#92400e}
+/* QC row + timeline are ONE table, Excel-style: no gaps, every internal
+   edge a single shared 1px gridline, square internal corners, and only
+   the four outer corners of the block rounded. They used to be two
+   strips of individually rounded chips 2px apart, which read as two
+   unrelated rows — but they are two readings of the same 16 half-hours,
+   so a signature has to sit squarely on top of the status it signs off.
+   Collapse is done by dropping each cell's right border and giving it
+   back to :last-child; the QC row also drops its bottom border so the
+   line between the two rows is the timeline's top border, not two. */
+.trace-sheet{margin:2px 0}
+.trace-qc-row{display:grid;grid-template-columns:repeat(16,1fr);gap:0}
+.trace-qc-slot{height:18px;border:1px solid var(--bd);border-right-width:0;border-bottom-width:0;border-radius:0;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;background:#f8fafc;color:#94a3b8;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.trace-qc-slot:first-child{border-top-left-radius:4px}
+.trace-qc-slot:last-child{border-right-width:1px;border-top-right-radius:4px}
+/* Supervisor cadence columns (slots 1/7/13) keep their rails, but as
+   inset shadows — a 3px border here would fatten two of the sixteen
+   gridlines and shove that cell's initials off-centre. */
+.trace-qc-slot.qc-supervisor{background:#fef3c7;color:#92400e;box-shadow:inset 3px 0 0 #f59e0b,inset -3px 0 0 #f59e0b}
 .trace-qc-slot.is-signed{background:#dcfce7;color:#166534}
-.trace-qc-slot.is-signed.qc-supervisor{background:#86efac;border-left-color:#15803d;border-right-color:#15803d}
-.trace-timeline{display:grid;grid-template-columns:repeat(16,1fr);gap:2px;margin:2px 0;position:relative}
-.trace-slot{height:22px;border:1px solid var(--bd);border-radius:3px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.trace-qc-slot.is-signed.qc-supervisor{background:#86efac;box-shadow:inset 3px 0 0 #15803d,inset -3px 0 0 #15803d}
+.trace-timeline{display:grid;grid-template-columns:repeat(16,1fr);gap:0;position:relative}
+.trace-slot{height:22px;border:1px solid var(--bd);border-right-width:0;border-radius:0;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.trace-slot:first-child{border-bottom-left-radius:4px}
+.trace-slot:last-child{border-right-width:1px;border-bottom-right-radius:4px}
 /* Per-slot reject codes, aligned under the status timeline so a defect
    sits directly beneath the half-hour it happened in. Empty slots keep
    the column width; slots with rejects show the code(s) in red. */
-.trace-rej-row{display:grid;grid-template-columns:repeat(16,1fr);gap:2px;margin:1px 0 2px}
+/* gap:0 is not cosmetic here — the strip only means anything while its
+   16 columns sit exactly under the timeline's, and the table above is
+   now gapless. */
+.trace-rej-row{display:grid;grid-template-columns:repeat(16,1fr);gap:0;margin:1px 0 2px}
 /* One number — the half-hour's reject total. Fixed height so the row
    can't grow with the number of codes in a slot (it used to stack
    "D07×1" over "D09×3" at 9px, which was both unreadable and a source of
    uneven block heights). Codes, descriptions and quantities are on the
    tooltip. */
 .trace-rej-slot{height:15px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#b91c1c;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}
-.trace-rej-slot.has-rej{background:#fee2e2;border:1px solid #fca5a5;border-radius:3px;cursor:help}
+.trace-rej-slot.has-rej{background:#fee2e2;border:1px solid #fca5a5;border-radius:0;cursor:help}
 .trace-now-line{position:absolute;top:-2px;bottom:-2px;width:2px;background:rgba(220,38,38,.55);box-shadow:0 0 6px rgba(220,38,38,.5);pointer-events:none;z-index:2;transform:translateX(-1px)}
 .trace-section{margin-top:6px;font-size:13px}
 .trace-section b{display:block;margin-bottom:4px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--mu)}
@@ -753,6 +773,13 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    colours of the same mould apart. */
 .kpi-trace-modal .bd-title{font-size:17px;display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;min-width:0}
 .trace-head-job{color:var(--theme-dark);font-weight:800}
+/* Order size and what's actually been made, right beside the order
+   number — the two figures the popup is opened to settle, so they sit
+   ahead of press/part identity. */
+.trace-head-tally{font-size:13px;font-weight:600;color:var(--mu);background:#f1f5f9;border:1px solid var(--bd);border-radius:999px;padding:2px 10px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.trace-head-tally b{color:var(--tx);font-weight:800}
+.trace-head-tally b.g{color:var(--gn)}
+.trace-head-pct{color:var(--mu);font-weight:700}
 .trace-head-meta{font-size:13.5px;font-weight:700;color:var(--mu)}
 .trace-head-desc{font-size:13.5px;font-weight:600;color:var(--mu)}
 /* Title row with the Close button on the right — no bottom action bar,

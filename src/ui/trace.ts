@@ -431,8 +431,14 @@ function renderSearchResults(): string {
  * per-slot reject-code annotation (positioned under the status it
  * happened in, e.g. 09:00 D07×2). Shared by the per-shift card and the
  * day-grouped popup card so both stay in lock-step.
+ *
+ * `sheet` welds the QC row onto the timeline as one Excel-style table —
+ * they are two views of the same 16 half-hours, so a signature and the
+ * status it signs off must share a column edge, not float 2px apart in
+ * two strips of separately rounded chips. The wrapper matters: the Live
+ * card is a flex column with a gap, which no margin can close.
  */
-function traceGrids(r: TraceRow): { qc: string; timeline: string; rej: string } {
+function traceGrids(r: TraceRow): { sheet: string; rej: string } {
   const rejBySlot: Record<number, Array<{ code: string; qty: number }>> = {};
   for (const p of r.rejects) {
     let obj: Record<string, number> = {};
@@ -497,7 +503,7 @@ function traceGrids(r: TraceRow): { qc: string; timeline: string; rej: string } 
     return `<div class="trace-qc-slot qc-${p.role}${p.signed ? ' is-signed' : ''}" title="${p.title}">${label}</div>`;
   }).join('')}</div>`;
 
-  return { qc, timeline, rej };
+  return { sheet: `<div class="trace-sheet">${qc}${timeline}</div>`, rej };
 }
 
 /** The shift's breakdowns spelled out under its grids: when, which code,
@@ -571,8 +577,7 @@ export function renderCard(r: TraceRow): string {
       <span class="g">Good <b>${r.good}</b></span>
       <span class="r">Reject <b>${r.reject}</b></span>
     </div>
-    ${grids.qc}
-    ${grids.timeline}
+    ${grids.sheet}
     ${grids.rej}
     ${bdLines}
   </div>`;
@@ -655,8 +660,7 @@ function renderDayCard(date: string, headExtra: string, rows: TraceRow[]): strin
         <span>Target ${r.shiftTarget ?? '—'}</span>
         <span>Left ${r.jobLeft ?? '—'}</span>
       </div>
-      ${grids.qc}
-      ${grids.timeline}
+      ${grids.sheet}
       ${grids.rej}
       ${breakdownLines(r)}
     </div>`;
@@ -1148,7 +1152,21 @@ function jobTraceHeading(job: string, rows: TraceRow[]): string {
   // row) — take it from the first shift that actually carries it.
   const part = rows.find((r) => r.partNumber || r.partDescription);
   const meta = [machines.join(' / '), part?.partNumber ?? ''].filter(Boolean).join(' · ');
-  return `<b class="trace-head-job">${escapeHtml(job)}</b>${
+  // How big the order is and how much of it is actually made — the two
+  // numbers the popup was opened to settle. Order Qty is the same figure
+  // on every row of the job (Epicor ProdQty), so take the first row that
+  // carries one; Good is summed across every shift and press.
+  const orderQty = rows.find((r) => r.orderQty != null)?.orderQty ?? null;
+  const good = rows.reduce((a, r) => a + r.good, 0);
+  // Floor, not round: 479 of 480 is 99%, and must not read "100%" at a
+  // morning meeting deciding whether the order can come off the press.
+  const done = orderQty
+    ? ` <span class="trace-head-pct">${Math.floor((good / orderQty) * 100)}%</span>`
+    : '';
+  const tally = rows.length
+    ? `<span class="trace-head-tally">Qty <b>${orderQty ?? '—'}</b> · Good <b class="g">${good}</b>${done}</span>`
+    : '';
+  return `<b class="trace-head-job">${escapeHtml(job)}</b>${tally}${
     meta ? `<span class="trace-head-meta">${escapeHtml(meta)}</span>` : ''
   }${
     part?.partDescription

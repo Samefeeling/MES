@@ -167,6 +167,17 @@ describe('renderJobTraceCards — every day is a fixed Day | Afternoon | Night r
     expect(html).toContain('ZZ9 × 2');
   });
 
+  it('welds the QC row onto the timeline as one table', async () => {
+    const { html } = await renderJobTraceCards(stubDal([shift('2026-07-01-Day')]), 'J1');
+    // Nothing between them: a signature has to sit squarely on top of the
+    // status it signs off, which a wrapper guarantees and sibling margins
+    // do not (the Live card is a flex column with a gap).
+    expect(html).toMatch(
+      /<div class="trace-sheet"><div class="trace-qc-row">[\s\S]*?<div class="trace-timeline">/,
+    );
+    expect(html.split('<div class="trace-sheet">').length - 1).toBe(1);
+  });
+
   it('carries the shift target and any breakdown detail into the block', async () => {
     const { html } = await renderJobTraceCards(
       stubDal([
@@ -248,6 +259,24 @@ describe('renderJobTraceCards — heading', () => {
     expect(heading).toContain('>J1<');
     expect(heading).toContain('125T · POPL01035');
     expect(heading).toContain('— Postura Max Chair - Slate');
+  });
+
+  it('states the order quantity and the good made against it', async () => {
+    // 4 shifts × 40 good on a 1000-piece order.
+    const { heading } = await renderJobTraceCards(stubDal(spread()), 'J1');
+    expect(heading).toContain('Qty <b>1000</b>');
+    expect(heading).toContain('Good <b class="g">160</b>');
+    expect(heading).toContain('16%');
+  });
+
+  it('still names the order when Epicor no longer carries a quantity', async () => {
+    const { heading } = await renderJobTraceCards(
+      stubDal([shift('2026-07-01-Day', { jobRequired: 0 })]),
+      'J1',
+    );
+    expect(heading).toContain('Qty <b>—</b>');
+    // No order size means no percentage — 40/0 is not "Infinity%".
+    expect(heading).not.toContain('%');
   });
 
   it('moves that identity off the day cards, leaving them headed by the date', async () => {
