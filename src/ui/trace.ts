@@ -206,6 +206,29 @@ let lastLiveLoadMs = 0;
 let liveLoadVersion = 0;
 let searchLoadVersion = 0;
 
+/** RejectCode → description ("D07" → "ShortShot"), for the reject
+ *  tooltips. Empty until loaded and after a failed read — a missing
+ *  description degrades to the bare code, never to a blank tooltip. */
+let rejectLabels = new Map<string, string>();
+let rejectLabelsLoaded = false;
+
+/**
+ * Fetch PMD_RejectCategories once per session. The list is small and
+ * changes rarely, so every view that renders a reject tooltip can await
+ * this without adding a round-trip after the first. Deliberately
+ * swallows failures: the grids are worth showing with bare codes.
+ */
+async function ensureRejectLabels(dal: PmdDataLayer): Promise<void> {
+  if (rejectLabelsLoaded) return;
+  rejectLabelsLoaded = true;
+  try {
+    const cats = await dal.listRejectCategories();
+    rejectLabels = new Map(cats.map((c) => [c.code.trim().toUpperCase(), c.label]));
+  } catch (e) {
+    console.warn('[pmd] reject categories load failed, showing bare codes:', e);
+  }
+}
+
 /** Mount Live Status or Job Search inside the KPI page. The KPI toolbar
  *  owns navigation; this module owns the selected panel's data and poll. */
 export async function mountTracePanel(
@@ -219,12 +242,16 @@ export async function mountTracePanel(
   hostEl = host;
   let machines: Machine[] = [];
   const errors: string[] = [];
+  // Reject descriptions ride along with the machine list: both are small
+  // lookups the first render needs, and neither should wait on the other.
+  const labels = ensureRejectLabels(dal);
   try {
     machines = await dal.listMachines();
   } catch (e) {
     console.warn('[pmd] Trace machine list failed:', e);
     errors.push(`Machines: ${(e as Error).message || 'read failed'}`);
   }
+  await labels;
   if (version !== mountVersion || !host.isConnected) return;
   S = {
     view,
@@ -388,7 +415,7 @@ function renderSearchResults(): string {
  * day-grouped popup card so both stay in lock-step.
  */
 function traceGrids(r: TraceRow): { qc: string; timeline: string; rej: string } {
-  const rejBySlot: Record<number, string[]> = {};
+  const rejBySlot: Record<number, Array<{ code: string; qty: number }>> = {};
   for (const p of r.rejects) {
     let obj: Record<string, number> = {};
     try {
@@ -397,18 +424,36 @@ function traceGrids(r: TraceRow): { qc: string; timeline: string; rej: string } 
       obj = {};
     }
     const parts = Object.entries(obj)
-      .filter(([, v]) => v)
-      .map(([k, v]) => `${k}×${v}`);
+      .filter(([, v]) => Number(v) > 0)
+      .map(([code, qty]) => ({ code, qty: Number(qty) }))
+      .sort((a, b) => b.qty - a.qty);
     if (parts.length) rejBySlot[p.slotIndex] = parts;
   }
+  const qtyIn = (parts: Array<{ code: string; qty: number }>): number =>
+    parts.reduce((a, x) => a + x.qty, 0);
+  /** "D07 ShortShot × 1" — the code alone when the tenant's
+   *  PMD_RejectCategories has no description for it. */
+  const spellOut = (p: { code: string; qty: number }): string => {
+    const label = rejectLabels.get(p.code.trim().toUpperCase());
+    return `${p.code}${label ? ' ' + label : ''} × ${p.qty}`;
+  };
   const hasRejects = Object.keys(rejBySlot).length > 0;
+  // The cell shows the half-hour's TOTAL and nothing else. Codes used to
+  // be printed in it ("D07×1" over "D09×3"), which at 9px in a 22px-wide
+  // slot was unreadable and made the row's height depend on how many
+  // codes a slot happened to carry. The number answers "how bad, when";
+  // the tooltip answers "which defects" for the one slot being asked
+  // about.
   const rej = hasRejects
     ? `<div class="trace-rej-row">${Array.from({ length: SLOTS_PER_SHIFT }, (_, i) => {
-        const codes = rejBySlot[i];
-        if (!codes) return `<div class="trace-rej-slot"></div>`;
-        return `<div class="trace-rej-slot has-rej" title="${escapeHtml(
-          slotClock(r.shiftId, i),
-        )} · ${escapeHtml(codes.join(', '))}">${codes.map(escapeHtml).join('<br>')}</div>`;
+        const parts = rejBySlot[i];
+        if (!parts) return `<div class="trace-rej-slot"></div>`;
+        const total = qtyIn(parts);
+        const tip = [
+          `${slotClock(r.shiftId, i)} · ${total} reject${total === 1 ? '' : 's'}`,
+          ...parts.map(spellOut),
+        ].join('\n');
+        return `<div class="trace-rej-slot has-rej" title="${escapeHtml(tip)}">${total}</div>`;
       }).join('')}</div>`
     : '';
 
@@ -418,9 +463,10 @@ function traceGrids(r: TraceRow): { qc: string; timeline: string; rej: string } 
     const style = def
       ? `background:${def.color};color:${def.text};border-color:${def.border}`
       : 'background:#f1f5f9;color:#94a3b8';
-    const rejTip = rejBySlot[i] ? ` · Reject ${rejBySlot[i].join(', ')}` : '';
-    return `<div class="trace-slot" title="${escapeHtml(slotClock(r.shiftId, i))} · ${escapeHtml(
-      (def?.label ?? 'Empty') + rejTip,
+    const parts = rejBySlot[i];
+    const rejTip = parts ? `\nReject ${qtyIn(parts)}\n${parts.map(spellOut).join('\n')}` : '';
+    return `<div class="trace-slot" title="${escapeHtml(
+      `${slotClock(r.shiftId, i)} · ${def?.label ?? 'Empty'}${rejTip}`,
     )}" style="${style}">${ch}</div>`;
   }).join('')}</div>`;
 
@@ -1103,7 +1149,7 @@ export async function renderJobTraceCards(
       )}.</div>`,
     };
   }
-  const planning = await dal.listPlanning({});
+  const [planning] = await Promise.all([dal.listPlanning({}), ensureRejectLabels(dal)]);
   const planByJob = new Map(planning.map((p) => [p.jobNumber, p]));
   const jobGoodTotals = new Map([[job, goodForRecords(all)]]);
   const rows = buildTraceRowsFor(all, planByJob, jobGoodTotals);

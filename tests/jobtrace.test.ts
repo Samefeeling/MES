@@ -10,6 +10,10 @@ function stubDal(records: ReturnType<typeof rec>[]): PmdDataLayer {
   return {
     listSignedOffProduction: async () => records,
     listPlanning: async () => [],
+    listRejectCategories: async () => [
+      { code: 'D07', label: 'ShortShot', sequence: 1 },
+      { code: 'D09', label: 'Flash', sequence: 2 },
+    ],
   } as unknown as PmdDataLayer;
 }
 
@@ -111,6 +115,56 @@ describe('renderJobTraceCards — every day is a fixed Day | Afternoon | Night r
     expect(headers[1]).toMatch(/^Afternoon G \d+ R \d+ Target \S+ Left \S+$/);
     // Still reachable, just not on the line that has to stay one line.
     expect(html).toContain('Operator Trong (Danny) Nguyen · Supervisor Jeff Penn');
+  });
+
+  it('shows only the reject count in the slot, with the detail on hover', async () => {
+    const { html } = await renderJobTraceCards(
+      stubDal([
+        shift('2026-07-01-Day'),
+        shift('2026-07-01-Day', {
+          slotIndex: 4,
+          rejectCount: 4,
+          rejects: JSON.stringify({ D07: 1, D09: 3 }),
+        }),
+      ]),
+      'J1',
+    );
+    const cells = Array.from(
+      html.matchAll(/<div class="trace-rej-slot has-rej" title="([^"]*)">([^<]*)<\/div>/g),
+    ).map((m) => ({ tip: m[1], text: m[2] }));
+    expect(cells).toHaveLength(1);
+    // The cell is the total and nothing else — no codes, no ×, no <br>.
+    expect(cells[0].text).toBe('4');
+    // Time, then each code with its description and quantity.
+    expect(cells[0].tip).toContain('4 rejects');
+    expect(cells[0].tip).toContain('D09 Flash × 3');
+    expect(cells[0].tip).toContain('D07 ShortShot × 1');
+    expect(cells[0].tip.split('&#10;')[0]).toMatch(/^\d{2}:\d{2}/);
+    // Biggest contributor first — that's the one worth acting on.
+    expect(cells[0].tip.indexOf('D09')).toBeLessThan(cells[0].tip.indexOf('D07'));
+  });
+
+  it('spells the same detail onto the status slot the rejects happened in', async () => {
+    const { html } = await renderJobTraceCards(
+      stubDal([
+        shift('2026-07-01-Day'),
+        shift('2026-07-01-Day', { slotIndex: 4, rejects: JSON.stringify({ D07: 2 }) }),
+      ]),
+      'J1',
+    );
+    const slot = html.match(/<div class="trace-slot" title="([^"]*)"[^>]*>R<\/div>/g) ?? [];
+    expect(slot.join()).toContain('D07 ShortShot × 2');
+  });
+
+  it('falls back to the bare code when the tenant has no description for it', async () => {
+    const { html } = await renderJobTraceCards(
+      stubDal([
+        shift('2026-07-01-Day'),
+        shift('2026-07-01-Day', { slotIndex: 4, rejects: JSON.stringify({ ZZ9: 2 }) }),
+      ]),
+      'J1',
+    );
+    expect(html).toContain('ZZ9 × 2');
   });
 
   it('carries the shift target and any breakdown detail into the block', async () => {

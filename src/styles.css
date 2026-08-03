@@ -231,8 +231,13 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    sits directly beneath the half-hour it happened in. Empty slots keep
    the column width; slots with rejects show the code(s) in red. */
 .trace-rej-row{display:grid;grid-template-columns:repeat(16,1fr);gap:2px;margin:1px 0 2px}
-.trace-rej-slot{min-height:14px;font-size:9px;font-weight:800;line-height:1.15;text-align:center;color:#b91c1c;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}
-.trace-rej-slot.has-rej{background:#fef2f2;border:1px solid #fecaca;border-radius:3px;padding:1px 0}
+/* One number — the half-hour's reject total. Fixed height so the row
+   can't grow with the number of codes in a slot (it used to stack
+   "D07×1" over "D09×3" at 9px, which was both unreadable and a source of
+   uneven block heights). Codes, descriptions and quantities are on the
+   tooltip. */
+.trace-rej-slot{height:15px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#b91c1c;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}
+.trace-rej-slot.has-rej{background:#fee2e2;border:1px solid #fca5a5;border-radius:3px;cursor:help}
 .trace-now-line{position:absolute;top:-2px;bottom:-2px;width:2px;background:rgba(220,38,38,.55);box-shadow:0 0 6px rgba(220,38,38,.5);pointer-events:none;z-index:2;transform:translateX(-1px)}
 .trace-section{margin-top:6px;font-size:13px}
 .trace-section b{display:block;margin-bottom:4px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--mu)}
