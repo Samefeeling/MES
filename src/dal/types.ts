@@ -56,6 +56,7 @@ export interface PmdDataLayer {
         | 'availableDate'
         | 'maintenanceLevel'
         | 'notes'
+        | 'changeOverMedian'
       >
     >,
   ): Promise<void>;

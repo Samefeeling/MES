@@ -28,6 +28,7 @@ import {
   SHIFTS,
 } from '../core/shifts';
 import { closeModal, escapeHtml, openModal } from './modal';
+import { toast } from './toast';
 import {
   renderBoxPlotChart,
   renderHoursOeeChart,
@@ -38,6 +39,7 @@ import {
 } from './charts';
 import {
   collectChangeoverEvents,
+  dieChangeoverMedians,
   CHANGEOVER_LABELS,
   type ChangeoverEvent,
   type ChangeoverKind,
@@ -161,7 +163,8 @@ interface ShiftAgg {
    *  not computed for this slice (job rows / category rows) or no cycle
    *  time anywhere in it — the Output cell stays uncoloured. */
   expOutput: number | null;
-  /** Standard changeover allowances (occurrences × standard duration).
+  /** Standard changeover allowances (changeovers × standard duration,
+   *  one changeover per order — see countSetupEvents).
    *  null = not computed for this slice; numbers colour the Die / Colour /
    *  Insert hour cells red-amber-blue against the actuals. */
   dieStdHrs: number | null;
@@ -322,6 +325,9 @@ interface KpiState {
   /** Every D/C/I changeover and B breakdown in the window, floor-wide.
    *  Feeds the supervisor-only duration box plot. */
   changeoverEvents: ChangeoverEvent[];
+  /** jobNumber → DieNumber, resolved order → part → PMD_ProductDieColor.
+   *  Lets a die change be attributed to the tool it fitted. */
+  dieByJob: Map<string, string>;
   /** Failed reads for the current computation. Values from successful
    *  sources still render, but the banner stops missing rows being read as
    *  real zero production/reject/downtime. */
@@ -969,6 +975,18 @@ async function compute(now = new Date()): Promise<void> {
   // "on this one machine" — but each event keeps its press and order so
   // an outlier can be named.
   S!.changeoverEvents = collectChangeoverEvents(perMachineProd.flat());
+  // order → part → die, so a die change can be attributed to the tool it
+  // fitted. partNumByJob is production-first (see above), which matters
+  // here: an order that has rolled off Epicor planning still resolves.
+  const dieByPart = new Map<string, string>();
+  for (const c of dieColorList) {
+    if (c.dieNumber) dieByPart.set(c.partNumber.trim().toUpperCase(), c.dieNumber.trim());
+  }
+  S!.dieByJob = new Map(
+    Array.from(partNumByJob.entries())
+      .map(([job, part]) => [job, dieByPart.get(part.trim().toUpperCase()) ?? ''] as const)
+      .filter(([, die]) => die),
+  );
 
   // Floor-wide totals split by PMD_ProductDieColor.Category. Resolution
   // chain per record: JobNum → Part # (partNumByJob, fully populated by
@@ -1069,7 +1087,8 @@ function outputCell(a: ShiftAgg): string {
 }
 
 /** Die / Colour / Insert hour cell judged against the standard allowance
- *  (occurrences × standard). Blue = within standard, amber = one block
+ *  (changeovers × standard, one per order). Blue = within standard,
+ *  amber = one block
  *  over, red = worse; plain when the slice wasn't judged / had none. */
 function setupCell(actualHrs: number, stdHrs: number | null, stdEachHrs: number, label: string): string {
   const v = actualHrs ? actualHrs.toFixed(1) : '—';
@@ -1078,8 +1097,8 @@ function setupCell(actualHrs: number, stdHrs: number | null, stdEachHrs: number,
   // still returns 'blue' for at/under standard; remap it to green here.
   const cls = setupJudgement(actualHrs, stdHrs).replace('blue', 'green');
   if (!cls) return `<td class="num">${v}</td>`;
-  const occurrences = Math.round((stdHrs ?? 0) / stdEachHrs);
-  const title = `${label}: ${occurrences} × ${stdEachHrs}h standard = ${(stdHrs ?? 0).toFixed(1)}h allowed — actual ${actualHrs.toFixed(1)}h${
+  const changeovers = Math.round((stdHrs ?? 0) / stdEachHrs);
+  const title = `${label}: ${changeovers} changeover${changeovers === 1 ? '' : 's'} × ${stdEachHrs}h standard = ${(stdHrs ?? 0).toFixed(1)}h allowed — actual ${actualHrs.toFixed(1)}h${
     actualHrs > (stdHrs ?? 0) ? ` (+${(actualHrs - (stdHrs ?? 0)).toFixed(1)}h over)` : ' (within standard)'
   }`;
   return `<td class="num ${cls}" title="${escapeHtml(title)}">${v}</td>`;
@@ -1610,6 +1629,14 @@ function render(): void {
             one breakdown. Dashed “std” = the floor allowance (die 4 h ·
             colour 0.5 h · insert 0.5 h); breakdowns have none.
           </div>
+          ${
+            dalRef.updateDieMaster
+              ? `<button type="button" class="btn kpi-median-import" data-import-die-medians
+                   title="Write each die's median CHANGEOVER hours to PMD_DieMaster.ChangeOverMedian — preview first">
+                   ⤓ Import die medians → PMD_DieMaster
+                 </button>`
+              : ''
+          }
         </div>`
     : '';
   const charts = S!.loading || S!.chartBuckets.length === 0
@@ -1755,7 +1782,7 @@ function render(): void {
         <div><b>Startup h</b> = hours in S blocks (warm-up). Counted separately from the D / C / I changeover columns.</div>
         <div><b>Efficiency*</b> = Run slots ÷ all filled slots.</div>
         <div><b>vs Plan 🟢🟡🔴</b> = Total Good ÷ the same expectation the Output cell shows (Σ Shift Targets, planning fallback) — the percentage form of Output's “/n”.</div>
-        <div><b>Die / Colour / Insert h 🟢🟡🔴</b> = hours in D / C / I blocks vs standard = occurrences × (die 4 h · colour 0.5 h · insert 0.5 h); 🟢 ≤ std, 🟡 ≤ std + 0.5 h, 🔴 above.</div>
+        <div><b>Die / Colour / Insert h 🟢🟡🔴</b> = hours in D / C / I blocks vs standard = changeovers × (die 4 h · colour 0.5 h · insert 0.5 h); 🟢 ≤ std, 🟡 ≤ std + 0.5 h, 🔴 above. <b>One changeover per order</b> — a die change the sheet logged in two pieces earns one 4 h allowance, not two.</div>
         <div>Colour thresholds for Output / Yield / Efficiency are editable in the panel above. Shift sub-rows show each shift's contribution to the period total.</div>
       </div>
     </div>`;
@@ -1863,6 +1890,117 @@ function render(): void {
       render();
     });
   }
+  app
+    .querySelector<HTMLButtonElement>('[data-import-die-medians]')
+    ?.addEventListener('click', () => void openDieMedianImport());
+}
+
+/**
+ * Preview then write the observed die-change medians onto
+ * PMD_DieMaster.ChangeOverMedian.
+ *
+ * A preview rather than a bare confirm: this writes to a list the
+ * toolroom reads and edits by hand, so the supervisor gets to see every
+ * die, its current value, the new one and how many changeovers it was
+ * measured from BEFORE anything leaves the browser. Dies whose value is
+ * already correct are listed but not written — there is no reason to
+ * touch a row to set it to what it already says.
+ */
+async function openDieMedianImport(): Promise<void> {
+  const medians = dieChangeoverMedians(S!.changeoverEvents, S!.dieByJob);
+  const master = dalRef.listDieMaster ? await dalRef.listDieMaster().catch(() => []) : [];
+  const byDie = new Map(master.map((m) => [m.dieNumber.trim().toUpperCase(), m]));
+  const rows = medians.map((m) => {
+    const row = byDie.get(m.dieNumber.trim().toUpperCase());
+    return {
+      ...m,
+      known: !!row,
+      current: row?.changeOverMedian ?? null,
+      nominal: row?.changeOverIn ?? null,
+    };
+  });
+  // Only dies the register actually has a row for can be written; the
+  // rest are shown so a missing tool is visible rather than silently
+  // dropped.
+  const writable = rows.filter((r) => r.known && r.current !== r.medianHrs);
+  const missing = rows.filter((r) => !r.known);
+  const mc = openModal(`<div class="bd-modal kpi-median-modal">
+    <div class="bd-head">
+      <h2 class="bd-title">Import die-change medians → PMD_DieMaster.ChangeOverMedian</h2>
+      <button type="button" class="btn" data-median-close>Close</button>
+    </div>
+    <p class="kpi-median-intro">
+      Median hours per die over the selected window, from signed-off
+      production only. <b>${writable.length}</b> of ${rows.length} die${
+        rows.length === 1 ? '' : 's'
+      } would change.
+    </p>
+    <div class="kpi-median-scroll"><table class="kpi-median-table">
+      <thead><tr><th>Die</th><th class="num">Nominal in</th><th class="num">Current</th><th class="num">New median</th><th class="num">Changeovers</th><th></th></tr></thead>
+      <tbody>${
+        rows.length
+          ? rows
+              .map(
+                (r) => `<tr class="${r.known ? (r.current === r.medianHrs ? 'is-same' : '') : 'is-missing'}">
+                  <td>${escapeHtml(r.dieNumber)}</td>
+                  <td class="num">${r.nominal == null ? '—' : r.nominal.toFixed(2)}</td>
+                  <td class="num">${r.current == null ? '—' : r.current.toFixed(2)}</td>
+                  <td class="num"><b>${r.medianHrs.toFixed(2)}</b></td>
+                  <td class="num">${r.events}</td>
+                  <td>${
+                    !r.known
+                      ? 'no PMD_DieMaster row'
+                      : r.current === r.medianHrs
+                        ? 'unchanged'
+                        : 'will write'
+                  }</td>
+                </tr>`,
+              )
+              .join('')
+          : `<tr><td colspan="6">No die change was observed in this window — nothing to import.</td></tr>`
+      }</tbody>
+    </table></div>
+    <div class="kpi-median-actions">
+      <span class="kpi-median-status" data-median-status>${
+        missing.length ? `${missing.length} die(s) have no PMD_DieMaster row and will be skipped.` : ''
+      }</span>
+      <button type="button" class="btn primary" data-median-write ${
+        writable.length ? '' : 'disabled'
+      }>Write ${writable.length} row${writable.length === 1 ? '' : 's'}</button>
+    </div>
+  </div>`);
+  mc.querySelector('[data-median-close]')?.addEventListener('click', () => closeModal());
+  const status = mc.querySelector<HTMLElement>('[data-median-status]');
+  const write = mc.querySelector<HTMLButtonElement>('[data-median-write]');
+  write?.addEventListener('click', async () => {
+    if (!dalRef.updateDieMaster) {
+      toast('This backend cannot write PMD_DieMaster', 'err');
+      return;
+    }
+    write.disabled = true;
+    let done = 0;
+    const failed: string[] = [];
+    for (const r of writable) {
+      if (status) status.textContent = `Writing ${done + 1} of ${writable.length}…`;
+      try {
+        await dalRef.updateDieMaster(r.dieNumber, { changeOverMedian: r.medianHrs });
+        done++;
+      } catch (e) {
+        // Keep going: one unwritable row shouldn't cost the other 40.
+        console.warn('[pmd] ChangeOverMedian write failed for', r.dieNumber, e);
+        failed.push(r.dieNumber);
+      }
+    }
+    if (status) {
+      status.textContent = failed.length
+        ? `Wrote ${done}; failed on ${failed.join(', ')}`
+        : `Wrote ${done} row${done === 1 ? '' : 's'}.`;
+    }
+    toast(
+      failed.length ? `ChangeOverMedian: ${done} written, ${failed.length} failed` : `ChangeOverMedian updated on ${done} die${done === 1 ? '' : 's'}`,
+      failed.length ? 'warn' : 'ok',
+    );
+  });
 }
 
 /** Compact code → "code label value(%)" legend under a Pareto chart, so
@@ -2201,6 +2339,7 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     downtimePareto: { floor: [], byMachine: new Map() },
     rejectDescByCode: new Map(),
     changeoverEvents: [],
+    dieByJob: new Map(),
     errors: [],
     catalogErrors: [],
   };

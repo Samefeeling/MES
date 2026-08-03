@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { collectChangeoverEvents } from '../src/core/changeover';
+import { collectChangeoverEvents, dieChangeoverMedians } from '../src/core/changeover';
 import { boxStats } from '../src/core/boxplot';
 import { changeoverBoxSeries } from '../src/ui/kpi';
 import { rec } from './helpers';
@@ -244,5 +244,90 @@ describe('changeoverBoxSeries — what the chart is handed', () => {
     expect(series).toHaveLength(4);
     expect(series[0].points).toEqual([]);
     expect(series[3].points).toHaveLength(1);
+  });
+});
+
+describe('dieChangeoverMedians — what goes into PMD_DieMaster', () => {
+  const die = (job: string, from: number, to: number, machineCode = '125T') =>
+    slots('D', from, to, { jobNumber: job, machineCode });
+
+  it('takes the median of a die’s changeovers, not the mean', () => {
+    // 1 h, 1 h, 6 h. The mean (2.67) would be dragged by the one that
+    // fought back; the median says what the tool normally costs.
+    const evts = collectChangeoverEvents([
+      ...die('J1', 0, 1),
+      ...die('J2', 2, 3),
+      ...die('J3', 4, 15),
+    ]);
+    const out = dieChangeoverMedians(
+      evts,
+      new Map([
+        ['J1', 'DIE-1'],
+        ['J2', 'DIE-1'],
+        ['J3', 'DIE-1'],
+      ]),
+    );
+    expect(out).toEqual([{ dieNumber: 'DIE-1', medianHrs: 1, events: 3 }]);
+  });
+
+  it('keeps each die separate and returns them in die order', () => {
+    const evts = collectChangeoverEvents([...die('J1', 0, 3), ...die('J2', 4, 4)]);
+    const out = dieChangeoverMedians(
+      evts,
+      new Map([
+        ['J1', 'DIE-9'],
+        ['J2', 'DIE-2'],
+      ]),
+    );
+    expect(out).toEqual([
+      { dieNumber: 'DIE-2', medianHrs: 0.5, events: 1 },
+      { dieNumber: 'DIE-9', medianHrs: 2, events: 1 },
+    ]);
+  });
+
+  it('pools the same die across presses — the tool is what is being measured', () => {
+    const evts = collectChangeoverEvents([
+      ...die('J1', 0, 1, '125T'),
+      ...die('J2', 0, 5, '550T'),
+    ]);
+    const out = dieChangeoverMedians(
+      evts,
+      new Map([
+        ['J1', 'DIE-1'],
+        ['J2', 'DIE-1'],
+      ]),
+    );
+    expect(out).toEqual([{ dieNumber: 'DIE-1', medianHrs: 2, events: 2 }]);
+  });
+
+  it('counts only die changes — colour and insert happen with the die in', () => {
+    const evts = collectChangeoverEvents([
+      ...die('J1', 0, 1),
+      ...slots('C', 2, 5, { jobNumber: 'J1' }),
+      ...slots('I', 6, 9, { jobNumber: 'J1' }),
+      ...slots('B', 10, 13, { jobNumber: 'J1' }),
+    ]);
+    expect(dieChangeoverMedians(evts, new Map([['J1', 'DIE-1']]))).toEqual([
+      { dieNumber: 'DIE-1', medianHrs: 1, events: 1 },
+    ]);
+  });
+
+  it('skips orders that resolve to no die rather than pooling them under a blank', () => {
+    const evts = collectChangeoverEvents([...die('J1', 0, 1), ...die('KNOWN', 2, 3)]);
+    expect(dieChangeoverMedians(evts, new Map([['KNOWN', 'DIE-7']]))).toEqual([
+      { dieNumber: 'DIE-7', medianHrs: 1, events: 1 },
+    ]);
+    expect(dieChangeoverMedians(evts, new Map())).toEqual([]);
+  });
+
+  it('rounds to the 2 dp the Number column stores', () => {
+    // Three events of 0.5, 1.0 and 1.5 h → median 1.0 exactly; an even
+    // count interpolates, which is where the rounding matters.
+    const evts = collectChangeoverEvents([
+      ...die('J1', 0, 0),
+      ...die('J2', 1, 4),
+    ]);
+    const out = dieChangeoverMedians(evts, new Map([['J1', 'D'], ['J2', 'D']]));
+    expect(out[0].medianHrs).toBe(1.25);
   });
 });

@@ -189,6 +189,8 @@ export function seedDieMaster(now: Date): DieMaster[] {
     // Changeover is recorded in HOURS on PMD_DieMaster.
     changeOverIn: 1 + cavities * 0.25,
     changeOverOut: 0.5 + cavities * 0.25,
+    // Observed median — empty until a KPI import has run.
+    changeOverMedian: null,
     lifeCycle,
     dateStamp: stamp(daysAgo),
     lastServiceDate: lastServiceDaysAgo == null ? '' : stamp(lastServiceDaysAgo),

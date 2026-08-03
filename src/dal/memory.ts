@@ -120,6 +120,7 @@ export class MemoryDataLayer implements PmdDataLayer {
         | 'availableDate'
         | 'maintenanceLevel'
         | 'notes'
+        | 'changeOverMedian'
       >
     >,
   ): Promise<void> {
@@ -132,6 +133,7 @@ export class MemoryDataLayer implements PmdDataLayer {
     if (patch.availableDate !== undefined) row.availableDate = patch.availableDate;
     if (patch.maintenanceLevel !== undefined) row.maintenanceLevel = patch.maintenanceLevel;
     if (patch.notes !== undefined) row.notes = patch.notes;
+    if (patch.changeOverMedian !== undefined) row.changeOverMedian = patch.changeOverMedian;
   }
 
   // ---- die maintenance (PMD_DieMaintenance parity) ---------------------

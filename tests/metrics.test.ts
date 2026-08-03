@@ -72,12 +72,23 @@ describe('KPI aggregation (§4.1)', () => {
     expect(k.scrapPct).toBe(5); // 10 / 200
   });
 
-  it('counts D/C/I changeover events, not slots', () => {
+  it('counts one D/C/I changeover per order, not one per run of slots', () => {
     const recs = [
       rec({ jobNumber: 'J', slotIndex: 0, statusCode: 'D' }),
-      rec({ jobNumber: 'J', slotIndex: 1, statusCode: 'D' }), // same run
+      rec({ jobNumber: 'J', slotIndex: 1, statusCode: 'D' }),
       rec({ jobNumber: 'J', slotIndex: 2, statusCode: 'R' }),
-      rec({ jobNumber: 'J', slotIndex: 3, statusCode: 'D' }), // new event
+      // Same order, so the same die change — the sheet just recorded it
+      // in two pieces. Counting runs would grant 2 × 4 h of standard and
+      // let an 8-hour changeover pass as within standard.
+      rec({ jobNumber: 'J', slotIndex: 3, statusCode: 'D' }),
+    ];
+    expect(countSetupEvents(recs).dieChanges).toBe(1);
+  });
+
+  it('still counts a second order’s changeover separately', () => {
+    const recs = [
+      rec({ jobNumber: 'J1', slotIndex: 0, statusCode: 'D' }),
+      rec({ jobNumber: 'J2', slotIndex: 1, statusCode: 'D' }),
     ];
     expect(countSetupEvents(recs).dieChanges).toBe(2);
   });

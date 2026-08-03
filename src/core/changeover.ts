@@ -1,4 +1,5 @@
 import type { ProductionRecord, StatusCode } from '../types';
+import { boxStats } from './boxplot';
 import { SLOT_MINUTES, slotTimeRange } from './shifts';
 
 /**
@@ -148,4 +149,50 @@ export function collectChangeoverEvents(records: ProductionRecord[]): Changeover
   }
 
   return out.sort((a, b) => a.startedAt - b.startedAt || (a.machineCode < b.machineCode ? -1 : 1));
+}
+
+/** One die's observed changeover time, ready to write to
+ *  PMD_DieMaster.ChangeOverMedian beside the toolroom's nominal
+ *  ChangeOverIn / ChangeOverOut. */
+export interface DieChangeoverMedian {
+  dieNumber: string;
+  /** Median hours across `events` die changes, 2 dp. */
+  medianHrs: number;
+  events: number;
+}
+
+/**
+ * Median die-change duration per die.
+ *
+ * Median rather than mean: one nine-hour changeover where the tool
+ * fought back would drag a mean up for months and misrepresent what the
+ * die normally costs to fit. The median is what "this tool takes about
+ * an hour and a half" means.
+ *
+ * Only D counts — this is the die's own changeover, the figure that sits
+ * next to the toolroom's nominal ChangeOverIn/Out. Colour and insert
+ * changes happen with the die already in the press.
+ *
+ * `dieByJob` maps an order to the die it ran on; orders that resolve to
+ * no die are skipped rather than pooled under a blank key, and a die is
+ * reported only if at least one of its changeovers was observed.
+ */
+export function dieChangeoverMedians(
+  events: ChangeoverEvent[],
+  dieByJob: Map<string, string>,
+): DieChangeoverMedian[] {
+  const hoursByDie = new Map<string, number[]>();
+  for (const e of events) {
+    if (e.kind !== 'die' || !e.jobNumber) continue;
+    const die = dieByJob.get(e.jobNumber)?.trim();
+    if (!die) continue;
+    hoursByDie.set(die, [...(hoursByDie.get(die) ?? []), e.hours]);
+  }
+  const out: DieChangeoverMedian[] = [];
+  for (const [dieNumber, hours] of hoursByDie) {
+    const st = boxStats(hours);
+    if (!st) continue;
+    out.push({ dieNumber, medianHrs: +st.median.toFixed(2), events: st.n });
+  }
+  return out.sort((a, b) => (a.dieNumber < b.dieNumber ? -1 : a.dieNumber > b.dieNumber ? 1 : 0));
 }

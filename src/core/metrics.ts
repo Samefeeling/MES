@@ -1,4 +1,5 @@
 import type { ProductionRecord } from '../types';
+import { collectChangeoverEvents, type ChangeoverKind } from './changeover';
 import { SLOT_MINUTES } from './shifts';
 import { STATUS_MAP } from './status';
 
@@ -145,33 +146,25 @@ export function aggregate(records: ProductionRecord[]): Kpi {
 }
 
 /**
- * Count D/C/I as "events" = consecutive runs of the same status along the
- * machine timeline (ShiftId then SlotIndex), mirroring the demo's logic so
- * the Setup Plan-vs-Actual chart counts changeovers, not slots.
+ * How many D/C/I *changeovers* the slice contains — one per order, not
+ * one per contiguous run of slots.
+ *
+ * A changeover belongs to the order it sets the press up for. The sheet
+ * may record it in pieces (three D slots before smoko, two after), and
+ * counting runs would call that two die changes: it doubles the standard
+ * allowance (2 × 4 h) and lets an 8-hour changeover pass as "within
+ * standard". collectChangeoverEvents owns the rule, so the KPI table's
+ * Die / Colour / Insert judgement and the supervisor's duration box plot
+ * can never disagree about what a changeover is.
  */
 export function countSetupEvents(records: ProductionRecord[]): {
   dieChanges: number;
   colorChanges: number;
   insertChanges: number;
 } {
-  const sorted = [...records]
-    .filter((r) => r.statusCode)
-    .sort((a, b) => {
-      const ka = `${a.shiftId}#${String(a.slotIndex).padStart(3, '0')}`;
-      const kb = `${b.shiftId}#${String(b.slotIndex).padStart(3, '0')}`;
-      return ka < kb ? -1 : ka > kb ? 1 : 0;
-    });
-  let d = 0;
-  let c = 0;
-  let i = 0;
-  let prev = '';
-  for (const r of sorted) {
-    if (r.statusCode === 'D' && prev !== 'D') d++;
-    else if (r.statusCode === 'C' && prev !== 'C') c++;
-    else if (r.statusCode === 'I' && prev !== 'I') i++;
-    prev = r.statusCode;
-  }
-  return { dieChanges: d, colorChanges: c, insertChanges: i };
+  const events = collectChangeoverEvents(records);
+  const of = (kind: ChangeoverKind): number => events.filter((e) => e.kind === kind).length;
+  return { dieChanges: of('die'), colorChanges: of('color'), insertChanges: of('insert') };
 }
 
 // §4.2 KPI color thresholds.

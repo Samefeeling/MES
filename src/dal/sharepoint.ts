@@ -321,6 +321,9 @@ const DEFAULT_FIELDS = {
     toolInjectorPlate: 'ToolInjectorPlate',
     changeOverIn: 'ChangeOverIn',
     changeOverOut: 'ChangeOverOut',
+    // Observed median die-change hours, written by the KPI import. Number
+    // column, auto-provisioned on first write like MaintenanceLevel/Notes.
+    changeOverMedian: 'ChangeOverMedian',
     lifeCycle: 'LifeCycle',
     dateStamp: 'DateStamp',
     lastServiceDate: 'LastServiceDate',
@@ -504,9 +507,11 @@ export class SharePointDataLayer implements PmdDataLayer {
     idByDie: Map<string, number>;
     maintenanceLevelExists: boolean;
     notesExists: boolean;
+    changeOverMedianExists: boolean;
   } | null = null;
   private dieMasterMaintenanceLevelReady: Promise<void> | null = null;
   private dieMasterNotesReady: Promise<void> | null = null;
+  private dieMasterChangeOverMedianReady: Promise<void> | null = null;
   /**
    * Short-TTL `jobNumber → partNumber` map used by pushLiveSnapshot to
    * stamp PartNum onto every PMD_LiveStatus mirror. Without the cache,
@@ -1091,6 +1096,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         toolInjectorPlate: resolve(F.toolInjectorPlate),
         changeOverIn: resolve(F.changeOverIn),
         changeOverOut: resolve(F.changeOverOut),
+        changeOverMedian: resolve(F.changeOverMedian),
         lifeCycle: resolve(F.lifeCycle),
         dateStamp: resolve(F.dateStamp),
         lastServiceDate: resolve(F.lastServiceDate),
@@ -1121,6 +1127,8 @@ export class SharePointDataLayer implements PmdDataLayer {
         maintenanceLevelExists:
           internals.has(F.maintenanceLevel) || byTitle.has(normName(F.maintenanceLevel)),
         notesExists: internals.has(F.notes) || byTitle.has(normName(F.notes)),
+        changeOverMedianExists:
+          internals.has(F.changeOverMedian) || byTitle.has(normName(F.changeOverMedian)),
       };
       const out = rows
         .map((r) => ({
@@ -1133,6 +1141,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           toolInjectorPlate: str(r[K.toolInjectorPlate]).trim(),
           changeOverIn: nullOrNum(r[K.changeOverIn]),
           changeOverOut: nullOrNum(r[K.changeOverOut]),
+          changeOverMedian: nullOrNum(r[K.changeOverMedian]),
           lifeCycle: nullOrNum(r[K.lifeCycle]),
           dateStamp: str(r[K.dateStamp]),
           lastServiceDate: str(r[K.lastServiceDate]),
@@ -1279,6 +1288,60 @@ export class SharePointDataLayer implements PmdDataLayer {
     return this.dieMasterNotesReady;
   }
 
+  /** Provision PMD_DieMaster.ChangeOverMedian (Number) on first import.
+   *  Same shape as the MaintenanceLevel / Notes provisioning: the column
+   *  is new, and a tenant shouldn't have to hand-create it before the KPI
+   *  page can write the observed medians. */
+  private async ensureDieMasterChangeOverMedianField(): Promise<void> {
+    if (this.dieMasterMeta?.changeOverMedianExists) return;
+    if (this.dieMasterChangeOverMedianReady) return this.dieMasterChangeOverMedianReady;
+    this.dieMasterChangeOverMedianReady = (async () => {
+      const meta = this.dieMasterMeta;
+      if (!meta) throw new Error('PMD_DieMaster metadata is not loaded');
+      const wanted = this.F.dieMaster.changeOverMedian;
+      const fieldsUrl = `${this.listUrl(LISTS.dieMaster)}/fields`;
+      const read = async (): Promise<Array<{ Title: string; InternalName: string }>> => {
+        const env = await this.getJson<{
+          d: { results: Array<{ Title: string; InternalName: string }> };
+        }>(`${fieldsUrl}?$filter=Hidden eq false&$select=Title,InternalName`);
+        return env.d.results;
+      };
+      const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const resolve = (fields: Array<{ Title: string; InternalName: string }>): string | null =>
+        fields.find((f) => f.InternalName === wanted)?.InternalName ??
+        fields.find((f) => norm(f.Title) === norm(wanted))?.InternalName ??
+        null;
+      let internal = resolve(await read());
+      if (!internal) {
+        try {
+          await this.post(fieldsUrl, {
+            __metadata: { type: 'SP.Field' },
+            Title: wanted,
+            FieldTypeKind: 9, // Number — hours, to 2 dp
+          });
+        } catch (e) {
+          // Another session may have created it between GET and POST.
+          internal = resolve(await read());
+          if (!internal) {
+            throw new Error(
+              `PMD_DieMaster needs a number '${wanted}' column (${(e as Error).message}). ` +
+                'Add it in List settings or grant Manage Lists once.',
+            );
+          }
+        }
+        internal ??= resolve(await read());
+      }
+      if (!internal) throw new Error(`PMD_DieMaster column '${wanted}' could not be resolved`);
+      meta.keys.changeOverMedian = internal;
+      meta.changeOverMedianExists = true;
+      console.info(`[pmd] PMD_DieMaster '${wanted}' column ready as ${internal}`);
+    })().catch((e) => {
+      this.dieMasterChangeOverMedianReady = null;
+      throw e;
+    });
+    return this.dieMasterChangeOverMedianReady;
+  }
+
   async updateDieMaster(
     dieNumber: string,
     patch: Partial<
@@ -1290,6 +1353,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         | 'availableDate'
         | 'maintenanceLevel'
         | 'notes'
+        | 'changeOverMedian'
       >
     >,
   ): Promise<void> {
@@ -1306,6 +1370,9 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (patch.notes !== undefined && !meta.notesExists) {
       await this.ensureDieMasterNotesField();
     }
+    if (patch.changeOverMedian !== undefined && !meta.changeOverMedianExists) {
+      await this.ensureDieMasterChangeOverMedianField();
+    }
     const body: Record<string, unknown> = {
       __metadata: { type: await this.itemType(LISTS.dieMaster) },
     };
@@ -1321,6 +1388,8 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (patch.maintenanceLevel !== undefined)
       body[meta.keys.maintenanceLevel] = patch.maintenanceLevel;
     if (patch.notes !== undefined) body[meta.keys.notes] = patch.notes;
+    if (patch.changeOverMedian !== undefined)
+      body[meta.keys.changeOverMedian] = patch.changeOverMedian;
     await this.post(`${this.listUrl(LISTS.dieMaster)}/items(${id})`, body, '*');
     // Keep the read cache coherent so a re-mount shows the new state
     // without a hard reload.
@@ -1333,6 +1402,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         if (patch.availableDate !== undefined) row.availableDate = patch.availableDate;
         if (patch.maintenanceLevel !== undefined) row.maintenanceLevel = patch.maintenanceLevel;
         if (patch.notes !== undefined) row.notes = patch.notes;
+        if (patch.changeOverMedian !== undefined) row.changeOverMedian = patch.changeOverMedian;
       }
     }
   }

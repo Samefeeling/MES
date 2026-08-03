@@ -31,9 +31,11 @@ export interface SetupStd {
   insertStdHrs: number;
 }
 
-/** Standard changeover allowance for a slice: each D/C/I *occurrence*
- *  (maximal run of consecutive slots, as counted by countSetupEvents)
- *  earns its standard duration. */
+/** Standard changeover allowance for a slice: each D/C/I *changeover*
+ *  (one per order, as counted by countSetupEvents) earns its standard
+ *  duration. Per order, not per run of slots — a die change the sheet
+ *  recorded in two pieces is one changeover with one 4 h allowance, not
+ *  two with eight. */
 export function setupStandardHours(counts: {
   dieChanges: number;
   colorChanges: number;

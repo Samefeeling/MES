@@ -98,12 +98,27 @@ describe('expectedShiftOutput (planning StartDate+StartHour × Standard hour)', 
     expect(e.pieces).toBe(400); // (8 − 4) / 0.01
   });
 
-  it('two die-change occurrences earn two allowances', () => {
+  it('one order’s die change earns ONE allowance even when logged in two pieces', () => {
+    // The floor rule: a changeover belongs to the order it sets the press
+    // up for. Granting 2 × 4 h here would let an 8-hour die change pass as
+    // within standard, and would wipe out the shift's expected output.
     const recs = [
       ...Array.from({ length: 4 }, (_, i) => slot(i, 'D')),
       ...running('J1', 4, 4),
       ...Array.from({ length: 4 }, (_, i) => slot(8 + i, 'D')),
       ...running('J1', 12, 4),
+    ];
+    const e = expectedShiftOutput(SID, recs, ct, new Map());
+    expect(e.stdSetupHrs).toBe(4);
+    expect(e.pieces).toBe(400); // (8 − 4) / 0.01
+  });
+
+  it('two orders’ die changes earn two allowances', () => {
+    const recs = [
+      ...Array.from({ length: 4 }, (_, i) => slot(i, 'D', 'J1')),
+      ...running('J1', 4, 4),
+      ...Array.from({ length: 4 }, (_, i) => slot(8 + i, 'D', 'J2')),
+      ...running('J2', 12, 4),
     ];
     const e = expectedShiftOutput(SID, recs, ct, new Map());
     expect(e.stdSetupHrs).toBe(8);

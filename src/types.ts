@@ -104,6 +104,12 @@ export interface DieMaster {
    *  not minutes — a big mould swap is a 1-4 h job). */
   changeOverIn: number | null;
   changeOverOut: number | null;
+  /** ChangeOverMedian column — the OBSERVED median die-change duration
+   *  (hours) for this tool, imported from signed-off production by the
+   *  KPI page. The toolroom's ChangeOverIn/Out beside it are the nominal
+   *  figures; this is what the floor actually takes. null until an
+   *  import has run for a window containing this die. */
+  changeOverMedian: number | null;
   /** Expected total life (shots). */
   lifeCycle: number | null;
   /** DateStamp column — when the row was last reviewed / status changed. */
