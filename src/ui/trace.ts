@@ -1146,6 +1146,20 @@ export interface JobTraceView {
 /** Order → the machine(s) it ran on → its part number and description.
  *  Machines are listed in the order the cards appear, so a job that moved
  *  presses names both. */
+/**
+ * Good against order quantity as a whole percent, rounded AWAY from 100
+ * in both directions. 100% has to mean "exactly the order", so short of
+ * it floors (479 of 480 is 99%, not a 100% that would send the die off
+ * the press a piece early) and over it ceils (313 of 310 is 101%, not a
+ * 100% that would hide three pieces of overrun). Only good === qty is
+ * allowed to print 100.
+ */
+export function completionPct(good: number, orderQty: number): number {
+  if (good === orderQty) return 100;
+  const raw = (good / orderQty) * 100;
+  return good < orderQty ? Math.floor(raw) : Math.ceil(raw);
+}
+
 function jobTraceHeading(job: string, rows: TraceRow[]): string {
   const machines = Array.from(new Set(rows.map((r) => r.machineCode).filter(Boolean)));
   // Part identity can be blank on an early shift (e.g. a die-change-only
@@ -1158,10 +1172,8 @@ function jobTraceHeading(job: string, rows: TraceRow[]): string {
   // carries one; Good is summed across every shift and press.
   const orderQty = rows.find((r) => r.orderQty != null)?.orderQty ?? null;
   const good = rows.reduce((a, r) => a + r.good, 0);
-  // Floor, not round: 479 of 480 is 99%, and must not read "100%" at a
-  // morning meeting deciding whether the order can come off the press.
   const done = orderQty
-    ? ` <span class="trace-head-pct">${Math.floor((good / orderQty) * 100)}%</span>`
+    ? ` <span class="trace-head-pct">${completionPct(good, orderQty)}%</span>`
     : '';
   const tally = rows.length
     ? `<span class="trace-head-tally">Qty <b>${orderQty ?? '—'}</b> · Good <b class="g">${good}</b>${done}</span>`

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { renderJobTraceCards } from '../src/ui/trace';
+import { completionPct, renderJobTraceCards } from '../src/ui/trace';
 import type { PmdDataLayer } from '../src/dal';
 import { rec } from './helpers';
 
@@ -302,5 +302,25 @@ describe('renderJobTraceCards — heading', () => {
   it('still titles the popup when the job has no records', async () => {
     const { heading } = await renderJobTraceCards(stubDal([]), 'NOPE');
     expect(heading).toContain('NOPE');
+  });
+});
+
+describe('completionPct — 100% means exactly the order', () => {
+  it('only prints 100 when Good equals the order quantity', () => {
+    expect(completionPct(480, 480)).toBe(100);
+  });
+
+  it('floors when the order is short — 479 of 480 is not "done"', () => {
+    expect(completionPct(479, 480)).toBe(99);
+    expect(completionPct(9999, 10000)).toBe(99);
+    expect(completionPct(240, 480)).toBe(50);
+    expect(completionPct(0, 480)).toBe(0);
+  });
+
+  it('ceils when the order is over — 313 of 310 is 101%, not 100%', () => {
+    expect(completionPct(313, 310)).toBe(101);
+    // A single piece of overrun still has to show as over.
+    expect(completionPct(311, 310)).toBe(101);
+    expect(completionPct(620, 310)).toBe(200);
   });
 });

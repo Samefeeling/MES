@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyRejectDescriptions,
+  byCompletion,
   collectHandovers,
   isHotStampMachine,
+  lastRunAt,
   paretoRelativeBarWidth,
   rejectActionContext,
   rejectCell,
@@ -196,5 +198,78 @@ describe('KPI Reject cell — per-shift traffic light', () => {
     expect(out).toContain('RejectCode (Pareto)');
     // Zero scrap has nothing to break down: no button even with a key.
     expect(rejectCell(0, 1, 'FLOOR')).not.toContain('button');
+  });
+});
+
+describe('Order rollup — listed in the sequence the press finished them', () => {
+  const slots = (job: string, shiftId: string, from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) =>
+      rec({ jobNumber: job, shiftId, slotIndex: from + i, statusCode: 'R' }),
+    );
+
+  it('takes the end of the last worked slot as the finish time', () => {
+    // Day starts 07:00; slot 5 spans 09:30–10:00, so the order came off
+    // at 10:00 — the slot's END, not its start.
+    const t = lastRunAt(slots('J1', '2026-05-15-Day', 0, 5));
+    expect(new Date(t!).getHours()).toBe(10);
+    expect(new Date(t!).getMinutes()).toBe(0);
+  });
+
+  it('ignores slots with no status — an empty row is not a run', () => {
+    const recs = [
+      ...slots('J1', '2026-05-15-Day', 0, 1),
+      rec({ jobNumber: 'J1', shiftId: '2026-05-15-Day', slotIndex: 15, statusCode: '' }),
+    ];
+    // 08:00, the end of slot 1 — not 15:00, the end of the blank slot 15.
+    expect(new Date(lastRunAt(recs)!).getHours()).toBe(8);
+  });
+
+  it('returns null when nothing was ever worked', () => {
+    expect(lastRunAt([rec({ jobNumber: 'J1', slotIndex: 0, statusCode: '' })])).toBeNull();
+    expect(lastRunAt([])).toBeNull();
+  });
+
+  it('orders earliest finish first, whatever the output', () => {
+    const jobs = [
+      { jobNumber: 'BIG', lastRunAt: lastRunAt(slots('BIG', '2026-05-15-Night', 0, 15)) },
+      { jobNumber: 'MID', lastRunAt: lastRunAt(slots('MID', '2026-05-15-Day', 0, 3)) },
+      { jobNumber: 'SML', lastRunAt: lastRunAt(slots('SML', '2026-05-15-Afternoon', 0, 1)) },
+    ];
+    expect([...jobs].sort(byCompletion).map((j) => j.jobNumber)).toEqual(['MID', 'SML', 'BIG']);
+  });
+
+  /** Night starts 23:00 and runs past midnight, so its slots are LATER
+   *  than the same date's Day and Afternoon — a shift code compared as
+   *  text would sort "Afternoon" first and put 15:00 before 07:00. */
+  it('puts a Night order after the same day it started on', () => {
+    const night = lastRunAt(slots('N', '2026-05-15-Night', 0, 15))!;
+    const day = lastRunAt(slots('D', '2026-05-15-Day', 0, 15))!;
+    const arvo = lastRunAt(slots('A', '2026-05-15-Afternoon', 0, 15))!;
+    expect(day).toBeLessThan(arvo);
+    expect(arvo).toBeLessThan(night);
+    // …and Night genuinely lands on the next calendar day.
+    expect(new Date(night).getDate()).toBe(16);
+  });
+
+  it('sorts orders with no finish time last, in a stable job order', () => {
+    const jobs = [
+      { jobNumber: 'Z', lastRunAt: null },
+      { jobNumber: 'RAN', lastRunAt: lastRunAt(slots('RAN', '2026-05-15-Day', 0, 0)) },
+      { jobNumber: 'A', lastRunAt: null },
+    ];
+    expect([...jobs].sort(byCompletion).map((j) => j.jobNumber)).toEqual(['RAN', 'A', 'Z']);
+  });
+
+  it('breaks a same-half-hour tie by job number rather than by Map order', () => {
+    const at = lastRunAt(slots('x', '2026-05-15-Day', 0, 2));
+    const jobs = [
+      { jobNumber: 'SFM9', lastRunAt: at },
+      { jobNumber: 'SFM1', lastRunAt: at },
+    ];
+    expect([...jobs].sort(byCompletion).map((j) => j.jobNumber)).toEqual(['SFM1', 'SFM9']);
+    expect([...jobs].reverse().sort(byCompletion).map((j) => j.jobNumber)).toEqual([
+      'SFM1',
+      'SFM9',
+    ]);
   });
 });

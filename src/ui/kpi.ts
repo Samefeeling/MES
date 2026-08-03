@@ -18,7 +18,15 @@ import {
   setupJudgement,
   setupStandardHours,
 } from '../core/standards';
-import { currentShift, dateKey, parseShiftId, previousShift, shiftBounds, SHIFTS } from '../core/shifts';
+import {
+  currentShift,
+  dateKey,
+  parseShiftId,
+  previousShift,
+  shiftBounds,
+  slotTimeRange,
+  SHIFTS,
+} from '../core/shifts';
 import { closeModal, escapeHtml, openModal } from './modal';
 import {
   renderHoursOeeChart,
@@ -158,6 +166,9 @@ interface JobAgg {
   partDescShort: string;
   color: ColorTag;
   agg: ShiftAgg;
+  /** Epoch ms the order last came off the press inside the window; null
+   *  when it has no slot with a status. Orders are listed by this. */
+  lastRunAt: number | null;
 }
 
 interface ColorTag {
@@ -521,6 +532,58 @@ function firstTwoWords(s: string): string {
   return words.slice(0, 2).join(' ');
 }
 
+/**
+ * When an order last ran in the window: the end of the latest half-hour
+ * slot it has a status in, as epoch ms. null when none of its records
+ * carries a status (placeholder rows only), which is not the same as
+ * "ran at time zero" and must not sort as if it were.
+ *
+ * Slot end rather than slot start — a job that occupies 14:00–14:30 came
+ * off the press at 14:30, and that is the moment being ordered by.
+ */
+export function lastRunAt(recs: ProductionRecord[]): number | null {
+  let last: number | null = null;
+  for (const r of recs) {
+    if (!r.statusCode) continue;
+    const end = slotTimeRange(r.shiftId, r.slotIndex)?.end.getTime();
+    if (end != null && (last === null || end > last)) last = end;
+  }
+  return last;
+}
+
+/**
+ * Orders in the sequence the floor finished them, earliest first — the
+ * order a supervisor walks the line in, so the list reads like the day
+ * rather than like a leaderboard. Ranking by Output instead (as this
+ * used to) interleaves Monday and Friday by size, which says nothing
+ * about what happened when.
+ *
+ * An order with no known finish time sorts last: "still unknown" belongs
+ * after everything that did come off. Job number breaks ties so two
+ * orders ending in the same half-hour keep a stable, repeatable order.
+ */
+export function byCompletion(
+  a: { lastRunAt: number | null; jobNumber: string },
+  b: { lastRunAt: number | null; jobNumber: string },
+): number {
+  const ta = a.lastRunAt ?? Number.POSITIVE_INFINITY;
+  const tb = b.lastRunAt ?? Number.POSITIVE_INFINITY;
+  // Guard the compare: Infinity - Infinity is NaN, which would leave the
+  // unfinished orders in whatever order the Map happened to yield.
+  if (ta !== tb) return ta - tb;
+  return a.jobNumber < b.jobNumber ? -1 : a.jobNumber > b.jobNumber ? 1 : 0;
+}
+
+/** "02 Aug 14:30" — the finish time spelled onto the row's tooltip so the
+ *  list's sequence is explicable without opening anything. */
+function finishedLabel(t: number | null): string {
+  if (t === null) return 'no completed slot in this window';
+  const d = new Date(t);
+  return `finished ${d.toLocaleDateString('en-AU', { day: '2-digit', month: 'short' })} ${String(
+    d.getHours(),
+  ).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 /** Add a record's per-code reject quantities into a running tally. Reads
  *  the `rejects` JSON ({"D01":3,…}); falls back to the flat rejectCount
  *  under an "Unspecified" bucket when the JSON is absent/unparseable so
@@ -806,9 +869,10 @@ async function compute(now = new Date()): Promise<void> {
             partDescShort: firstTwoWords(desc),
             color: colorForJob(partNumByJob.get(jobNumber) ?? '', desc, dieColors),
             agg: toAgg(aggregate(recs)),
+            lastRunAt: lastRunAt(recs),
           };
         })
-        .sort((a, b2) => b2.agg.output - a.agg.output);
+        .sort(byCompletion);
     }
     const total = toAgg(aggregate(all));
     // Machine total = Σ of its shift aggs' expectations / standards.
@@ -823,7 +887,9 @@ async function compute(now = new Date()): Promise<void> {
 
     // Per-Job# rollup across every shift in the period. The supervisor
     // uses this to answer "how is each order doing on 1600T over the
-    // week?" without scanning three shift sub-tables.
+    // week?" without scanning three shift sub-tables. Listed in the
+    // sequence the press finished them, so the rollup reads down the
+    // week the way the machine lived it.
     const allByJob = new Map<string, ProductionRecord[]>();
     for (const r of all) {
       if (!r.jobNumber) continue;
@@ -839,9 +905,10 @@ async function compute(now = new Date()): Promise<void> {
           partDescShort: firstTwoWords(desc),
           color: colorForJob(partNumByJob.get(jobNumber) ?? '', desc, dieColors),
           agg: toAgg(aggregate(recs)),
+          lastRunAt: lastRunAt(recs),
         };
       })
-      .sort((a, b2) => b2.agg.output - a.agg.output);
+      .sort(byCompletion);
 
     // Schedule Adherence was retired here — the Output "vs Plan" column
     // now carries plan attainment, judged against the simulated planned-
@@ -1360,7 +1427,7 @@ function render(): void {
               .map((j) => {
                 const fullDesc = `${j.jobNumber}${
                   j.partDescShort ? ' — ' + j.partDescShort : ''
-                } (period total)`;
+                } (period total) · ${finishedLabel(j.lastRunAt)}`;
                 return `<tr class="kpi-job kpi-order-total">
                   ${jobNameTh(j.jobNumber, j.partDescShort, fullDesc)}
                   ${colorCell(j.color)}
@@ -1395,7 +1462,7 @@ function render(): void {
             .map((j) => {
               const fullDesc = `${j.jobNumber}${
                 j.partDescShort ? ' — ' + j.partDescShort : ''
-              }`;
+              } · ${finishedLabel(j.lastRunAt)}`;
               return `<tr class="kpi-job">
                 ${jobNameTh(j.jobNumber, j.partDescShort, fullDesc)}
                 ${colorCell(j.color)}
