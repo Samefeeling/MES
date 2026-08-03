@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { goodForRecords, syntheticOrderFromRecord } from '../src/ui/trace';
+import {
+  goodForRecords,
+  groupByDay,
+  renderCard,
+  syntheticOrderFromRecord,
+  type TraceRow,
+} from '../src/ui/trace';
 import {
   jobLeftPiecesFor,
   shiftTargetFor,
@@ -120,5 +126,125 @@ describe('syntheticOrderFromRecord (past-shift order rebuilt from PMD_Production
     const canon = rec({ jobNumber: 'J1', slotIndex: 0, statusCode: 'R' });
     expect(syntheticOrderFromRecord(canon, 'J1')).toBeNull();
     expect(syntheticOrderFromRecord(undefined, 'J1')).toBeNull();
+  });
+});
+
+describe('groupByDay (the unit a day card draws)', () => {
+  const row = (over: Partial<TraceRow>): TraceRow =>
+    ({
+      key: '',
+      machineCode: '125T',
+      shiftId: '2026-07-01-Day',
+      jobNumber: 'J1',
+      partNumber: '',
+      partDescription: '',
+      operator: '',
+      supervisor: '',
+      timeline: '·'.repeat(16),
+      countStart: null,
+      countEnd: null,
+      good: 0,
+      reject: 0,
+      orderQty: null,
+      jobLeft: null,
+      shiftTarget: null,
+      qcBySlot: [],
+      rejects: [],
+      bdSlots: [],
+      records: [],
+      ...over,
+    }) as TraceRow;
+
+  it('gathers one order-press-date into a single card', () => {
+    const groups = groupByDay([
+      row({ shiftId: '2026-07-01-Day' }),
+      row({ shiftId: '2026-07-01-Afternoon' }),
+      row({ shiftId: '2026-07-01-Night' }),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ jobNumber: 'J1', machineCode: '125T', date: '2026-07-01' });
+    expect(groups[0].rows).toHaveLength(3);
+  });
+
+  it('splits two orders that shared a press on the same day', () => {
+    // A job finishing and the next starting in the same shift: merged
+    // into one card, their timelines would overwrite each other in the
+    // same three blocks.
+    const groups = groupByDay([
+      row({ jobNumber: 'J1', shiftId: '2026-07-01-Day' }),
+      row({ jobNumber: 'J2', shiftId: '2026-07-01-Day' }),
+    ]);
+    expect(groups.map((g) => g.jobNumber)).toEqual(['J1', 'J2']);
+  });
+
+  it('splits by press and by date', () => {
+    const groups = groupByDay([
+      row({ shiftId: '2026-07-01-Day' }),
+      row({ shiftId: '2026-07-02-Day' }),
+      row({ machineCode: '550T', shiftId: '2026-07-01-Day' }),
+    ]);
+    expect(groups.map((g) => `${g.machineCode}|${g.date}`)).toEqual([
+      '125T|2026-07-01',
+      '125T|2026-07-02',
+      '550T|2026-07-01',
+    ]);
+  });
+
+  it('keeps the caller’s order — the sort decides which way time runs', () => {
+    const groups = groupByDay([
+      row({ shiftId: '2026-07-03-Day' }),
+      row({ shiftId: '2026-07-01-Day' }),
+    ]);
+    expect(groups.map((g) => g.date)).toEqual(['2026-07-03', '2026-07-01']);
+  });
+});
+
+describe('Live Status card for a press with no order', () => {
+  const live = (over: Partial<TraceRow>): TraceRow =>
+    ({
+      key: '',
+      machineCode: '1300T',
+      shiftId: '2026-07-01-Day',
+      jobNumber: '',
+      partNumber: '',
+      partDescription: 'No production logged this shift',
+      operator: '',
+      supervisor: '',
+      timeline: '·'.repeat(16),
+      countStart: null,
+      countEnd: null,
+      good: 0,
+      reject: 0,
+      orderQty: null,
+      jobLeft: null,
+      shiftTarget: null,
+      qcBySlot: Array.from({ length: 16 }, () => ''),
+      rejects: [],
+      bdSlots: [],
+      records: [],
+      idle: true,
+      ...over,
+    }) as TraceRow;
+
+  it('collapses to one line: machine, (no job), Idle', () => {
+    const html = renderCard(live({}));
+    expect(html).toContain('trace-card-slim');
+    expect(html).toContain('>1300T<');
+    expect(html).toContain('(no job)');
+    expect(html).toContain('>Idle<');
+    // Nothing else is known about it — no counts, no grids, no operator.
+    expect(html).not.toContain('trace-timeline');
+    expect(html).not.toContain('trace-qc-row');
+    expect(html).not.toContain('trace-card-totals');
+  });
+
+  it('still draws the full card for a press that has an order', () => {
+    const html = renderCard(
+      live({ jobNumber: 'J1', idle: false, timeline: 'R'.repeat(16), good: 400 }),
+    );
+    expect(html).not.toContain('trace-card-slim');
+    expect(html).toContain('trace-timeline');
+    expect(html).toContain('trace-card-totals');
+    expect(html).toContain('>J1<');
   });
 });

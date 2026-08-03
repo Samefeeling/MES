@@ -185,9 +185,14 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .live-meta{font-size:13px;color:var(--mu);font-weight:600;font-variant-numeric:tabular-nums}
 .trace-tabs{display:flex;gap:8px;margin-bottom:12px}
 .trace-tabs .shift-btn{min-width:180px}
-.trace-idle{display:inline-block;padding:2px 10px;border-radius:999px;background:#e2e8f0;color:#475569;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px}
 .trace-card.is-idle{background:#f8fafc;border-style:dashed}
 .trace-card.is-idle .trace-card-head b{color:#94a3b8}
+/* A press with no order: one line — machine, "(no job)", Idle. Nothing
+   else is known about it, and the running presses are what the board is
+   for, so an idle one gets a row, not a card. */
+.trace-card-slim{padding-top:6px;padding-bottom:6px;gap:0}
+.trace-card-slim .trace-card-head{align-items:center}
+.trace-card-slim .trace-activity{padding:2px 10px;font-size:11px;box-shadow:none}
 /* Live cards: machine chip is the identity colour, activity badge + rail
    are the live activity colour (green = running, orange = changeover,
    red = breakdown, slate = idle). Subtle background tint of the same

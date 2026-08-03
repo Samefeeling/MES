@@ -43,7 +43,7 @@ interface TraceState {
   errors: string[];
 }
 
-interface TraceRow {
+export interface TraceRow {
   key: string; // machineCode|shiftId|jobNumber
   machineCode: string;
   shiftId: string;
@@ -404,7 +404,25 @@ function renderSearchResults(): string {
   if (S!.results.length === 0) {
     return `<div class="trace-empty">No production records match this query.</div>`;
   }
-  return `<div class="trace-results">${S!.results.map(renderCard).join('')}</div>`;
+  // Same day cards the KPI job popup draws — a search result and a
+  // drill-down onto the same order used to be two different pictures of
+  // it. Results can mix orders and presses, so each card names its own
+  // (the popup gets that from its title instead).
+  const cards = groupByDay(S!.results).map((g) => {
+    const part = g.rows.find((r) => r.partNumber || r.partDescription);
+    const partMeta = part?.partNumber
+      ? `<span class="trace-meta">${escapeHtml(part.partNumber)}${
+          part.partDescription ? ' — ' + escapeHtml(part.partDescription) : ''
+        }</span>`
+      : '';
+    return renderDayCard(
+      g.date,
+      `<span class="trace-job">${escapeHtml(g.jobNumber || '(no job)')}</span>` +
+        `<span class="trace-meta">${escapeHtml(g.machineCode)}</span>${partMeta}`,
+      g.rows,
+    );
+  });
+  return `<div class="trace-results">${cards.join('')}</div>`;
 }
 
 /**
@@ -498,40 +516,50 @@ function breakdownLines(r: TraceRow): string {
     .join('')}</ul></div>`;
 }
 
-function renderCard(r: TraceRow): string {
+/**
+ * One press on the Live Status board. Machine name in plain text on the
+ * left for identity, activity badge beside it so the supervisor can scan
+ * the floor and see at a glance which line is running, which is in
+ * changeover, which is down. The rail + tint carry the colour signal — a
+ * dedicated machine swatch was distracting on top.
+ *
+ * Live only. Job Search and the KPI popup both draw day cards
+ * (renderDayCard); this used to serve all three with a second layout
+ * behind an `isLive` flag, which is exactly how the two order views
+ * drifted apart.
+ */
+export function renderCard(r: TraceRow): string {
+  const activity = activityFor(r);
+  const activityCol = ACTIVITY_COLOURS[activity];
+  const machineName = `<b class="trace-machine">${escapeHtml(r.machineCode)}</b>`;
+  const activityBadge = `<span class="trace-activity" style="background:${activityCol}">${escapeHtml(
+    ACTIVITY_LABELS[activity],
+  )}</span>`;
+  // A press with no order on it has nothing to show: no counts, no
+  // operator, and sixteen empty slots that say only what "(no job)"
+  // already said. Collapse it to the one line that IS the news — which
+  // press is sitting idle — so the presses that ARE running aren't
+  // pushed off the screen by the ones that aren't.
+  if (!r.jobNumber) {
+    return `<div class="trace-card is-idle is-live trace-card-slim act-${activity}" style="--mc:${activityCol}">
+      <div class="trace-card-head">
+        ${machineName}<span class="trace-job">(no job)</span>${activityBadge}
+      </div>
+    </div>`;
+  }
   const grids = traceGrids(r);
   const dateLabel = r.shiftId.slice(0, 10);
   const shiftLabel = r.shiftId.slice(11);
   const bdLines = breakdownLines(r);
-  // Live view: machine name in plain text on the left for identity,
-  // activity badge on the right so the supervisor can scan the floor
-  // and see at a glance which line is running, which is in
-  // changeover, which is down. The rail + tint carry the colour
-  // signal — a dedicated machine swatch was distracting on top.
-  // Search view keeps the older job-first layout. `S` is null when a card
-  // is rendered outside the Trace tab (the KPI job-number popup), which is
-  // the search layout too — so default isLive to false there.
-  const isLive = S?.view === 'live';
-  const activity = activityFor(r);
-  const activityCol = ACTIVITY_COLOURS[activity];
-  const machineName = `<b class="trace-machine">${escapeHtml(r.machineCode)}</b>`;
-  const activityBadge = isLive
-    ? `<span class="trace-activity" style="background:${activityCol}">${escapeHtml(ACTIVITY_LABELS[activity])}</span>`
-    : r.idle
-      ? `<span class="trace-idle">Idle</span>`
-      : '';
   // Co-run badge: this order shares its die with another running on the
   // same press at the same time (both flagged CoRun=Yes).
   const coRunBadge = r.coRun
     ? `<span class="trace-corun" title="Co-running with another order on the same die">⛓ Co-run</span>`
     : '';
-  const headline = isLive
-    ? `${machineName}<span class="trace-job">${escapeHtml(r.jobNumber || '(no job)')}</span>${activityBadge}${coRunBadge}<span class="trace-meta">${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`
-    : `<b>${escapeHtml(r.jobNumber || '(no job)')}</b>${activityBadge}${coRunBadge}<span class="trace-meta">${escapeHtml(r.machineCode)} · ${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`;
 
-  return `<div class="trace-card${r.idle ? ' is-idle' : ''}${isLive ? ' is-live' : ''} act-${activity}" style="${isLive ? `--mc:${activityCol}` : ''}">
+  return `<div class="trace-card is-live act-${activity}" style="--mc:${activityCol}">
     <div class="trace-card-head">
-      ${headline}
+      ${machineName}<span class="trace-job">${escapeHtml(r.jobNumber)}</span>${activityBadge}${coRunBadge}<span class="trace-meta">${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>
       <span class="trace-meta">${escapeHtml(r.partNumber)}${r.partDescription ? ' — ' + escapeHtml(r.partDescription) : ''}</span>
     </div>
     <div class="trace-card-totals">
@@ -550,12 +578,41 @@ function renderCard(r: TraceRow): string {
   </div>`;
 }
 
+export interface DayGroup {
+  jobNumber: string;
+  machineCode: string;
+  date: string;
+  rows: TraceRow[];
+}
+
+/**
+ * Split rows into the unit a day card draws: one order, on one press,
+ * on one date. Insertion order follows the caller's sort, so the cards
+ * come out in whatever order the rows were given in.
+ *
+ * The order has to be part of the key. A press that finished one job and
+ * started the next in the same shift would otherwise have both collapsed
+ * into a single card, where the two orders' timelines would overwrite
+ * each other in the same three blocks.
+ */
+export function groupByDay(rows: TraceRow[]): DayGroup[] {
+  const byDay = new Map<string, DayGroup>();
+  for (const r of rows) {
+    const date = r.shiftId.slice(0, 10);
+    const key = `${r.jobNumber}|${r.machineCode}|${date}`;
+    const g = byDay.get(key) ?? { jobNumber: r.jobNumber, machineCode: r.machineCode, date, rows: [] };
+    g.rows.push(r);
+    byDay.set(key, g);
+  }
+  return Array.from(byDay.values());
+}
+
 /**
  * A whole day for one press: Day | Afternoon | Night side-by-side in one
  * row, so a multi-day job reads day-by-day instead of as a long stack of
  * per-shift cards. Each block carries its own QC / status / reject grids,
- * a compact header (operator, Good, Reject, Shift Target, Job Left) and
- * any breakdowns logged in it.
+ * a compact header (Good, Reject, Shift Target, Job Left) and any
+ * breakdowns logged in it.
  *
  * ALL THREE blocks are always rendered, in the same three positions,
  * whether or not the order ran them — a day that only ran Night shows an
@@ -563,16 +620,13 @@ function renderCard(r: TraceRow): string {
  * row. At a morning meeting the eye finds the problem shift by WHERE it
  * sits on the row; that only works if the position never moves.
  *
- * The card is headed by its date alone — order, press and part identify
- * the whole popup from its title, so repeating them per card only pushed
- * the date, the one thing that changes, off to the side.
+ * The date leads the heading because it is the one thing that changes
+ * down the page. `headExtra` is whatever else the reader needs to place
+ * the card: nothing in the KPI popup (its title already names the order,
+ * press and part), the order and press in Job Search, where results can
+ * mix both.
  */
-function renderJobDayCard(
-  machineCode: string,
-  date: string,
-  rows: TraceRow[],
-  showMachine = false,
-): string {
+function renderDayCard(date: string, headExtra: string, rows: TraceRow[]): string {
   const byCode = new Map(rows.map((r) => [r.shiftId.slice(11), r]));
   const blocks = SHIFTS.map((s) => {
     const r = byCode.get(s.code);
@@ -610,7 +664,7 @@ function renderJobDayCard(
   return `<div class="trace-card trace-day-card">
     <div class="trace-card-head">
       <b>${escapeHtml(date)}</b>
-      ${showMachine ? `<span class="trace-meta">${escapeHtml(machineCode)}</span>` : ''}
+      ${headExtra}
     </div>
     <div class="trace-day-shifts">${blocks}</div>
   </div>`;
@@ -1155,20 +1209,17 @@ export async function renderJobTraceCards(
   const rows = buildTraceRowsFor(all, planByJob, jobGoodTotals);
   rows.sort(chronologically);
   const heading = jobTraceHeading(job, rows);
-  const byDay = new Map<string, TraceRow[]>();
-  for (const r of rows) {
-    const key = `${r.machineCode}|${r.shiftId.slice(0, 10)}`;
-    (byDay.get(key) ?? byDay.set(key, []).get(key)!).push(r);
-  }
   // The heading already names the press; repeating it on every card is
   // noise — unless the job moved between presses, where the date alone
   // wouldn't say which one a card belongs to.
   const showMachine = new Set(rows.map((r) => r.machineCode)).size > 1;
-  // Map insertion order already follows the machine→oldest-date sort.
-  const cards = Array.from(byDay.entries()).map(([key, dayRows]) => {
-    const [machineCode, date] = key.split('|');
-    return renderJobDayCard(machineCode, date, dayRows, showMachine);
-  });
+  const cards = groupByDay(rows).map((g) =>
+    renderDayCard(
+      g.date,
+      showMachine ? `<span class="trace-meta">${escapeHtml(g.machineCode)}</span>` : '',
+      g.rows,
+    ),
+  );
   return { heading, html: `<div class="trace-results">${cards.join('')}</div>` };
 }
 
@@ -1233,19 +1284,11 @@ async function doSearch(): Promise<void> {
     if (version !== searchLoadVersion || S !== state || state.view !== 'search') return;
 
   const rows = buildTraceRowsFor(filtered, planByJob, jobGoodTotals);
-  // Group by machine, then newest shift first within each machine, so a
-  // multi-machine / multi-day search reads as one press's timeline at a
-  // time (D01 newest→oldest, then D02, …) instead of the whole floor
-  // interleaved by date.
-  rows.sort((a, b) =>
-    a.machineCode !== b.machineCode
-      ? a.machineCode < b.machineCode
-        ? -1
-        : 1
-      : a.shiftId < b.shiftId
-        ? 1
-        : -1,
-  );
+  // Group by machine, then run each press's days forwards — the same
+  // order the KPI popup uses, so the two views of one order can't
+  // disagree about which way time runs. (This used to be newest-first
+  // here and oldest-first there.)
+  rows.sort(chronologically);
     state.results = rows;
     state.searched = true;
     state.errors = [];
