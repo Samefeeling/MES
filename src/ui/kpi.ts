@@ -29,11 +29,19 @@ import {
 } from '../core/shifts';
 import { closeModal, escapeHtml, openModal } from './modal';
 import {
+  renderBoxPlotChart,
   renderHoursOeeChart,
   renderOutputByShiftChart,
   renderParetoByShiftChart,
   renderParetoChart,
+  type BoxSeries,
 } from './charts';
+import {
+  collectChangeoverEvents,
+  CHANGEOVER_LABELS,
+  type ChangeoverEvent,
+  type ChangeoverKind,
+} from '../core/changeover';
 import { parseHandover } from '../core/handover';
 import { STATUS_MAP } from '../core/status';
 import { isSupervisor } from './supervisor-auth';
@@ -311,6 +319,9 @@ interface KpiState {
   /** Reject code → human description (PMD_RejectCategories, e.g. D01 →
    *  "ShortShot"), so the Reject drill spells the codes out. */
   rejectDescByCode: Map<string, string>;
+  /** Every D/C/I changeover and B breakdown in the window, floor-wide.
+   *  Feeds the supervisor-only duration box plot. */
+  changeoverEvents: ChangeoverEvent[];
   /** Failed reads for the current computation. Values from successful
    *  sources still render, but the banner stops missing rows being read as
    *  real zero production/reject/downtime. */
@@ -572,6 +583,33 @@ export function byCompletion(
   // unfinished orders in whatever order the Map happened to yield.
   if (ta !== tb) return ta - tb;
   return a.jobNumber < b.jobNumber ? -1 : a.jobNumber > b.jobNumber ? 1 : 0;
+}
+
+/**
+ * The four boxes, in the order they cost the floor: die change, colour
+ * change, insert change, breakdown. Colours come from the status palette
+ * so the chart speaks the same language as the operator timeline, and
+ * each point carries its press + order so an outlier dot can name itself.
+ */
+export function changeoverBoxSeries(events: ChangeoverEvent[]): BoxSeries[] {
+  const spec: Array<{ kind: ChangeoverKind; color: string; std: number | null }> = [
+    { kind: 'die', color: '#ea580c', std: DIE_CHANGE_STD_HRS },
+    { kind: 'color', color: '#d97706', std: COLOR_CHANGE_STD_HRS },
+    { kind: 'insert', color: '#c2410c', std: INSERT_CHANGE_STD_HRS },
+    // A breakdown has no allowance — the floor doesn't budget for one.
+    { kind: 'down', color: '#dc2626', std: null },
+  ];
+  return spec.map((s) => ({
+    label: CHANGEOVER_LABELS[s.kind],
+    color: s.color,
+    std: s.std,
+    points: events
+      .filter((e) => e.kind === s.kind)
+      .map((e) => ({
+        value: e.hours,
+        label: `${e.machineCode}${e.jobNumber ? ' · ' + e.jobNumber : ''} · ${e.shiftId}`,
+      })),
+  }));
 }
 
 /** "02 Aug 14:30" — the finish time spelled onto the row's tooltip so the
@@ -924,6 +962,13 @@ async function compute(now = new Date()): Promise<void> {
   });
 
   S!.rows = rows;
+
+  // Every changeover and breakdown in the window, floor-wide, for the
+  // supervisor's box plot. Collected across all presses at once so the
+  // distribution answers "how long does a die change take HERE", not
+  // "on this one machine" — but each event keeps its press and order so
+  // an outlier can be named.
+  S!.changeoverEvents = collectChangeoverEvents(perMachineProd.flat());
 
   // Floor-wide totals split by PMD_ProductDieColor.Category. Resolution
   // chain per record: JobNum → Part # (partNumByJob, fully populated by
@@ -1551,6 +1596,22 @@ function render(): void {
           ${renderParetoLegend(S!.downtimePareto.floor, 'h')}
         </div>`
     : '';
+  // Distribution of how long each kind of stoppage actually takes.
+  // Supervisor-only: it is a "why are we slow" chart, and it names the
+  // press and order behind every outlier — the conversation an operator
+  // should be having with their supervisor, not reading off a board.
+  const stoppageChart = isSupervisor() && S!.changeoverEvents.length
+    ? `<div class="kpi-chart kpi-chart-box">
+          <h4>Changeover &amp; breakdown duration spread 🔒 — box = middle half, line = median, dots = outliers (hover names the press and order)</h4>
+          ${renderBoxPlotChart(changeoverBoxSeries(S!.changeoverEvents))}
+          <div class="kpi-chart-note">
+            One D / C / I per order counts as a single changeover however
+            many pieces the sheet recorded it in; each unbroken run of B is
+            one breakdown. Dashed “std” = the floor allowance (die 4 h ·
+            colour 0.5 h · insert 0.5 h); breakdowns have none.
+          </div>
+        </div>`
+    : '';
   const charts = S!.loading || S!.chartBuckets.length === 0
     ? ''
     : `<div class="kpi-charts">
@@ -1564,6 +1625,7 @@ function render(): void {
         </div>
         ${rejectChart}
         ${downtimeChart}
+        ${stoppageChart}
       </div>`;
 
   // Headline stat tiles — the numbers a daily production meeting opens
@@ -2138,6 +2200,7 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     rejectPareto: { floor: [], byMachine: new Map() },
     downtimePareto: { floor: [], byMachine: new Map() },
     rejectDescByCode: new Map(),
+    changeoverEvents: [],
     errors: [],
     catalogErrors: [],
   };

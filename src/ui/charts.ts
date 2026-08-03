@@ -2,6 +2,8 @@
 // Stacks Good (production) + Reject for each bucket; outlined like a Pareto
 // to make scrap visible at a glance.
 
+import { boxStats } from '../core/boxplot';
+
 export interface BarBucket {
   label: string;
   good: number;
@@ -340,4 +342,180 @@ export function renderHoursOeeChart(
     overlayColor: '#1d4ed8',
     overlayAsPercent: true,
   });
+}
+
+// =========================================================================
+// Box plot — how long each kind of stoppage actually takes.
+// =========================================================================
+
+/** One event on a box: its duration, and enough identity to name it when
+ *  it turns out to be the outlier worth asking about. */
+export interface BoxPoint {
+  value: number;
+  label: string;
+}
+
+export interface BoxSeries {
+  label: string;
+  color: string;
+  points: BoxPoint[];
+  /** Standard allowance, drawn as a dashed reference across the box.
+   *  null where the floor has no standard (a breakdown has none). */
+  std?: number | null;
+}
+
+/** Hour-friendly axis top. The shared niceCeil floors at 10, which would
+ *  squash a 3-hour chart into the bottom third. */
+function niceHours(n: number): number {
+  if (n <= 0) return 1;
+  for (const s of [0.5, 1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48]) {
+    if (n <= s) return s;
+  }
+  return Math.ceil(n / 24) * 24;
+}
+
+const h1 = (v: number): string => `${v.toFixed(1)} h`;
+
+/**
+ * One box per category on a SHARED hours axis — the comparison is the
+ * point: a die change costing eight times a colour change is the finding,
+ * and scaling each box to its own range would hide exactly that. Small
+ * categories stay legible via a minimum box height, the median printed
+ * above each box, and each category's standard drawn where it has one.
+ */
+export function renderBoxPlotChart(series: BoxSeries[]): string {
+  const PL = 44, PR = 14, PT = 26, PB = 46;
+  const HB = 260;
+  const n = Math.max(series.length, 1);
+  // The viewBox scales to fit BOTH width and height, so its aspect ratio
+  // decides how much of the card actually gets used: too narrow a box and
+  // the fixed 260px height letterboxes the chart into the middle third.
+  // ~160px a category matches the half-width KPI card's proportions.
+  const width = Math.max(680, PL + PR + n * 160);
+  const innerH = HB - PT - PB;
+  const innerW = width - PL - PR;
+  const slotW = innerW / n;
+  const bw = Math.min(58, slotW * 0.5);
+
+  const stats = series.map((s) => boxStats(s.points.map((p) => p.value)));
+  const top = niceHours(
+    Math.max(
+      0.5,
+      ...stats.map((st) => st?.max ?? 0),
+      ...series.map((s) => s.std ?? 0),
+    ),
+  );
+  const y = (v: number): number => PT + innerH - (Math.min(v, top) / top) * innerH;
+
+  let grid = '';
+  for (let g = 0; g <= 4; g++) {
+    const gy = PT + innerH - (g / 4) * innerH;
+    grid += `<line x1="${PL}" y1="${gy.toFixed(1)}" x2="${(width - PR).toFixed(1)}" y2="${gy.toFixed(
+      1,
+    )}" stroke="#e2e8f0" stroke-width="1"/>`;
+    grid += `<text x="${PL - 6}" y="${(gy + 3).toFixed(
+      1,
+    )}" font-size="10" fill="#64748b" text-anchor="end">${+((g / 4) * top).toFixed(1)}</text>`;
+  }
+  grid += `<text x="10" y="${PT - 12}" font-size="10" fill="#64748b">hours</text>`;
+
+  let body = '';
+  for (let i = 0; i < series.length; i++) {
+    const s = series[i];
+    const st = stats[i];
+    const cx = PL + i * slotW + slotW / 2;
+    const x = cx - bw / 2;
+
+    if (!st) {
+      body += `<text x="${cx.toFixed(1)}" y="${(PT + innerH / 2).toFixed(
+        1,
+      )}" font-size="11" fill="#94a3b8" text-anchor="middle">no events</text>`;
+      body += `<text x="${cx.toFixed(1)}" y="${HB - 26}" font-size="11" fill="#475569" text-anchor="middle">${escAttr(
+        s.label,
+      )}</text>`;
+      continue;
+    }
+
+    const yq1 = y(st.q1);
+    const yq3 = y(st.q3);
+    // A category where every event took the same time has a zero-height
+    // box; draw it as a 3px bar so it reads as "no spread", not "absent".
+    const boxH = Math.max(3, yq1 - yq3);
+    const yBox = Math.min(yq3, yq1 - boxH);
+
+    const tip = [
+      `${s.label} — ${st.n} event${st.n === 1 ? '' : 's'}`,
+      `median ${h1(st.median)} · mean ${h1(st.mean)}`,
+      `middle half ${h1(st.q1)} – ${h1(st.q3)}`,
+      `range ${h1(st.min)} – ${h1(st.max)}`,
+      s.std != null ? `standard ${h1(s.std)}` : '',
+      st.outliers.length ? `${st.outliers.length} beyond 1.5×IQR` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    body += `<g><title>${escAttr(tip)}</title>`;
+    // whisker spine + caps
+    body += `<line x1="${cx.toFixed(1)}" y1="${y(st.upperWhisker).toFixed(1)}" x2="${cx.toFixed(
+      1,
+    )}" y2="${y(st.lowerWhisker).toFixed(1)}" stroke="${s.color}" stroke-width="1.5"/>`;
+    for (const w of [st.upperWhisker, st.lowerWhisker]) {
+      body += `<line x1="${(cx - bw / 4).toFixed(1)}" y1="${y(w).toFixed(1)}" x2="${(
+        cx + bw / 4
+      ).toFixed(1)}" y2="${y(w).toFixed(1)}" stroke="${s.color}" stroke-width="1.5"/>`;
+    }
+    body += `<rect x="${x.toFixed(1)}" y="${yBox.toFixed(1)}" width="${bw.toFixed(
+      1,
+    )}" height="${boxH.toFixed(1)}" fill="${s.color}" fill-opacity="0.28" stroke="${
+      s.color
+    }" stroke-width="1.5" rx="2"/>`;
+    body += `<line x1="${x.toFixed(1)}" y1="${y(st.median).toFixed(1)}" x2="${(x + bw).toFixed(
+      1,
+    )}" y2="${y(st.median).toFixed(1)}" stroke="${s.color}" stroke-width="3"/>`;
+    body += `</g>`;
+
+    // Standard allowance — the line the box is meant to sit under.
+    if (s.std != null && s.std > 0) {
+      const ys = y(s.std);
+      body += `<g><title>${escAttr(`${s.label} standard ${h1(s.std)}`)}</title>`;
+      body += `<line x1="${(cx - bw / 2 - 8).toFixed(1)}" y1="${ys.toFixed(1)}" x2="${(
+        cx +
+        bw / 2 +
+        8
+      ).toFixed(
+        1,
+      )}" y2="${ys.toFixed(1)}" stroke="#1e293b" stroke-width="1.5" stroke-dasharray="4 3"/>`;
+      body += `<text x="${(cx + bw / 2 + 10).toFixed(1)}" y="${(ys + 3).toFixed(
+        1,
+      )}" font-size="9" fill="#1e293b">std</text></g>`;
+    }
+
+    // Outliers, each named — this is the actionable end of the chart.
+    const byValue = new Map<number, string[]>();
+    for (const p of s.points) {
+      if (!st.outliers.includes(p.value)) continue;
+      byValue.set(p.value, [...(byValue.get(p.value) ?? []), p.label]);
+    }
+    for (const [value, labels] of byValue) {
+      body += `<g><title>${escAttr(`${h1(value)} — ${labels.join(', ')}`)}</title><circle cx="${cx.toFixed(
+        1,
+      )}" cy="${y(value).toFixed(1)}" r="3" fill="#fff" stroke="${
+        s.color
+      }" stroke-width="1.5"/></g>`;
+    }
+
+    body += `<text x="${cx.toFixed(1)}" y="${Math.max(PT + 9, y(st.upperWhisker) - 6).toFixed(
+      1,
+    )}" font-size="10" font-weight="700" fill="#1e293b" text-anchor="middle">${st.median.toFixed(
+      1,
+    )}</text>`;
+    body += `<text x="${cx.toFixed(1)}" y="${HB - 26}" font-size="11" fill="#475569" text-anchor="middle">${escAttr(
+      s.label,
+    )}</text>`;
+    body += `<text x="${cx.toFixed(1)}" y="${HB - 13}" font-size="10" fill="#94a3b8" text-anchor="middle">n=${
+      st.n
+    }</text>`;
+  }
+
+  return `<svg viewBox="0 0 ${width} ${HB}" width="100%" height="${HB}" role="img" preserveAspectRatio="xMidYMid meet">${grid}${body}</svg>`;
 }
