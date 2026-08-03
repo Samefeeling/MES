@@ -539,10 +539,17 @@ function renderJobDayCard(
       </div>`;
     }
     const grids = traceGrids(r);
-    return `<div class="trace-day-shift">
+    // Operator and supervisor ride in the tooltip, not the header line.
+    // Names are the one item here of unbounded length ("Trong (Danny)
+    // Nguyen" against "Van Minh Ma"), so keeping them inline wrapped one
+    // block's header to two lines and not its neighbour's — which pushed
+    // that block's grids half a line down and broke the row's alignment,
+    // the whole point of the fixed three-column layout.
+    return `<div class="trace-day-shift" title="${escapeHtml(
+      `${s.label} · Operator ${r.operator || '—'} · Supervisor ${r.supervisor || '—'}`,
+    )}">
       <div class="trace-day-shift-hd">
         <b>${escapeHtml(s.code)}</b>
-        <span>Op ${escapeHtml(r.operator || '—')}</span>
         <span class="g">G ${r.good}</span>
         <span class="r">R ${r.reject}</span>
         <span>Target ${r.shiftTarget ?? '—'}</span>

@@ -767,7 +767,11 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    overflowing, and drop the wide timestamp gutter. */
 .trace-day-shift .trace-section li{flex-wrap:wrap;gap:6px;padding:4px 8px;font-size:12px}
 .trace-day-shift .trace-section .ts{min-width:0}
-.trace-day-shift-hd{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--mu);margin-bottom:3px;align-items:baseline}
+/* One line, always. A header that wraps in one block and not the next
+   pushes that block's grids down and the row stops lining up — so it is
+   nowrap with a fixed height, and a freak-long value is clipped rather
+   than allowed to cost the whole card its alignment. */
+.trace-day-shift-hd{display:flex;flex-wrap:nowrap;white-space:nowrap;gap:10px;font-size:12px;color:var(--mu);margin-bottom:3px;align-items:baseline;height:16px;overflow:hidden}
 .trace-day-shift-hd b{color:#1e3a8a;font-size:13px}
 .trace-day-shift-hd .g{color:var(--gn);font-weight:700}
 .trace-day-shift-hd .r{color:var(--rd);font-weight:700}

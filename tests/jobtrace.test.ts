@@ -93,6 +93,26 @@ describe('renderJobTraceCards — every day is a fixed Day | Afternoon | Night r
     expect(html).not.toContain('✓');
   });
 
+  it('keeps names out of the header line, where they broke the alignment', async () => {
+    const { html } = await renderJobTraceCards(
+      stubDal([
+        shift('2026-07-01-Afternoon', { operator: 'Trong (Danny) Nguyen', supervisor: 'Jeff Penn' }),
+        shift('2026-07-01-Night', { operator: 'Van Minh Ma', supervisor: 'Jeff Penn' }),
+      ]),
+      'J1',
+    );
+    const headers = Array.from(html.matchAll(/trace-day-shift-hd">([\s\S]*?)<\/div>/g)).map((m) =>
+      m[1].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
+    );
+    // Operator names are the one unbounded-length item: inline, the long
+    // one wraps its header to two lines and the short one doesn't, which
+    // pushes one block's grids out of line with its neighbour's.
+    expect(headers.every((h) => !/Nguyen|Van Minh/.test(h))).toBe(true);
+    expect(headers[1]).toMatch(/^Afternoon G \d+ R \d+ Target \S+ Left \S+$/);
+    // Still reachable, just not on the line that has to stay one line.
+    expect(html).toContain('Operator Trong (Danny) Nguyen · Supervisor Jeff Penn');
+  });
+
   it('carries the shift target and any breakdown detail into the block', async () => {
     const { html } = await renderJobTraceCards(
       stubDal([
