@@ -749,9 +749,24 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    so the order detail keeps all the vertical room. */
 .kpi-trace-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .kpi-trace-close{padding:8px 20px;font-size:14px;min-height:0}
-/* Day card: the (up to 3) shifts of one date, side-by-side in one row. */
-.trace-day-card .trace-day-shifts{display:flex;gap:12px;flex-wrap:wrap}
-.trace-day-shift{flex:1 1 300px;min-width:280px;border:1px solid var(--bd);border-radius:8px;padding:6px 8px;background:#fbfcfe}
+/* Day card: Day | Afternoon | Night of one date, side-by-side.
+   THREE FIXED COLUMNS, always — never flex. A day that only ran Night
+   must leave the first two thirds empty instead of stretching Night
+   across the row: at a morning meeting the problem shift is found by
+   where it sits, and that only works if the position never moves. The
+   16-slot grids inside are 1fr each, so they shrink with the column
+   rather than forcing it wider. */
+.trace-day-card .trace-day-shifts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:stretch}
+.trace-day-shift{min-width:0;border:1px solid var(--bd);border-radius:8px;padding:6px 8px;background:#fbfcfe}
+/* A shift this order didn't run: keeps its name so the column is still
+   labelled, greys out so the eye skips it. */
+.trace-day-shift.is-empty{background:#f8fafc;border-style:dashed;display:flex;flex-direction:column}
+.trace-day-shift.is-empty .trace-day-shift-hd b{color:#94a3b8}
+.trace-day-none{flex:1;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:12px;font-weight:700;letter-spacing:.3px;padding:6px 0}
+/* Breakdown detail inside a third-width column: wrap instead of
+   overflowing, and drop the wide timestamp gutter. */
+.trace-day-shift .trace-section li{flex-wrap:wrap;gap:6px;padding:4px 8px;font-size:12px}
+.trace-day-shift .trace-section .ts{min-width:0}
 .trace-day-shift-hd{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--mu);margin-bottom:3px;align-items:baseline}
 .trace-day-shift-hd b{color:#1e3a8a;font-size:13px}
 .trace-day-shift-hd .g{color:var(--gn);font-weight:700}

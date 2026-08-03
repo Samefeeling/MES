@@ -343,9 +343,7 @@ function renderLiveBody(): string {
     <div class="live-chips">${chip('running')}${chip('changeover')}${chip('breakdown')}${chip('idle')}</div>
     <div class="live-meta">${escapeHtml(live.shiftId)} · updated ${escapeHtml(updated)} · auto-refresh ${LIVE_POLL_MS / 1000}s</div>
   </div>`;
-  return `${head}<div class="trace-results">${S!.liveRows
-    .map((r) => renderCard(r))
-    .join('')}</div>`;
+  return `${head}<div class="trace-results">${S!.liveRows.map(renderCard).join('')}</div>`;
 }
 
 function renderSearchBody(): string {
@@ -379,7 +377,7 @@ function renderSearchResults(): string {
   if (S!.results.length === 0) {
     return `<div class="trace-empty">No production records match this query.</div>`;
   }
-  return `<div class="trace-results">${S!.results.map((r) => renderCard(r)).join('')}</div>`;
+  return `<div class="trace-results">${S!.results.map(renderCard).join('')}</div>`;
 }
 
 /**
@@ -438,29 +436,27 @@ function traceGrids(r: TraceRow): { qc: string; timeline: string; rej: string } 
   return { qc, timeline, rej };
 }
 
-/**
- * One shift as a card. `hideIdentity` is for the KPI job popup, where the
- * order, press and part are already in the modal title — there the card
- * only has to say WHEN, so it leads with the date instead of repeating
- * the job number three times down the page. The Trace tab passes false:
- * its results mix jobs and machines, so every card must name itself.
- */
-function renderCard(r: TraceRow, hideIdentity = false): string {
+/** The shift's breakdowns spelled out under its grids: when, which code,
+ *  what it was, and the Mango ticket if one was raised. */
+function breakdownLines(r: TraceRow): string {
+  if (!r.bdSlots.length) return '';
+  return `<div class="trace-section"><b>Breakdowns</b><ul>${r.bdSlots
+    .map(
+      (b) =>
+        `<li><span class="ts">${escapeHtml(slotClock(r.shiftId, b.slot))}</span> <span class="bd-code">${escapeHtml(
+          b.code,
+        )}</span> ${escapeHtml(bdLabelFor(b.code))}${
+          b.ticket ? ` · ${escapeHtml(b.ticket)}` : ''
+        }${b.note ? ` — ${escapeHtml(b.note)}` : ''}</li>`,
+    )
+    .join('')}</ul></div>`;
+}
+
+function renderCard(r: TraceRow): string {
   const grids = traceGrids(r);
   const dateLabel = r.shiftId.slice(0, 10);
   const shiftLabel = r.shiftId.slice(11);
-  const bdLines = r.bdSlots.length
-    ? `<div class="trace-section"><b>Breakdowns</b><ul>${r.bdSlots
-        .map(
-          (b) =>
-            `<li><span class="ts">${escapeHtml(slotClock(r.shiftId, b.slot))}</span> <span class="bd-code">${escapeHtml(
-              b.code,
-            )}</span> ${escapeHtml(bdLabelFor(b.code))}${
-              b.ticket ? ` · ${escapeHtml(b.ticket)}` : ''
-            }${b.note ? ` — ${escapeHtml(b.note)}` : ''}</li>`,
-        )
-        .join('')}</ul></div>`
-    : '';
+  const bdLines = breakdownLines(r);
   // Live view: machine name in plain text on the left for identity,
   // activity badge on the right so the supervisor can scan the floor
   // and see at a glance which line is running, which is in
@@ -483,22 +479,14 @@ function renderCard(r: TraceRow, hideIdentity = false): string {
   const coRunBadge = r.coRun
     ? `<span class="trace-corun" title="Co-running with another order on the same die">⛓ Co-run</span>`
     : '';
-  const headline = hideIdentity
-    ? `<b>${escapeHtml(dateLabel)}</b>${activityBadge}${coRunBadge}<span class="trace-meta">${escapeHtml(shiftLabel)}</span>`
-    : isLive
-      ? `${machineName}<span class="trace-job">${escapeHtml(r.jobNumber || '(no job)')}</span>${activityBadge}${coRunBadge}<span class="trace-meta">${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`
-      : `<b>${escapeHtml(r.jobNumber || '(no job)')}</b>${activityBadge}${coRunBadge}<span class="trace-meta">${escapeHtml(r.machineCode)} · ${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`;
+  const headline = isLive
+    ? `${machineName}<span class="trace-job">${escapeHtml(r.jobNumber || '(no job)')}</span>${activityBadge}${coRunBadge}<span class="trace-meta">${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`
+    : `<b>${escapeHtml(r.jobNumber || '(no job)')}</b>${activityBadge}${coRunBadge}<span class="trace-meta">${escapeHtml(r.machineCode)} · ${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`;
 
   return `<div class="trace-card${r.idle ? ' is-idle' : ''}${isLive ? ' is-live' : ''} act-${activity}" style="${isLive ? `--mc:${activityCol}` : ''}">
     <div class="trace-card-head">
       ${headline}
-      ${
-        hideIdentity
-          ? ''
-          : `<span class="trace-meta">${escapeHtml(r.partNumber)}${
-              r.partDescription ? ' — ' + escapeHtml(r.partDescription) : ''
-            }</span>`
-      }
+      <span class="trace-meta">${escapeHtml(r.partNumber)}${r.partDescription ? ' — ' + escapeHtml(r.partDescription) : ''}</span>
     </div>
     <div class="trace-card-totals">
       <span>Operator <b>${escapeHtml(r.operator || '—')}</b></span>
@@ -517,11 +505,18 @@ function renderCard(r: TraceRow, hideIdentity = false): string {
 }
 
 /**
- * A whole day for one press: the (up to three) shifts that ran on the
- * same date, laid out side-by-side in one row so a multi-day job reads
- * day-by-day instead of as a long stack of per-shift cards. Each shift
- * block carries its own QC / status / reject grids and a compact header
- * (operator, Good, Reject, Job Left). Shifts that didn't run are omitted.
+ * A whole day for one press: Day | Afternoon | Night side-by-side in one
+ * row, so a multi-day job reads day-by-day instead of as a long stack of
+ * per-shift cards. Each block carries its own QC / status / reject grids,
+ * a compact header (operator, Good, Reject, Shift Target, Job Left) and
+ * any breakdowns logged in it.
+ *
+ * ALL THREE blocks are always rendered, in the same three positions,
+ * whether or not the order ran them — a day that only ran Night shows an
+ * empty Day and Afternoon rather than letting Night stretch across the
+ * row. At a morning meeting the eye finds the problem shift by WHERE it
+ * sits on the row; that only works if the position never moves.
+ *
  * The card is headed by its date alone — order, press and part identify
  * the whole popup from its title, so repeating them per card only pushed
  * the date, the one thing that changes, off to the side.
@@ -535,7 +530,14 @@ function renderJobDayCard(
   const byCode = new Map(rows.map((r) => [r.shiftId.slice(11), r]));
   const blocks = SHIFTS.map((s) => {
     const r = byCode.get(s.code);
-    if (!r) return '';
+    if (!r) {
+      return `<div class="trace-day-shift is-empty" title="${escapeHtml(
+        `This order recorded no production in the ${s.label} shift on ${date}`,
+      )}">
+        <div class="trace-day-shift-hd"><b>${escapeHtml(s.code)}</b></div>
+        <div class="trace-day-none">Not run</div>
+      </div>`;
+    }
     const grids = traceGrids(r);
     return `<div class="trace-day-shift">
       <div class="trace-day-shift-hd">
@@ -543,11 +545,13 @@ function renderJobDayCard(
         <span>Op ${escapeHtml(r.operator || '—')}</span>
         <span class="g">G ${r.good}</span>
         <span class="r">R ${r.reject}</span>
+        <span>Target ${r.shiftTarget ?? '—'}</span>
         <span>Left ${r.jobLeft ?? '—'}</span>
       </div>
       ${grids.qc}
       ${grids.timeline}
       ${grids.rej}
+      ${breakdownLines(r)}
     </div>`;
   }).join('');
   return `<div class="trace-card trace-day-card">
@@ -1063,13 +1067,18 @@ function chronologically(a: TraceRow, b: TraceRow): number {
 }
 
 /**
- * Render the Trace detail card(s) for a single job as standalone HTML —
+ * Render the Trace detail cards for a single job as standalone HTML —
  * used by the KPI table's job-number popup. Loads the job's full
  * signed-off history through the passed DAL (works even if the Trace tab
- * was never opened this session). Up to 3 shifts render as the usual
- * detailed per-shift cards; a longer job switches to day-grouped cards —
- * each date's Day/Afternoon/Night shifts laid side-by-side in one row so
- * it reads day-by-day. Oldest first, so a multi-day job reads forwards.
+ * was never opened this session).
+ *
+ * One card per date, each a fixed Day | Afternoon | Night row, oldest
+ * first — the same shape whether the order ran one shift or twelve. It
+ * used to fall back to a stack of per-shift cards below four shifts,
+ * which meant an order that ran only Afternoon and Night was drawn as
+ * two lone cards with no Day column to place them against: the reader
+ * had to work out which shift each card was rather than see it.
+ *
  * Returns an empty-state message when the job has no signed-off records.
  */
 export async function renderJobTraceCards(
@@ -1093,19 +1102,6 @@ export async function renderJobTraceCards(
   const rows = buildTraceRowsFor(all, planByJob, jobGoodTotals);
   rows.sort(chronologically);
   const heading = jobTraceHeading(job, rows);
-  // ≤3 shifts: the detailed per-shift cards read fine and carry the full
-  // Order Qty / Job Left / Shift Target line. Beyond that the stack gets
-  // long, so group each (machine, date) into one day card with its shifts
-  // side-by-side — one row per day is more scannable.
-  if (rows.length <= 3) {
-    // Explicit arrow, not a bare `renderCard` reference: map would hand
-    // the array index in as the second argument and silently hide the
-    // identity on every card but the first.
-    return {
-      heading,
-      html: `<div class="trace-results">${rows.map((r) => renderCard(r, true)).join('')}</div>`,
-    };
-  }
   const byDay = new Map<string, TraceRow[]>();
   for (const r of rows) {
     const key = `${r.machineCode}|${r.shiftId.slice(0, 10)}`;

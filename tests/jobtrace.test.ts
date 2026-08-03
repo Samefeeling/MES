@@ -26,50 +26,58 @@ const shift = (shiftId: string, over: Partial<ReturnType<typeof rec>> = {}) =>
     ...over,
   });
 
-describe('renderJobTraceCards — day grouping', () => {
-  it('renders detailed per-shift cards for ≤3 shifts', async () => {
-    const { html } = await renderJobTraceCards(
-      stubDal([shift('2026-07-01-Day'), shift('2026-07-01-Afternoon'), shift('2026-07-01-Night')]),
-      'J1',
-    );
-    expect(html).not.toContain('trace-day-card');
-    // One card head per shift (per-shift cards, not day-grouped).
-    expect((html.match(/trace-card-head/g) ?? []).length).toBe(3);
+const BLOCK =
+  /<div class="trace-day-shift( is-empty)?"[^>]*>\s*<div class="trace-day-shift-hd">\s*<b>(\w+)<\/b>/g;
+
+/** Shift codes in document order, with the ones that have no production
+ *  marked — `Night*` means "rendered, but empty". */
+const blockStates = (html: string): string[] =>
+  Array.from(html.matchAll(BLOCK)).map((m) => `${m[2]}${m[1] ? '*' : ''}`);
+
+/** The same, grouped by day card. */
+const blocksPerCard = (html: string): string[][] =>
+  html
+    .split('<div class="trace-card trace-day-card">')
+    .slice(1)
+    .map((card) => Array.from(card.matchAll(BLOCK)).map((m) => m[2]));
+
+describe('renderJobTraceCards — every day is a fixed Day | Afternoon | Night row', () => {
+  it('lays out all three shifts even when the order ran only one', async () => {
+    const { html } = await renderJobTraceCards(stubDal([shift('2026-07-01-Night')]), 'J1');
+    expect(blockStates(html)).toEqual(['Day*', 'Afternoon*', 'Night']);
+    // The one shift that ran must not be widened to fill the row: the
+    // three columns come from the grid, so all three boxes exist.
+    expect(blockStates(html)).toHaveLength(3);
   });
 
-  it('heads every per-shift card with its date, identity left to the title', async () => {
+  it('leaves a Day column standing when the order ran only Afternoon and Night', async () => {
     const { html } = await renderJobTraceCards(
-      stubDal([
-        shift('2026-07-01-Day', { jobRequired: 1000, partNumber: 'POPL01035' }),
-        shift('2026-07-01-Night', { jobRequired: 1000, partNumber: 'POPL01035' }),
-      ]),
+      stubDal([shift('2026-07-01-Afternoon'), shift('2026-07-01-Night')]),
       'J1',
     );
-    const heads = Array.from(html.matchAll(/trace-card-head">\s*<b>([^<]*)<\/b>/g)).map((m) => m[1]);
-    // Both cards, not just the first — map() would otherwise pass the
-    // array index in as the hide flag.
-    expect(heads).toEqual(['2026-07-01', '2026-07-01']);
-    expect(html).not.toContain('POPL01035');
-    expect(html).toContain('>Day</span>');
-    expect(html).toContain('>Night</span>');
+    expect(blockStates(html)).toEqual(['Day*', 'Afternoon', 'Night']);
   });
 
-  it('groups into one day card per date once a job spans >3 shifts', async () => {
-    const { html } = await renderJobTraceCards(
-      stubDal([
-        shift('2026-07-01-Day'),
-        shift('2026-07-01-Afternoon'),
-        shift('2026-07-02-Day'),
-        shift('2026-07-02-Afternoon'),
-      ]),
-      'J1',
-    );
-    // Two dates → two day cards, oldest first.
-    const dayCards = html.match(/trace-day-card/g) ?? [];
-    expect(dayCards.length).toBe(2);
-    expect(html.indexOf('2026-07-01')).toBeLessThan(html.indexOf('2026-07-02'));
-    // Each day card holds its date's shift blocks (4 shifts total).
-    expect((html.match(/trace-day-shift"/g) ?? []).length).toBe(4);
+  it('uses the same day grid however many shifts the order ran', async () => {
+    for (const ids of [
+      ['2026-07-01-Day'],
+      ['2026-07-01-Day', '2026-07-01-Night'],
+      ['2026-07-01-Day', '2026-07-01-Afternoon', '2026-07-01-Night'],
+    ]) {
+      const { html } = await renderJobTraceCards(stubDal(ids.map((i) => shift(i))), 'J1');
+      expect(html).toContain('trace-day-card');
+      expect(blockStates(html).map((s) => s.replace('*', ''))).toEqual([
+        'Day',
+        'Afternoon',
+        'Night',
+      ]);
+    }
+  });
+
+  it('marks the empty blocks so the eye skips them, and says why', async () => {
+    const { html } = await renderJobTraceCards(stubDal([shift('2026-07-01-Day')]), 'J1');
+    expect((html.match(/trace-day-none">Not run</g) ?? []).length).toBe(2);
+    expect(html).toContain('recorded no production in the Afternoon shift on 2026-07-01');
   });
 
   it('reports an empty state when the job has no signed-off records', async () => {
@@ -84,21 +92,44 @@ describe('renderJobTraceCards — day grouping', () => {
     expect(html).toContain('>JT</div>');
     expect(html).not.toContain('✓');
   });
+
+  it('carries the shift target and any breakdown detail into the block', async () => {
+    const { html } = await renderJobTraceCards(
+      stubDal([
+        shift('2026-07-01-Day', { jobRequired: 1000, cycleTime: 0.01 }),
+        shift('2026-07-01-Day', {
+          slotIndex: 4,
+          statusCode: 'B',
+          bdIssue: 'B01',
+          mangoTicket: 'MG-77',
+        }),
+      ]),
+      'J1',
+    );
+    expect(html).toContain('Target ');
+    expect(html).toContain('Breakdowns');
+    expect(html).toContain('B01');
+    expect(html).toContain('MG-77');
+  });
 });
 
 describe('renderJobTraceCards — chronological order', () => {
-  /** Shift codes must be ranked by the clock, not alphabetically:
-   *  "Afternoon" < "Day" < "Night" as text would put 15:00 first. */
-  it('orders the per-shift cards Day → Afternoon → Night', async () => {
+  it('runs the day cards oldest → newest', async () => {
     const { html } = await renderJobTraceCards(
-      stubDal([shift('2026-07-01-Night'), shift('2026-07-01-Afternoon'), shift('2026-07-01-Day')]),
+      stubDal([
+        shift('2026-07-02-Day'),
+        shift('2026-07-01-Afternoon'),
+        shift('2026-07-03-Night'),
+      ]),
       'J1',
     );
-    expect(html.indexOf('Day')).toBeLessThan(html.indexOf('Afternoon'));
-    expect(html.indexOf('Afternoon')).toBeLessThan(html.indexOf('Night'));
+    const dates = Array.from(html.matchAll(/trace-card-head">\s*<b>([^<]*)<\/b>/g)).map((m) => m[1]);
+    expect(dates).toEqual(['2026-07-01', '2026-07-02', '2026-07-03']);
   });
 
-  it('keeps Day → Afternoon → Night inside each day card', async () => {
+  /** Shift codes must be ranked by the clock, not alphabetically:
+   *  "Afternoon" < "Day" < "Night" as text would put 15:00 first. */
+  it('keeps Day → Afternoon → Night inside every day card', async () => {
     const { html } = await renderJobTraceCards(
       stubDal([
         shift('2026-07-02-Night'),
@@ -108,10 +139,19 @@ describe('renderJobTraceCards — chronological order', () => {
       ]),
       'J1',
     );
-    const order = Array.from(html.matchAll(/trace-day-shift-hd">\s*<b>(\w+)<\/b>/g)).map(
-      (m) => m[1],
-    );
-    expect(order).toEqual(['Day', 'Afternoon', 'Day', 'Night']);
+    expect(blocksPerCard(html)).toEqual([
+      ['Day', 'Afternoon', 'Night'],
+      ['Day', 'Afternoon', 'Night'],
+    ]);
+    // …and the empties land where the order genuinely didn't run.
+    expect(blockStates(html)).toEqual([
+      'Day',
+      'Afternoon',
+      'Night*',
+      'Day',
+      'Afternoon*',
+      'Night',
+    ]);
   });
 });
 
