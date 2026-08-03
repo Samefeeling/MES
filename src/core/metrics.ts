@@ -17,7 +17,18 @@ export interface Kpi {
   dieHrs: number;
   colorHrs: number;
   insertHrs: number;
+  /** S slots × 0.5h. Startup is a setup-kind status but deliberately NOT
+   *  part of setupHrs (which is the D/C/I changeover trio §4.1) — it is
+   *  warm-up on a die that is already in, not a changeover. Reported on
+   *  its own so the hours a shift spends coming up to temperature stop
+   *  being invisible: they count against Efficiency (filled slots) while
+   *  appearing in no hours column at all. */
+  startupHrs: number;
   runHrs: number;
+  /** Distinct ShiftIds the slice covers. Lets a caller judge a rolled-up
+   *  figure per shift (e.g. "≤5 rejects a shift") instead of against a
+   *  raw total whose size depends on how many shifts got summed. */
+  shifts: number;
   dieChanges: number; // D event count
   colorChanges: number; // C event count
   insertChanges: number; // I event count
@@ -69,14 +80,18 @@ export function aggregate(records: ProductionRecord[]): Kpi {
   let dieSlots = 0;
   let colorSlots = 0;
   let insertSlots = 0;
+  let startupSlots = 0;
+  const shiftIds = new Set<string>();
 
   for (const r of records) {
+    if (r.shiftId) shiftIds.add(r.shiftId);
     if (!r.statusCode) continue;
     filled++;
     const def = STATUS_MAP[r.statusCode];
     if (!def) continue;
     if (def.kind === 'production') run++;
     else if (def.kind === 'downtime') downSlots++;
+    if (r.statusCode === 'S') startupSlots++;
     if (r.statusCode === 'D') {
       setupSlots++;
       dieSlots++;
@@ -121,7 +136,9 @@ export function aggregate(records: ProductionRecord[]): Kpi {
     dieHrs: +(dieSlots * SLOT_HOURS).toFixed(1),
     colorHrs: +(colorSlots * SLOT_HOURS).toFixed(1),
     insertHrs: +(insertSlots * SLOT_HOURS).toFixed(1),
+    startupHrs: +(startupSlots * SLOT_HOURS).toFixed(1),
     runHrs: +(run * SLOT_HOURS).toFixed(1),
+    shifts: shiftIds.size,
     ...countSetupEvents(records),
     filledSlots: filled,
   };

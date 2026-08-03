@@ -343,7 +343,9 @@ function renderLiveBody(): string {
     <div class="live-chips">${chip('running')}${chip('changeover')}${chip('breakdown')}${chip('idle')}</div>
     <div class="live-meta">${escapeHtml(live.shiftId)} · updated ${escapeHtml(updated)} · auto-refresh ${LIVE_POLL_MS / 1000}s</div>
   </div>`;
-  return `${head}<div class="trace-results">${S!.liveRows.map(renderCard).join('')}</div>`;
+  return `${head}<div class="trace-results">${S!.liveRows
+    .map((r) => renderCard(r))
+    .join('')}</div>`;
 }
 
 function renderSearchBody(): string {
@@ -377,7 +379,7 @@ function renderSearchResults(): string {
   if (S!.results.length === 0) {
     return `<div class="trace-empty">No production records match this query.</div>`;
   }
-  return `<div class="trace-results">${S!.results.map(renderCard).join('')}</div>`;
+  return `<div class="trace-results">${S!.results.map((r) => renderCard(r)).join('')}</div>`;
 }
 
 /**
@@ -436,7 +438,14 @@ function traceGrids(r: TraceRow): { qc: string; timeline: string; rej: string } 
   return { qc, timeline, rej };
 }
 
-function renderCard(r: TraceRow): string {
+/**
+ * One shift as a card. `hideIdentity` is for the KPI job popup, where the
+ * order, press and part are already in the modal title — there the card
+ * only has to say WHEN, so it leads with the date instead of repeating
+ * the job number three times down the page. The Trace tab passes false:
+ * its results mix jobs and machines, so every card must name itself.
+ */
+function renderCard(r: TraceRow, hideIdentity = false): string {
   const grids = traceGrids(r);
   const dateLabel = r.shiftId.slice(0, 10);
   const shiftLabel = r.shiftId.slice(11);
@@ -474,14 +483,22 @@ function renderCard(r: TraceRow): string {
   const coRunBadge = r.coRun
     ? `<span class="trace-corun" title="Co-running with another order on the same die">⛓ Co-run</span>`
     : '';
-  const headline = isLive
-    ? `${machineName}<span class="trace-job">${escapeHtml(r.jobNumber || '(no job)')}</span>${activityBadge}${coRunBadge}<span class="trace-meta">${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`
-    : `<b>${escapeHtml(r.jobNumber || '(no job)')}</b>${activityBadge}${coRunBadge}<span class="trace-meta">${escapeHtml(r.machineCode)} · ${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`;
+  const headline = hideIdentity
+    ? `<b>${escapeHtml(dateLabel)}</b>${activityBadge}${coRunBadge}<span class="trace-meta">${escapeHtml(shiftLabel)}</span>`
+    : isLive
+      ? `${machineName}<span class="trace-job">${escapeHtml(r.jobNumber || '(no job)')}</span>${activityBadge}${coRunBadge}<span class="trace-meta">${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`
+      : `<b>${escapeHtml(r.jobNumber || '(no job)')}</b>${activityBadge}${coRunBadge}<span class="trace-meta">${escapeHtml(r.machineCode)} · ${escapeHtml(dateLabel)} · ${escapeHtml(shiftLabel)}</span>`;
 
   return `<div class="trace-card${r.idle ? ' is-idle' : ''}${isLive ? ' is-live' : ''} act-${activity}" style="${isLive ? `--mc:${activityCol}` : ''}">
     <div class="trace-card-head">
       ${headline}
-      <span class="trace-meta">${escapeHtml(r.partNumber)}${r.partDescription ? ' — ' + escapeHtml(r.partDescription) : ''}</span>
+      ${
+        hideIdentity
+          ? ''
+          : `<span class="trace-meta">${escapeHtml(r.partNumber)}${
+              r.partDescription ? ' — ' + escapeHtml(r.partDescription) : ''
+            }</span>`
+      }
     </div>
     <div class="trace-card-totals">
       <span>Operator <b>${escapeHtml(r.operator || '—')}</b></span>
@@ -505,15 +522,17 @@ function renderCard(r: TraceRow): string {
  * day-by-day instead of as a long stack of per-shift cards. Each shift
  * block carries its own QC / status / reject grids and a compact header
  * (operator, Good, Reject, Job Left). Shifts that didn't run are omitted.
+ * The card is headed by its date alone — order, press and part identify
+ * the whole popup from its title, so repeating them per card only pushed
+ * the date, the one thing that changes, off to the side.
  */
-function renderJobDayCard(machineCode: string, date: string, rows: TraceRow[]): string {
+function renderJobDayCard(
+  machineCode: string,
+  date: string,
+  rows: TraceRow[],
+  showMachine = false,
+): string {
   const byCode = new Map(rows.map((r) => [r.shiftId.slice(11), r]));
-  const first = rows[0];
-  const partMeta = first.partNumber
-    ? `<span class="trace-meta">${escapeHtml(first.partNumber)}${
-        first.partDescription ? ' — ' + escapeHtml(first.partDescription) : ''
-      }</span>`
-    : '';
   const blocks = SHIFTS.map((s) => {
     const r = byCode.get(s.code);
     if (!r) return '';
@@ -533,9 +552,8 @@ function renderJobDayCard(machineCode: string, date: string, rows: TraceRow[]): 
   }).join('');
   return `<div class="trace-card trace-day-card">
     <div class="trace-card-head">
-      <b>${escapeHtml(first.jobNumber || '(no job)')}</b>
-      <span class="trace-meta">${escapeHtml(machineCode)} · ${escapeHtml(date)}</span>
-      ${partMeta}
+      <b>${escapeHtml(date)}</b>
+      ${showMachine ? `<span class="trace-meta">${escapeHtml(machineCode)}</span>` : ''}
     </div>
     <div class="trace-day-shifts">${blocks}</div>
   </div>`;
@@ -1002,6 +1020,48 @@ async function loadJobGoodTotals(
   return out;
 }
 
+export interface JobTraceView {
+  /** The day / per-shift cards. */
+  html: string;
+  /** Ready-to-inject popup title: order · machine(s) · part — description.
+   *  The identity lives here once instead of being repeated on every card. */
+  heading: string;
+}
+
+/** Order → the machine(s) it ran on → its part number and description.
+ *  Machines are listed in the order the cards appear, so a job that moved
+ *  presses names both. */
+function jobTraceHeading(job: string, rows: TraceRow[]): string {
+  const machines = Array.from(new Set(rows.map((r) => r.machineCode).filter(Boolean)));
+  // Part identity can be blank on an early shift (e.g. a die-change-only
+  // row) — take it from the first shift that actually carries it.
+  const part = rows.find((r) => r.partNumber || r.partDescription);
+  const meta = [machines.join(' / '), part?.partNumber ?? ''].filter(Boolean).join(' · ');
+  return `<b class="trace-head-job">${escapeHtml(job)}</b>${
+    meta ? `<span class="trace-head-meta">${escapeHtml(meta)}</span>` : ''
+  }${
+    part?.partDescription
+      ? `<span class="trace-head-desc">— ${escapeHtml(part.partDescription)}</span>`
+      : ''
+  }`;
+}
+
+/** Oldest → newest, the order the floor lived it: machine, then date,
+ *  then Day → Afternoon → Night. Shift codes must be ranked by SHIFTS
+ *  rather than compared as text — "Afternoon" sorts before "Day"
+ *  alphabetically, which would put 15:00 ahead of 07:00. */
+function chronologically(a: TraceRow, b: TraceRow): number {
+  if (a.machineCode !== b.machineCode) return a.machineCode < b.machineCode ? -1 : 1;
+  const da = a.shiftId.slice(0, 10);
+  const db = b.shiftId.slice(0, 10);
+  if (da !== db) return da < db ? -1 : 1;
+  const rank = (id: string): number => {
+    const i = SHIFTS.findIndex((s) => s.code === id.slice(11));
+    return i < 0 ? SHIFTS.length : i;
+  };
+  return rank(a.shiftId) - rank(b.shiftId);
+}
+
 /**
  * Render the Trace detail card(s) for a single job as standalone HTML —
  * used by the KPI table's job-number popup. Loads the job's full
@@ -1009,52 +1069,58 @@ async function loadJobGoodTotals(
  * was never opened this session). Up to 3 shifts render as the usual
  * detailed per-shift cards; a longer job switches to day-grouped cards —
  * each date's Day/Afternoon/Night shifts laid side-by-side in one row so
- * it reads day-by-day. Sorted machine → newest date first. Returns an
- * empty-state message when the job has no signed-off records.
+ * it reads day-by-day. Oldest first, so a multi-day job reads forwards.
+ * Returns an empty-state message when the job has no signed-off records.
  */
 export async function renderJobTraceCards(
   dal: PmdDataLayer,
   jobNumber: string,
-): Promise<string> {
+): Promise<JobTraceView> {
   dalRef = dal;
   const job = jobNumber.trim();
   const all = await readSignedOff({ jobNumber: job });
   if (all.length === 0) {
-    return `<div class="trace-empty">No signed-off production records for ${escapeHtml(
-      job,
-    )}.</div>`;
+    return {
+      heading: `<b class="trace-head-job">${escapeHtml(job)}</b>`,
+      html: `<div class="trace-empty">No signed-off production records for ${escapeHtml(
+        job,
+      )}.</div>`,
+    };
   }
   const planning = await dal.listPlanning({});
   const planByJob = new Map(planning.map((p) => [p.jobNumber, p]));
   const jobGoodTotals = new Map([[job, goodForRecords(all)]]);
   const rows = buildTraceRowsFor(all, planByJob, jobGoodTotals);
-  const byMachineNewest = (a: TraceRow, b: TraceRow): number =>
-    a.machineCode !== b.machineCode
-      ? a.machineCode < b.machineCode
-        ? -1
-        : 1
-      : a.shiftId < b.shiftId
-        ? 1
-        : -1;
-  rows.sort(byMachineNewest);
+  rows.sort(chronologically);
+  const heading = jobTraceHeading(job, rows);
   // ≤3 shifts: the detailed per-shift cards read fine and carry the full
   // Order Qty / Job Left / Shift Target line. Beyond that the stack gets
   // long, so group each (machine, date) into one day card with its shifts
   // side-by-side — one row per day is more scannable.
   if (rows.length <= 3) {
-    return `<div class="trace-results">${rows.map(renderCard).join('')}</div>`;
+    // Explicit arrow, not a bare `renderCard` reference: map would hand
+    // the array index in as the second argument and silently hide the
+    // identity on every card but the first.
+    return {
+      heading,
+      html: `<div class="trace-results">${rows.map((r) => renderCard(r, true)).join('')}</div>`,
+    };
   }
   const byDay = new Map<string, TraceRow[]>();
   for (const r of rows) {
     const key = `${r.machineCode}|${r.shiftId.slice(0, 10)}`;
     (byDay.get(key) ?? byDay.set(key, []).get(key)!).push(r);
   }
-  // Map insertion order already follows the machine→newest-date sort.
+  // The heading already names the press; repeating it on every card is
+  // noise — unless the job moved between presses, where the date alone
+  // wouldn't say which one a card belongs to.
+  const showMachine = new Set(rows.map((r) => r.machineCode)).size > 1;
+  // Map insertion order already follows the machine→oldest-date sort.
   const cards = Array.from(byDay.entries()).map(([key, dayRows]) => {
     const [machineCode, date] = key.split('|');
-    return renderJobDayCard(machineCode, date, dayRows);
+    return renderJobDayCard(machineCode, date, dayRows, showMachine);
   });
-  return `<div class="trace-results">${cards.join('')}</div>`;
+  return { heading, html: `<div class="trace-results">${cards.join('')}</div>` };
 }
 
 async function doSearch(): Promise<void> {

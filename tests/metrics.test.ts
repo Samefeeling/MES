@@ -81,6 +81,39 @@ describe('KPI aggregation (§4.1)', () => {
     ];
     expect(countSetupEvents(recs).dieChanges).toBe(2);
   });
+
+  it('reports Startup (S) hours on their own, outside the D/C/I setup trio', () => {
+    const recs = [
+      rec({ jobNumber: 'J', slotIndex: 0, statusCode: 'S' }),
+      rec({ jobNumber: 'J', slotIndex: 1, statusCode: 'S' }),
+      rec({ jobNumber: 'J', slotIndex: 2, statusCode: 'S' }),
+      rec({ jobNumber: 'J', slotIndex: 3, statusCode: 'D' }),
+      rec({ jobNumber: 'J', slotIndex: 4, statusCode: 'R' }),
+    ];
+    const k = aggregate(recs);
+    expect(k.startupHrs).toBe(1.5); // 3 slots × 0.5h
+    // Startup is warm-up, not a changeover: it must not leak into the
+    // Die/Colour/Insert columns those hours are judged against.
+    expect(k.setupHrs).toBe(0.5);
+    expect(k.dieHrs).toBe(0.5);
+    // It is still a filled slot, so Efficiency counts it: 1 run of 5.
+    expect(k.oee).toBe(20);
+  });
+
+  it('reports zero Startup hours for a shift that never warmed up', () => {
+    expect(aggregate([rec({ jobNumber: 'J', slotIndex: 0, statusCode: 'R' })]).startupHrs).toBe(0);
+  });
+
+  it('counts the distinct shifts a slice covers, so totals can be judged per shift', () => {
+    const recs = [
+      rec({ jobNumber: 'J', slotIndex: 0, statusCode: 'R', shiftId: '2026-07-01-Day' }),
+      rec({ jobNumber: 'J', slotIndex: 1, statusCode: 'R', shiftId: '2026-07-01-Day' }),
+      rec({ jobNumber: 'J', slotIndex: 0, statusCode: 'R', shiftId: '2026-07-01-Night' }),
+      rec({ jobNumber: 'J', slotIndex: 0, statusCode: 'R', shiftId: '2026-07-02-Day' }),
+    ];
+    expect(aggregate(recs).shifts).toBe(3);
+    expect(aggregate([]).shifts).toBe(0);
+  });
 });
 
 describe('cavityGross', () => {

@@ -134,6 +134,12 @@ interface ShiftAgg {
   dieHrs: number;
   colorHrs: number;
   insertHrs: number;
+  /** S slots × 0.5h — warm-up, its own column next to Down h. */
+  startupHrs: number;
+  /** Distinct shifts rolled into this slice, so Reject can be judged per
+   *  shift rather than against a total whose size depends on how wide the
+   *  row is. */
+  shifts: number;
   oee: number | null;
   /** Planning-driven expected good pieces (see core/standards.ts). null =
    *  not computed for this slice (job rows / category rows) or no cycle
@@ -454,6 +460,8 @@ function toAgg(k: Kpi): ShiftAgg {
     dieHrs: k.dieHrs,
     colorHrs: k.colorHrs,
     insertHrs: k.insertHrs,
+    startupHrs: k.startupHrs,
+    shifts: k.shifts,
     oee: k.oee,
     // Expectation / standards are computed PER SHIFT BUCKET (the runs-of-D
     // counting and the planned-start cut only make sense against one
@@ -477,6 +485,8 @@ function emptyAgg(): ShiftAgg {
     dieHrs: 0,
     colorHrs: 0,
     insertHrs: 0,
+    startupHrs: 0,
+    shifts: 0,
     oee: null,
     expOutput: null,
     dieStdHrs: null,
@@ -1082,16 +1092,38 @@ function colorCell(c?: ColorTag): string {
   )}</span></td>`;
 }
 
-/** When `drillKey` is given (machine code, or 'FLOOR') and the row has
- *  scrap, the Reject number becomes a button that opens the per-code
- *  Pareto drill-down. Sub-rows (shift / job / category) pass nothing and
- *  render a plain number. */
-function rejectCell(reject: number, drillKey?: string): string {
-  const n = reject ? String(reject) : '—';
-  if (!drillKey || !reject) return `<td class="num r">${n}</td>`;
-  return `<td class="num r"><button type="button" class="kpi-reject-drill" data-reject-drill="${escapeHtml(
+/** Scrap a single shift is allowed before the number turns red. */
+export const REJECT_PER_SHIFT_MAX = 5;
+
+/**
+ * Reject is judged PER SHIFT, never against the raw row total: five
+ * rejects is one shift's tolerance, so a slice covering N shifts stays
+ * green up to N × that. Scaling matters because the same column carries
+ * one shift (sub-row) and a whole week of them (machine row, TOTAL) —
+ * a flat cut-off would paint a machine red for three green shifts.
+ *
+ * When `drillKey` is given (machine code, or 'FLOOR') and the row has
+ * scrap, the number becomes a button that opens the per-code Pareto
+ * drill-down. Sub-rows (shift / job / category) pass nothing and render a
+ * plain number.
+ */
+export function rejectCell(reject: number, shifts: number, drillKey?: string): string {
+  // No scrap at all: a dash, uncoloured. Green here would read as a
+  // measurement ("we made 0 bad parts") on rows that simply logged none.
+  if (!reject) return `<td class="num">—</td>`;
+  const span = Math.max(1, shifts);
+  const cls = reject <= REJECT_PER_SHIFT_MAX * span ? 'green' : 'red';
+  const perShift =
+    span === 1
+      ? `${reject} in the shift`
+      : `${reject} over ${span} shifts = ${(reject / span).toFixed(1)}/shift`;
+  const verdict = `${perShift} · ${cls === 'green' ? '🟢 within' : '🔴 above'} ${REJECT_PER_SHIFT_MAX} per shift`;
+  if (!drillKey) {
+    return `<td class="num ${cls}" title="${escapeHtml(verdict)}">${reject}</td>`;
+  }
+  return `<td class="num ${cls}"><button type="button" class="kpi-reject-drill" data-reject-drill="${escapeHtml(
     drillKey,
-  )}" title="Break down ${reject} rejects by RejectCode (Pareto)">${n}</button></td>`;
+  )}" title="${escapeHtml(verdict)} — tap to break down by RejectCode (Pareto)">${reject}</button></td>`;
 }
 
 /** Same idea for Down hours: clickable on the machine head + floor TOTAL,
@@ -1131,10 +1163,11 @@ function aggCells(
   const noPieces = !a.output && !a.reject;
   return `
     ${outputCell(a)}
-    ${rejectCell(a.reject, rejectDrillKey)}
+    ${rejectCell(a.reject, a.shifts, rejectDrillKey)}
     <td class="num ${noPieces ? '' : yc}">${noPieces ? '—' : `${a.yieldPct}%`}</td>
     <td class="num">${h(a.runHrs)}</td>
     ${downHrsCell(a.downHrs, downtimeDrillKey)}
+    <td class="num">${h(a.startupHrs)}</td>
     ${setupCell(a.dieHrs, a.dieStdHrs, DIE_CHANGE_STD_HRS, 'Die change')}
     ${setupCell(a.colorHrs, a.colorStdHrs, COLOR_CHANGE_STD_HRS, 'Colour change')}
     ${setupCell(a.insertHrs, a.insertStdHrs, INSERT_CHANGE_STD_HRS, 'Insert change')}
@@ -1253,6 +1286,11 @@ function render(): void {
       a.dieHrs += r.total.dieHrs;
       a.colorHrs += r.total.colorHrs;
       a.insertHrs += r.total.insertHrs;
+      a.startupHrs += r.total.startupHrs;
+      // Machine-shifts, not shifts: floor-wide scrap is judged against
+      // every press's shift allowance, the same way each machine row is
+      // judged against its own.
+      a.shifts += r.total.shifts;
       if (r.total.expOutput != null) a.expOutput = (a.expOutput ?? 0) + r.total.expOutput;
       a.dieStdHrs = (a.dieStdHrs ?? 0) + (r.total.dieStdHrs ?? 0);
       a.colorStdHrs = (a.colorStdHrs ?? 0) + (r.total.colorStdHrs ?? 0);
@@ -1268,6 +1306,8 @@ function render(): void {
       dieHrs: 0,
       colorHrs: 0,
       insertHrs: 0,
+      startupHrs: 0,
+      shifts: 0,
       expOutput: null as number | null,
       dieStdHrs: null as number | null,
       colorStdHrs: null as number | null,
@@ -1284,7 +1324,7 @@ function render(): void {
 
   let body: string;
   if (S!.loading) {
-    body = `<tr><td colspan="13" class="muted">Loading…</td></tr>`;
+    body = `<tr><td colspan="14" class="muted">Loading…</td></tr>`;
   } else {
     body = S!.rows
       .map((r) => {
@@ -1520,7 +1560,7 @@ function render(): void {
           <colgroup>
             <col class="kpi-col-machine">
             <col class="kpi-col-color">
-            <col span="10" class="kpi-col-metric">
+            <col span="11" class="kpi-col-metric">
             <col class="kpi-col-handover">
           </colgroup>
           <thead><tr>
@@ -1530,6 +1570,7 @@ function render(): void {
             </th><th class="kpi-color-head">Color</th>
             <th>Output</th><th>Reject</th><th>Yield%</th>
             <th>Run h</th><th>Down h</th>
+            <th title="S — Startup / warm-up">Startup h</th>
             <th title="D — Die change">Die h</th>
             <th title="C — Colour change">Colour h</th>
             <th title="I — Insert change">Insert h</th>
@@ -1560,10 +1601,11 @@ function render(): void {
                         ? ` <span class="kpi-exp">/${tot.expOutput}</span>`
                         : ''
                     }</td>
-                    ${rejectCell(tot.reject, 'FLOOR')}
+                    ${rejectCell(tot.reject, tot.shifts, 'FLOOR')}
                     <td class="num">${totYield != null ? totYield + '%' : '—'}</td>
                     <td class="num">${th(tot.runHrs)}</td>
                     ${downHrsCell(tot.downHrs, 'FLOOR')}
+                    <td class="num">${th(tot.startupHrs)}</td>
                     ${setupCell(tot.dieHrs, tot.dieStdHrs, DIE_CHANGE_STD_HRS, 'Die change')}
                     ${setupCell(tot.colorHrs, tot.colorStdHrs, COLOR_CHANGE_STD_HRS, 'Colour change')}
                     ${setupCell(tot.insertHrs, tot.insertStdHrs, INSERT_CHANGE_STD_HRS, 'Insert change')}
@@ -1580,6 +1622,8 @@ function render(): void {
         <div>Every metric uses one traffic-light language: <b>🟢 met · 🟡 close · 🔴 short</b>.</div>
         <div><b>Output 🟢🟡🔴</b> = Σ Total Good vs expected (the small “/n”). Expected = Σ Shift Target of the orders run that shift — per job the smaller of its Job Left at shift start and ⌊(8 h − hours held by earlier orders − changeover D/C/I) ÷ ProdStandard⌋, i.e. the very target the operator sheet showed. Shifts signed before Job Left / CycleTime were recorded fall back to simulating the machine's planned order queue (window = 8 h − Σ changeover standards − smoko; per order capped by its remaining qty).</div>
         <div><b>Yield%</b> = Good ÷ (Good + Reject).</div>
+        <div><b>Reject 🟢🔴</b> = judged per shift: 🟢 up to ${REJECT_PER_SHIFT_MAX} rejects a shift, 🔴 above. Rows covering several shifts (machine, order, TOTAL) scale the allowance by the shifts they roll up, so a machine isn't red for three green shifts.</div>
+        <div><b>Startup h</b> = hours in S blocks (warm-up). Counted separately from the D / C / I changeover columns.</div>
         <div><b>Efficiency*</b> = Run slots ÷ all filled slots.</div>
         <div><b>vs Plan 🟢🟡🔴</b> = Total Good ÷ the same expectation the Output cell shows (Σ Shift Targets, planning fallback) — the percentage form of Output's “/n”.</div>
         <div><b>Die / Colour / Insert h 🟢🟡🔴</b> = hours in D / C / I blocks vs standard = occurrences × (die 4 h · colour 0.5 h · insert 0.5 h); 🟢 ≤ std, 🟡 ≤ std + 0.5 h, 🔴 above.</div>
@@ -1951,16 +1995,20 @@ function openParetoDrill(opts: {
 async function openJobTrace(jobNumber: string): Promise<void> {
   const mc = openModal(`<div class="bd-modal kpi-trace-modal">
     <div class="kpi-trace-head">
-      <h2 class="bd-title">🔍 ${escapeHtml(jobNumber)} — Trace detail</h2>
+      <h2 class="bd-title"><b class="trace-head-job">${escapeHtml(jobNumber)}</b></h2>
       <button type="button" class="btn-primary-big kpi-trace-close" data-drill-close>Close</button>
     </div>
     <div class="trace kpi-trace-body"><div class="trace-empty">Loading…</div></div>
   </div>`);
   mc.querySelector('[data-drill-close]')?.addEventListener('click', closeModal);
   try {
-    const html = await renderJobTraceCards(dalRef, jobNumber);
+    // Press / part / description only exist once the history is read, so
+    // the title starts as the order number and fills in on resolve.
+    const view = await renderJobTraceCards(dalRef, jobNumber);
     const body = mc.querySelector('.kpi-trace-body');
-    if (body) body.innerHTML = html;
+    const title = mc.querySelector('.kpi-trace-head .bd-title');
+    if (title) title.innerHTML = view.heading;
+    if (body) body.innerHTML = view.html;
   } catch (e) {
     console.warn('[pmd] job Trace load failed', e);
     const body = mc.querySelector('.kpi-trace-body');

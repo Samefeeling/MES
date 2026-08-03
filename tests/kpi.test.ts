@@ -5,6 +5,8 @@ import {
   isHotStampMachine,
   paretoRelativeBarWidth,
   rejectActionContext,
+  rejectCell,
+  REJECT_PER_SHIFT_MAX,
   sortHandoversNewest,
   type HandoverEntry,
 } from '../src/ui/kpi';
@@ -155,5 +157,44 @@ describe('KPI Reject Pareto labels', () => {
       rejectActionContext({ code: 'D05', label: 'Short shot', value: 7, byStatus: { R: 7 } })
         .runningPct,
     ).toBe(100);
+  });
+});
+
+describe('KPI Reject cell — per-shift traffic light', () => {
+  it('is green up to the per-shift allowance and red above it', () => {
+    expect(rejectCell(REJECT_PER_SHIFT_MAX, 1)).toContain('class="num green"');
+    expect(rejectCell(REJECT_PER_SHIFT_MAX + 1, 1)).toContain('class="num red"');
+  });
+
+  it('scales the allowance by the shifts the row rolls up', () => {
+    // 12 rejects is red for one shift but green across three — the same
+    // number means something different on a shift row and a machine row.
+    expect(rejectCell(12, 1)).toContain('class="num red"');
+    expect(rejectCell(12, 3)).toContain('class="num green"');
+    expect(rejectCell(16, 3)).toContain('class="num red"');
+  });
+
+  it('treats a slice with no shift count as a single shift', () => {
+    expect(rejectCell(4, 0)).toContain('class="num green"');
+    expect(rejectCell(6, 0)).toContain('class="num red"');
+  });
+
+  it('leaves a scrap-free row as an uncoloured dash', () => {
+    const out = rejectCell(0, 3);
+    expect(out).toBe('<td class="num">—</td>');
+  });
+
+  it('says how it judged the number, per shift', () => {
+    expect(rejectCell(12, 3)).toContain('12 over 3 shifts = 4.0/shift');
+    expect(rejectCell(2, 1)).toContain('2 in the shift');
+  });
+
+  it('keeps the drill-down button, and its verdict, on drillable rows', () => {
+    const out = rejectCell(9, 1, 'FLOOR');
+    expect(out).toContain('class="num red"');
+    expect(out).toContain('data-reject-drill="FLOOR"');
+    expect(out).toContain('RejectCode (Pareto)');
+    // Zero scrap has nothing to break down: no button even with a key.
+    expect(rejectCell(0, 1, 'FLOOR')).not.toContain('button');
   });
 });

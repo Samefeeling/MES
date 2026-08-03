@@ -115,7 +115,10 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-machine-head{white-space:nowrap}
 .kpi-toggle-all{width:22px;height:22px;font-size:14px;margin-left:6px;margin-right:0}
 .kpi-table-wrap{background:#fff;border:1px solid var(--bd);border-radius:12px;overflow:auto;max-height:70vh;position:relative}
-.kpi-table{background:#fff;font-variant-numeric:tabular-nums;border:0;border-radius:0;overflow:visible;min-width:1300px;table-layout:fixed}
+/* min-width = the colgroup's own widths (250 + 100 + 11×72 + 230), so the
+   fixed layout never has to squeeze a metric column. Bump it when a
+   column is added or removed. */
+.kpi-table{background:#fff;font-variant-numeric:tabular-nums;border:0;border-radius:0;overflow:visible;min-width:1372px;table-layout:fixed}
 .kpi-col-machine{width:250px}
 .kpi-col-color{width:100px}
 .kpi-col-metric{width:72px}
@@ -125,6 +128,13 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-table td.amber{color:#FFA500;font-weight:800}
 .kpi-table td.red{color:#b91c1c;font-weight:800}
 .kpi-table td.gray{color:var(--mu)}
+/* Drillable numbers (Reject / Down h) carry their own colour so they read
+   as links. When the cell itself is judged green/amber/red the verdict
+   must win — otherwise a within-tolerance Reject total stays red purely
+   because it happens to be clickable. */
+.kpi-table td.green .kpi-reject-drill,
+.kpi-table td.amber .kpi-reject-drill,
+.kpi-table td.red .kpi-reject-drill{color:inherit}
 /* The small "/expected" companion on a judged Output cell. */
 .kpi-exp{font-size:10px;font-weight:600;color:var(--mu)}
 .kpi-total th,.kpi-total td{border-top:2px solid var(--theme-dark);font-weight:800;background:#f8fafc}
@@ -727,10 +737,17 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 /* Compact title — the big 26px heading wasted vertical space the order
    detail needs. Tighter modal gap for the same reason. */
 .kpi-trace-modal{gap:10px}
-.kpi-trace-modal .bd-title{font-size:17px}
+/* The title carries the order's whole identity — order · press · part —
+   description — so the cards below only have to say which day they are.
+   Wraps rather than truncates: a long part description is what tells two
+   colours of the same mould apart. */
+.kpi-trace-modal .bd-title{font-size:17px;display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;min-width:0}
+.trace-head-job{color:var(--theme-dark);font-weight:800}
+.trace-head-meta{font-size:13.5px;font-weight:700;color:var(--mu)}
+.trace-head-desc{font-size:13.5px;font-weight:600;color:var(--mu)}
 /* Title row with the Close button on the right — no bottom action bar,
    so the order detail keeps all the vertical room. */
-.kpi-trace-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.kpi-trace-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .kpi-trace-close{padding:8px 20px;font-size:14px;min-height:0}
 /* Day card: the (up to 3) shifts of one date, side-by-side in one row. */
 .trace-day-card .trace-day-shifts{display:flex;gap:12px;flex-wrap:wrap}
