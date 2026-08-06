@@ -55,6 +55,7 @@ import { renderOutputRejectChart } from './charts';
 import { clearSupervisor, isSupervisor } from './supervisor-auth';
 import { isIpadDevice } from '../core/device';
 import { confirmTuple, isTupleConfirmed, pressesRunningJobElsewhere } from '../core/confirm';
+import { rejectSlotBlock } from '../core/rejectslot';
 
 /**
  * Device-class write rule (replaces the old per-device OwnerDevice claim
@@ -2082,27 +2083,26 @@ function buildGrid(): string {
       .join('') +
     `</tr>`;
 
-  const gridRdo = isReadOnlyDevice()
-    ? ' disabled title="Read only — sign in as supervisor to edit"'
-    : isJobLocked()
-      ? ' disabled title="Signed off — sign in as supervisor and Unlock to edit"'
-      : needsConfirm()
-        ? ' disabled title="Tap ✅ Confirm above to start logging this order on this press"'
-        : '';
-  // In reopened-for-correction mode, reject inputs on slots outside the
-  // signed timeline follow the same rule as the status grid: blocked on an
-  // ended shift unless a supervisor is signed in — a running shift's
-  // timeline is still growing and stays editable.
+  // Reject cells are painted by the SAME predicate their change handler
+  // runs (rejectEntryBlocked), so what looks editable is editable. They
+  // used to be two separate expressions — the paint covered the sheet-wide
+  // states only, which left the per-slot rules invisible and, worse, left
+  // the cell looking identical whether it was open or not.
   const rejRows = S!.rejCats
     .map((cat) => {
       const cells = recs
         .map((r, i) => {
           const v = parseRejects(r)[cat.code] ?? 0;
           const now = nowSlot === i ? ' is-now-col' : '';
-          const cellRdo = gridRdo || (reopenedBlocksNewPeriod(i) ? ' disabled' : '');
-          return `<td class="num-cell${now}"><input type="text" inputmode="numeric" pattern="[0-9]*" class="rej-input" data-row="named" data-code="${escapeHtml(
+          const guard = rejectEntryBlocked(i, cat.code);
+          // A half-hour that belongs to another order reuses the status
+          // row's hatch, so the whole column reads as one "not yours" block
+          // from the Machine Status cell down through every defect row.
+          const occ = guard.blocked && occupyingOtherJob(i) ? ' is-occupied' : '';
+          const tip = guard.blocked ? ` title="${escapeHtml(guard.reason)}"` : '';
+          return `<td class="num-cell${now}${guard.blocked ? ' is-blocked' : ''}${occ}"${tip}><input type="text" inputmode="numeric" pattern="[0-9]*" class="rej-input" data-row="named" data-code="${escapeHtml(
             cat.code,
-          )}" data-slot="${i}" value="${v || ''}"${cellRdo}></td>`;
+          )}" data-slot="${i}" value="${v || ''}"${guard.blocked ? ' disabled' : ''}></td>`;
         })
         .join('');
       return `<tr class="row-named"><th class="rh">${escapeHtml(cat.code)} ${escapeHtml(
@@ -2440,16 +2440,34 @@ function reopenedBlocksNewPeriod(slot: number): boolean {
   return isPastShift() && !isSupervisor();
 }
 
-/** Belt-and-braces guard for D01–D10 reject entry — mirrors the grid's
- *  disabled state (gridRdo + the reopened per-slot rule) so a signed-off,
- *  unconfirmed or read-only slot can't take a reject even when the input's
- *  `disabled` paint is stale: right after a sign-off the row is locked but
+/** Has this half-hour already finished? The one running now is NOT past —
+ *  it is still in progress, so a reject may be recorded on it before its
+ *  Machine Status is set. Every slot of an ended shift is past; on a shift
+ *  that has not started yet, none of them are. */
+function slotIsPast(slot: number): boolean {
+  if (isPastShift()) return true;
+  const live = currentSlotIndex(sid(), new Date());
+  if (live == null) return false; // future shift — nothing has happened yet
+  return slot < live;
+}
+
+/** The one predicate that decides whether a D01–D10 reject cell is open.
+ *  buildGrid paints from it and the change handler re-runs it, so a
+ *  signed-off, unconfirmed or read-only slot can't take a reject even when
+ *  the input's `disabled` paint is stale: right after a sign-off the row is locked but
  *  the grid may not have re-rendered yet, and an iPad Edge re-render race, a
  *  hardware keyboard, paste or devtools can each defeat the attribute. The
  *  Machine Status and Quality Check pickers already re-check the lock in
  *  their handlers — this brings the reject row up to parity so a worker
- *  can't type into the wrong (already-signed) place. */
-function rejectEntryBlocked(slot: number): { blocked: boolean; reason: string } {
+ *  can't type into the wrong (already-signed) place.
+ *
+ *  The last two rules answer "which half-hour does this reject belong
+ *  to?" rather than "may this sheet be edited at all" — see
+ *  core/rejectslot.ts for why each one is provably wrong data. `code` is
+ *  the reject category (D01–D10): the escape hatch for an already-entered
+ *  value is per-cell, so a wrong number can be cleared without opening the
+ *  rest of the column. */
+function rejectEntryBlocked(slot: number, code: string): { blocked: boolean; reason: string } {
   if (isReadOnlyDevice())
     return { blocked: true, reason: 'Read only — sign in as supervisor to edit' };
   if (isJobLocked())
@@ -2458,7 +2476,14 @@ function rejectEntryBlocked(slot: number): { blocked: boolean; reason: string } 
     return { blocked: true, reason: 'Tap ✅ Confirm first — order, press, operator & supervisor' };
   if (reopenedBlocksNewPeriod(slot))
     return { blocked: true, reason: 'Re-opened for correction — this slot wasn\'t part of the signed timeline. Sign in as supervisor to add it' };
-  return { blocked: false, reason: '' };
+  const rec = slotRec(slot);
+  return rejectSlotBlock({
+    clock: slotClock(sid(), slot),
+    hasOwnStatus: !!rec?.statusCode,
+    occupiedBy: occupyingOtherJob(slot)?.jobNumber ?? null,
+    isPast: slotIsPast(slot),
+    existing: parseRejects(rec)[code] ?? 0,
+  });
 }
 
 function lockInfo(): { lockedBy: string; lockedAt: string } | null {
@@ -2739,7 +2764,7 @@ function wire(): void {
       // pickers. A signed-off (or unconfirmed / read-only) slot rejects
       // the edit and reverts the cell, even if its `disabled` attribute is
       // stale, so a worker can't slip a reject into the wrong place.
-      const guard = rejectEntryBlocked(slot);
+      const guard = rejectEntryBlocked(slot, code);
       if (guard.blocked) {
         const cur = parseRejects(slotRec(slot))[code] ?? 0;
         inp.value = cur ? String(cur) : '';
@@ -2753,6 +2778,19 @@ function wire(): void {
         else delete obj[code];
         r.rejects = JSON.stringify(obj);
       }).then(() => void refreshJobTotalAndPaintSide());
+    }),
+  );
+
+  // A disabled input fires no events, so a blocked reject cell would just
+  // swallow the tap and leave the worker guessing — which is how the wrong
+  // -column entries went unnoticed in the first place. The input carries
+  // pointer-events:none, so the tap lands on the <td> and we can say why.
+  app.querySelectorAll<HTMLElement>('td.num-cell.is-blocked').forEach((td) =>
+    td.addEventListener('click', () => {
+      const inp = td.querySelector<HTMLInputElement>('input.rej-input');
+      if (!inp) return;
+      const guard = rejectEntryBlocked(Number(inp.dataset.slot), inp.dataset.code!);
+      if (guard.blocked) toast(guard.reason, 'warn');
     }),
   );
 
