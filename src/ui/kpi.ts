@@ -44,6 +44,14 @@ import {
   type ChangeoverEvent,
   type ChangeoverKind,
 } from '../core/changeover';
+import {
+  monthOf,
+  monthLabel,
+  rollUpByMonth,
+  spansMonths,
+  type ChartBucket as CoreChartBucket,
+  type DisplayBucket,
+} from '../core/chartrollup';
 import { parseHandover } from '../core/handover';
 import { STATUS_MAP } from '../core/status';
 import { isSupervisor } from './supervisor-auth';
@@ -295,6 +303,13 @@ interface KpiState {
   loading: boolean;
   rows: KpiRow[];
   chartBuckets: ChartBucket[];
+  /** YYYY-MM of the rolled-up months the user has opened to daily bars.
+   *  Only consulted when the range crosses a month boundary; the newest
+   *  month in the range is always daily and never appears here. Shared by
+   *  both trend charts — they are two readings of the same days, and
+   *  letting them disagree would just invite comparing May against
+   *  15 May. */
+  expandedMonths: Set<string>;
   /** Machine codes whose shift sub-rows are hidden. */
   collapsed: Set<string>;
   /** "${mc}|${shiftCode}" pairs whose Job#+Part rows are revealed. Default
@@ -335,10 +350,10 @@ interface KpiState {
   catalogErrors: string[];
 }
 
-interface ChartBucket {
-  label: string;
-  byShift: Record<ShiftCode, { good: number; reject: number; runHrs: number; downHrs: number; setupHrs: number; oee: number | null; exp: number | null }>;
-}
+// ChartBucket now lives in core/chartrollup.ts — the month rollup owns the
+// shape it aggregates. Re-exported here so the rest of this file reads the
+// same as before.
+type ChartBucket = CoreChartBucket;
 
 let S: KpiState | null = null;
 let dalRef: PmdDataLayer;
@@ -882,6 +897,7 @@ async function compute(now = new Date()): Promise<void> {
           expectedShiftOutput(bShiftId, recs, ctByJob, psByJob).pieces;
         stdAcc.push({ exp: expPieces, std });
         const cb = charts.get(dateKey) ?? {
+          key: dateKey, // full YYYY-MM-DD — the month rollup groups on it
           label: dateKey.slice(5), // MM-DD
           byShift: { Day: emptyChartShift(), Afternoon: emptyChartShift(), Night: emptyChartShift() },
         };
@@ -1051,6 +1067,11 @@ async function compute(now = new Date()): Promise<void> {
   S!.chartBuckets = Array.from(charts.entries())
     .sort(([a], [b2]) => (a < b2 ? -1 : a > b2 ? 1 : 0))
     .map(([, v]) => v);
+  // Drop expansions for months the new range no longer covers, so changing
+  // the dates can't leave a month open that isn't on screen — and so the
+  // newest month (always daily anyway) never lingers in the set.
+  const live = new Set(S!.chartBuckets.map((b) => monthOf(b.key)));
+  for (const m of [...S!.expandedMonths]) if (!live.has(m)) S!.expandedMonths.delete(m);
   state.errors = errors;
   state.loading = false;
   render();
@@ -1558,13 +1579,50 @@ function render(): void {
   // Charts: one bucket per date with shift segments. Output (stacked by
   // shift) + Reject line; Run/Down/Setup (stacked) + OEE line. Each chart
   // sums every machine in the period — total floor view.
-  const outChartData = S!.chartBuckets.map((b) => {
+  //
+  // Over a range that crosses a month boundary the days are rolled up to
+  // months (see core/chartrollup.ts) — 90 daily bars in a card this wide
+  // is a smear, not a trend — leaving the newest month on daily bars and
+  // letting any earlier month be opened to its days by clicking it.
+  const rolled = spansMonths(S!.chartBuckets);
+  const displayBuckets: DisplayBucket[] = rolled
+    ? rollUpByMonth(S!.chartBuckets, S!.expandedMonths)
+    : S!.chartBuckets.map((b) => ({ ...b, month: monthOf(b.key), isMonth: false, days: 1 }));
+  const multiYear = new Set(S!.chartBuckets.map((b) => b.key.slice(0, 4))).size > 1;
+  // Only bars that actually toggle something are clickable: a month bar
+  // opens, a day of an OPENED month closes it again. Days of the newest
+  // month have nothing to toggle and stay inert rather than offering a
+  // click that would do nothing.
+  const chartMeta = displayBuckets.map((b) => {
+    if (b.isMonth) {
+      return {
+        clickKey: b.month,
+        title: `${monthLabel(b.month, multiYear)} — ${b.days} day${
+          b.days === 1 ? '' : 's'
+        } summed. Click to open the daily bars.`,
+      };
+    }
+    if (S!.expandedMonths.has(b.month)) {
+      return {
+        clickKey: b.month,
+        title: `${b.key} · part of ${monthLabel(
+          b.month,
+          multiYear,
+        )}, opened. Click to roll the month back up.`,
+      };
+    }
+    return { clickKey: undefined, title: undefined };
+  });
+  const outChartData = displayBuckets.map((b, i) => {
     // Day standard = sum of the shift expectations that were computable;
     // Per-shift vs-Plan % (good ÷ expected) labels each segment; null
-    // when that shift had no planning expectation to divide by.
+    // when that shift had no planning expectation to divide by. On a month
+    // bar this is Σgood ÷ Σexpected — the month's real ratio, not the mean
+    // of its days'.
     const vsPlan = (good: number, exp: number | null): number | null =>
       exp != null && exp > 0 ? Math.round((good / exp) * 100) : null;
     return {
+      ...chartMeta[i],
       label: b.label,
       day: b.byShift.Day.good,
       afternoon: b.byShift.Afternoon.good,
@@ -1578,13 +1636,15 @@ function render(): void {
       ],
     };
   });
-  const hoursChartData = S!.chartBuckets.map((b) => {
+  const hoursChartData = displayBuckets.map((b, i) => {
     const run = b.byShift.Day.runHrs + b.byShift.Afternoon.runHrs + b.byShift.Night.runHrs;
     const down = b.byShift.Day.downHrs + b.byShift.Afternoon.downHrs + b.byShift.Night.downHrs;
     const setup = b.byShift.Day.setupHrs + b.byShift.Afternoon.setupHrs + b.byShift.Night.setupHrs;
     const logged = run + down + setup;
+    // Ratio of the sums on a month bar too, so a month with one busy week
+    // and three quiet ones reads as the month it was.
     const oee = logged > 0 ? Math.round((run / logged) * 100) : null;
-    return { label: b.label, run, down, setup, oee };
+    return { ...chartMeta[i], label: b.label, run, down, setup, oee };
   });
   // Reject Pareto counts + shift/status splits come from PMD_Rejects; its
   // legend resolves RejectCode through PMD_RejectCategories and displays
@@ -1639,15 +1699,43 @@ function render(): void {
           }
         </div>`
     : '';
+  // One line above both trend charts explaining the rollup, plus a chip
+  // per opened month so a month can be closed from the text as well as
+  // from its bars — after opening two or three, the bars alone stop being
+  // an obvious way back. It spans the grid rather than sitting in each
+  // card: the two charts share one setting, and printing the same
+  // paragraph twice side by side reads as a mistake.
+  const openChips = [...S!.expandedMonths]
+    .sort()
+    .map(
+      (m) =>
+        `<button type="button" class="kpi-month-chip" data-collapse-month="${escapeHtml(
+          m,
+        )}" title="Roll ${monthLabel(m, multiYear)} back up to one bar">${escapeHtml(
+          monthLabel(m, multiYear),
+        )} ✕</button>`,
+    )
+    .join('');
+  const rollupNote = rolled
+    ? `<div class="kpi-chart-note kpi-rollup-note">
+         📅 Range crosses a month, so earlier months are summed into one bar
+         each and <b>${escapeHtml(
+           monthLabel(monthOf(S!.chartBuckets[S!.chartBuckets.length - 1].key), multiYear),
+         )}</b> is shown by day. <b>Click a month</b> to open its days, click
+         them again to close — both charts below follow the same setting.
+         ${openChips ? `<span class="kpi-month-chips">Open: ${openChips}</span>` : ''}
+       </div>`
+    : '';
   const charts = S!.loading || S!.chartBuckets.length === 0
     ? ''
     : `<div class="kpi-charts">
+        ${rollupNote}
         <div class="kpi-chart">
-          <h4>Output by shift (stacked) vs Reject</h4>
+          <h4>Output by shift (stacked) vs Reject${rolled ? ' — by month' : ''}</h4>
           ${renderOutputByShiftChart(outChartData)}
         </div>
         <div class="kpi-chart">
-          <h4>Run / Down / Setup hours (stacked) vs Efficiency</h4>
+          <h4>Run / Down / Setup hours (stacked) vs Efficiency${rolled ? ' — by month' : ''}</h4>
           ${renderHoursOeeChart(hoursChartData)}
         </div>
         ${rejectChart}
@@ -1893,6 +1981,29 @@ function render(): void {
   app
     .querySelector<HTMLButtonElement>('[data-import-die-medians]')
     ?.addEventListener('click', () => void openDieMedianImport());
+
+  // Month rollup: a bar carrying data-bucket toggles its month open or
+  // closed. Delegated per chart rather than bound per <rect> — both trend
+  // charts emit the same keys, and re-render replaces every node anyway.
+  // Keyboard parity comes free: the hit target is a focusable role=button,
+  // so Enter/Space reach the same handler.
+  const toggleMonth = (m: string): void => {
+    if (!m) return;
+    if (S!.expandedMonths.has(m)) S!.expandedMonths.delete(m);
+    else S!.expandedMonths.add(m);
+    render();
+  };
+  app.querySelectorAll<SVGElement>('.chart-hit[data-bucket]').forEach((hit) => {
+    hit.addEventListener('click', () => toggleMonth(hit.dataset.bucket ?? ''));
+    hit.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      toggleMonth(hit.dataset.bucket ?? '');
+    });
+  });
+  app
+    .querySelectorAll<HTMLButtonElement>('[data-collapse-month]')
+    .forEach((b) => b.addEventListener('click', () => toggleMonth(b.dataset.collapseMonth!)));
 }
 
 /**
@@ -2331,6 +2442,7 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     loading: true,
     rows: [],
     chartBuckets: [],
+    expandedMonths: new Set(),
     collapsed: new Set(),
     jobsExpanded: new Set(),
     ordersExpanded: new Set(),

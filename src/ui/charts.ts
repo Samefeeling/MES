@@ -101,6 +101,14 @@ export interface StackBucket {
   label: string;
   segments: number[]; // bottom -> top; index aligns with `segmentColors`
   overlay: number | null; // value on the right axis (null skips the point)
+  /** Makes this bar clickable: the whole column (not just the drawn bar,
+   *  which can be a few pixels wide) becomes a hit target carrying
+   *  `data-bucket="<key>"`, so the page can wire a handler by delegation.
+   *  Undefined leaves the bar inert. */
+  clickKey?: string;
+  /** Hover text for the column. Also the accessible name of the hit
+   *  target — a clickable bar has to say what clicking it does. */
+  title?: string;
 }
 
 interface DualOpts {
@@ -175,9 +183,21 @@ function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
         top,
       )}</text>`;
     }
-    bars += `<text x="${cx.toFixed(1)}" y="${H2 - 14}" font-size="11" fill="#475569" text-anchor="middle">${escAttr(
+    bars += `<text x="${cx.toFixed(1)}" y="${H2 - 14}" font-size="11" font-weight="${
+      b.clickKey ? 700 : 400
+    }" fill="${b.clickKey ? '#1d4ed8' : '#475569'}" text-anchor="middle">${escAttr(
       b.label,
     )}</text>`;
+    // Hit target last so it sits above the bars it covers. Full plot
+    // height and a full slot wide: over a quarter a day's bar is only a
+    // few pixels, and a target you have to aim at is not a control.
+    if (b.clickKey) {
+      bars += `<rect class="chart-hit" x="${(cx - slot / 2).toFixed(1)}" y="${PT}" width="${slot.toFixed(
+        1,
+      )}" height="${(innerH + 18).toFixed(1)}" fill="transparent" data-bucket="${escAttr(
+        b.clickKey,
+      )}" role="button" tabindex="0"><title>${escAttr(b.title ?? b.label)}</title></rect>`;
+    }
   }
 
   // overlay line + dots
@@ -239,12 +259,16 @@ export function renderOutputByShiftChart(
     /** vs-Plan % per shift [Day, Afternoon, Night]; null skips a
      *  segment's label (no planning expectation for that shift). */
     vsPlan?: Array<number | null>;
+    clickKey?: string;
+    title?: string;
   }>,
 ): string {
   const data: StackBucket[] = buckets.map((b) => ({
     label: b.label,
     segments: [b.day, b.afternoon, b.night],
     overlay: b.reject,
+    clickKey: b.clickKey,
+    title: b.title,
   }));
   // Each shift segment labelled with its own vs-Plan % (small, not bold).
   const segmentValueLabels = buckets.map((b) =>
@@ -328,12 +352,16 @@ export function renderHoursOeeChart(
     down: number;
     setup: number;
     oee: number | null;
+    clickKey?: string;
+    title?: string;
   }>,
 ): string {
   const data: StackBucket[] = buckets.map((b) => ({
     label: b.label,
     segments: [b.run, b.down, b.setup],
     overlay: b.oee,
+    clickKey: b.clickKey,
+    title: b.title,
   }));
   return renderDualAxis(data, {
     segmentColors: ['#16a34a', '#dc2626', '#f59e0b'],

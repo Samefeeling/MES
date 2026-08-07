@@ -707,6 +707,19 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-chart{background:#fff;border:1px solid var(--bd);border-radius:10px;padding:10px}
 .kpi-chart h4{margin:0 0 6px;font-size:14px;font-weight:700;color:var(--theme-dark)}
 .kpi-chart-note{margin-top:6px;font-size:11.5px;line-height:1.5;color:var(--mu)}
+/* Month rollup — a bar that toggles its month open/closed. The hit target
+   is a transparent full-height rect covering the whole column, so the tint
+   on hover is the only thing that shows where the click lands; without it
+   there is no hover feedback at all on an SVG rect. */
+.chart-hit{cursor:pointer}
+.chart-hit:hover{fill:rgba(29,78,216,.10)}
+.chart-hit:focus-visible{fill:rgba(29,78,216,.14);outline:2px solid var(--theme-dark);outline-offset:-2px}
+/* Spans the 2-up chart grid: one setting drives both charts, so it is
+   stated once above them rather than repeated in each card. */
+.kpi-rollup-note{grid-column:1/-1;margin:0;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:6px 10px;color:#1e40af}
+.kpi-month-chips{display:inline-flex;flex-wrap:wrap;gap:4px;margin-left:6px;vertical-align:middle}
+.kpi-month-chip{border:1px solid var(--bd);background:#eff6ff;color:#1d4ed8;border-radius:999px;padding:1px 8px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit}
+.kpi-month-chip:hover{background:#dbeafe}
 @media (max-width:1100px){
   .kpi-charts{grid-template-columns:1fr}
 }
