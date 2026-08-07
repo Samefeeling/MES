@@ -552,7 +552,7 @@ function addStd(
 }
 
 function emptyChartShift(): ChartBucket['byShift'][ShiftCode] {
-  return { good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, oee: null, exp: null };
+  return { good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0 };
 }
 
 /** First two words of a part description — keeps the per-job row narrow
@@ -907,7 +907,6 @@ async function compute(now = new Date()): Promise<void> {
         cell.runHrs += k.runHrs;
         cell.downHrs += k.downtimeHrs;
         cell.setupHrs += k.setupHrs;
-        if (expPieces != null) cell.exp = (cell.exp ?? 0) + expPieces;
         charts.set(dateKey, cb);
       }
       byShift[code] = toAgg(aggregate(flat));
@@ -1613,29 +1612,14 @@ function render(): void {
     }
     return { clickKey: undefined, title: undefined };
   });
-  const outChartData = displayBuckets.map((b, i) => {
-    // Day standard = sum of the shift expectations that were computable;
-    // Per-shift vs-Plan % (good ÷ expected) labels each segment; null
-    // when that shift had no planning expectation to divide by. On a month
-    // bar this is Σgood ÷ Σexpected — the month's real ratio, not the mean
-    // of its days'.
-    const vsPlan = (good: number, exp: number | null): number | null =>
-      exp != null && exp > 0 ? Math.round((good / exp) * 100) : null;
-    return {
-      ...chartMeta[i],
-      label: b.label,
-      day: b.byShift.Day.good,
-      afternoon: b.byShift.Afternoon.good,
-      night: b.byShift.Night.good,
-      reject:
-        b.byShift.Day.reject + b.byShift.Afternoon.reject + b.byShift.Night.reject,
-      vsPlan: [
-        vsPlan(b.byShift.Day.good, b.byShift.Day.exp),
-        vsPlan(b.byShift.Afternoon.good, b.byShift.Afternoon.exp),
-        vsPlan(b.byShift.Night.good, b.byShift.Night.exp),
-      ],
-    };
-  });
+  const outChartData = displayBuckets.map((b, i) => ({
+    ...chartMeta[i],
+    label: b.label,
+    day: b.byShift.Day.good,
+    afternoon: b.byShift.Afternoon.good,
+    night: b.byShift.Night.good,
+    reject: b.byShift.Day.reject + b.byShift.Afternoon.reject + b.byShift.Night.reject,
+  }));
   const hoursChartData = displayBuckets.map((b, i) => {
     const run = b.byShift.Day.runHrs + b.byShift.Afternoon.runHrs + b.byShift.Night.runHrs;
     const down = b.byShift.Day.downHrs + b.byShift.Afternoon.downHrs + b.byShift.Night.downHrs;

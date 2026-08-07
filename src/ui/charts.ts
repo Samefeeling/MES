@@ -117,12 +117,9 @@ interface DualOpts {
   overlayLabel: string;
   overlayColor: string;
   overlayAsPercent?: boolean; // forces right axis to 0..100
-  /** Optional text drawn above each bar's stack top (index aligns with
-   *  `buckets`). null skips a bar. Used to print "output/standard". */
-  topLabels?: Array<string | null>;
-  /** Optional small label centred inside each segment [bucket][segment]
-   *  — e.g. per-shift vs-Plan %. null / too-short segments are skipped. */
-  segmentValueLabels?: Array<Array<string | null>>;
+  /** Print each segment's own value inside it. Segments too short to fit
+   *  the text are left bare. */
+  labelSegments?: boolean;
 }
 
 function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
@@ -161,27 +158,16 @@ function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
       bars += `<rect x="${x.toFixed(1)}" y="${cumY.toFixed(1)}" width="${bw.toFixed(
         1,
       )}" height="${h.toFixed(1)}" fill="${o.segmentColors[s]}" rx="2"></rect>`;
-      // Small vs-Plan % centred in the segment (skip if too short to fit).
-      const segLabel = o.segmentValueLabels?.[i]?.[s];
-      if (segLabel && h >= 12) {
+      // The segment's own value, centred in it (skip if too short to fit).
+      if (o.labelSegments && h >= 12) {
         bars += `<text x="${cx.toFixed(1)}" y="${(cumY + h / 2 + 3).toFixed(
           1,
-        )}" font-size="9" fill="#1e293b" text-anchor="middle">${escAttr(segLabel)}</text>`;
+        )}" font-size="9" fill="#1e293b" text-anchor="middle">${v}</text>`;
       }
     }
     if (b.overlay != null) {
       const y = PT + innerH - (b.overlay / niceRight) * innerH;
       linePts.push(`${cx.toFixed(1)},${y.toFixed(1)}`);
-    }
-    // Value label above the stack top (e.g. "285/536" = output/standard).
-    const top = o.topLabels?.[i];
-    if (top) {
-      const ly = Math.max(PT + 8, cumY - 5);
-      bars += `<text x="${cx.toFixed(1)}" y="${ly.toFixed(
-        1,
-      )}" font-size="11" font-weight="700" fill="#1e293b" text-anchor="middle">${escAttr(
-        top,
-      )}</text>`;
     }
     bars += `<text x="${cx.toFixed(1)}" y="${H2 - 14}" font-size="11" font-weight="${
       b.clickKey ? 700 : 400
@@ -256,9 +242,6 @@ export function renderOutputByShiftChart(
     afternoon: number;
     night: number;
     reject: number;
-    /** vs-Plan % per shift [Day, Afternoon, Night]; null skips a
-     *  segment's label (no planning expectation for that shift). */
-    vsPlan?: Array<number | null>;
     clickKey?: string;
     title?: string;
   }>,
@@ -270,16 +253,15 @@ export function renderOutputByShiftChart(
     clickKey: b.clickKey,
     title: b.title,
   }));
-  // Each shift segment labelled with its own vs-Plan % (small, not bold).
-  const segmentValueLabels = buckets.map((b) =>
-    (b.vsPlan ?? [null, null, null]).map((p) => (p == null ? null : `${p}%`)),
-  );
+  // Each shift segment prints its own Good count — the chart is about
+  // output, so the number in the bar is the output, not a ratio the bar
+  // height doesn't represent.
   return renderDualAxis(data, {
     segmentColors: SHIFT_COLORS,
     segmentLabels: SHIFT_LABELS,
     overlayLabel: 'Reject',
     overlayColor: '#dc2626',
-    segmentValueLabels,
+    labelSegments: true,
   });
 }
 

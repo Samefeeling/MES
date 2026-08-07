@@ -10,7 +10,7 @@ import {
 } from '../src/core/chartrollup';
 
 const cell = (o: Partial<ChartShiftCell> = {}): ChartShiftCell => ({
-  good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, oee: null, exp: null, ...o,
+  good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, ...o,
 });
 
 /** One day where only the Day shift worked — enough for the sums. */
@@ -88,7 +88,7 @@ describe('rollUpByMonth', () => {
         key: '2026-06-01',
         label: '06-01',
         byShift: {
-          Day: cell({ good: 10, reject: 1, runHrs: 5, downHrs: 2, setupHrs: 1, exp: 20 }),
+          Day: cell({ good: 10, reject: 1, runHrs: 5, downHrs: 2, setupHrs: 1 }),
           Afternoon: cell({ good: 5, runHrs: 3 }),
           Night: cell({ downHrs: 8 }),
         },
@@ -97,7 +97,7 @@ describe('rollUpByMonth', () => {
         key: '2026-06-02',
         label: '06-02',
         byShift: {
-          Day: cell({ good: 30, reject: 4, runHrs: 6, downHrs: 1, setupHrs: 1, exp: 40 }),
+          Day: cell({ good: 30, reject: 4, runHrs: 6, downHrs: 1, setupHrs: 1 }),
           Afternoon: cell({ good: 5, runHrs: 3 }),
           Night: cell({ downHrs: 8 }),
         },
@@ -106,7 +106,7 @@ describe('rollUpByMonth', () => {
     ];
     const jun = rollUpByMonth(two)[0];
     expect(jun.byShift.Day).toMatchObject({
-      good: 40, reject: 5, runHrs: 11, downHrs: 3, setupHrs: 2, exp: 60,
+      good: 40, reject: 5, runHrs: 11, downHrs: 3, setupHrs: 2,
     });
     expect(jun.byShift.Afternoon.good).toBe(10);
     expect(jun.byShift.Night.downHrs).toBe(16);
@@ -125,21 +125,6 @@ describe('rollUpByMonth', () => {
     const d = out[0].byShift.Day;
     const logged = d.runHrs + d.downHrs + d.setupHrs;
     expect(Math.round((d.runHrs / logged) * 100)).toBe(83); // not 50
-  });
-
-  it('keeps a month with no planning expectation at null rather than 0', () => {
-    // exp 0 would render as "0% of plan"; null renders as no expectation.
-    const out = rollUpByMonth([day('2026-06-01', { good: 5 }), day('2026-07-01')]);
-    expect(out[0].byShift.Day.exp).toBeNull();
-  });
-
-  it('sums the expectation over only the days that had one', () => {
-    const out = rollUpByMonth([
-      day('2026-06-01', { good: 5, exp: 10 }),
-      day('2026-06-02', { good: 5 }),
-      day('2026-07-01'),
-    ]);
-    expect(out[0].byShift.Day.exp).toBe(10);
   });
 
   it('labels months with the year when the range crosses one', () => {

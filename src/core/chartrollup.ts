@@ -14,12 +14,11 @@ import type { ShiftCode } from '../types';
  * the fine detail sits where you are reading from. A rolled-up month can
  * be opened to its own days by clicking it, and closed again the same way.
  *
- * Everything here sums. That matters for the two derived lines the charts
- * draw on top: Efficiency is recomputed as Σrun ÷ Σ(run+down+setup) and
- * vs-Plan as Σgood ÷ Σexpected, so a month's figure is the ratio of the
- * sums — the month's real efficiency — and not the average of thirty daily
- * ratios, which would let one quiet Sunday count as much as a full
- * Wednesday.
+ * Everything here sums. That matters for the Efficiency line the hours
+ * chart draws on top: it is recomputed as Σrun ÷ Σ(run+down+setup), so a
+ * month's figure is the ratio of the sums — the month's real efficiency —
+ * and not the average of thirty daily ratios, which would let one quiet
+ * Sunday count as much as a full Wednesday.
  */
 
 export interface ChartShiftCell {
@@ -28,8 +27,6 @@ export interface ChartShiftCell {
   runHrs: number;
   downHrs: number;
   setupHrs: number;
-  oee: number | null;
-  exp: number | null;
 }
 
 export interface ChartBucket {
@@ -88,13 +85,10 @@ const addInto = (into: ChartShiftCell, from: ChartShiftCell): void => {
   into.runHrs += from.runHrs;
   into.downHrs += from.downHrs;
   into.setupHrs += from.setupHrs;
-  // exp stays null until at least one day had a planning expectation, so a
-  // month with no plan at all shows "no expectation" rather than 0.
-  if (from.exp != null) into.exp = (into.exp ?? 0) + from.exp;
 };
 
 const emptyCell = (): ChartShiftCell => ({
-  good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, oee: null, exp: null,
+  good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0,
 });
 
 /**
