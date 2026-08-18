@@ -758,18 +758,34 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-reject-drill-modal .die-bar-track{display:block;min-width:220px}
 /* Handover history modal: newest shift groups first, then natural Job #
    order. Notes wrap here instead of being truncated inside the KPI table. */
-.mdl:has(.kpi-handover-modal){max-width:min(900px,96vw)}
-.kpi-handover-modal{gap:12px}
-.kpi-ho-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}
+/* The dialog fills the viewport height and the history list is the ONLY
+   thing that scrolls, so the title and Close button stay put however many
+   shifts there are. There used to be two nested scrollers — .mdl at 92vh
+   and this list at 72vh — which let the dialog scroll its own header away
+   underneath a list that was scrolling separately. */
+.mdl:has(.kpi-handover-modal){max-width:min(1040px,96vw);max-height:92vh;overflow:hidden;display:flex}
+.kpi-handover-modal{gap:12px;flex:1;min-width:0;min-height:0}
+.kpi-ho-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex:0 0 auto}
 .kpi-ho-modal-head>div{min-width:0}
 .kpi-ho-modal-head .bd-title{font-size:21px}
 .kpi-ho-close{padding:8px 20px;font-size:14px;min-height:40px;flex:0 0 auto}
-.kpi-ho-history{display:flex;flex-direction:column;gap:12px;max-height:72vh;overflow:auto;padding-right:4px}
-.kpi-ho-group{border:1px solid #cbd5e1;border-radius:10px;overflow:hidden;background:#f8fafc}
+/* min-height:0 lets this shrink below its content (a flex item defaults to
+   min-height:auto and would refuse), which is what turns the overflow into
+   a scrollbar instead of an overgrown dialog. */
+.kpi-ho-history{display:flex;flex-direction:column;gap:12px;flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-right:6px}
+/* flex-shrink:0 is the whole fix for the reported bug. As flex children
+   these groups shrank to fit the list's height instead of overflowing it,
+   so past ~4 shifts nothing scrolled — the groups just got squashed and
+   `overflow:hidden` below chopped each job card off mid-note. */
+.kpi-ho-group{flex:0 0 auto;border:1px solid #cbd5e1;border-radius:10px;overflow:hidden;background:#f8fafc}
 .kpi-ho-shift-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 12px;background:#dbeafe;color:#1e3a8a}
 .kpi-ho-shift-head b{font-size:14px}
 .kpi-ho-shift-head span{font-size:12px;font-weight:700;color:#475569}
-.kpi-ho-jobs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:10px}
+/* auto-fit, not a hard 2 columns: most shifts run one job, and pinning
+   that card to half the width left the other half empty while squeezing
+   the four notes into a narrow column — taller dialog, more scrolling,
+   for nothing. Two jobs still sit side by side. */
+.kpi-ho-jobs{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:10px;padding:10px}
 .kpi-ho-job{min-width:0;border:1px solid #e2e8f0;border-left:4px solid #3b82f6;border-radius:8px;background:#fff;padding:10px}
 .kpi-ho-job h3{margin:0 0 8px;font-size:15px;color:#0f172a}
 .kpi-ho-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px}
