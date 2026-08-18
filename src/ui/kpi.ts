@@ -1124,16 +1124,23 @@ function setupCell(actualHrs: number, stdHrs: number | null, stdEachHrs: number,
   return `<td class="num ${cls}" title="${escapeHtml(title)}">${v}</td>`;
 }
 
-function handoverShiftLabel(shiftId: string, compact = false): string {
+/** The two halves of a handover's stamp, kept apart because the detail list
+ *  stacks them down a narrow rail and the table cell joins them on one line. */
+function handoverStamp(shiftId: string, compact = false): { date: string; shift: string } {
   const p = parseShiftId(shiftId);
-  if (!p) return shiftId || 'Unknown shift';
+  if (!p) return { date: shiftId || 'Unknown shift', shift: '' };
   // Midday avoids DST / timezone edge cases when formatting this wall date.
   const date = new Date(p.year, p.month - 1, p.day, 12).toLocaleDateString('en-AU', {
     day: '2-digit',
     month: 'short',
     ...(compact ? {} : { year: 'numeric' as const }),
   });
-  return compact ? `${date} · ${p.code}` : `${date} · ${p.code} shift`;
+  return { date, shift: compact ? p.code : `${p.code} shift` };
+}
+
+function handoverShiftLabel(shiftId: string, compact = false): string {
+  const { date, shift } = handoverStamp(shiftId, compact);
+  return shift ? `${date} · ${shift}` : date;
 }
 
 /** One compact entry on the machine row. Detail text never participates in
@@ -1170,36 +1177,38 @@ function handoverField(icon: string, label: string, value: string): string {
   </div>`;
 }
 
-/** Full Handover history for one machine, grouped newest shift first and
- *  naturally ordered by Job # inside each shift. */
+/**
+ * Full Handover history for one machine: one flat row per handover, newest
+ * shift first and Job # order within a shift.
+ *
+ * The rows are deliberately NOT boxed per shift. What the notes are read
+ * for is the text, and the stamp that identifies them (date, shift, job) is
+ * three short strings — so it goes down a narrow rail on the left in small
+ * type and the notes get the whole rest of the width. Boxing each shift
+ * spent that width on chrome and made the dialog taller for the same
+ * content, which is what forced the scrolling in the first place.
+ */
 function openHandoverDetail(machineCode: string, handovers: HandoverEntry[]): void {
   const sorted = sortHandoversNewest(handovers);
-  const grouped = new Map<string, HandoverEntry[]>();
-  for (const h of sorted) {
-    const entries = grouped.get(h.shiftId) ?? [];
-    entries.push(h);
-    grouped.set(h.shiftId, entries);
-  }
-  const groups = Array.from(grouped.entries())
-    .map(([shiftId, entries]) => `<section class="kpi-ho-group">
-      <div class="kpi-ho-shift-head">
-        <b>${escapeHtml(handoverShiftLabel(shiftId))}</b>
-        <span>${entries.length} job${entries.length === 1 ? '' : 's'}</span>
-      </div>
-      <div class="kpi-ho-jobs">
-        ${entries
-          .map((h) => `<article class="kpi-ho-job">
-            <h3>Job ${escapeHtml(h.jobNumber || '—')}</h3>
-            <div class="kpi-ho-fields">
-              ${handoverField('🛠', 'Machine', h.machine)}
-              ${handoverField('🧩', 'Mold', h.mold)}
-              ${handoverField('📦', 'Material', h.material)}
-              ${handoverField('📋', 'Method', h.method)}
-            </div>
-          </article>`)
-          .join('')}
-      </div>
-    </section>`)
+  const rows = sorted
+    .map((h) => {
+      const stamp = handoverStamp(h.shiftId);
+      const notes =
+        handoverField('🛠', 'Machine', h.machine) +
+        handoverField('🧩', 'Mold', h.mold) +
+        handoverField('📦', 'Material', h.material) +
+        handoverField('📋', 'Method', h.method);
+      return `<article class="kpi-ho-row">
+        <div class="kpi-ho-meta">
+          <b>${escapeHtml(stamp.date)}</b>
+          <span class="kpi-ho-meta-shift">${escapeHtml(stamp.shift)}</span>
+          <span class="kpi-ho-meta-job">${escapeHtml(h.jobNumber || '—')}</span>
+        </div>
+        <div class="kpi-ho-notes">${
+          notes || '<p class="kpi-ho-none">No detail recorded.</p>'
+        }</div>
+      </article>`;
+    })
     .join('');
   const mc = openModal(`<div class="bd-modal kpi-handover-modal">
     <div class="kpi-ho-modal-head">
@@ -1207,11 +1216,11 @@ function openHandoverDetail(machineCode: string, handovers: HandoverEntry[]): vo
         <h2 class="bd-title">📝 Handover — ${escapeHtml(machineCode)}</h2>
         <p class="bd-sub">${sorted.length} handover${
           sorted.length === 1 ? '' : 's'
-        } · newest shift first · Job # order within each shift</p>
+        } · newest first</p>
       </div>
       <button type="button" class="btn-primary-big kpi-ho-close" data-handover-close>Close</button>
     </div>
-    <div class="kpi-ho-history">${groups}</div>
+    <div class="kpi-ho-history">${rows}</div>
   </div>`);
   mc.querySelector('[data-handover-close]')?.addEventListener('click', closeModal);
 }

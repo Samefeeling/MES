@@ -756,44 +756,49 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-reject-drill-modal .kpi-drill-table{min-width:900px}
 .kpi-reject-drill-modal .kpi-reject-statuses{margin-left:0;flex-wrap:wrap}
 .kpi-reject-drill-modal .die-bar-track{display:block;min-width:220px}
-/* Handover history modal: newest shift groups first, then natural Job #
-   order. Notes wrap here instead of being truncated inside the KPI table. */
-/* The dialog fills the viewport height and the history list is the ONLY
-   thing that scrolls, so the title and Close button stay put however many
-   shifts there are. There used to be two nested scrollers — .mdl at 92vh
-   and this list at 72vh — which let the dialog scroll its own header away
-   underneath a list that was scrolling separately. */
+/* Handover history modal: one flat row per handover, newest shift first,
+   then natural Job # order. Stamp (date / shift / job) down a small rail on
+   the left, the four notes across the rest of the width. Notes wrap here
+   instead of being truncated inside the KPI table.
+
+   Nothing between the dialog and a note sets a height or an overflow any
+   more, so there is exactly ONE scrollbar — .kpi-ho-history — and a row is
+   always as tall as its own text. The boxed-per-shift version had three
+   nested containers that could each clip: the dialog at 92vh, the list at
+   72vh, and a rounded `overflow:hidden` box per shift. Past ~4 shifts those
+   boxes shrank to fit the list instead of overflowing it, so nothing
+   scrolled and every job card was chopped off mid-note. */
 .mdl:has(.kpi-handover-modal){max-width:min(1040px,96vw);max-height:92vh;overflow:hidden;display:flex}
-.kpi-handover-modal{gap:12px;flex:1;min-width:0;min-height:0}
+.kpi-handover-modal{gap:10px;flex:1;min-width:0;min-height:0}
 .kpi-ho-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex:0 0 auto}
 .kpi-ho-modal-head>div{min-width:0}
 .kpi-ho-modal-head .bd-title{font-size:21px}
 .kpi-ho-close{padding:8px 20px;font-size:14px;min-height:40px;flex:0 0 auto}
-/* min-height:0 lets this shrink below its content (a flex item defaults to
-   min-height:auto and would refuse), which is what turns the overflow into
-   a scrollbar instead of an overgrown dialog. */
-.kpi-ho-history{display:flex;flex-direction:column;gap:12px;flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-right:6px}
-/* flex-shrink:0 is the whole fix for the reported bug. As flex children
-   these groups shrank to fit the list's height instead of overflowing it,
-   so past ~4 shifts nothing scrolled — the groups just got squashed and
-   `overflow:hidden` below chopped each job card off mid-note. */
-.kpi-ho-group{flex:0 0 auto;border:1px solid #cbd5e1;border-radius:10px;overflow:hidden;background:#f8fafc}
-.kpi-ho-shift-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 12px;background:#dbeafe;color:#1e3a8a}
-.kpi-ho-shift-head b{font-size:14px}
-.kpi-ho-shift-head span{font-size:12px;font-weight:700;color:#475569}
-/* auto-fit, not a hard 2 columns: most shifts run one job, and pinning
-   that card to half the width left the other half empty while squeezing
-   the four notes into a narrow column — taller dialog, more scrolling,
-   for nothing. Two jobs still sit side by side. */
-.kpi-ho-jobs{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:10px;padding:10px}
-.kpi-ho-job{min-width:0;border:1px solid #e2e8f0;border-left:4px solid #3b82f6;border-radius:8px;background:#fff;padding:10px}
-.kpi-ho-job h3{margin:0 0 8px;font-size:15px;color:#0f172a}
-.kpi-ho-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.kpi-ho-field{min-width:0;background:#f8fafc;border-radius:6px;padding:7px 8px}
-.kpi-ho-field-label{display:block;margin-bottom:3px;color:#64748b;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.35px}
-.kpi-ho-field p{margin:0;color:#334155;font-size:13px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere}
+/* A plain block, not a flex column: flex children shrink to fit their
+   container by default, which is precisely how the old list ended up
+   squashing its content instead of scrolling it. min-height:0 lets this
+   shrink below its content (a flex item defaults to min-height:auto and
+   would refuse), which turns the overflow into a scrollbar rather than an
+   overgrown dialog. */
+.kpi-ho-history{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:8px;border-top:1px solid var(--bd)}
+.kpi-ho-row{display:grid;grid-template-columns:120px minmax(0,1fr);gap:16px;padding:9px 4px;border-bottom:1px solid #e8edf3}
+.kpi-ho-row:last-child{border-bottom:0}
+/* Zebra, not boxes: at this width the eye has to track a note back to its
+   date across ~800px, and a tint does that without adding chrome. */
+.kpi-ho-row:nth-child(even){background:#f8fafc}
+.kpi-ho-meta{min-width:0;font-size:11px;line-height:1.5;color:#64748b}
+.kpi-ho-meta b{display:block;font-size:12px;color:#1e3a8a}
+.kpi-ho-meta-shift{display:block}
+.kpi-ho-meta-job{display:block;margin-top:2px;font-weight:800;color:#0f172a;overflow-wrap:anywhere}
+.kpi-ho-notes{min-width:0;display:flex;flex-direction:column;gap:4px}
+.kpi-ho-field{display:grid;grid-template-columns:82px minmax(0,1fr);gap:10px;align-items:baseline}
+.kpi-ho-field-label{color:#64748b;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.35px;white-space:nowrap}
+.kpi-ho-field p{margin:0;color:#334155;font-size:13px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
+.kpi-ho-none{margin:0;color:#94a3b8;font-size:13px;font-style:italic}
 @media (max-width:700px){
-  .kpi-ho-jobs,.kpi-ho-fields{grid-template-columns:1fr}
+  .kpi-ho-row,.kpi-ho-field{grid-template-columns:minmax(0,1fr);gap:3px}
+  .kpi-ho-meta{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px}
+  .kpi-ho-meta b,.kpi-ho-meta-shift,.kpi-ho-meta-job{display:inline;margin-top:0}
   .kpi-ho-modal-head{align-items:stretch;flex-direction:column}
   .kpi-ho-close{align-self:flex-end}
 }
