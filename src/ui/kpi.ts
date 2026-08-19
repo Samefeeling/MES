@@ -35,14 +35,17 @@ import {
   renderOutputByShiftChart,
   renderParetoByShiftChart,
   renderParetoChart,
+  SHIFT_COLORS,
   type BoxSeries,
 } from './charts';
 import {
   collectChangeoverEvents,
+  collectSetupEvents,
   dieChangeoverMedians,
   CHANGEOVER_LABELS,
   type ChangeoverEvent,
   type ChangeoverKind,
+  type SetupEvent,
 } from '../core/changeover';
 import {
   monthOf,
@@ -338,8 +341,16 @@ interface KpiState {
    *  "ShortShot"), so the Reject drill spells the codes out. */
   rejectDescByCode: Map<string, string>;
   /** Every D/C/I changeover and B breakdown in the window, floor-wide.
-   *  Feeds the supervisor-only duration box plot. */
+   *  Feeds the supervisor-only duration box plot — which draws only the
+   *  non-hot-stamp events, see hstampCodes — and the die-median import,
+   *  which still wants the lot. */
   changeoverEvents: ChangeoverEvent[];
+  /** Machine codes of the hot-stamping press(es). Their stoppages are
+   *  drawn on their own chart instead of the floor-wide one. */
+  hstampCodes: Set<string>;
+  /** Hot-stamp setups, one per order per shift, with the setup codes
+   *  folded together. Feeds the Hstamp setup-by-shift box plot. */
+  hstampSetupEvents: SetupEvent[];
   /** jobNumber → DieNumber, resolved order → part → PMD_ProductDieColor.
    *  Lets a die change be attributed to the tool it fitted. */
   dieByJob: Map<string, string>;
@@ -631,6 +642,64 @@ export function changeoverBoxSeries(events: ChangeoverEvent[]): BoxSeries[] {
         label: `${e.machineCode}${e.jobNumber ? ' · ' + e.jobNumber : ''} · ${e.shiftId}`,
       })),
   }));
+}
+
+/** Shifts that actually run the hot-stamping press. A shift outside this
+ *  list gets a box only when it has events — an empty "Night" box every
+ *  week is noise, but a night setup that happened must not be hidden. */
+const HSTAMP_SHIFTS: ShiftCode[] = ['Day', 'Afternoon'];
+
+/**
+ * Hot-stamp setup spread, one box per shift.
+ *
+ * The question this chart is for is "does one crew take longer to set up
+ * than the other", so the split is by shift and the setup codes are
+ * already folded together upstream (collectSetupEvents). Colours are the
+ * shift colours the stacked Output chart uses, so blue/green mean the
+ * same thing on both.
+ *
+ * No dashed standard line: the floor's allowances are for a die, colour
+ * or insert change on an injection press, and drawing the 4 h die
+ * standard across a hot-stamp tool change would invent a target nobody
+ * set. The comparison here is shift against shift.
+ *
+ * `breakdowns` adds one last box only when the press actually broke down
+ * in the window. Hot-stamp events are out of the floor-wide chart now, and
+ * a breakdown that appears on neither chart would be a stoppage the KPI
+ * page had quietly stopped mentioning.
+ */
+export function hstampSetupBoxSeries(
+  events: SetupEvent[],
+  breakdowns: ChangeoverEvent[] = [],
+): BoxSeries[] {
+  const shifts = SHIFTS.map((s) => s.code).filter(
+    (code) => HSTAMP_SHIFTS.includes(code) || events.some((e) => e.shiftCode === code),
+  );
+  const series: BoxSeries[] = shifts.map((code) => ({
+    label: `${code} setup`,
+    color: SHIFT_COLORS[SHIFTS.findIndex((s) => s.code === code)],
+    std: null,
+    points: events
+      .filter((e) => e.shiftCode === code)
+      .map((e) => ({
+        value: e.hours,
+        label: `${e.machineCode}${e.jobNumber ? ' · ' + e.jobNumber : ''} · ${
+          e.shiftId
+        } · ${e.codes.join('+')}`,
+      })),
+  }));
+  if (breakdowns.length) {
+    series.push({
+      label: CHANGEOVER_LABELS.down,
+      color: '#dc2626',
+      std: null,
+      points: breakdowns.map((e) => ({
+        value: e.hours,
+        label: `${e.machineCode}${e.jobNumber ? ' · ' + e.jobNumber : ''} · ${e.shiftId}`,
+      })),
+    });
+  }
+  return series;
 }
 
 /** "02 Aug 14:30" — the finish time spelled onto the row's tooltip so the
@@ -990,6 +1059,14 @@ async function compute(now = new Date()): Promise<void> {
   // "on this one machine" — but each event keeps its press and order so
   // an outlier can be named.
   S!.changeoverEvents = collectChangeoverEvents(perMachineProd.flat());
+  // The hot-stamping press is a different process and its stoppages are
+  // drawn separately (see hstampSetupBoxSeries): its setup codes mean one
+  // thing between them, and mixed into the floor-wide boxes they widened
+  // the die / insert distributions with work that is not a die change.
+  S!.hstampCodes = new Set(S!.machines.filter(isHotStampMachine).map((m) => m.machineCode));
+  S!.hstampSetupEvents = collectSetupEvents(
+    perMachineProd.filter((_, i) => S!.hstampCodes.has(S!.machines[i].machineCode)).flat(),
+  );
   // order → part → die, so a die change can be attributed to the tool it
   // fitted. partNumByJob is production-first (see above), which matters
   // here: an order that has rolled off Epicor planning still resolves.
@@ -1020,9 +1097,7 @@ async function compute(now = new Date()): Promise<void> {
   for (const c of dieColorList) {
     if (c.category) categoryByPart.set(c.partNumber.trim().toUpperCase(), c.category);
   }
-  const hstampCodes = new Set(
-    S!.machines.filter(isHotStampMachine).map((m) => m.machineCode),
-  );
+  const hstampCodes = S!.hstampCodes;
   const byCategory = new Map<string, ProductionRecord[]>();
   for (const recs of perMachineProd) {
     for (const r of recs) {
@@ -1672,15 +1747,24 @@ function render(): void {
   // Supervisor-only: it is a "why are we slow" chart, and it names the
   // press and order behind every outlier — the conversation an operator
   // should be having with their supervisor, not reading off a board.
-  const stoppageChart = isSupervisor() && S!.changeoverEvents.length
+  // The hot-stamping press draws on its own chart below, so its events
+  // come out of the floor-wide one: a hot-stamp tool change is not a die
+  // change and was widening those boxes with work of a different kind.
+  const floorEvents = S!.changeoverEvents.filter((e) => !S!.hstampCodes.has(e.machineCode));
+  const stoppageChart = isSupervisor() && floorEvents.length
     ? `<div class="kpi-chart kpi-chart-box">
           <h4>Changeover &amp; breakdown duration spread 🔒 — box = middle half, line = median, dots = outliers (hover names the press and order)</h4>
-          ${renderBoxPlotChart(changeoverBoxSeries(S!.changeoverEvents))}
+          ${renderBoxPlotChart(changeoverBoxSeries(floorEvents))}
           <div class="kpi-chart-note">
             One D / C / I per order counts as a single changeover however
             many pieces the sheet recorded it in; each unbroken run of B is
             one breakdown. Dashed “std” = the floor allowance (die 4 h ·
             colour 0.5 h · insert 0.5 h); breakdowns have none.
+            ${
+              S!.hstampCodes.size
+                ? 'Hot-stamp stoppages are excluded — they have their own chart.'
+                : ''
+            }
           </div>
           ${
             dalRef.updateDieMaster
@@ -1692,6 +1776,30 @@ function render(): void {
           }
         </div>`
     : '';
+  // Hot stamp on its own, split by shift. Two crews run this press and
+  // the question is whether one of them takes longer to set up than the
+  // other — which the floor-wide chart could never show, because there
+  // the press's setups were scattered across three boxes by the code the
+  // operator happened to key.
+  const hstampBreakdowns = S!.changeoverEvents.filter(
+    (e) => S!.hstampCodes.has(e.machineCode) && e.kind === 'down',
+  );
+  const hstampChart =
+    isSupervisor() && (S!.hstampSetupEvents.length || hstampBreakdowns.length)
+      ? `<div class="kpi-chart kpi-chart-box">
+          <h4>Hstamp setup duration by shift 🔒 — box = middle half, line = median, dots = outliers (hover names the order and codes)</h4>
+          ${renderBoxPlotChart(hstampSetupBoxSeries(S!.hstampSetupEvents, hstampBreakdowns))}
+          <div class="kpi-chart-note">
+            Every setup code counts as one setup here — D, I, S, C and P
+            all mean the same job of work on this press, so a setup keyed
+            partly as D and partly as S is one setup, not two. One setup
+            per order per shift: pieces split by smoko fold back together,
+            but each shift's own setup time stays its own. Hot stamp
+            normally runs Day and Afternoon only; a Night box appears only
+            if something was logged.
+          </div>
+        </div>`
+      : '';
   // One line above both trend charts explaining the rollup, plus a chip
   // per opened month so a month can be closed from the text as well as
   // from its bars — after opening two or three, the bars alone stop being
@@ -1734,6 +1842,7 @@ function render(): void {
         ${rejectChart}
         ${downtimeChart}
         ${stoppageChart}
+        ${hstampChart}
       </div>`;
 
   // Headline stat tiles — the numbers a daily production meeting opens
@@ -2444,6 +2553,8 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     downtimePareto: { floor: [], byMachine: new Map() },
     rejectDescByCode: new Map(),
     changeoverEvents: [],
+    hstampCodes: new Set(),
+    hstampSetupEvents: [],
     dieByJob: new Map(),
     errors: [],
     catalogErrors: [],

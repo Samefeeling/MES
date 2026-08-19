@@ -231,7 +231,9 @@ function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
   return `<svg viewBox="0 0 ${width} ${H2}" width="100%" height="${H2}" role="img" preserveAspectRatio="xMidYMid meet">${grid}${bars}${line}${legend.join('')}</svg>`;
 }
 
-const SHIFT_COLORS = ['#60a5fa', '#4ade80', '#fbbf24']; // Day / Afternoon / Night
+// Exported so any chart split by shift speaks the same colour language as
+// the stacked Output chart — a reader learns "green = Afternoon" once.
+export const SHIFT_COLORS = ['#60a5fa', '#4ade80', '#fbbf24']; // Day / Afternoon / Night
 const SHIFT_LABELS = ['Day', 'Afternoon', 'Night'];
 
 /** Stacked Output by shift (left axis) + Reject line on the right axis. */

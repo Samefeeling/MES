@@ -1,6 +1,7 @@
-import type { ProductionRecord, StatusCode } from '../types';
+import type { ProductionRecord, ShiftCode, StatusCode } from '../types';
 import { boxStats } from './boxplot';
-import { SLOT_MINUTES, slotTimeRange } from './shifts';
+import { parseShiftId, SLOT_MINUTES, slotTimeRange } from './shifts';
+import { statusKind } from './status';
 
 /**
  * Changeover and breakdown *events* — the unit a supervisor thinks in.
@@ -146,6 +147,133 @@ export function collectChangeoverEvents(records: ProductionRecord[]): Changeover
     closeRun();
 
     for (const g of byOrder.values()) out.push(eventFrom(g.kind, machineCode, g.job, g.slots));
+  }
+
+  return out.sort((a, b) => a.startedAt - b.startedAt || (a.machineCode < b.machineCode ? -1 : 1));
+}
+
+/**
+ * One setup, on a press where the setup codes are not worth telling apart.
+ *
+ * The hot-stamping line is the case this exists for. An injection press
+ * distinguishes a die change from a colour change from an insert change,
+ * and the difference is most of what its box plot says. Hot stamp does
+ * not: whichever of D / I / S (or C / P) the operator keys, the work is
+ * the same job of fitting and warming the tool for the next order, and
+ * splitting one setup across three boxes by the code somebody happened to
+ * pick reports it as three short setups instead of one real one.
+ *
+ * "Setup" here is the system's own definition — every status whose kind is
+ * `setup` in core/status.ts (C, D, I, P, S) — so this chart and the KPI
+ * table's Setup h column always count the same slots. Breakdowns (B) and
+ * smoko (M) are downtime and stay out.
+ */
+export interface SetupEvent {
+  machineCode: string;
+  /** '' where the slot carried no order number. */
+  jobNumber: string;
+  shiftId: string;
+  shiftCode: ShiftCode;
+  /** Slots × 0.5 h. */
+  hours: number;
+  slots: number;
+  startedAt: number;
+  /** The distinct codes keyed for this one setup, in the order they were
+   *  worked — "D + S" reads as one setup the operators split across two
+   *  codes, which is exactly the thing being folded back together. */
+  codes: StatusCode[];
+}
+
+function setupEventFrom(machineCode: string, jobNumber: string, slots: Slot[]): SetupEvent | null {
+  const first = slots[0];
+  const p = parseShiftId(first.rec.shiftId);
+  // Unreachable in practice: a slot only gets here once slotTimeRange has
+  // parsed the same ShiftId. Kept total rather than asserted.
+  if (!p) return null;
+  const codes: StatusCode[] = [];
+  for (const s of slots) {
+    const c = s.rec.statusCode as StatusCode;
+    if (!codes.includes(c)) codes.push(c);
+  }
+  return {
+    machineCode,
+    jobNumber,
+    shiftId: first.rec.shiftId,
+    shiftCode: p.code,
+    hours: +(slots.length * SLOT_HOURS).toFixed(2),
+    slots: slots.length,
+    startedAt: first.at,
+    codes,
+  };
+}
+
+/**
+ * Every setup in the slice, oldest first — one per order per SHIFT.
+ *
+ * Per shift, not per slice, which is the one place this deliberately
+ * differs from collectChangeoverEvents. That function gathers an order's
+ * changeover across the whole window, because it is answering "what did
+ * this die cost to fit". This one feeds a shift-vs-shift comparison, and
+ * merging Monday-Day's setup of an order with Wednesday-Afternoon's would
+ * file the pair under Monday Day and destroy exactly the comparison being
+ * drawn. Within one shift the pieces still fold together: a setup broken
+ * by smoko is one setup, not two.
+ *
+ * The cost is that a setup running through a shift change counts once on
+ * each side of it. That is also the honest answer to "how much of this
+ * shift went on setting up", which is the question the chart asks.
+ *
+ * Slots with no order number fall back to contiguous runs, for the same
+ * reason as the breakdown rule: with nothing to group them by, a 07:00
+ * setup and a 13:00 setup would otherwise become one invented four-hour
+ * outlier.
+ */
+export function collectSetupEvents(records: ProductionRecord[]): SetupEvent[] {
+  const byMachine = new Map<string, Slot[]>();
+  for (const rec of records) {
+    if (!rec.statusCode || statusKind(rec.statusCode) !== 'setup') continue;
+    const at = slotTimeRange(rec.shiftId, rec.slotIndex)?.start.getTime();
+    if (at == null) continue;
+    const arr = byMachine.get(rec.machineCode) ?? [];
+    arr.push({ rec, at });
+    byMachine.set(rec.machineCode, arr);
+  }
+
+  const out: SetupEvent[] = [];
+  const push = (e: SetupEvent | null): void => {
+    if (e) out.push(e);
+  };
+  for (const [machineCode, slots] of byMachine) {
+    slots.sort((a, b) => a.at - b.at);
+    const byOrder = new Map<string, Slot[]>();
+    let run: { slots: Slot[]; endsAt: number } | null = null;
+    const closeRun = (): void => {
+      if (run) push(setupEventFrom(machineCode, '', run.slots));
+      run = null;
+    };
+
+    for (const s of slots) {
+      if (s.rec.jobNumber) {
+        closeRun();
+        const key = `${s.rec.shiftId}|${s.rec.jobNumber}`;
+        const g = byOrder.get(key) ?? [];
+        g.push(s);
+        byOrder.set(key, g);
+        continue;
+      }
+      // An orphan run also breaks at the shift change, so every event
+      // belongs to exactly one shift and can be counted under it.
+      if (run && s.at === run.endsAt && s.rec.shiftId === run.slots[0].rec.shiftId) {
+        run.slots.push(s);
+        run.endsAt = s.at + ADJACENT_MS;
+        continue;
+      }
+      closeRun();
+      run = { slots: [s], endsAt: s.at + ADJACENT_MS };
+    }
+    closeRun();
+
+    for (const g of byOrder.values()) push(setupEventFrom(machineCode, g[0].rec.jobNumber, g));
   }
 
   return out.sort((a, b) => a.startedAt - b.startedAt || (a.machineCode < b.machineCode ? -1 : 1));

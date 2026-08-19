@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { collectChangeoverEvents, dieChangeoverMedians } from '../src/core/changeover';
+import {
+  collectChangeoverEvents,
+  collectSetupEvents,
+  dieChangeoverMedians,
+} from '../src/core/changeover';
 import { boxStats } from '../src/core/boxplot';
-import { changeoverBoxSeries } from '../src/ui/kpi';
+import { changeoverBoxSeries, hstampSetupBoxSeries } from '../src/ui/kpi';
+import { SHIFT_COLORS } from '../src/ui/charts';
 import { rec } from './helpers';
 import type { StatusCode } from '../src/types';
 
@@ -329,5 +334,162 @@ describe('dieChangeoverMedians — what goes into PMD_DieMaster', () => {
     ]);
     const out = dieChangeoverMedians(evts, new Map([['J1', 'D'], ['J2', 'D']]));
     expect(out[0].medianHrs).toBe(1.25);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Hot stamp: every setup code means the same job of work, and the question
+// is whether one crew takes longer than the other.
+// ---------------------------------------------------------------------------
+
+/** Setup slots on the hot-stamp press. */
+const hs = (
+  code: StatusCode,
+  from: number,
+  to: number,
+  over: Partial<ReturnType<typeof rec>> = {},
+) => slots(code, from, to, { machineCode: 'Hstamp', ...over });
+
+describe('collectSetupEvents — one setup per order per shift', () => {
+  it('folds D, I and S under one order into a single setup', () => {
+    // The operators keyed the same tool change three different ways. Split
+    // by code this reads as three short setups; it was one 2 h setup.
+    const evts = collectSetupEvents([...hs('D', 0, 1), ...hs('I', 2, 2), ...hs('S', 3, 3)]);
+    expect(evts).toHaveLength(1);
+    expect(evts[0].hours).toBe(2);
+    expect(evts[0].codes).toEqual(['D', 'I', 'S']);
+    expect(evts[0].jobNumber).toBe('J1');
+  });
+
+  it('folds the pieces back together when smoko interrupts a setup', () => {
+    const evts = collectSetupEvents([
+      ...hs('S', 0, 1),
+      ...hs('M', 2, 2),
+      ...hs('S', 3, 4),
+    ]);
+    expect(evts.map((e) => e.hours)).toEqual([2]);
+  });
+
+  it('keeps each shift its own setup, even for the same order', () => {
+    // This is the whole point of the chart: merging these would file the
+    // afternoon crew's hour under the day crew.
+    const evts = collectSetupEvents([
+      ...hs('S', 0, 1, { shiftId: '2026-05-15-Day' }),
+      ...hs('S', 0, 3, { shiftId: '2026-05-15-Afternoon' }),
+    ]);
+    expect(evts.map((e) => [e.shiftCode, e.hours])).toEqual([
+      ['Day', 1],
+      ['Afternoon', 2],
+    ]);
+  });
+
+  it('counts only setup-kind statuses — a breakdown is not a setup', () => {
+    const evts = collectSetupEvents([
+      ...hs('B', 0, 3),
+      ...hs('M', 4, 5),
+      ...hs('R', 6, 9),
+      ...hs('O', 10, 10),
+      ...hs('P', 11, 11),
+    ]);
+    expect(evts.map((e) => e.codes)).toEqual([['P']]);
+  });
+
+  it('splits unnumbered setups by contiguous run, not into one long event', () => {
+    // Nobody keyed the order. A 07:00 setup and a 13:00 setup are two
+    // setups; pooling them would invent a four-hour outlier.
+    const evts = collectSetupEvents([
+      ...hs('S', 0, 1, { jobNumber: '' }),
+      ...hs('S', 12, 13, { jobNumber: '' }),
+    ]);
+    expect(evts.map((e) => e.hours)).toEqual([1, 1]);
+  });
+
+  it('breaks an unnumbered run at the shift change so it lands in one shift', () => {
+    const evts = collectSetupEvents([
+      ...hs('S', 15, 15, { jobNumber: '', shiftId: '2026-05-15-Day' }),
+      ...hs('S', 0, 0, { jobNumber: '', shiftId: '2026-05-15-Afternoon' }),
+    ]);
+    expect(evts.map((e) => e.shiftCode)).toEqual(['Day', 'Afternoon']);
+  });
+
+  it('attributes a setup to the shift it started in', () => {
+    const evts = collectSetupEvents(hs('D', 14, 15, { shiftId: '2026-05-15-Afternoon' }));
+    expect(evts[0].shiftCode).toBe('Afternoon');
+    expect(evts[0].shiftId).toBe('2026-05-15-Afternoon');
+  });
+
+  it('never merges two machines', () => {
+    const evts = collectSetupEvents([
+      ...hs('S', 0, 1),
+      ...hs('S', 0, 1, { machineCode: '125T' }),
+    ]);
+    expect(evts.map((e) => e.machineCode).sort()).toEqual(['125T', 'Hstamp']);
+  });
+
+  it('returns oldest first', () => {
+    const evts = collectSetupEvents([
+      ...hs('S', 8, 8, { jobNumber: 'J2' }),
+      ...hs('S', 0, 0, { jobNumber: 'J1' }),
+    ]);
+    expect(evts.map((e) => e.jobNumber)).toEqual(['J1', 'J2']);
+  });
+});
+
+describe('hstampSetupBoxSeries — one box per crew', () => {
+  const evts = collectSetupEvents([
+    ...hs('D', 0, 3, { shiftId: '2026-05-15-Day' }),
+    ...hs('S', 0, 1, { shiftId: '2026-05-15-Afternoon', jobNumber: 'J2' }),
+  ]);
+
+  it('always draws Day and Afternoon, and no Night box when nobody worked it', () => {
+    expect(hstampSetupBoxSeries(evts).map((s) => s.label)).toEqual([
+      'Day setup',
+      'Afternoon setup',
+    ]);
+  });
+
+  it('draws Night as soon as a night setup exists, rather than hiding it', () => {
+    const withNight = [
+      ...evts,
+      ...collectSetupEvents(hs('S', 0, 0, { shiftId: '2026-05-15-Night', jobNumber: 'J3' })),
+    ];
+    expect(hstampSetupBoxSeries(withNight).map((s) => s.label)).toEqual([
+      'Day setup',
+      'Afternoon setup',
+      'Night setup',
+    ]);
+  });
+
+  it('puts each shift its own hours and nothing else', () => {
+    const [day, arvo] = hstampSetupBoxSeries(evts);
+    expect(day.points.map((p) => p.value)).toEqual([2]);
+    expect(arvo.points.map((p) => p.value)).toEqual([1]);
+  });
+
+  it('names the order and the codes that were keyed, for the outlier dots', () => {
+    expect(hstampSetupBoxSeries(evts)[0].points[0].label).toBe('Hstamp · J1 · 2026-05-15-Day · D');
+  });
+
+  it('draws no standard line — the floor has no hot-stamp allowance', () => {
+    expect(hstampSetupBoxSeries(evts).every((s) => s.std == null)).toBe(true);
+  });
+
+  it('speaks the same shift colours as the stacked Output chart', () => {
+    expect(hstampSetupBoxSeries(evts).map((s) => s.color)).toEqual([
+      SHIFT_COLORS[0],
+      SHIFT_COLORS[1],
+    ]);
+  });
+
+  it('adds a breakdown box only when the press actually broke down', () => {
+    expect(hstampSetupBoxSeries(evts, []).map((s) => s.label)).not.toContain('Breakdown');
+    const bd = collectChangeoverEvents(hs('B', 4, 7)).filter((e) => e.kind === 'down');
+    const withBd = hstampSetupBoxSeries(evts, bd);
+    expect(withBd[withBd.length - 1]).toMatchObject({ label: 'Breakdown', std: null });
+    expect(withBd[withBd.length - 1].points.map((p) => p.value)).toEqual([2]);
+  });
+
+  it('draws the crews even with nothing logged, so an empty window reads as empty', () => {
+    expect(hstampSetupBoxSeries([]).map((s) => s.points.length)).toEqual([0, 0]);
   });
 });
