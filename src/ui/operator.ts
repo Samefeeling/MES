@@ -25,6 +25,7 @@ import {
 } from '../core/shifts';
 import { STATUSES, STATUS_MAP } from '../core/status';
 import { cavityGross } from '../core/metrics';
+import { cavityNote, dieKey, resolveCavities, type CavitySource } from '../core/cavities';
 import { ordersCoRun } from '../core/corun';
 // Re-exported so existing importers (Trace view, tests) can keep pulling
 // these from ./operator while the canonical definitions live in core.
@@ -69,19 +70,6 @@ function canWriteThisDevice(): boolean {
   return isIpadDevice() || isSupervisor();
 }
 
-/** Presses that can run a multi-cavity die — the only machines that show the
- *  Cavities dropdown on the operator sheet. Everywhere else the count is taken
- *  at face value (1 cavity). Edit this set if a die moves to another press. */
-const CAVITY_MACHINES = new Set(['550T', '320T', '150T', '125T']);
-
-/** Selectable cavity counts. A die makes this many identical parts per press
- *  cycle, so Total Good = (Count End − Count Start) × cavities − Reject. */
-const CAVITY_OPTIONS = [1, 2, 4, 8];
-
-function machineHasCavityOption(mc: string): boolean {
-  return CAVITY_MACHINES.has(mc.trim());
-}
-
 // PMD Operator Production Sheet — Excel-style rebuild of modPMDOperator.bas.
 // One machine + one shift + one job at a time. 16 half-hour slots horizontally;
 // rows are: Machine Status / 10 defect rows (D01-D10).
@@ -123,6 +111,11 @@ interface OpState {
    *  Description meta cell + the Die# pill so the operator can see the
    *  colour and which die to fit before starting the job. */
   dieColors: Map<string, { hex: string; name: string; dieNumber: string; die: string; coRun: boolean }>;
+  /** Die # → cavities, read from PMD_DieMaster on boot. Keyed by
+   *  dieKey() because the two lists drift in case and padding. This is
+   *  what makes the Cavities figure a lookup instead of a question: the
+   *  order fixes the part, the part fixes the die, the die fixes this. */
+  dieCavities: Map<string, number | null>;
 }
 
 let S: OpState | null = null;
@@ -646,6 +639,11 @@ function blankRecordForJob(slot: number, job: string): ProductionRecord {
     // NOT Epicor's decremented remaining qty.
     cycleTime: order?.qtyPerHr ?? 0,
     jobRequired: order && order.orderQty > 0 ? order.orderQty : undefined,
+    // Cavities from the die register, stamped at birth so the row is
+    // right without waiting for the load-time sync — and so a co-run
+    // sibling written by upsertSlotForJob carries its own die's count.
+    // Left undefined when the register has no answer, which reads as 1.
+    cavities: cavitySourceForJob(job).count,
     slotIndex: slot,
     statusCode: '',
     countStart: null,
@@ -1234,6 +1232,7 @@ async function reload(preferLiveJob = false): Promise<void> {
     // have a non-null Count End from the immediately-preceding shift on
     // the same machine + job.
     await maybeCarryCountStart();
+    await syncCavitiesFromDie();
   }
   await refreshJobTotal();
   if (!needsConfirm()) await seedStatusFromCoRunner();
@@ -1569,8 +1568,61 @@ async function maybeCarryCountStart(): Promise<void> {
   });
 }
 
-/** Cavities frozen on the selected job's canonical row (1 when unset). */
+/**
+ * Keep the canonical row's Cavities in step with the die register.
+ *
+ * New rows are born with the right count (blankRecordForJob), but a row
+ * written before the toolroom filled the tool in — or before this became
+ * automatic at all — carries whatever it was given, and every consumer
+ * downstream reads the stored number rather than re-deriving it. So the
+ * sheet corrects it on load.
+ *
+ * Three things it will not do: create a row (an unconfirmed browse must
+ * leave no footprint), touch a signed-off shift (history is frozen), or
+ * overwrite anything when PMD_DieMaster has no answer — a hand-set 4 is
+ * worth more than a guessed 1.
+ */
+async function syncCavitiesFromDie(): Promise<void> {
+  if (!S!.selJob) return;
+  const src = cavitySource();
+  if (!src.known) return;
+  const c = canonical();
+  if (!c || c.locked) return;
+  if ((c.cavities ?? 1) === src.count) return;
+  console.info(
+    `[pmd] cavities ×${c.cavities ?? 1} → ×${src.count} from ${src.dieNumber} (PMD_DieMaster)`,
+  );
+  await upsertSlotNoReload(0, (r) => {
+    r.cavities = src.count;
+  });
+}
+
+/** Cavities for a job, and where the number came from: order → part →
+ *  Die # (PMD_ProductDieColor) → Cavities (PMD_DieMaster). */
+function cavitySourceForJob(job: string): CavitySource {
+  return resolveCavities(dieRowForJob(job)?.dieNumber ?? '', S!.dieCavities);
+}
+
+function cavitySource(): CavitySource {
+  return cavitySourceForJob(S!.selJob);
+}
+
+/**
+ * Cavities to count this job's output on.
+ *
+ * The die register wins whenever it has an answer — that is the whole
+ * point of the change, and it means a tool re-cut to four cavities is
+ * right on every press and every shift the moment the toolroom updates
+ * the row.
+ *
+ * Where it has no answer we keep whatever the row already carries rather
+ * than resetting to 1. Some of those values were set by hand on the old
+ * dropdown, and quietly turning a 4-cavity job into a 1-cavity one would
+ * quarter its recorded output.
+ */
 function cavities(): number {
+  const src = cavitySource();
+  if (src.known) return src.count;
   const v = canonical()?.cavities;
   return v && v > 0 ? v : 1;
 }
@@ -2141,6 +2193,34 @@ function handoverBox(
   return `<label><span>${label}${mic}</span><textarea data-meta="${field}" placeholder="${placeholder}" ${rdo}${rdoTitle}>${escapeHtml(value)}</textarea></label>`;
 }
 
+/**
+ * The Cavities row — every press now, and read-only on all of them.
+ *
+ * It shows on every machine because a multi-cavity die can be fitted to
+ * any of them; it is not editable because the number is the toolroom's
+ * fact about the tool, not the operator's judgement. When it is wrong the
+ * fix belongs in PMD_DieMaster, where it corrects every press and every
+ * shift at once instead of one sheet.
+ *
+ * The "?" marks the one case worth acting on: a die that IS fitted but
+ * whose cavity count the register cannot supply. A part with no die at
+ * all already says so on the Die# pill above, so it gets the explanation
+ * without the flag.
+ */
+function cavityRow(): string {
+  const src = cavitySource();
+  const cav = cavities();
+  const note = S!.selJob ? cavityNote(src) : 'Pick an order — its die decides the cavity count.';
+  const flag = S!.selJob && !src.known && src.dieNumber
+    ? ' <span class="cav-flag" aria-label="cavity count missing from the die register">?</span>'
+    : '';
+  return `<div class="sk sk-cavity"><label title="${escapeHtml(
+    note,
+  )}">Cavities</label><b class="cav-val" data-cavities="${cav}" title="${escapeHtml(
+    note,
+  )}">×${cav}${flag}</b></div>`;
+}
+
 function buildSide(): string {
   const c = canonical();
   const cs = c?.countStart ?? '';
@@ -2182,13 +2262,7 @@ function buildSide(): string {
     <div class="sk"><label title="${escapeHtml(targetTitle)}">Shift Target</label><b title="${escapeHtml(targetTitle)}">${targetDisplay}</b></div>
     <div class="sk"><label>Count Start</label><input class="count-input${outputWarning ? ' count-invalid' : ''}" type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cstart" value="${cs}" aria-invalid="${outputWarning ? 'true' : 'false'}" ${rdo}${rdoTitle}></div>
     <div class="sk"><label>Count End</label><input class="count-input${outputWarning ? ' count-invalid' : ''}" type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cend" value="${ce}" aria-invalid="${outputWarning ? 'true' : 'false'}" ${rdo}${rdoTitle}></div>
-    ${
-      machineHasCavityOption(S!.mc)
-        ? `<div class="sk sk-cavity"><label title="Number of identical cavities on the die — pieces produced per press cycle. Total Good = (Count End − Count Start) × cavities − Reject.">Cavities</label><select class="cavity-sel" data-meta="cavity" ${rdo}${rdoTitle}>${CAVITY_OPTIONS.map(
-            (n) => `<option value="${n}"${cav === n ? ' selected' : ''}>×${n}</option>`,
-          ).join('')}</select></div>`
-        : ''
-    }
+    ${cavityRow()}
     <div class="sk"><label>Total Reject</label><b class="r" data-live="totalReject">${totalReject}</b></div>
     <div class="sk"><label${cav > 1 ? ` title="(Count End − Count Start) × ${cav} cavities − Reject"` : ''}>Total Good${cav > 1 ? ` <span class="cavity-tag">×${cav}</span>` : ''}</label><b class="g${outputWarning ? ' count-invalid' : ''}" data-live="totalGood">${good}</b></div>
     <div class="count-warning" data-live="outputWarn" role="alert"${outputWarning ? '' : ' hidden'}>${outputWarning ? escapeHtml(outputWarning.message) : ''}</div>
@@ -3015,22 +3089,6 @@ function onMetaChange(el: HTMLElement): void {
       // touch the visible cells directly so the operator still sees a
       // live total without losing focus.
       void refreshJobTotalAndPaintSide();
-      break;
-    }
-    case 'cavity': {
-      if (needsConfirm()) {
-        toast('Tap ✅ Confirm first — order, press, operator & supervisor', 'warn');
-        render();
-        break;
-      }
-      // Cavities dropdown: parts produced per press cycle. Validate against the
-      // allowed set, falling back to 1. Persist on the canonical slot, then
-      // re-render so Total Good / Job Left / Shift Target and the ×N tag all
-      // recompute. A select has no text focus to preserve, so a full render is fine.
-      const n = CAVITY_OPTIONS.includes(Number(val)) ? Number(val) : 1;
-      void upsertSlotNoReload(0, (r) => {
-        r.cavities = n;
-      }).then(() => render());
       break;
     }
     case 'hand-machine':
@@ -4234,22 +4292,32 @@ export async function renderOperator(
   now: Date = new Date(),
 ): Promise<void> {
   dalRef = dal;
-  const [machines, planning, operators, supervisors, rcats, dieColorList] = await Promise.all([
-    dal.listMachines(),
-    dal.listPlanning({}),
-    dal.listOperators(),
-    dal.listSupervisors(),
-    dal.listRejectCategories(),
-    dal.listProductDieColors
-      ? dal.listProductDieColors().catch((e) => {
-          // Colour/die metadata is optional on the operator sheet. Keep the
-          // production workflow available, while logging the missing lookup;
-          // management views surface the same failure in their data banner.
-          console.warn('[pmd] operator part/die mapping unavailable:', e);
-          return [];
-        })
-      : Promise.resolve([]),
-  ]);
+  const [machines, planning, operators, supervisors, rcats, dieColorList, dieMasterList] =
+    await Promise.all([
+      dal.listMachines(),
+      dal.listPlanning({}),
+      dal.listOperators(),
+      dal.listSupervisors(),
+      dal.listRejectCategories(),
+      dal.listProductDieColors
+        ? dal.listProductDieColors().catch((e) => {
+            // Colour/die metadata is optional on the operator sheet. Keep the
+            // production workflow available, while logging the missing lookup;
+            // management views surface the same failure in their data banner.
+            console.warn('[pmd] operator part/die mapping unavailable:', e);
+            return [];
+          })
+        : Promise.resolve([]),
+      // The die asset register, for Cavities. Optional the same way: a
+      // tenant without PMD_DieMaster keeps counting 1 piece per cycle,
+      // which is exactly what the sheet did before this lookup existed.
+      dal.listDieMaster
+        ? dal.listDieMaster().catch((e) => {
+            console.warn('[pmd] die register unavailable — cavities default to 1:', e);
+            return [];
+          })
+        : Promise.resolve([]),
+    ]);
   // Key by upper-trimmed Part # so the swatch lookup is tolerant of
   // case / whitespace drift between PMD_ProductDieColor and
   // Planning.csv's JobHead_PartNum.
@@ -4259,6 +4327,7 @@ export async function renderOperator(
       { hex: c.hex, name: c.name, dieNumber: c.dieNumber, die: c.die, coRun: c.coRun },
     ]),
   );
+  const dieCavities = new Map(dieMasterList.map((d) => [dieKey(d.dieNumber), d.cavities]));
   const cs = currentShift(now);
   const vd = new Date(now);
   vd.setHours(0, 0, 0, 0);
@@ -4306,6 +4375,7 @@ export async function renderOperator(
     unsignedEarlier: [],
     selSet: new Set<number>(),
     dieColors,
+    dieCavities,
   };
   if (nowTimer) clearInterval(nowTimer);
   nowTimer = setInterval(nowTick, 30_000);
