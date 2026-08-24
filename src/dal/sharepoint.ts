@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 60597)
-Total output lines: 5561
-
 import type {
   BdCode,
   DieChangeLog,
@@ -2700,7 +2697,69 @@ export class SharePointDataLayer implements PmdDataLayer {
       try {
         const parsed = JSON.parse(h.qcChecks);
         if (parsed && typeof parsed === 'object') {
-          qcMap =…597 tokens truncated…ect column total
+          qcMap = parsed as Record<string, string>;
+        }
+      } catch {
+        /* not JSON — ignore */
+      }
+    }
+    for (let i = 0; i < 16; i++) {
+      const ch = timeline[i];
+      const blank = ch === '·' || ch === ' ' || !ch;
+      // Materialise a slot record when either the status is filled OR a
+      // QC sign-off exists for this slot — otherwise a QC done before
+      // production was logged would be silently dropped on round-trip.
+      if (blank && !qcMap[String(i)]) continue;
+      slots.push({
+        id: 0,
+        machineCode: h.machineCode,
+        shiftId,
+        jobNumber: h.jobNumber,
+        partNumber: h.partNumber,
+        partDescription: h.partDescription,
+        slotIndex: i,
+        statusCode: blank ? '' : (ch as ProductionRecord['statusCode']),
+        countStart: i === 0 ? h.countStart : null,
+        countEnd: i === 0 ? h.countEnd : null,
+        rejectCount: 0,
+        rejects: '{}',
+        purgeKg: null,
+        operator: i === 0 ? h.operator : '',
+        supervisor: i === 0 ? h.supervisor : '',
+        bdIssue: '',
+        mangoTicket: '',
+        handoverNote: i === 0 ? h.handover : '',
+        qcBy: qcMap[String(i)] ?? '',
+        // A reopened-for-correction row is NOT locked — every device reads
+        // the Reopened=Yes flag and unlocks consistently (no device-local
+        // unlock split-brain). It still carries reopened=true so the UI can
+        // limit edits to the already-signed slots.
+        locked: isSignedOff && !h.reopened,
+        reopened: isSignedOff && h.reopened,
+        lockedBy: h.supervisor,
+        lockedAt: signedAt,
+        createdAt: stamp,
+        updatedAt: stamp,
+      });
+    }
+    if (slots.length === 0 || slots[0].slotIndex !== 0) {
+      // Always provide a canonical slot 0 so the UI can read totals.
+      slots.unshift({
+        id: 0,
+        machineCode: h.machineCode,
+        shiftId,
+        jobNumber: h.jobNumber,
+        partNumber: h.partNumber,
+        partDescription: h.partDescription,
+        jobRequired: h.jobRequired,
+        cycleTime: h.cycleTime,
+        slotIndex: 0,
+        statusCode: '',
+        countStart: h.countStart,
+        countEnd: h.countEnd,
+        // PMD_Rejects is the source of truth. When events exist they
+        // fully populate per-slot rejectCount below, so seed slot 0 at 0
+        // to avoid blending a stale PMD_Production.Reject column total
         // with the event total (the 20-vs-28 drift). Only fall back to
         // the column when there are NO events at all (legacy rows signed
         // off before PMD_Rejects existed, or live rows pre-sign-off).
