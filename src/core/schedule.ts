@@ -19,7 +19,12 @@ export function planningOrderMatchesMachine(
 ): boolean {
   const orderMachine = normaliseMachineCode(order.machineCode);
   if (!orderMachine) return includeUniversalManual && order.manuallyAdded;
-  return orderMachine === normaliseMachineCode(machineCode);
+  const selectedMachine = normaliseMachineCode(machineCode);
+  // Planning Excel uses "HS" for the hot-stamping press while the MES
+  // machine register / Operator view calls it "Hstamp". Keep the alias
+  // directional so an existing literal HS machine still matches itself.
+  if (orderMachine === 'HS' && selectedMachine === 'HSTAMP') return true;
+  return orderMachine === selectedMachine;
 }
 
 function orderWindow(order: PlanningOrder): { start: Date; end: Date } | null {
@@ -94,6 +99,27 @@ export interface ScheduledOutput {
   jobsUsed: string[];
 }
 
+/** Exact elapsed planned pieces for one order in one shift. null means its
+ * schedule has not started yet, does not overlap, has no valid rate, or is
+ * assigned to another machine. The caller decides when to round. */
+export function expectedScheduledPiecesForOrder(
+  shiftId: string,
+  order: PlanningOrder,
+  machineCode: string,
+  asOf: Date = new Date(),
+): number | null {
+  const bounds = shiftBounds(shiftId);
+  if (!bounds || asOf <= bounds.start) return null;
+  if (!planningOrderMatchesMachine(order, machineCode) || order.isDieChange) return null;
+  if (!(order.qtyPerHr > 0)) return null;
+  const window = orderWindow(order);
+  if (!window || window.start >= bounds.end || window.end <= bounds.start) return null;
+  const start = Math.max(bounds.start.getTime(), window.start.getTime());
+  const end = Math.min(bounds.end.getTime(), window.end.getTime(), asOf.getTime());
+  if (end <= start) return null;
+  return (end - start) / HOUR_MS / order.qtyPerHr;
+}
+
 /** Expected pieces from Planning.csv alone.
  *
  * JobOper_ProdStandard is normalised by the CSV parser to hours/piece, so
@@ -116,14 +142,20 @@ export function expectedScheduledOutputForShift(
   let scheduledHours = 0;
   const jobsUsed: string[] = [];
   for (const order of plannedOrdersForShift(orders, machineCode, shiftId)) {
-    if (!(order.qtyPerHr > 0)) continue;
+    const orderPieces = expectedScheduledPiecesForOrder(
+      shiftId,
+      order,
+      machineCode,
+      asOf,
+    );
+    if (orderPieces == null) continue;
     const window = orderWindow(order)!;
     const start = Math.max(bounds.start.getTime(), window.start.getTime());
     const end = Math.min(elapsedEnd, window.end.getTime());
     if (end <= start) continue;
     const hours = (end - start) / HOUR_MS;
     scheduledHours += hours;
-    exactPieces += hours / order.qtyPerHr;
+    exactPieces += orderPieces;
     jobsUsed.push(order.jobNumber);
   }
   if (!jobsUsed.length) return { pieces: null, scheduledHours: 0, jobsUsed: [] };

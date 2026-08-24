@@ -232,6 +232,7 @@ export class MemoryDataLayer implements PmdDataLayer {
       isDieChange: false,
       manuallyAdded: true,
       source: 'Manual',
+      createdAt: new Date().toISOString(),
     };
     this.planning.push(created);
     return MemoryDataLayer.clone(created);

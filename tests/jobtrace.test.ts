@@ -185,7 +185,7 @@ describe('renderJobTraceCards — every day is a fixed Day | Afternoon | Night r
         shift('2026-07-01-Day', {
           slotIndex: 4,
           statusCode: 'B',
-          bdIssue: 'B01',
+          bdIssue: 'MEC-11',
           mangoTicket: 'MG-77',
         }),
       ]),
@@ -193,8 +193,11 @@ describe('renderJobTraceCards — every day is a fixed Day | Afternoon | Night r
     );
     expect(html).toContain('Target ');
     expect(html).toContain('Breakdowns');
-    expect(html).toContain('B01');
+    expect(html).toContain('MEC-11');
     expect(html).toContain('MG-77');
+    expect(html).toContain('Category: Mechanical');
+    expect(html).toContain('Cause: Abnormal noise / vibration');
+    expect(html).toContain('Likely owner: Operator → Maintenance');
   });
 });
 

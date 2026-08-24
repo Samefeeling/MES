@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   expectedScheduledOutputForShift,
+  expectedScheduledPiecesForOrder,
   plannedOrdersForShift,
   scheduleSegmentsForShift,
 } from '../src/core/schedule';
@@ -28,6 +29,13 @@ describe('Planning.csv schedule core', () => {
     ]);
   });
 
+  it('maps Planning.csv HS to the Operator Hstamp machine', () => {
+    const hs = order({ jobNumber: 'HOT', machineCode: 'HS' });
+    expect(plannedOrdersForShift([hs], 'Hstamp', '2026-05-15-Day')).toHaveLength(1);
+    expect(plannedOrdersForShift([hs], 'HS', '2026-05-15-Day')).toHaveLength(1);
+    expect(plannedOrdersForShift([hs], '125T', '2026-05-15-Day')).toHaveLength(0);
+  });
+
   it('uses all completed-shift overlap and truncates the current shift at now', () => {
     const orders = [
       order({
@@ -53,6 +61,14 @@ describe('Planning.csv schedule core', () => {
         '1300T',
         new Date('2026-07-01T11:00:00'),
       ).pieces,
+    ).toBe(200);
+    expect(
+      expectedScheduledPiecesForOrder(
+        '2026-07-01-Day',
+        orders[0],
+        '1300T',
+        new Date('2026-07-01T11:00:00'),
+      ),
     ).toBe(200);
   });
 

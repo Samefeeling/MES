@@ -151,6 +151,25 @@ export function bdLabelFor(code: string): string {
   return c ? c.cause : code;
 }
 
+export interface BreakdownDetail {
+  code: string;
+  cause: string;
+  owner: string;
+  category: string;
+}
+
+/** Full taxonomy detail for hover/drilldown views. Unknown legacy codes
+ * remain displayable instead of disappearing. */
+export function breakdownDetailFor(code: string): BreakdownDetail {
+  const found = BD_TAXONOMY.find((x) => x.code === code);
+  return {
+    code,
+    cause: found?.cause ?? (code || 'Cause not recorded'),
+    owner: found?.owner ?? '—',
+    category: bdCategoryOf(code)?.label ?? 'Other / legacy',
+  };
+}
+
 /** Adapter so the existing PMD_BdCodes list returns the same shape. */
 export function bdAsBdCodes(): BdCode[] {
   return BD_TAXONOMY.map((c, i) => ({

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { operatorOrderStartVisible, operatorPlanningOrderVisible } from '../src/ui/operator';
+import {
+  manualOrderDropdownVisible,
+  operatorOrderStartVisible,
+  operatorPlanningOrderVisible,
+} from '../src/ui/operator';
 import { order } from './helpers';
 
 describe('Operator planning-order StartDate window', () => {
@@ -37,12 +41,51 @@ describe('Operator Job# machine filter', () => {
     ).toBe(false);
   });
 
+  it('matches Planning HS to the Hstamp Operator machine', () => {
+    expect(
+      operatorPlanningOrderVisible(order({ jobNumber: 'HOT', machineCode: 'HS' }), 'Hstamp', anchor),
+    ).toBe(true);
+  });
+
   it('keeps supervisor manual orders without a machine universally selectable', () => {
     expect(
       operatorPlanningOrderVisible(
         order({ jobNumber: 'MANUAL', machineCode: '', manuallyAdded: true, source: 'Manual' }),
         '1300T',
         anchor,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('Manual order 48-hour dropdown life', () => {
+  const now = new Date('2026-08-25T10:00:00');
+
+  it('shows a manual order before 48 hours and hides it at 48 hours', () => {
+    const recent = order({
+      jobNumber: 'RECENT',
+      machineCode: '',
+      manuallyAdded: true,
+      source: 'Manual',
+      createdAt: '2026-08-23T10:00:01',
+    });
+    const expired = { ...recent, jobNumber: 'OLD', createdAt: '2026-08-23T10:00:00' };
+    expect(manualOrderDropdownVisible(recent, now)).toBe(true);
+    expect(manualOrderDropdownVisible(expired, now)).toBe(false);
+    expect(operatorPlanningOrderVisible(expired, '1300T', now, true, now)).toBe(false);
+  });
+
+  it('fails open for a legacy manual row with no trustworthy Created value', () => {
+    expect(
+      manualOrderDropdownVisible(
+        order({
+          jobNumber: 'LEGACY',
+          machineCode: '',
+          manuallyAdded: true,
+          source: 'Manual',
+          createdAt: 'not-a-date',
+        }),
+        now,
       ),
     ).toBe(true);
   });

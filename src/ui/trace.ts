@@ -9,10 +9,15 @@ import {
   shiftBounds,
   slotClock,
 } from '../core/shifts';
-import { bdLabelFor } from '../core/breakdown';
+import { bdLabelFor, breakdownDetailFor } from '../core/breakdown';
 import { cavityGross } from '../core/metrics';
 import { ordersCoRun, type DieCoRun } from '../core/corun';
-import { plannedOrdersForShift, scheduleSegmentsForShift } from '../core/schedule';
+import {
+  expectedScheduledPiecesForOrder,
+  plannedOrdersForShift,
+  scheduleSegmentsForShift,
+} from '../core/schedule';
+import { loadKpiThresholds, planColourClass } from '../core/kpi-thresholds';
 import {
   hoursUnavailableFor,
   jobLeftPiecesFor,
@@ -76,6 +81,9 @@ export interface TraceRow {
   records: ProductionRecord[];
   /** Planning.csv rows for this machine that overlap the live shift. */
   schedule?: PlanningOrder[];
+  /** Current-shift actual Good by scheduled Job#, used to colour each
+   *  Schedule bar against the same vs Plan thresholds as KPI. */
+  scheduleGoodByJob?: Record<string, number>;
   /** True when this row is just a placeholder for an idle machine on
    *  the live view — render the card with a muted "Idle" badge. */
   idle?: boolean;
@@ -492,8 +500,30 @@ function traceGrids(r: TraceRow): { sheet: string; rej: string } {
       : 'background:#f1f5f9;color:#94a3b8';
     const parts = rejBySlot[i];
     const rejTip = parts ? `\nReject ${qtyIn(parts)}\n${parts.map(spellOut).join('\n')}` : '';
+    const record = r.records.find((x) => x.slotIndex === i);
+    const breakdownTip = ch === 'B'
+      ? (() => {
+          const detail = breakdownDetailFor(record?.bdIssue ?? '');
+          return [
+            `Job ${r.jobNumber || '—'}`,
+            `Breakdown code: ${detail.code || 'not recorded'}`,
+            `Category: ${detail.category}`,
+            `Cause: ${detail.cause}`,
+            `Likely owner: ${detail.owner}`,
+            record?.mangoTicket ? `Note / Mango ticket: ${record.mangoTicket}` : '',
+          ]
+            .filter(Boolean)
+            .join('\n');
+        })()
+      : '';
+    const tip = [
+      `${slotClock(r.shiftId, i)} · ${def?.label ?? 'Empty'}`,
+      breakdownTip,
+    ]
+      .filter(Boolean)
+      .join('\n');
     return `<div class="trace-slot" title="${escapeHtml(
-      `${slotClock(r.shiftId, i)} · ${def?.label ?? 'Empty'}${rejTip}`,
+      `${tip}${rejTip}`,
     )}" style="${style}">${ch}</div>`;
   }).join('')}</div>`;
 
@@ -520,16 +550,29 @@ function scheduleTime(value: string): string {
 
 /** Planning.csv Start–Due bars aligned to the same eight-hour shift as the
  * live status grid. Overlapping jobs occupy separate lanes. */
-export function renderSchedule(r: TraceRow): string {
+export function renderSchedule(r: TraceRow, now: Date = new Date()): string {
   const { segments, laneCount } = scheduleSegmentsForShift(
     r.schedule ?? [],
     r.machineCode,
     r.shiftId,
   );
   if (!segments.length) return '';
+  const thresholds = loadKpiThresholds();
+  const rowHeight = 17;
   const bars = segments
     .map(({ order, leftPct, widthPct, lane }) => {
       const piecesPerHour = order.qtyPerHr > 0 ? 1 / order.qtyPerHr : 0;
+      const expectedExact = expectedScheduledPiecesForOrder(
+        r.shiftId,
+        order,
+        r.machineCode,
+        now,
+      );
+      const expected = expectedExact == null ? null : Math.floor(expectedExact);
+      const actual = r.scheduleGoodByJob?.[order.jobNumber] ?? 0;
+      const pct = expected != null && expected > 0 ? Math.round((actual / expected) * 100) : null;
+      const kpiClass = planColourClass(pct, thresholds);
+      const barClass = kpiClass === 'amber' ? 'orange' : kpiClass || 'future';
       const tip = [
         `Job ${order.jobNumber}`,
         `${order.partNumber}${order.partDescription ? ' — ' + order.partDescription : ''}`,
@@ -537,17 +580,20 @@ export function renderSchedule(r: TraceRow): string {
         `Due ${scheduleTime(order.plannedEnd)}`,
         `Planned qty ${order.orderQty || '—'}`,
         `Standard ${piecesPerHour > 0 ? piecesPerHour.toFixed(2) + ' pcs/h' : '—'}`,
+        pct == null
+          ? 'vs Plan: not started yet'
+          : `vs Plan: ${actual} actual / ${expected} expected = ${pct}%`,
       ].join('\n');
-      return `<div class="trace-schedule-bar" style="left:${leftPct.toFixed(
+      return `<div class="trace-schedule-bar is-${barClass}" style="left:${leftPct.toFixed(
         3,
-      )}%;width:${widthPct.toFixed(3)}%;top:${lane * 18}px" title="${escapeHtml(tip)}">${escapeHtml(
+      )}%;width:${widthPct.toFixed(3)}%;top:${lane * rowHeight}px" title="${escapeHtml(tip)}">${escapeHtml(
         order.jobNumber,
       )}</div>`;
     })
     .join('');
   return `<div class="trace-schedule">
     <div class="trace-schedule-head"><b>Schedule</b><span>Planning.csv · Start → Due</span></div>
-    <div class="trace-schedule-track" style="height:${Math.max(18, laneCount * 18)}px">${bars}</div>
+    <div class="trace-schedule-track" style="height:${Math.max(rowHeight, laneCount * rowHeight)}px">${bars}</div>
   </div>`;
 }
 
@@ -835,8 +881,16 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
   for (const m of sortedMachines) {
     const recs = byMachine.get(m.machineCode) ?? [];
     const machineSchedule = plannedOrdersForShift(planning, m.machineCode, live.shiftId);
+    const scheduleGoodByJob: Record<string, number> = {};
+    for (const planned of machineSchedule) {
+      scheduleGoodByJob[planned.jobNumber] = goodForRecords(
+        recs.filter((record) => record.jobNumber === planned.jobNumber),
+      );
+    }
     if (recs.length === 0) {
-      out.push(idlePlaceholder(m.machineCode, live.shiftId, machineSchedule));
+      out.push(
+        idlePlaceholder(m.machineCode, live.shiftId, machineSchedule, scheduleGoodByJob),
+      );
       continue;
     }
     // One card per machine: a press can carry several jobs in the same
@@ -858,10 +912,12 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
         ordersCoRun(latestDie, dieFor(row.partNumber), latest.orderQty, row.orderQty),
     );
     if (coRunners.length) {
-      out.push({ ...latest, coRun: true, schedule: machineSchedule });
-      for (const row of coRunners) out.push({ ...row, coRun: true, schedule: machineSchedule });
+      out.push({ ...latest, coRun: true, schedule: machineSchedule, scheduleGoodByJob });
+      for (const row of coRunners) {
+        out.push({ ...row, coRun: true, schedule: machineSchedule, scheduleGoodByJob });
+      }
     } else {
-      out.push({ ...latest, schedule: machineSchedule });
+      out.push({ ...latest, schedule: machineSchedule, scheduleGoodByJob });
     }
   }
   state.liveRows = out;
@@ -912,6 +968,7 @@ function idlePlaceholder(
   machineCode: string,
   shiftId: string,
   schedule: PlanningOrder[] = [],
+  scheduleGoodByJob: Record<string, number> = {},
 ): TraceRow {
   return {
     key: `${machineCode}|${shiftId}|`,
@@ -935,6 +992,7 @@ function idlePlaceholder(
     bdSlots: [],
     records: [],
     schedule,
+    scheduleGoodByJob,
     idle: true,
   };
 }

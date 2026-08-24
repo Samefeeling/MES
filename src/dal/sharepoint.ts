@@ -1898,6 +1898,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     partNumber: string;
     partDescription: string;
     orderQty: number;
+    createdAt: string;
   }): PlanningOrder {
     return {
       id: o.id,
@@ -1916,6 +1917,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       isDieChange: false,
       manuallyAdded: true,
       source: 'Manual',
+      createdAt: o.createdAt,
     };
   }
 
@@ -1933,6 +1935,7 @@ export class SharePointDataLayer implements PmdDataLayer {
             partNumber: str(r['PartNumber']).trim(),
             partDescription: str(r['PartDescription']).trim(),
             orderQty: num(r['OrderQty']) || 0,
+            createdAt: str(r['Created']),
           }),
         )
         .filter((o) => o.jobNumber);
@@ -1988,8 +1991,12 @@ export class SharePointDataLayer implements PmdDataLayer {
       PartDescription: o.partDescription,
       OrderQty: o.orderQty,
     });
-    const j = (await res.json()) as { d?: { ID?: number; Id?: number } };
-    return SharePointDataLayer.manualPlanningOrder({ id: j.d?.ID ?? j.d?.Id ?? 0, ...o });
+    const j = (await res.json()) as { d?: { ID?: number; Id?: number; Created?: string } };
+    return SharePointDataLayer.manualPlanningOrder({
+      id: j.d?.ID ?? j.d?.Id ?? 0,
+      createdAt: j.d?.Created ?? new Date().toISOString(),
+      ...o,
+    });
   }
 
   // ---- management Pareto aggregations --------------------------------

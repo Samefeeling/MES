@@ -266,4 +266,62 @@ describe('Live Status card for a press with no order', () => {
     expect(card).toContain('(no live job)');
     expect(renderSchedule(live({ schedule }))).toContain('left:12.500%');
   });
+
+  it('colours Schedule bars with the same 95/80 vs Plan thresholds as KPI', () => {
+    const plan = order({
+      jobNumber: 'PLAN-COLOUR',
+      machineCode: '1300T',
+      plannedStart: '2026-07-01T07:00:00',
+      plannedEnd: '2026-07-01T15:00:00',
+      qtyPerHr: 1 / 50,
+    });
+    const now = new Date('2026-07-01T11:00:00'); // expected = 200
+    expect(
+      renderSchedule(live({ schedule: [plan], scheduleGoodByJob: { 'PLAN-COLOUR': 190 } }), now),
+    ).toContain('is-green');
+    expect(
+      renderSchedule(live({ schedule: [plan], scheduleGoodByJob: { 'PLAN-COLOUR': 170 } }), now),
+    ).toContain('is-orange');
+    expect(
+      renderSchedule(live({ schedule: [plan], scheduleGoodByJob: { 'PLAN-COLOUR': 100 } }), now),
+    ).toContain('is-red');
+  });
+
+  it('keeps a not-yet-started Schedule bar neutral instead of falsely red', () => {
+    const plan = order({
+      jobNumber: 'FUTURE',
+      machineCode: '1300T',
+      plannedStart: '2026-07-01T12:00:00',
+      plannedEnd: '2026-07-01T14:00:00',
+      qtyPerHr: 1 / 50,
+    });
+    expect(
+      renderSchedule(live({ schedule: [plan] }), new Date('2026-07-01T11:00:00')),
+    ).toContain('is-future');
+  });
+
+  it('shows full breakdown taxonomy detail when hovering a B block', () => {
+    const breakdown = rec({
+      machineCode: '1300T',
+      shiftId: '2026-07-01-Day',
+      jobNumber: 'J-BD',
+      slotIndex: 0,
+      statusCode: 'B',
+      bdIssue: 'MEC-11',
+      mangoTicket: 'MAN-77',
+    });
+    const html = renderCard(
+      live({
+        jobNumber: 'J-BD',
+        idle: false,
+        timeline: 'B' + '·'.repeat(15),
+        records: [breakdown],
+      }),
+    );
+    expect(html).toContain('Breakdown code: MEC-11');
+    expect(html).toContain('Category: Mechanical');
+    expect(html).toContain('Cause: Abnormal noise / vibration');
+    expect(html).toContain('Likely owner: Operator → Maintenance');
+    expect(html).toContain('Note / Mango ticket: MAN-77');
+  });
 });

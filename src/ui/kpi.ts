@@ -17,6 +17,13 @@ import {
 } from '../core/standards';
 import { expectedScheduledOutputForShift } from '../core/schedule';
 import {
+  DEFAULT_KPI_THRESHOLDS,
+  loadKpiThresholds,
+  planColourClass,
+  saveKpiThresholds,
+  type KpiThresholds,
+} from '../core/kpi-thresholds';
+import {
   currentShift,
   dateKey,
   parseShiftId,
@@ -75,53 +82,6 @@ import {
 export function isHotStampMachine(m: Pick<Machine, 'machineCode' | 'displayName'>): boolean {
   const norm = `${m.machineCode} ${m.displayName}`.toLowerCase().replace(/[\s_-]/g, '');
   return norm.includes('hstamp') || norm.includes('hotstamp');
-}
-
-// Per-metric green / amber colour thresholds for the KPI table. Editable
-// by a signed-in supervisor (the floor tunes them per plant); persisted
-// per-browser in localStorage. A value ≥ green → green, ≥ amber → amber,
-// else red.
-interface KpiThresholds {
-  effGreen: number;
-  effAmber: number;
-  yieldGreen: number;
-  yieldAmber: number;
-  /** Output vs Planning.csv scheduled output, and the
-   *  "vs Plan" column. Blue at/above planBlue %, amber at/above planAmber
-   *  %, red below. */
-  planBlue: number;
-  planAmber: number;
-}
-
-const DEFAULT_THRESHOLDS: KpiThresholds = {
-  effGreen: 85,
-  effAmber: 70,
-  yieldGreen: 98,
-  yieldAmber: 95,
-  planBlue: 95,
-  planAmber: 80,
-};
-
-const THRESHOLDS_KEY = 'pmd.kpiThresholds';
-
-function loadThresholds(): KpiThresholds {
-  try {
-    const raw = localStorage.getItem(THRESHOLDS_KEY);
-    if (!raw) return { ...DEFAULT_THRESHOLDS };
-    const parsed = JSON.parse(raw) as Partial<KpiThresholds>;
-    // Merge over defaults so a partial / older blob never yields NaN.
-    return { ...DEFAULT_THRESHOLDS, ...parsed };
-  } catch {
-    return { ...DEFAULT_THRESHOLDS };
-  }
-}
-
-function saveThresholds(t: KpiThresholds): void {
-  try {
-    localStorage.setItem(THRESHOLDS_KEY, JSON.stringify(t));
-  } catch {
-    /* private mode — keep the in-memory copy, just don't persist */
-  }
 }
 
 // Management KPI view (`#/kpi`) for daily / weekly / monthly meetings.
@@ -1112,17 +1072,6 @@ function colourClass(v: number | null, green: number, amber: number): string {
   return 'red';
 }
 
-/** Output-vs-plan colouring, on the one unified traffic-light language as
- *  every other KPI: green = met, amber = close, red = short; '' (no
- *  colour) when there's nothing to judge against. (Was 红黄蓝 with blue
- *  for "met" — dropped so the whole board reads consistently.) */
-function planColourClass(pct: number | null, t: KpiThresholds): string {
-  if (pct == null) return '';
-  if (pct >= t.planBlue) return 'green';
-  if (pct >= t.planAmber) return 'amber';
-  return 'red';
-}
-
 /** Output cell judged against the planning-driven expectation: value
  *  coloured green / amber / red, tooltip explains the maths. Plain cell
  *  when the slice carries no expectation (job rows, no cycle time). */
@@ -1962,14 +1911,14 @@ function render(): void {
       const key = el.dataset.th as keyof KpiThresholds;
       const v = Math.max(0, Math.min(100, Math.round(Number(el.value) || 0)));
       S!.thresholds = { ...S!.thresholds, [key]: v };
-      saveThresholds(S!.thresholds);
+      saveKpiThresholds(S!.thresholds);
       // Recolour only — no data refetch needed.
       render();
     }),
   );
   app.querySelector<HTMLButtonElement>('[data-th-reset]')?.addEventListener('click', () => {
-    S!.thresholds = { ...DEFAULT_THRESHOLDS };
-    saveThresholds(S!.thresholds);
+    S!.thresholds = { ...DEFAULT_KPI_THRESHOLDS };
+    saveKpiThresholds(S!.thresholds);
     render();
   });
   app.querySelectorAll<HTMLButtonElement>('[data-toggle]').forEach((b) =>
@@ -2493,7 +2442,7 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     period: 'last3',
     customFrom: dateKey(weekAgo),
     customTo: dateKey(today),
-    thresholds: loadThresholds(),
+    thresholds: loadKpiThresholds(),
     machines,
     loading: true,
     rows: [],

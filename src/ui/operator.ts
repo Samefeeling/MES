@@ -696,6 +696,21 @@ function isPastShift(): boolean {
 }
 
 const OPERATOR_FUTURE_ORDER_DAYS = 5;
+const MANUAL_ORDER_DROPDOWN_TTL_MS = 48 * 60 * 60 * 1000;
+
+/** Manual PMD_ManualOrders rows are a short-lived escape hatch, not a
+ * permanent planning queue. Missing/malformed legacy Created values fail
+ * open so an old row is not silently lost without a trustworthy clock. */
+export function manualOrderDropdownVisible(
+  order: PlanningOrder,
+  now: Date = new Date(),
+): boolean {
+  if (!order.manuallyAdded || order.source !== 'Manual') return true;
+  if (!order.createdAt) return true;
+  const created = new Date(order.createdAt).getTime();
+  if (!Number.isFinite(created)) return true;
+  return now.getTime() - created < MANUAL_ORDER_DROPDOWN_TTL_MS;
+}
 
 /** Operator Job# visibility by Epicor JobHead_StartDate (`plannedStart`).
  * There is deliberately no lower bound: an overdue order still present in
@@ -726,9 +741,11 @@ export function operatorPlanningOrderVisible(
   machineCode: string,
   anchorDate: Date,
   showAll = false,
+  now: Date = new Date(),
 ): boolean {
   return (
     planningOrderMatchesMachine(order, machineCode, true) &&
+    manualOrderDropdownVisible(order, now) &&
     operatorOrderStartVisible(order.plannedStart, anchorDate, showAll)
   );
 }
@@ -3643,13 +3660,14 @@ async function multiFillApply(
 // Manual order entry (PMD_ManualOrders) — supervisor-only escape hatch
 // for a job the Epicor planning extract doesn't carry yet (rush order,
 // extract lag). The order persists to SharePoint so every press's Job#
-// dropdown sees it; once Epicor picks the job up, the ERP row wins.
+// dropdown sees it for up to 48 hours; once Epicor picks the job up, the
+// ERP row wins sooner.
 
 function openAddOrderModal(): void {
   if (!isSupervisor() || !dalRef.createManualOrder) return;
   const mc = openModal(`<div class="bd-modal add-ord-modal">
     <h2 class="bd-title">➕ Add order manually</h2>
-    <p class="bd-sub">For a job that's missing from the Epicor planning extract. It appears in every press's Job# list until Epicor catches up — then the ERP row takes over automatically.</p>
+    <p class="bd-sub">For a job that's missing from the Epicor planning extract. It appears in every press's Job# list for up to 48 hours, or until Epicor catches up and its ERP row takes over.</p>
     <div class="dcl-row">
       <label>Job # *<input type="text" data-ao="job" placeholder="e.g. SFM507147" autocomplete="off"></label>
       <label>Part #<input type="text" data-ao="part" placeholder="e.g. 400.410.70" autocomplete="off"></label>
@@ -3698,7 +3716,7 @@ function openAddOrderModal(): void {
         S!.selJob = created.jobNumber;
         saveView();
         closeModal();
-        toast(`Order ${created.jobNumber} added — it's now selectable on every press`, 'ok');
+        toast(`Order ${created.jobNumber} added — selectable on every press for 48 hours`, 'ok');
         void reload();
       } catch (e) {
         console.error('[pmd] manual order add failed:', e);

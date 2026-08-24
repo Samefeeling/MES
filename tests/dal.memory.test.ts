@@ -46,6 +46,7 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
     expect(created.manuallyAdded).toBe(true);
     expect(created.orderQty).toBe(500);
     expect(created.jobRequired).toBe(500);
+    expect(new Date(created.createdAt ?? '').getTime()).not.toBeNaN();
     const all = await dal.listPlanning({});
     expect(all.some((o) => o.jobNumber === 'SFM999001')).toBe(true);
     // Same job again (case-insensitive) → rejected, no duplicate.

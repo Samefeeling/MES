@@ -105,7 +105,9 @@ export interface PmdDataLayer {
    *  lag) so the operator can pick it. Supervisor-only in the UI. Stored
    *  outside the planning pipeline (PMD_ManualOrders on SharePoint) and
    *  merged into listPlanning with source 'Manual' — an ERP row for the
-   *  same job number wins once Epicor catches up. Optional. */
+   *  same job number wins once Epicor catches up. The Operator dropdown
+   *  ages the manual row out after 48 hours; the stored row is retained.
+   *  Optional. */
   createManualOrder?(o: {
     jobNumber: string;
     partNumber: string;

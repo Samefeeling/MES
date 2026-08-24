@@ -276,6 +276,9 @@ export interface PlanningOrder {
   isDieChange: boolean;
   manuallyAdded: boolean;
   source: 'ERP' | 'Auto-DC' | 'Manual';
+  /** SharePoint PMD_ManualOrders.Created. Used only to age a manual row
+   *  out of the Operator dropdown after 48 hours; absent on ERP/history. */
+  createdAt?: string;
 }
 
 export interface ProductionRecord {
