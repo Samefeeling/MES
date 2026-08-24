@@ -12,12 +12,10 @@ import {
   COLOR_CHANGE_STD_HRS,
   DIE_CHANGE_STD_HRS,
   INSERT_CHANGE_STD_HRS,
-  expectedShiftOutput,
-  expectedShiftOutputFromPlanning,
-  expectedShiftOutputFromTargets,
   setupJudgement,
   setupStandardHours,
 } from '../core/standards';
+import { expectedScheduledOutputForShift } from '../core/schedule';
 import {
   currentShift,
   dateKey,
@@ -88,7 +86,7 @@ interface KpiThresholds {
   effAmber: number;
   yieldGreen: number;
   yieldAmber: number;
-  /** Output vs planning-expected output (core/standards.ts), and the
+  /** Output vs Planning.csv scheduled output, and the
    *  "vs Plan" column. Blue at/above planBlue %, amber at/above planAmber
    *  %, red below. */
   planBlue: number;
@@ -446,6 +444,28 @@ function periodRange(
     to,
     label: from.toLocaleDateString('en-AU', { month: 'long', year: 'numeric' }),
   };
+}
+
+/** Every physical shift instance whose shift-date belongs to the selected
+ * KPI window. An exact preset (Last 3) supplies its own IDs; calendar
+ * presets expand each date to Day/Afternoon/Night. */
+function shiftInstancesInRange(
+  from: Date,
+  to: Date,
+  exact?: Set<string>,
+): string[] {
+  if (exact) return Array.from(exact);
+  const out: string[] = [];
+  const cursor = new Date(from);
+  cursor.setHours(0, 0, 0, 0);
+  const last = new Date(to);
+  last.setHours(0, 0, 0, 0);
+  while (cursor <= last) {
+    const day = dateKey(cursor);
+    for (const code of SHIFT_ORDER) out.push(`${day}-${code}`);
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return out;
 }
 
 function inRange(
@@ -824,18 +844,6 @@ async function compute(now = new Date()): Promise<void> {
   const partDescByJob = new Map<string, string>();
   for (const o of planning) partDescByJob.set(o.jobNumber, o.partDescription);
 
-  // Cycle time (hours per piece — Epicor JobOper_ProdStandard, the
-  // "Standard hour") and planned start (JobHead_StartDate + StartHour)
-  // per job, feeding the expected-output judgement (core/standards.ts).
-  // Planning seeds both; the signed rows' denormalised copies override
-  // below, because planning rolls off Epicor once an order completes.
-  const ctByJob = new Map<string, number>();
-  const psByJob = new Map<string, string>();
-  for (const o of planning) {
-    if (o.qtyPerHr > 0) ctByJob.set(o.jobNumber, o.qtyPerHr);
-    if (o.plannedStart) psByJob.set(o.jobNumber, o.plannedStart);
-  }
-
   const charts = new Map<string, ChartBucket>();
   const rows: KpiRow[] = S!.machines.map((m, i) => {
     const all = perMachineProd[i];
@@ -849,23 +857,7 @@ async function compute(now = new Date()): Promise<void> {
       // comment above. Skip blanks so we never blow away a planning seed
       // with an empty production row (the non-canonical slots carry '').
       if (r.partDescription) partDescByJob.set(r.jobNumber, r.partDescription);
-      // Same production-wins rule for the expectation inputs.
-      if (r.cycleTime && r.cycleTime > 0) ctByJob.set(r.jobNumber, r.cycleTime);
-      if (r.plannedStart) psByJob.set(r.jobNumber, r.plannedStart);
     }
-    // Planning queue for the schedule-based expectation: this machine's
-    // live orders in planned sequence. Die-change pseudo-rows are
-    // excluded — changeover time enters the model as the OBSERVED
-    // occurrences × standard instead.
-    const planQueue = planning
-      .filter((o) => o.machineCode === m.machineCode && !o.isDieChange)
-      .map((o) => ({
-        jobNumber: o.jobNumber,
-        plannedStart: o.plannedStart,
-        remainingLaborHrs: o.duration,
-        remainingQty: o.jobRequired > 0 ? o.jobRequired : o.orderQty,
-        hrsPerPiece: o.qtyPerHr,
-      }));
     // Single pass per machine: partition into byShift × byDateBucket, then
     // aggregate each slice once at the end. Avoids re-filtering `all` 3×
     // and re-walking each shift slice to bucket by date.
@@ -880,6 +872,25 @@ async function compute(now = new Date()): Promise<void> {
       const arr = m2.get(dateKey) ?? [];
       arr.push(r);
       m2.set(dateKey, arr);
+    }
+    // A scheduled shift with zero production is still a real vs Plan data
+    // point (0%, not invisible). Seed empty buckets from Planning.csv;
+    // future time and shifts with no elapsed plan are intentionally omitted.
+    const expectedByShift = new Map<string, number>();
+    for (const shiftId of shiftInstancesInRange(from, to, shiftIds)) {
+      const expected = expectedScheduledOutputForShift(
+        shiftId,
+        planning,
+        m.machineCode,
+        now,
+      ).pieces;
+      if (expected == null) continue;
+      expectedByShift.set(shiftId, expected);
+      const parsed = parseShiftId(shiftId);
+      if (!parsed) continue;
+      const date = shiftId.slice(0, 10);
+      const shiftMap = buckets.get(parsed.code);
+      if (shiftMap && !shiftMap.has(date)) shiftMap.set(date, []);
     }
 
     const byShift: Record<ShiftCode, ShiftAgg> = {
@@ -902,68 +913,12 @@ async function compute(now = new Date()): Promise<void> {
       for (const [dateKey, recs] of shiftBuckets) {
         flat.push(...recs);
         const k = aggregate(recs);
-        // Planning-driven expectation + changeover standards are per
-        // SHIFT INSTANCE (runs-of-D counting and the planned-start cut
-        // both need one shift's clock window); summed onto the shift agg
-        // after toAgg below. The planned-queue simulation is the primary
-        // model (order sequence + RemainingQty caps); when the bucket's
-        // orders have rolled off planning (history), fall back to the
-        // records-based footprint model, whose inputs are denormalised
-        // onto the signed rows.
+        // Standards are still measured from the signed status blocks. vs
+        // Plan is deliberately independent: it comes only from the exact
+        // Planning.csv Start–Due overlap and standard rate for this press.
         const bShiftId = `${dateKey}-${code}`;
         const std = setupStandardHours(countSetupEvents(recs));
-        const smokoHrs =
-          recs.filter((r) => r.statusCode === 'M').length * 0.5;
-        // Exact remaining at THIS shift's start beats the planning
-        // snapshot: each signed canonical row carries JobLeft (order
-        // TOTAL − Σ good of earlier-started signed shifts, retro-healed
-        // on late sign-offs) + CycleTime, denormalised at sign-off.
-        // Epicor's Calculated_Remaining* decrement daily as shifts book
-        // in, so for any bucket older than the last sync they overstate
-        // progress; the ledger value is per-shift truth. Planning stays
-        // in the queue for orders that DIDN'T run (the follow-on order
-        // the shift was supposed to start).
-        const q = new Map(planQueue.map((o) => [o.jobNumber, o]));
-        for (const r of recs) {
-          if (r.slotIndex !== 0 || r.jobLeft == null) continue;
-          const ct =
-            r.cycleTime && r.cycleTime > 0
-              ? r.cycleTime
-              : (q.get(r.jobNumber)?.hrsPerPiece ?? 0);
-          if (!(ct > 0)) continue;
-          q.set(r.jobNumber, {
-            jobNumber: r.jobNumber,
-            // JobLeft is measured AT shift start, so the entry is
-            // runnable from the shift's first slot unless planning says
-            // it wasn't due yet.
-            plannedStart:
-              r.plannedStart ||
-              q.get(r.jobNumber)?.plannedStart ||
-              shiftBounds(bShiftId)?.start.toISOString() ||
-              '',
-            remainingLaborHrs: r.jobLeft * ct,
-            remainingQty: r.jobLeft,
-            hrsPerPiece: ct,
-          });
-        }
-        const fromPlan = expectedShiftOutputFromPlanning(
-          bShiftId,
-          [...q.values()],
-          std.dieStdHrs + std.colorStdHrs + std.insertStdHrs,
-          smokoHrs,
-        );
-        // Primary model: Σ Shift Targets of the orders that ran — the
-        // SAME per-job number the operator sheet showed and sign-off
-        // stamped (min(JobLeft, hours-left-after-earlier-orders-and-
-        // changeover ÷ ProdStandard), core/targets.ts), so Output "/n"
-        // and vs Plan judge against the target the floor was actually
-        // given. Buckets whose rows lack the denormalised JobLeft /
-        // CycleTime (legacy sign-offs) fall back to the planned-queue
-        // simulation, then the records-footprint model.
-        const expPieces =
-          expectedShiftOutputFromTargets(recs, ctByJob) ??
-          fromPlan.pieces ??
-          expectedShiftOutput(bShiftId, recs, ctByJob, psByJob).pieces;
+        const expPieces = expectedByShift.get(bShiftId) ?? null;
         stdAcc.push({ exp: expPieces, std });
         const cb = charts.get(dateKey) ?? {
           key: dateKey, // full YYYY-MM-DD — the month rollup groups on it
@@ -1038,9 +993,8 @@ async function compute(now = new Date()): Promise<void> {
       })
       .sort(byCompletion);
 
-    // Schedule Adherence was retired here — the Output "vs Plan" column
-    // now carries plan attainment, judged against the simulated planned-
-    // queue expectation rather than a separate scheduled-qty ratio.
+    // Schedule Adherence was retired here — Output / vs Plan now carry
+    // attainment against the exact Planning.csv time-window expectation.
     return {
       machineCode: m.machineCode,
       handovers: collectHandovers(all),
@@ -1177,7 +1131,7 @@ function outputCell(a: ShiftAgg): string {
   if (a.expOutput == null || a.expOutput <= 0) return `<td class="num">${n}</td>`;
   const pct = Math.round((a.output / a.expOutput) * 100);
   const cls = planColourClass(pct, S!.thresholds);
-  const title = `Expected ≈ ${a.expOutput} pcs = Σ Shift Target of the orders run (per job: the smaller of Job Left and the shift hours left after earlier orders + changeover, ÷ JobOper_ProdStandard — the same target the operator sheet showed). Shifts without recorded targets use the planned order queue instead (capped by remaining qty; changeover standards deducted: die 4h, colour/insert 30min) — actual ${a.output} = ${pct}%`;
+  const title = `Expected ${a.expOutput} pcs from Planning.csv = elapsed Start–Due overlap for this machine ÷ hours per piece (the reciprocal of JobOper_ProdStandard). Completed shifts use the full scheduled overlap; the current shift stops at now. Status blocks and filled Shift Targets are not used — actual ${a.output} = ${pct}%`;
   return `<td class="num ${cls}" title="${escapeHtml(title)}">${n} <span class="kpi-exp">/${a.expOutput}</span></td>`;
 }
 
@@ -1920,7 +1874,7 @@ function render(): void {
             <th title="D — Die change">Die h</th>
             <th title="C — Colour change">Colour h</th>
             <th title="I — Insert change">Insert h</th>
-            <th>Efficiency*</th><th title="Total Good ÷ expected (Σ Shift Targets of the orders run; planning fallback)">vs Plan</th>
+            <th>Efficiency*</th><th title="Total Good ÷ Planning.csv scheduled output (Machine + StartDate/DueDate + JobOper_ProdStandard)">vs Plan</th>
             <th class="kpi-ho-head">Handover</th>
           </tr></thead>
           <tbody>${body}</tbody>
@@ -1966,12 +1920,12 @@ function render(): void {
       ${charts}
       <div class="kpi-note">
         <div>Every metric uses one traffic-light language: <b>🟢 met · 🟡 close · 🔴 short</b>.</div>
-        <div><b>Output 🟢🟡🔴</b> = Σ Total Good vs expected (the small “/n”). Expected = Σ Shift Target of the orders run that shift — per job the smaller of its Job Left at shift start and ⌊(8 h − hours held by earlier orders − changeover D/C/I) ÷ ProdStandard⌋, i.e. the very target the operator sheet showed. Shifts signed before Job Left / CycleTime were recorded fall back to simulating the machine's planned order queue (window = 8 h − Σ changeover standards − smoko; per order capped by its remaining qty).</div>
+        <div><b>Output 🟢🟡🔴</b> = Σ Total Good vs the Planning.csv expectation (the small “/n”). For each machine and shift, expected pieces = elapsed overlap of JobHead_StartDate → JobHead_ReqDueDate ÷ hours per piece (the reciprocal of JobOper_ProdStandard). Completed shifts use the full overlap; the current shift only uses time elapsed through now.</div>
         <div><b>Yield%</b> = Good ÷ (Good + Reject).</div>
         <div><b>Reject 🟢🔴</b> = judged per shift: 🟢 up to ${REJECT_PER_SHIFT_MAX} rejects a shift, 🔴 above. Rows covering several shifts (machine, order, TOTAL) scale the allowance by the shifts they roll up, so a machine isn't red for three green shifts.</div>
         <div><b>Startup h</b> = hours in S blocks (warm-up). Counted separately from the D / C / I changeover columns.</div>
         <div><b>Efficiency*</b> = Run slots ÷ all filled slots.</div>
-        <div><b>vs Plan 🟢🟡🔴</b> = Total Good ÷ the same expectation the Output cell shows (Σ Shift Targets, planning fallback) — the percentage form of Output's “/n”.</div>
+        <div><b>vs Plan 🟢🟡🔴</b> = Total Good ÷ that Planning.csv expectation. Filled status blocks, Shift Target and changeover/smoko deductions are not part of this comparison. If an historical order is no longer in Planning.csv, the result is “—”.</div>
         <div><b>Die / Colour / Insert h 🟢🟡🔴</b> = hours in D / C / I blocks vs standard = changeovers × (die 4 h · colour 0.5 h · insert 0.5 h); 🟢 ≤ std, 🟡 ≤ std + 0.5 h, 🔴 above. <b>One changeover per order</b> — a die change the sheet logged in two pieces earns one 4 h allowance, not two.</div>
         <div>Colour thresholds for Output / Yield / Efficiency are editable in the panel above. Shift sub-rows show each shift's contribution to the period total.</div>
       </div>

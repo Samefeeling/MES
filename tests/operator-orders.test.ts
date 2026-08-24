@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { operatorOrderStartVisible } from '../src/ui/operator';
+import { operatorOrderStartVisible, operatorPlanningOrderVisible } from '../src/ui/operator';
+import { order } from './helpers';
 
 describe('Operator planning-order StartDate window', () => {
   const anchor = new Date(2026, 6, 16, 12);
@@ -21,5 +22,28 @@ describe('Operator planning-order StartDate window', () => {
   it('keeps missing or malformed legacy StartDate values selectable', () => {
     expect(operatorOrderStartVisible('', anchor)).toBe(true);
     expect(operatorOrderStartVisible('not-a-date', anchor)).toBe(true);
+  });
+});
+
+describe('Operator Job# machine filter', () => {
+  const anchor = new Date(2026, 6, 16, 12);
+
+  it('matches Planning.csv Machine case-insensitively and trims whitespace', () => {
+    expect(
+      operatorPlanningOrderVisible(order({ jobNumber: 'J1', machineCode: ' 1300t ' }), '1300T', anchor),
+    ).toBe(true);
+    expect(
+      operatorPlanningOrderVisible(order({ jobNumber: 'J2', machineCode: '125T' }), '1300T', anchor),
+    ).toBe(false);
+  });
+
+  it('keeps supervisor manual orders without a machine universally selectable', () => {
+    expect(
+      operatorPlanningOrderVisible(
+        order({ jobNumber: 'MANUAL', machineCode: '', manuallyAdded: true, source: 'Manual' }),
+        '1300T',
+        anchor,
+      ),
+    ).toBe(true);
   });
 });

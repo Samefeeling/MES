@@ -263,6 +263,15 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    tooltip. */
 .trace-rej-slot{height:15px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#b91c1c;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}
 .trace-rej-slot.has-rej{background:#fee2e2;border:1px solid #fca5a5;border-radius:0;cursor:help}
+/* Live Status is the dense floor-at-a-glance view; keep Search / KPI day
+   cards at their existing readable size. */
+.trace-card.is-live .trace-qc-slot{height:13px;font-size:8px}
+.trace-card.is-live .trace-slot{height:17px;font-size:10px}
+.trace-schedule{margin:3px 0 2px}
+.trace-schedule-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:2px;font-size:10px;color:var(--mu)}
+.trace-schedule-head b{text-transform:uppercase;letter-spacing:.35px;color:#334155}
+.trace-schedule-track{position:relative;min-height:18px;background:repeating-linear-gradient(90deg,#f8fafc 0,#f8fafc calc(12.5% - 1px),#cbd5e1 calc(12.5% - 1px),#cbd5e1 12.5%);border:1px solid var(--bd);border-radius:4px;overflow:hidden}
+.trace-schedule-bar{position:absolute;height:16px;min-width:2px;padding:1px 4px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;background:#0f766e;color:#fff;border:1px solid #115e59;font-size:9px;font-weight:800;line-height:12px;cursor:help;box-sizing:border-box}
 .trace-now-line{position:absolute;top:-2px;bottom:-2px;width:2px;background:rgba(220,38,38,.55);box-shadow:0 0 6px rgba(220,38,38,.5);pointer-events:none;z-index:2;transform:translateX(-1px)}
 .trace-section{margin-top:6px;font-size:13px}
 .trace-section b{display:block;margin-bottom:4px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--mu)}

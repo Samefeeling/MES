@@ -428,8 +428,8 @@ export function seedPlanning(now: Date): PlanningOrder[] {
         plannedEnd: e1.toISOString(),
         orderQty: 480,
         jobRequired: 240,
-        // HOURS PER PIECE (Epicor JobOper_ProdStandard semantics — see
-        // core/targets.ts): 1/60 h/pc = 60 pieces/hour.
+        // Internal HOURS PER PIECE (see core/targets.ts): 1/60 h/pc =
+        // 60 pieces/hour. The CSV parser performs this conversion for ERP.
         qtyPerHr: 1 / 60,
         duration: 4,
         released: true,

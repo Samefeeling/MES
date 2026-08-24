@@ -88,9 +88,9 @@ export function hoursUnavailableFor(
 /**
  * Shift Target = pieces to aim for this shift.
  *
- * `qtyPerHr` is sourced from Epicor's `JobOper_ProdStandard`, which on
- * this tenant is *hours per piece* (cycle time, ~0.005 range) — that's
- * why the old "× pieces/hour" formula rounded to zero.
+ * `qtyPerHr` is the app's internal hours-per-piece value. The current
+ * Planning.csv exports `JobOper_ProdStandard` as pieces/hour, and the CSV
+ * parser takes its reciprocal before this calculation sees it.
  *
  * Rule (operator-stated):
  *   avail    = 8 h − hours consumed by previous order(s), if any

@@ -46,6 +46,7 @@ export {
 import { sumOtherShiftGood, unsignedEarlierTuples } from '../core/jobgood';
 import { bdLabelFor } from '../core/breakdown';
 import { compareOrdersByStart } from '../core/planning';
+import { planningOrderMatchesMachine } from '../core/schedule';
 import { type Handover, parseHandover as sharedParseHandover } from '../core/handover';
 import { openBreakdownCascade } from './breakdown';
 import { toast } from './toast';
@@ -717,6 +718,21 @@ export function operatorOrderStartVisible(
   return start <= horizon.getTime();
 }
 
+/** Active/future Job# dropdown rule. ERP rows must belong to the selected
+ * press; supervisor-created manual rows (which intentionally have no
+ * machine) remain available everywhere. */
+export function operatorPlanningOrderVisible(
+  order: PlanningOrder,
+  machineCode: string,
+  anchorDate: Date,
+  showAll = false,
+): boolean {
+  return (
+    planningOrderMatchesMachine(order, machineCode, true) &&
+    operatorOrderStartVisible(order.plannedStart, anchorDate, showAll)
+  );
+}
+
 /**
  * The selected shift hasn't started yet — its wall-clock start is still in
  * the future. The classic trap is a Night-shift supervisor working past
@@ -809,12 +825,9 @@ function shiftOrders(): PlanningOrder[] {
   const planned = S!.planning
     .slice()
     .filter((o) =>
-      operatorOrderStartVisible(o.plannedStart, S!.viewDate, S!.showAllPlanningOrders),
+      operatorPlanningOrderVisible(o, S!.mc, S!.viewDate, S!.showAllPlanningOrders),
     )
-    .sort(
-      (a, b2) =>
-        new Date(a.plannedStart).getTime() - new Date(b2.plannedStart).getTime(),
-    );
+    .sort(compareOrdersByStart);
   const knownIds = new Set(planned.map((o) => o.jobNumber));
   const extras = historicalIds.filter((j) => !knownIds.has(j)).map(historicalOrder);
   return [...planned, ...extras];
@@ -1861,7 +1874,7 @@ function buildMeta(): string {
     .join('');
   const orders = shiftOrders();
   // Job# is a strict dropdown of the released orders for this press, sorted
-  // by planned start (JobHead_StartDate + StartHour), earliest first — the
+  // by planned start (JobHead_StartDate now includes time), earliest first — the
   // next order to run is the first thing the operator sees. Free typing was
   // removed on request: workers were entering item / part numbers (and other
   // junk) into the Job# box. A just-released order appears after the 15-min

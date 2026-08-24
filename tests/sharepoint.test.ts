@@ -23,22 +23,33 @@ describe('SharePoint DAL surface', () => {
 describe('parsePlanningCsv', () => {
   it('parses headers + rows with the expected Epicor column names', () => {
     const csv =
-      'JobHead_JobNum,JobHead_PartNum,JobHead_PartDescription,Calculated_RemainingQty,JobHead_StartDate,JobHead_ReqDueDate,Calculated_RemaingLaborHrs,JobOper_ProdStandard\n' +
-      'J100,P1,"Widget, large",250,2026-06-02T07:00:00,2026-06-05T15:00:00,8.5,30\n' +
-      'J101,P2,Bolt,0,,,0,0\n';
+      'Machine,JobHead_StartDate,JobOper_ProdStandard,JobHead_ReqDueDate,JobHead_JobNum,JobHead_PartNum,JobHead_PartDescription,Calculated_RemainingQty,JobHead_ProdQty\n' +
+      '1300T,02/06/2026 07:00,30,05/06/2026 15:00,J100,P1,"Widget, large",250,1000\n' +
+      '125T,,, ,J101,P2,Bolt,0,0\n';
     const out = parsePlanningCsv(csv);
     expect(out).toHaveLength(2);
     expect(out[0].jobNumber).toBe('J100');
     expect(out[0].partNumber).toBe('P1');
     expect(out[0].partDescription).toBe('Widget, large');
     expect(out[0].jobRequired).toBe(250);
-    // No JobHead_ProdQty column → Order Qty falls back to the remaining qty.
-    expect(out[0].orderQty).toBe(250);
-    expect(out[0].duration).toBe(8.5);
-    expect(out[0].qtyPerHr).toBe(30);
+    expect(out[0].machineCode).toBe('1300T');
+    expect(out[0].orderQty).toBe(1000);
+    expect(out[0].duration).toBe(80);
+    expect(out[0].qtyPerHr).toBeCloseTo(1 / 30);
     expect(out[0].plannedStart).not.toBe('');
     expect(out[1].jobNumber).toBe('J101');
     expect(out[1].plannedStart).toBe('');
+  });
+
+  it('keeps the new 24-hour AU timestamps as Sydney wall-clock values', () => {
+    const csv =
+      'Machine,JobHead_StartDate,JobOper_ProdStandard,JobHead_ReqDueDate,JobHead_JobNum,JobHead_PartNum,JobHead_PartDescription,Calculated_RemainingQty,JobHead_ProdQty\n' +
+      '1300T,24/08/2026 23:00,50,25/08/2026 07:00,J-NIGHT,P1,Night part,300,500\n';
+    const [parsed] = parsePlanningCsv(csv);
+    expect(parsed.plannedStart).toBe('2026-08-24T23:00:00');
+    expect(parsed.plannedEnd).toBe('2026-08-25T07:00:00');
+    expect(parsed.duration).toBe(8);
+    expect(parsed.qtyPerHr).toBeCloseTo(0.02);
   });
 
   it('maps JobHead_ProdQty to Order Qty, keeping Calculated_RemainingQty for Job Left', () => {
@@ -82,7 +93,7 @@ describe('parsePlanningCsv', () => {
     expect(out[0].plannedStart).toMatch(/2026-06-0[12]T/);
   });
 
-  it('layers JobHead_StartHour decimal hours onto JobHead_StartDate', () => {
+  it('keeps legacy JobHead_StartHour support without replacing DueDate', () => {
     // 18.68 → 18:40:48 per Epicor's decimal-hours convention.
     const csv =
       'JobHead_JobNum,JobHead_StartDate,JobHead_ReqDueDate,Calculated_RemaingLaborHrs,JobHead_StartHour\n' +
@@ -92,10 +103,8 @@ describe('parsePlanningCsv', () => {
     expect(t.getHours()).toBe(18);
     expect(t.getMinutes()).toBe(40);
     expect(t.getSeconds()).toBe(48);
-    // plannedEnd should derive from the precise start + duration (2h).
-    const end = new Date(out[0].plannedEnd);
-    expect(end.getHours()).toBe(20);
-    expect(end.getMinutes()).toBe(40);
+    // DueDate is now authoritative; the retired labor-hours value is ignored.
+    expect(out[0].plannedEnd).toBe('2026-06-05');
   });
 
   it('falls back through StartTime / Start_Time / Start Time header variants', () => {

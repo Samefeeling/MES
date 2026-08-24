@@ -12,6 +12,7 @@ import {
 import { bdLabelFor } from '../core/breakdown';
 import { cavityGross } from '../core/metrics';
 import { ordersCoRun, type DieCoRun } from '../core/corun';
+import { plannedOrdersForShift, scheduleSegmentsForShift } from '../core/schedule';
 import {
   hoursUnavailableFor,
   jobLeftPiecesFor,
@@ -73,6 +74,8 @@ export interface TraceRow {
   rejects: ProductionRecord[];
   bdSlots: { slot: number; code: string; ticket: string; note: string }[];
   records: ProductionRecord[];
+  /** Planning.csv rows for this machine that overlap the live shift. */
+  schedule?: PlanningOrder[];
   /** True when this row is just a placeholder for an idle machine on
    *  the live view — render the card with a muted "Idle" badge. */
   idle?: boolean;
@@ -506,6 +509,48 @@ function traceGrids(r: TraceRow): { sheet: string; rej: string } {
   return { sheet: `<div class="trace-sheet">${qc}${timeline}</div>`, rej };
 }
 
+function scheduleTime(value: string): string {
+  const d = new Date(value);
+  if (!Number.isFinite(d.getTime())) return value;
+  return `${d.toLocaleDateString('en-AU', { day: '2-digit', month: 'short' })} ${d.toLocaleTimeString(
+    'en-AU',
+    { hour: '2-digit', minute: '2-digit', hour12: false },
+  )}`;
+}
+
+/** Planning.csv Start–Due bars aligned to the same eight-hour shift as the
+ * live status grid. Overlapping jobs occupy separate lanes. */
+export function renderSchedule(r: TraceRow): string {
+  const { segments, laneCount } = scheduleSegmentsForShift(
+    r.schedule ?? [],
+    r.machineCode,
+    r.shiftId,
+  );
+  if (!segments.length) return '';
+  const bars = segments
+    .map(({ order, leftPct, widthPct, lane }) => {
+      const piecesPerHour = order.qtyPerHr > 0 ? 1 / order.qtyPerHr : 0;
+      const tip = [
+        `Job ${order.jobNumber}`,
+        `${order.partNumber}${order.partDescription ? ' — ' + order.partDescription : ''}`,
+        `Start ${scheduleTime(order.plannedStart)}`,
+        `Due ${scheduleTime(order.plannedEnd)}`,
+        `Planned qty ${order.orderQty || '—'}`,
+        `Standard ${piecesPerHour > 0 ? piecesPerHour.toFixed(2) + ' pcs/h' : '—'}`,
+      ].join('\n');
+      return `<div class="trace-schedule-bar" style="left:${leftPct.toFixed(
+        3,
+      )}%;width:${widthPct.toFixed(3)}%;top:${lane * 18}px" title="${escapeHtml(tip)}">${escapeHtml(
+        order.jobNumber,
+      )}</div>`;
+    })
+    .join('');
+  return `<div class="trace-schedule">
+    <div class="trace-schedule-head"><b>Schedule</b><span>Planning.csv · Start → Due</span></div>
+    <div class="trace-schedule-track" style="height:${Math.max(18, laneCount * 18)}px">${bars}</div>
+  </div>`;
+}
+
 /** The shift's breakdowns spelled out under its grids: when, which code,
  *  what it was, and the Mango ticket if one was raised. */
 function breakdownLines(r: TraceRow): string {
@@ -546,11 +591,20 @@ export function renderCard(r: TraceRow): string {
   // already said. Collapse it to the one line that IS the news — which
   // press is sitting idle — so the presses that ARE running aren't
   // pushed off the screen by the ones that aren't.
-  if (!r.jobNumber) {
+  const schedule = renderSchedule(r);
+  if (!r.jobNumber && !schedule) {
     return `<div class="trace-card is-idle is-live trace-card-slim act-${activity}" style="--mc:${activityCol}">
       <div class="trace-card-head">
         ${machineName}<span class="trace-job">(no job)</span>${activityBadge}
       </div>
+    </div>`;
+  }
+  if (!r.jobNumber) {
+    return `<div class="trace-card is-idle is-live act-${activity}" style="--mc:${activityCol}">
+      <div class="trace-card-head">
+        ${machineName}<span class="trace-job">(no live job)</span>${activityBadge}
+      </div>
+      ${schedule}
     </div>`;
   }
   const grids = traceGrids(r);
@@ -579,6 +633,7 @@ export function renderCard(r: TraceRow): string {
     </div>
     ${grids.sheet}
     ${grids.rej}
+    ${schedule}
     ${bdLines}
   </div>`;
 }
@@ -779,8 +834,9 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
   const out: TraceRow[] = [];
   for (const m of sortedMachines) {
     const recs = byMachine.get(m.machineCode) ?? [];
+    const machineSchedule = plannedOrdersForShift(planning, m.machineCode, live.shiftId);
     if (recs.length === 0) {
-      out.push(idlePlaceholder(m.machineCode, live.shiftId));
+      out.push(idlePlaceholder(m.machineCode, live.shiftId, machineSchedule));
       continue;
     }
     // One card per machine: a press can carry several jobs in the same
@@ -802,10 +858,10 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
         ordersCoRun(latestDie, dieFor(row.partNumber), latest.orderQty, row.orderQty),
     );
     if (coRunners.length) {
-      out.push({ ...latest, coRun: true });
-      for (const row of coRunners) out.push({ ...row, coRun: true });
+      out.push({ ...latest, coRun: true, schedule: machineSchedule });
+      for (const row of coRunners) out.push({ ...row, coRun: true, schedule: machineSchedule });
     } else {
-      out.push(latest);
+      out.push({ ...latest, schedule: machineSchedule });
     }
   }
   state.liveRows = out;
@@ -833,7 +889,11 @@ function drawNowLines(): void {
     Math.min(1, (Date.now() - b.start.getTime()) / (b.end.getTime() - b.start.getTime())),
   );
   const pct = (frac * 100).toFixed(2);
-  hostEl?.querySelectorAll<HTMLElement>('.trace-card.is-live .trace-timeline').forEach((tl) => {
+  hostEl
+    ?.querySelectorAll<HTMLElement>(
+      '.trace-card.is-live .trace-timeline, .trace-card.is-live .trace-schedule-track',
+    )
+    .forEach((tl) => {
     let line = tl.querySelector<HTMLElement>('.trace-now-line');
     if (!line) {
       line = document.createElement('div');
@@ -845,10 +905,14 @@ function drawNowLines(): void {
       hour: '2-digit',
       minute: '2-digit',
     })}`;
-  });
+    });
 }
 
-function idlePlaceholder(machineCode: string, shiftId: string): TraceRow {
+function idlePlaceholder(
+  machineCode: string,
+  shiftId: string,
+  schedule: PlanningOrder[] = [],
+): TraceRow {
   return {
     key: `${machineCode}|${shiftId}|`,
     machineCode,
@@ -870,6 +934,7 @@ function idlePlaceholder(machineCode: string, shiftId: string): TraceRow {
     rejects: [],
     bdSlots: [],
     records: [],
+    schedule,
     idle: true,
   };
 }

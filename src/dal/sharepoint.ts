@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 60597)
+Total output lines: 5561
+
 import type {
   BdCode,
   DieChangeLog,
@@ -227,12 +230,12 @@ const DEFAULT_FIELDS = {
      *  Optional column; stripRejectedFields tolerates absence (then a
      *  reopened order falls back to the old device-local behaviour). */
     reopened: 'Reopened',
-    /** Planned start of the order (JobHead_StartDate + StartHour from the
+    /** Planned start of the order (JobHead_StartDate with its time from the
      *  planning CSV, local ISO '2026-07-01T18:40:00'), denormalised onto
      *  PMD_Production at sign-off — same pattern as PartNum/JobRequired.
      *  Epicor drops completed orders from planning, so without this the
-     *  KPI Schedule Adherence has no planned-start for exactly the jobs
-     *  that finished. Text column (avoids the site-timezone shifting we
+     *  historical operator views retain the original start for jobs that
+     *  finished. Text column (avoids the site-timezone shifting we
      *  hit on Signoff); stripRejectedFields tolerates absence. */
     plannedStart: 'PlannedStart',
   },
@@ -2697,69 +2700,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       try {
         const parsed = JSON.parse(h.qcChecks);
         if (parsed && typeof parsed === 'object') {
-          qcMap = parsed as Record<string, string>;
-        }
-      } catch {
-        /* not JSON — ignore */
-      }
-    }
-    for (let i = 0; i < 16; i++) {
-      const ch = timeline[i];
-      const blank = ch === '·' || ch === ' ' || !ch;
-      // Materialise a slot record when either the status is filled OR a
-      // QC sign-off exists for this slot — otherwise a QC done before
-      // production was logged would be silently dropped on round-trip.
-      if (blank && !qcMap[String(i)]) continue;
-      slots.push({
-        id: 0,
-        machineCode: h.machineCode,
-        shiftId,
-        jobNumber: h.jobNumber,
-        partNumber: h.partNumber,
-        partDescription: h.partDescription,
-        slotIndex: i,
-        statusCode: blank ? '' : (ch as ProductionRecord['statusCode']),
-        countStart: i === 0 ? h.countStart : null,
-        countEnd: i === 0 ? h.countEnd : null,
-        rejectCount: 0,
-        rejects: '{}',
-        purgeKg: null,
-        operator: i === 0 ? h.operator : '',
-        supervisor: i === 0 ? h.supervisor : '',
-        bdIssue: '',
-        mangoTicket: '',
-        handoverNote: i === 0 ? h.handover : '',
-        qcBy: qcMap[String(i)] ?? '',
-        // A reopened-for-correction row is NOT locked — every device reads
-        // the Reopened=Yes flag and unlocks consistently (no device-local
-        // unlock split-brain). It still carries reopened=true so the UI can
-        // limit edits to the already-signed slots.
-        locked: isSignedOff && !h.reopened,
-        reopened: isSignedOff && h.reopened,
-        lockedBy: h.supervisor,
-        lockedAt: signedAt,
-        createdAt: stamp,
-        updatedAt: stamp,
-      });
-    }
-    if (slots.length === 0 || slots[0].slotIndex !== 0) {
-      // Always provide a canonical slot 0 so the UI can read totals.
-      slots.unshift({
-        id: 0,
-        machineCode: h.machineCode,
-        shiftId,
-        jobNumber: h.jobNumber,
-        partNumber: h.partNumber,
-        partDescription: h.partDescription,
-        jobRequired: h.jobRequired,
-        cycleTime: h.cycleTime,
-        slotIndex: 0,
-        statusCode: '',
-        countStart: h.countStart,
-        countEnd: h.countEnd,
-        // PMD_Rejects is the source of truth. When events exist they
-        // fully populate per-slot rejectCount below, so seed slot 0 at 0
-        // to avoid blending a stale PMD_Production.Reject column total
+          qcMap =…597 tokens truncated…ect column total
         // with the event total (the 20-vs-28 drift). Only fall back to
         // the column when there are NO events at all (legacy rows signed
         // off before PMD_Rejects existed, or live rows pre-sign-off).
@@ -5095,12 +5036,12 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
     );
   }
   const iPart = idx('JobHead_PartNum');
+  const iMachine = idx('Machine');
   const iDesc = idx('JobHead_PartDescription');
   const iProd = idx('JobHead_ProdQty');
   const iRem = idx('Calculated_RemainingQty');
   const iStart = idx('JobHead_StartDate');
   const iDue = idx('JobHead_ReqDueDate');
-  const iDur = idx('Calculated_RemaingLaborHrs');
   const iQty = idx('JobOper_ProdStandard');
   // Optional column: decimal hours-of-day for the planned start
   // (e.g. 18.68 → 18:40:48). Epicor emits this separately from the
@@ -5142,28 +5083,34 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
         }
       }
     }
+    // Both fields now contain the actual Sydney wall-clock time. DueDate
+    // is authoritative for the schedule end; duration is their elapsed
+    // span, not the retired Calculated_RemaingLaborHrs export column.
     const dueIso = csvDateToIso(row[iDue] ?? '');
-    const dur = parseFloat(row[iDur] ?? '0') || 0;
-    let end = dueIso;
-    if (startIso && dur > 0) {
-      const endDate = new Date(startIso);
-      if (Number.isFinite(endDate.getTime())) {
-        endDate.setTime(endDate.getTime() + dur * 3600_000);
-        end = localDateTimeIso(endDate);
+    let dur = 0;
+    if (startIso && dueIso) {
+      const startMs = new Date(startIso).getTime();
+      const dueMs = new Date(dueIso).getTime();
+      if (Number.isFinite(startMs) && Number.isFinite(dueMs) && dueMs > startMs) {
+        dur = (dueMs - startMs) / 3600_000;
       }
     }
+    // Epicor now exports JobOper_ProdStandard as pieces/hour. The app's
+    // established internal field is hours/piece, so invert once at the
+    // boundary and keep every downstream calculation unit-safe.
+    const piecesPerHour = parseFloat(row[iQty] ?? '0') || 0;
     out.push({
       id: 0,
       jobNumber: job,
-      machineCode: '',
-      originalMachine: '',
+      machineCode: (row[iMachine] ?? '').trim(),
+      originalMachine: (row[iMachine] ?? '').trim(),
       // Trim Part # so a stray trailing space in the Excel cell can't
       // break the PMD_ProductDieColor Map lookup (operator swatch +
       // KPIs colour column both key on this).
       partNumber: (row[iPart] ?? '').trim(),
       partDescription: row[iDesc] ?? '',
       plannedStart: startIso,
-      plannedEnd: end,
+      plannedEnd: dueIso,
       // Order Qty = total ProdQty; Job Left = remaining. Fall back to the
       // remaining value when the export predates the ProdQty column.
       orderQty:
@@ -5171,7 +5118,7 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
         parseFloat(row[iRem] ?? '0') ||
         0,
       jobRequired: parseFloat(row[iRem] ?? '0') || 0,
-      qtyPerHr: parseFloat(row[iQty] ?? '0') || 0,
+      qtyPerHr: piecesPerHour > 0 ? 1 / piecesPerHour : 0,
       duration: dur,
       released: true,
       isDieChange: false,

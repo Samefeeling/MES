@@ -266,8 +266,12 @@ export interface PlanningOrder {
    *  subtracting PMD's Good from it again double-counts (SFM507147 showed
    *  0 with 656 left). Only used as a last-resort orderQty fallback. */
   jobRequired: number;
+  /** Hours per piece. Planning.csv supplies JobOper_ProdStandard as
+   *  pieces/hour; the CSV parser stores its reciprocal here so existing
+   *  target calculations keep one consistent internal unit. */
   qtyPerHr: number;
-  duration: number; // hours
+  /** Scheduled StartDate → DueDate span, in hours. */
+  duration: number;
   released: boolean;
   isDieChange: boolean;
   manuallyAdded: boolean;

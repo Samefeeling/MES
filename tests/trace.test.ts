@@ -3,6 +3,7 @@ import {
   goodForRecords,
   groupByDay,
   renderCard,
+  renderSchedule,
   syntheticOrderFromRecord,
   type TraceRow,
 } from '../src/ui/trace';
@@ -246,5 +247,23 @@ describe('Live Status card for a press with no order', () => {
     expect(html).toContain('trace-timeline');
     expect(html).toContain('trace-card-totals');
     expect(html).toContain('>J1<');
+  });
+
+  it('shows the planned schedule even while the machine is idle', () => {
+    const schedule = [
+      order({
+        jobNumber: 'PLAN-42',
+        machineCode: '1300T',
+        plannedStart: '2026-07-01T08:00:00',
+        plannedEnd: '2026-07-01T10:00:00',
+        qtyPerHr: 1 / 40,
+      }),
+    ];
+    const card = renderCard(live({ schedule }));
+    expect(card).not.toContain('trace-card-slim');
+    expect(card).toContain('Schedule');
+    expect(card).toContain('PLAN-42');
+    expect(card).toContain('(no live job)');
+    expect(renderSchedule(live({ schedule }))).toContain('left:12.500%');
   });
 });
