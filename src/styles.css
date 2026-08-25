@@ -272,11 +272,7 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .trace-schedule-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:2px;font-size:10px;color:var(--mu)}
 .trace-schedule-head b{text-transform:uppercase;letter-spacing:.35px;color:#334155}
 .trace-schedule-track{position:relative;min-height:17px;background:repeating-linear-gradient(90deg,#f8fafc 0,#f8fafc calc(12.5% - 1px),#cbd5e1 calc(12.5% - 1px),#cbd5e1 12.5%);border:1px solid var(--bd);border-radius:4px;overflow:hidden;box-sizing:content-box}
-.trace-schedule-bar{position:absolute;height:17px;min-width:2px;padding:1px 4px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#fff;font-size:9px;font-weight:800;line-height:13px;cursor:help;box-sizing:border-box}
-.trace-schedule-bar.is-green{background:#16a34a;border:1px solid #15803d}
-.trace-schedule-bar.is-orange{background:#f59e0b;border:1px solid #d97706;color:#451a03}
-.trace-schedule-bar.is-red{background:#dc2626;border:1px solid #b91c1c}
-.trace-schedule-bar.is-future{background:#94a3b8;border:1px solid #64748b}
+.trace-schedule-bar{position:absolute;height:17px;min-width:2px;padding:1px 4px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;background:#94a3b8;border:1px solid #64748b;color:#fff;font-size:9px;font-weight:800;line-height:13px;cursor:help;box-sizing:border-box}
 .trace-now-line{position:absolute;top:-2px;bottom:-2px;width:2px;background:rgba(220,38,38,.55);box-shadow:0 0 6px rgba(220,38,38,.5);pointer-events:none;z-index:2;transform:translateX(-1px)}
 .trace-section{margin-top:6px;font-size:13px}
 .trace-section b{display:block;margin-bottom:4px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--mu)}

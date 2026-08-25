@@ -267,7 +267,7 @@ describe('Live Status card for a press with no order', () => {
     expect(renderSchedule(live({ schedule }))).toContain('left:12.500%');
   });
 
-  it('colours Schedule bars with the same 95/80 vs Plan thresholds as KPI', () => {
+  it('keeps Schedule bars neutral because Good is entered only at shift end', () => {
     const plan = order({
       jobNumber: 'PLAN-COLOUR',
       machineCode: '1300T',
@@ -276,18 +276,13 @@ describe('Live Status card for a press with no order', () => {
       qtyPerHr: 1 / 50,
     });
     const now = new Date('2026-07-01T11:00:00'); // expected = 200
-    expect(
-      renderSchedule(live({ schedule: [plan], scheduleGoodByJob: { 'PLAN-COLOUR': 190 } }), now),
-    ).toContain('is-green');
-    expect(
-      renderSchedule(live({ schedule: [plan], scheduleGoodByJob: { 'PLAN-COLOUR': 170 } }), now),
-    ).toContain('is-orange');
-    expect(
-      renderSchedule(live({ schedule: [plan], scheduleGoodByJob: { 'PLAN-COLOUR': 100 } }), now),
-    ).toContain('is-red');
+    const html = renderSchedule(live({ schedule: [plan] }), now);
+    expect(html).toContain('class="trace-schedule-bar"');
+    expect(html).not.toMatch(/is-(green|orange|red|future)/);
+    expect(html).not.toContain('vs Plan');
   });
 
-  it('keeps a not-yet-started Schedule bar neutral instead of falsely red', () => {
+  it('uses the same neutral Schedule bar before the planned start', () => {
     const plan = order({
       jobNumber: 'FUTURE',
       machineCode: '1300T',
@@ -295,9 +290,9 @@ describe('Live Status card for a press with no order', () => {
       plannedEnd: '2026-07-01T14:00:00',
       qtyPerHr: 1 / 50,
     });
-    expect(
-      renderSchedule(live({ schedule: [plan] }), new Date('2026-07-01T11:00:00')),
-    ).toContain('is-future');
+    const html = renderSchedule(live({ schedule: [plan] }), new Date('2026-07-01T11:00:00'));
+    expect(html).toContain('class="trace-schedule-bar"');
+    expect(html).not.toMatch(/is-(green|orange|red|future)/);
   });
 
   it('shows full breakdown taxonomy detail when hovering a B block', () => {
