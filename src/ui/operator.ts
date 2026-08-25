@@ -1,5 +1,6 @@
 import type { PmdDataLayer } from '../dal';
 import type {
+  BdCode,
   DieChangeLog,
   DieComponentCondition,
   Machine,
@@ -44,10 +45,14 @@ export {
   totalGoodExceedsShiftTarget,
 } from '../core/targets';
 import { sumOtherShiftGood, unsignedEarlierTuples } from '../core/jobgood';
-import { bdLabelFor } from '../core/breakdown';
+import { breakdownDetailFor } from '../core/breakdown';
 import { compareOrdersByStart } from '../core/planning';
 import { planningOrderMatchesMachine } from '../core/schedule';
-import { type Handover, parseHandover as sharedParseHandover } from '../core/handover';
+import {
+  appendHandoverLine,
+  type Handover,
+  parseHandover as sharedParseHandover,
+} from '../core/handover';
 import { openBreakdownCascade } from './breakdown';
 import { toast } from './toast';
 import { closeModal, escapeHtml, openModal } from './modal';
@@ -92,6 +97,9 @@ interface OpState {
    *  the rest of this Operator-page session. */
   showAllPlanningOrders: boolean;
   rejCats: RejectCategory[];
+  /** BDCODE -> PMD_BreakdownMaster row. Cause is authoritative for all
+   * Breakdown detail shown on the Operator sheet. */
+  bdCodes: Map<string, BdCode>;
   selOperator: string;
   selSupervisor: string;
   /** 1 = single-shift detail (editable); 2 = today's 3 shifts;
@@ -706,9 +714,12 @@ export function manualOrderDropdownVisible(
   now: Date = new Date(),
 ): boolean {
   if (!order.manuallyAdded || order.source !== 'Manual') return true;
-  if (!order.createdAt) return true;
+  // A manual row without a trustworthy Created value cannot prove it is
+  // inside the 48-hour escape-hatch window. Hide it instead of allowing a
+  // legacy PMD_ManualOrders row to remain in the dropdown forever.
+  if (!order.createdAt) return false;
   const created = new Date(order.createdAt).getTime();
-  if (!Number.isFinite(created)) return true;
+  if (!Number.isFinite(created)) return false;
   return now.getTime() - created < MANUAL_ORDER_DROPDOWN_TTL_MS;
 }
 
@@ -2106,7 +2117,10 @@ function statusCellHtml(
     : '';
   let tip = '';
   if (code === 'B' && bdIssue) {
-    tip = ` title="${escapeHtml(bdIssue)} — ${escapeHtml(bdLabelFor(bdIssue))}"`;
+    const detail = S
+      ? breakdownDetailFor(bdIssue, S.bdCodes)
+      : breakdownDetailFor(bdIssue);
+    tip = ` title="${escapeHtml(detail.code)} — ${escapeHtml(detail.cause)}\nCategory: ${escapeHtml(detail.category)}\nLikely owner: ${escapeHtml(detail.owner)}"`;
   } else if (occ) {
     tip = ` title="${escapeHtml(slotClock(sid(), slot))} · already used by ${escapeHtml(occ.jobNumber)} (${escapeHtml(occ.statusCode)})"`;
   }
@@ -3146,6 +3160,25 @@ function parseHandover(r: ProductionRecord | undefined): Handover {
   return sharedParseHandover(r?.handoverNote);
 }
 
+/** Persist an operator-entered Breakdown explanation in Handover · Machine.
+ * Kept pure/testable; multiFillApply owns the actual slot-0 write. */
+export function recordBreakdownInMachineHandover(
+  handoverNote: string | undefined,
+  bdCode: string,
+  explanation: string,
+  at: Date = new Date(),
+): string {
+  const text = explanation.trim();
+  if (!text) return handoverNote ?? '';
+  const hh = String(at.getHours()).padStart(2, '0');
+  const mm = String(at.getMinutes()).padStart(2, '0');
+  return appendHandoverLine(
+    handoverNote,
+    'machine',
+    `[${hh}:${mm}] ${bdCode || 'Breakdown'} — ${text}`,
+  );
+}
+
 /**
  * Refresh (§7): re-read PMD_Planning from SharePoint and recompute the
  * cross-shift Good total. The Excel→Planning sync itself is handled by
@@ -3614,6 +3647,26 @@ async function multiFillApply(
   bdIssue: string,
   mangoNote: string,
 ): Promise<void> {
+  // OTH-99's operator-entered explanation used to live only in the
+  // per-slot mangoTicket field. That field is not part of the persisted
+  // PMD_Production / PMD_LiveStatus header, so it vanished after a reload.
+  // Record it once on the canonical slot's Handover Machine field, which is
+  // mirrored live and written at sign-off.
+  if (code === 'B' && mangoNote.trim()) {
+    let nextMachine = '';
+    await upsertSlotNoReload(0, (r) => {
+      r.handoverNote = recordBreakdownInMachineHandover(
+        r.handoverNote,
+        bdIssue,
+        mangoNote,
+      );
+      nextMachine = sharedParseHandover(r.handoverNote).machine;
+    });
+    const live = document.querySelector<HTMLTextAreaElement>(
+      'textarea[data-meta="hand-machine"]',
+    );
+    if (live) live.value = nextMachine;
+  }
   const apply = (r: ProductionRecord): void => {
     r.statusCode = code;
     r.bdIssue = code === 'B' ? bdIssue : '';
@@ -4323,13 +4376,17 @@ export async function renderOperator(
   now: Date = new Date(),
 ): Promise<void> {
   dalRef = dal;
-  const [machines, planning, operators, supervisors, rcats, dieColorList, dieMasterList] =
+  const [machines, planning, operators, supervisors, rcats, bdCodeList, dieColorList, dieMasterList] =
     await Promise.all([
       dal.listMachines(),
       dal.listPlanning({}),
       dal.listOperators(),
       dal.listSupervisors(),
       dal.listRejectCategories(),
+      dal.listBdCodes().catch((e) => {
+        console.warn('[pmd] operator breakdown master unavailable, using fallback:', e);
+        return [] as BdCode[];
+      }),
       dal.listProductDieColors
         ? dal.listProductDieColors().catch((e) => {
             // Colour/die metadata is optional on the operator sheet. Keep the
@@ -4359,6 +4416,9 @@ export async function renderOperator(
     ]),
   );
   const dieCavities = new Map(dieMasterList.map((d) => [dieKey(d.dieNumber), d.cavities]));
+  const bdCodes = new Map(
+    bdCodeList.map((row) => [row.code.trim().toUpperCase(), row]),
+  );
   const cs = currentShift(now);
   const vd = new Date(now);
   vd.setHours(0, 0, 0, 0);
@@ -4399,6 +4459,7 @@ export async function renderOperator(
     supervisors,
     showAllPlanningOrders: false,
     rejCats: rcats,
+    bdCodes,
     selOperator,
     selSupervisor,
     viewLevel: 1,

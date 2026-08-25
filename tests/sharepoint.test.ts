@@ -8,6 +8,7 @@ import {
   odataString,
   parsePlanningCsv,
   sanitizeBodyStrings,
+  sharePointDateTimeIso,
   SharePointDataLayer,
   shiftEndedLongAgo,
   toServerRelativePath,
@@ -17,6 +18,38 @@ describe('SharePoint DAL surface', () => {
   it('accepts the string siteUrl shorthand for backwards compat', () => {
     const sp = new SharePointDataLayer('https://example.sharepoint.com/sites/foo');
     expect(sp).toBeInstanceOf(SharePointDataLayer);
+  });
+});
+
+describe('PMD_BreakdownMaster + manual-order timestamps', () => {
+  it('reads the current BDCODE and Cause columns (with legacy field fallbacks)', async () => {
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const rows = [
+      {
+        BDCODE: ' mec-11 ',
+        Cause: 'Drive coupling vibration',
+        Category: 'Mechanical',
+        LikelyOwner: 'Maintenance',
+      },
+    ];
+    const internal = dal as unknown as { getAllItems: () => Promise<unknown[]> };
+    internal.getAllItems = async (): Promise<unknown[]> => rows;
+    await expect(dal.listBdCodes()).resolves.toEqual([
+      {
+        code: 'MEC-11',
+        label: 'Drive coupling vibration',
+        subCategory: 'Mechanical',
+        sequence: 1,
+        owner: 'Maintenance',
+      },
+    ]);
+  });
+
+  it('normalises ISO and legacy OData Created values and rejects malformed dates', () => {
+    expect(sharePointDateTimeIso('2026-08-22T00:00:00Z')).toBe('2026-08-22T00:00:00.000Z');
+    expect(sharePointDateTimeIso('/Date(1787356800000)/')).toBe('2026-08-22T00:00:00.000Z');
+    expect(sharePointDateTimeIso('not-a-date')).toBe('');
+    expect(sharePointDateTimeIso(undefined)).toBe('');
   });
 });
 

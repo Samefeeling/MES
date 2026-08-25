@@ -274,11 +274,11 @@ const DEFAULT_FIELDS = {
     description: 'Description',
   },
   breakdownMaster: {
-    // Title = Cause (the longest descriptive field); Code/Category/
-    // LikelyOwner are explicit columns.
-    code: 'Code',
+    // Current tenant columns are BDCODE + Cause. listBdCodes also probes
+    // the legacy Code + Title names so older deployments keep working.
+    code: 'BDCODE',
     category: 'Category',
-    cause: 'Title',
+    cause: 'Cause',
     likelyOwner: 'LikelyOwner',
   },
   productDieColor: {
@@ -971,13 +971,19 @@ export class SharePointDataLayer implements PmdDataLayer {
     try {
       const rows = await this.getAllItems(LISTS.breakdownMaster);
       if (rows.length === 0) return bdFallback();
-      return rows.map((r, i) => ({
-        code: str(r[F.code]),
-        label: str(r[F.cause]),
-        subCategory: str(r[F.category]),
-        sequence: i + 1,
-        owner: str(r[F.likelyOwner]),
-      }));
+      const codeKey = resolveBreakdownMasterKey(rows, [F.code, 'BDCODE', 'BDCode', 'Code']);
+      const causeKey = resolveBreakdownMasterKey(rows, [F.cause, 'Cause', 'Title']);
+      const categoryKey = resolveBreakdownMasterKey(rows, [F.category, 'Category']);
+      const ownerKey = resolveBreakdownMasterKey(rows, [F.likelyOwner, 'LikelyOwner']);
+      return rows
+        .map((r, i) => ({
+          code: codeKey ? str(r[codeKey]).trim().toUpperCase() : '',
+          label: causeKey ? str(r[causeKey]).trim() : '',
+          subCategory: categoryKey ? str(r[categoryKey]).trim() : '',
+          sequence: i + 1,
+          owner: ownerKey ? str(r[ownerKey]).trim() : '',
+        }))
+        .filter((row) => row.code);
     } catch {
       // If the list is empty / unreadable, fall back to the hard-coded
       // taxonomy so the cascade UI keeps working.
@@ -1935,7 +1941,7 @@ export class SharePointDataLayer implements PmdDataLayer {
             partNumber: str(r['PartNumber']).trim(),
             partDescription: str(r['PartDescription']).trim(),
             orderQty: num(r['OrderQty']) || 0,
-            createdAt: str(r['Created']),
+            createdAt: sharePointDateTimeIso(r['Created']),
           }),
         )
         .filter((o) => o.jobNumber);
@@ -1994,7 +2000,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     const j = (await res.json()) as { d?: { ID?: number; Id?: number; Created?: string } };
     return SharePointDataLayer.manualPlanningOrder({
       id: j.d?.ID ?? j.d?.Id ?? 0,
-      createdAt: j.d?.Created ?? new Date().toISOString(),
+      createdAt: sharePointDateTimeIso(j.d?.Created) || new Date().toISOString(),
       ...o,
     });
   }
@@ -4440,6 +4446,23 @@ function resolveDieDescKey(
   return null;
 }
 
+/** Resolve PMD_BreakdownMaster columns across the current BDCODE/Cause
+ * schema and the legacy Code/Title schema. Prefer a candidate that carries
+ * at least one value, then accept an empty-but-present column. */
+function resolveBreakdownMasterKey(
+  rows: ReadonlyArray<Record<string, unknown>>,
+  names: ReadonlyArray<string | undefined>,
+): string | null {
+  const candidates = Array.from(new Set(names.filter((name): name is string => !!name)));
+  for (const name of candidates) {
+    if (rows.some((row) => name in row && str(row[name]).trim())) return name;
+  }
+  for (const name of candidates) {
+    if (rows.some((row) => name in row)) return name;
+  }
+  return null;
+}
+
 function num(v: unknown): number {
   if (v == null) return 0;
   const n = Number(v);
@@ -4504,6 +4527,19 @@ export function dateOnly(v: unknown): string {
 function isoDate(v: unknown): string {
   if (typeof v === 'string' && v) return new Date(v).toISOString();
   return '';
+}
+
+/** Normalise SharePoint's built-in Created timestamp. Modern REST returns
+ * ISO-8601; older OData payloads may use /Date(…)/. Invalid/missing values
+ * stay blank so the Operator dropdown can safely hide un-ageable manual
+ * rows rather than retaining them forever. */
+export function sharePointDateTimeIso(v: unknown): string {
+  if (typeof v !== 'string') return '';
+  const raw = v.trim();
+  if (!raw) return '';
+  const legacy = /^\/Date\((-?\d+)(?:[+-]\d+)?\)\/$/.exec(raw);
+  const parsed = legacy ? new Date(Number(legacy[1])) : new Date(raw);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : '';
 }
 
 function parseShiftIdLoose(sid: string): { date: string; shift: string } {

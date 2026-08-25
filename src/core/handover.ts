@@ -14,7 +14,8 @@ export interface Handover {
 }
 
 const BLANK: Handover = { machine: '', mold: '', material: '', method: '' };
-const LABELLED_RE = /(Machine|Mold|Material|Method)\s*:\s*([^\n\r]*)/gi;
+const LABELLED_RE =
+  /(Machine|Mold|Material|Method)\s*:\s*([\s\S]*?)(?=\r?\n(?:Machine|Mold|Material|Method)\s*:|$)/gi;
 
 export function parseHandover(note: string | undefined | null): Handover {
   if (!note) return { ...BLANK };
@@ -52,4 +53,24 @@ export function parseHandover(note: string | undefined | null): Handover {
   if (matched) return out;
   // Legacy plain-text: surface under "method" so nothing is lost.
   return { ...BLANK, method: trimmed };
+}
+
+/** Append one line to a 4M handover field without overwriting the existing
+ * shift note. An exact existing line is not duplicated, which keeps a
+ * retried status save idempotent from the operator's point of view. */
+export function appendHandoverLine(
+  note: string | undefined | null,
+  field: keyof Handover,
+  line: string,
+): string {
+  const next = line.trim();
+  const handover = parseHandover(note);
+  if (!next) return JSON.stringify(handover);
+  const lines = handover[field]
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (!lines.includes(next)) lines.push(next);
+  handover[field] = lines.join('\n');
+  return JSON.stringify(handover);
 }

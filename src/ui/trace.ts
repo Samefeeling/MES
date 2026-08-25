@@ -1,5 +1,5 @@
 import type { PmdDataLayer } from '../dal';
-import type { Machine, PlanningOrder, ProductionRecord } from '../types';
+import type { BdCode, Machine, PlanningOrder, ProductionRecord } from '../types';
 import { STATUS_MAP } from '../core/status';
 import {
   SHIFTS,
@@ -9,7 +9,7 @@ import {
   shiftBounds,
   slotClock,
 } from '../core/shifts';
-import { bdLabelFor, breakdownDetailFor } from '../core/breakdown';
+import { breakdownDetailFor } from '../core/breakdown';
 import { cavityGross } from '../core/metrics';
 import { ordersCoRun, type DieCoRun } from '../core/corun';
 import {
@@ -111,7 +111,7 @@ const FLOOR_ORDER: string[] = [
   '550C',
   '320C',
   '125T',
-  'HS',
+  'Hstamp',
 ];
 
 function floorIndex(code: string): number {
@@ -223,6 +223,13 @@ let searchLoadVersion = 0;
 let rejectLabels = new Map<string, string>();
 let rejectLabelsLoaded = false;
 
+/** BDCODE -> PMD_BreakdownMaster row. Unlike rejects, this catalogue is
+ * keyed to the DAL instance because KPI Job Trace tests and alternate
+ * backends can legitimately provide different masters in one session. */
+let breakdownCodes = new Map<string, BdCode>();
+let breakdownCodesDal: PmdDataLayer | null = null;
+let breakdownCodesLoad: Promise<void> | null = null;
+
 /**
  * Fetch PMD_RejectCategories once per session. The list is small and
  * changes rarely, so every view that renders a reject tooltip can await
@@ -240,6 +247,28 @@ async function ensureRejectLabels(dal: PmdDataLayer): Promise<void> {
   }
 }
 
+function ensureBreakdownCodes(dal: PmdDataLayer): Promise<void> {
+  if (breakdownCodesDal === dal && breakdownCodesLoad) return breakdownCodesLoad;
+  breakdownCodesDal = dal;
+  breakdownCodes = new Map();
+  breakdownCodesLoad = (async () => {
+    try {
+      const rows = await dal.listBdCodes();
+      // PMD_BreakdownMaster.BDCODE matching is case/whitespace tolerant.
+      breakdownCodes = new Map(
+        rows.map((row) => [row.code.trim().toUpperCase(), row]),
+      );
+    } catch (e) {
+      console.warn('[pmd] breakdown master load failed, using fallback taxonomy:', e);
+    }
+  })();
+  return breakdownCodesLoad;
+}
+
+function displayedBreakdownDetail(code: string) {
+  return breakdownDetailFor(code, breakdownCodes);
+}
+
 /** Mount Live Status or Job Search inside the KPI page. The KPI toolbar
  *  owns navigation; this module owns the selected panel's data and poll. */
 export async function mountTracePanel(
@@ -255,7 +284,7 @@ export async function mountTracePanel(
   const errors: string[] = [];
   // Reject descriptions ride along with the machine list: both are small
   // lookups the first render needs, and neither should wait on the other.
-  const labels = ensureRejectLabels(dal);
+  const labels = Promise.all([ensureRejectLabels(dal), ensureBreakdownCodes(dal)]);
   try {
     machines = await dal.listMachines();
   } catch (e) {
@@ -503,7 +532,7 @@ function traceGrids(r: TraceRow): { sheet: string; rej: string } {
     const record = r.records.find((x) => x.slotIndex === i);
     const breakdownTip = ch === 'B'
       ? (() => {
-          const detail = breakdownDetailFor(record?.bdIssue ?? '');
+          const detail = displayedBreakdownDetail(record?.bdIssue ?? '');
           return [
             `Job ${r.jobNumber || '—'}`,
             `Breakdown code: ${detail.code || 'not recorded'}`,
@@ -602,14 +631,16 @@ export function renderSchedule(r: TraceRow, now: Date = new Date()): string {
 function breakdownLines(r: TraceRow): string {
   if (!r.bdSlots.length) return '';
   return `<div class="trace-section"><b>Breakdowns</b><ul>${r.bdSlots
-    .map(
-      (b) =>
+    .map((b) => {
+      const detail = displayedBreakdownDetail(b.code);
+      return (
         `<li><span class="ts">${escapeHtml(slotClock(r.shiftId, b.slot))}</span> <span class="bd-code">${escapeHtml(
-          b.code,
-        )}</span> ${escapeHtml(bdLabelFor(b.code))}${
+          detail.code,
+        )}</span> ${escapeHtml(detail.cause)}${
           b.ticket ? ` · ${escapeHtml(b.ticket)}` : ''
-        }${b.note ? ` — ${escapeHtml(b.note)}` : ''}</li>`,
-    )
+        }${b.note ? ` — ${escapeHtml(b.note)}` : ''}</li>`
+      );
+    })
     .join('')}</ul></div>`;
 }
 
@@ -1356,7 +1387,11 @@ export async function renderJobTraceCards(
       )}.</div>`,
     };
   }
-  const [planning] = await Promise.all([dal.listPlanning({}), ensureRejectLabels(dal)]);
+  const [planning] = await Promise.all([
+    dal.listPlanning({}),
+    ensureRejectLabels(dal),
+    ensureBreakdownCodes(dal),
+  ]);
   const planByJob = new Map(planning.map((p) => [p.jobNumber, p]));
   const jobGoodTotals = new Map([[job, goodForRecords(all)]]);
   const rows = buildTraceRowsFor(all, planByJob, jobGoodTotals);

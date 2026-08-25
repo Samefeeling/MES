@@ -14,6 +14,15 @@ function stubDal(records: ReturnType<typeof rec>[]): PmdDataLayer {
       { code: 'D07', label: 'ShortShot', sequence: 1 },
       { code: 'D09', label: 'Flash', sequence: 2 },
     ],
+    listBdCodes: async () => [
+      {
+        code: 'MEC-11',
+        label: 'Drive coupling vibration from Breakdown Master',
+        subCategory: 'Mechanical master',
+        sequence: 1,
+        owner: 'Maintenance master',
+      },
+    ],
   } as unknown as PmdDataLayer;
 }
 
@@ -195,9 +204,9 @@ describe('renderJobTraceCards — every day is a fixed Day | Afternoon | Night r
     expect(html).toContain('Breakdowns');
     expect(html).toContain('MEC-11');
     expect(html).toContain('MG-77');
-    expect(html).toContain('Category: Mechanical');
-    expect(html).toContain('Cause: Abnormal noise / vibration');
-    expect(html).toContain('Likely owner: Operator → Maintenance');
+    expect(html).toContain('Category: Mechanical master');
+    expect(html).toContain('Cause: Drive coupling vibration from Breakdown Master');
+    expect(html).toContain('Likely owner: Maintenance master');
   });
 });
 

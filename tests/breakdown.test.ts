@@ -5,6 +5,7 @@ import {
   bdAsBdCodes,
   bdCategoryOf,
   bdCausesFor,
+  breakdownDetailFor,
   bdLabelFor,
 } from '../src/core/breakdown';
 
@@ -53,5 +54,26 @@ describe('breakdown taxonomy (breakdown_classification_taxonomy.md)', () => {
     const ele = all.find((b) => b.code === 'ELE-02')!;
     expect(ele.subCategory).toBe('Electrical');
     expect(ele.owner).toBe('Maintenance');
+  });
+
+  it('uses PMD_BreakdownMaster Cause as the authoritative display text', () => {
+    const master = new Map([
+      [
+        'MEC-11',
+        {
+          code: 'MEC-11',
+          label: 'Cause supplied by SharePoint master',
+          subCategory: 'Mechanical master',
+          sequence: 1,
+          owner: 'Maintenance master',
+        },
+      ],
+    ]);
+    expect(breakdownDetailFor(' mec-11 ', master)).toEqual({
+      code: 'MEC-11',
+      cause: 'Cause supplied by SharePoint master',
+      category: 'Mechanical master',
+      owner: 'Maintenance master',
+    });
   });
 });

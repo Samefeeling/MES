@@ -160,13 +160,21 @@ export interface BreakdownDetail {
 
 /** Full taxonomy detail for hover/drilldown views. Unknown legacy codes
  * remain displayable instead of disappearing. */
-export function breakdownDetailFor(code: string): BreakdownDetail {
-  const found = BD_TAXONOMY.find((x) => x.code === code);
+export function breakdownDetailFor(
+  code: string,
+  master: ReadonlyMap<string, BdCode> = new Map(),
+): BreakdownDetail {
+  const normalised = code.trim().toUpperCase();
+  const fromMaster = master.get(normalised);
+  const found = BD_TAXONOMY.find((x) => x.code === normalised);
   return {
-    code,
-    cause: found?.cause ?? (code || 'Cause not recorded'),
-    owner: found?.owner ?? '—',
-    category: bdCategoryOf(code)?.label ?? 'Other / legacy',
+    code: normalised,
+    // PMD_BreakdownMaster.Cause is authoritative. The compiled taxonomy
+    // remains a resilient fallback for an unreadable list / legacy code.
+    cause: fromMaster?.label || found?.cause || normalised || 'Cause not recorded',
+    owner: fromMaster?.owner || found?.owner || '—',
+    category:
+      fromMaster?.subCategory || bdCategoryOf(normalised)?.label || 'Other / legacy',
   };
 }
 

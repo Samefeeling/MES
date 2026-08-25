@@ -29,10 +29,10 @@ describe('Planning.csv schedule core', () => {
     ]);
   });
 
-  it('maps Planning.csv HS to the Operator Hstamp machine', () => {
+  it('maps Planning.csv HS only to the Operator Hstamp machine', () => {
     const hs = order({ jobNumber: 'HOT', machineCode: 'HS' });
     expect(plannedOrdersForShift([hs], 'Hstamp', '2026-05-15-Day')).toHaveLength(1);
-    expect(plannedOrdersForShift([hs], 'HS', '2026-05-15-Day')).toHaveLength(1);
+    expect(plannedOrdersForShift([hs], 'HS', '2026-05-15-Day')).toHaveLength(0);
     expect(plannedOrdersForShift([hs], '125T', '2026-05-15-Day')).toHaveLength(0);
   });
 

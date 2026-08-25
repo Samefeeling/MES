@@ -20,10 +20,10 @@ export function planningOrderMatchesMachine(
   const orderMachine = normaliseMachineCode(order.machineCode);
   if (!orderMachine) return includeUniversalManual && order.manuallyAdded;
   const selectedMachine = normaliseMachineCode(machineCode);
-  // Planning Excel uses "HS" for the hot-stamping press while the MES
-  // machine register / Operator view calls it "Hstamp". Keep the alias
-  // directional so an existing literal HS machine still matches itself.
-  if (orderMachine === 'HS' && selectedMachine === 'HSTAMP') return true;
+  // Planning Excel uses "HS" exclusively for the hot-stamping press while
+  // the MES machine register / Operator view calls it "Hstamp". Do not let
+  // that planning row also land on a literal Machine Code="HS" press.
+  if (orderMachine === 'HS') return selectedMachine === 'HSTAMP';
   return orderMachine === selectedMachine;
 }
 
