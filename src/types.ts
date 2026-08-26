@@ -347,6 +347,10 @@ export interface ProductionRecord {
   operator: string;
   supervisor: string;
   bdIssue: string;
+  /** Per-slot breakdown cause. During entry this is copied from
+   *  PMD_BreakdownMaster.Cause (or the operator's OTH-99 free text), then
+   *  persisted in PMD_BreakDownLog.BDCause as a slot map. */
+  bdCause?: string;
   mangoTicket: string;
   handoverNote: string; // only meaningful on slotIndex=0
   /** Per-slot Quality Check sign-off. Even slots are signed by the
@@ -368,6 +372,21 @@ export interface ProductionRecord {
   reopened?: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface BreakdownSlotDetail {
+  slotIndex: number;
+  code: string;
+  cause: string;
+}
+
+/** One PMD_BreakDownLog tuple expanded into its slot-level details. */
+export interface BreakdownLogDetail {
+  machineCode: string;
+  shiftId: string;
+  jobNumber: string;
+  timeline: string;
+  slots: BreakdownSlotDetail[];
 }
 
 /** Lightweight canonical production header used by the mould service

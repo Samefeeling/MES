@@ -7,7 +7,10 @@ import {
   bdCausesFor,
   breakdownDetailFor,
   bdLabelFor,
+  decodeBreakdownCauseMap,
+  encodeBreakdownCauseMap,
 } from '../src/core/breakdown';
+import { rec } from './helpers';
 
 describe('breakdown taxonomy (breakdown_classification_taxonomy.md)', () => {
   it('exposes exactly 11 categories', () => {
@@ -75,5 +78,27 @@ describe('breakdown taxonomy (breakdown_classification_taxonomy.md)', () => {
       category: 'Mechanical master',
       owner: 'Maintenance master',
     });
+  });
+
+  it('round-trips different causes by half-hour slot', () => {
+    const encoded = encodeBreakdownCauseMap([
+      rec({ jobNumber: 'J1', slotIndex: 3, statusCode: 'B', bdIssue: 'MEC-11', bdCause: 'Master cause' }),
+      rec({ jobNumber: 'J1', slotIndex: 7, statusCode: 'B', bdIssue: 'OTH-99', bdCause: 'I model leaking' }),
+    ]);
+    expect(JSON.parse(encoded)).toEqual({
+      3: 'MEC-11 — Master cause',
+      7: 'OTH-99 — I model leaking',
+    });
+    expect(decodeBreakdownCauseMap(encoded)).toEqual([
+      { slotIndex: 3, code: 'MEC-11', cause: 'Master cause' },
+      { slotIndex: 7, code: 'OTH-99', cause: 'I model leaking' },
+    ]);
+  });
+
+  it('applies a legacy plain BDCause to every B in the timeline', () => {
+    expect(decodeBreakdownCauseMap('Hydraulic leak', 'HYD-01', 'RBBR')).toEqual([
+      { slotIndex: 1, code: 'HYD-01', cause: 'Hydraulic leak' },
+      { slotIndex: 2, code: 'HYD-01', cause: 'Hydraulic leak' },
+    ]);
   });
 });

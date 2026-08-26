@@ -2,7 +2,7 @@
 // Operator picks the Category first, then the specific Cause. The code
 // prefix doubles as the Pareto grouping (ELE*, HYD*, ...).
 
-import type { BdCode } from '../types';
+import type { BdCode, BreakdownSlotDetail, ProductionRecord } from '../types';
 
 interface BdCategory {
   prefix: string;
@@ -149,6 +149,66 @@ export function bdCausesFor(prefix: string): BdCause[] {
 export function bdLabelFor(code: string): string {
   const c = BD_TAXONOMY.find((x) => x.code === code);
   return c ? c.cause : code;
+}
+
+/** Encode each B slot into PMD_BreakDownLog.BDCause. Values stay readable
+ * in SharePoint while the slot key preserves multiple causes in one job. */
+export function encodeBreakdownCauseMap(records: ReadonlyArray<ProductionRecord>): string {
+  const bySlot: Record<string, string> = {};
+  for (const record of records) {
+    if (record.statusCode !== 'B') continue;
+    const code = record.bdIssue.trim().toUpperCase();
+    if (!code) continue;
+    const cause =
+      record.bdCause?.trim() ||
+      (code === 'OTH-99' ? record.mangoTicket.trim() : '') ||
+      bdLabelFor(code);
+    bySlot[String(record.slotIndex)] = `${code}${cause ? ` — ${cause}` : ''}`;
+  }
+  return Object.keys(bySlot).length ? JSON.stringify(bySlot) : '';
+}
+
+/** Decode the slot map. A legacy/plain BDCause value is applied to every B
+ * slot using the row's dominant BDCode, so hand-entered SharePoint rows are
+ * still useful rather than silently disappearing. */
+export function decodeBreakdownCauseMap(
+  value: string,
+  dominantCode = '',
+  timeline = '',
+): BreakdownSlotDetail[] {
+  const text = value.trim();
+  const fallbackCode = dominantCode.trim().toUpperCase();
+  const detail = (slotIndex: number, raw: string): BreakdownSlotDetail | null => {
+    if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex > 15) return null;
+    const entry = raw.trim();
+    if (!entry) return null;
+    const split = entry.indexOf(' — ');
+    const code = (split >= 0 ? entry.slice(0, split) : fallbackCode).trim().toUpperCase();
+    const cause = (split >= 0 ? entry.slice(split + 3) : entry).trim();
+    if (!code && !cause) return null;
+    return { slotIndex, code, cause };
+  };
+
+  if (text) {
+    try {
+      const parsed = JSON.parse(text) as Record<string, unknown>;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return Object.entries(parsed)
+          .map(([slot, raw]) => detail(Number(slot), typeof raw === 'string' ? raw : ''))
+          .filter((item): item is BreakdownSlotDetail => item !== null)
+          .sort((a, b) => a.slotIndex - b.slotIndex);
+      }
+    } catch {
+      // Plain-text fallback below.
+    }
+  }
+
+  if (!text) return [];
+  return Array.from(timeline).flatMap((status, slotIndex) => {
+    if (status !== 'B') return [];
+    const item = detail(slotIndex, text);
+    return item ? [item] : [];
+  });
 }
 
 export interface BreakdownDetail {

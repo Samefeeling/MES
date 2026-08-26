@@ -3,9 +3,7 @@ import {
   manualOrderDropdownVisible,
   operatorOrderStartVisible,
   operatorPlanningOrderVisible,
-  recordBreakdownInMachineHandover,
 } from '../src/ui/operator';
-import { parseHandover } from '../src/core/handover';
 import { order } from './helpers';
 
 describe('Operator planning-order StartDate window', () => {
@@ -110,27 +108,5 @@ describe('Manual order 48-hour dropdown life', () => {
         now,
       ),
     ).toBe(false);
-  });
-});
-
-describe('Breakdown free text -> Handover Machine', () => {
-  it('records OTH-99 once while preserving existing Machine notes', () => {
-    const at = new Date(2026, 7, 25, 10, 5);
-    const initial = JSON.stringify({ machine: 'Robot checked', mold: '', material: '', method: '' });
-    const once = recordBreakdownInMachineHandover(
-      initial,
-      'OTH-99',
-      'cooling unit smells unusual',
-      at,
-    );
-    const twice = recordBreakdownInMachineHandover(
-      once,
-      'OTH-99',
-      'cooling unit smells unusual',
-      at,
-    );
-    expect(parseHandover(twice).machine).toBe(
-      'Robot checked\n[10:05] OTH-99 — cooling unit smells unusual',
-    );
   });
 });

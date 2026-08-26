@@ -319,4 +319,28 @@ describe('Live Status card for a press with no order', () => {
     expect(html).toContain('Likely owner: Operator → Maintenance');
     expect(html).toContain('Note / Mango ticket: MAN-77');
   });
+
+  it('uses the slot BDCause from PMD_BreakDownLog for an OTH-99 hover', () => {
+    const breakdown = rec({
+      machineCode: '1300T',
+      shiftId: '2026-07-01-Day',
+      jobNumber: 'J-OTH',
+      slotIndex: 0,
+      statusCode: 'B',
+      bdIssue: 'OTH-99',
+      bdCause: 'I model leaking',
+      mangoTicket: '',
+    });
+    const html = renderCard(
+      live({
+        jobNumber: 'J-OTH',
+        idle: false,
+        timeline: 'B' + '·'.repeat(15),
+        records: [breakdown],
+      }),
+    );
+    expect(html).toContain('Breakdown code: OTH-99');
+    expect(html).toContain('Cause: I model leaking');
+    expect(html).not.toContain('Cause: Cause not recorded');
+  });
 });

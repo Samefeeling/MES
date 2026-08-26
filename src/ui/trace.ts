@@ -528,13 +528,16 @@ function traceGrids(r: TraceRow): { sheet: string; rej: string } {
     const breakdownTip = ch === 'B'
       ? (() => {
           const detail = displayedBreakdownDetail(record?.bdIssue ?? '');
+          const recordedCause = record?.bdCause?.trim() || detail.cause;
           return [
             `Job ${r.jobNumber || '—'}`,
             `Breakdown code: ${detail.code || 'not recorded'}`,
             `Category: ${detail.category}`,
-            `Cause: ${detail.cause}`,
+            `Cause: ${recordedCause}`,
             `Likely owner: ${detail.owner}`,
-            record?.mangoTicket ? `Note / Mango ticket: ${record.mangoTicket}` : '',
+            record?.mangoTicket?.trim() && record.mangoTicket.trim() !== recordedCause
+              ? `Note / Mango ticket: ${record.mangoTicket.trim()}`
+              : '',
           ]
             .filter(Boolean)
             .join('\n');
@@ -614,12 +617,12 @@ function breakdownLines(r: TraceRow): string {
   return `<div class="trace-section"><b>Breakdowns</b><ul>${r.bdSlots
     .map((b) => {
       const detail = displayedBreakdownDetail(b.code);
+      const cause = b.note.trim() || detail.cause;
+      const ticket = b.ticket.trim() && b.ticket.trim() !== cause ? b.ticket.trim() : '';
       return (
         `<li><span class="ts">${escapeHtml(slotClock(r.shiftId, b.slot))}</span> <span class="bd-code">${escapeHtml(
           detail.code,
-        )}</span> ${escapeHtml(detail.cause)}${
-          b.ticket ? ` · ${escapeHtml(b.ticket)}` : ''
-        }${b.note ? ` — ${escapeHtml(b.note)}` : ''}</li>`
+        )}</span> ${escapeHtml(cause)}${ticket ? ` · ${escapeHtml(ticket)}` : ''}</li>`
       );
     })
     .join('')}</ul></div>`;
@@ -1095,7 +1098,7 @@ function buildTraceRowsFor(
         slot: r.slotIndex,
         code: r.bdIssue,
         ticket: r.mangoTicket,
-        note: '',
+        note: r.bdCause ?? '',
       }));
     // Source-of-truth selection, identical to operator.ts's selectedOrder:
     // Planning.csv only describes the CURRENT Epicor state, so it is

@@ -1,5 +1,6 @@
 import type {
   BdCode,
+  BreakdownLogDetail,
   DieChangeLog,
   DieMaintenanceRequest,
   DieMaster,
@@ -126,6 +127,9 @@ export interface PmdDataLayer {
    *  B_BreakDown hours); `label` is the breakdown cause. Sorted
    *  value-descending. Optional — KPI hides the chart when absent. */
   listDowntimePareto?(filter: ParetoFilter): Promise<ParetoSlice[]>;
+  /** Slot-level BDCode/Cause from PMD_BreakDownLog.BDCause. Live Status
+   *  uses this list as the breakdown tooltip source of truth. */
+  listBreakdownDetails?(filter: ProductionFilter): Promise<BreakdownLogDetail[]>;
 
   // Production (hot path)
   listProduction(filter: ProductionFilter): Promise<ProductionRecord[]>;

@@ -1,5 +1,6 @@
 import type {
   BdCode,
+  BreakdownLogDetail,
   DieChangeLog,
   DieComponentCondition,
   DieMaintenanceRequest,
@@ -24,7 +25,13 @@ import type {
   UserContext,
 } from '../types';
 import type { PmdDataLayer } from './types';
-import { bdCategoryOf, bdLabelFor, BD_TAXONOMY } from '../core/breakdown';
+import {
+  bdCategoryOf,
+  bdLabelFor,
+  BD_TAXONOMY,
+  decodeBreakdownCauseMap,
+  encodeBreakdownCauseMap,
+} from '../core/breakdown';
 import { shiftBounds, slotClock } from '../core/shifts';
 import { hoursUnavailableFor, shiftTargetFor } from '../core/targets';
 import { retroJobLeftFixes, sumGoodStartedBefore } from '../core/jobgood';
@@ -258,6 +265,7 @@ const DEFAULT_FIELDS = {
     shift: 'Shift',
     statusTimeline: 'StatusTimeline',
     bdCode: 'BDCode',
+    bdCause: 'BDCause',
     r: 'R_Runtime',
     b: 'B_BreakDown',
     c: 'C_ColorChange',
@@ -2222,7 +2230,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     // around sign-off, or another iPad's pre-sign-off localStorage)
     // and must not shadow it — that's how a signed-off order with 53
     // goods rendered as an empty, editable timeline. Purge them.
-    const [prodHeaders, liveHeaders, rejectsByKey, timelinesByKey] = await Promise.all([
+    const [prodHeaders, liveHeaders, rejectsByKey, breakdownByKey] = await Promise.all([
       this.fetchHeaders(LISTS.production, filter),
       this.fetchHeaders(LISTS.liveStatus, filter).catch((e) => {
         // The live list may not exist yet on a fresh tenant — fall
@@ -2231,7 +2239,10 @@ export class SharePointDataLayer implements PmdDataLayer {
         return [] as HeaderRow[];
       }),
       this.fetchRejectsByKey(filter),
-      this.fetchBreakdownTimelines(filter),
+      this.fetchBreakdownDetailsByKey(filter).catch((e) => {
+        console.warn('[pmd] PMD_BreakDownLog read failed (details unavailable):', e);
+        return new Map<string, BreakdownLogDetail>();
+      }),
     ]);
 
     const matchesFilter = (h: HeaderRow): boolean => {
@@ -2430,11 +2441,12 @@ export class SharePointDataLayer implements PmdDataLayer {
       if (signedKeys.has(key) && !reEditedKeys.has(key)) continue;
       const hWithTimeline: HeaderRow = h.timeline
         ? h
-        : { ...h, timeline: timelinesByKey.get(key) ?? '' };
+        : { ...h, timeline: breakdownByKey.get(key)?.timeline ?? '' };
       const liveSlots = this.expandHeaderToSlots(
         hWithTimeline,
         rejectsByKey.get(key) ?? [],
         false,
+        breakdownByKey.get(key),
       );
       if (!writable || !this.dirtyTuples.has(key)) {
         this.editCache.set(key, liveSlots);
@@ -2476,9 +2488,14 @@ export class SharePointDataLayer implements PmdDataLayer {
       // canonical slot 0 (07:00–07:30 for Day shift).
       const hWithTimeline: HeaderRow = h.timeline
         ? h
-        : { ...h, timeline: timelinesByKey.get(key) ?? '' };
+        : { ...h, timeline: breakdownByKey.get(key)?.timeline ?? '' };
       cached.push(
-        ...this.expandHeaderToSlots(hWithTimeline, rejectsByKey.get(key) ?? [], isSignedOff),
+        ...this.expandHeaderToSlots(
+          hWithTimeline,
+          rejectsByKey.get(key) ?? [],
+          isSignedOff,
+          breakdownByKey.get(key),
+        ),
       );
     };
 
@@ -2508,10 +2525,13 @@ export class SharePointDataLayer implements PmdDataLayer {
    * correct per-slot status + reject breakdown.
    */
   async listSignedOffProduction(filter: ProductionFilter): Promise<ProductionRecord[]> {
-    const [prodHeaders, rejectsByKey, timelinesByKey] = await Promise.all([
+    const [prodHeaders, rejectsByKey, breakdownByKey] = await Promise.all([
       this.fetchHeaders(LISTS.production, filter),
       this.fetchRejectsByKey(filter),
-      this.fetchBreakdownTimelines(filter),
+      this.fetchBreakdownDetailsByKey(filter).catch((e) => {
+        console.warn('[pmd] PMD_BreakDownLog read failed (details unavailable):', e);
+        return new Map<string, BreakdownLogDetail>();
+      }),
     ]);
     const out: ProductionRecord[] = [];
     for (const h of prodHeaders) {
@@ -2527,9 +2547,14 @@ export class SharePointDataLayer implements PmdDataLayer {
       const key = this.cacheKey(h.machineCode, hShiftId, h.jobNumber);
       const hWithTimeline: HeaderRow = h.timeline
         ? h
-        : { ...h, timeline: timelinesByKey.get(key) ?? '' };
+        : { ...h, timeline: breakdownByKey.get(key)?.timeline ?? '' };
       out.push(
-        ...this.expandHeaderToSlots(hWithTimeline, rejectsByKey.get(key) ?? [], true),
+        ...this.expandHeaderToSlots(
+          hWithTimeline,
+          rejectsByKey.get(key) ?? [],
+          true,
+          breakdownByKey.get(key),
+        ),
       );
     }
     return out;
@@ -2616,11 +2641,9 @@ export class SharePointDataLayer implements PmdDataLayer {
    * tenant) — without this fetch, every signed-off shift would come back
    * with no Machine Status row and rejects collapsed to slot 0.
    */
-  private async fetchBreakdownTimelines(
-    filter: ProductionFilter,
-  ): Promise<Map<string, string>> {
+  async listBreakdownDetails(filter: ProductionFilter): Promise<BreakdownLogDetail[]> {
     const F = this.F.breakdown;
-    if (!F.statusTimeline) return new Map();
+    if (!F.statusTimeline) return [];
     const parts: string[] = [];
     if (filter.machineCode) parts.push(`${F.machine} eq '${odataString(filter.machineCode)}'`);
     if (filter.jobNumber) parts.push(`${F.jobNum} eq '${odataString(filter.jobNumber)}'`);
@@ -2633,18 +2656,41 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (fromTo) parts.push(fromTo);
     const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
     const rows = await this.getAllItems<Record<string, unknown>>(LISTS.breakdown, qs);
-    const out = new Map<string, string>();
+    const out: BreakdownLogDetail[] = [];
     for (const r of rows) {
       const mc = str(r[F.machine]);
       const date = dateOnly(r[F.date]);
       const shift = str(r[F.shift]);
       const job = str(r[F.jobNum]);
       const sid = `${date}-${shift}`;
-      const key = this.cacheKey(mc, sid, job);
       const tl = str(r[F.statusTimeline]);
-      if (tl) out.set(key, tl);
+      if (filter.shiftId && sid !== filter.shiftId) continue;
+      if (filter.shiftIdFrom && sid < filter.shiftIdFrom) continue;
+      if (filter.shiftIdTo && sid > filter.shiftIdTo) continue;
+      if (filter.machineCode && mc !== filter.machineCode) continue;
+      if (filter.jobNumber && job !== filter.jobNumber) continue;
+      const dominantCode = str(r[F.bdCode]);
+      out.push({
+        machineCode: mc,
+        shiftId: sid,
+        jobNumber: job,
+        timeline: tl,
+        slots: decodeBreakdownCauseMap(str(r[F.bdCause]), dominantCode, tl),
+      });
     }
     return out;
+  }
+
+  private async fetchBreakdownDetailsByKey(
+    filter: ProductionFilter,
+  ): Promise<Map<string, BreakdownLogDetail>> {
+    const details = await this.listBreakdownDetails(filter);
+    return new Map(
+      details.map((detail) => [
+        this.cacheKey(detail.machineCode, detail.shiftId, detail.jobNumber),
+        detail,
+      ]),
+    );
   }
 
   private async fetchRejectsByKey(
@@ -2690,6 +2736,7 @@ export class SharePointDataLayer implements PmdDataLayer {
      *  from PMD_LiveStatus (in progress). The caller knows which list
      *  the header came from — no need to infer from supervisor. */
     isSignedOff: boolean,
+    breakdown?: BreakdownLogDetail,
   ): ProductionRecord[] {
     const shiftId = `${h.date}-${h.shift}`;
     const slots: ProductionRecord[] = [];
@@ -2701,6 +2748,9 @@ export class SharePointDataLayer implements PmdDataLayer {
     // back to the render stamp for legacy rows signed before the column
     // existed (and for live rows, where lockedAt is unused).
     const signedAt = isSignedOff && h.signOff ? h.signOff : stamp;
+    const breakdownBySlot = new Map(
+      (breakdown?.slots ?? []).map((detail) => [detail.slotIndex, detail]),
+    );
     // QualityChecks JSON {"<slotIndex>":"<name>"} → per-slot qcBy.
     // Bare-string fallback so a column that pre-dates the JSON format
     // (or has been mis-edited in SP directly) still surfaces something
@@ -2739,7 +2789,8 @@ export class SharePointDataLayer implements PmdDataLayer {
         purgeKg: null,
         operator: i === 0 ? h.operator : '',
         supervisor: i === 0 ? h.supervisor : '',
-        bdIssue: '',
+        bdIssue: breakdownBySlot.get(i)?.code ?? '',
+        bdCause: breakdownBySlot.get(i)?.cause ?? '',
         mangoTicket: '',
         handoverNote: i === 0 ? h.handover : '',
         qcBy: qcMap[String(i)] ?? '',
@@ -2781,7 +2832,8 @@ export class SharePointDataLayer implements PmdDataLayer {
         purgeKg: null,
         operator: h.operator,
         supervisor: h.supervisor,
-        bdIssue: '',
+        bdIssue: breakdownBySlot.get(0)?.code ?? '',
+        bdCause: breakdownBySlot.get(0)?.cause ?? '',
         mangoTicket: '',
         handoverNote: h.handover,
         qcBy: qcMap['0'] ?? '',
@@ -2867,7 +2919,8 @@ export class SharePointDataLayer implements PmdDataLayer {
             purgeKg: null,
             operator: '',
             supervisor: '',
-            bdIssue: '',
+            bdIssue: breakdownBySlot.get(slotIdx)?.code ?? '',
+            bdCause: breakdownBySlot.get(slotIdx)?.cause ?? '',
             mangoTicket: '',
             handoverNote: '',
             qcBy: '',
@@ -3361,48 +3414,66 @@ export class SharePointDataLayer implements PmdDataLayer {
       const date = shiftId.slice(0, 10);
       const shift = shiftId.slice(11);
       const agg = aggregateSlots(slots);
-      tasks.push(() =>
-        this.upsertHeaderInto(LISTS.liveStatus, {
-          machineCode,
-          date,
-          shift,
-          jobNumber,
-          partNumber: partNumByJob.get(jobNumber) ?? '',
-          partDescription: '',
-          // Order total when the cache knows it — lets another device
-          // (or the Trace live board) rebuild a synthetic order for an
-          // in-progress job even after Epicor drops it from planning.
-          // upsertHeaderInto skips the column when this is 0.
-          jobRequired: slots.find((s) => s.jobRequired && s.jobRequired > 0)?.jobRequired ?? 0,
-          // Carry cycle time + cavities so a mid-shift reload (editCache
-          // lost, rehydrate from PMD_LiveStatus) keeps them. Job Left /
-          // Shift Target are deliberately NOT mirrored: they are derived
-          // from signed PMD_Production rows on read now — mirroring the
-          // old client-frozen snapshot is how a contaminated value
-          // spread to every device (SFM507147's phantom "200").
-          cycleTime: canon.cycleTime ?? 0,
-          cavities: canon.cavities ?? 1,
-          timeline: agg.timeline,
-          countStart: agg.countStart,
-          countEnd: agg.countEnd,
-          reject: agg.reject,
-          operator: canon.operator,
-          supervisor: canon.supervisor,
-          runTime: agg.runTime,
-          downTime: agg.downTime,
-          handover: agg.handover,
-          qcChecks: agg.qcChecks,
-          rejectsBySlot: agg.rejectsBySlot,
-          ownerDevice,
-        }).catch((e) => {
+      tasks.push(async () => {
+        try {
+          await this.upsertHeaderInto(LISTS.liveStatus, {
+            machineCode,
+            date,
+            shift,
+            jobNumber,
+            partNumber: partNumByJob.get(jobNumber) ?? '',
+            partDescription: '',
+            // Order total when the cache knows it — lets another device
+            // (or the Trace live board) rebuild a synthetic order for an
+            // in-progress job even after Epicor drops it from planning.
+            // upsertHeaderInto skips the column when this is 0.
+            jobRequired: slots.find((s) => s.jobRequired && s.jobRequired > 0)?.jobRequired ?? 0,
+            // Carry cycle time + cavities so a mid-shift reload (editCache
+            // lost, rehydrate from PMD_LiveStatus) keeps them. Job Left /
+            // Shift Target are deliberately NOT mirrored: they are derived
+            // from signed PMD_Production rows on read now — mirroring the
+            // old client-frozen snapshot is how a contaminated value
+            // spread to every device (SFM507147's phantom "200").
+            cycleTime: canon.cycleTime ?? 0,
+            cavities: canon.cavities ?? 1,
+            timeline: agg.timeline,
+            countStart: agg.countStart,
+            countEnd: agg.countEnd,
+            reject: agg.reject,
+            operator: canon.operator,
+            supervisor: canon.supervisor,
+            runTime: agg.runTime,
+            downTime: agg.downTime,
+            handover: agg.handover,
+            qcChecks: agg.qcChecks,
+            rejectsBySlot: agg.rejectsBySlot,
+            ownerDevice,
+          });
+          // PMD_LiveStatus already carries the complete status timeline.
+          // The extra live BreakdownLog write is needed only while B exists,
+          // to publish its slot-level BDCause before sign-off.
+          if (slots.some((slot) => slot.statusCode === 'B')) {
+            await this.upsertBreakdownSnapshot(
+              {
+                machineCode,
+                date,
+                shift,
+                jobNumber,
+                partNumber: partNumByJob.get(jobNumber) ?? '',
+                timeline: agg.timeline,
+              },
+              slots,
+            );
+          }
+        } catch (e) {
           // Snapshot push is best-effort; never propagate. Recorded for
           // the mirror-health badge so a silently-failing iPad is
           // visible on its own screen.
           failures++;
           this.lastMirrorError = `${key}: ${(e as Error)?.message ?? e}`;
           console.warn('[pmd] live snapshot push failed for', key, e);
-        }),
-      );
+        }
+      });
     }
     // Push in serial — each upsert is digest + GET-by-key + POST/PATCH
     // (3 round trips). With 5-10 jobs cached on a busy iPad, the old
@@ -4010,35 +4081,24 @@ export class SharePointDataLayer implements PmdDataLayer {
     const F = this.F.breakdown;
     const shiftId = `${key.date}-${key.shift}`;
     const slotStartIso = shiftDateMarker(shiftId);
-    // Count per-status slots across the whole shift; each slot = 0.5h.
-    const counts: Record<StatusCode, number> = {
-      R: 0, B: 0, C: 0, D: 0, I: 0, M: 0, O: 0, P: 0, S: 0,
-    };
-    const bdTally: Record<string, number> = {};
-    for (const r of slots) {
-      const c = r.statusCode as StatusCode | '';
-      if (c && c in counts) counts[c as StatusCode] += 1;
-      if (c === 'B' && r.bdIssue) bdTally[r.bdIssue] = (bdTally[r.bdIssue] ?? 0) + 1;
-    }
-    const dominantBd = Object.keys(bdTally).sort(
-      (a, b2) => bdTally[b2] - bdTally[a],
-    )[0] ?? '';
+    const agg = aggregateSlots(slots);
     const body: Record<string, unknown> = {
       [F.machine]: key.machineCode,
       [F.shift]: key.shift,
       [F.jobNum]: key.jobNumber,
       [F.partNum]: key.partNumber,
       [F.statusTimeline]: key.timeline,
-      [F.bdCode]: dominantBd,
-      [F.r]: counts.R * 0.5,
-      [F.b]: counts.B * 0.5,
-      [F.c]: counts.C * 0.5,
-      [F.d]: counts.D * 0.5,
-      [F.i]: counts.I * 0.5,
-      [F.m]: counts.M * 0.5,
-      [F.o]: counts.O * 0.5,
-      [F.p]: counts.P * 0.5,
-      [F.s]: counts.S * 0.5,
+      [F.bdCode]: agg.bdCode,
+      [F.bdCause]: agg.bdCause,
+      [F.r]: agg.hours.R,
+      [F.b]: agg.hours.B,
+      [F.c]: agg.hours.C,
+      [F.d]: agg.hours.D,
+      [F.i]: agg.hours.I,
+      [F.m]: agg.hours.M,
+      [F.o]: agg.hours.O,
+      [F.p]: agg.hours.P,
+      [F.s]: agg.hours.S,
     };
     if (slotStartIso) body[F.date] = slotStartIso;
     return this.replaceRowsWithRollback(
@@ -4048,9 +4108,61 @@ export class SharePointDataLayer implements PmdDataLayer {
       [body],
       [
         F.machine, F.date, F.shift, F.jobNum, F.partNum, F.statusTimeline, F.bdCode,
+        F.bdCause,
         F.r, F.b, F.c, F.d, F.i, F.m, F.o, F.p, F.s,
       ],
     );
+  }
+
+  /** Keep the single PMD_BreakDownLog tuple current while the shift is live.
+   * Unlike sign-off replacement this MERGEs in place, so the 60-second live
+   * mirror does not churn list rows or briefly erase the tooltip source. */
+  private async upsertBreakdownSnapshot(
+    key: {
+      machineCode: string;
+      date: string;
+      shift: string;
+      jobNumber: string;
+      partNumber: string;
+      timeline: string;
+    },
+    slots: ProductionRecord[],
+  ): Promise<void> {
+    const F = this.F.breakdown;
+    const shiftId = `${key.date}-${key.shift}`;
+    const agg = aggregateSlots(slots);
+    const body: Record<string, unknown> = {
+      __metadata: { type: await this.itemType(LISTS.breakdown) },
+      [F.machine]: key.machineCode,
+      [F.shift]: key.shift,
+      [F.jobNum]: key.jobNumber,
+      [F.partNum]: key.partNumber,
+      [F.statusTimeline]: key.timeline,
+      [F.bdCode]: agg.bdCode,
+      [F.bdCause]: agg.bdCause,
+      [F.r]: agg.hours.R,
+      [F.b]: agg.hours.B,
+      [F.c]: agg.hours.C,
+      [F.d]: agg.hours.D,
+      [F.i]: agg.hours.I,
+      [F.m]: agg.hours.M,
+      [F.o]: agg.hours.O,
+      [F.p]: agg.hours.P,
+      [F.s]: agg.hours.S,
+    };
+    const marker = shiftDateMarker(shiftId);
+    if (marker) body[F.date] = marker;
+    sanitizeBodyStrings(body);
+    const qs = '$filter=' + encodeURIComponent(
+      `${F.machine} eq '${odataString(key.machineCode)}' and (${shiftDateRange(shiftId, F.date)}) and ${F.shift} eq '${odataString(key.shift)}' and ${F.jobNum} eq '${odataString(key.jobNumber)}'`,
+    );
+    const rows = await this.getAllItems<Record<string, unknown>>(LISTS.breakdown, qs);
+    const existing = rows.find((row) => dateOnly(row[F.date]) === key.date);
+    const id = existing ? sharePointItemId(existing) : null;
+    const url = id == null
+      ? `${this.listUrl(LISTS.breakdown)}/items`
+      : `${this.listUrl(LISTS.breakdown)}/items(${id})`;
+    await this.post(url, body, id == null ? undefined : '*');
   }
 
   private async replaceRejectEvents(
@@ -4889,6 +5001,7 @@ function aggregateSlots(slots: ProductionRecord[]): {
   hours: StatusHours;
   rejectEvents: RejectEvent[];
   bdCode: string;
+  bdCause: string;
   handover: string;
   qcChecks: string;
   rejectsBySlot: string;
@@ -4979,6 +5092,7 @@ function aggregateSlots(slots: ProductionRecord[]): {
     hours,
     rejectEvents,
     bdCode,
+    bdCause: encodeBreakdownCauseMap(slots),
     handover: canonical?.handoverNote ?? '',
     qcChecks: Object.keys(qcMap).length ? JSON.stringify(qcMap) : '',
     rejectsBySlot: Object.keys(rejectsBySlotMap).length ? JSON.stringify(rejectsBySlotMap) : '',

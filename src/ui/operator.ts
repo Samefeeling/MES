@@ -49,7 +49,6 @@ import { breakdownDetailFor } from '../core/breakdown';
 import { compareOrdersByStart } from '../core/planning';
 import { planningOrderMatchesMachine } from '../core/schedule';
 import {
-  appendHandoverLine,
   type Handover,
   parseHandover as sharedParseHandover,
 } from '../core/handover';
@@ -3160,25 +3159,6 @@ function parseHandover(r: ProductionRecord | undefined): Handover {
   return sharedParseHandover(r?.handoverNote);
 }
 
-/** Persist an operator-entered Breakdown explanation in Handover · Machine.
- * Kept pure/testable; multiFillApply owns the actual slot-0 write. */
-export function recordBreakdownInMachineHandover(
-  handoverNote: string | undefined,
-  bdCode: string,
-  explanation: string,
-  at: Date = new Date(),
-): string {
-  const text = explanation.trim();
-  if (!text) return handoverNote ?? '';
-  const hh = String(at.getHours()).padStart(2, '0');
-  const mm = String(at.getMinutes()).padStart(2, '0');
-  return appendHandoverLine(
-    handoverNote,
-    'machine',
-    `[${hh}:${mm}] ${bdCode || 'Breakdown'} — ${text}`,
-  );
-}
-
 /**
  * Refresh (§7): re-read PMD_Planning from SharePoint and recompute the
  * cross-shift Good total. The Excel→Planning sync itself is handled by
@@ -3647,31 +3627,16 @@ async function multiFillApply(
   bdIssue: string,
   mangoNote: string,
 ): Promise<void> {
-  // OTH-99's operator-entered explanation used to live only in the
-  // per-slot mangoTicket field. That field is not part of the persisted
-  // PMD_Production / PMD_LiveStatus header, so it vanished after a reload.
-  // Record it once on the canonical slot's Handover Machine field, which is
-  // mirrored live and written at sign-off.
-  if (code === 'B' && mangoNote.trim()) {
-    let nextMachine = '';
-    await upsertSlotNoReload(0, (r) => {
-      r.handoverNote = recordBreakdownInMachineHandover(
-        r.handoverNote,
-        bdIssue,
-        mangoNote,
-      );
-      nextMachine = sharedParseHandover(r.handoverNote).machine;
-    });
-    const live = document.querySelector<HTMLTextAreaElement>(
-      'textarea[data-meta="hand-machine"]',
-    );
-    if (live) live.value = nextMachine;
-  }
+  const bdCause =
+    code === 'B'
+      ? mangoNote.trim() || breakdownDetailFor(bdIssue, S!.bdCodes).cause
+      : '';
   const apply = (r: ProductionRecord): void => {
     r.statusCode = code;
     r.bdIssue = code === 'B' ? bdIssue : '';
-    if (code === 'B' && mangoNote) r.mangoTicket = mangoNote;
-    else if (code !== 'B') r.mangoTicket = '';
+    r.bdCause = code === 'B' ? bdCause : '';
+    if (code === 'B') r.mangoTicket = mangoNote;
+    else r.mangoTicket = '';
   };
   // Mirror the machine status across every co-running order on this die
   // (they share the press, so they share the timeline). Counts / rejects

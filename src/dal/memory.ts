@@ -1,5 +1,6 @@
 import type {
   BdCode,
+  BreakdownLogDetail,
   DieChangeLog,
   DieMaintenanceRequest,
   DieMaster,
@@ -19,7 +20,11 @@ import type {
   UserContext,
 } from '../types';
 import type { PmdDataLayer } from './types';
-import { bdLabelFor } from '../core/breakdown';
+import {
+  bdLabelFor,
+  decodeBreakdownCauseMap,
+  encodeBreakdownCauseMap,
+} from '../core/breakdown';
 import { dieChangeEventKey } from '../core/die';
 import {
   seedBdCodes,
@@ -258,6 +263,31 @@ export class MemoryDataLayer implements PmdDataLayer {
     if (filter.shiftIdFrom) rows = rows.filter((r) => r.shiftId >= filter.shiftIdFrom!);
     if (filter.shiftIdTo) rows = rows.filter((r) => r.shiftId <= filter.shiftIdTo!);
     return MemoryDataLayer.clone(rows);
+  }
+
+  async listBreakdownDetails(filter: ProductionFilter): Promise<BreakdownLogDetail[]> {
+    const rows = await this.listProduction(filter);
+    const groups = new Map<string, ProductionRecord[]>();
+    for (const row of rows) {
+      const key = `${row.machineCode}|${row.shiftId}|${row.jobNumber}`;
+      const group = groups.get(key) ?? [];
+      group.push(row);
+      groups.set(key, group);
+    }
+    return [...groups.entries()].map(([key, records]) => {
+      const [machineCode, shiftId, jobNumber] = key.split('|');
+      const timeline = Array.from({ length: 16 }, (_, slot) =>
+        records.find((record) => record.slotIndex === slot)?.statusCode || '·',
+      ).join('');
+      const encoded = encodeBreakdownCauseMap(records);
+      return {
+        machineCode,
+        shiftId,
+        jobNumber,
+        timeline,
+        slots: decodeBreakdownCauseMap(encoded, '', timeline),
+      };
+    });
   }
 
   async listProductionCounters(filter: ProductionFilter): Promise<ProductionCounterRecord[]> {

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { aggregate, cavityGross } from '../src/core/metrics';
 import type { ProductionRecord } from '../src/types';
+import { rec } from './helpers';
 import {
   dateOnly,
   decimalHoursToHms,
@@ -50,6 +51,116 @@ describe('PMD_BreakdownMaster + manual-order timestamps', () => {
     expect(sharePointDateTimeIso('/Date(1787356800000)/')).toBe('2026-08-22T00:00:00.000Z');
     expect(sharePointDateTimeIso('not-a-date')).toBe('');
     expect(sharePointDateTimeIso(undefined)).toBe('');
+  });
+});
+
+describe('PMD_BreakDownLog.BDCause slot details', () => {
+  it('reads the persisted slot map as per-slot code and cause', async () => {
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const internal = dal as unknown as { getAllItems: () => Promise<unknown[]> };
+    internal.getAllItems = async () => [{
+      Title: '1300T',
+      Date: '2026-08-26T12:00:00Z',
+      Shift: 'Day',
+      JobHead_JobNum: 'SFM507205',
+      StatusTimeline: '··············B·',
+      BDCode: 'OTH-99',
+      BDCause: JSON.stringify({ 14: 'OTH-99 — I model leaking' }),
+    }];
+
+    await expect(dal.listBreakdownDetails({
+      machineCode: '1300T',
+      shiftId: '2026-08-26-Day',
+    })).resolves.toEqual([{
+      machineCode: '1300T',
+      shiftId: '2026-08-26-Day',
+      jobNumber: 'SFM507205',
+      timeline: '··············B·',
+      slots: [{ slotIndex: 14, code: 'OTH-99', cause: 'I model leaking' }],
+    }]);
+  });
+
+  it('writes BDCause during the live snapshot upsert', async () => {
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    let written: Record<string, unknown> | null = null;
+    const internal = dal as unknown as {
+      upsertBreakdownSnapshot: (
+        key: Record<string, string>,
+        rows: ProductionRecord[],
+      ) => Promise<void>;
+      itemType: () => Promise<string>;
+      getAllItems: () => Promise<Record<string, unknown>[]>;
+      post: (_url: string, body: Record<string, unknown>) => Promise<Response>;
+    };
+    internal.itemType = async () => 'SP.Data.PMD_x005f_BreakDownlogListItem';
+    internal.getAllItems = async () => [];
+    internal.post = async (_url, body) => {
+      written = body;
+      return {} as Response;
+    };
+
+    await internal.upsertBreakdownSnapshot({
+      machineCode: '1300T',
+      date: '2026-08-26',
+      shift: 'Day',
+      jobNumber: 'SFM507205',
+      partNumber: 'P1',
+      timeline: 'B' + '·'.repeat(15),
+    }, [rec({
+      machineCode: '1300T',
+      shiftId: '2026-08-26-Day',
+      jobNumber: 'SFM507205',
+      slotIndex: 0,
+      statusCode: 'B',
+      bdIssue: 'OTH-99',
+      bdCause: 'I model leaking',
+    })]);
+
+    expect(written).not.toBeNull();
+    expect(JSON.parse(String(written!.BDCause))).toEqual({
+      0: 'OTH-99 — I model leaking',
+    });
+  });
+
+  it('rewrites the final BDCause slot map at sign-off', async () => {
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    let bodies: Record<string, unknown>[] = [];
+    const internal = dal as unknown as {
+      replaceBreakdownEvents: (
+        key: Record<string, string>,
+        rows: ProductionRecord[],
+      ) => Promise<() => Promise<void>>;
+      replaceRowsWithRollback: (
+        _list: string,
+        _filter: string,
+        _date: unknown,
+        next: Record<string, unknown>[],
+      ) => Promise<() => Promise<void>>;
+    };
+    internal.replaceRowsWithRollback = async (_list, _filter, _date, next) => {
+      bodies = next;
+      return async () => {};
+    };
+    await internal.replaceBreakdownEvents({
+      machineCode: '1300T',
+      date: '2026-08-26',
+      shift: 'Day',
+      jobNumber: 'SFM507205',
+      partNumber: 'P1',
+      timeline: 'B' + '·'.repeat(15),
+    }, [rec({
+      machineCode: '1300T',
+      shiftId: '2026-08-26-Day',
+      jobNumber: 'SFM507205',
+      slotIndex: 0,
+      statusCode: 'B',
+      bdIssue: 'MEC-11',
+      bdCause: 'Drive coupling vibration',
+    })]);
+
+    expect(JSON.parse(String(bodies[0].BDCause))).toEqual({
+      0: 'MEC-11 — Drive coupling vibration',
+    });
   });
 });
 
