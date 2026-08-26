@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  breakdownLines,
   goodForRecords,
   groupByDay,
   renderCard,
@@ -197,6 +198,19 @@ describe('groupByDay (the unit a day card draws)', () => {
       row({ shiftId: '2026-07-01-Day' }),
     ]);
     expect(groups.map((g) => g.date)).toEqual(['2026-07-03', '2026-07-01']);
+  });
+
+  it('shows repeated identical breakdown causes once with merged time ranges', () => {
+    const html = breakdownLines(row({
+      bdSlots: [0, 1, 2, 4].map((slot) => ({
+        slot,
+        code: 'OTH-99',
+        note: 'Robot safety zone breach',
+        ticket: '',
+      })),
+    }));
+    expect(html.match(/Robot safety zone breach/g)).toHaveLength(1);
+    expect(html).toContain('07:00–08:30, 09:00–09:30');
   });
 });
 

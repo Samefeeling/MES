@@ -612,17 +612,38 @@ export function renderSchedule(r: TraceRow, now: Date = new Date()): string {
 
 /** The shift's breakdowns spelled out under its grids: when, which code,
  *  what it was, and the Mango ticket if one was raised. */
-function breakdownLines(r: TraceRow): string {
+export function breakdownLines(r: TraceRow): string {
   if (!r.bdSlots.length) return '';
-  return `<div class="trace-section"><b>Breakdowns</b><ul>${r.bdSlots
-    .map((b) => {
-      const detail = displayedBreakdownDetail(b.code);
-      const cause = b.note.trim() || detail.cause;
-      const ticket = b.ticket.trim() && b.ticket.trim() !== cause ? b.ticket.trim() : '';
+  const groups = new Map<string, { code: string; cause: string; slots: number[]; tickets: Set<string> }>();
+  for (const b of r.bdSlots) {
+    const detail = displayedBreakdownDetail(b.code);
+    const cause = b.note.trim() || detail.cause;
+    const key = `${detail.code}\u0000${cause}`;
+    const group = groups.get(key) ?? { code: detail.code, cause, slots: [], tickets: new Set() };
+    group.slots.push(b.slot);
+    const ticket = b.ticket.trim();
+    if (ticket && ticket !== cause) group.tickets.add(ticket);
+    groups.set(key, group);
+  }
+  const timeRanges = (slots: number[]): string => {
+    const sorted = [...new Set(slots)].sort((a, b) => a - b);
+    const runs: Array<[number, number]> = [];
+    for (const slot of sorted) {
+      const last = runs[runs.length - 1];
+      if (last && slot === last[1] + 1) last[1] = slot;
+      else runs.push([slot, slot]);
+    }
+    return runs.map(([start, end]) =>
+      `${slotClock(r.shiftId, start).slice(0, 5)}–${slotClock(r.shiftId, end).slice(-5)}`,
+    ).join(', ');
+  };
+  return `<div class="trace-section"><b>Breakdowns</b><ul>${[...groups.values()]
+    .map((group) => {
+      const tickets = [...group.tickets].join(' / ');
       return (
-        `<li><span class="ts">${escapeHtml(slotClock(r.shiftId, b.slot))}</span> <span class="bd-code">${escapeHtml(
-          detail.code,
-        )}</span> ${escapeHtml(cause)}${ticket ? ` · ${escapeHtml(ticket)}` : ''}</li>`
+        `<li><span class="ts">${escapeHtml(timeRanges(group.slots))}</span> <span class="bd-code">${escapeHtml(
+          group.code,
+        )}</span> ${escapeHtml(group.cause)}${tickets ? ` · ${escapeHtml(tickets)}` : ''}</li>`
       );
     })
     .join('')}</ul></div>`;
