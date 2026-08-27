@@ -452,7 +452,7 @@ to the quick reference card (next section).
 │    8.  Tap each status cell → pick a letter             │
 │        R = Running   B = Breakdown   C = Colour change  │
 │        D = Die       I = Insert      M = Maintenance    │
-│        O = No work   P = Purge       S = Start/Shutdown │
+│        O = No plan   P = Purge       S = Start/Shutdown │
 │    9.  Hold + drag to fill many cells at once           │
 │   10.  Tap reject row + column → type the number        │
 │                                                         │
