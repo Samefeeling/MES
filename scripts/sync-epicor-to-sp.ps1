@@ -1,0 +1,112 @@
+# Epicor -> CSV sync, plain and simple.
+#
+# Runs on a Windows PC every 15 min via Task Scheduler. Pulls released PMD
+# orders from Epicor and writes a CSV. If you point the output path at a
+# folder that OneDrive is syncing with the PMD SharePoint site, the file
+# will be uploaded automatically — no SP write credentials in this script.
+#
+# The MES app reads that CSV directly from SharePoint (see
+# VITE_PLANNING_CSV_PATH in docs/DEPLOYMENT.md).
+#
+# Secrets stay in Windows Credential Manager — see docs/DEPLOYMENT.md
+# section D for one-time setup.
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+function LogMsg([string]$msg) {
+  $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+  Write-Host "[$ts] $msg"
+}
+
+# ---- 1. config ---------------------------------------------------------
+$cfgPath = if ($env:PMD_SYNC_CONFIG) { $env:PMD_SYNC_CONFIG } else { 'C:\PMDSync\config.json' }
+if (-not (Test-Path $cfgPath)) {
+  throw "Missing config file at $cfgPath. Copy scripts/sync-epicor-to-sp.config.example.json there and fill in values."
+}
+# TrimStart the UTF-8 BOM — Windows PowerShell 5.1's ConvertFrom-Json
+# chokes on it with "Invalid JSON primitive: â" (BOM bytes shown as
+# Latin-1). PS 7's parser is fine but the trim is harmless either way.
+$cfg = (Get-Content $cfgPath -Raw).TrimStart([char]0xFEFF) | ConvertFrom-Json
+foreach ($key in 'EpicorUrl','OutputCsvPath') {
+  if (-not $cfg.$key) { throw "Config $cfgPath missing required key: $key" }
+}
+
+# ---- 2. secrets --------------------------------------------------------
+Import-Module CredentialManager -ErrorAction Stop
+$epi = Get-StoredCredential -Target 'PMDSync.Epicor' -ErrorAction SilentlyContinue
+if (-not $epi) { throw "Missing Credential Manager entry 'PMDSync.Epicor'. See docs/DEPLOYMENT.md section D." }
+
+# ---- 3. pull from Epicor -----------------------------------------------
+$pair  = "{0}:{1}" -f $epi.UserName, $epi.GetNetworkCredential().Password
+$basic = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pair))
+$headers = @{
+  'Authorization' = "Basic $basic"
+  'Accept'        = 'application/json'
+}
+if ($cfg.PSObject.Properties.Match('EpicorApiKey').Count -and $cfg.EpicorApiKey) {
+  $headers['X-API-Key'] = $cfg.EpicorApiKey
+}
+LogMsg "GET $($cfg.EpicorUrl)"
+$resp = Invoke-RestMethod -Uri $cfg.EpicorUrl -Headers $headers -Method GET -UseBasicParsing
+$rows = if ($null -ne $resp.value) { $resp.value } else { $resp }
+LogMsg "  Epicor returned $($rows.Count) rows"
+
+# ---- 4. filter ---------------------------------------------------------
+$keep = $rows | Where-Object {
+  $_.JobHead_JobReleased -eq $true `
+    -and $_.JobHead_PersonID -eq 'PMD' `
+    -and (-not $_.JobHead_JobClosed) `
+    -and (-not $_.JobHead_JobComplete)
+}
+LogMsg "  Kept $($keep.Count) after PMD/Released filter"
+
+# ---- 5. project to CSV columns the app expects -------------------------
+# Column order is not significant (the app finds columns by header name),
+# but the header names ARE — they have to match src/dal/sharepoint.ts
+# parsePlanningCsv exactly.
+$projected = $keep | ForEach-Object {
+  [PSCustomObject]@{
+    JobHead_JobNum             = [string]$_.JobHead_JobNum
+    JobHead_PartNum            = [string]$_.JobHead_PartNum
+    JobHead_PartDescription    = [string]$_.JobHead_PartDescription
+    # Total order quantity — drives "Order Qty". Distinct from the remaining
+    # qty below, which counts down as Job Left.
+    JobHead_ProdQty            = [double]$_.JobHead_ProdQty
+    Calculated_RemainingQty    = [double]$_.Calculated_RemainingQty
+    JobHead_StartDate          = if ($_.JobHead_StartDate)  { ([datetime]$_.JobHead_StartDate).ToString("yyyy-MM-ddTHH:mm:ss") }  else { "" }
+    # Decimal hours-of-day (e.g. 18.68 = 18:40:48). The app layers this
+    # onto JobHead_StartDate. Use an explicit null check, NOT truthiness:
+    # writing an empty cell tells the app to keep the date's own time,
+    # whereas [double]$null would emit 0 and the app would read that as a
+    # valid midnight start and shift the job to 00:00. (A genuine 0.0
+    # start hour is indistinguishable from null here and likewise yields
+    # "", which is the safe choice — the date's own time stands.)
+    JobHead_StartHour          = if ($null -ne $_.JobHead_StartHour) { [double]$_.JobHead_StartHour } else { "" }
+    JobHead_ReqDueDate         = if ($_.JobHead_ReqDueDate) { ([datetime]$_.JobHead_ReqDueDate).ToString("yyyy-MM-ddTHH:mm:ss") } else { "" }
+    Calculated_RemaingLaborHrs = [double]$_.Calculated_RemaingLaborHrs
+    JobOper_ProdStandard       = [double]$_.JobOper_ProdStandard
+  }
+}
+
+# ---- 6. atomic write: tmp -> rename so the app never reads a half file -
+$outPath = $cfg.OutputCsvPath
+$outDir  = Split-Path -Path $outPath -Parent
+if ($outDir -and -not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir -Force | Out-Null }
+$tmpPath = "$outPath.tmp"
+if (Test-Path $tmpPath) { Remove-Item -Path $tmpPath -Force }
+$projected | Export-Csv -Path $tmpPath -NoTypeInformation -Encoding UTF8
+# Never replace the last-known-good planning file with an empty export, an
+# error payload, or a schema Epicor renamed underneath us. The app requires
+# JobHead_JobNum to distinguish "valid zero orders" from "could not parse";
+# Export-Csv emits no header when the pipeline is empty, so that case safely
+# retains the prior file and raises an actionable sync error.
+if (-not (Test-Path $tmpPath)) {
+  throw "Planning export produced no CSV. Previous $outPath remains active."
+}
+$csvHeader = Get-Content -Path $tmpPath -TotalCount 1
+if ([string]::IsNullOrWhiteSpace($csvHeader) -or $csvHeader -notmatch 'JobHead_JobNum') {
+  throw "Planning CSV validation failed: JobHead_JobNum header missing. Kept $tmpPath for inspection; previous $outPath remains active."
+}
+Move-Item -Path $tmpPath -Destination $outPath -Force
+LogMsg "Wrote $($projected.Count) rows to $outPath"

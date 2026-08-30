@@ -16,10 +16,6 @@ export function closeModal(): void {
   if (bg) bg.classList.remove('open');
 }
 
-export function isModalOpen(): boolean {
-  return document.getElementById('modal')?.classList.contains('open') ?? false;
-}
-
 export function escapeHtml(s: string): string {
   return s.replace(
     /[&<>"']/g,

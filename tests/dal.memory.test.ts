@@ -13,16 +13,13 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
   it('serves seeded reference data', async () => {
     expect((await dal.listMachines()).length).toBe(8);
     const rcats = await dal.listRejectCategories();
-    expect(rcats.length).toBe(21);
-    // Matches the .bas operator sheet: 5 fixed rows + 16 "Other (Drop Down)".
-    expect(rcats.filter((r) => r.kind === 'named').map((r) => r.code)).toEqual([
-      'P11',
-      'P12',
-      'P1',
-      'P5',
-      'P9',
+    expect(rcats.length).toBe(10);
+    // The 10 D-codes are all fixed rows; no "other" dropdown codes.
+    expect(rcats.map((r) => r.code)).toEqual([
+      'D01', 'D02', 'D03', 'D04', 'D05', 'D06', 'D07', 'D08', 'D09', 'D10',
     ]);
-    expect(rcats.filter((r) => r.kind === 'other').length).toBe(16);
+    expect(rcats.find((r) => r.code === 'D01')?.label).toBe('ShortShot');
+    expect(rcats.find((r) => r.code === 'D08')?.label).toBe('CrackedDelamination');
     const bd = await dal.listBdCodes();
     expect(bd.length).toBe(91); // 11 categories × 6–11 causes, taxonomy MD
     expect(bd.find((b) => b.code === 'ELE-01')?.subCategory).toBe('Electrical');
@@ -36,6 +33,36 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
     expect(all.every((p) => p.machineCode === '125T')).toBe(true);
     const released = await dal.listPlanning({ machineCode: '125T', released: true });
     expect(released.every((p) => p.released)).toBe(true);
+  });
+
+  it('createManualOrder adds a pickable Manual order and rejects duplicates', async () => {
+    const created = await dal.createManualOrder({
+      jobNumber: 'SFM999001',
+      partNumber: '400.410.70',
+      partDescription: 'Rush job missing from the extract',
+      orderQty: 500,
+    });
+    expect(created.source).toBe('Manual');
+    expect(created.manuallyAdded).toBe(true);
+    expect(created.orderQty).toBe(500);
+    expect(created.jobRequired).toBe(500);
+    expect(new Date(created.createdAt ?? '').getTime()).not.toBeNaN();
+    const all = await dal.listPlanning({});
+    expect(all.some((o) => o.jobNumber === 'SFM999001')).toBe(true);
+    // Same job again (case-insensitive) → rejected, no duplicate.
+    await expect(
+      dal.createManualOrder({
+        jobNumber: ' sfm999001 ',
+        partNumber: '',
+        partDescription: '',
+        orderQty: 1,
+      }),
+    ).rejects.toThrow(/already/);
+    expect(
+      (await dal.listPlanning({})).filter(
+        (o) => o.jobNumber.trim().toUpperCase() === 'SFM999001',
+      ).length,
+    ).toBe(1);
   });
 
   it('does not leak internal state to callers (deep copy)', async () => {
@@ -52,20 +79,20 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
       machineCode: '850T',
       shiftId: sid,
       jobNumber: 'JT1',
+      partNumber: '',
       slotIndex: 7,
       statusCode: 'R',
       countStart: null,
       countEnd: null,
       rejectCount: 0,
       rejects: '{}',
-      otherType: '',
-      otherCount: 0,
       purgeKg: null,
       operator: 'Op',
       supervisor: '',
       bdIssue: '',
       mangoTicket: '',
       handoverNote: '',
+      qcBy: '',
       locked: false,
       lockedBy: '',
       lockedAt: '',
@@ -97,20 +124,20 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
       machineCode: '320T',
       shiftId: sid,
       jobNumber: 'JL',
+      partNumber: '',
       slotIndex: 0,
       statusCode: 'R',
       countStart: 0,
       countEnd: 10,
       rejectCount: 0,
       rejects: '{}',
-      otherType: '',
-      otherCount: 0,
       purgeKg: null,
       operator: 'Op',
       supervisor: '',
       bdIssue: '',
       mangoTicket: '',
       handoverNote: '',
+      qcBy: '',
       locked: false,
       lockedBy: '',
       lockedAt: '',
@@ -121,9 +148,59 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
     const rows = await dal.listProduction({ machineCode: '320T', shiftId: sid });
     expect(rows.every((r) => r.locked && r.lockedBy === 'Jeff Penn')).toBe(true);
 
+    // Tuple is not flagged as unlock-edit before unlock.
+    expect(dal.isUnlockedTuple?.('320T', sid, 'JL')).toBe(false);
+
     await dal.unlockShift('320T', sid);
     const after = await dal.listProduction({ machineCode: '320T', shiftId: sid });
     expect(after.every((r) => !r.locked)).toBe(true);
+    // ...and IS flagged after unlock, so the operator UI force-loads
+    // the canonical Operator / Supervisor instead of a stale selection.
+    expect(dal.isUnlockedTuple?.('320T', sid, 'JL')).toBe(true);
+
+    // Re-sign-off clears the flag.
+    await dal.lockShift('320T', sid, 'Jeff Penn', 'Tin Maung', 'JL');
+    expect(dal.isUnlockedTuple?.('320T', sid, 'JL')).toBe(false);
+  });
+
+  it('lockShift scoped to a job leaves other jobs on the shift editable', async () => {
+    const sid = currentShift(NOW).shiftId;
+    const base = {
+      id: 0,
+      machineCode: 'Batt1',
+      shiftId: sid,
+      partNumber: '',
+      slotIndex: 0,
+      statusCode: 'R' as const,
+      countStart: 0,
+      countEnd: 10,
+      rejectCount: 0,
+      rejects: '{}',
+      purgeKg: null,
+      operator: 'Op',
+      supervisor: '',
+      bdIssue: '',
+      mangoTicket: '',
+      handoverNote: '',
+      qcBy: '',
+      locked: false,
+      lockedBy: '',
+      lockedAt: '',
+      createdAt: '',
+      updatedAt: '',
+    };
+    await dal.upsertProductionRecord({ ...base, jobNumber: 'SFM507006' });
+    await dal.upsertProductionRecord({ ...base, jobNumber: 'SFM507057', slotIndex: 1 });
+    // Sign off ONLY the first order — the next order the operator
+    // already started on the remaining slots must stay live.
+    await dal.lockShift('Batt1', sid, 'Christopher King', 'Op', 'SFM507006');
+    const rows = await dal.listProduction({ machineCode: 'Batt1', shiftId: sid });
+    const signed = rows.filter((r) => r.jobNumber === 'SFM507006');
+    const live = rows.filter((r) => r.jobNumber === 'SFM507057');
+    expect(signed.length).toBeGreaterThan(0);
+    expect(signed.every((r) => r.locked && r.lockedBy === 'Christopher King')).toBe(true);
+    expect(live.length).toBeGreaterThan(0);
+    expect(live.every((r) => !r.locked)).toBe(true);
   });
 
   it('lockShift on an empty shift creates a SlotIndex=0 placeholder (§5.5)', async () => {
@@ -141,5 +218,53 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
     const me = await dal.whoAmI();
     expect(me.name).toBeTruthy();
     expect(['operator', 'supervisor', 'admin']).toContain(me.role);
+  });
+
+  it('photo attachments require a SIGNED header row (queue-until-signoff contract)', async () => {
+    const sid = currentShift(NOW).shiftId;
+    const photo = new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: 'image/jpeg' });
+    await dal.upsertProductionRecord({
+      id: 0,
+      machineCode: '650T',
+      shiftId: sid,
+      jobNumber: 'JP1',
+      partNumber: '',
+      slotIndex: 0,
+      statusCode: 'R',
+      countStart: 0,
+      countEnd: 100,
+      rejectCount: 0,
+      rejects: '{}',
+      purgeKg: null,
+      operator: 'Op',
+      supervisor: '',
+      bdIssue: '',
+      mangoTicket: '',
+      handoverNote: '',
+      qcBy: '',
+      locked: false,
+      lockedBy: '',
+      lockedAt: '',
+      createdAt: '',
+      updatedAt: '',
+    });
+
+    // Not signed off yet → the DAL refuses and the caller keeps it queued.
+    expect(await dal.attachProductionPhoto('650T', sid, 'JP1', 'a.jpg', photo)).toBe(false);
+    expect(await dal.listProductionPhotos('650T', sid, 'JP1')).toEqual([]);
+
+    await dal.lockShift('650T', sid, 'Sup', 'Op', 'JP1');
+    expect(await dal.attachProductionPhoto('650T', sid, 'JP1', 'a.jpg', photo)).toBe(true);
+    const photos = await dal.listProductionPhotos('650T', sid, 'JP1');
+    expect(photos).toHaveLength(1);
+    expect(photos[0].name).toBe('a.jpg');
+    expect(photos[0].url).toBeTruthy();
+
+    // Same filename retried (dropped response) → dedupes, still one photo.
+    expect(await dal.attachProductionPhoto('650T', sid, 'JP1', 'a.jpg', photo)).toBe(true);
+    expect(await dal.listProductionPhotos('650T', sid, 'JP1')).toHaveLength(1);
+
+    // A different tuple stays empty.
+    expect(await dal.listProductionPhotos('650T', sid, 'OTHER')).toEqual([]);
   });
 });

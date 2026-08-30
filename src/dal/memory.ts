@@ -1,23 +1,40 @@
 import type {
   BdCode,
+  BreakdownLogDetail,
+  DieChangeLog,
+  DieMaintenanceRequest,
+  DieMaster,
   Machine,
   Operator,
+  ParetoFilter,
+  ParetoSlice,
   PlanningFilter,
   PlanningOrder,
-  Product,
+  ProductDieColor,
+  ProductionCounterRecord,
   ProductionFilter,
   ProductionRecord,
   RejectCategory,
+  StatusCode,
   Supervisor,
   UserContext,
 } from '../types';
 import type { PmdDataLayer } from './types';
 import {
+  bdLabelFor,
+  decodeBreakdownCauseMap,
+  encodeBreakdownCauseMap,
+} from '../core/breakdown';
+import { dieChangeEventKey } from '../core/die';
+import {
   seedBdCodes,
+  seedDieChangeLogs,
+  seedDieMaintenance,
+  seedDieMaster,
   seedMachines,
   seedOperators,
   seedPlanning,
-  seedProducts,
+  seedProductDieColors,
   seedProduction,
   seedRejectCategories,
   seedSupervisors,
@@ -33,25 +50,39 @@ export class MemoryDataLayer implements PmdDataLayer {
   private machines: Machine[];
   private operators: Operator[];
   private supervisors: Supervisor[];
-  private products: Product[];
   private rejectCategories: RejectCategory[];
   private bdCodes: BdCode[];
   private planning: PlanningOrder[];
   private production: ProductionRecord[];
+  private dieColors: ProductDieColor[];
+  private dieMaster: DieMaster[];
+  private dieMaintenance: DieMaintenanceRequest[];
+  private dieChangeLogs: DieChangeLog[] = [];
+  private nextDclId = 1;
+  private nextMaintId: number;
   private nextProdId: number;
-  private nextPlanId: number;
+  /** Tuples currently unlocked from a signed-off state (parity with the
+   *  SharePoint DAL so the operator UI's force-load works in dev too). */
+  private unlockedTuples = new Set<string>();
+  /** Photos "attached" per signed tuple — object URLs standing in for the
+   *  SharePoint attachment URLs, so the 📷 flow is testable in dev. */
+  private photos = new Map<string, Array<{ name: string; url: string }>>();
 
   constructor(now: Date = new Date()) {
     this.machines = seedMachines();
     this.operators = seedOperators();
     this.supervisors = seedSupervisors();
-    this.products = seedProducts();
     this.rejectCategories = seedRejectCategories();
     this.bdCodes = seedBdCodes();
     this.planning = seedPlanning(now);
     this.production = seedProduction(now, this.planning);
+    this.dieColors = seedProductDieColors();
+    this.dieMaster = seedDieMaster(now);
+    this.dieMaintenance = seedDieMaintenance(now);
+    this.dieChangeLogs = seedDieChangeLogs(now);
+    this.nextDclId = Math.max(0, ...this.dieChangeLogs.map((r) => r.id)) + 1;
+    this.nextMaintId = Math.max(0, ...this.dieMaintenance.map((r) => r.id)) + 1;
     this.nextProdId = Math.max(0, ...this.production.map((r) => r.id)) + 1;
-    this.nextPlanId = Math.max(0, ...this.planning.map((p) => p.id)) + 1;
   }
 
   // Deep-copy on the way out so callers can't mutate internal state.
@@ -68,9 +99,6 @@ export class MemoryDataLayer implements PmdDataLayer {
   async listSupervisors(): Promise<Supervisor[]> {
     return MemoryDataLayer.clone(this.supervisors.filter((s) => s.active));
   }
-  async listProducts(): Promise<Product[]> {
-    return MemoryDataLayer.clone(this.products.filter((p) => p.active));
-  }
   async listRejectCategories(): Promise<RejectCategory[]> {
     return MemoryDataLayer.clone(
       [...this.rejectCategories].sort((a, b) => a.sequence - b.sequence),
@@ -78,6 +106,141 @@ export class MemoryDataLayer implements PmdDataLayer {
   }
   async listBdCodes(): Promise<BdCode[]> {
     return MemoryDataLayer.clone([...this.bdCodes].sort((a, b) => a.sequence - b.sequence));
+  }
+  async listProductDieColors(): Promise<ProductDieColor[]> {
+    return MemoryDataLayer.clone(this.dieColors);
+  }
+  async listDieMaster(): Promise<DieMaster[]> {
+    return MemoryDataLayer.clone(this.dieMaster);
+  }
+
+  async updateDieMaster(
+    dieNumber: string,
+    patch: Partial<
+      Pick<
+        DieMaster,
+        | 'toolStatus'
+        | 'dateStamp'
+        | 'lastServiceDate'
+        | 'availableDate'
+        | 'maintenanceLevel'
+        | 'notes'
+        | 'changeOverMedian'
+      >
+    >,
+  ): Promise<void> {
+    const key = dieNumber.trim().toUpperCase();
+    const row = this.dieMaster.find((m) => m.dieNumber.trim().toUpperCase() === key);
+    if (!row) throw new Error(`No PMD_DieMaster row for die ${dieNumber}`);
+    if (patch.toolStatus !== undefined) row.toolStatus = patch.toolStatus;
+    if (patch.dateStamp !== undefined) row.dateStamp = patch.dateStamp;
+    if (patch.lastServiceDate !== undefined) row.lastServiceDate = patch.lastServiceDate;
+    if (patch.availableDate !== undefined) row.availableDate = patch.availableDate;
+    if (patch.maintenanceLevel !== undefined) row.maintenanceLevel = patch.maintenanceLevel;
+    if (patch.notes !== undefined) row.notes = patch.notes;
+    if (patch.changeOverMedian !== undefined) row.changeOverMedian = patch.changeOverMedian;
+  }
+
+  // ---- die maintenance (PMD_DieMaintenance parity) ---------------------
+
+  async listDieMaintenance(): Promise<DieMaintenanceRequest[]> {
+    return MemoryDataLayer.clone(
+      [...this.dieMaintenance].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
+    );
+  }
+
+  async createDieMaintenance(
+    req: Omit<DieMaintenanceRequest, 'id' | 'createdAt' | 'closedAt'>,
+  ): Promise<DieMaintenanceRequest> {
+    const created: DieMaintenanceRequest = MemoryDataLayer.clone({
+      ...req,
+      id: this.nextMaintId++,
+      createdAt: new Date().toISOString(),
+      closedAt: '',
+    });
+    this.dieMaintenance.push(created);
+    return MemoryDataLayer.clone(created);
+  }
+
+  workOrderSource(): 'mango-csv' | 'list' | null {
+    return 'list';
+  }
+
+  async listDieChangeLog(): Promise<DieChangeLog[]> {
+    return MemoryDataLayer.clone(
+      [...this.dieChangeLogs].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
+    );
+  }
+
+  async createDieChangeLog(log: Omit<DieChangeLog, 'id' | 'createdAt'>): Promise<DieChangeLog> {
+    const eventKey = dieChangeEventKey(
+      log.machineCode,
+      log.date,
+      log.shift,
+      log.jobNumber,
+      log.eventStartSlot,
+    );
+    const clean = {
+      ...log,
+      eventKey,
+      eventStartSlot: Math.max(0, Math.floor(log.eventStartSlot)),
+      eventEndSlot: Math.max(log.eventStartSlot, Math.floor(log.eventEndSlot)),
+    };
+    const existing = this.dieChangeLogs.find((r) => r.eventKey === eventKey);
+    if (existing) {
+      Object.assign(existing, MemoryDataLayer.clone({ ...clean, id: existing.id, createdAt: existing.createdAt }));
+      return MemoryDataLayer.clone(existing);
+    }
+    const created: DieChangeLog = MemoryDataLayer.clone({
+      ...clean,
+      id: this.nextDclId++,
+      createdAt: new Date().toISOString(),
+    });
+    this.dieChangeLogs.push(created);
+    return MemoryDataLayer.clone(created);
+  }
+
+  async updateDieMaintenance(
+    id: number,
+    patch: Partial<Pick<DieMaintenanceRequest, 'status' | 'mangoTicket' | 'closedAt'>>,
+  ): Promise<void> {
+    const row = this.dieMaintenance.find((r) => r.id === id);
+    if (!row) throw new Error(`Die maintenance request ${id} not found`);
+    if (patch.status) row.status = patch.status;
+    if (patch.mangoTicket !== undefined) row.mangoTicket = patch.mangoTicket;
+    if (patch.closedAt !== undefined) row.closedAt = patch.closedAt;
+  }
+
+  async createManualOrder(o: {
+    jobNumber: string;
+    partNumber: string;
+    partDescription: string;
+    orderQty: number;
+  }): Promise<PlanningOrder> {
+    const norm = o.jobNumber.trim().toUpperCase();
+    if (this.planning.some((p) => p.jobNumber.trim().toUpperCase() === norm))
+      throw new Error(`Job ${o.jobNumber} is already in the order list`);
+    const created: PlanningOrder = {
+      id: 900_000 + this.planning.length,
+      jobNumber: o.jobNumber.trim(),
+      machineCode: '',
+      originalMachine: '',
+      partNumber: o.partNumber,
+      partDescription: o.partDescription,
+      plannedStart: '',
+      plannedEnd: '',
+      orderQty: o.orderQty,
+      jobRequired: o.orderQty,
+      qtyPerHr: 0,
+      duration: 0,
+      released: true,
+      isDieChange: false,
+      manuallyAdded: true,
+      source: 'Manual',
+      createdAt: new Date().toISOString(),
+    };
+    this.planning.push(created);
+    return MemoryDataLayer.clone(created);
   }
 
   async listPlanning(filter: PlanningFilter): Promise<PlanningOrder[]> {
@@ -92,21 +255,6 @@ export class MemoryDataLayer implements PmdDataLayer {
     );
   }
 
-  async upsertPlanningOrder(order: PlanningOrder): Promise<PlanningOrder> {
-    const idx = this.planning.findIndex((p) => p.id === order.id);
-    if (idx >= 0) {
-      this.planning[idx] = MemoryDataLayer.clone(order);
-      return MemoryDataLayer.clone(this.planning[idx]);
-    }
-    const created = MemoryDataLayer.clone({ ...order, id: this.nextPlanId++ });
-    this.planning.push(created);
-    return MemoryDataLayer.clone(created);
-  }
-
-  async deletePlanningOrder(id: number): Promise<void> {
-    this.planning = this.planning.filter((p) => p.id !== id);
-  }
-
   async listProduction(filter: ProductionFilter): Promise<ProductionRecord[]> {
     let rows = this.production;
     if (filter.machineCode) rows = rows.filter((r) => r.machineCode === filter.machineCode);
@@ -115,6 +263,104 @@ export class MemoryDataLayer implements PmdDataLayer {
     if (filter.shiftIdFrom) rows = rows.filter((r) => r.shiftId >= filter.shiftIdFrom!);
     if (filter.shiftIdTo) rows = rows.filter((r) => r.shiftId <= filter.shiftIdTo!);
     return MemoryDataLayer.clone(rows);
+  }
+
+  async listBreakdownDetails(filter: ProductionFilter): Promise<BreakdownLogDetail[]> {
+    const rows = await this.listProduction(filter);
+    const groups = new Map<string, ProductionRecord[]>();
+    for (const row of rows) {
+      const key = `${row.machineCode}|${row.shiftId}|${row.jobNumber}`;
+      const group = groups.get(key) ?? [];
+      group.push(row);
+      groups.set(key, group);
+    }
+    return [...groups.entries()].map(([key, records]) => {
+      const [machineCode, shiftId, jobNumber] = key.split('|');
+      const timeline = Array.from({ length: 16 }, (_, slot) =>
+        records.find((record) => record.slotIndex === slot)?.statusCode || '·',
+      ).join('');
+      const encoded = encodeBreakdownCauseMap(records);
+      return {
+        machineCode,
+        shiftId,
+        jobNumber,
+        timeline,
+        slots: decodeBreakdownCauseMap(encoded, '', timeline),
+      };
+    });
+  }
+
+  async listProductionCounters(filter: ProductionFilter): Promise<ProductionCounterRecord[]> {
+    const rows = await this.listProduction(filter);
+    const byTuple = new Map<string, ProductionRecord>();
+    for (const r of rows) {
+      if (r.slotIndex !== 0) continue;
+      byTuple.set(`${r.machineCode}|${r.shiftId}|${r.jobNumber}`, r);
+    }
+    return [...byTuple.values()].map((r) => ({
+      machineCode: r.machineCode,
+      shiftId: r.shiftId,
+      jobNumber: r.jobNumber,
+      partNumber: r.partNumber,
+      countStart: r.countStart,
+      countEnd: r.countEnd,
+      cavities: r.cavities,
+    }));
+  }
+
+  /** Reject Pareto derived from the in-memory records' per-code reject
+   *  maps — the mock stand-in for PMD_Rejects. Label resolves from the
+   *  seeded RejectCategories (code → description). */
+  async listRejectPareto(filter: ParetoFilter): Promise<ParetoSlice[]> {
+    const labelByCode = new Map(this.rejectCategories.map((c) => [c.code, c.label]));
+    const qty = new Map<string, number>();
+    const statusQty = new Map<
+      string,
+      Partial<Record<StatusCode | 'Unknown', number>>
+    >();
+    for (const r of this.inWindow(filter)) {
+      let obj: Record<string, number> = {};
+      try {
+        obj = r.rejects ? (JSON.parse(r.rejects) as Record<string, number>) : {};
+      } catch {
+        obj = {};
+      }
+      for (const [code, v] of Object.entries(obj)) {
+        const n = Number(v) || 0;
+        if (n <= 0) continue;
+        qty.set(code, (qty.get(code) ?? 0) + n);
+        const status: StatusCode | 'Unknown' = r.statusCode || 'Unknown';
+        const statuses = statusQty.get(code) ?? {};
+        statuses[status] = (statuses[status] ?? 0) + n;
+        statusQty.set(code, statuses);
+      }
+    }
+    return paretoSlices(
+      qty,
+      (code) => labelByCode.get(code) ?? code,
+      (code) => statusQty.get(code),
+    );
+  }
+
+  /** Downtime Pareto derived from B-status slots' bdIssue — the mock
+   *  stand-in for PMD_BreakDownlog (BDCode + breakdown hours). Each B
+   *  slot is 0.5 h. */
+  async listDowntimePareto(filter: ParetoFilter): Promise<ParetoSlice[]> {
+    const hrs = new Map<string, number>();
+    for (const r of this.inWindow(filter)) {
+      if (r.statusCode !== 'B' || !r.bdIssue) continue;
+      hrs.set(r.bdIssue, (hrs.get(r.bdIssue) ?? 0) + 0.5);
+    }
+    return paretoSlices(hrs, (code) => bdLabelFor(code) || code);
+  }
+
+  /** Records inside a Pareto date window (+ optional machine). */
+  private inWindow(filter: ParetoFilter): ProductionRecord[] {
+    return this.production.filter((r) => {
+      if (filter.machineCode && r.machineCode !== filter.machineCode) return false;
+      const day = r.shiftId.slice(0, 10);
+      return day >= filter.from && day <= filter.to;
+    });
   }
 
   // Last-write-wins (§5.6): match on composite key, no version check.
@@ -154,37 +400,64 @@ export class MemoryDataLayer implements PmdDataLayer {
     this.production = this.production.filter((r) => r.id !== id);
   }
 
+  /** Contract parity with the SharePoint backend: forget a tuple's
+   *  UNSIGNED rows (a browse the worker never confirmed). Signed-off
+   *  rows are the permanent record and are never discarded. */
+  async discardUnconfirmedTuple(
+    machineCode: string,
+    shiftId: string,
+    jobNumber: string,
+  ): Promise<void> {
+    this.production = this.production.filter(
+      (r) =>
+        r.locked ||
+        r.machineCode !== machineCode ||
+        r.shiftId !== shiftId ||
+        r.jobNumber !== jobNumber,
+    );
+  }
+
   async lockShift(
     machineCode: string,
     shiftId: string,
     supervisor: string,
     operator: string,
+    jobNumber?: string,
+    /** Accepted for interface parity with the SharePoint DAL; the memory
+     *  DAL doesn't persist a JobLeft column. */
+    _jobLeft?: number | null,
   ): Promise<void> {
     const now = new Date().toISOString();
+    // Per-job sign-off: other orders on the same shift stay editable
+    // (matches the SharePoint DAL — see its lockShift for rationale).
     const rows = this.production.filter(
-      (r) => r.machineCode === machineCode && r.shiftId === shiftId,
+      (r) =>
+        r.machineCode === machineCode &&
+        r.shiftId === shiftId &&
+        (!jobNumber || r.jobNumber === jobNumber),
     );
     if (rows.length === 0) {
       this.production.push({
         id: this.nextProdId++,
         machineCode,
         shiftId,
-        jobNumber: '',
+        jobNumber: jobNumber ?? '',
+        partNumber: '',
         slotIndex: 0,
         statusCode: '',
         countStart: null,
         countEnd: null,
         rejectCount: 0,
         rejects: '{}',
-        otherType: '',
-        otherCount: 0,
         purgeKg: null,
         operator,
         supervisor,
         bdIssue: '',
         mangoTicket: '',
         handoverNote: '',
+        qcBy: '',
         locked: true,
+        reopened: false,
         lockedBy: supervisor,
         lockedAt: now,
         createdAt: now,
@@ -194,28 +467,93 @@ export class MemoryDataLayer implements PmdDataLayer {
     }
     for (const r of rows) {
       r.locked = true;
+      r.reopened = false;
       r.lockedBy = supervisor;
       r.lockedAt = now;
       r.supervisor = supervisor;
       if (operator) r.operator = operator;
       r.updatedAt = now;
+      this.unlockedTuples.delete(`${r.machineCode}|${r.shiftId}|${r.jobNumber}`);
     }
   }
 
-  async unlockShift(machineCode: string, shiftId: string): Promise<void> {
+  async unlockShift(
+    machineCode: string,
+    shiftId: string,
+    jobNumber?: string,
+  ): Promise<void> {
     const now = new Date().toISOString();
     for (const r of this.production) {
-      if (r.machineCode === machineCode && r.shiftId === shiftId) {
-        r.locked = false;
-        r.lockedBy = '';
-        r.lockedAt = '';
-        r.updatedAt = now;
-      }
+      if (r.machineCode !== machineCode || r.shiftId !== shiftId) continue;
+      if (jobNumber && r.jobNumber !== jobNumber) continue;
+      r.locked = false;
+      r.reopened = true;
+      r.lockedBy = '';
+      r.lockedAt = '';
+      r.updatedAt = now;
+      this.unlockedTuples.add(`${r.machineCode}|${r.shiftId}|${r.jobNumber}`);
     }
+  }
+
+  isUnlockedTuple(machineCode: string, shiftId: string, jobNumber: string): boolean {
+    return this.unlockedTuples.has(`${machineCode}|${shiftId}|${jobNumber}`);
+  }
+
+  async attachProductionPhoto(
+    machineCode: string,
+    shiftId: string,
+    jobNumber: string,
+    fileName: string,
+    data: Blob,
+  ): Promise<boolean> {
+    // Same contract as SharePoint: attachments hang off the SIGNED header
+    // row, so an unsigned tuple reports false and the caller keeps the
+    // photo queued until lockShift.
+    const signed = this.production.some(
+      (r) =>
+        r.machineCode === machineCode &&
+        r.shiftId === shiftId &&
+        r.jobNumber === jobNumber &&
+        r.locked,
+    );
+    if (!signed) return false;
+    const key = `${machineCode}|${shiftId}|${jobNumber}`;
+    const list = this.photos.get(key) ?? [];
+    if (!list.some((p) => p.name === fileName)) {
+      list.push({ name: fileName, url: URL.createObjectURL(data) });
+    }
+    this.photos.set(key, list);
+    return true;
+  }
+
+  async listProductionPhotos(
+    machineCode: string,
+    shiftId: string,
+    jobNumber: string,
+  ): Promise<Array<{ name: string; url: string }>> {
+    return [...(this.photos.get(`${machineCode}|${shiftId}|${jobNumber}`) ?? [])];
   }
 
   async whoAmI(): Promise<UserContext> {
     // Mock identity. Real backends resolve this from the host platform (§2.4).
     return { name: 'Christopher King', role: 'supervisor' };
   }
+}
+
+/** Value-descending ParetoSlice[] from a code→value tally. */
+function paretoSlices(
+  tally: Map<string, number>,
+  labelFor: (code: string) => string,
+  byStatusFor?: (
+    code: string,
+  ) => Partial<Record<StatusCode | 'Unknown', number>> | undefined,
+): ParetoSlice[] {
+  return Array.from(tally.entries())
+    .map(([code, value]) => {
+      const slice: ParetoSlice = { code, label: labelFor(code), value: +value.toFixed(2) };
+      const byStatus = byStatusFor?.(code);
+      if (byStatus) slice.byStatus = byStatus;
+      return slice;
+    })
+    .sort((a, b) => b.value - a.value);
 }

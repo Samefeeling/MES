@@ -20,8 +20,8 @@ export const STATUSES: StatusDef[] = [
   { code: 'C', label: 'Color Change', color: '#fde68a', border: '#d97706', text: '#78350f', kind: 'setup' },
   { code: 'D', label: 'Die Change', color: '#fed7aa', border: '#ea580c', text: '#7c2d12', kind: 'setup' },
   { code: 'I', label: 'Insert Change', color: '#fed7aa', border: '#c2410c', text: '#7c2d12', kind: 'setup' },
-  { code: 'M', label: 'Maintenance', color: '#fbcfe8', border: '#db2777', text: '#831843', kind: 'downtime' },
-  { code: 'O', label: 'No Work', color: '#e5e7eb', border: '#9ca3af', text: '#374151', kind: 'idle' },
+  { code: 'M', label: 'Smoko', color: '#fbcfe8', border: '#db2777', text: '#831843', kind: 'downtime' },
+  { code: 'O', label: 'No Plan', color: '#e5e7eb', border: '#9ca3af', text: '#374151', kind: 'idle' },
   { code: 'P', label: 'Purge', color: '#e9d5ff', border: '#9333ea', text: '#581c87', kind: 'setup' },
   { code: 'S', label: 'Startup', color: '#bae6fd', border: '#0284c7', text: '#075985', kind: 'setup' },
 ];

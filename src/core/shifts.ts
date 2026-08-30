@@ -3,7 +3,7 @@ import type { ShiftCode } from '../types';
 export const SLOTS_PER_SHIFT = 16; // §5.1 — 8h × 2
 export const SLOT_MINUTES = 30; // §5.1 — every slot is exactly 30 min
 
-export interface ShiftDef {
+interface ShiftDef {
   code: ShiftCode;
   label: string;
   startHour: number; // local hour the shift starts
@@ -58,6 +58,14 @@ export function shiftBounds(shiftId: string): { start: Date; end: Date } | null 
   return { start, end };
 }
 
+/** Milliseconds from `now` until the shift ends — positive while the shift
+ *  is still running, negative once it's over, null if the id is malformed.
+ *  Drives the "sign off, the shift ends soon" reminder. */
+export function msUntilShiftEnd(shiftId: string, now: Date = new Date()): number | null {
+  const b = shiftBounds(shiftId);
+  return b ? b.end.getTime() - now.getTime() : null;
+}
+
 /** {start,end} of a single 30-min slot within a shift. */
 export function slotTimeRange(
   shiftId: string,
@@ -110,4 +118,21 @@ export function currentSlotIndex(shiftId: string, now: Date = new Date()): numbe
   if (now < b.start || now >= b.end) return null;
   const idx = Math.floor((now.getTime() - b.start.getTime()) / (SLOT_MINUTES * 60_000));
   return idx >= 0 && idx < SLOTS_PER_SHIFT ? idx : null;
+}
+
+/**
+ * The shift immediately before `shiftId` in chronological order, wrapping
+ * across midnight (Day → previous Night dated yesterday, Afternoon → Day
+ * same date, Night → Afternoon same date). Returns null if shiftId is
+ * malformed.
+ */
+export function previousShift(shiftId: string): string | null {
+  const p = parseShiftId(shiftId);
+  if (!p) return null;
+  const codes = SHIFTS.map((s) => s.code);
+  const idx = codes.indexOf(p.code);
+  if (idx > 0) return buildShiftId(new Date(p.year, p.month - 1, p.day), codes[idx - 1]);
+  const prev = new Date(p.year, p.month - 1, p.day);
+  prev.setDate(prev.getDate() - 1);
+  return buildShiftId(prev, codes[codes.length - 1]);
 }

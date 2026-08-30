@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildShiftId,
+  msUntilShiftEnd,
   parseShiftId,
+  previousShift,
   shiftBounds,
   slotTimeRange,
   slotClock,
@@ -43,6 +45,18 @@ describe('shift id / bounds (§2.3)', () => {
   });
 });
 
+describe('msUntilShiftEnd', () => {
+  it('counts down to the shift end, goes negative after, null on garbage', () => {
+    // Day shift ends 15:00. At 14:55 → 5 min left.
+    expect(msUntilShiftEnd('2026-05-15-Day', new Date(2026, 4, 15, 14, 55))).toBe(5 * 60_000);
+    expect(msUntilShiftEnd('2026-05-15-Day', new Date(2026, 4, 15, 15, 0))).toBe(0);
+    expect(msUntilShiftEnd('2026-05-15-Day', new Date(2026, 4, 15, 15, 10))).toBe(-10 * 60_000);
+    // Night ends 07:00 next day.
+    expect(msUntilShiftEnd('2026-05-15-Night', new Date(2026, 4, 16, 6, 56))).toBe(4 * 60_000);
+    expect(msUntilShiftEnd('garbage')).toBeNull();
+  });
+});
+
 describe('slots (§5.1)', () => {
   it('has exactly 16 slots of 30 minutes', () => {
     expect(SLOTS_PER_SHIFT).toBe(16);
@@ -77,9 +91,39 @@ describe('current shift (§2.3)', () => {
     expect(cs.shiftId).toBe('2026-05-15-Night');
   });
 
+  it('a Night shift dated "today" is in the future before its 23:00 start', () => {
+    // The mis-date trap powering isFutureShift(): at 06:00 on 16 May the
+    // running Night is 15-May-Night, but a supervisor who leaves the date on
+    // "today" picks 16-May-Night — which doesn't start until 23:00 that day,
+    // so its bounds begin AFTER the current 06:00 clock (a future shift).
+    const now = new Date(2026, 4, 16, 6, 0);
+    expect(currentShift(now).shiftId).toBe('2026-05-15-Night');
+    const wronglyPicked = shiftBounds('2026-05-16-Night')!;
+    expect(now < wronglyPicked.start).toBe(true);
+    // The correct shift's window has already started (not future).
+    const running = shiftBounds('2026-05-15-Night')!;
+    expect(now < running.start).toBe(false);
+  });
+
   it('locates the active slot index, null when outside the shift', () => {
     expect(currentSlotIndex('2026-05-15-Day', new Date(2026, 4, 15, 7, 15))).toBe(0);
     expect(currentSlotIndex('2026-05-15-Day', new Date(2026, 4, 15, 9, 0))).toBe(4);
     expect(currentSlotIndex('2026-05-15-Day', new Date(2026, 4, 15, 18, 0))).toBeNull();
+  });
+});
+
+describe('previousShift', () => {
+  it('walks Night → Afternoon → Day within one date', () => {
+    expect(previousShift('2026-06-02-Night')).toBe('2026-06-02-Afternoon');
+    expect(previousShift('2026-06-02-Afternoon')).toBe('2026-06-02-Day');
+  });
+  it('wraps Day to previous date Night', () => {
+    expect(previousShift('2026-06-02-Day')).toBe('2026-06-01-Night');
+  });
+  it('crosses month boundary correctly', () => {
+    expect(previousShift('2026-07-01-Day')).toBe('2026-06-30-Night');
+  });
+  it('returns null on garbage input', () => {
+    expect(previousShift('not-a-shift')).toBeNull();
   });
 });

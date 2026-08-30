@@ -1,0 +1,10 @@
+{
+  "//": "Copy to C:\\PMDSync\\mango-sync.config.json and fill in. See scripts/sync-mango-csv.mjs header + docs/DEPLOYMENT.md.",
+  "ReportUrl": "https://my.mangolive.com/plant-equipment/REPLACE-with-the-work-order-report-page",
+  "ExportSelector": "",
+  "OutputCsvPath": "C:\\Users\\pmdsync\\OneDrive - Resero\\PMD\\MangoWorkOrders.csv",
+  "StorageStatePath": "C:\\PMDSync\\mango-auth.json",
+  "BrowserChannel": "msedge",
+  "Headless": true,
+  "TimeoutMs": 60000
+}

@@ -39,36 +39,241 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .hidden{display:none!important}
 
 /* ===== top bar (uses theme-dark) — slim: logo + title + connection status ===== */
-.top{background:var(--theme-dark);color:var(--theme-on-dark);padding:8px 18px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:50;box-shadow:0 2px 6px rgba(0,0,0,.15);transition:background .25s}
+/* FIXED to the viewport, not sticky: the bar's size must never follow
+   the operator sheet's zoomed width (sticky sat in the body flow, so a
+   zoomed-wide sheet stretched it / scrolled it off sideways exposing
+   white). Fixed = always exactly one viewport wide, immune to both
+   horizontal scroll and --disp-zoom. Content starts below it via the
+   .vw margin (--topbar-h is measured from JS; 52px = logo 36 + 2×8). */
+.top{background:var(--theme-dark);color:var(--theme-on-dark);padding:8px 18px;display:flex;align-items:center;gap:14px;position:fixed;top:0;left:0;right:0;z-index:50;box-shadow:0 2px 6px rgba(0,0,0,.15);transition:background .25s}
 .top h1{margin:0;font-size:20px;font-weight:700;flex:1;letter-spacing:.2px}
-.top .st{font-size:14px;opacity:.92;background:rgba(255,255,255,.16);padding:4px 10px;border-radius:99px;font-weight:600}
+/* Mirror-health badge (build id + last live-mirror push): supervisor-only
+   diagnostics pinned to the bottom-right corner — visible only while
+   supervisor mode is on (display toggled from JS). Deliberately dim so
+   it never competes with the sheet. */
+#mirrorBadge{position:fixed;right:8px;bottom:8px;z-index:60;font-size:12px;font-weight:600;padding:4px 10px;border-radius:99px;white-space:nowrap;background:rgba(15,23,42,.75);color:#e2e8f0;pointer-events:auto;cursor:default}
+#mirrorBadge.mb-ok{opacity:.85}
+#mirrorBadge.mb-idle{opacity:.6}
+#mirrorBadge.mb-bad{background:#c62828;color:#fff;opacity:1}
 .brand-logo{height:36px;width:auto;background:rgba(255,255,255,.96);padding:4px 10px;border-radius:8px}
-.top-nav{display:flex;gap:6px}
+/* min-width:0 + overflow-x lets the nav shrink inside the fixed bar and
+   swipe sideways on a phone instead of the last buttons being clipped. */
+.top-nav{display:flex;gap:6px;min-width:0;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.top-nav::-webkit-scrollbar{display:none}
+.top-nav a,.top-nav .nav-btn{flex:0 0 auto;white-space:nowrap}
 .top-nav a{color:var(--theme-on-dark);text-decoration:none;padding:7px 14px;border-radius:8px;font-size:14px;font-weight:700;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25)}
 .top-nav a:hover{background:rgba(255,255,255,.24)}
-.vw{padding:14px}
+.vw{padding:14px;margin-top:var(--topbar-h,52px)}
+
+/* KPI / meeting view */
+.kpi{display:flex;flex-direction:column;gap:14px}
+.kpi-head{background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 14px;display:flex;flex-wrap:wrap;align-items:center;gap:14px}
+/* The active window, small and muted beside the period tabs (the old
+   two-line "Production KPIs — …" title ate a whole row for it). The
+   "signed-off only · as at" detail lives in its tooltip. */
+/* Period tabs sized like the topbar Operator link (7px 14px pad,
+   14px font, 8px radius) — the 52px .shift-btn blocks the operator
+   shift picker uses were oversized and uneven here. */
+.kpi-head .shift-tabs{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.kpi-head .shift-btn{min-height:0;padding:7px 14px;border-width:1px;border-radius:8px;font-size:14px;line-height:16px}
+.kpi-trace-host{min-width:0}
+/* Formula footnote — one formula per line, small print. */
+.kpi-note{margin:0;font-size:11.5px;line-height:1.6;color:var(--mu)}
+.kpi-note b{color:#334155}
+/* From/To range picker — always visible, sits inline inside .kpi-head
+   (which already supplies the white card), so it stays transparent. */
+.kpi-range{display:flex;flex-wrap:wrap;gap:14px;align-items:center}
+.kpi-head .kpi-range{margin-left:auto}
+.kpi-range label{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:#0c4a6e}
+.kpi-range input[type=date]{font-size:14px;padding:6px 8px;border:1px solid var(--bd);border-radius:8px}
+/* Supervisor-only colour-threshold editor. */
+.kpi-thresholds{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 14px}
+.kpi-th-title{font-size:13px;font-weight:700;color:#0c4a6e}
+.kpi-th-group{display:flex;align-items:center;gap:6px;font-size:12px;color:#334155}
+.kpi-th-group b{font-weight:700;color:#0f172a}
+.kpi-th-field{display:flex;align-items:center;gap:3px;font-size:12px;color:#475569}
+.kpi-th-field input{width:48px;font-size:13px;padding:3px 5px;border:1px solid var(--bd);border-radius:6px;text-align:right}
+.kpi-th-reset{font-size:12px;font-weight:600;color:#475569;background:#f1f5f9;border:1px solid var(--bd);border-radius:8px;padding:4px 10px;cursor:pointer}
+.kpi-th-reset:hover{background:#e2e8f0}
+/* Headline stat tiles above the table — daily-meeting numbers readable
+   from across the room. Top border carries the traffic-light colour. */
+/* Headline tiles: ALWAYS one row (auto-flow column splits the width
+   evenly across however many tiles render), shrinking instead of
+   wrapping — 8 tiles were spilling onto a second row. min-width:0 lets
+   the grid actually compress a tile; the value font scales with the
+   viewport so "276.5" survives an iPad-width column. */
+.kpi-stats{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:8px}
+.kpi-stat{background:#fff;border:1px solid var(--bd);border-top:4px solid var(--theme-dark);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.kpi-stat-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kpi-stat-value{font-size:clamp(16px,2.2vw,28px);font-weight:800;color:var(--tx);font-variant-numeric:tabular-nums;line-height:1.1;white-space:nowrap}
+.kpi-stat.is-green{border-top-color:var(--gn)}.kpi-stat.is-green .kpi-stat-value{color:#15803d}
+.kpi-stat.is-amber{border-top-color:var(--am)}.kpi-stat.is-amber .kpi-stat-value{color:#FFA500}
+.kpi-stat.is-red{border-top-color:var(--rd)}.kpi-stat.is-red .kpi-stat-value{color:#b91c1c}
+/* Global toggles in the Machine column header. Inherit kpi-toggle for
+   look but shave a few px so they sit comfortably next to the "Machine"
+   label. */
+.kpi-machine-head{white-space:nowrap}
+.kpi-toggle-all{width:22px;height:22px;font-size:14px;margin-left:6px;margin-right:0}
+.kpi-table-wrap{background:#fff;border:1px solid var(--bd);border-radius:12px;overflow:auto;max-height:70vh;position:relative}
+/* min-width = the colgroup's own widths (250 + 100 + 11×72 + 230), so the
+   fixed layout never has to squeeze a metric column. Bump it when a
+   column is added or removed. */
+.kpi-table{background:#fff;font-variant-numeric:tabular-nums;border:0;border-radius:0;overflow:visible;min-width:1372px;table-layout:fixed}
+.kpi-col-machine{width:250px}
+.kpi-col-color{width:100px}
+.kpi-col-metric{width:72px}
+.kpi-col-handover{width:230px}
+.kpi-table td.num,.kpi-table th{white-space:nowrap}
+.kpi-table td.green{color:#15803d;font-weight:800}
+.kpi-table td.amber{color:#FFA500;font-weight:800}
+.kpi-table td.red{color:#b91c1c;font-weight:800}
+.kpi-table td.gray{color:var(--mu)}
+/* Drillable numbers (Reject / Down h) carry their own colour so they read
+   as links. When the cell itself is judged green/amber/red the verdict
+   must win — otherwise a within-tolerance Reject total stays red purely
+   because it happens to be clickable. */
+.kpi-table td.green .kpi-reject-drill,
+.kpi-table td.amber .kpi-reject-drill,
+.kpi-table td.red .kpi-reject-drill{color:inherit}
+/* The small "/expected" companion on a judged Output cell. */
+.kpi-exp{font-size:10px;font-weight:600;color:var(--mu)}
+.kpi-total th,.kpi-total td{border-top:2px solid var(--theme-dark);font-weight:800;background:#f8fafc}
+/* Per-category subtotal block (PMD_ProductDieColor.Category) sitting at
+   the end of the body, directly above the sticky TOTAL footer. Same
+   bold/grey "totals" look as TOTAL but one notch lighter; the first row
+   opens the block with a strong border so it doesn't read as another
+   machine row. */
+.kpi-cat-total th,.kpi-cat-total td{background:#eef2f7;font-weight:700;border-top:1px solid #cbd5e1}
+.kpi-cat-first th,.kpi-cat-first td{border-top:2px solid var(--theme-dark)}
+/* Sticky header — stays pinned while the table body scrolls inside .kpi-table-wrap. */
+.kpi-table thead th{position:sticky;top:0;z-index:3;box-shadow:0 1px 0 #cbd5e1}
+.kpi-table tfoot th,.kpi-table tfoot td{position:sticky;bottom:0;z-index:2;background:#f8fafc}
+/* Collapse toggle on each machine row. */
+.kpi-toggle{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border:1px solid var(--bd);background:#fff;color:var(--theme-dark);border-radius:6px;font-weight:800;font-size:16px;cursor:pointer;margin-right:6px;line-height:1;padding:0}
+.kpi-toggle:hover{background:#eff6ff;border-color:var(--theme-dark)}
+/* Second toggle on machine row: per-Job# rollup across all shifts in
+   the period. ">" collapsed → "⌄" expanded. */
+.kpi-orders-toggle{margin-right:8px;color:#0c4a6e}
+.kpi-mc-name{vertical-align:middle}
+/* Handover appears once per machine. A compact button keeps the table width
+   stable; full multi-line notes live in a modal and never influence column
+   sizing when Shift / Order rows are expanded. */
+.kpi-ho-head{width:230px}
+.kpi-ho-cell{white-space:nowrap;overflow:hidden;font-size:12px;color:#475569}
+.kpi-ho-empty{color:transparent}
+.kpi-ho-summary{width:100%;height:24px;display:flex;align-items:center;gap:6px;min-width:0;padding:2px 5px;border:1px solid #bfdbfe;border-radius:6px;background:#eff6ff;color:#1e3a8a;font:inherit;font-weight:700;cursor:pointer;text-align:left}
+.kpi-ho-summary:hover{background:#dbeafe;border-color:#60a5fa}
+.kpi-ho-summary:focus-visible{outline:2px solid var(--theme-dark);outline-offset:1px}
+.kpi-ho-count{flex:0 0 auto;min-width:20px;height:18px;padding:0 5px;border-radius:999px;background:#1d4ed8;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:800}
+.kpi-ho-latest{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kpi-ho-arrow{flex:0 0 auto;font-size:18px;line-height:1;color:#1d4ed8}
 
 /* Trace / search view */
 .trace{display:flex;flex-direction:column;gap:14px}
 .trace-search{background:#fff;border:1px solid var(--bd);border-radius:12px;padding:16px}
 .trace-search h2{margin:0 0 6px;font-size:22px;font-weight:800;color:#0c4a6e}
-.trace-form{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;margin-top:10px}
+.trace-form{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;margin-top:0}
 .trace-form label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--mu);text-transform:uppercase;letter-spacing:.4px;font-weight:700}
 .trace-form input,.trace-form select{padding:10px 12px;border:2px solid var(--bd);border-radius:8px;font-size:16px;min-height:48px;min-width:180px;background:#fff;color:var(--tx)}
 .trace-empty{padding:30px;background:#fff;border:1px dashed var(--bd);border-radius:10px;text-align:center;color:var(--mu);font-weight:600}
+/* Live Status andon header: per-activity counts + shift + refresh heartbeat. */
+.live-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 16px}
+.live-chips{display:flex;gap:10px;flex-wrap:wrap}
+.live-chip{display:inline-flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;background:#f8fafc;border:1px solid var(--bd);font-size:14px;font-weight:700;color:var(--tx)}
+.live-chip i{width:12px;height:12px;border-radius:50%;background:var(--c)}
+.live-chip b{font-size:18px;font-variant-numeric:tabular-nums;color:var(--c)}
+.live-meta{font-size:13px;color:var(--mu);font-weight:600;font-variant-numeric:tabular-nums}
+.trace-tabs{display:flex;gap:8px;margin-bottom:12px}
+.trace-tabs .shift-btn{min-width:180px}
+.trace-card.is-idle{background:#f8fafc;border-style:dashed}
+.trace-card.is-idle .trace-card-head b{color:#94a3b8}
+/* A press with no order: one line — machine, "(no job)", Idle. Nothing
+   else is known about it, and the running presses are what the board is
+   for, so an idle one gets a row, not a card. */
+.trace-card-slim{padding-top:6px;padding-bottom:6px;gap:0}
+.trace-card-slim .trace-card-head{align-items:center}
+.trace-card-slim .trace-activity{padding:2px 10px;font-size:11px;box-shadow:none}
+/* Live cards: machine chip is the identity colour, activity badge + rail
+   are the live activity colour (green = running, orange = changeover,
+   red = breakdown, slate = idle). Subtle background tint of the same
+   hue so a glance at the floor view reads the dominant state instantly. */
+.trace-card.is-live{border-left:6px solid var(--mc,#94a3b8);padding-left:14px}
+.trace-card.is-live.act-running{background:#f0fdf4}
+.trace-card.is-live.act-changeover{background:#fff7ed}
+.trace-card.is-live.act-breakdown{background:#fef2f2}
+.trace-card.is-live.act-idle{background:#f8fafc}
+.trace-machine{font-size:16px;font-weight:800;color:#1e293b;letter-spacing:.3px;min-width:56px}
+.trace-activity{display:inline-block;padding:4px 12px;border-radius:999px;color:#fff;font-weight:800;font-size:12px;letter-spacing:.6px;text-transform:uppercase;box-shadow:0 1px 2px rgba(0,0,0,.15)}
+.trace-corun{display:inline-block;margin-left:6px;padding:2px 9px;border-radius:999px;background:#ede9fe;color:#6d28d9;border:1px solid #c4b5fd;font-size:11px;font-weight:800;letter-spacing:.4px;text-transform:uppercase}
+.trace-card .trace-job{font-size:15px;color:#475569;font-weight:600;margin-left:4px}
 .trace-results{display:flex;flex-direction:column;gap:12px}
-.trace-card{background:#fff;border:1px solid var(--bd);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:8px}
-.trace-card-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px;font-size:16px}
-.trace-card-head b{font-size:18px;color:#1e3a8a}
-.trace-card-head .trace-meta{font-size:13px;color:var(--mu);font-weight:600}
-.trace-card-people{font-size:13px;color:var(--mu)}
-.trace-card-people b{color:var(--tx)}
-.trace-card-totals{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:var(--mu);text-transform:uppercase;letter-spacing:.4px}
-.trace-card-totals b{font-size:18px;color:var(--tx);margin-left:6px;font-weight:800}
+/* Cards are packed to ~1/3 of the old height: one merged people+totals
+   row (Operator/Supervisor sit inline with Order Qty), a slim rejects
+   row, and shorter QC / timeline slots. Padding and gaps tightened. */
+.trace-card{background:#fff;border:1px solid var(--bd);border-radius:10px;padding:8px 12px;display:flex;flex-direction:column;gap:3px}
+.trace-card-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;font-size:14px}
+.trace-card-head b{font-size:16px;color:#1e3a8a}
+.trace-card-head .trace-meta{font-size:12px;color:var(--mu);font-weight:600}
+.trace-card-totals{display:flex;gap:12px;flex-wrap:wrap;font-size:10.5px;color:var(--mu);text-transform:uppercase;letter-spacing:.3px;align-items:baseline}
+.trace-card-totals b{font-size:12.5px;color:var(--tx);margin-left:4px;font-weight:800}
 .trace-card-totals .g b{color:var(--gn)}
 .trace-card-totals .r b{color:var(--rd)}
-.trace-timeline{display:grid;grid-template-columns:repeat(16,1fr);gap:2px;margin:6px 0}
-.trace-slot{height:36px;border:1px solid var(--bd);border-radius:4px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+/* Per-slot Quality Checks row — sits directly above the status timeline
+   so a signed cell (e.g. `✓ GM`) reads as confirming the status block
+   below it. Same 16-column grid as .trace-timeline. Mirrors the operator
+   sheet's editable Quality Checks row in read-only form. Supervisor
+   cadence cells (slots 1/7/13) wear an amber tint + side-rails just
+   like the operator grid so the 3 required supervisor columns are
+   obvious. Signed cells go green; unsigned show a muted "—". */
+/* QC row + timeline are ONE table, Excel-style: no gaps, every internal
+   edge a single shared 1px gridline, square internal corners, and only
+   the four outer corners of the block rounded. They used to be two
+   strips of individually rounded chips 2px apart, which read as two
+   unrelated rows — but they are two readings of the same 16 half-hours,
+   so a signature has to sit squarely on top of the status it signs off.
+   Collapse is done by dropping each cell's right border and giving it
+   back to :last-child; the QC row also drops its bottom border so the
+   line between the two rows is the timeline's top border, not two. */
+.trace-sheet{margin:2px 0}
+.trace-qc-row{display:grid;grid-template-columns:repeat(16,1fr);gap:0}
+.trace-qc-slot{height:18px;border:1px solid var(--bd);border-right-width:0;border-bottom-width:0;border-radius:0;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;background:#f8fafc;color:#94a3b8;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.trace-qc-slot:first-child{border-top-left-radius:4px}
+.trace-qc-slot:last-child{border-right-width:1px;border-top-right-radius:4px}
+/* Supervisor cadence columns (slots 1/7/13) keep their rails, but as
+   inset shadows — a 3px border here would fatten two of the sixteen
+   gridlines and shove that cell's initials off-centre. */
+.trace-qc-slot.qc-supervisor{background:#fef3c7;color:#92400e;box-shadow:inset 3px 0 0 #f59e0b,inset -3px 0 0 #f59e0b}
+.trace-qc-slot.is-signed{background:#dcfce7;color:#166534}
+.trace-qc-slot.is-signed.qc-supervisor{background:#86efac;box-shadow:inset 3px 0 0 #15803d,inset -3px 0 0 #15803d}
+.trace-timeline{display:grid;grid-template-columns:repeat(16,1fr);gap:0;position:relative}
+.trace-slot{height:22px;border:1px solid var(--bd);border-right-width:0;border-radius:0;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.trace-slot:first-child{border-bottom-left-radius:4px}
+.trace-slot:last-child{border-right-width:1px;border-bottom-right-radius:4px}
+/* Per-slot reject codes, aligned under the status timeline so a defect
+   sits directly beneath the half-hour it happened in. Empty slots keep
+   the column width; slots with rejects show the code(s) in red. */
+/* gap:0 is not cosmetic here — the strip only means anything while its
+   16 columns sit exactly under the timeline's, and the table above is
+   now gapless. */
+.trace-rej-row{display:grid;grid-template-columns:repeat(16,1fr);gap:0;margin:1px 0 2px}
+/* One number — the half-hour's reject total. Fixed height so the row
+   can't grow with the number of codes in a slot (it used to stack
+   "D07×1" over "D09×3" at 9px, which was both unreadable and a source of
+   uneven block heights). Codes, descriptions and quantities are on the
+   tooltip. */
+.trace-rej-slot{height:15px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#b91c1c;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}
+.trace-rej-slot.has-rej{background:#fee2e2;border:1px solid #fca5a5;border-radius:0;cursor:help}
+/* Live Status is the dense floor-at-a-glance view; keep Search / KPI day
+   cards at their existing readable size. */
+.trace-card.is-live{--trace-live-row-height:17px}
+.trace-card.is-live .trace-qc-slot{height:var(--trace-live-row-height);font-size:8px}
+.trace-card.is-live .trace-slot{height:var(--trace-live-row-height);font-size:10px}
+.trace-schedule{margin:3px 0 2px}
+.trace-schedule-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:2px;font-size:10px;color:var(--mu)}
+.trace-schedule-head b{text-transform:uppercase;letter-spacing:.35px;color:#334155}
+.trace-schedule-track{position:relative;min-height:17px;background:repeating-linear-gradient(90deg,#f8fafc 0,#f8fafc calc(12.5% - 1px),#cbd5e1 calc(12.5% - 1px),#cbd5e1 12.5%);border:1px solid var(--bd);border-radius:4px;overflow:hidden;box-sizing:content-box}
+.trace-schedule-bar{position:absolute;height:17px;min-width:2px;padding:1px 4px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;background:#94a3b8;border:1px solid #64748b;color:#fff;font-size:9px;font-weight:800;line-height:13px;cursor:help;box-sizing:border-box}
+.trace-now-line{position:absolute;top:-2px;bottom:-2px;width:2px;background:rgba(220,38,38,.55);box-shadow:0 0 6px rgba(220,38,38,.5);pointer-events:none;z-index:2;transform:translateX(-1px)}
 .trace-section{margin-top:6px;font-size:13px}
 .trace-section b{display:block;margin-bottom:4px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--mu)}
 .trace-section ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:3px}
@@ -77,7 +282,13 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .trace-section .bd-code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;font-weight:800;background:#1e3a8a;color:#fff;padding:2px 6px;border-radius:4px}
 
 /* ===== operator sheet ===== */
-.op-sheet{background:var(--theme-base);border:1px solid var(--theme-accent);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:12px;transition:background .25s,border-color .25s}
+/* --disp-zoom (set on <body> by the operator view's − / + control) scales
+   the whole operator page via CSS zoom — action bar, meta, grid, side
+   panel, legend. Scoped to .op-sheet so Trace / KPI stay at 100%.
+   min-width:min-content: at a manual zoom-in the grid row gets wider than
+   the viewport; the sheet must grow with it so the yellow panel keeps
+   covering the grid while the page pans sideways. */
+.op-sheet{background:var(--theme-base);border:1px solid var(--theme-accent);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:12px;transition:background .25s,border-color .25s;zoom:var(--disp-zoom,1);min-width:min-content}
 
 /* Unified action bar — date nav + shift tabs + view level + Refresh + Save in one row.
    Replaces the old op-title and op-nav strips. */
@@ -85,26 +296,139 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .ab-date{display:flex;align-items:center;gap:6px}
 .ab-date-input{padding:10px 12px;border:2px solid var(--bd);border-radius:10px;font-size:16px;font-weight:700;background:#fff;min-height:52px;color:var(--tx);min-width:170px;text-align:center}
 .ab-shifts{display:flex;gap:6px;flex-wrap:wrap}
+.ab-window{display:flex;align-items:center;gap:4px;font-size:13px;font-weight:700;color:var(--mu);font-variant-numeric:tabular-nums;white-space:nowrap}
+/* Display-size − / % / + stepper. 44px hit targets; the % readout is
+   fixed-width so the bar doesn't jiggle between 60% and 150%. The %
+   itself is a button: tapping it returns to ⛶ auto-fit. */
+.ab-zoom{display:flex;align-items:center;gap:2px;background:#fff;border:2px solid var(--bd);border-radius:10px;padding:2px}
+.ab-zoom-btn{width:44px;height:44px;border:0;background:transparent;border-radius:8px;font-size:24px;font-weight:800;color:var(--theme-dark);cursor:pointer;line-height:1;-webkit-tap-highlight-color:transparent}
+.ab-zoom-btn:active{background:var(--gy)}
+.ab-zoom-val{min-width:70px;height:44px;border:0;background:transparent;border-radius:8px;text-align:center;font-size:13px;font-weight:700;color:var(--mu);font-variant-numeric:tabular-nums;white-space:nowrap;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.ab-zoom-val:active{background:var(--gy)}
+/* Measurement probe for auto-fit: zoom pinned to 1 so the sheet's
+   natural height is read scale-free. Added for one
+   getBoundingClientRect, then removed. */
+.op-sheet.measuring{zoom:1}
 .ab-right{display:flex;align-items:center;gap:10px;margin-left:auto;flex-wrap:wrap}
+/* ⚠ Future-shift warning — a shift picked that hasn't started yet (the
+   classic night-past-midnight date slip). Loud amber so it can't be missed,
+   with a one-tap jump to the shift actually running. */
+.future-banner{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:#fffbeb;border:2px solid #f59e0b;border-radius:10px;padding:12px 14px}
+.future-text{display:flex;flex-direction:column;gap:2px;flex:1 1 320px;min-width:260px}
+.future-text>b{color:#92400e;font-size:15px}
+.future-text>span{color:#78350f;font-size:13px;line-height:1.4}
+.future-fix-btn{padding:11px 18px;border:none;border-radius:10px;background:#f59e0b;color:#3b2a06;font-size:15px;font-weight:800;cursor:pointer;min-height:52px;white-space:nowrap}
+.future-fix-btn:active{background:#d97706}
+/* ✅ Confirm-to-start banner — gate between picking a (machine, order,
+   operator, supervisor) and actually logging/mirroring it. Green accent:
+   it's the "go" step, not a warning. */
+.confirm-bar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:#f0fdf4;border:2px solid #16a34a;border-radius:10px;padding:12px 14px}
+.confirm-text{display:flex;flex-direction:column;gap:2px;flex:1 1 320px;min-width:260px}
+.confirm-text>b{color:#166534;font-size:15px}
+.confirm-text>span{color:#14532d;font-size:13px;line-height:1.4}
+.confirm-text i{color:#b45309;font-style:normal;font-weight:700}
+.confirm-btn{padding:11px 18px;border:none;border-radius:10px;background:#16a34a;color:#fff;font-size:15px;font-weight:800;cursor:pointer;min-height:52px;white-space:nowrap}
+.confirm-btn:active{background:#15803d}
+.confirm-btn:disabled{background:#94a3b8;cursor:not-allowed}
+/* ⏰ Shift-ending sign-off reminder — soft nudge in the last 5 min, replaces
+   the old block-on-navigation prompt. Blue so it reads as a reminder, not an
+   error. */
+.signoff-reminder{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:#eff6ff;border:2px solid #3b82f6;border-radius:10px;padding:12px 14px}
+.signoff-reminder-text{display:flex;flex-direction:column;gap:2px;flex:1 1 320px;min-width:260px}
+.signoff-reminder-text>b{color:#1e40af;font-size:15px}
+.signoff-reminder-text>span{color:#1e3a8a;font-size:13px;line-height:1.4}
+.signoff-now-btn{padding:11px 18px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-size:15px;font-weight:800;cursor:pointer;min-height:52px;white-space:nowrap}
+.signoff-now-btn:active{background:#1d4ed8}
+/* ⚠ Job# not in planning — likely an item number typed into the Job# box. */
+.m-job-warn{display:inline-block;margin-top:2px;font-size:12px;font-weight:800;color:#b91c1c;text-transform:none;letter-spacing:0;line-height:1.3}
+/* 🔓 Re-opened for correction — signed order unlocked for edits to its signed
+   slots/counts only. Purple to tie it to the supervisor unlock flow. */
+.reopened-banner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#f5f3ff;border:2px solid #7c3aed;border-radius:10px;padding:10px 14px}
+.reopened-banner>b{color:#5b21b6;font-size:15px;white-space:nowrap}
+.reopened-banner>span{color:#4c1d95;font-size:13px;line-height:1.4}
 .btn-load{padding:12px 18px;background:#fff;border:2px solid var(--theme-dark);color:var(--theme-dark);border-radius:10px;font-weight:700;font-size:16px;cursor:pointer;min-height:52px}
 .btn-load:hover{background:rgba(255,255,255,.85)}
 .btn-save{padding:12px 20px;background:var(--rd);color:#fff;border:0;border-radius:10px;font-weight:800;font-size:16px;cursor:pointer;min-height:52px;box-shadow:0 2px 0 #991b1b}
 .btn-save:hover{background:#b91c1c}
 
 .op-meta{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;background:var(--theme-panel);padding:12px 14px;border-radius:10px}
-.op-meta label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:700;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.5px}
-.op-meta input,.op-meta select{padding:10px 12px;border:2px solid var(--bd);border-radius:8px;font-size:17px;background:#fff;min-height:52px;color:var(--tx);width:auto}
-.op-meta input[disabled]{background:#f1f5f9;color:var(--mu)}
-.op-meta .m-date input{width:160px}
-.op-meta .m-mc select{width:120px}
-.op-meta .m-job select{width:170px}
-.op-meta .m-part input{width:160px}
-.op-meta .m-op select,.op-meta .m-sup select{width:200px}
-.op-meta .wide{flex:1 1 260px;min-width:240px}
-.op-meta .wide input{width:100%}
+.op-meta label{display:flex;flex-direction:column;gap:5px;font-size:13px;font-weight:700;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.5px}
+/* Shared min-height + identical font/line-height/padding metrics: every
+   control clamps UP to the same 56px row (tall enough for the 20px bold
+   identity values below on iPad), and if the fonts are enlarged further
+   the boxes GROW instead of clipping. The old fixed height:52px was what
+   squeezed the bigger bold values; the explicit line-height is what keeps
+   selects and inputs at equal natural heights so the row stays aligned
+   (the reason a bare min-height failed before). */
+.op-meta input,.op-meta select{padding:10px 12px;border:2px solid var(--bd);border-radius:8px;font-size:18px;line-height:1.3;background:#fff;height:auto;min-height:56px;box-sizing:border-box;color:var(--tx);width:auto}
+.op-meta input[disabled]{background:#f1f5f9;color:#475569}
+/* High-visibility focus ring — operators with reduced eyesight need to
+   see at a glance which field the keyboard is going into. */
+.op-meta input:focus,.op-meta select:focus,.op-side .sk input:focus,.ab-date-input:focus,.handover-grid textarea:focus{outline:3px solid var(--theme-dark);outline-offset:1px}
+/* Machine sizes itself to the widest code (width:auto from the base
+   rule) — a fixed 100px clipped "1600T" at the 20px bold size once the
+   Safari chevron took its share. The floor is min-width so a short list
+   ("55T") doesn't collapse the box. */
+.op-meta .m-mc select{min-width:112px}
+/* Value widths balance readability against the iPad meta-row space.
+   Product Description remains flexible; fixed identity fields leave room
+   for the larger bold values without clipping; the row flex-wraps, so a
+   wider box moves to the next line rather than overflowing the panel. */
+/* Job# leaves enough room for long SFM numbers at the larger bold size,
+   plus the dropdown chevron on Safari. */
+.op-meta .m-job input{width:210px}
+/* Job# dropdown labels carry the planned start (dd/mm hh:mm) so they run
+   longer than the bare JobNum — cap the width so the meta row still fits
+   iPad portrait; the selected option ellipsizes. */
+.op-meta .m-job select{min-width:200px;max-width:340px;text-overflow:ellipsis}
+.op-meta .m-part input{width:140px}
+/* Product Description takes whatever width the row has left — it's the
+   field the operator actually reads to confirm they're on the right
+   part, so don't truncate it to a fixed 140px box. */
+.op-meta .m-desc{flex:1 1 260px;min-width:240px}
+.op-meta .m-desc input{width:100%}
+/* iPad portrait (and anything narrower): Product Description takes a full
+   row of its own — squeezed in beside the identity fields it truncated
+   long part names at the 20px bold size. */
+@media (max-width:900px){.op-meta .m-desc{flex-basis:100%;min-width:0}}
+.op-meta .m-orderqty input{width:130px}
+/* The four values operators use to confirm the correct press and job are
+   one step larger and strongly weighted for older shop-floor users. Labels
+   stay at 13px so the meta row's overall geometry remains compact. */
+.op-meta .m-mc select,.op-meta .m-job input,.op-meta .m-job select,.op-meta .m-orderqty input,.op-meta .m-desc input{font-size:20px;font-weight:800}
+/* Swatch sits inline next to the "Part#" label, not next to the
+   Product Description input. Shrunk to ~12px so it sits on the
+   12px-uppercase label baseline without bumping the row's height. */
+.op-meta .m-part-title{display:inline-flex;align-items:center;gap:6px}
+.m-die-swatch-inline{display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.25);flex-shrink:0;box-shadow:inset 0 0 0 1px rgba(255,255,255,.3)}
+.op-meta .m-desc-title{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+/* Die# inline after the Product Description title — sits in the title
+   row at the same height/font as the label itself (inherits font-size /
+   font-weight / text-transform / letter-spacing from .op-meta label) so
+   it reads as part of the title. Orange-red picks it out from the
+   surrounding white-on-theme labels without adding chrome (no pill /
+   background / border). Tabular numerals so multi-digit die numbers
+   align nicely. */
+.m-die-num{color:#c2410c;font-variant-numeric:tabular-nums}
+/* Die# as a button — deep-links into the Tool board drilldown. Reset the
+   button chrome so it reads as a link in the Product Description title. */
+.m-die-jump{border:none;background:none;padding:0;font:inherit;font-variant-numeric:tabular-nums;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.m-die-jump:hover{color:#9a3412}
+.m-die-jump:active{color:#7c2d12}
+/* ⛓ Co-Run chips under Job# — purple to match the Trace co-run badge. The
+   chip is a one-tap hop to the linked simultaneous order. */
+.op-meta .m-corun{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px;font-size:12px;font-weight:800;color:#6d28d9;text-transform:none;letter-spacing:0}
+.op-meta .corun-chip{height:auto;padding:4px 10px;border:2px solid #6d28d9;border-radius:999px;background:#f5f3ff;color:#5b21b6;font-size:13px;font-weight:800;cursor:pointer;font-variant-numeric:tabular-nums}
+.op-meta .corun-chip:active{background:#6d28d9;color:#fff}
+/* Cavities is read from PMD_DieMaster, not chosen — it reads as a fact
+   like Job Left, not as a control. `help` on the cursor because the whole
+   explanation (which die, and what to do when it's missing) is in the
+   title. */
+.sk-cavity .cav-val{cursor:help}
+.cav-flag{display:inline-block;min-width:16px;padding:0 4px;border-radius:6px;background:#fef3c7;border:1px solid #f59e0b;color:#92400e;font-size:11px;font-weight:800;vertical-align:middle}
+.cavity-tag{display:inline-block;padding:0 6px;border-radius:6px;background:#fde68a;color:#92400e;font-size:11px;font-weight:800;vertical-align:middle}
+.op-meta .m-op select,.op-meta .m-sup select{width:140px}
 
-.dnav-btn,.today-btn{padding:10px 14px;border:2px solid var(--bd);background:#fff;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;min-height:52px;min-width:52px;color:var(--tx)}
-.today-btn{background:var(--theme-dark);color:var(--theme-on-dark);border-color:var(--theme-dark);padding:10px 18px}
 .shift-btn{padding:10px 16px;border:2px solid var(--bd);background:#fff;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;color:var(--mu);min-height:52px}
 .shift-btn.a{background:var(--theme-dark);color:var(--theme-on-dark);border-color:var(--theme-dark);box-shadow:inset 0 -3px 0 rgba(0,0,0,.2)}
 .zoom{display:inline-flex;align-items:center;gap:6px}
@@ -114,69 +438,156 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 
 /* ===== grid ===== */
 .op-grid-row{display:flex;gap:10px;align-items:stretch}
-.op-grid-wrap{position:relative;flex:1;background:#fff;border:2px solid var(--theme-accent);border-radius:10px;overflow:auto;--slot-w:60px}
+/* Natural height, deliberately UNCAPPED vertically: the grid always
+   shows every row D01–D10 in full, matching the side panel instead of
+   collapsing into an internal scrollbar half its height (a previous
+   viewport-based max-height did exactly that on short screens). Keeping
+   the whole sheet on screen is auto-fit's job (the default ⛶ zoom); at
+   a manual zoom that overflows, the PAGE scrolls — both axes.
+   overflow:visible (NOT auto) is what makes the pinned header rows work
+   there: any overflow≠visible would turn the wrap itself into the
+   sticky containing scrollport, and since the wrap never scrolls (it is
+   content-sized), the time / Quality Checks / Machine Status rows would
+   simply never pin. With visible overflow they stick against the PAGE
+   scrollport, under the sticky top bar — see the --topbar-h offsets. */
+.op-grid-wrap{position:relative;flex:1;background:#fff;border:2px solid var(--theme-accent);border-radius:10px;overflow:visible;min-height:300px;--slot-w:60px}
 .op-grid{border-collapse:separate;border-spacing:0;font-size:14px;table-layout:fixed;width:auto;min-width:100%}
 .op-grid th,.op-grid td{border:1px solid #d1d5db;padding:0;margin:0;text-align:center;vertical-align:middle}
-.op-grid thead th{background:var(--theme-dark);color:var(--theme-on-dark);font-weight:700;height:44px;padding:0 4px;white-space:nowrap;font-size:13px}
-.op-grid th.slot-head{width:var(--slot-w);font-size:11px}
+/* Header rows pin against the PAGE scrollport, tucked under the sticky
+   top bar. The top bar's height (--topbar-h, set from JS — it doesn't
+   scale) is divided by the zoom factor because these offsets live inside
+   the zoomed .op-sheet subtree, where every length is re-multiplied by
+   the factor at paint time. */
+.op-grid thead th{background:var(--theme-dark);color:var(--theme-on-dark);font-weight:700;height:44px;padding:0 4px;white-space:nowrap;font-size:13px;position:sticky;top:calc(var(--topbar-h,52px)/var(--disp-zoom,1));z-index:4}
+.op-grid th.slot-head{width:var(--slot-w);font-size:15px}
 .op-grid th.rh{background:rgba(255,255,255,.85);color:var(--theme-on-base);width:200px;text-align:left;padding:0 12px;font-weight:700;position:sticky;left:0;z-index:2;font-size:15px}
-.op-grid thead th.corner{background:var(--theme-dark);color:var(--theme-on-dark);text-align:left;font-size:15px}
+.op-grid thead th.corner{background:var(--theme-dark);color:var(--theme-on-dark);text-align:left;font-size:15px;z-index:6}
 .op-grid tbody tr{height:64px}
 .op-grid tbody td{background:#fff;position:relative}
 .op-grid tbody td.num-cell,.op-grid tbody td.status-cell{padding:2px}
+/* Machine Status sits at the top of the grid and drives the colour of
+   every column underneath; visually separate it from the D01-D10 reject
+   rows so operators don't read it as just another defect tally. Tint the
+   row-header strip with the theme accent, bump its label to bold, and
+   close the row off with a thick bottom border so the defect grid below
+   reads as a distinct block. */
+/* Quality Checks row — alternating operator (even) / supervisor (odd)
+   per-slot sign-off. Sits above Machine Status. Cells default to a
+   muted "—"; signed cells turn green with the picked user's initials.
+   Even / odd cells differ in tint so operators see the alternating
+   cadence at a glance. */
+/* Pin the Quality Checks + Machine Status rows to the top, stacked under
+   the 44px time header (each body row is 64px → QC at 44, Status at 108),
+   so the clock and current machine status stay in view while the operator
+   scrolls the defect grid. The left-sticky row-headers (th.rh) ride above
+   both axes (z-index:6); the pinned body cells clear the NOW line (z:3). */
+.op-grid tr.row-qc th.rh{background:#0f172a;color:#fff;font-weight:800;font-size:14px;letter-spacing:.4px;text-transform:uppercase;top:calc(var(--topbar-h,52px)/var(--disp-zoom,1) + 44px);z-index:6}
+.op-grid tr.row-qc td{border-bottom:2px solid var(--theme-accent);background:#f8fafc;padding:0;position:sticky;top:calc(var(--topbar-h,52px)/var(--disp-zoom,1) + 44px);z-index:4}
+/* Supervisor QC cells are the 3 cadence checkpoints per shift (slots
+   1 / 7 / 13). Stronger amber tint + amber side-rails make them
+   stand out against the operator cells so a supervisor walking the
+   floor sees their 3 columns at a glance. */
+.op-grid tr.row-qc td.qc-supervisor{background:#fef3c7;border-left:3px solid #f59e0b;border-right:3px solid #f59e0b}
+.op-grid tr.row-qc td.is-signed{background:#dcfce7}
+.op-grid tr.row-qc td.is-signed.qc-supervisor{background:#86efac;border-left-color:#15803d;border-right-color:#15803d}
+.qc-btn{width:100%;height:42px;border:0;background:transparent;font-size:15px;font-weight:800;color:#64748b;letter-spacing:.3px;cursor:pointer;padding:0;font-variant-numeric:tabular-nums}
+.qc-btn:focus{outline:3px solid var(--theme-dark);outline-offset:-3px}
+.row-qc td.qc-supervisor .qc-btn{color:#92400e}
+.row-qc td.is-signed .qc-btn{color:#166534}
+.bd-cause.is-current{border-color:var(--theme-dark);background:#eff6ff}
+.op-grid tr.row-status th.rh{background:var(--theme-accent);color:var(--theme-on-dark);font-weight:800;font-size:16px;letter-spacing:.3px;text-transform:uppercase;top:calc(var(--topbar-h,52px)/var(--disp-zoom,1) + 108px);z-index:6}
+.op-grid tr.row-status td{border-bottom:3px solid var(--theme-dark);background:#f8fafc;position:sticky;top:calc(var(--topbar-h,52px)/var(--disp-zoom,1) + 108px);z-index:4}
+.op-grid tr.row-named th.rh{background:#fafafa;font-size:14px;color:#334155;font-weight:700}
+.op-grid tr.row-named:first-of-type td{border-top:0}
 
-.slot-status{width:100%;height:60px;border:0;background:transparent;font-size:24px;font-weight:900;text-align:center;cursor:pointer;appearance:none;-webkit-appearance:none;padding:0;text-align-last:center;color:inherit}
-.slot-status:focus{outline:3px solid var(--theme-dark);outline-offset:-3px}
 /* §2 — live slot highlight: thick frame + soft pulse so operators see it at a glance. */
 .op-grid td.is-now{box-shadow:inset 0 0 0 3px var(--rd);animation:nowPulse 1.6s ease-in-out infinite}
 @keyframes nowPulse{0%,100%{box-shadow:inset 0 0 0 3px var(--rd)}50%{box-shadow:inset 0 0 0 3px var(--rd),0 0 0 4px rgba(220,38,38,.25)}}
+/* whole live column tint (time header + every reject row) so operators see which time to fill */
+.op-grid .is-now-col{background:rgba(254,226,226,.65)!important}
+.op-grid th.slot-head.is-now-col{background:#b91c1c!important;color:#fff}
+.op-grid td.num-cell.is-now-col .rej-input{background:transparent}
 .bd-tag{position:absolute;bottom:2px;right:4px;font-size:9px;font-weight:800;background:rgba(0,0,0,.55);color:#fff;padding:1px 4px;border-radius:3px;letter-spacing:.3px;pointer-events:none}
 
-/* Multi-fill mode — cells become tappable buttons, selection highlighted. */
-.btn-multi{padding:12px 16px;background:#fff;border:2px solid var(--bd);color:var(--mu);border-radius:10px;font-weight:700;font-size:15px;cursor:pointer;min-height:52px}
-.btn-multi.a{background:var(--am);color:#fff;border-color:var(--am);box-shadow:inset 0 -3px 0 rgba(0,0,0,.2)}
-.slot-cell{width:100%;height:60px;border:0;background:transparent;font-size:24px;font-weight:900;text-align:center;cursor:pointer;color:inherit;padding:0;touch-action:none;user-select:none;-webkit-user-select:none}
+/* Status cell — tap selects this slot, hold-and-drag extends the range. */
+.slot-cell{width:100%;height:60px;border:0;background:transparent;font-size:28px;font-weight:900;text-align:center;cursor:pointer;color:inherit;padding:0;touch-action:none;user-select:none;-webkit-user-select:none}
 .op-grid td.multisel{box-shadow:inset 0 0 0 3px #1e3a8a,0 0 0 2px rgba(30,58,138,.25)}
-.multifill-bar{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:#1e293b;color:#fff;border-radius:14px;padding:12px 16px;display:flex;align-items:center;gap:14px;z-index:150;box-shadow:0 8px 22px rgba(0,0,0,.35)}
-.multifill-bar .mf-count{font-size:15px;font-weight:700}
-.multifill-bar .btn-ghost-big{background:rgba(255,255,255,.12);color:#fff;border-color:rgba(255,255,255,.4);min-height:46px;padding:10px 16px;font-size:15px}
-.multifill-bar .btn-ghost-big:hover{background:rgba(255,255,255,.2)}
-.multifill-bar .btn-primary-big{background:var(--gn);min-height:46px;padding:10px 18px;font-size:15px}
-.multifill-bar .btn-primary-big:hover{filter:brightness(.92)}
+/* Slot already covered by another job on this (machine, shift). Render the
+   occupier's colour but mute it + slash overlay so the operator reads it
+   as locked, and the button itself is :disabled so taps don't fire. */
+.op-grid td.is-occupied{opacity:.55;background-image:repeating-linear-gradient(135deg,transparent 0 6px,rgba(15,23,42,.18) 6px 8px)}
+.op-grid td.is-occupied .slot-cell{cursor:not-allowed;pointer-events:none}
 .ab-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px}
-.ab-pill{padding:14px 8px;border-radius:12px;font-weight:800;cursor:pointer;border:2px solid;text-align:center;min-height:72px;display:flex;flex-direction:column;gap:4px;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent;transition:transform .08s}
+.ab-pill{padding:14px 8px;border-radius:12px;font-weight:800;cursor:pointer;border:2px solid;text-align:center;min-height:84px;display:flex;flex-direction:column;gap:4px;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent;transition:transform .08s}
 .ab-pill:active{transform:scale(.94)}
-.ab-cd{font-size:28px;font-weight:900;line-height:1}
-.ab-lb{font-size:12px;font-weight:600;line-height:1.1;opacity:.9}
+.ab-cd{font-size:34px;font-weight:900;line-height:1}
+.ab-lb{font-size:13px;font-weight:600;line-height:1.1;opacity:.92}
 
-.rej-input{width:100%;height:60px;border:0;background:transparent;text-align:right;font-size:18px;padding:0 8px;font-weight:600;color:var(--tx)}
+.rej-input{width:100%;height:60px;border:0;background:transparent;text-align:right;font-size:20px;padding:0 8px;font-weight:700;color:var(--tx);font-variant-numeric:tabular-nums}
 .rej-input:focus{outline:3px solid var(--theme-dark);outline-offset:-3px}
-.other-type-sel{width:100%;height:60px;border:0;background:transparent;font-size:13px;padding:0 4px;appearance:none;-webkit-appearance:none;color:var(--tx)}
-.other-type-sel:focus{outline:3px solid var(--theme-dark);outline-offset:-3px}
+/* A reject cell that can't take an entry — the sheet is locked/unconfirmed,
+   or this half-hour isn't this order's production time. Until now a blocked
+   cell was painted EXACTLY like an open one, so the only feedback was that
+   nothing happened. pointer-events:none lets the tap fall through to the
+   <td>, which toasts the reason (a disabled input fires no events at all).
+   iOS Safari washes out a disabled input's text via -webkit-text-fill-color
+   regardless of `color`, so set both or an already-entered count fades to
+   near-invisible. */
+.op-grid td.num-cell.is-blocked{background:#e2e8f0;cursor:not-allowed}
+.rej-input:disabled{color:var(--mu);-webkit-text-fill-color:var(--mu);cursor:not-allowed;pointer-events:none}
 
 .now-line{position:absolute;top:44px;bottom:0;width:3px;background:var(--rd);z-index:3;pointer-events:none;box-shadow:0 0 8px rgba(220,38,38,.7)}
 .now-line::before{content:"NOW";position:absolute;top:-18px;left:-18px;background:var(--rd);color:#fff;font-size:10px;font-weight:800;padding:2px 6px;border-radius:4px;letter-spacing:.6px}
 
 /* ===== side summary ===== */
-.op-side{width:260px;display:flex;flex-direction:column;gap:8px;background:var(--theme-panel);padding:12px;border-radius:10px;border:2px solid var(--theme-accent)}
-.op-side .sk{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--theme-on-base);font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+.op-side{width:270px;display:flex;flex-direction:column;gap:8px;background:var(--theme-panel);padding:12px;border-radius:10px;border:2px solid var(--theme-accent)}
+.side-title{font-size:14px;font-weight:800;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.6px;border-bottom:2px solid var(--theme-accent);padding-bottom:6px}
+.op-side .sk{display:flex;align-items:center;gap:10px;font-size:14px;color:var(--theme-on-base);font-weight:700;text-transform:uppercase;letter-spacing:.4px}
 .op-side .sk label{flex:1}
-.op-side .sk b{font-size:22px;color:var(--tx);font-weight:800}
+.op-side .sk b{font-size:26px;color:var(--tx);font-weight:800;font-variant-numeric:tabular-nums}
 .op-side .sk b.r{color:var(--rd)}
 .op-side .sk b.g{color:var(--gn)}
-.op-side .sk input{width:120px;padding:10px;border:2px solid var(--bd);border-radius:8px;font-size:18px;text-align:right;min-height:48px;font-weight:700}
-.op-side .sk.sk-pair{gap:6px}
-.op-side .sk-pair-cell{display:flex;align-items:center;gap:6px;flex:1}
-.op-side .sk-pair-cell label{font-size:11px}
-.op-side .sk-pair-cell input{width:90px}
-.op-side .other-line{font-size:12px;color:var(--mu);text-transform:none;letter-spacing:0;font-weight:500;font-style:italic}
+.op-side .sk input{width:130px;padding:10px;border:2px solid var(--bd);border-radius:8px;font-size:20px;text-align:right;min-height:48px;font-weight:700;font-variant-numeric:tabular-nums}
+.op-side .sk input.count-invalid{border-color:var(--rd);background:#fef2f2;color:#991b1b;box-shadow:0 0 0 2px #fecaca}
+.op-side .sk b.g.count-invalid{color:var(--rd)}
+.count-warning{padding:9px 10px;border:2px solid var(--rd);border-radius:8px;background:#fef2f2;color:#991b1b;font-size:12px;font-weight:800;line-height:1.35;text-transform:none;letter-spacing:0}
+/* Same warning inside the Sign off & Save modal (supervisor override) —
+   the side panel's 12px is sized for its narrow column; the modal has
+   room, and this is the line a supervisor is vouching over. */
+.bd-modal .count-warning{font-size:14px}
 
 /* §6 — Handover / Journey: 2x2 grid of textareas for People / Plant / Machine / Material. */
-.handover{display:flex;flex-direction:column;gap:8px;margin-top:4px;border-top:2px solid var(--theme-accent);padding-top:10px}
+/* 📷 defect photos — queued shots (amber ⏳, ✕ discards) upload to the
+   tuple's PMD_Production row as attachments at Sign off; uploaded ones
+   render from their SP URL and open full-size in a new tab. */
+.photos{display:flex;flex-direction:column;gap:6px;margin-top:4px;border-top:2px solid var(--theme-accent);padding-top:10px}
+.photos-title{font-size:13px;font-weight:800;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.5px}
+.photo-strip{display:flex;flex-wrap:wrap;gap:6px}
+.photo-strip:empty{display:none}
+.photo-thumb{position:relative;display:block;width:56px;height:56px;border:2px solid var(--bd);border-radius:8px;overflow:hidden;background:#fff}
+.photo-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.photo-thumb.pending{border-color:#f59e0b}
+.photo-thumb.pending::after{content:'⏳';position:absolute;left:2px;bottom:1px;font-size:11px}
+.photo-thumb [data-photo-del]{position:absolute;top:0;right:0;width:20px;height:20px;border:0;border-radius:0 0 0 8px;background:rgba(220,38,38,.92);color:#fff;font-size:11px;font-weight:800;cursor:pointer;line-height:1;padding:0}
+.photo-take{width:100%;min-height:48px;border:2px solid var(--bd);border-radius:10px;background:#fff;font-size:15px;font-weight:700;cursor:pointer;color:var(--tx)}
+.photo-take:active{background:var(--gy)}
+.photo-take:disabled{opacity:.5;cursor:not-allowed}
+/* Job Left ⚠ — an earlier unsigned shift means the number is provisional */
+.jl-warn{color:#b45309;font-size:16px;margin-left:6px;cursor:help}
+.handover{display:flex;flex-direction:column;gap:8px;margin-top:4px;border-top:2px solid var(--theme-accent);padding-top:10px;flex:1 1 auto;min-height:0}
 .handover-title{font-size:13px;font-weight:800;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.5px}
-.handover-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.handover-grid label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:700;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.4px}
-.handover-grid textarea{width:100%;min-height:64px;resize:vertical;border:2px solid var(--bd);border-radius:8px;padding:8px;font-family:inherit;font-size:14px;background:#fef9c3}
+/* Fill the remaining space in the side panel so all four textboxes
+   stretch to the bottom of the frame instead of staying a short fixed
+   height. Each label becomes a flex column with the textarea consuming
+   any extra room (operators were running out of typing space). */
+.handover-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:1 1 auto;min-height:240px}
+.handover-grid label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:700;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.4px;min-height:0}
+.handover-grid label span{display:flex;align-items:center;gap:6px}
+/* 🎤 dictation toggle — flashes red while listening */
+.mic-btn{margin-left:auto;width:36px;height:30px;border:1px solid var(--bd);border-radius:8px;background:#fff;cursor:pointer;font-size:15px;padding:0;line-height:1;-webkit-tap-highlight-color:transparent}
+.mic-btn.rec{background:#fecaca;border-color:#b91c1c;animation:micPulse 1.2s ease-in-out infinite}
+@keyframes micPulse{50%{box-shadow:0 0 0 5px rgba(220,38,38,.35)}}
+.handover-grid textarea{width:100%;flex:1 1 auto;min-height:110px;resize:vertical;border:2px solid var(--bd);border-radius:8px;padding:8px;font-family:inherit;font-size:15px;background:#fef9c3}
 
 /* §9 — Summary view shown when zoom is at Today / Week / Month. Read-only. */
 .summary-wrap{background:#fff;border-radius:10px;border:2px solid var(--theme-accent);padding:14px}
@@ -200,9 +611,9 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .signoff-summary b.r{color:var(--rd)}
 .signoff-summary b.g{color:var(--gn)}
 
-.op-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:14px;color:var(--theme-on-base);padding:8px 12px;background:var(--theme-panel);border-radius:8px;font-weight:600}
+.op-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:15px;color:var(--theme-on-base);padding:8px 12px;background:var(--theme-panel);border-radius:8px;font-weight:600}
 .op-legend span{display:inline-flex;align-items:center;gap:6px}
-.op-legend i{display:inline-block;width:18px;height:18px;border-radius:3px;border:2px solid}
+.op-legend i{display:inline-block;width:20px;height:20px;border-radius:3px;border:2px solid}
 
 /* ===== modal shell (shared) ===== */
 .mbg{position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:200;display:none;align-items:center;justify-content:center;padding:18px}
@@ -235,8 +646,656 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .btn-primary-big:hover{filter:brightness(.92)}
 .bd-note{width:100%;min-height:120px;border:2px solid var(--bd);border-radius:10px;padding:12px;font-size:17px;font-family:inherit;background:#fef9c3}
 
+/* ===== lock banner (signed-off shift) ===== */
+.lock-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;background:#fef3c7;border:2px solid #f59e0b;border-radius:10px;padding:10px 16px;margin-bottom:12px}
+.lock-text{display:flex;flex-direction:column;gap:2px}
+.lock-text b{font-size:16px;color:#b45309;font-weight:800}
+.lock-text span{font-size:13px;color:#92400e}
+.lock-unlock-btn{padding:10px 18px;border-radius:8px;background:#f59e0b;color:#fff;border:0;font-size:15px;font-weight:800;cursor:pointer;min-height:44px}
+.lock-unlock-btn:hover{background:#d97706}
+.lock-no-perm{font-size:13px;color:#92400e;font-style:italic;background:rgba(255,255,255,.5);padding:6px 10px;border-radius:6px}
+/* ===== supervisor mode toggle in the top nav ===== */
+.nav-btn{background:rgba(255,255,255,.14);color:var(--theme-on-dark);border:1px solid rgba(255,255,255,.25);padding:7px 14px;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;margin-left:4px}
+.nav-btn:hover{background:rgba(255,255,255,.24)}
+.sv-toggle.on{background:#dcfce7 !important;color:#166534 !important;border:1px solid #86efac !important}
+.sv-toggle.on:hover{background:#bbf7d0 !important}
+
+/* ===== supervisor login modal ===== */
+.sv-login{display:flex;flex-direction:column;gap:14px}
+.sv-pwd-input{width:100%;font-size:18px;padding:14px 16px;border:2px solid var(--bd);border-radius:10px;font-family:inherit;background:#fff;box-sizing:border-box}
+.sv-pwd-input:focus{outline:none;border-color:var(--theme-dark);box-shadow:0 0 0 3px rgba(14,165,233,.18)}
+
+/* ===== KPI machine + shift + job rows ===== */
+/* Uniform row height across the three indent levels so the table reads
+   as a clean grid (operator complained about wobble where shift rows
+   were 28px and job rows 22px). Pin line-height + padding identically;
+   only background colour, font-weight and the leading indent change to
+   convey hierarchy. */
+/* Fixed 36px rows across all 3 hierarchy levels. The trick: kill every
+   per-level vertical padding override and let the table use a uniform
+   `height:36; padding:0 8` on every cell. Only background colour, text
+   colour and font weight vary by level — geometry stays identical so
+   the table reads as a clean grid (previously machine rows ran ~44px
+   because they inherited browser default padding while shift/job had
+   explicit 6px). */
+.kpi-table tr{height:30px}
+/* `.summary-table tbody tr` sets min-height:56px and min-height DOES
+   apply to table rows (used row height = max(height, min-height,
+   content)) — so `height:30px` above was silently losing and every
+   row rendered at 56px+. Zero it out inside the KPI table. */
+.kpi-table tbody tr{min-height:0}
+.kpi-table th,.kpi-table td{height:30px;line-height:18px;padding:0 8px;vertical-align:middle;box-sizing:border-box;overflow:hidden}
+/* `.summary-table .muted` (0,2,0) sets padding:30px + center, which
+   out-specifies `.kpi-table td` (0,1,1) and blew muted Color / Handover
+   cells (the "—" placeholders) up to ~76px while data rows stayed ~36px.
+   Re-pin padding on muted cells inside the KPI table so every row is a
+   uniform 30px regardless of whether a cell is a placeholder. */
+.kpi-table .muted{padding:0 8px}
+.kpi-machine th{font-size:16px;font-weight:800;color:var(--tx);background:#f1f5f9}
+.kpi-machine td{font-weight:800;background:#f1f5f9}
+.kpi-shift th,.kpi-shift td{background:#eef2f7;border-top:1px dashed #cbd5e1;border-bottom:1px dashed #cbd5e1;font-size:13px;font-weight:600;color:#475569}
+.kpi-shift-name{padding-left:32px !important;font-style:italic}
+.kpi-job-toggle{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-right:6px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;font-size:11px;line-height:1;color:#475569;cursor:pointer;padding:0;vertical-align:middle}
+.kpi-job-toggle.ph{visibility:hidden;border-color:transparent;background:transparent}
+.kpi-job-toggle:hover{background:#dbeafe;border-color:var(--theme-dark)}
+/* 3rd level: per-Job # + Part. Lighter weight + lighter background; same
+   row geometry as Shift so the table doesn't get jagged. */
+.kpi-job th,.kpi-job td{background:#f8fafc;border-top:1px dotted #e2e8f0;font-size:13px;font-weight:500;color:#64748b}
+/* The ">" toggle's rollup rows sit directly under the machine row
+   (no Shift wrapper) — tint them a touch warmer so they read as a
+   different drill than the cool-grey shift→job rows. */
+.kpi-order-total th,.kpi-order-total td{background:#fefce8;border-top:1px dashed #facc15}
+.kpi-job-name{padding-left:56px !important}
+/* Job number is a link-button that opens the Trace detail popup. */
+.kpi-job-link{background:none;border:0;padding:0;font:inherit;color:#1d4ed8;font-weight:800;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.kpi-job-link:hover{color:#1e3a8a}
+.kpi-job-part{margin-left:8px;color:#94a3b8;font-style:italic;font-weight:400}
+/* Color column: 16px square swatch + label. Neutral falls back to a
+   diagonal-hatch pattern so it reads "no colour requirement" at a
+   glance rather than looking like a real grey paint. */
+.kpi-color-head{min-width:90px}
+.kpi-color-cell{white-space:nowrap}
+.kpi-swatch{display:inline-block;width:16px;height:16px;border:1px solid rgba(0,0,0,.15);border-radius:3px;vertical-align:middle;margin-right:6px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.25)}
+.kpi-swatch.is-neutral{background:repeating-linear-gradient(45deg,#e2e8f0 0 4px,#cbd5e1 4px 8px)}
+.kpi-color-name{vertical-align:middle;font-size:13px}
+.kpi-charts{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+.kpi-chart{background:#fff;border:1px solid var(--bd);border-radius:10px;padding:10px}
+.kpi-chart h4{margin:0 0 6px;font-size:14px;font-weight:700;color:var(--theme-dark)}
+.kpi-chart-note{margin-top:6px;font-size:11.5px;line-height:1.5;color:var(--mu)}
+/* Month rollup — a bar that toggles its month open/closed. The hit target
+   is a transparent full-height rect covering the whole column, so the tint
+   on hover is the only thing that shows where the click lands; without it
+   there is no hover feedback at all on an SVG rect. */
+.chart-hit{cursor:pointer}
+.chart-hit:hover{fill:rgba(29,78,216,.10)}
+.chart-hit:focus-visible{fill:rgba(29,78,216,.14);outline:2px solid var(--theme-dark);outline-offset:-2px}
+/* Spans the 2-up chart grid: one setting drives both charts, so it is
+   stated once above them rather than repeated in each card. */
+.kpi-rollup-note{grid-column:1/-1;margin:0;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:6px 10px;color:#1e40af}
+.kpi-month-chips{display:inline-flex;flex-wrap:wrap;gap:4px;margin-left:6px;vertical-align:middle}
+.kpi-month-chip{border:1px solid var(--bd);background:#eff6ff;color:#1d4ed8;border-radius:999px;padding:1px 8px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit}
+.kpi-month-chip:hover{background:#dbeafe}
+@media (max-width:1100px){
+  .kpi-charts{grid-template-columns:1fr}
+}
+/* Reject number → click to drill into the per-defect-code Pareto. Looks
+   like the red number it replaces but underlined-on-hover to signal it's
+   actionable. */
+.kpi-reject-drill,.kpi-downtime-drill{background:none;border:none;padding:0;font:inherit;font-weight:800;cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px}
+.kpi-reject-drill{color:var(--rd)}
+.kpi-downtime-drill{color:var(--theme-dark)}
+.kpi-reject-drill:hover,.kpi-downtime-drill:hover{text-decoration:underline solid}
+/* Pareto legend: code → defect label × qty, under the floor chart. */
+.kpi-reject-legend{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12px;color:var(--tx)}
+.kpi-reject-legend li{white-space:nowrap}
+.kpi-reject-legend .kpi-rej-qty{font-weight:800;color:var(--rd);font-variant-numeric:tabular-nums}
+.kpi-reject-statuses{display:inline-flex;align-items:center;gap:4px;margin-left:7px;vertical-align:middle}
+.kpi-reject-status{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border:1px solid #cbd5e1;border-radius:999px;background:#f1f5f9;color:#475569;font-size:11px;font-weight:700;line-height:17px;white-space:nowrap}
+.kpi-reject-status b{font-variant-numeric:tabular-nums}
+/* R means the defect occurred while the press was producing: make it the
+   strongest action signal. S remains visible as useful startup context. */
+.kpi-reject-status.is-running{border-color:#fca5a5;background:#fef2f2;color:#b91c1c}
+.kpi-reject-status.is-startup{border-color:#7dd3fc;background:#f0f9ff;color:#0369a1}
+.kpi-reject-status.is-context{border-color:#fcd34d;background:#fffbeb;color:#92400e}
+.kpi-reject-status.is-unknown{border-color:#cbd5e1;background:#f8fafc;color:#64748b}
+.kpi-reject-signal{display:inline-flex;flex-direction:column;gap:1px;min-width:118px;padding:4px 7px;border-radius:6px;font-size:12px;line-height:1.2}
+.kpi-reject-signal small{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.25px}
+.kpi-reject-signal.is-review{border:1px solid #fca5a5;background:#fef2f2;color:#b91c1c}
+.kpi-reject-signal.is-startup{border:1px solid #7dd3fc;background:#f0f9ff;color:#0369a1}
+.kpi-reject-signal.is-context{border:1px solid #fcd34d;background:#fffbeb;color:#92400e}
+.kpi-reject-signal.is-unknown{border:1px solid #cbd5e1;background:#f8fafc;color:#64748b}
+/* Reject drill-down modal: chart above a ranked Pareto table. */
+.kpi-drill-modal{max-width:760px}
+.mdl:has(.kpi-reject-drill-modal){max-width:min(1080px,96vw)}
+.kpi-reject-drill-modal{max-width:none}
+.kpi-reject-drill-modal .kpi-drill-table{min-width:900px}
+.kpi-reject-drill-modal .kpi-reject-statuses{margin-left:0;flex-wrap:wrap}
+.kpi-reject-drill-modal .die-bar-track{display:block;min-width:220px}
+/* Handover history modal: one flat row per handover, newest shift first,
+   then natural Job # order. Stamp (date / shift / job) down a small rail on
+   the left, the four notes across the rest of the width. Notes wrap here
+   instead of being truncated inside the KPI table.
+
+   Nothing between the dialog and a note sets a height or an overflow any
+   more, so there is exactly ONE scrollbar — .kpi-ho-history — and a row is
+   always as tall as its own text. The boxed-per-shift version had three
+   nested containers that could each clip: the dialog at 92vh, the list at
+   72vh, and a rounded `overflow:hidden` box per shift. Past ~4 shifts those
+   boxes shrank to fit the list instead of overflowing it, so nothing
+   scrolled and every job card was chopped off mid-note. */
+.mdl:has(.kpi-handover-modal){max-width:min(1040px,96vw);max-height:92vh;overflow:hidden;display:flex}
+.kpi-handover-modal{gap:10px;flex:1;min-width:0;min-height:0}
+.kpi-ho-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex:0 0 auto}
+.kpi-ho-modal-head>div{min-width:0}
+.kpi-ho-modal-head .bd-title{font-size:21px}
+.kpi-ho-close{padding:8px 20px;font-size:14px;min-height:40px;flex:0 0 auto}
+/* A plain block, not a flex column: flex children shrink to fit their
+   container by default, which is precisely how the old list ended up
+   squashing its content instead of scrolling it. min-height:0 lets this
+   shrink below its content (a flex item defaults to min-height:auto and
+   would refuse), which turns the overflow into a scrollbar rather than an
+   overgrown dialog. */
+.kpi-ho-history{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:8px;border-top:1px solid var(--bd)}
+.kpi-ho-row{display:grid;grid-template-columns:120px minmax(0,1fr);gap:16px;padding:9px 4px;border-bottom:1px solid #e8edf3}
+.kpi-ho-row:last-child{border-bottom:0}
+/* Zebra, not boxes: at this width the eye has to track a note back to its
+   date across ~800px, and a tint does that without adding chrome. */
+.kpi-ho-row:nth-child(even){background:#f8fafc}
+.kpi-ho-meta{min-width:0;font-size:11px;line-height:1.5;color:#64748b}
+.kpi-ho-meta b{display:block;font-size:12px;color:#1e3a8a}
+.kpi-ho-meta-shift{display:block}
+.kpi-ho-meta-job{display:block;margin-top:2px;font-weight:800;color:#0f172a;overflow-wrap:anywhere}
+.kpi-ho-notes{min-width:0;display:flex;flex-direction:column;gap:4px}
+.kpi-ho-field{display:grid;grid-template-columns:82px minmax(0,1fr);gap:10px;align-items:baseline}
+.kpi-ho-field-label{color:#64748b;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.35px;white-space:nowrap}
+.kpi-ho-field p{margin:0;color:#334155;font-size:13px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
+.kpi-ho-none{margin:0;color:#94a3b8;font-size:13px;font-style:italic}
+@media (max-width:700px){
+  .kpi-ho-row,.kpi-ho-field{grid-template-columns:minmax(0,1fr);gap:3px}
+  .kpi-ho-meta{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px}
+  .kpi-ho-meta b,.kpi-ho-meta-shift,.kpi-ho-meta-job{display:inline;margin-top:0}
+  .kpi-ho-modal-head{align-items:stretch;flex-direction:column}
+  .kpi-ho-close{align-self:flex-end}
+}
+/* Job-number → Trace detail popup: wide enough for the 16-slot timeline,
+   scrolls when a job ran across many shifts. */
+.kpi-trace-modal{max-width:none}
+/* The shared modal shell caps at 760px; the Trace popup needs the room
+   for a 16-slot timeline (and up to 3 side-by-side in a day card), so
+   widen the shell when it holds one. */
+.mdl:has(.kpi-trace-modal){max-width:min(1240px,96vw)}
+/* Compact title — the big 26px heading wasted vertical space the order
+   detail needs. Tighter modal gap for the same reason. */
+.kpi-trace-modal{gap:10px}
+/* The title carries the order's whole identity — order · press · part —
+   description — so the cards below only have to say which day they are.
+   Wraps rather than truncates: a long part description is what tells two
+   colours of the same mould apart. */
+.kpi-trace-modal .bd-title{font-size:17px;display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;min-width:0}
+.trace-head-job{color:var(--theme-dark);font-weight:800}
+/* Order size and what's actually been made, right beside the order
+   number — the two figures the popup is opened to settle, so they sit
+   ahead of press/part identity. */
+.trace-head-tally{font-size:13px;font-weight:600;color:var(--mu);background:#f1f5f9;border:1px solid var(--bd);border-radius:999px;padding:2px 10px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.trace-head-tally b{color:var(--tx);font-weight:800}
+.trace-head-tally b.g{color:var(--gn)}
+.trace-head-pct{color:var(--mu);font-weight:700}
+.trace-head-meta{font-size:13.5px;font-weight:700;color:var(--mu)}
+.trace-head-desc{font-size:13.5px;font-weight:600;color:var(--mu)}
+/* Title row with the Close button on the right — no bottom action bar,
+   so the order detail keeps all the vertical room. */
+.kpi-trace-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.kpi-trace-close{padding:8px 20px;font-size:14px;min-height:0}
+/* Day card: Day | Afternoon | Night of one date, side-by-side.
+   THREE FIXED COLUMNS, always — never flex. A day that only ran Night
+   must leave the first two thirds empty instead of stretching Night
+   across the row: at a morning meeting the problem shift is found by
+   where it sits, and that only works if the position never moves. The
+   16-slot grids inside are 1fr each, so they shrink with the column
+   rather than forcing it wider. */
+.trace-day-card .trace-day-shifts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:stretch}
+.trace-day-shift{min-width:0;border:1px solid var(--bd);border-radius:8px;padding:6px 8px;background:#fbfcfe}
+/* A shift this order didn't run: keeps its name so the column is still
+   labelled, greys out so the eye skips it. */
+.trace-day-shift.is-empty{background:#f8fafc;border-style:dashed;display:flex;flex-direction:column}
+.trace-day-shift.is-empty .trace-day-shift-hd b{color:#94a3b8}
+.trace-day-none{flex:1;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:12px;font-weight:700;letter-spacing:.3px;padding:6px 0}
+/* Breakdown detail inside a third-width column: wrap instead of
+   overflowing, and drop the wide timestamp gutter. */
+.trace-day-shift .trace-section li{flex-wrap:wrap;gap:6px;padding:4px 8px;font-size:12px}
+.trace-day-shift .trace-section .ts{min-width:0}
+/* One line, always. A header that wraps in one block and not the next
+   pushes that block's grids down and the row stops lining up — so it is
+   nowrap with a fixed height, and a freak-long value is clipped rather
+   than allowed to cost the whole card its alignment. */
+.trace-day-shift-hd{display:flex;flex-wrap:nowrap;white-space:nowrap;gap:10px;font-size:12px;color:var(--mu);margin-bottom:3px;align-items:baseline;height:16px;overflow:hidden}
+.trace-day-shift-hd b{color:#1e3a8a;font-size:13px}
+.trace-day-shift-hd .g{color:var(--gn);font-weight:700}
+.trace-day-shift-hd .r{color:var(--rd);font-weight:700}
+.kpi-trace-body{max-height:70vh;overflow:auto}
+.kpi-drill-chart{background:#fff;border:1px solid var(--bd);border-radius:8px;padding:8px}
+.kpi-drill-table tbody tr{cursor:default}
+.kpi-drill-table th,.kpi-drill-table td{padding:7px 10px}
+
+/* ===== Tool / Die Management ===== */
+/* Die head reuses the KPI head card (same tabs, same From/To pickers) —
+   only the extras (filter, Mango pill) are die-specific. The KPI rule
+   pushing .kpi-range right doesn't apply here: the filter wants the
+   stretch space. */
+.die-head .kpi-range{margin-left:0}
+.die-filter{border:1px solid var(--bd);border-radius:8px;padding:7px 10px;font-size:14px;min-width:180px;flex:1}
+.die-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.die-chip{background:#fff;border:1px solid var(--bd);border-radius:99px;padding:5px 14px;font-size:13px;color:var(--mu)}
+.die-chip b{color:var(--tx);margin-left:4px}
+.die-chip.is-warn{border-color:#FFA500;background:#fff7ed}
+.die-chip.is-bad{border-color:var(--rd);background:#fef2f2}
+/* Chips that DO something on tap: the four ToolStatus filters and the
+   jump to the work-order list. Buttons, so they need the font reset. */
+.die-chip-st,.die-chip-btn{font-family:inherit;font-size:13px;line-height:1.5;cursor:pointer}
+.die-chip-btn{text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px}
+.die-chip-st:hover,.die-chip-btn:hover{background:#f8fafc}
+.die-chip-st:active,.die-chip-btn:active{transform:scale(.97)}
+.die-chip-st.ts-red{border-color:#fecaca}
+.die-chip-st.ts-orange{border-color:#fed7aa}
+.die-chip-st.ts-blue{border-color:#bfdbfe}
+.die-chip-st.ts-green{border-color:#bbf7d0}
+/* Active filter = filled in its status colour, so which one is on is
+   readable across the shop floor, not just a subtle outline. */
+.die-chip-st.on,.die-chip-st.on b{color:#fff}
+.die-chip-st.on{font-weight:700}
+.die-chip-st.on.ts-red{background:var(--rd);border-color:var(--rd)}
+.die-chip-st.on.ts-orange{background:#d97706;border-color:#d97706}
+.die-chip-st.on.ts-blue{background:#2563eb;border-color:#2563eb}
+.die-chip-st.on.ts-green{background:#15803d;border-color:#15803d}
+.die-chip-st.on:hover{filter:brightness(1.08)}
+.die-table-wrap{overflow:auto;max-height:70vh;position:relative;margin-top:10px;background:#fff;border:1px solid var(--bd);border-radius:12px}
+/* One size down from the KPI table so the extra Description + trend
+   columns fit without a horizontal scroll on the iPad. */
+.die-table{--die-sticky-first-width:90px;margin:0;font-size:13px;table-layout:auto}
+.die-table thead th{font-size:12px;background:#f8fafc;color:#334155}
+.die-table td.num{text-align:right;font-variant-numeric:tabular-nums}
+.die-table td.die-desc{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#334155}
+/* Sortable headers */
+th.die-sort{cursor:pointer;user-select:none;-webkit-user-select:none}
+th.die-sort:hover{background:#eef2f7}
+th.die-sort.a{color:#1d4ed8}
+/* The header and the first two identity columns stay visible in both
+   scroll directions. Description's offset is measured from the rendered
+   Die # width because that column can be resized by the user. */
+.die-table thead th{position:sticky;top:0;z-index:4}
+.die-table th:nth-child(1),.die-table td:nth-child(1){position:sticky;left:0}
+.die-table th:nth-child(2),.die-table td:nth-child(2){position:sticky;left:var(--die-sticky-first-width)}
+.die-table thead th:nth-child(1),.die-table thead th:nth-child(2){z-index:7;background:#f8fafc}
+.die-table tbody td:nth-child(1),.die-table tbody td:nth-child(2){z-index:2;background:#fff}
+.die-table tbody tr:hover td{background:#f1f5f9}
+.die-table th:nth-child(2),.die-table td:nth-child(2){box-shadow:7px 0 9px -9px rgba(15,23,42,.75)}
+/* Column-resize handles: a grab zone on every header's right edge.
+   Once the user drags, JS pins the <colgroup> widths, switches the table
+   to fixed layout (class .resized) and persists to localStorage. */
+.die-rz{position:absolute;top:0;right:-5px;width:11px;height:100%;cursor:col-resize;touch-action:none;z-index:2}
+.die-rz::after{content:"";position:absolute;left:5px;top:22%;height:56%;width:1px;background:var(--bd)}
+.die-rz:hover::after,.die-rz:active::after{width:3px;left:4px;background:#1d4ed8;border-radius:2px}
+.die-table.resized{max-width:none}
+.die-table.resized th,.die-table.resized td{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ToolStatus badge (PMD_DieMaster): Serviced green · In service blue ·
+   To be Serviced orange · Problems red. */
+.die-tstat{font-weight:700;white-space:nowrap;font-size:12px}
+.die-tstat.none{color:var(--mu);font-weight:400}
+.die-tstat.ts-green{color:#15803d}
+.die-tstat.ts-blue{color:#2563eb}
+.die-tstat.ts-orange{color:#FFA500}
+.die-tstat.ts-red{color:var(--rd)}
+/* Editable badge (backend can write PMD_DieMaster): same colours, but a
+   tappable pill with a caret. */
+.die-tstat-btn{background:#fff;border:1px solid var(--bd);border-radius:8px;padding:3px 8px;cursor:pointer}
+.die-tstat-btn:hover{background:#f1f5f9;border-color:#94a3b8}
+/* Status picker modal */
+.die-st-pick .die-st-opt{display:flex;align-items:center;gap:10px;width:100%;margin-top:8px;padding:12px 14px;background:#fff;border:1px solid var(--bd);border-radius:10px;font-size:14px;cursor:pointer;text-align:left}
+.die-st-pick .die-st-opt:hover{background:#f1f5f9}
+.die-st-pick .die-st-opt.cur{border-color:#1d4ed8;box-shadow:0 0 0 1px #1d4ed8}
+.die-st-pick .die-st-opt .die-tstat{font-size:14px}
+.die-st-pick .die-st-opt em{color:var(--mu);font-size:12px;font-style:normal}
+.die-st-pick .die-st-opt b{margin-left:auto;color:#1d4ed8;font-size:12px}
+/* In-service step: Mango ticket reminder + the mandatory return date */
+.die-insvc-mango{margin-top:10px;padding:10px 12px;background:#fff7ed;border:1px solid #fdba74;border-radius:10px;font-size:14px;color:#9a3412;line-height:1.5}
+.die-insvc-mango .die-mango-open{margin-left:4px;white-space:nowrap}
+.die-insvc-date{display:block;margin-top:14px;font-size:14px;font-weight:700}
+.die-insvc-date input{display:block;margin-top:6px;padding:10px 12px;font-size:16px;border:2px solid var(--bd);border-radius:8px;background:#fff;min-width:200px}
+.die-insvc .bd-actions{margin-top:14px}
+/* Service (🔧) markers on the big trend chart */
+.die-trend-col.svc em{color:#9a3412;font-style:normal;font-weight:800}
+.die-trend-col.svc .die-trend-bar{box-shadow:inset 0 -3px 0 #fdba74}
+/* Machine-status letters above trend bars (same colours as the
+   operator timeline's status cells) */
+/* Available column */
+.die-avail{white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:700;font-size:12px}
+.die-avail.now{color:#15803d}
+.die-avail.maint{color:#FFA500}
+.die-avail.late{color:var(--rd)}
+/* Work-order history rows in the die detail */
+.die-hist-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;padding:6px 0;border-bottom:1px dashed var(--bd);list-style:none}
+.die-hist-row .die-hist-span{font-variant-numeric:tabular-nums;color:#334155;font-weight:600;font-size:12px}
+.die-hist-row .die-hist-desc{flex:1 1 100%;color:#334155}
+.die-hist-row .die-hist-who{color:var(--mu);font-size:12px}
+.die-hist-row .die-hist-nums{font-size:12px;color:#334155}
+.die-hist-row .die-hist-nums b{font-variant-numeric:tabular-nums}
+/* "To be completed by" due date, inline on the open-order line — red +
+   bold when past due (same signal the Maint column's traffic light
+   carries). */
+.die-hist-row .die-hist-due{font-variant-numeric:tabular-nums}
+.die-hist-row .die-hist-due.overdue{color:var(--rd);font-weight:800}
+/* Narrative detail lines from the Mango report (issue / work done /
+   corrective / preventative) */
+.die-hist-line{flex:1 1 100%;font-size:12px;color:#475569;padding-left:10px;border-left:2px solid var(--bd)}
+.die-hist-line i{font-style:normal;font-weight:800;color:var(--mu);margin-right:6px;text-transform:uppercase;font-size:10px;letter-spacing:.4px}
+/* Last die change record */
+.die-dc{background:#fff7ed;border:1px solid #fdba74;border-radius:10px;padding:8px 12px;font-size:13px;color:#7c2d12;margin-top:6px}
+.die-dc.none{background:#f8fafc;border-color:var(--bd);color:var(--mu)}
+/* Die Change Log popup (operator sheet, first D/I of a tuple) */
+.mdl:has(.dcl-modal){max-width:min(720px,94vw)}
+.dcl-modal .bd-sub b{color:#0c4a6e}
+.dcl-row{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:end;margin-top:10px}
+.dcl-row label{display:flex;flex-direction:column;gap:4px;font-size:13px;font-weight:700;color:var(--mu)}
+.dcl-row select{font-size:15px;padding:8px;border:2px solid var(--bd);border-radius:8px;min-width:180px;background:#fff}
+.dcl-cos{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center;font-size:13px;font-weight:700;color:var(--mu)}
+.dcl-co{display:inline-flex;align-items:center;gap:5px;font-size:14px;font-weight:600;color:#334155}
+.dcl-co input{width:18px;height:18px}
+.dcl-comps{margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:6px 18px}
+.dcl-comp{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px dashed var(--bd)}
+.dcl-comp-name{font-size:14px;color:#334155}
+.dcl-seg{display:inline-flex;gap:4px}
+.dcl-opt{width:40px;min-height:34px;border:2px solid var(--bd);border-radius:8px;background:#fff;font-size:15px;font-weight:800;color:var(--mu);cursor:pointer}
+.dcl-opt.green.a{background:#dcfce7;border-color:#16a34a;color:#14532d}
+.dcl-opt.amber.a{background:#fef3c7;border-color:#FFA500;color:#78350f}
+.dcl-opt.red.a{background:#fee2e2;border-color:#dc2626;color:#7f1d1d}
+.dcl-title{font-size:18px}
+.dcl-editnote{font-size:13px;margin:4px 0 0}
+.dcl-editnote i{color:#0c4a6e;font-style:italic}
+/* Condition-check legend sits right above the 1/2/3 component grid so the
+   scale is read next to the buttons it explains. */
+.dcl-legend{font-size:13px;color:#334155;margin:12px 0 0;padding-top:10px;border-top:1px dashed var(--bd)}
+.dcl-legend b{color:var(--tx)}
+/* OUT / IN condition sections — each its own 13-component check. */
+.dcl-section{margin-top:10px;border:1px solid var(--bd);border-radius:10px;padding:8px 10px 10px}
+.dcl-section+.dcl-section{margin-top:12px}
+.dcl-sec-h{font-size:14px;font-weight:800;color:#334155;display:flex;align-items:baseline;gap:8px}
+.dcl-sec-h.out{color:#9a3412}
+.dcl-sec-h.in{color:#0369a1}
+.dcl-sec-h em{font-style:normal;font-size:12px;font-weight:600;color:var(--mu)}
+.dcl-section .dcl-comps{margin-top:8px}
+.dcl-prob{display:block;margin-top:12px;font-size:13px;font-weight:700;color:var(--mu)}
+.dcl-prob textarea{width:100%;margin-top:4px;font-family:inherit;font-size:15px;padding:8px;border:2px solid var(--bd);border-radius:8px;resize:vertical}
+/* Manual order entry (supervisor only): ＋ next to Job#, small form modal. */
+.m-add-order{width:30px;height:30px;margin-left:4px;border:2px dashed var(--bd);border-radius:8px;background:#fff;font-size:16px;font-weight:800;color:#0369a1;cursor:pointer;line-height:1;vertical-align:middle}
+.m-add-order:hover{border-color:#0369a1;background:#f0f9ff}
+.mdl:has(.add-ord-modal){max-width:min(560px,94vw)}
+.add-ord-modal .dcl-row label{flex:1 1 200px}
+.add-ord-modal input{font-size:15px;padding:8px;border:2px solid var(--bd);border-radius:8px;width:100%;font-family:inherit}
+/* Defect-trend sparkline: one bar per bucket, height = reject qty,
+   colour = that bucket's reject-% band. */
+.die-trend-cell{min-width:150px}
+.die-spark{display:inline-flex;align-items:flex-end;gap:1px;height:22px;min-width:90px;max-width:170px;vertical-align:middle;cursor:pointer;padding:1px 2px;border-radius:4px;background:#f8fafc}
+.die-spark i{flex:1 1 3px;min-width:2px;max-width:6px;border-radius:1px 1px 0 0}
+.die-spark i.green{background:var(--gn)}
+.die-spark i.amber{background:#FFA500}
+.die-spark i.red{background:var(--rd)}
+.die-spark i.empty{height:2px;background:#e2e8f0}
+.die-spark-none{color:var(--mu)}
+/* Scheduled column: running / next planned start / free for service. */
+.die-plan{white-space:nowrap;font-variant-numeric:tabular-nums;color:#334155}
+.die-plan.running{color:var(--gn);font-weight:800}
+.die-plan.free{color:var(--mu)}
+.die-table td.green{color:var(--gn);font-weight:800}
+.die-table td.amber{color:#FFA500;font-weight:800}
+.die-table td.red{color:var(--rd);font-weight:800}
+.die-link{background:none;border:none;color:#1d4ed8;font-weight:800;font-size:14px;cursor:pointer;text-decoration:underline;padding:0}
+/* Machine column: each press is a drill-down link like Die #. Default is
+   the same blue; an OPEN Mango work order tints it green, an OVERDUE one
+   red — the colour is the signal. Codes wrap with a small gap. */
+.die-mc-cell{line-height:1.7}
+.mc-link{font-size:13px;white-space:nowrap}
+.mc-link.wo-open{color:#15803d}
+.mc-link.wo-overdue{color:#b91c1c}
+.die-maint-badge{background:#fff7ed;border:1px solid #fdba74;color:#9a3412;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:800;cursor:pointer;font-family:inherit}
+button.die-maint-badge:hover{background:#fed7aa;border-color:#fb923c}
+/* Traffic-light by the open WO's Mango 'To be completed by' date. */
+.die-maint-badge.wo-overdue{background:#fef2f2;border-color:#fca5a5;color:#b91c1c}
+button.die-maint-badge.wo-overdue:hover{background:#fee2e2;border-color:#f87171}
+.die-maint-badge.wo-soon{background:#fff7ed;border-color:#FFA500;color:#9a3412}
+button.die-maint-badge.wo-soon:hover{background:#ffedd5;border-color:#f59e0b}
+.die-maint-badge.wo-ok{background:#f0fdf4;border-color:#86efac;color:#15803d}
+button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
+/* Open-WO focused popup — a touch narrower than the full drilldown. */
+.mdl:has(.die-wo-modal){max-width:min(720px,94vw)}
+/* Worn / damaged component chips from the latest die-change condition
+   report (PMD_DieChangeLog): 2 = amber, 3 = red. */
+.die-cond-chip{display:inline-block;border-radius:6px;padding:1px 7px;font-size:11px;font-weight:800;white-space:nowrap;margin:1px 3px 1px 0}
+.die-cond-chip.worn{background:#fff7ed;border:1px solid #fdba74;color:#9a3412}
+.die-cond-chip.damaged{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c}
+.die-cond-chip.more{background:#f1f5f9;border:1px solid var(--bd);color:var(--mu)}
+/* Drilldown condition-report block */
+.die-cond{background:#f8fafc;border:1px solid var(--bd);border-radius:8px;padding:8px 10px;font-size:13px}
+.die-cond.warn{background:#fff7ed;border-color:#fdba74}
+.die-cond.bad{background:#fef2f2;border-color:#fecaca}
+.die-cond-meta{color:var(--mu)}
+.die-cond-meta b{color:var(--tx)}
+.die-cond-flags{margin-top:6px}
+.die-cond-flags .die-cond-chip{font-size:12px;padding:2px 9px}
+.die-cond-note{margin-top:5px;font-size:12px;color:#9a3412;font-weight:700}
+.die-cond-note.bad{color:#b91c1c}
+.die-cond-ok{margin-top:5px;color:var(--gn);font-weight:700;font-size:12px}
+.die-cond-desc{margin-top:5px;color:#334155;font-style:italic}
+/* Requests list */
+.die-req-section{margin-top:16px}
+.die-req-section h3{margin:0 0 8px;font-size:16px}
+.die-req{background:#fff;border:1px solid var(--bd);border-left:5px solid #94a3b8;border-radius:10px;padding:9px 12px;margin-bottom:8px}
+.die-req.st-open{border-left-color:#FFA500}
+.die-req.st-in-progress{border-left-color:#2563eb}
+.die-req.st-done{border-left-color:var(--gn);opacity:.72}
+.die-req.st-overdue{border-left-color:var(--rd);background:#fffafa}
+.die-req.pr-urgent{border-left-color:var(--rd);box-shadow:0 0 0 1px #fecaca inset}
+.die-req-hd{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px}
+.die-req-die{font-size:15px;color:#1e3a8a}
+.die-req-type{color:var(--mu)}
+.die-req-pr{border-radius:6px;padding:1px 8px;font-size:11px;font-weight:800;background:#f1f5f9;color:#475569}
+.die-req-pr.pr-high{background:#fff7ed;color:#9a3412}
+.die-req-pr.pr-urgent{background:#fef2f2;color:#b91c1c}
+.die-req-st{font-weight:800;font-size:12px;color:#475569}
+.die-req.st-open .die-req-st{color:#b45309}
+.die-req.st-in-progress .die-req-st{color:#2563eb}
+.die-req.st-done .die-req-st{color:var(--gn)}
+.die-req.st-overdue .die-req-st,.die-req-due.overdue{color:var(--rd);font-weight:900}
+.die-req-meta{margin-left:auto;color:var(--mu);font-size:12px}
+.die-mango{background:#fefce8;border:1px solid #fde68a;color:#854d0e;border-radius:6px;padding:1px 8px;font-size:12px;font-weight:700}
+/* Direct link to Mango's request-maintenance form (new tab). */
+.die-mango-open{display:inline-block;background:#fefce8;border:1px solid #fde68a;color:#854d0e;border-radius:8px;padding:7px 14px;font-size:13px;font-weight:800;text-decoration:none;white-space:nowrap}
+.die-mango-open:hover{background:#fef9c3}
+.die-mango-open.sm{padding:2px 10px;font-size:12px;font-weight:700;vertical-align:2px;margin-left:8px}
+/* The primary "raise a request" action — Mango is the system of record,
+   so this pill is the button that used to open the in-app form. */
+.die-mango-open.lg{padding:12px 18px;font-size:15px;border-width:2px}
+/* Header variant in the drilldown top bar — sits next to Close, same
+   height so the two buttons read as a matched pair. */
+.die-mango-open.hd{padding:8px 14px;font-size:14px;border-width:1.5px}
+.die-req-note{margin:4px 0 10px;font-size:13px;color:var(--mu)}
+/* Shot-triggered mould service plan. */
+.die-svc-badge{display:inline-block;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:800;white-space:nowrap;margin-left:4px}
+.die-svc-badge.due{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c}
+.die-svc-badge.soon{background:#fff7ed;border:1px solid #fdba74;color:#9a3412}
+.die-svc-none{font-size:13px;color:var(--mu);background:#f8fafc;border:1px solid var(--bd);border-radius:8px;padding:10px 12px;line-height:1.45}
+.die-svc-panel{display:grid;gap:8px;font-size:13px;background:#f8fafc;border:1px solid var(--bd);border-radius:10px;padding:10px 12px}
+.die-svc-panel.due{border-color:#fecaca;background:#fef2f2}
+.die-svc-panel.soon{border-color:#fdba74;background:#fff7ed}
+.die-svc-rule{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-bottom:4px;border-bottom:1px dashed var(--bd)}
+.die-svc-rule>span:not(.die-svc-flag):not(.die-svc-ok){color:var(--mu)}
+.die-svc-rule .die-svc-flag,.die-svc-rule .die-svc-ok{margin-left:auto}
+.die-svc-metric{display:grid;grid-template-columns:64px minmax(235px,auto) minmax(120px,1fr) 48px;gap:10px;align-items:center}
+.die-svc-kind{font-weight:900;color:#334155}
+.die-svc-detail{font-variant-numeric:tabular-nums;color:#475569}
+.die-svc-bar{flex:1;min-width:120px;height:12px;background:#e2e8f0;border-radius:6px;overflow:hidden}
+.die-svc-bar i{display:block;height:100%;border-radius:6px}
+.die-svc-bar i.ok{background:var(--gn)}
+.die-svc-bar i.soon{background:#FFA500}
+.die-svc-bar i.due{background:var(--rd)}
+.die-svc-pct{font-variant-numeric:tabular-nums}
+.die-svc-pct.due{color:var(--rd)}.die-svc-pct.soon{color:#b45309}.die-svc-pct.ok{color:var(--gn)}
+.die-svc-flag{font-weight:900;color:#b91c1c;font-size:12px;letter-spacing:.4px}
+.die-svc-flag.soon{color:#9a3412}
+.die-svc-ok{font-weight:800;color:var(--gn);font-size:12px}
+.die-svc-condition{border-left:3px solid #f59e0b;background:#fff7ed;color:#7c2d12;padding:6px 9px;border-radius:4px;line-height:1.4}
+.die-svc-foot{font-size:11px;color:var(--mu);line-height:1.35}
+@media(max-width:700px){
+  .die-svc-metric{grid-template-columns:58px 1fr 44px}
+  .die-svc-metric .die-svc-detail{grid-column:2/4}
+  .die-svc-metric .die-svc-bar{grid-column:2}
+}
+.die-req-details{display:grid;gap:5px;margin-top:7px}
+.die-req-detail{display:grid;grid-template-columns:112px minmax(0,1fr);gap:8px;font-size:13px;line-height:1.4}
+.die-req-detail b{color:var(--mu);font-size:11px;text-transform:uppercase;letter-spacing:.35px}
+.die-req-detail span{color:#334155;white-space:pre-wrap;overflow-wrap:anywhere}
+.die-action-comments{list-style:none;margin:0;padding:0;display:grid;gap:4px;color:#334155}
+.die-action-comments li{display:grid;grid-template-columns:90px minmax(0,1fr);gap:5px;align-items:start}
+.die-action-comments time{color:#1e3a8a;font-weight:800;white-space:nowrap;font-variant-numeric:tabular-nums}
+.die-action-comments span{min-width:0;white-space:normal;overflow-wrap:anywhere}
+/* Multi-level PM plan (PMD_DieMaster.MaintenanceLevel) */
+.die-pm-plan{margin-top:8px;border:1px solid var(--bd);border-radius:10px;padding:8px 10px;background:#fff}
+.die-pm-head{display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px}
+.die-pm-src{font-size:11px;font-weight:700;color:var(--mu);background:#f1f5f9;border:1px solid var(--bd);border-radius:999px;padding:1px 8px}
+.die-pm-src.custom{color:#1d4ed8;background:#eff6ff;border-color:#bfdbfe}
+.die-pm-edit{margin-left:auto;font-size:12px;font-weight:700;padding:4px 10px;border:1px solid var(--bd);border-radius:8px;background:#fff;cursor:pointer;color:#334155}
+.die-pm-edit:hover{background:#f1f5f9}
+.die-pm-note{font-size:12px;color:var(--mu);margin-bottom:6px}
+.die-pm-row{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 10px;padding:6px 0;border-top:1px dashed var(--bd)}
+.die-pm-row.due{background:#fef2f2;border-radius:8px;padding-left:6px;padding-right:6px}
+.die-pm-row.soon{background:#fff7ed;border-radius:8px;padding-left:6px;padding-right:6px}
+.die-pm-lv{font-weight:900;font-size:12px;border-radius:6px;padding:1px 8px;color:#fff;background:#64748b}
+.die-pm-lv.l1{background:#15803d}
+.die-pm-lv.l2{background:#b45309}
+.die-pm-lv.l3{background:#b91c1c}
+.die-pm-int{font-size:12.5px;font-weight:700;color:#334155}
+.die-pm-prog{font-size:12px;font-variant-numeric:tabular-nums;color:var(--mu)}
+.die-pm-prog.soon{color:#9a3412;font-weight:700}
+.die-pm-prog.due{color:#b91c1c;font-weight:800}
+.die-pm-tasks{flex:1 1 100%;margin:2px 0 0;padding-left:20px;font-size:12.5px;color:#475569;columns:2;column-gap:24px}
+.die-pm-tasks li{break-inside:avoid;margin:1px 0}
+.die-pm-free{font-size:12.5px;color:#475569;white-space:pre-wrap;border-top:1px dashed var(--bd);padding-top:6px}
+.die-pm-editor .die-pm-text{width:100%;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;border:1px solid var(--bd);border-radius:8px;padding:10px;resize:vertical;white-space:pre;overflow-x:auto}
+.die-pm-editor code{background:#f1f5f9;border:1px solid var(--bd);border-radius:4px;padding:0 4px}
+@media (max-width:700px){.die-pm-tasks{columns:1}}
+.die-req-ft{margin-top:4px;font-size:12px;color:var(--mu)}
+@media (max-width:620px){.die-req-detail{grid-template-columns:1fr;gap:1px}}
+/* Die detail modal */
+.mdl:has(.die-detail){max-width:min(880px,94vw)}
+.die-detail h3{margin:0;font-size:18px}
+.die-detail-sub{font-size:13px;color:var(--mu);font-weight:600}
+.die-detail h4{margin:16px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.4px;color:var(--mu);border-top:1px solid var(--bd);padding-top:12px}
+.die-detail h4 .die-h4-sub{text-transform:none;letter-spacing:0;font-weight:600;color:#94a3b8;margin-left:6px}
+/* Header row: title left, Request-in-Mango + Close together on the right,
+   sharing one visual weight so the three read as a set. */
+.die-detail-head{align-items:flex-start;gap:14px;border-bottom:1px solid var(--bd);padding-bottom:10px;margin-bottom:4px}
+.die-detail-head-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.die-detail-close{padding:8px 16px;background:#fff;border:1.5px solid var(--bd);color:#475569;border-radius:9px;font-weight:800;font-size:14px;cursor:pointer;white-space:nowrap}
+.die-detail-close:hover{background:#f1f5f9;border-color:#94a3b8}
+.die-detail-print{padding:8px 14px;background:#fff;border:1.5px solid var(--bd);color:#334155;border-radius:9px;font-weight:800;font-size:14px;cursor:pointer;white-space:nowrap}
+.die-detail-print:hover{background:#f1f5f9;border-color:#94a3b8}
+/* 📝 Add note — accent the SOC-log action so it stands out from Print/Close. */
+.die-detail-note{padding:8px 14px;background:#eef2ff;border:1.5px solid #c7d2fe;color:#3730a3;border-radius:9px;font-weight:800;font-size:14px;cursor:pointer;white-space:nowrap}
+.die-detail-note:hover{background:#e0e7ff;border-color:#a5b4fc}
+/* SOC notes panel — sits above ① Die Master in the drilldown. */
+.die-notes-h4{margin-bottom:6px}
+.die-notes{margin:0 0 6px;border:1px solid var(--bd);border-radius:10px;background:#fafbfc;padding:10px}
+.die-note-search{width:100%;box-sizing:border-box;padding:8px 10px;font-size:14px;border:1px solid var(--bd);border-radius:8px;background:#fff;margin-bottom:8px}
+.die-note-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;max-height:320px;overflow-y:auto}
+.die-note{border:1px solid var(--bd);border-left:3px solid #6366f1;border-radius:8px;background:#fff;padding:8px 10px}
+.die-note-meta{font-size:12px;font-weight:700;color:var(--mu);margin-bottom:3px}
+.die-note-body{font-size:14px;line-height:1.45;color:#1e293b;white-space:pre-wrap;overflow-wrap:anywhere}
+.die-note-nobody{color:var(--mu);font-style:italic}
+.die-note-empty{list-style:none;font-size:13px;color:var(--mu);padding:6px 2px}
+/* Add-note dialog. Compact: 20px title, no subtitle, context on one row. */
+.die-note-editor .bd-title.die-note-title{font-size:20px}
+.die-note-editor .die-note-fields{display:flex;gap:8px;margin:2px 0 10px}
+.die-note-editor .die-note-fields label{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:700;color:var(--mu)}
+.die-note-editor .die-note-fields input{width:100%;box-sizing:border-box;min-width:0;padding:8px 10px;font-size:15px;font-weight:600;color:#1e293b;border:1px solid var(--bd);border-radius:8px;background:#fff}
+/* Past-notes reference panel inside the dialog — search the die's SOC log
+   while composing a new note. */
+.die-note-past-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;font-weight:800;color:var(--mu);margin-bottom:8px}
+.die-note-past .die-note-search{flex:1;min-width:180px;margin-bottom:0}
+.die-note-past .die-note-list{max-height:170px}
+.die-note-body-wrap{position:relative}
+.die-note-editor .die-note-text{width:100%;box-sizing:border-box;font:15px/1.5 inherit;border:1px solid var(--bd);border-radius:8px;padding:10px 46px 10px 10px;resize:vertical}
+.die-note-mic{position:absolute;top:8px;right:8px;width:34px;height:34px;border:1px solid var(--bd);border-radius:8px;background:#fff;font-size:16px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.die-note-mic:hover{background:#f1f5f9}
+.die-note-mic.recording{background:#fee2e2;border-color:#fca5a5;animation:die-mic-pulse 1s ease-in-out infinite}
+.die-note-mic.unavailable{opacity:.6}
+@keyframes die-mic-pulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.5)}50%{box-shadow:0 0 0 5px rgba(239,68,68,0)}}
+/* The print clone lives outside the modal, hidden on screen; only the
+   @media print rules below reveal it (see openDieDetail's print handler). */
+#die-print-area{display:none}
+/* Print just the cloned Die page: hide everything else on the page (works
+   no matter how deep the app is mounted in the host), let the die page flow
+   onto paper at full height with colours intact. */
+@media print {
+  body.die-printing > *:not(#die-print-area){display:none !important}
+  #die-print-area{display:block !important;position:static !important;padding:0 12px;color:#0f172a;background:#fff}
+  #die-print-area .die-detail-head{border-bottom:1px solid #cbd5e1}
+  #die-print-area *{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important}
+  #die-print-area h4{break-after:avoid}
+  #die-print-area .die-hist-row,
+  #die-print-area .die-bar-row,
+  #die-print-area .die-wo-group,
+  #die-print-area .die-cond,
+  #die-print-area .die-note{break-inside:avoid}
+  /* Print the whole SOC log; the on-screen search box / scroll cap are
+     screen-only chrome. */
+  #die-print-area .die-note-search{display:none !important}
+  #die-print-area .die-note-list{max-height:none !important;overflow:visible !important}
+}
+/* Top stats: one tidy wrap-row, pill-free, tabular. */
+.die-detail-topstats{gap:6px 18px;padding:2px 0 4px}
+.die-detail-stats{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--mu);margin-top:8px}
+.die-detail-stats b{color:var(--tx);font-variant-numeric:tabular-nums}
+.die-detail-stats .g b{color:var(--gn)}.die-detail-stats .r b{color:var(--rd)}
+.die-detail-stats .green b{color:var(--gn)}.die-detail-stats .amber b{color:#FFA500}.die-detail-stats .red b{color:var(--rd)}
+/* Full-size defect trend in the die detail popup. */
+.die-trend-lg{display:flex;align-items:flex-end;gap:2px;height:112px;background:#f8fafc;border:1px solid var(--bd);border-radius:8px;padding:6px 8px 2px}
+.die-trend-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;min-width:0}
+.die-trend-col b{font-size:10px;color:#991b1b;line-height:1;font-variant-numeric:tabular-nums}
+.die-trend-bar{flex:1;width:100%;max-width:18px;display:flex;align-items:flex-end;margin-top:1px}
+.die-trend-bar i{display:block;width:100%;border-radius:2px 2px 0 0}
+.die-trend-bar i.green{background:var(--gn)}
+.die-trend-bar i.amber{background:#FFA500}
+.die-trend-bar i.red{background:var(--rd)}
+.die-trend-bar i.empty{background:transparent}
+.die-trend-col em{font-size:9px;color:var(--mu);font-style:normal;white-space:nowrap;line-height:1.3;height:12px}
+.die-bar-row{display:flex;align-items:center;gap:8px;margin-bottom:4px;font-size:13px}
+.die-bar-code{width:38px;font-weight:800;color:#991b1b}
+.die-bar-label{width:170px;color:var(--mu);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.die-bar-track{flex:1;background:#f1f5f9;border-radius:6px;height:16px;overflow:hidden}
+.die-bar-fill{display:flex;height:100%;border-radius:6px;overflow:hidden}
+/* One segment per machine-status letter; colour + letter come inline
+   from STATUS_MAP so the Pareto matches the operator timeline. Red is
+   the fallback for legacy rows with no status on the slot. */
+.die-bar-seg{display:flex;align-items:center;justify-content:center;height:100%;background:#ef4444;color:#fff;font-size:10px;font-weight:800;font-style:normal;line-height:1;overflow:hidden;border-right:1px solid rgba(255,255,255,.75)}
+.die-bar-seg:last-child{border-right:none}
+.die-bar-qty{width:36px;text-align:right;font-variant-numeric:tabular-nums}
+.die-detail-hist{margin:4px 0 0;padding-left:20px;font-size:13px}
+.die-detail-hist li{margin-bottom:3px}
+.die-detail-hist .die-req-st{margin-right:4px}
+/* Maintenance Track: In progress + History groups. */
+.die-wo-group{margin-top:6px}
+.die-wo-group + .die-wo-group{margin-top:10px}
+.die-wo-sub{font-size:12px;font-weight:800;color:#475569;display:flex;align-items:center;gap:6px}
+.die-wo-count{background:#eef2f7;border-radius:99px;padding:0 8px;font-size:11px;color:var(--mu)}
+.die-wo-empty{font-size:13px;color:var(--mu);padding:2px 0 2px 4px}
+
+/* A failed source must be visibly different from a genuine zero. Die and
+   KPI views keep rendering successful sources, with this banner naming the
+   incomplete reads instead of silently substituting empty arrays. */
+.data-error-banner{margin:10px 16px;padding:10px 14px;border:1px solid #f59e0b;border-left:5px solid #dc2626;border-radius:8px;background:#fff7ed;color:#7c2d12;font-size:13px;line-height:1.4}
+.data-error-banner b{color:#991b1b}
+
 /* ===== toast ===== */
-.toast{position:fixed;top:18px;right:18px;background:#1e293b;color:#fff;padding:14px 22px;border-radius:10px;font-size:16px;font-weight:700;z-index:300;opacity:0;transform:translateY(-10px);transition:.2s;pointer-events:none;max-width:80vw;box-shadow:0 4px 16px rgba(0,0,0,.25)}
+.toast{position:fixed;top:18px;right:18px;background:#1e293b;color:#fff;padding:14px 22px;border-radius:10px;font-size:17px;font-weight:700;z-index:300;opacity:0;transform:translateY(-10px);transition:.2s;pointer-events:none;max-width:80vw;box-shadow:0 4px 16px rgba(0,0,0,.25)}
 .toast.show{opacity:1;transform:translateY(0)}
 .toast.ok{background:var(--gn)}.toast.err{background:var(--rd)}.toast.warn{background:var(--am)}
 
@@ -249,3 +1308,18 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
   .handover-grid{grid-template-columns:1fr}
   .signoff-summary{grid-template-columns:1fr}
 }
+
+/* Die-median import: preview before an outward-facing bulk write to a
+   list the toolroom also edits by hand. */
+.kpi-median-import{margin-top:8px;font-size:12.5px;padding:6px 12px;min-height:0}
+.kpi-median-modal{max-width:820px}
+.kpi-median-intro{margin:6px 0 10px;font-size:13px;color:var(--mu)}
+.kpi-median-scroll{max-height:52vh;overflow:auto;border:1px solid var(--bd);border-radius:8px}
+.kpi-median-table{width:100%;border-collapse:collapse;font-size:13px}
+.kpi-median-table th,.kpi-median-table td{padding:5px 10px;text-align:left;border-bottom:1px solid var(--bd);white-space:nowrap}
+.kpi-median-table th{position:sticky;top:0;background:#f8fafc;font-size:11.5px;text-transform:uppercase;letter-spacing:.3px;color:var(--mu)}
+.kpi-median-table td.num,.kpi-median-table th.num{text-align:right;font-variant-numeric:tabular-nums}
+.kpi-median-table tr.is-same{color:var(--mu)}
+.kpi-median-table tr.is-missing{background:#fef2f2;color:#991b1b}
+.kpi-median-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px}
+.kpi-median-status{font-size:12.5px;color:var(--mu)}

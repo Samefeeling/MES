@@ -1,25 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import {
-  plannedRegion,
-  isSlotInPlan,
-  generateDieChanges,
-  manualDieChangeJobNumber,
-} from '../src/core/planning';
+import { compareOrdersByStart, generateDieChanges } from '../src/core/planning';
 import { order } from './helpers';
 
-describe('order bar planned region (§5.2)', () => {
-  it('maps PlannedStart/End to the in-plan slot window', () => {
-    // 07:00–09:00 inside a Day shift → slots 0..3
-    const o = order({
-      jobNumber: 'J1',
-      plannedStart: '2026-05-15T07:00:00',
-      plannedEnd: '2026-05-15T09:00:00',
-    });
-    const r = plannedRegion(o, '2026-05-15-Day');
-    expect(r.fromSlot).toBe(0);
-    expect(r.toSlot).toBe(3);
-    expect(isSlotInPlan(o, '2026-05-15-Day', 2)).toBe(true);
-    expect(isSlotInPlan(o, '2026-05-15-Day', 8)).toBe(false);
+describe('compareOrdersByStart', () => {
+  it('sorts by planned start (date + hour) ascending; blank starts last', () => {
+    const late = order({ jobNumber: 'C', plannedStart: '2026-07-01T18:40:00' });
+    const early = order({ jobNumber: 'A', plannedStart: '2026-07-01T07:00:00' });
+    const sameDayLater = order({ jobNumber: 'B', plannedStart: '2026-07-01T09:30:00' });
+    const noStart = order({ jobNumber: 'D', plannedStart: '' });
+    const sorted = [late, noStart, early, sameDayLater].sort(compareOrdersByStart);
+    expect(sorted.map((o) => o.jobNumber)).toEqual(['A', 'B', 'C', 'D']);
+  });
+
+  it('breaks ties on job number for a stable order', () => {
+    const a = order({ jobNumber: 'SFM2', plannedStart: '2026-07-01T07:00:00' });
+    const b = order({ jobNumber: 'SFM1', plannedStart: '2026-07-01T07:00:00' });
+    expect([a, b].sort(compareOrdersByStart).map((o) => o.jobNumber)).toEqual(['SFM1', 'SFM2']);
   });
 });
 
@@ -62,10 +58,5 @@ describe('auto die-change generation (§5.3)', () => {
       }),
     ];
     expect(generateDieChanges(orders).filter((o) => o.isDieChange)).toHaveLength(0);
-  });
-
-  it('manual DC job numbers are timestamped', () => {
-    const jn = manualDieChangeJobNumber(new Date(2026, 4, 15));
-    expect(jn).toMatch(/^DC_manual_\d+$/);
   });
 });
