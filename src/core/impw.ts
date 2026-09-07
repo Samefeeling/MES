@@ -236,6 +236,9 @@ export const IMPW_PLACEMENT_MAX = 255;
  * invented into fields Mango would ignore.
  */
 export interface ImpwDraft {
+  /** Web-form fields; retained in API details because v4 has no equivalents. */
+  source?: string;
+  type?: string;
   /** "Brief Description" on the form — what the register lists. */
   description: string;
   /** Must be one of the tenant's own types, from /improvement/new. */
@@ -300,7 +303,7 @@ export function missingImpwFields(d: ImpwDraft, target: ImpwTarget = 'api'): str
   return IMPW_REQUIRED.filter((f) => !impwFieldFilled(d[f.field], target)).map((f) => f.label);
 }
 
-function impwFieldFilled(v: string | MangoOption, target: ImpwTarget): boolean {
+function impwFieldFilled(v: string | MangoOption | undefined, target: ImpwTarget): boolean {
   if (typeof v === 'string') return !!v.trim();
   if (!v) return false;
   return target === 'api' ? !!(v.id.trim() && v.name.trim()) : !!v.name.trim();
@@ -310,7 +313,7 @@ function impwFieldFilled(v: string | MangoOption, target: ImpwTarget): boolean {
 export function overlongImpwFields(d: ImpwDraft): string[] {
   return [...IMPW_REQUIRED, ...IMPW_OPTIONAL]
     .filter((f) => {
-      const v = d[f.field];
+      const v = f.field === 'improvementDetails' ? impwApiDetails(d) : d[f.field];
       return f.maxLength != null && typeof v === 'string' && v.length > f.maxLength;
     })
     .map((f) => `${f.label} (max ${f.maxLength})`);
@@ -350,6 +353,29 @@ export const EMPTY_IMPW_SITE: ImpwSiteConfig = {
   typeOfImprovement: { ...EMPTY_OPTION },
   coordinator: { ...EMPTY_OPTION },
 };
+
+export const IMPW_IMPROVEMENT_TYPES = ['Internal quality', 'supply quality', 'process gap'];
+export const IMPW_TYPES = ['Equipment(breakdown)', 'Process Improvment', 'quality'];
+export const IMPW_OTHERS = ['Maitenance -AU', 'PMD - AU'];
+
+/** Match tenant-issued IDs by name; never manufacture an API ID. */
+export function matchImpwOption(list: MangoOption[], name: string): MangoOption | undefined {
+  const normalize = (s: string): string => s.trim().replace(/\s+/g, ' ').toLowerCase();
+  return list.find((o) => normalize(o.name) === normalize(name));
+}
+
+export function suggestImpwClassification(f: ImpwFinding): { type: string; improvement: string; other: string } {
+  const worst = [...f.slice.breakdowns].sort((a, b) => b.hours - a.hours)[0];
+  const equipment = f.triggers.includes('breakdown') &&
+    (!worst || /Maintenance|Toolroom/i.test(worst.owner));
+  const quality = f.triggers.includes('yield') || f.triggers.includes('reject');
+  return {
+    type: equipment ? IMPW_TYPES[0] : quality ? IMPW_TYPES[2] : IMPW_TYPES[1],
+    // Material shortages do not prove a supplier quality problem; that choice is manual.
+    improvement: equipment || !quality ? 'process gap' : 'Internal quality',
+    other: equipment ? IMPW_OTHERS[0] : IMPW_OTHERS[1],
+  };
+}
 
 /** Who is raising it — from the signed-in user (DAL whoAmI). */
 export interface ImpwRaiser {
@@ -419,6 +445,7 @@ export function buildImpwDraft(
   f: ImpwFinding,
   raiser: ImpwRaiser,
   site: ImpwSiteConfig,
+  now: Date = new Date(),
 ): ImpwDraft {
   const s = f.slice;
   const date = impwOccurrenceDate(f.shiftId);
@@ -426,19 +453,25 @@ export function buildImpwDraft(
   // Press first: Mango lists tickets by their Brief Description, and the
   // press is what a reader scans that list for.
   const where = `${s.machineCode}${shift ? ` ${shift} shift` : ''}${date ? ` ${date}` : ''}`;
-  const headline = f.reasons[0] ?? 'KPI target missed';
+  const headline = f.reasons.join('; ') || 'KPI target missed';
+  const classification = suggestImpwClassification(f);
+  const notes = s.breakdowns.filter((b) => b.note).map((b) => b.note).join('; ');
 
   return {
-    description: clamp(`${where} — ${headline}`, IMPW_DESCRIPTION_MAX),
-    typeOfImprovement: { ...site.typeOfImprovement },
+    description: clamp(`${where} — ${headline}${notes ? `; ${notes}` : ''}`, IMPW_DESCRIPTION_MAX),
+    typeOfImprovement: { ...(matchImpwOption([site.typeOfImprovement], classification.improvement)
+      ?? { id: '', name: classification.improvement }) },
+    source: 'Employee',
+    type: classification.type,
     originatorName: clamp(raiser.name, IMPW_NAME_MAX),
-    improvementDate: impwOccurrenceIso(f.shiftId),
-    improvementDetails: clamp(impwDetailsBody(f, raiser), IMPW_DETAILS_MAX),
-    region: site.region,
-    branch: site.branch,
-    department: suggestImpwDepartment(f),
-    other: site.other,
-    coordinator: { ...site.coordinator },
+    improvementDate: now.toISOString(),
+    improvementDetails: clamp(`Investigate rootcause\n\n${impwDetailsBody(f, raiser)}`, IMPW_DETAILS_MAX - 80),
+    region: 'Minto (AU)',
+    branch: 'Resero - Minto',
+    department: 'Manufacturing - AU',
+    other: classification.other,
+    coordinator: { ...(matchImpwOption([site.coordinator], 'Paul Fiddling (AU)')
+      ?? { id: '', name: 'Paul Fiddling (AU)' }) },
   };
 }
 
@@ -519,13 +552,17 @@ function clamp(s: string, max: number): string {
  * blank — each has to match a name that already exists in the tenant, and
  * an empty string is not one of those.
  */
+function impwApiDetails(d: ImpwDraft): string {
+  return `Source: ${d.source || 'Employee'}\nType: ${d.type || 'Process Improvment'}\n\n${d.improvementDetails}`;
+}
+
 export function impwApiPayload(d: ImpwDraft): Record<string, unknown> {
   const out: Record<string, unknown> = {
     description: d.description,
     typeOfImprovement: { id: d.typeOfImprovement.id, name: d.typeOfImprovement.name },
     originatorName: d.originatorName,
     improvementDate: d.improvementDate,
-    improvementDetails: d.improvementDetails,
+    improvementDetails: impwApiDetails(d),
     coordinator: { id: d.coordinator.id, name: d.coordinator.name },
   };
   for (const key of ['region', 'branch', 'department', 'other'] as const) {
@@ -547,6 +584,8 @@ export function impwPlainText(d: ImpwDraft): string {
     '',
     row('Brief Description', d.description, true),
     row('Type of Improvement', d.typeOfImprovement.name, true),
+    row('Source', d.source || 'Employee', true),
+    row('Type', d.type || 'Process Improvment', true),
     row('Name', d.originatorName, true),
     row('Date of occurrence', impwIsoToFormDate(d.improvementDate), true),
     row('Details of Improvement and/or Proposed Action', d.improvementDetails, true),

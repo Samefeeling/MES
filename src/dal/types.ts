@@ -133,6 +133,8 @@ export interface PmdDataLayer {
 
   // Production (hot path)
   listProduction(filter: ProductionFilter): Promise<ProductionRecord[]>;
+  /** Append a confirmed Mango reference to existing signed-off Handover notes only. */
+  appendImpwHandover?(machineCode: string, shiftId: string, ticket: string): Promise<void>;
   /** Canonical slot-0 counters only. The Tool service planner uses this
    *  lightweight path for its rolling annual ledger so it does not have
    *  to download a year of status/reject event detail. */

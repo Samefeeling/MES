@@ -1,3 +1,4 @@
+import { appendHandoverLine } from '../core/handover';
 import type {
   BdCode,
   BreakdownLogDetail,
@@ -2963,6 +2964,29 @@ export class SharePointDataLayer implements PmdDataLayer {
       target.rejectCount = Object.values(obj).reduce((a, v) => a + (Number(v) || 0), 0);
     }
     return slots;
+  }
+
+  async appendImpwHandover(machineCode: string, shiftId: string, ticket: string): Promise<void> {
+    if (!ticket.trim()) throw new Error('Missing Mango ticket number');
+    const { shift } = parseShiftIdLoose(shiftId);
+    const rows = (await this.fetchHeaders(LISTS.production, { machineCode, shiftId }))
+      .filter((row) => row.machineCode === machineCode && row.date === shiftId.slice(0, 10) && row.shift === shift);
+    if (!rows.length) throw new Error('No PMD_Production row found for this shift');
+    const field = this.F.production.handover;
+    for (const row of rows) {
+      const url = `${this.listUrl(LISTS.production)}/items(${row.id})`;
+      // Re-read the note and use its ETag so another user's edit cannot be overwritten.
+      const { d } = await this.getJson<{ d: Record<string, unknown> & { __metadata: { etag: string; type: string } } }>(url);
+      const note = str(d[field]);
+      const line = `IMPW: ${ticket.trim()}`;
+      const updated = formatHandover(appendHandoverLine(note, 'method', line));
+      if (updated === note) continue;
+      if (!d.__metadata?.etag) throw new Error('SharePoint did not return an ETag');
+      await this.post(url, {
+        __metadata: { type: d.__metadata.type },
+        [field]: updated,
+      }, d.__metadata.etag);
+    }
   }
 
   async upsertProductionRecord(record: ProductionRecord): Promise<ProductionRecord> {

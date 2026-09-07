@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildImpwDraft,
+  matchImpwOption,
+  suggestImpwClassification,
   describeImpwApiFailure,
   describeMangoAuthFailure,
   detectImpwFindings,
@@ -55,8 +57,8 @@ const SITE: ImpwSiteConfig = {
   region: 'QLD',
   branch: 'Wacol',
   other: 'Precision Moulding',
-  typeOfImprovement: { id: 'toi-1', name: 'Corrective Action' },
-  coordinator: { id: 'co-1', name: 'Felicity Kidwell' },
+  typeOfImprovement: { id: 'toi-1', name: 'process gap' },
+  coordinator: { id: 'co-1', name: 'Paul Fiddling (AU)' },
 };
 
 describe('detectImpwFindings', () => {
@@ -360,13 +362,14 @@ describe('buildImpwDraft', () => {
 
   it('carries the coordinator through as the id-and-name pair Mango issued', () => {
     const d = buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, SITE);
-    expect(d.coordinator).toEqual({ id: 'co-1', name: 'Felicity Kidwell' });
-    expect(d.typeOfImprovement).toEqual({ id: 'toi-1', name: 'Corrective Action' });
+    expect(d.coordinator).toEqual({ id: 'co-1', name: 'Paul Fiddling (AU)' });
+    expect(d.typeOfImprovement).toEqual({ id: 'toi-1', name: 'process gap' });
   });
 
-  it('dates the ticket from the shift', () => {
-    expect(buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, SITE).improvementDate).toBe(
-      new Date(2026, 7, 26, 23, 0, 0, 0).toISOString(),
+  it('dates the ticket when the form opens while retaining the historical shift in the evidence', () => {
+    const now = new Date('2026-09-07T07:30:00Z');
+    expect(buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, SITE, now).improvementDate).toBe(
+      now.toISOString(),
     );
   });
 
@@ -428,7 +431,7 @@ describe('buildImpwDraft', () => {
       ],
     });
     expect(suggestImpwDepartment(f)).toBe('Toolroom');
-    expect(buildImpwDraft(f, raiser, SITE).department).toBe('Toolroom');
+    expect(buildImpwDraft(f, raiser, SITE).department).toBe('Manufacturing - AU');
   });
 
   it('routes a quality-only finding to Production', () => {
@@ -485,6 +488,37 @@ describe('buildImpwDraft', () => {
 });
 
 describe('IMPW validation', () => {
+  it('uses the requested Minto defaults and preserves all missed KPI reasons', () => {
+    const f = detectImpwFindings([slice({ breakdownHrs: 2, output: 900, reject: 100, yieldPct: 90 })], RULES)[0];
+    const d = buildImpwDraft(f, { name: 'CK' }, SITE);
+    expect(d).toMatchObject({ source: 'Employee', type: 'Equipment(breakdown)', region: 'Minto (AU)', branch: 'Resero - Minto', department: 'Manufacturing - AU', other: 'Maitenance -AU' });
+    for (const reason of f.reasons) expect(d.description).toContain(reason);
+    expect(d.improvementDetails.startsWith('Investigate rootcause\n')).toBe(true);
+    expect(impwPlainText(d)).toContain('Source *: Employee');
+    expect(impwApiPayload(d).improvementDetails).toContain('Type: Equipment(breakdown)');
+    expect(impwApiPayload(d)).not.toHaveProperty('source');
+  });
+
+  it('suggests quality and process categories without assuming supplier fault', () => {
+    const quality = detectImpwFindings([slice({ output: 900, reject: 100, yieldPct: 90 })], RULES)[0];
+    expect(suggestImpwClassification(quality)).toEqual({ type: 'quality', improvement: 'Internal quality', other: 'PMD - AU' });
+    const process = detectImpwFindings([slice({ breakdownHrs: 1, breakdowns: [{ code: 'MAT-01', label: 'Material shortage', owner: 'Operator', hours: 1, note: '' }] })], RULES)[0];
+    expect(suggestImpwClassification(process)).toEqual({ type: 'Process Improvment', improvement: 'process gap', other: 'PMD - AU' });
+    expect(buildImpwDraft(quality, { name: 'CK' }, SITE).typeOfImprovement).toEqual({ id: '', name: 'Internal quality' });
+  });
+
+  it('matches an actual tenant option despite case and spacing differences, with no invented ID', () => {
+    const options = [{ id: 'real-id', name: ' Internal  Quality ' }];
+    expect(matchImpwOption(options, 'Internal quality')).toEqual(options[0]);
+    expect(matchImpwOption(options, 'supply quality')).toBeUndefined();
+  });
+
+  it('counts Source and Type against the API details limit', () => {
+    const f = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
+    const d = { ...buildImpwDraft(f, { name: 'CK' }, SITE), improvementDetails: 'x'.repeat(4096) };
+    expect(overlongImpwFields(d)).toContain('Details of Improvement and/or Proposed Action (max 4096)');
+  });
+
   const blank = (): ImpwDraft => ({
     description: '',
     typeOfImprovement: { ...EMPTY_OPTION },
@@ -585,8 +619,8 @@ describe('Mango API contract', () => {
 
   it('sends the two option fields as {id, name} objects', () => {
     const p = impwApiPayload(draft());
-    expect(p.typeOfImprovement).toEqual({ id: 'toi-1', name: 'Corrective Action' });
-    expect(p.coordinator).toEqual({ id: 'co-1', name: 'Felicity Kidwell' });
+    expect(p.typeOfImprovement).toEqual({ id: 'toi-1', name: 'process gap' });
+    expect(p.coordinator).toEqual({ id: 'co-1', name: 'Paul Fiddling (AU)' });
   });
 
   it('sends the date as ISO 8601 UTC', () => {
@@ -599,7 +633,7 @@ describe('Mango API contract', () => {
     const p = impwApiPayload({ ...draft(), region: '', other: '   ' });
     expect(p).not.toHaveProperty('region');
     expect(p).not.toHaveProperty('other');
-    expect(p.branch).toBe('Wacol');
+    expect(p.branch).toBe('Resero - Minto');
   });
 
   it('reads back the created ticket the way the API documents it', () => {
@@ -635,13 +669,13 @@ describe('Mango API contract', () => {
         null,
         'nonsense',
       ],
-      coordinator: [{ id: 'c1', name: 'Felicity Kidwell' }],
+      coordinator: [{ id: 'c1', name: 'Paul Fiddling (AU)' }],
     };
     expect(parseImpwOptions(body, 'typeOfImprovement')).toEqual([
       { id: 'a', name: 'Audit finding' },
       { id: 'b', name: 'Customer complaint' },
     ]);
-    expect(parseImpwOptions(body, 'coordinator')).toEqual([{ id: 'c1', name: 'Felicity Kidwell' }]);
+    expect(parseImpwOptions(body, 'coordinator')).toEqual([{ id: 'c1', name: 'Paul Fiddling (AU)' }]);
     expect(parseImpwOptions(null, 'coordinator')).toEqual([]);
     expect(parseImpwOptions({ coordinator: 'nope' }, 'coordinator')).toEqual([]);
   });
@@ -685,16 +719,16 @@ describe('Mango API contract', () => {
 describe('impwPlainText', () => {
   it('labels the fields the way the web form does, for pasting in by hand', () => {
     const found = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
-    const text = impwPlainText(buildImpwDraft(found, { name: 'CK' }, SITE));
+    const text = impwPlainText(buildImpwDraft(found, { name: 'CK' }, SITE, new Date(2026, 7, 26, 12)));
     expect(text.startsWith('IMPW — Improvement Workflow')).toBe(true);
     expect(text).toContain('Brief Description *');
-    expect(text).toContain('Type of Improvement *: Corrective Action');
+    expect(text).toContain('Type of Improvement *: process gap');
     expect(text).toContain('Name *: CK');
     // The form takes dd/mm/yyyy even though the API takes ISO.
     expect(text).toContain('Date of occurrence *: 26/08/2026');
-    expect(text).toContain('Coordinator *: Felicity Kidwell');
-    expect(text).toContain('Region: QLD');
-    expect(text).toContain('Branch: Wacol');
+    expect(text).toContain('Coordinator *: Paul Fiddling (AU)');
+    expect(text).toContain('Region: Minto (AU)');
+    expect(text).toContain('Branch: Resero - Minto');
   });
 
   it('never leaks an id into text a person retypes', () => {

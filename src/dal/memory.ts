@@ -1,3 +1,4 @@
+import { appendHandoverLine } from '../core/handover';
 import type {
   BdCode,
   BreakdownLogDetail,
@@ -364,6 +365,12 @@ export class MemoryDataLayer implements PmdDataLayer {
   }
 
   // Last-write-wins (§5.6): match on composite key, no version check.
+  async appendImpwHandover(machineCode: string, shiftId: string, ticket: string): Promise<void> {
+    const rows = this.production.filter((r) => r.machineCode === machineCode && r.shiftId === shiftId && r.locked && r.slotIndex === 0);
+    if (!rows.length || !ticket.trim()) throw new Error('Missing signed-off row or ticket number');
+    for (const row of rows) row.handoverNote = appendHandoverLine(row.handoverNote, 'method', `IMPW: ${ticket.trim()}`);
+  }
+
   async upsertProductionRecord(record: ProductionRecord): Promise<ProductionRecord> {
     const now = new Date().toISOString();
     const idx =

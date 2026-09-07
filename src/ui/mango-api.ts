@@ -258,6 +258,7 @@ export async function fetchImpwOptions(
 }
 
 export interface MangoSubmitResult {
+  uncertain?: boolean;
   ok: boolean;
   /** 'IMP 0123' — what the floor calls it. */
   ticketRef: string;
@@ -306,6 +307,10 @@ export async function submitImpwToMango(
     };
   }
   const created = parseImpwCreated(parseJson(res.text));
+  if (!created.number) return {
+    ok: false, uncertain: true, ticketRef: '', ticketId: created.id, status: res.status,
+    message: 'Mango returned no ticket number. Check Mango before trying again; creation is unconfirmed.',
+  };
   const ref = impwTicketRef(created);
   return {
     ok: true,
