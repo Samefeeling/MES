@@ -1,12 +1,18 @@
 import {
   describeImpwApiFailure,
+  describeImpwLookupFailure,
   describeMangoAuthFailure,
+  findImpwRecord,
   impwApiPayload,
   impwEndpoint,
+  impwRecordIsDetailed,
   impwTicketRef,
   parseImpwCreated,
   parseImpwOptions,
+  parseImpwRecord,
+  parseImpwRecords,
   type ImpwDraft,
+  type ImpwRecord,
   type MangoOption,
 } from '../core/impw';
 
@@ -21,6 +27,11 @@ import {
 //                                   Coordinator lists (a GET — despite the
 //                                   name it creates nothing)
 //   POST /api/v4/improvement        the ticket
+//   GET  /api/v4/improvement/{id}   where that ticket has got to since —
+//   GET  /api/v4/improvement        …falling back to the whole register,
+//                                   because the document's page for the
+//                                   single-record GET is a copy-paste of the
+//                                   Compliance one and cannot be trusted
 //
 // The sign-in is entered ON SITE rather than compiled in: the Mango account
 // password is rotated periodically, and a build-time env var would mean a
@@ -319,6 +330,87 @@ export async function submitImpwToMango(
     status: res.status,
     message: ref ? `Raised in Mango — ${ref}` : 'Raised in Mango',
   };
+}
+
+export interface MangoRecordResult {
+  ok: boolean;
+  /** What Mango holds for the ticket right now. Null on any failure. */
+  record: ImpwRecord | null;
+  message: string;
+  status: number;
+}
+
+/**
+ * Read one raised ticket back — the stage it has reached, who is
+ * investigating it, when it is due.
+ *
+ * Two endpoints, deliberately in this order:
+ *
+ *   1. GET /api/v4/improvement/{id} — one small call. The vendor document's
+ *      page for it is a copy-paste of the Compliance endpoint (its own URL
+ *      line says /api/v4/compliance/{id}), so what it returns is genuinely
+ *      unknown: it may be the full improvement, or the eight-field stub the
+ *      document prints. PMD tries it and checks what came back.
+ *   2. GET /api/v4/improvement — the whole register, whose returned fields
+ *      ARE documented, matched on the id (or the ticket number, for tickets
+ *      raised before PMD kept ids). Heavier, so it is the fallback and not
+ *      the first move.
+ *
+ * Nothing is written and nothing is cached here: a stale stage shown as
+ * current is the failure mode worth avoiding, so every lookup asks.
+ */
+export async function fetchImpwRecord(
+  ref: { id?: string; number?: string },
+  conn = loadMangoConnection(),
+): Promise<MangoRecordResult> {
+  const fail = (status: number, message: string): MangoRecordResult => ({
+    ok: false,
+    record: null,
+    status,
+    message,
+  });
+
+  const id = (ref.id ?? '').trim();
+  if (id) {
+    const res = await withToken(conn, (token) =>
+      mangoFetch(`${impwEndpoint(conn.baseUrl, CREATE_PATH)}/${encodeURIComponent(id)}`, {
+        method: 'GET',
+        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+      }),
+    );
+    if (isAuthFailure(res)) return fail(res.authFailure.status, res.authFailure.message);
+    if (res.status >= 200 && res.status < 300) {
+      const rec = parseImpwRecord(parseJson(res.text));
+      if (impwRecordIsDetailed(rec)) {
+        return { ok: true, record: rec, status: res.status, message: '' };
+      }
+      // A stub, not a refusal — the register knows more, so ask it.
+    } else if (res.status !== 400 && res.status !== 404) {
+      // 400/404 can simply mean this Mango does not serve single records;
+      // anything else is a real failure and stops here rather than pulling
+      // the whole register behind a problem that will repeat.
+      return fail(res.status, describeImpwLookupFailure(res.status, res.text));
+    }
+  }
+
+  const list = await withToken(conn, (token) =>
+    mangoFetch(impwEndpoint(conn.baseUrl, CREATE_PATH), {
+      method: 'GET',
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+    }),
+  );
+  if (isAuthFailure(list)) return fail(list.authFailure.status, list.authFailure.message);
+  if (list.status < 200 || list.status >= 300) {
+    return fail(list.status, describeImpwLookupFailure(list.status, list.text));
+  }
+  const hit = findImpwRecord(parseImpwRecords(parseJson(list.text)), ref);
+  if (!hit) {
+    return fail(
+      list.status,
+      'Mango returned the improvement register but no ticket in it matches this reference. It may have been archived, or this account may not be allowed to see it.',
+    );
+  }
+  return { ok: true, record: hit, status: list.status, message: '' };
 }
 
 // ---------------------------------------------------------------------------

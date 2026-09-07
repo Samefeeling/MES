@@ -4,8 +4,10 @@ import {
   matchImpwOption,
   suggestImpwClassification,
   describeImpwApiFailure,
+  describeImpwLookupFailure,
   describeMangoAuthFailure,
   detectImpwFindings,
+  findImpwRecord,
   foldBreakdowns,
   impwApiPayload,
   impwDepartmentOf,
@@ -13,19 +15,24 @@ import {
   impwDraftIssues,
   impwFindingKey,
   impwIsoToFormDate,
+  impwMangoDate,
   impwOccurrenceDate,
   impwOccurrenceIso,
   impwPlainText,
+  impwRecordIsDetailed,
   impwTicketRef,
   missingImpwFields,
   overlongImpwFields,
   parseImpwCreated,
   parseImpwOptions,
+  parseImpwRecord,
+  parseImpwRecords,
   suggestImpwDepartment,
   yieldPctOf,
   EMPTY_IMPW_SITE,
   EMPTY_OPTION,
   IMPW_DESCRIPTION_MAX,
+  IMPW_RECORD_ROWS,
   type ImpwDraft,
   type ImpwFinding,
   type ImpwSiteConfig,
@@ -736,5 +743,185 @@ describe('impwPlainText', () => {
     const text = impwPlainText(buildImpwDraft(found, { name: 'CK' }, SITE));
     expect(text).not.toContain('toi-1');
     expect(text).not.toContain('co-1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reading a raised ticket back — GET /api/v4/improvement
+// ---------------------------------------------------------------------------
+
+/** One row of the register, spelled the way the document's RETURNS table
+ *  spells it. */
+const REGISTER_ROW = {
+  id: 'GfuUaXy_yPcB-H_Wk4WBMyfYsdlyDw0D8_LgHhRywPI',
+  number: '0123',
+  typeOfImprovement: 'Corrective Action',
+  source: 'Employee',
+  name: 'Christopher King',
+  region: 'QLD',
+  branch: 'Wacol',
+  department: 'Maintenance',
+  other: 'Precision Moulding',
+  potentialSeverity: 'Major',
+  details: 'Plant/Equipment: 1600T…',
+  briefDescription: '1600T Night shift 26/08/2026 — Breakdown 2 h lost',
+  currentStage: 'Investigation',
+  dateOfOccurrence: '2026-08-26',
+  dueDate: '2026-09-15',
+  dateCreated: '2026-09-01T04:12:00.000Z',
+  dateClosed: '',
+  correctiveAction: 'Replaced the heater band.',
+  preventativeAction: '',
+  improvementSummary: '',
+  additionalInformation: '',
+  coordinator: 'Felicity Kidwell',
+  investigator: 'Richie McCaw',
+};
+
+describe('parseImpwRecord', () => {
+  it('reads the fields a review meeting asks about', () => {
+    const r = parseImpwRecord(REGISTER_ROW);
+    expect(r.currentStage).toBe('Investigation');
+    expect(r.investigator).toBe('Richie McCaw');
+    expect(r.dueDate).toBe('2026-09-15');
+    expect(r.number).toBe('0123');
+    expect(r.coordinator).toBe('Felicity Kidwell');
+  });
+
+  it("accepts the document's own misspelling of briefDescription", () => {
+    // The RETURNS table says briefDescription; the JSON sample printed
+    // beside it says briefDecription. Either has to work.
+    const r = parseImpwRecord({ id: 'x', briefDecription: 'Press down 2 h' });
+    expect(r.briefDescription).toBe('Press down 2 h');
+  });
+
+  it('matches keys whatever their capitalisation', () => {
+    const r = parseImpwRecord({ ID: 'x', Investigator: 'Don', CurrentStage: 'Closed' });
+    expect(r.investigator).toBe('Don');
+    expect(r.currentStage).toBe('Closed');
+    expect(r.id).toBe('x');
+  });
+
+  it('leaves anything Mango did not send blank, never undefined', () => {
+    const r = parseImpwRecord({ id: 'x' });
+    expect(r.investigator).toBe('');
+    expect(r.dueDate).toBe('');
+    for (const row of IMPW_RECORD_ROWS) expect(typeof r[row.field]).toBe('string');
+  });
+
+  it('survives a body that is not an object', () => {
+    for (const body of [null, undefined, 'text', 42, []]) {
+      expect(parseImpwRecord(body).id).toBe('');
+    }
+  });
+
+  it('keeps a number Mango sent as a number', () => {
+    expect(parseImpwRecord({ id: 'x', number: 123 }).number).toBe('123');
+  });
+});
+
+describe('parseImpwRecords', () => {
+  it('reads a register listing', () => {
+    const list = parseImpwRecords([REGISTER_ROW, { ...REGISTER_ROW, id: 'b', number: '0124' }]);
+    expect(list).toHaveLength(2);
+    expect(list[1].number).toBe('0124');
+  });
+
+  it('drops rows with neither an id nor a number, and non-arrays', () => {
+    expect(parseImpwRecords([{ currentStage: 'Open' }])).toHaveLength(0);
+    expect(parseImpwRecords({ id: 'x' })).toHaveLength(0);
+    expect(parseImpwRecords(null)).toHaveLength(0);
+  });
+});
+
+describe('impwRecordIsDetailed', () => {
+  it('recognises a real improvement', () => {
+    expect(impwRecordIsDetailed(parseImpwRecord(REGISTER_ROW))).toBe(true);
+  });
+
+  it('rejects the compliance-shaped stub the document prints for /{id}', () => {
+    // The vendor document's page for GET /api/v4/improvement/{id} is a
+    // copy-paste of the Compliance one — this is exactly the shape it
+    // describes, and none of it answers "where has the ticket got to".
+    const stub = parseImpwRecord({
+      id: 'x',
+      number: '0123',
+      typeOfDocument: 'Act',
+      status: 'Compliant',
+      branch: 'Wacol',
+      department: 'HR',
+      region: 'QLD',
+      other: '',
+    });
+    expect(impwRecordIsDetailed(stub)).toBe(false);
+  });
+});
+
+describe('findImpwRecord', () => {
+  const list = parseImpwRecords([
+    { ...REGISTER_ROW, id: 'other', number: '0099' },
+    REGISTER_ROW,
+  ]);
+
+  it('matches on Mango’s own id', () => {
+    expect(findImpwRecord(list, { id: REGISTER_ROW.id })?.number).toBe('0123');
+  });
+
+  it('falls back to the ticket number, abbreviation and all', () => {
+    // Tickets raised before PMD stored ids only have 'IMP 0123' to go on.
+    expect(findImpwRecord(list, { number: 'IMP 0123' })?.id).toBe(REGISTER_ROW.id);
+    expect(findImpwRecord(list, { number: '123' })?.id).toBe(REGISTER_ROW.id);
+  });
+
+  it('prefers the id when both are given', () => {
+    expect(findImpwRecord(list, { id: 'other', number: 'IMP 0123' })?.number).toBe('0099');
+  });
+
+  it('returns null rather than the wrong ticket', () => {
+    expect(findImpwRecord(list, { id: 'nope' })).toBeNull();
+    expect(findImpwRecord(list, { number: 'IMP 7777' })).toBeNull();
+    expect(findImpwRecord(list, {})).toBeNull();
+  });
+});
+
+describe('impwMangoDate', () => {
+  it('shows a yyyy-mm-dd due date as the site reads dates', () => {
+    expect(impwMangoDate('2026-09-15')).toBe('15/09/2026');
+  });
+
+  it('does not shift a bare date by a day in a timezone behind UTC', () => {
+    // Parsing '2026-01-01' through Date makes it UTC midnight, which is
+    // 31 December in the Americas. The whole point of the regex path.
+    expect(impwMangoDate('2026-01-01')).toBe('01/01/2026');
+    expect(impwMangoDate('2026-12-31')).toBe('31/12/2026');
+  });
+
+  it('reformats a full ISO timestamp', () => {
+    const iso = new Date(2026, 8, 15, 9, 30).toISOString();
+    expect(impwMangoDate(iso)).toBe('15/09/2026');
+  });
+
+  it("passes anything that is not a date through in Mango's own words", () => {
+    expect(impwMangoDate('Not set')).toBe('Not set');
+    expect(impwMangoDate('')).toBe('');
+    expect(impwMangoDate('  ')).toBe('');
+  });
+});
+
+describe('describeImpwLookupFailure', () => {
+  it('says the ticket is missing, not the API address, on a 404', () => {
+    const msg = describeImpwLookupFailure(404, '');
+    expect(msg).toMatch(/no improvement with that reference/i);
+    expect(msg).not.toMatch(/check the API address/i);
+  });
+
+  it('never suggests anything was lost — nothing was being written', () => {
+    for (const status of [0, 401, 404, 422, 500]) {
+      expect(describeImpwLookupFailure(status, '')).not.toMatch(/nothing was filed|not accept the ticket/i);
+    }
+  });
+
+  it('quotes Mango when it said something', () => {
+    expect(describeImpwLookupFailure(500, 'upstream timeout')).toContain('upstream timeout');
   });
 });

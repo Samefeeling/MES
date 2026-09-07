@@ -637,6 +637,207 @@ export function impwTicketRef(c: ImpwCreated): string {
   return c.number || c.id || '';
 }
 
+/**
+ * One improvement as Mango reads it BACK — the answer to "what happened to
+ * the ticket we raised?", which is a different question from the ten fields
+ * PMD is allowed to send. Mango owns everything here: the stage it has
+ * reached, who is investigating it, when it is due. PMD writes none of it
+ * and stores none of it as fact; it is shown, with the time it was read.
+ *
+ * Field names are the ones in the document's own RETURNS table for
+ * GET /api/v4/improvement (docs/mango-api-v4.md § Reading a ticket back).
+ * Only the useful subset is kept — the register also returns four root
+ * causes, a cost, an item/product and the related-risk text, none of which
+ * a KPI meeting is looking at.
+ */
+export interface ImpwRecord {
+  id: string;
+  number: string;
+  briefDescription: string;
+  typeOfImprovement: string;
+  source: string;
+  /** Originator — what PMD posted as `originatorName`. */
+  name: string;
+  coordinator: string;
+  /** The three the meeting actually asks about. */
+  currentStage: string;
+  investigator: string;
+  /** "To be completed by" on the form. */
+  dueDate: string;
+  dateCreated: string;
+  dateClosed: string;
+  dateOfOccurrence: string;
+  region: string;
+  branch: string;
+  department: string;
+  other: string;
+  details: string;
+  additionalInformation: string;
+  correctiveAction: string;
+  preventativeAction: string;
+  improvementSummary: string;
+  potentialSeverity: string;
+}
+
+const EMPTY_RECORD: ImpwRecord = {
+  id: '', number: '', briefDescription: '', typeOfImprovement: '', source: '', name: '',
+  coordinator: '', currentStage: '', investigator: '', dueDate: '', dateCreated: '',
+  dateClosed: '', dateOfOccurrence: '', region: '', branch: '', department: '', other: '',
+  details: '', additionalInformation: '', correctiveAction: '', preventativeAction: '',
+  improvementSummary: '', potentialSeverity: '',
+};
+
+/**
+ * Spellings to accept besides the field's own name. Mango's document
+ * disagrees with itself: the RETURNS table says `briefDescription` and
+ * `Investigator`, and the JSON sample printed beside it says
+ * `briefDecription` and `investigator`. Rather than bet on which one the
+ * server actually sends, take either — a misread field would silently show
+ * a blank Stage, which reads as "nobody has touched it" and is the one
+ * wrong answer this dialog must never give.
+ */
+const IMPW_RECORD_ALIASES: Partial<Record<keyof ImpwRecord, string[]>> = {
+  briefDescription: ['briefdecription'],
+  dueDate: ['tobecompletedby'],
+  currentStage: ['stage'],
+};
+
+/** Where a read-back field belongs on screen. */
+export type ImpwRecordGroup = 'progress' | 'ticket' | 'outcome';
+
+export interface ImpwRecordRow {
+  field: keyof ImpwRecord;
+  /** Mango's own label for it, from the module data table. */
+  label: string;
+  group: ImpwRecordGroup;
+  /** Reformat through impwMangoDate before showing. */
+  date?: boolean;
+  /** Free text that needs its own block, not a table row. */
+  block?: boolean;
+}
+
+/** Every field worth showing, in reading order: where the ticket has got to
+ *  first, because that is the question being asked. */
+export const IMPW_RECORD_ROWS: ImpwRecordRow[] = [
+  { field: 'currentStage', label: 'Current Stage', group: 'progress' },
+  { field: 'investigator', label: 'Investigator', group: 'progress' },
+  { field: 'dueDate', label: 'To be completed by', group: 'progress', date: true },
+  { field: 'dateClosed', label: 'Close Date', group: 'progress', date: true },
+  { field: 'coordinator', label: 'Coordinator', group: 'ticket' },
+  { field: 'typeOfImprovement', label: 'Type of Improvement', group: 'ticket' },
+  { field: 'source', label: 'Source', group: 'ticket' },
+  { field: 'name', label: 'Name', group: 'ticket' },
+  { field: 'dateOfOccurrence', label: 'Date of Occurrence', group: 'ticket', date: true },
+  { field: 'dateCreated', label: 'Create Date', group: 'ticket', date: true },
+  { field: 'region', label: 'Region', group: 'ticket' },
+  { field: 'branch', label: 'Branch', group: 'ticket' },
+  { field: 'department', label: 'Department', group: 'ticket' },
+  { field: 'other', label: 'Other', group: 'ticket' },
+  { field: 'potentialSeverity', label: 'Potential Severity', group: 'outcome' },
+  { field: 'correctiveAction', label: 'Corrective Action Taken', group: 'outcome', block: true },
+  { field: 'preventativeAction', label: 'Preventative Action Taken', group: 'outcome', block: true },
+  { field: 'improvementSummary', label: 'Improvement Summary', group: 'outcome', block: true },
+  { field: 'additionalInformation', label: 'Additional Information', group: 'outcome', block: true },
+  { field: 'briefDescription', label: 'Brief Description', group: 'outcome', block: true },
+  { field: 'details', label: 'Details of Improvement and/or Proposed Action', group: 'outcome', block: true },
+];
+
+/** One improvement out of whatever shape Mango sent. Keys are matched
+ *  case-insensitively; anything absent stays '' rather than becoming
+ *  'undefined' on screen. */
+export function parseImpwRecord(body: unknown): ImpwRecord {
+  const raw = body && typeof body === 'object' && !Array.isArray(body)
+    ? (body as Record<string, unknown>)
+    : {};
+  const byLower = new Map<string, string>();
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === 'string') byLower.set(k.toLowerCase(), v.trim());
+    else if (typeof v === 'number' && Number.isFinite(v)) byLower.set(k.toLowerCase(), String(v));
+  }
+  const pick = (field: keyof ImpwRecord): string => {
+    for (const name of [field.toLowerCase(), ...(IMPW_RECORD_ALIASES[field] ?? [])]) {
+      const v = byLower.get(name);
+      if (v) return v;
+    }
+    return '';
+  };
+  const out = { ...EMPTY_RECORD };
+  for (const key of Object.keys(EMPTY_RECORD) as Array<keyof ImpwRecord>) out[key] = pick(key);
+  return out;
+}
+
+/** The register, from GET /api/v4/improvement. */
+export function parseImpwRecords(body: unknown): ImpwRecord[] {
+  if (!Array.isArray(body)) return [];
+  return body.map((item) => parseImpwRecord(item)).filter((r) => r.id || r.number);
+}
+
+/**
+ * Did that response actually carry an improvement?
+ *
+ * The vendor document's GET /api/v4/improvement/{id} page is a copy-paste of
+ * the Compliance one — its URL line says `/api/v4/compliance/{id}` and its
+ * RETURNS table lists compliance fields — so what that endpoint really
+ * answers with is not documented. PMD asks it anyway (one small call beats
+ * pulling the whole register) and uses this to tell a real improvement from
+ * the eight-field stub the document describes; a stub means fall back to the
+ * register, which IS documented, rather than showing a ticket with every
+ * field blank.
+ */
+export function impwRecordIsDetailed(r: ImpwRecord): boolean {
+  return !!(
+    r.briefDescription || r.details || r.currentStage || r.investigator ||
+    r.dueDate || r.name || r.dateCreated
+  );
+}
+
+/** Digits only, leading zeros dropped: 'IMP 0123' and '0123' are the same
+ *  ticket, and the register has been seen to carry the abbreviation in the
+ *  number column while the create response splits the two apart. */
+function impwNumberKey(s: string): string {
+  const digits = (s.match(/\d+/g) ?? []).join('');
+  return digits.replace(/^0+/, '');
+}
+
+/** The raised ticket inside a register listing. The id is exact and wins;
+ *  the number is the fallback for tickets PMD filed before it kept ids. */
+export function findImpwRecord(
+  records: ReadonlyArray<ImpwRecord>,
+  ref: { id?: string; number?: string },
+): ImpwRecord | null {
+  const id = (ref.id ?? '').trim();
+  if (id) {
+    const hit = records.find((r) => r.id === id);
+    if (hit) return hit;
+  }
+  const num = impwNumberKey(ref.number ?? '');
+  if (num) {
+    const hit = records.find((r) => impwNumberKey(r.number) === num);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * A date Mango sent back, in the dd/mm/yyyy the rest of the site reads.
+ *
+ * The document types every returned date as "String" and shows two shapes —
+ * the search filters use yyyy-mm-dd, the create body takes full ISO 8601 —
+ * so both turn up. A bare yyyy-mm-dd is rewritten by hand rather than
+ * through Date, because parsing one makes it UTC midnight and prints the day
+ * before anywhere behind UTC. Anything that is not a date Mango's own words
+ * are shown unchanged; inventing a date it never sent would be worse than
+ * showing an odd one.
+ */
+export function impwMangoDate(raw: string): string {
+  const s = (raw || '').trim();
+  if (!s) return '';
+  const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (ymd) return `${ymd[3]}/${ymd[2]}/${ymd[1]}`;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return impwIsoToFormDate(s) || s;
+  return s;
+}
+
 /** The tenant's option lists from GET /api/v4/improvement/new. Anything that
  *  isn't a well-formed {id,name} is skipped rather than offered as a broken
  *  choice — a pick with no id fails Mango's validation anyway. */
@@ -723,6 +924,31 @@ export function describeImpwApiFailure(status: number, body: string): string {
     return quoteMango(`Mango returned a server error (${status}). It is not the ticket — try again shortly.`, body);
   }
   return quoteMango(`Mango returned ${status}.`, body);
+}
+
+/**
+ * Reading a ticket back is a different failure from filing one, and must not
+ * borrow its words: nothing is being written, so nothing can be lost, and a
+ * 404 here means the ticket, not the address.
+ */
+export function describeImpwLookupFailure(status: number, body: string): string {
+  if (status === 0) return OFFLINE;
+  if (status === 401 || status === 403) {
+    return quoteMango(
+      'Mango would not accept the sign-in for this lookup. Re-enter it under ⚙ Mango connection. (A token is tied to the network it was issued on, so this can also mean the device changed network.)',
+      body,
+    );
+  }
+  if (status === 400 || status === 404) {
+    return quoteMango(
+      'Mango has no improvement with that reference. It may have been archived, or this account may not be allowed to see it.',
+      body,
+    );
+  }
+  if (status >= 500) {
+    return quoteMango(`Mango returned a server error (${status}) while looking the ticket up. Try again shortly.`, body);
+  }
+  return quoteMango(`Mango returned ${status} while looking the ticket up.`, body);
 }
 
 /**

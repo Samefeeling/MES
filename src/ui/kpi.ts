@@ -80,15 +80,19 @@ import {
   foldBreakdowns,
   impwDraftIssues,
   impwIsoToFormDate,
+  impwMangoDate,
   impwPlainText,
   yieldPctOf,
   EMPTY_IMPW_SITE,
   EMPTY_OPTION,
   IMPW_DESCRIPTION_MAX,
   IMPW_DETAILS_MAX,
+  IMPW_RECORD_ROWS,
   type ImpwDraft,
   type ImpwFinding,
   type ImpwRaiser,
+  type ImpwRecord,
+  type ImpwRecordGroup,
   type ImpwSiteConfig,
   type ImpwSlice,
   type ImpwTarget,
@@ -97,6 +101,7 @@ import {
 import {
   clearMangoConnection,
   fetchImpwOptions,
+  fetchImpwRecord,
   isMangoConfigured,
   loadMangoConnection,
   mangoCreateUrl,
@@ -402,6 +407,24 @@ interface ImpwDecision {
   /** Mango's own reference for the ticket ('IMP 0123'), when the API filed
    *  it. Absent on a clipboard hand-off — PMD never saw a ticket number. */
   ticket?: string;
+  /** Mango's opaque record id, kept so the ticket can be read back later.
+   *  Absent on tickets raised before this was stored, and on clipboard
+   *  hand-offs; the lookup falls back to matching on the number. */
+  ticketId?: string;
+  /** The last answer Mango gave about the ticket's progress. Cached only so
+   *  a decided card can say where it got to without asking on every render —
+   *  never treated as current, always shown with the time it was read. */
+  progress?: ImpwProgress;
+}
+
+/** What the meeting asks about a raised ticket, as Mango last answered it. */
+interface ImpwProgress {
+  stage: string;
+  investigator: string;
+  dueDate: string;
+  closed: string;
+  /** When PMD read it, so the card can say how old the answer is. */
+  at: number;
 }
 
 const IMPW_DECISIONS_KEY = 'pmd.impwDecisions';
@@ -411,15 +434,51 @@ function loadImpwDecisions(): Map<string, ImpwDecision> {
   try {
     const raw = localStorage.getItem(IMPW_DECISIONS_KEY);
     if (!raw) return new Map();
-    const parsed = JSON.parse(raw) as Record<string, ImpwDecision>;
-    return new Map(
-      Object.entries(parsed).filter(
-        ([, v]) => v && ((v.decision === 'yes' && !!v.ticket) || v.decision === 'no'),
-      ),
-    );
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out = new Map<string, ImpwDecision>();
+    for (const [key, v] of Object.entries(parsed)) {
+      const d = normImpwDecision(v);
+      if (d) out.set(key, d);
+    }
+    return out;
   } catch {
     return new Map();
   }
+}
+
+/** Rebuild a stored decision field by field. Everything in here was written
+ *  by an older build at some point — ticket numbers arrived before ids, and
+ *  progress after both — so a missing or wrong-shaped part must degrade to
+ *  "not known" rather than reach the panel as `undefined`. */
+function normImpwDecision(v: unknown): ImpwDecision | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  if (o.decision !== 'yes' && o.decision !== 'no') return null;
+  const str = (k: string): string => (typeof o[k] === 'string' ? (o[k] as string) : '');
+  // A 'yes' with no ticket number is not a raised ticket — nothing in Mango
+  // was ever confirmed — so it is dropped and the finding asks again.
+  if (o.decision === 'yes' && !str('ticket')) return null;
+  const d: ImpwDecision = {
+    decision: o.decision,
+    at: typeof o.at === 'number' ? o.at : 0,
+    by: str('by'),
+    ticket: str('ticket') || undefined,
+    ticketId: str('ticketId') || undefined,
+    handoverSaved: o.handoverSaved === true || undefined,
+  };
+  const p = o.progress;
+  if (p && typeof p === 'object') {
+    const po = p as Record<string, unknown>;
+    const ps = (k: string): string => (typeof po[k] === 'string' ? (po[k] as string) : '');
+    d.progress = {
+      stage: ps('stage'),
+      investigator: ps('investigator'),
+      dueDate: ps('dueDate'),
+      closed: ps('closed'),
+      at: typeof po.at === 'number' ? po.at : 0,
+    };
+  }
+  return d;
 }
 
 function saveImpwDecisions(m: ReadonlyMap<string, ImpwDecision>): void {
@@ -1658,6 +1717,49 @@ function impwWhen(shiftId: string): string {
   return s.shift ? `${s.shift} · ${s.date}` : s.date;
 }
 
+/** "just now" / "2 h ago" / "3 d ago" — how old a Mango answer is. A stage
+ *  read last week is not today's stage, and the row has to say so. */
+function impwSince(at: number): string {
+  const mins = Math.max(0, Math.round((Date.now() - at) / 60000));
+  if (!at) return 'at an unknown time';
+  if (mins < 2) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 48) return `${hrs} h ago`;
+  return `${Math.round(hrs / 24)} d ago`;
+}
+
+/**
+ * Where the ticket got to, as of the last time anyone asked — stage and due
+ * date on the row itself, the rest in the tooltip, because the row is one
+ * dense line and the stage is the part a meeting scans for.
+ *
+ * Shown only once Mango HAS been asked: an empty chip would read as "nobody
+ * has touched it", which is a claim PMD has no right to make.
+ */
+function impwProgressChip(d: ImpwDecision): string {
+  const p = d.progress;
+  if (!p) return '';
+  const short = [
+    p.stage,
+    p.closed ? `closed ${impwMangoDate(p.closed)}` : p.dueDate ? `due ${impwMangoDate(p.dueDate)}` : '',
+  ].filter(Boolean).join(' · ');
+  const full = [
+    p.stage ? `Current Stage: ${p.stage}` : '',
+    p.investigator ? `Investigator: ${p.investigator}` : '',
+    p.dueDate ? `To be completed by: ${impwMangoDate(p.dueDate)}` : '',
+    p.closed ? `Closed: ${impwMangoDate(p.closed)}` : '',
+  ].filter(Boolean).join(' · ');
+  if (!short) {
+    return `<span class="kpi-impw-progress is-blank" title="Read from Mango ${escapeHtml(
+      impwSince(p.at),
+    )}">no stage yet</span>`;
+  }
+  return `<span class="kpi-impw-progress" title="${escapeHtml(full)} — read from Mango ${escapeHtml(
+    impwSince(p.at),
+  )}">${escapeHtml(short)}</span>`;
+}
+
 /**
  * The actions block: every shift in the window that broke a KPI rule, worst
  * first, each with Yes / No. Decided ones drop out of the list (the meeting
@@ -1670,8 +1772,10 @@ function buildImpwPanel(): string {
   const shown = S!.impwShowDecided ? S!.impwFindings : S!.impwFindings.filter((f) => !S!.impwDecisions.has(f.key) || S!.impwDecisions.get(f.key)?.decision === 'yes');
   const rows = shown.map((f) => {
     const d = S!.impwDecisions.get(f.key);
+    // A confirmed ticket number is a button: pressing it asks Mango where
+    // the ticket has got to, and the answer stays on the row afterwards.
     const action = d?.ticket
-      ? `<span>${escapeHtml(d.ticket)}</span>${!d.handoverSaved ? `<button type="button" data-impw-sync="${escapeHtml(f.key)}">Save to Handover</button>` : '<span>Saved</span>'}`
+      ? `<button type="button" class="kpi-impw-ticket" data-impw-open="${escapeHtml(f.key)}" title="Ask Mango where ${escapeHtml(d.ticket)} has got to">${escapeHtml(d.ticket)}</button>${impwProgressChip(d)}${!d.handoverSaved ? `<button type="button" data-impw-sync="${escapeHtml(f.key)}">Save to Handover</button>` : '<span>Saved</span>'}`
       : d?.decision === 'no' ? `<button type="button" data-impw-undo="${escapeHtml(f.key)}">Undo skip</button>`
       : `<button type="button" class="kpi-impw-yes" data-impw-yes="${escapeHtml(f.key)}">Raise IMPW</button><button type="button" class="kpi-impw-no" data-impw-no="${escapeHtml(f.key)}">Skip</button>`;
     return `<li class="kpi-impw-row"><b>${escapeHtml(f.machineCode)}</b><span>${escapeHtml(impwWhen(f.shiftId))}</span><span class="kpi-impw-summary" title="${escapeHtml(f.reasons.join('; '))}">${escapeHtml(f.reasons.join('; '))}</span><div class="kpi-impw-row-actions">${action}</div></li>`;
@@ -1796,8 +1900,15 @@ function findingByKey(key: string): ImpwFinding | undefined {
   return S!.impwFindings.find((f) => f.key === key);
 }
 
-function recordImpwDecision(key: string, decision: 'yes' | 'no', ticket = ''): void {
-  S!.impwDecisions.set(key, { decision, at: Date.now(), by: S!.who.name, ticket });
+function recordImpwDecision(
+  key: string,
+  decision: 'yes' | 'no',
+  ticket = '',
+  ticketId = '',
+): void {
+  // The id is what reads the ticket back later; the number is what the floor
+  // calls it. Both are kept — neither substitutes for the other.
+  S!.impwDecisions.set(key, { decision, at: Date.now(), by: S!.who.name, ticket, ticketId });
   saveImpwDecisions(S!.impwDecisions);
 }
 
@@ -2111,7 +2222,7 @@ async function fileImpwViaApi(
   }
   const res = await submitImpwToMango(draft, S!.mango);
   if (res.ok) {
-    recordImpwDecision(finding.key, 'yes', res.ticketRef);
+    recordImpwDecision(finding.key, 'yes', res.ticketRef, res.ticketId);
     await saveImpwHandover(finding);
     closeModal();
     toast(res.message, 'ok');
@@ -2146,6 +2257,141 @@ async function saveImpwHandover(finding: ImpwFinding): Promise<void> {
   } catch (error) {
     toast(`${decision.ticket} created; Handover not saved: ${(error as Error).message}. Use Save to Handover to retry.`, 'err');
   }
+}
+
+// ---------------------------------------------------------------------------
+// Reading a raised ticket back
+// ---------------------------------------------------------------------------
+
+const IMPW_GROUP_TITLE: Record<ImpwRecordGroup, string> = {
+  progress: 'Where it has got to',
+  ticket: 'The ticket',
+  outcome: 'What Mango holds',
+};
+
+/** One group of read-back fields. Blank ones are dropped rather than shown
+ *  as "—": a list of empty labels buries the two lines that matter. */
+function impwRecordGroupHtml(rec: ImpwRecord, group: ImpwRecordGroup): string {
+  const rows = IMPW_RECORD_ROWS.filter((r) => r.group === group);
+  const lines = rows
+    .filter((r) => !r.block && rec[r.field])
+    .map(
+      (r) => `<div class="kpi-impw-rrow"><span>${escapeHtml(r.label)}</span><b>${escapeHtml(
+        r.date ? impwMangoDate(rec[r.field]) : rec[r.field],
+      )}</b></div>`,
+    )
+    .join('');
+  const blocks = rows
+    .filter((r) => r.block && rec[r.field])
+    .map(
+      (r) => `<div class="kpi-impw-rblock"><span>${escapeHtml(r.label)}</span><pre>${escapeHtml(
+        rec[r.field],
+      )}</pre></div>`,
+    )
+    .join('');
+  if (!lines && !blocks) return '';
+  return `<section class="kpi-impw-rgroup is-${group}">
+    <h3>${escapeHtml(IMPW_GROUP_TITLE[group])}</h3>
+    ${lines}${blocks}
+  </section>`;
+}
+
+/**
+ * What Mango holds for a ticket PMD raised.
+ *
+ * The three questions a review meeting actually asks — what stage is it at,
+ * who has it, when is it due — lead the dialog, because they are the reason
+ * anyone presses the ticket number. Everything else Mango returns follows.
+ *
+ * Nothing here is editable. PMD posts an improvement once and never again;
+ * the API has no PUT for an improvement, and even if it did, Mango is the
+ * register and a second place to edit a stage would be a second version of
+ * the truth.
+ */
+function openImpwStatus(key: string): void {
+  const d = S!.impwDecisions.get(key);
+  const finding = findingByKey(key);
+  if (!d || d.decision !== 'yes') return;
+  const ref = (d.ticket ?? '').trim() || 'this ticket';
+  const where = finding
+    ? `${finding.machineCode} · ${impwWhen(finding.shiftId)}`
+    : 'Raised from the KPI review';
+
+  const mc = openModal(`<div class="bd-modal kpi-impw-status-modal">
+    <div class="kpi-impw-modal-head">
+      <div>
+        <h2 class="bd-title">🥭 ${escapeHtml(ref)}</h2>
+        <p class="bd-sub">${escapeHtml(where)}${
+          d.by ? ` · raised by ${escapeHtml(d.by)}` : ''
+        }${d.at ? ` ${escapeHtml(impwSince(d.at))}` : ''}</p>
+      </div>
+      <button type="button" class="btn-ghost-big" data-status-close>Close</button>
+    </div>
+    <div class="kpi-impw-status-body" data-status-body></div>
+    <div class="bd-actions kpi-impw-status-actions">
+      <a class="btn-ghost-big" href="${escapeHtml(
+        MANGO_IMPW_URL,
+      )}" target="_blank" rel="noopener">Open Mango ↗</a>
+      <button type="button" class="btn-primary-big" data-status-refresh>⟳ Ask Mango</button>
+    </div>
+  </div>`);
+
+  const body = mc.querySelector<HTMLElement>('[data-status-body]');
+  const refresh = mc.querySelector<HTMLButtonElement>('[data-status-refresh]');
+  mc.querySelector('[data-status-close]')?.addEventListener('click', closeModal);
+
+  // No sign-in on this device: the number was recorded when the ticket was
+  // filed, but reading it back is an API call and there is nothing to make
+  // it with. Say which, rather than showing a failure that looks like Mango.
+  if (!isMangoConfigured(S!.mango)) {
+    if (body) {
+      body.innerHTML = `<p class="kpi-impw-bad">PMD kept the ticket number, but looking it up needs
+        the Mango sign-in on this device — set it under <b>⚙ Mango connection</b>, or open Mango and
+        search for ${escapeHtml(ref)}.</p>`;
+    }
+    refresh?.remove();
+    return;
+  }
+
+  const load = (): void => {
+    if (body) body.innerHTML = `<p class="kpi-impw-ok">Asking Mango about ${escapeHtml(ref)}…</p>`;
+    if (refresh) refresh.disabled = true;
+    void fetchImpwRecord({ id: d.ticketId, number: d.ticket }, S!.mango).then((res) => {
+      if (refresh) refresh.disabled = false;
+      if (!body) return;
+      if (!res.ok || !res.record) {
+        body.innerHTML = `<p class="kpi-impw-bad" role="alert">${escapeHtml(res.message)}</p>
+          <p class="kpi-impw-note">The ticket is still in Mango either way — this only failed to
+            read it back.</p>`;
+        return;
+      }
+      const rec = res.record;
+      // Keep the three progress fields on the decision so the card can show
+      // them after the dialog closes. Stored with the time read, never as a
+      // fact about now.
+      d.progress = {
+        stage: rec.currentStage,
+        investigator: rec.investigator,
+        dueDate: rec.dueDate,
+        closed: rec.dateClosed,
+        at: Date.now(),
+      };
+      // Mango's id is worth keeping once seen: a ticket raised before PMD
+      // stored ids can then be looked up directly instead of by number.
+      if (!d.ticketId && rec.id) d.ticketId = rec.id;
+      saveImpwDecisions(S!.impwDecisions);
+      const groups = (['progress', 'ticket', 'outcome'] as ImpwRecordGroup[])
+        .map((g) => impwRecordGroupHtml(rec, g))
+        .join('');
+      body.innerHTML =
+        groups ||
+        `<p class="kpi-impw-bad">Mango returned the ticket but every field was empty.</p>`;
+      // The card behind the dialog now knows the stage too.
+      render();
+    });
+  };
+  refresh?.addEventListener('click', load);
+  load();
 }
 
 /** The no-API path, and the fallback when the API refuses: copy the filled
@@ -2730,6 +2976,9 @@ function render(): void {
       recordImpwDecision(b.dataset.impwNo!, 'no');
       render();
     }),
+  );
+  app.querySelectorAll<HTMLButtonElement>('[data-impw-open]').forEach((b) =>
+    b.addEventListener('click', () => openImpwStatus(b.dataset.impwOpen!)),
   );
   app.querySelectorAll<HTMLButtonElement>('[data-impw-undo]').forEach((b) =>
     b.addEventListener('click', () => {

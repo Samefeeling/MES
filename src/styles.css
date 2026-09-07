@@ -151,6 +151,12 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-impw-decided{font-size:12px;font-weight:700;color:#475569}
 .kpi-impw-decided.is-yes{color:#15803d}
 .kpi-impw-locked{font-size:11.5px;color:#94a3b8}
+/* A raised ticket's number is a button — it asks Mango where the ticket has
+   got to; the answer comes back beside it as a chip, full detail on hover. */
+.kpi-impw-ticket{background:none;border:0;padding:0 2px;font:inherit;font-weight:800;color:#15803d;text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.kpi-impw-ticket:hover{color:#14532d;background:#dcfce7;border-radius:4px}
+.kpi-impw-progress{font-size:11.5px;font-weight:700;color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:999px;padding:1px 8px;white-space:nowrap;cursor:help}
+.kpi-impw-progress.is-blank{color:#94a3b8;background:#f8fafc;border-color:var(--bd);font-weight:600}
 /* The ticket dialog — Mango's IMPW form, drafted and editable. */
 .mdl:has(.kpi-impw-modal){max-width:min(900px,96vw);max-height:92vh;overflow:hidden;display:flex}
 .kpi-impw-modal{gap:10px;flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
@@ -185,11 +191,32 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-mango-actions{margin-top:12px}
 .kpi-impw-modal-actions{flex:0 0 auto}
 .kpi-impw-modal-actions button[disabled]{opacity:.5;cursor:not-allowed}
+/* Reading a ticket back: Mango's own answer, nothing editable. The progress
+   group is boxed because it is the only reason anyone opened this. */
+.mdl:has(.kpi-impw-status-modal){max-width:min(720px,95vw);max-height:92vh;overflow:hidden;display:flex}
+.kpi-impw-status-modal{gap:10px;flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
+.kpi-impw-status-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:6px;display:flex;flex-direction:column;gap:14px}
+.kpi-impw-rgroup{display:flex;flex-direction:column;gap:2px}
+.kpi-impw-rgroup h3{margin:0 0 4px;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.35px;color:#64748b}
+.kpi-impw-rgroup.is-progress{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:10px 12px}
+.kpi-impw-rgroup.is-progress h3{color:#15803d}
+.kpi-impw-rgroup.is-progress .kpi-impw-rrow{border-bottom-color:#dcfce7}
+.kpi-impw-rgroup.is-progress .kpi-impw-rrow b{font-size:14px;color:#14532d}
+.kpi-impw-rrow{display:grid;grid-template-columns:210px minmax(0,1fr);gap:10px;font-size:13px;padding:5px 0;border-bottom:1px solid #f1f5f9}
+.kpi-impw-rrow:last-child{border-bottom:0}
+.kpi-impw-rrow span{color:#64748b}
+.kpi-impw-rrow b{color:#0f172a;overflow-wrap:anywhere}
+.kpi-impw-rblock{display:flex;flex-direction:column;gap:3px;margin-top:8px}
+.kpi-impw-rblock span{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.35px;color:#64748b}
+.kpi-impw-rblock pre{margin:0;font-family:inherit;font-size:12.5px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;color:#334155;background:#f8fafc;border:1px solid var(--bd);border-radius:8px;padding:8px 10px;max-height:230px;overflow-y:auto}
+.kpi-impw-status-actions{flex:0 0 auto;display:flex;align-items:center;gap:8px;justify-content:flex-end}
+.kpi-impw-status-actions a{text-decoration:none;display:inline-flex;align-items:center}
 @media (max-width:760px){
   .kpi-impw-card{grid-template-columns:minmax(0,1fr);gap:6px}
   .kpi-impw-wo{grid-column:1}
   .kpi-impw-actions{grid-column:1;grid-row:auto;justify-content:flex-start}
   .kpi-impw-form{grid-template-columns:minmax(0,1fr)}
+  .kpi-impw-rrow{grid-template-columns:minmax(0,1fr);gap:0}
 }
 /* Global toggles in the Machine column header. Inherit kpi-toggle for
    look but shave a few px so they sit comfortably next to the "Machine"

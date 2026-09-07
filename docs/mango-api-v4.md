@@ -159,13 +159,73 @@ rest rather than inventing values. The same three fields the form stars —
 Region, Branch, Other — are explicitly optional here ("Can leave it blank"),
 but must name something that already exists in the tenant.
 
+## Reading a ticket back — `GET /api/v4/improvement`
+
+Everything the API can tell you about an improvement AFTER it is raised —
+the stage it reached, who is investigating it, when it is due — comes from
+here. None of it can be posted: the module data table marks Current Stage,
+Investigator, To be completed by, Create Date, Close Date, the four root
+causes, Corrective/Preventative Action, Improvement Summary and Potential
+Severity as **GET only**.
+
+Returns an array. Fields, verbatim from the RETURNS table (page 78–79):
+
+| Field | What it is |
+| --- | --- |
+| `id` | the improvement's id |
+| `number` | its number |
+| `briefDescription` | Brief Description |
+| `typeOfImprovement` · `source` · `name` | as posted |
+| `region` · `branch` · `department` · `other` | where it happened |
+| `details` | Details of Improvement and/or Proposed Action |
+| **`currentStage`** | **Current Stage** |
+| **`investigator`** | **Assign to Investigation** |
+| **`dueDate`** | **"To be completed by"** |
+| `dateOfOccurrence` · `dateCreated` · `dateClosed` | the three dates |
+| `type` · `code` · `causeA`…`causeD` | classification and root causes |
+| `additionalInformation` | Additional Information |
+| `correctiveAction` · `preventativeAction` | what was done |
+| `improvementSummary` · `improvement` · `itemProduct` · `cost` | outcome |
+| `potentialSeverity` · `plantEquipment` · `risk` · `coordinator` | |
+
+Dates come back as strings; the search filters beside them are documented as
+`yyyy-mm-dd` while the create body takes full ISO 8601, so **both shapes turn
+up** and PMD renders either.
+
+> **The document contradicts itself on names.** The RETURNS *table* says
+> `briefDescription` and `Investigator`; the JSON sample printed directly
+> beside it says `briefDecription` (sic) and `investigator`. `parseImpwRecord`
+> matches keys case-insensitively and accepts the sample's misspelling, because
+> a missed field would show a blank Stage — which reads as "nobody has touched
+> it", the one wrong answer this must never give.
+
+### `GET /api/v4/improvement/{id}` — one improvement, with a caveat
+
+**The document's page for this endpoint is a copy-paste of the Compliance
+one.** Its URL line reads `https://api.Mangolive.com/api/v4/compliance/{id}`
+and its RETURNS table lists compliance fields (`typeOfDocument`, `status`,
+region/branch/department/other) — none of which answer "where has the ticket
+got to". Only the EXAMPLE line names the improvement path. So what this
+endpoint really returns is **not documented**.
+
+PMD therefore asks it first (one small call beats pulling the whole register)
+and then checks what came back: if the response carries improvement fields it
+is used; if it is the eight-field stub the document describes, or a 400/404,
+PMD falls back to `GET /api/v4/improvement` and matches on the id — or on the
+ticket number, for tickets raised before PMD stored ids. Any other status is
+a real failure and stops there rather than repeating the problem on a heavier
+call.
+
+Errors: **400** invalid id · **401** unauthorised.
+
 ## Other Improvement endpoints (not used by PMD)
 
-- `GET /api/v4/improvement` — all improvements
-- `POST /api/v4/improvement/search` — filtered/sorted list
+- `POST /api/v4/improvement/search` — the same rows, filtered and sorted.
+  Its filter object has no `id` key (only the example shows `number`), so the
+  plain list plus a client-side match is the reliable lookup.
 - `GET /api/v4/improvement/open`, `GET /api/v4/improvement/closed` and their
-  `/search` variants
-- `GET /api/v4/improvement/{id}` — one improvement
+  `/search` variants — subsets of the same rows.
 
-PMD deliberately reads none of these: Mango is the system of record and PMD
-does not keep a second copy of the register.
+PMD keeps no register of its own: it reads a ticket back only when someone
+presses its number, and stores just the stage, investigator and due date on
+the decision, with the time they were read.

@@ -48,6 +48,17 @@ ok (~76 KB JS / 24 KB gzip).
     guessed;
   - `POST /api/v4/improvement` → the ticket; the reply's
     `abbreviation + number` ("IMP 0123") is shown on the card.
+  - `GET /api/v4/improvement/{id}` → **the ticket number on the row is a
+    button**: pressing it asks Mango where the ticket has got to and shows
+    Current Stage / Investigator / "To be completed by" first, then the rest
+    of what Mango holds (nothing editable — the API has no PUT, and a second
+    place to edit a stage would be a second version of the truth). The
+    document's page for this endpoint is a copy-paste of the Compliance one,
+    so PMD checks what came back and falls back to `GET /api/v4/improvement`
+    (the register, matched on id or number) when it gets the stub the
+    document describes. The three progress fields are then kept on the
+    decision and shown on the row **with the time they were read** — a
+    stage from last week is not today's stage.
 
   The API takes 10 fields where the web form asks for 26, so what PMD can
   actually prove — press, orders, output/reject/yield, every breakdown
@@ -59,8 +70,9 @@ ok (~76 KB JS / 24 KB gzip).
   paste into, and any API failure falls back to that same path quoting
   Mango's own response — filing a ticket never depends on the API being
   reachable. Mango stays the system of record; PMD keeps no register.
-  Decisions are remembered per browser (`pmd.impwDecisions`, with the
-  ticket reference), as are the plant's answers (`pmd.impwSite`).
+  Decisions are remembered per browser (`pmd.impwDecisions` — the ticket
+  reference, Mango's record id, and the last progress read), as are the
+  plant's answers (`pmd.impwSite`).
 
 ## Action needed on the SharePoint side
 
