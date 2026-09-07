@@ -405,6 +405,10 @@ export interface ProductionCounterRecord {
 export interface UserContext {
   name: string;
   role: Role;
+  /** Signed-in user's email, when the host platform knows one. Fills the
+   *  Email field of a Mango IMPW ticket raised from the KPI page. Optional:
+   *  backends without an identity service (memory) omit it. */
+  email?: string;
 }
 
 export interface PlanningFilter {

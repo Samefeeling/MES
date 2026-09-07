@@ -238,6 +238,16 @@ export function breakdownDetailFor(
   };
 }
 
+/** Who owns the fix for a cause. Routes a Mango improvement ticket to the
+ *  department that can actually action it; '' when nobody is named — an
+ *  unknown code, or one the taxonomy deliberately leaves open (OTH-99).
+ *  Reads through breakdownDetailFor so the owner behind a ticket is the
+ *  same one the breakdown drilldown shows. */
+export function bdOwnerFor(code: string, master?: ReadonlyMap<string, BdCode>): string {
+  const owner = breakdownDetailFor(code, master).owner;
+  return owner === '—' ? '' : owner;
+}
+
 /** Adapter so the existing PMD_BdCodes list returns the same shape. */
 export function bdAsBdCodes(): BdCode[] {
   return BD_TAXONOMY.map((c, i) => ({

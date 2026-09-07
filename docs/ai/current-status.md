@@ -33,6 +33,15 @@ ok (~76 KB JS / 24 KB gzip).
   machine status so die-change defects are distinguishable.
 - **Live-column highlight**: the whole current-time column (status + all
   reject rows) is tinted, not just the status cell.
+- **Mango IMPW actions** (`#/kpi`): signed-off shifts that lost time to a
+  breakdown (B slots only — *not* the Down h column, which counts Smoko),
+  missed the yield threshold, or blew the per-shift reject allowance raise a
+  "ready to raise" card with Yes / No. Yes drafts Mango's Improvement
+  Workflow form (`core/impw.ts`), validates every field Mango marks
+  required, copies it to the clipboard and opens IMPW in a new tab. Mango
+  stays the system of record — PMD never keeps a second register. Yes / No
+  is supervisor-gated and remembered per browser (`pmd.impwDecisions`); the
+  plant's Mango dropdown answers are remembered too (`pmd.impwSite`).
 
 ## Action needed on the SharePoint side
 
@@ -65,8 +74,13 @@ ok (~76 KB JS / 24 KB gzip).
 VITE_BACKEND=sharepoint
 VITE_SITE_URL=https://reseroglobal.sharepoint.com/sites/ReseroOperationsAU
 VITE_PLANNING_PATH=Shared Documents/General/Planning/PMD/PMD Schedule_master_epicor 300424.xlsm
+VITE_MANGO_IMPW_URL=https://my.mangolive.com/improvement-workflow
 ```
-Default (no env) = `memory`.
+Default (no env) = `memory`. `VITE_MANGO_IMPW_URL` is the deep link the KPI
+"Raise in Mango" button opens — **confirm the real IMPW path and set it**;
+the default is the best guess, and Mango exposes no write API for this form,
+so the handoff is clipboard + form, exactly like the maintenance-request
+link on the Die tab.
 
 ## Immediate next action
 

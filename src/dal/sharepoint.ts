@@ -4330,7 +4330,11 @@ export class SharePointDataLayer implements PmdDataLayer {
     const res = await this.getJson<{
       d: { Title: string; Email: string; LoginName: string };
     }>(`${this.siteUrl}/_api/web/currentUser`);
-    return { name: res.d.Title || res.d.Email || res.d.LoginName, role: 'operator' };
+    return {
+      name: res.d.Title || res.d.Email || res.d.LoginName,
+      role: 'operator',
+      email: res.d.Email || '',
+    };
   }
 
   // ---- diagnostics ---------------------------------------------------

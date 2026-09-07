@@ -109,6 +109,68 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-stat.is-green{border-top-color:var(--gn)}.kpi-stat.is-green .kpi-stat-value{color:#15803d}
 .kpi-stat.is-amber{border-top-color:var(--am)}.kpi-stat.is-amber .kpi-stat-value{color:#FFA500}
 .kpi-stat.is-red{border-top-color:var(--rd)}.kpi-stat.is-red .kpi-stat-value{color:#b91c1c}
+/* ── Mango IMPW actions ───────────────────────────────────────────────
+   Shifts that broke a KPI rule, each offering Yes / No. Amber card, not
+   red: these are prompts for a decision, not failures in their own right,
+   and the red numbers they came from are already in the table below. */
+.kpi-impw{background:#fffbeb;border:1px solid #fcd34d;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.kpi-impw-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.kpi-impw-head h3{margin:0;font-size:14px;font-weight:800;color:#92400e;display:flex;align-items:center;gap:8px}
+.kpi-impw-count{background:#f59e0b;color:#fff;border-radius:999px;min-width:22px;padding:1px 8px;font-size:12px;font-weight:800;text-align:center}
+.kpi-impw-toggle{margin-left:auto;font-size:12px;font-weight:600;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:4px 10px;cursor:pointer}
+.kpi-impw-toggle:hover{background:#fde68a}
+.kpi-impw-intro{margin:0;font-size:11.5px;line-height:1.6;color:#a16207}
+.kpi-impw-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:44vh;overflow-y:auto;overscroll-behavior:contain}
+.kpi-impw-card{display:grid;grid-template-columns:170px minmax(0,1fr) auto;gap:12px;align-items:center;background:#fff;border:1px solid #fde68a;border-radius:10px;padding:8px 12px}
+.kpi-impw-card.is-decided{opacity:.62}
+.kpi-impw-who{display:flex;flex-direction:column;gap:1px;min-width:0}
+.kpi-impw-mc{font-size:14px;font-weight:800;color:#0f172a}
+.kpi-impw-when{font-size:11px;color:#64748b}
+.kpi-impw-icons{font-size:12px;letter-spacing:2px}
+.kpi-impw-reasons{list-style:none;margin:0;padding:0;min-width:0;display:flex;flex-direction:column;gap:2px}
+.kpi-impw-reasons li{font-size:12.5px;line-height:1.45;color:#334155;overflow-wrap:anywhere}
+.kpi-impw-wo{grid-column:2;margin:0;font-size:11px;color:#a16207}
+/* Pin the buttons to the right edge across both rows: without this the WO
+   note starts a second row and the actions drop to sit beside it, so a
+   card with a work order put Yes / No lower than a card without one. */
+.kpi-impw-actions{grid-column:3;grid-row:1/-1;align-self:center;display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.kpi-impw-yes,.kpi-impw-no,.kpi-impw-undo{font-size:12.5px;font-weight:700;border-radius:8px;padding:6px 12px;cursor:pointer;white-space:nowrap}
+.kpi-impw-yes{background:#f59e0b;border:1px solid #d97706;color:#fff}
+.kpi-impw-yes:hover{background:#d97706}
+.kpi-impw-no{background:#f1f5f9;border:1px solid var(--bd);color:#475569}
+.kpi-impw-no:hover{background:#e2e8f0}
+.kpi-impw-undo{background:transparent;border:1px solid var(--bd);color:#64748b;font-weight:600}
+.kpi-impw-decided{font-size:12px;font-weight:700;color:#475569}
+.kpi-impw-decided.is-yes{color:#15803d}
+.kpi-impw-locked{font-size:11.5px;color:#94a3b8}
+/* The ticket dialog — Mango's IMPW form, drafted and editable. */
+.mdl:has(.kpi-impw-modal){max-width:min(900px,96vw);max-height:92vh;overflow:hidden;display:flex}
+.kpi-impw-modal{gap:10px;flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
+.kpi-impw-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex:0 0 auto}
+.kpi-impw-cancel{padding:8px 20px;font-size:14px;min-height:40px;flex:0 0 auto}
+.kpi-impw-issues{flex:0 0 auto}
+.kpi-impw-ok{margin:0;font-size:12.5px;font-weight:700;color:#15803d}
+.kpi-impw-bad{margin:0;font-size:12.5px;font-weight:700;color:#b91c1c;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:7px 10px;line-height:1.5}
+.kpi-impw-form{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:8px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 14px;align-content:start}
+.kpi-impw-field{display:flex;flex-direction:column;gap:3px;min-width:0}
+.kpi-impw-field.is-area{grid-column:1/-1}
+.kpi-impw-label{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.35px;color:#64748b}
+.kpi-impw-req{color:#dc2626}
+.kpi-impw-label em{font-style:normal;font-size:9.5px;font-weight:800;color:#92400e;background:#fef3c7;border-radius:4px;padding:0 4px;text-transform:uppercase}
+.kpi-impw-field input,.kpi-impw-field textarea{width:100%;font-size:13px;padding:6px 8px;border:1px solid var(--bd);border-radius:8px;font-family:inherit;box-sizing:border-box}
+.kpi-impw-field textarea{resize:vertical;line-height:1.45;white-space:pre-wrap}
+.kpi-impw-field.is-site input{background:#fffbeb}
+.kpi-impw-checks{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px 16px;padding-top:4px;border-top:1px solid var(--bd)}
+.kpi-impw-check{display:flex;align-items:center;gap:6px;font-size:12px;color:#334155}
+.kpi-impw-note{flex:0 0 auto;margin:0;font-size:11px;line-height:1.55;color:var(--mu)}
+.kpi-impw-modal-actions{flex:0 0 auto}
+.kpi-impw-modal-actions button[disabled]{opacity:.5;cursor:not-allowed}
+@media (max-width:760px){
+  .kpi-impw-card{grid-template-columns:minmax(0,1fr);gap:6px}
+  .kpi-impw-wo{grid-column:1}
+  .kpi-impw-actions{grid-column:1;grid-row:auto;justify-content:flex-start}
+  .kpi-impw-form{grid-template-columns:minmax(0,1fr)}
+}
 /* Global toggles in the Machine column header. Inherit kpi-toggle for
    look but shave a few px so they sit comfortably next to the "Machine"
    label. */
