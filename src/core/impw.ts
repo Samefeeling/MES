@@ -1,5 +1,5 @@
 import { bdLabelFor, bdOwnerFor } from './breakdown';
-import { SLOTS_PER_SHIFT, SLOT_MINUTES } from './shifts';
+import { shiftBounds, SLOTS_PER_SHIFT, SLOT_MINUTES } from './shifts';
 
 // Mango IMPW (Improvement Workflow) — the company's improvement / corrective
 // action register. Mango is the system of record (same management decision
@@ -10,8 +10,14 @@ import { SLOTS_PER_SHIFT, SLOT_MINUTES } from './shifts';
 // every field it can prove, and hands the finished draft to Mango.
 //
 // This module is the whole contract in pure form: the rules that raise a
-// finding, the IMPW field set, and the validation of it. No DOM, no fetch —
-// the UI owns the Yes / No and the handoff.
+// finding, the body of POST /api/v4/improvement, and the validation of it.
+// No DOM, no fetch — the UI owns the Yes / No and the handoff.
+//
+// The API half is transcribed from Mango's own v4 developer document; see
+// docs/mango-api-v4.md, which is the authority for every field name, type
+// and limit below. Nothing here is derived from the IMPW web form: the form
+// asks for 26 things and the API accepts 10, and several of the form's
+// starred fields cannot be posted at all.
 
 const SHIFT_HOURS = (SLOTS_PER_SHIFT * SLOT_MINUTES) / 60; // 8
 
@@ -49,7 +55,7 @@ export interface ImpwBreakdown {
  */
 export interface ImpwSlice {
   machineCode: string;
-  /** Display name of the press, for Plant/Equipment. */
+  /** Display name of the press, for the ticket body. */
   machineName: string;
   shiftId: string;
   output: number;
@@ -198,89 +204,121 @@ function fmtHrs(h: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// The IMPW form
+// The ticket — body of POST /api/v4/improvement
 // ---------------------------------------------------------------------------
 
 /**
- * Mango's Improvement Workflow form, field for field. Required fields are
- * the ones Mango marks with * — see IMPW_REQUIRED, which is what
- * impwDraftIssues() enforces before anything is handed over.
+ * One entry from a tenant's own option list, as GET /api/v4/improvement/new
+ * returns it. Mango wants BOTH halves back on the POST, so both are carried
+ * around together rather than PMD storing an id and looking the name up.
+ */
+export interface MangoOption {
+  id: string;
+  name: string;
+}
+
+export const EMPTY_OPTION: MangoOption = { id: '', name: '' };
+
+/** Mango's own caps (docs/mango-api-v4.md). Enforced here so a ticket is
+ *  rejected on the floor, where it can still be fixed, and not by a 422. */
+export const IMPW_DESCRIPTION_MAX = 255;
+export const IMPW_DETAILS_MAX = 4096;
+export const IMPW_NAME_MAX = 255;
+/** region / branch / department / other. */
+export const IMPW_PLACEMENT_MAX = 255;
+
+/**
+ * The create body, field for field. Ten fields — the IMPW web form's other
+ * sixteen (Source, Type, Email, Phone, the five checkboxes, Investigation
+ * Details, Plant/Equipment, Risks, Related documents/files, Attachments…)
+ * have no POST equivalent, so what PMD actually knows about the press, the
+ * orders and the stoppage goes into `improvementDetails` instead of being
+ * invented into fields Mango would ignore.
  */
 export interface ImpwDraft {
-  briefDescription: string;
-  typeOfImprovement: string;
-  source: string;
-  email: string;
-  phone: string;
-  fax: string;
-  sendCopyToCustomer: boolean;
-  /** dd/mm/yyyy — Mango's date format on this form. */
-  dateOfOccurrence: string;
-  details: string;
-  additionalInformation: string;
-  authoritiesNotified: boolean;
-  customerNotified: boolean;
-  proceduresReviewed: boolean;
-  processToBeChanged: boolean;
-  trainingReviewed: boolean;
-  investigationDetails: string;
-  type: string;
+  /** "Brief Description" on the form — what the register lists. */
+  description: string;
+  /** Must be one of the tenant's own types, from /improvement/new. */
+  typeOfImprovement: MangoOption;
+  /** "Name" — who raised it. */
+  originatorName: string;
+  /** ISO 8601 UTC, e.g. 2026-08-26T11:00:00.000Z. NOT the form's dd/mm/yyyy. */
+  improvementDate: string;
+  /** "Details of Improvement and/or Proposed Action". */
+  improvementDetails: string;
+  /** The four placement fields. Optional to the API, but each must name
+   *  something that already exists in the tenant — a typo is a 422, not a
+   *  new branch. */
   region: string;
   branch: string;
   department: string;
   other: string;
-  plantEquipment: string;
-  risks: string;
-  relatedDocuments: string;
-  relatedFiles: string;
-  coordinator: string;
+  /** Must be one of the tenant's own coordinators, from /improvement/new. */
+  coordinator: MangoOption;
 }
 
-export interface ImpwFieldSpec {
+interface ImpwFieldSpec {
   field: keyof ImpwDraft;
   label: string;
-  /** Mango's own character cap, where the form states one. */
   maxLength?: number;
 }
 
-/** Every field Mango marks with * — a draft missing one cannot be saved
- *  there, so PMD refuses to hand it over. */
-export const IMPW_REQUIRED: ImpwFieldSpec[] = [
-  { field: 'briefDescription', label: 'Brief Description', maxLength: 256 },
+/** Required by the API — a draft missing one of these is a 400 or a 422, so
+ *  PMD refuses to send it. Labelled the way Mango's own form labels them so
+ *  the message means something to whoever is reading it. */
+const IMPW_REQUIRED: ImpwFieldSpec[] = [
+  { field: 'description', label: 'Brief Description', maxLength: IMPW_DESCRIPTION_MAX },
   { field: 'typeOfImprovement', label: 'Type of Improvement' },
-  { field: 'source', label: 'Source' },
-  { field: 'dateOfOccurrence', label: 'Date of occurrence' },
-  { field: 'details', label: 'Details of Improvement and/or Proposed Action' },
-  { field: 'type', label: 'Type' },
-  { field: 'region', label: 'Region' },
-  { field: 'branch', label: 'Branch' },
-  { field: 'department', label: 'Department' },
-  { field: 'other', label: 'Other' },
+  { field: 'originatorName', label: 'Name', maxLength: IMPW_NAME_MAX },
+  { field: 'improvementDate', label: 'Date of occurrence' },
+  {
+    field: 'improvementDetails',
+    label: 'Details of Improvement and/or Proposed Action',
+    maxLength: IMPW_DETAILS_MAX,
+  },
   { field: 'coordinator', label: 'Coordinator' },
 ];
 
-/** Optional fields that still carry one of Mango's 256-char caps. */
-const IMPW_CAPPED: ImpwFieldSpec[] = [
-  { field: 'email', label: 'Email', maxLength: 256 },
-  { field: 'phone', label: 'Phone', maxLength: 256 },
-  { field: 'fax', label: 'Fax', maxLength: 256 },
+/** Optional, but still capped. */
+const IMPW_OPTIONAL: ImpwFieldSpec[] = [
+  { field: 'region', label: 'Region', maxLength: IMPW_PLACEMENT_MAX },
+  { field: 'branch', label: 'Branch', maxLength: IMPW_PLACEMENT_MAX },
+  { field: 'department', label: 'Department', maxLength: IMPW_PLACEMENT_MAX },
+  { field: 'other', label: 'Other', maxLength: IMPW_PLACEMENT_MAX },
 ];
 
-/** Blank required fields, by their Mango label. */
-export function missingImpwFields(d: ImpwDraft): string[] {
-  return IMPW_REQUIRED.filter((f) => !String(d[f.field] ?? '').trim()).map((f) => f.label);
+/**
+ * Where the draft is going, because the two paths have genuinely different
+ * requirements: the API will only accept the {id, name} Mango itself issued
+ * for Type of Improvement and Coordinator, while a person pasting into the
+ * web form picks from its dropdowns and needs nothing but the name.
+ */
+export type ImpwTarget = 'api' | 'paste';
+
+/** Labels of every required field the draft has not filled. */
+export function missingImpwFields(d: ImpwDraft, target: ImpwTarget = 'api'): string[] {
+  return IMPW_REQUIRED.filter((f) => !impwFieldFilled(d[f.field], target)).map((f) => f.label);
 }
 
-/** Fields longer than the cap Mango's form enforces. */
+function impwFieldFilled(v: string | MangoOption, target: ImpwTarget): boolean {
+  if (typeof v === 'string') return !!v.trim();
+  if (!v) return false;
+  return target === 'api' ? !!(v.id.trim() && v.name.trim()) : !!v.name.trim();
+}
+
+/** Fields past Mango's documented length limit. */
 export function overlongImpwFields(d: ImpwDraft): string[] {
-  return [...IMPW_REQUIRED, ...IMPW_CAPPED]
-    .filter((f) => f.maxLength != null && String(d[f.field] ?? '').length > f.maxLength)
+  return [...IMPW_REQUIRED, ...IMPW_OPTIONAL]
+    .filter((f) => {
+      const v = d[f.field];
+      return f.maxLength != null && typeof v === 'string' && v.length > f.maxLength;
+    })
     .map((f) => `${f.label} (max ${f.maxLength})`);
 }
 
 /** Everything that would stop Mango accepting this draft. Empty = ready. */
-export function impwDraftIssues(d: ImpwDraft): string[] {
-  const missing = missingImpwFields(d);
+export function impwDraftIssues(d: ImpwDraft, target: ImpwTarget = 'api'): string[] {
+  const missing = missingImpwFields(d, target);
   return [
     ...(missing.length ? [`Required: ${missing.join(', ')}`] : []),
     ...overlongImpwFields(d).map((f) => `Too long: ${f}`),
@@ -288,32 +326,29 @@ export function impwDraftIssues(d: ImpwDraft): string[] {
 }
 
 /**
- * The plant's own answers to Mango's categorisation dropdowns. PMD cannot
- * know a tenant's option lists, so it never invents one: these start blank,
- * the coordinator picks them once on the first ticket, and the UI remembers
- * them. A blank one fails validation rather than being guessed — a ticket
- * filed under the wrong Branch is worse than one that asked.
+ * The plant's own answers, remembered between tickets. Region / Branch /
+ * Other are free text that has to match names already in Mango; Type of
+ * Improvement and Coordinator are picked from the lists Mango returns.
+ * Nothing here is guessed or seeded — the first ticket asks, and only the
+ * first ticket.
+ *
+ * Department is deliberately NOT here: it comes from the breakdown's owner
+ * and so is a per-finding answer, not a site-wide one.
  */
 export interface ImpwSiteConfig {
-  typeOfImprovement: string;
-  source: string;
-  type: string;
   region: string;
   branch: string;
   other: string;
-  email: string;
-  phone: string;
+  typeOfImprovement: MangoOption;
+  coordinator: MangoOption;
 }
 
 export const EMPTY_IMPW_SITE: ImpwSiteConfig = {
-  typeOfImprovement: '',
-  source: '',
-  type: '',
   region: '',
   branch: '',
   other: '',
-  email: '',
-  phone: '',
+  typeOfImprovement: { ...EMPTY_OPTION },
+  coordinator: { ...EMPTY_OPTION },
 };
 
 /** Who is raising it — from the signed-in user (DAL whoAmI). */
@@ -322,8 +357,21 @@ export interface ImpwRaiser {
   email?: string;
 }
 
-/** '2026-08-26-Night' → '26/08/2026'. A Night shift's ShiftId carries its
- *  START date, which is the date the occurrence began. */
+/**
+ * When the occurrence began, as Mango wants it: ISO 8601 UTC.
+ *
+ * The shift's own start instant, not midnight — a Night shift's ShiftId
+ * carries its START date, and dating it 00:00 would put a 23:00 Tuesday
+ * stoppage on Tuesday morning. shiftBounds() already knows every shift's
+ * wall-clock start, and Date#toISOString converts local → UTC, so a site in
+ * NZDT files the same instant Mango would have recorded itself.
+ */
+export function impwOccurrenceIso(shiftId: string): string {
+  return shiftBounds(shiftId)?.start.toISOString() ?? '';
+}
+
+/** '2026-08-26-Night' → '26/08/2026'. The form's own format, for the human
+ *  paste-in path and for showing the date back on screen. */
 export function impwOccurrenceDate(shiftId: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})-/.exec(shiftId);
   return m ? `${m[3]}/${m[2]}/${m[1]}` : '';
@@ -338,9 +386,9 @@ function shiftCodeOf(shiftId: string): string {
 /**
  * One department name out of a taxonomy owner. The taxonomy writes an
  * escalation path ("Operator → Maintenance") or a shared job ("Maintenance
- * / Setter"); Mango's Department is a single pick from a list, so take the
- * end of an escalation (whoever it lands on) and the front of a shared job
- * (the primary owner).
+ * / Setter"); Mango's Department is a single existing name, so take the end
+ * of an escalation (whoever it lands on) and the front of a shared job (the
+ * primary owner).
  */
 export function impwDepartmentOf(owner: string): string {
   const escalated = owner.split('→').pop() ?? '';
@@ -363,9 +411,9 @@ export function suggestImpwDepartment(f: ImpwFinding): string {
 
 /**
  * Draft the whole ticket from one finding. Everything PMD can prove is
- * filled in; everything only the tenant knows comes from `site` and stays
- * editable. The body is written to stand on its own in Mango — someone
- * reading it there has no access to this dashboard.
+ * filled in; the two option fields and the placement names come from `site`
+ * and stay editable. The body is written to stand on its own in Mango —
+ * someone reading it there has no access to this dashboard.
  */
 export function buildImpwDraft(
   f: ImpwFinding,
@@ -380,8 +428,38 @@ export function buildImpwDraft(
   const where = `${s.machineCode}${shift ? ` ${shift} shift` : ''}${date ? ` ${date}` : ''}`;
   const headline = f.reasons[0] ?? 'KPI target missed';
 
+  return {
+    description: clamp(`${where} — ${headline}`, IMPW_DESCRIPTION_MAX),
+    typeOfImprovement: { ...site.typeOfImprovement },
+    originatorName: clamp(raiser.name, IMPW_NAME_MAX),
+    improvementDate: impwOccurrenceIso(f.shiftId),
+    improvementDetails: clamp(impwDetailsBody(f, raiser), IMPW_DETAILS_MAX),
+    region: site.region,
+    branch: site.branch,
+    department: suggestImpwDepartment(f),
+    other: site.other,
+    coordinator: { ...site.coordinator },
+  };
+}
+
+/**
+ * The whole story in one field. The API has no Plant/Equipment, no Risks,
+ * no Additional Information and no Investigation Details to spread this
+ * across, and 4096 characters here is far more room than those would have
+ * given — so the press, the orders, the measured numbers, every breakdown
+ * cause with what the operator wrote, and the rule that fired all go in,
+ * in an order that reads top-down.
+ */
+function impwDetailsBody(f: ImpwFinding, raiser: ImpwRaiser): string {
+  const s = f.slice;
+  const date = impwOccurrenceDate(f.shiftId);
+  const shift = shiftCodeOf(f.shiftId);
+  const press = s.machineName && s.machineName !== s.machineCode
+    ? `${s.machineCode} (${s.machineName})`
+    : s.machineCode;
+
   const lines: string[] = [
-    `Machine: ${s.machineCode}${s.machineName && s.machineName !== s.machineCode ? ` (${s.machineName})` : ''}`,
+    `Plant/Equipment: ${press}`,
     `Shift: ${shift || '—'} ${date} (ShiftId ${f.shiftId})`,
     `Orders run: ${s.jobNumbers.length ? s.jobNumbers.join(', ') : '—'}`,
     '',
@@ -406,43 +484,15 @@ export function buildImpwDraft(
     'Why this was raised:',
     ...f.reasons.map((r) => `  · ${r}`),
     '',
+    `Risk: ${impwRisks(f)}`,
+    '',
     'Requested: investigate the cause and agree the corrective action with the',
     'department owner, then record the outcome against this ticket.',
+    '',
+    `Raised from the PMD Dashboard KPI review by ${raiser.name || 'an unnamed user'}.`,
+    `Source data: signed-off PMD_Production for ${f.shiftId} on ${s.machineCode}.`,
   );
-
-  return {
-    briefDescription: clamp(`${where} — ${headline}`, 256),
-    typeOfImprovement: site.typeOfImprovement,
-    source: site.source,
-    email: site.email || raiser.email || '',
-    phone: site.phone,
-    fax: '',
-    sendCopyToCustomer: false,
-    dateOfOccurrence: date,
-    details: lines.join('\n'),
-    additionalInformation: [
-      `Raised from the PMD Dashboard KPI review by ${raiser.name || 'an unnamed user'}.`,
-      `Source data: signed-off PMD_Production for ${f.shiftId} on ${s.machineCode}.`,
-    ].join('\n'),
-    authoritiesNotified: false,
-    customerNotified: false,
-    proceduresReviewed: false,
-    processToBeChanged: false,
-    trainingReviewed: false,
-    investigationDetails: '',
-    type: site.type,
-    region: site.region,
-    branch: site.branch,
-    department: suggestImpwDepartment(f),
-    other: site.other,
-    plantEquipment: s.machineName && s.machineName !== s.machineCode
-      ? `${s.machineCode} — ${s.machineName}`
-      : s.machineCode,
-    risks: impwRisks(f),
-    relatedDocuments: `PMD Dashboard KPI — ${f.shiftId} — ${s.machineCode}`,
-    relatedFiles: '',
-    coordinator: raiser.name,
-  };
+  return lines.join('\n');
 }
 
 function impwRisks(f: ImpwFinding): string {
@@ -463,165 +513,177 @@ function clamp(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max - 1).trimEnd() + '…';
 }
 
-/** Every field, labelled the way Mango's form labels it — the block the
- *  coordinator pastes from. Required fields keep their * so nothing is
- *  skipped on the way across. */
-export function impwPlainText(d: ImpwDraft): string {
-  const req = new Set(IMPW_REQUIRED.map((f) => f.field));
-  const row = (field: keyof ImpwDraft, label: string): string => {
-    const v = d[field];
-    const text = typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v ?? '');
-    const star = req.has(field) ? ' *' : '';
-    return text.includes('\n')
-      ? `${label}${star}:\n${text}\n`
-      : `${label}${star}: ${text}`;
-  };
-  return [
-    'IMPW — Improvement Workflow',
-    '',
-    row('briefDescription', 'Brief Description'),
-    row('typeOfImprovement', 'Type of Improvement'),
-    row('source', 'Source'),
-    row('email', 'Email'),
-    row('phone', 'Phone'),
-    row('fax', 'Fax'),
-    row('sendCopyToCustomer', 'Send copy to customer'),
-    row('dateOfOccurrence', 'Date of occurrence'),
-    row('details', 'Details of Improvement and/or Proposed Action'),
-    row('additionalInformation', 'Additional information'),
-    row('authoritiesNotified', 'Authorities have been notified'),
-    row('customerNotified', 'Customer notified?'),
-    row('proceduresReviewed', 'Procedures have been reviewed'),
-    row('processToBeChanged', 'Process to be changed?'),
-    row('trainingReviewed', 'Training reviewed?'),
-    row('investigationDetails', 'Investigation Details'),
-    row('type', 'Type'),
-    row('region', 'Region'),
-    row('branch', 'Branch'),
-    row('department', 'Department'),
-    row('other', 'Other'),
-    row('plantEquipment', 'Plant/Equipment involved'),
-    row('risks', 'Risks involved'),
-    row('relatedDocuments', 'Related documents'),
-    row('relatedFiles', 'Related files'),
-    row('coordinator', 'Coordinator'),
-  ].join('\n');
-}
-
-// ---------------------------------------------------------------------------
-// Mango's REST API
-// ---------------------------------------------------------------------------
-
 /**
- * ImpwDraft key → the JSON property Mango's API expects.
- *
- * Split out as a table because it is the one thing here that is a guess:
- * Mango published the FORM (the labels and which are required), and the
- * property names below are those labels in camelCase. When the live API
- * rejects a name, correct it HERE and nothing else changes — the draft,
- * the validation and the dialog all key off ImpwDraft.
+ * The draft as the API wants it (docs/mango-api-v4.md § Create an
+ * improvement). The four placement fields are optional and are dropped when
+ * blank — each has to match a name that already exists in the tenant, and
+ * an empty string is not one of those.
  */
-export const IMPW_API_FIELDS: Record<keyof ImpwDraft, string> = {
-  briefDescription: 'briefDescription',
-  typeOfImprovement: 'typeOfImprovement',
-  source: 'source',
-  email: 'email',
-  phone: 'phone',
-  fax: 'fax',
-  sendCopyToCustomer: 'sendCopyToCustomer',
-  dateOfOccurrence: 'dateOfOccurrence',
-  details: 'details',
-  additionalInformation: 'additionalInformation',
-  authoritiesNotified: 'authoritiesNotified',
-  customerNotified: 'customerNotified',
-  proceduresReviewed: 'proceduresReviewed',
-  processToBeChanged: 'processToBeChanged',
-  trainingReviewed: 'trainingReviewed',
-  investigationDetails: 'investigationDetails',
-  type: 'type',
-  region: 'region',
-  branch: 'branch',
-  department: 'department',
-  other: 'other',
-  plantEquipment: 'plantEquipment',
-  risks: 'risks',
-  relatedDocuments: 'relatedDocuments',
-  relatedFiles: 'relatedFiles',
-  coordinator: 'coordinator',
-};
-
-/** The draft as Mango's API wants it. Empty optional strings are dropped —
- *  an API that validates its own optional fields should not be handed a
- *  blank Fax to reject. */
-export function impwApiPayload(d: ImpwDraft): Record<string, string | boolean> {
-  const required = new Set<string>(IMPW_REQUIRED.map((f) => f.field));
-  const out: Record<string, string | boolean> = {};
-  for (const [key, name] of Object.entries(IMPW_API_FIELDS) as Array<
-    [keyof ImpwDraft, string]
-  >) {
-    const v = d[key];
-    if (typeof v === 'boolean') out[name] = v;
-    else if (String(v ?? '').trim() || required.has(key)) out[name] = String(v ?? '');
+export function impwApiPayload(d: ImpwDraft): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    description: d.description,
+    typeOfImprovement: { id: d.typeOfImprovement.id, name: d.typeOfImprovement.name },
+    originatorName: d.originatorName,
+    improvementDate: d.improvementDate,
+    improvementDetails: d.improvementDetails,
+    coordinator: { id: d.coordinator.id, name: d.coordinator.name },
+  };
+  for (const key of ['region', 'branch', 'department', 'other'] as const) {
+    const v = d[key].trim();
+    if (v) out[key] = v;
   }
   return out;
 }
 
-/** Join the configured base and path without doubling or dropping the '/'. */
-export function impwEndpoint(base: string, path: string): string {
-  return `${base.trim().replace(/\/+$/, '')}/${path.trim().replace(/^\/+/, '')}`;
-}
-
-/**
- * Whatever Mango calls the new ticket, found without knowing its response
- * shape: the first string/number under a plausible id key, at the top level
- * or one level in (APIs of this vintage wrap in `data` or `result` about
- * half the time). Returns '' when nothing looks like an id — the caller
- * still reports success, just without a number to quote.
- */
-export function extractImpwTicketId(body: unknown): string {
-  const KEYS = ['ticketNumber', 'ticketNo', 'ticketId', 'reference', 'number', 'id'];
-  const pick = (o: unknown): string => {
-    if (!o || typeof o !== 'object') return '';
-    const rec = o as Record<string, unknown>;
-    for (const k of KEYS) {
-      const v = rec[k];
-      if (typeof v === 'string' && v.trim()) return v.trim();
-      if (typeof v === 'number' && Number.isFinite(v)) return String(v);
-    }
-    return '';
+/** Every field, labelled the way Mango's own form labels it — the block
+ *  someone pastes in by hand when this device has no API sign-in. */
+export function impwPlainText(d: ImpwDraft): string {
+  const row = (label: string, value: string, required = false): string => {
+    const star = required ? ' *' : '';
+    return value.includes('\n') ? `${label}${star}:\n${value}\n` : `${label}${star}: ${value}`;
   };
-  const top = pick(body);
-  if (top) return top;
-  for (const nest of ['data', 'result', 'improvement', 'record']) {
-    const inner = pick((body as Record<string, unknown> | null)?.[nest]);
-    if (inner) return inner;
-  }
-  return '';
+  return [
+    'IMPW — Improvement Workflow',
+    '',
+    row('Brief Description', d.description, true),
+    row('Type of Improvement', d.typeOfImprovement.name, true),
+    row('Name', d.originatorName, true),
+    row('Date of occurrence', impwIsoToFormDate(d.improvementDate), true),
+    row('Details of Improvement and/or Proposed Action', d.improvementDetails, true),
+    row('Region', d.region),
+    row('Branch', d.branch),
+    row('Department', d.department),
+    row('Other', d.other),
+    row('Coordinator', d.coordinator.name, true),
+  ].join('\n');
 }
 
-/**
- * Turn a failed call into a sentence that says what to DO. The floor cannot
- * read an HTTP status, and "it didn't work" wastes the trip to the office.
- */
-export function describeImpwApiFailure(status: number, body: string): string {
-  const detail = body.trim().slice(0, 300);
-  const withDetail = (s: string): string => (detail ? `${s} — Mango said: ${detail}` : s);
-  if (status === 0) {
-    return 'Could not reach Mango from this browser — check the network, or ask IT whether api.mangolive.com allows requests from this site (CORS).';
+/** ISO 8601 → the form's dd/mm/yyyy, in the browser's own timezone so the
+ *  pasted date matches the shift the ticket is about. */
+export function impwIsoToFormDate(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '';
+  const d = new Date(t);
+  const p = (n: number): string => String(n).padStart(2, '0');
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
+
+// ---------------------------------------------------------------------------
+// Reading Mango back
+// ---------------------------------------------------------------------------
+
+/** What POST /api/v4/improvement returns. */
+export interface ImpwCreated {
+  id: string;
+  formTitle: string;
+  abbreviation: string;
+  number: string;
+}
+
+export function parseImpwCreated(body: unknown): ImpwCreated {
+  const rec = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+  const str = (k: string): string => (typeof rec[k] === 'string' ? (rec[k] as string).trim() : '');
+  return {
+    id: str('id'),
+    formTitle: str('formTitle'),
+    abbreviation: str('abbreviation'),
+    number: str('number'),
+  };
+}
+
+/** 'IMP 0123' — what the floor calls the ticket. Falls back through the
+ *  number alone and then the opaque id, so a 2xx always shows something. */
+export function impwTicketRef(c: ImpwCreated): string {
+  if (c.abbreviation && c.number) return `${c.abbreviation} ${c.number}`;
+  return c.number || c.id || '';
+}
+
+/** The tenant's option lists from GET /api/v4/improvement/new. Anything that
+ *  isn't a well-formed {id,name} is skipped rather than offered as a broken
+ *  choice — a pick with no id fails Mango's validation anyway. */
+export function parseImpwOptions(body: unknown, key: string): MangoOption[] {
+  const raw = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+  const list = Array.isArray(raw[key]) ? (raw[key] as unknown[]) : [];
+  const out: MangoOption[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const o = item as Record<string, unknown>;
+    const id = typeof o.id === 'string' ? o.id.trim() : '';
+    const name = typeof o.name === 'string' ? o.name.trim() : '';
+    if (id && name) out.push({ id, name });
   }
-  if (status === 401 || status === 403) {
-    return withDetail('Mango rejected the sign-in. Re-enter the Mango username and password under 🥭 Mango connection.');
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// ---------------------------------------------------------------------------
+// Failures, in words the floor can act on
+// ---------------------------------------------------------------------------
+
+/** Join a base URL and an API path without doubling or dropping the '/'.
+ *  Mango's paths must not end in a slash or whitespace, so both ends are
+ *  trimmed. */
+export function impwEndpoint(base: string, path: string): string {
+  return `${base.trim().replace(/\/+$/, '')}/${path.trim().replace(/^\/+/, '').replace(/\/+$/, '')}`;
+}
+
+function quoteMango(s: string, body: string): string {
+  const detail = body.trim().slice(0, 300);
+  return detail ? `${s} — Mango said: ${detail}` : s;
+}
+
+const OFFLINE =
+  'Could not reach Mango from this browser — check the network, or ask IT whether api.mangolive.com allows requests from this site (CORS).';
+
+/**
+ * Sign-in failures. Mango answers a wrong username or password with 400 and
+ * a message, so 400 here means the credentials, not the ticket.
+ */
+export function describeMangoAuthFailure(status: number, body: string): string {
+  if (status === 0) return OFFLINE;
+  if (status === 400 || status === 401) {
+    return quoteMango(
+      'Mango would not sign in. Check the username and password under ⚙ Mango connection — and that this account has API access switched on inside Mango.',
+      body,
+    );
   }
   if (status === 404) {
-    return withDetail('Mango has no endpoint at that address — check the API path in 🥭 Mango connection.');
-  }
-  if (status === 400 || status === 422) {
-    return withDetail('Mango would not accept the ticket contents.');
+    return quoteMango('No Mango API at that address — check the API address in ⚙ Mango connection.', body);
   }
   if (status >= 500) {
-    return withDetail(`Mango returned a server error (${status}). It is not the ticket — try again shortly.`);
+    return quoteMango(`Mango returned a server error (${status}) while signing in. Try again shortly.`, body);
   }
-  return withDetail(`Mango returned ${status}.`);
+  return quoteMango(`Mango returned ${status} while signing in.`, body);
+}
+
+/**
+ * Turn a failed ticket call into a sentence that says what to DO. The floor
+ * cannot read an HTTP status, and "it didn't work" wastes the trip to the
+ * office.
+ */
+export function describeImpwApiFailure(status: number, body: string): string {
+  if (status === 0) return OFFLINE;
+  if (status === 401 || status === 403) {
+    return quoteMango(
+      'Mango rejected the sign-in. Re-enter the username and password under ⚙ Mango connection. (A Mango token is tied to the network it was issued on, so this can also mean the device changed network.)',
+      body,
+    );
+  }
+  if (status === 404) {
+    return quoteMango('No Mango API at that address — check the API address in ⚙ Mango connection.', body);
+  }
+  if (status === 422) {
+    return quoteMango(
+      'Mango rejected one of the fields. Region, Branch, Department and Other must each match a name that already exists in Mango — check their spelling.',
+      body,
+    );
+  }
+  if (status === 400) {
+    return quoteMango('Mango would not accept the ticket contents.', body);
+  }
+  if (status >= 500) {
+    return quoteMango(`Mango returned a server error (${status}). It is not the ticket — try again shortly.`, body);
+  }
+  return quoteMango(`Mango returned ${status}.`, body);
 }
 
 /**

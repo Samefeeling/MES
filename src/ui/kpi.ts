@@ -75,21 +75,28 @@ import {
   detectImpwFindings,
   foldBreakdowns,
   impwDraftIssues,
-  impwEndpoint,
+  impwIsoToFormDate,
   impwPlainText,
   yieldPctOf,
   EMPTY_IMPW_SITE,
-  IMPW_REQUIRED,
+  EMPTY_OPTION,
+  IMPW_DESCRIPTION_MAX,
+  IMPW_DETAILS_MAX,
   type ImpwDraft,
   type ImpwFinding,
   type ImpwRaiser,
   type ImpwSiteConfig,
   type ImpwSlice,
+  type ImpwTarget,
+  type MangoOption,
 } from '../core/impw';
 import {
   clearMangoConnection,
+  fetchImpwOptions,
   isMangoConfigured,
   loadMangoConnection,
+  mangoCreateUrl,
+  mangoSignIn,
   saveMangoConnection,
   submitImpwToMango,
   DEFAULT_MANGO_CONNECTION,
@@ -357,9 +364,13 @@ interface KpiState {
   impwFindings: ImpwFinding[];
   /** Yes / No already recorded against a finding, by its key. */
   impwDecisions: Map<string, ImpwDecision>;
-  /** The plant's answers to Mango's categorisation dropdowns, remembered
-   *  after the first ticket. */
+  /** The plant's answers to Mango's placement fields and option lists,
+   *  remembered after the first ticket. */
   impwSite: ImpwSiteConfig;
+  /** The tenant's Type of Improvement / Coordinator lists, once Mango has
+   *  been asked for them. Null until the first ticket dialog fetches them;
+   *  kept for the rest of the meeting so a second ticket opens instantly. */
+  impwOptions: { typeOfImprovement: MangoOption[]; coordinator: MangoOption[] } | null;
   /** Whether the actions list also shows the ones already decided. */
   impwShowDecided: boolean;
   /** This device's Mango API sign-in. Configured = Yes files the ticket
@@ -383,8 +394,8 @@ interface ImpwDecision {
   decision: 'yes' | 'no';
   at: number;
   by: string;
-  /** Mango's id for the ticket, when the API filed it and named one.
-   *  Absent on a clipboard hand-off — PMD never saw a ticket number. */
+  /** Mango's own reference for the ticket ('IMP 0123'), when the API filed
+   *  it. Absent on a clipboard hand-off — PMD never saw a ticket number. */
   ticket?: string;
 }
 
@@ -414,11 +425,31 @@ function saveImpwDecisions(m: ReadonlyMap<string, ImpwDecision>): void {
   }
 }
 
+/** Read field by field rather than spreading the parsed object: an earlier
+ *  build stored typeOfImprovement as a plain string, and spreading that
+ *  over the {id,name} shape would put a string where the dialog expects an
+ *  option and break the ticket rather than just asking again. */
 function loadImpwSite(): ImpwSiteConfig {
   try {
     const raw = localStorage.getItem(IMPW_SITE_KEY);
     if (!raw) return { ...EMPTY_IMPW_SITE };
-    return { ...EMPTY_IMPW_SITE, ...(JSON.parse(raw) as Partial<ImpwSiteConfig>) };
+    const p = JSON.parse(raw) as Record<string, unknown>;
+    const str = (k: string): string => (typeof p[k] === 'string' ? (p[k] as string) : '');
+    const opt = (k: string): MangoOption => {
+      const v = p[k];
+      if (!v || typeof v !== 'object') return { ...EMPTY_OPTION };
+      const o = v as Record<string, unknown>;
+      const id = typeof o.id === 'string' ? o.id : '';
+      const name = typeof o.name === 'string' ? o.name : '';
+      return id && name ? { id, name } : { ...EMPTY_OPTION };
+    };
+    return {
+      region: str('region'),
+      branch: str('branch'),
+      other: str('other'),
+      typeOfImprovement: opt('typeOfImprovement'),
+      coordinator: opt('coordinator'),
+    };
   } catch {
     return { ...EMPTY_IMPW_SITE };
   }
@@ -1581,45 +1612,43 @@ const IMPW_TRIGGER_ICON: Record<string, string> = {
   reject: '🗑',
 };
 
-/** Fields the dialog edits, in the order Mango's form asks for them.
- *  `site` marks the tenant's categorisation answers — those are the ones
- *  remembered between tickets. */
+/**
+ * The text fields of POST /api/v4/improvement, in the order the dialog asks
+ * for them. `site` marks the plant-wide answers — those are remembered
+ * between tickets; the rest are drafted fresh from the finding.
+ *
+ * The two option fields (Type of Improvement, Coordinator) are not here:
+ * they are picked from lists Mango issues, and are rendered separately.
+ */
 const IMPW_TEXT_FIELDS: Array<{
-  field: keyof ImpwDraft;
+  field: 'description' | 'originatorName' | 'improvementDetails' | 'region' | 'branch' |
+    'department' | 'other';
   label: string;
+  required?: boolean;
   area?: boolean;
   site?: boolean;
+  maxLength?: number;
+  hint?: string;
 }> = [
-  { field: 'briefDescription', label: 'Brief Description' },
-  { field: 'typeOfImprovement', label: 'Type of Improvement', site: true },
-  { field: 'source', label: 'Source', site: true },
-  { field: 'dateOfOccurrence', label: 'Date of occurrence' },
-  { field: 'details', label: 'Details of Improvement and/or Proposed Action', area: true },
-  { field: 'additionalInformation', label: 'Additional information', area: true },
-  { field: 'investigationDetails', label: 'Investigation Details', area: true },
-  { field: 'type', label: 'Type', site: true },
+  {
+    field: 'description',
+    label: 'Brief Description',
+    required: true,
+    maxLength: IMPW_DESCRIPTION_MAX,
+  },
+  { field: 'originatorName', label: 'Name', required: true, hint: 'who raised it' },
+  {
+    field: 'improvementDetails',
+    label: 'Details of Improvement and/or Proposed Action',
+    required: true,
+    area: true,
+    maxLength: IMPW_DETAILS_MAX,
+  },
   { field: 'region', label: 'Region', site: true },
   { field: 'branch', label: 'Branch', site: true },
   { field: 'department', label: 'Department' },
   { field: 'other', label: 'Other', site: true },
-  { field: 'plantEquipment', label: 'Plant/Equipment involved' },
-  { field: 'risks', label: 'Risks involved', area: true },
-  { field: 'relatedDocuments', label: 'Related documents', area: true },
-  { field: 'coordinator', label: 'Coordinator' },
-  { field: 'email', label: 'Email', site: true },
-  { field: 'phone', label: 'Phone', site: true },
 ];
-
-const IMPW_CHECK_FIELDS: Array<{ field: keyof ImpwDraft; label: string }> = [
-  { field: 'sendCopyToCustomer', label: 'Send copy to customer' },
-  { field: 'authoritiesNotified', label: 'Authorities have been notified' },
-  { field: 'customerNotified', label: 'Customer notified?' },
-  { field: 'proceduresReviewed', label: 'Procedures have been reviewed' },
-  { field: 'processToBeChanged', label: 'Process to be changed?' },
-  { field: 'trainingReviewed', label: 'Training reviewed?' },
-];
-
-const IMPW_REQUIRED_FIELDS = new Set(IMPW_REQUIRED.map((f) => f.field));
 
 /** "1600T · Night 26 Aug 2026" — the same date wording the Handover cell
  *  uses, so one page never dates the same shift two ways. */
@@ -1699,8 +1728,8 @@ function buildImpwPanel(): string {
   // ask different things of the person pressing it: one files the ticket,
   // the other hands them a form to paste into.
   const connStatus = linked
-    ? `<span class="kpi-impw-conn is-on" title="${escapeHtml(
-        impwEndpoint(conn.baseUrl, conn.path),
+    ? `<span class="kpi-impw-conn is-on" title="POST ${escapeHtml(
+        mangoCreateUrl(conn),
       )}">🔗 Filing directly as ${escapeHtml(conn.username)}</span>`
     : `<span class="kpi-impw-conn" title="Set the Mango sign-in to file tickets straight from here">✂ Copy &amp; paste mode — Mango sign-in not set</span>`;
   const connBtn = isSupervisor()
@@ -1741,10 +1770,8 @@ function openMangoConnection(): void {
     <p class="bd-sub">Set once on this device. With it, <b>Yes</b> files the ticket straight into
       Mango; without it, PMD copies the filled form and opens IMPW for you to paste.</p>
     <div class="kpi-mango-form">
-      <label class="kpi-impw-field"><span class="kpi-impw-label">API address</span>
+      <label class="kpi-impw-field is-area"><span class="kpi-impw-label">API address</span>
         <input type="text" data-mango="baseUrl" value="${escapeHtml(c.baseUrl)}"></label>
-      <label class="kpi-impw-field"><span class="kpi-impw-label">Path</span>
-        <input type="text" data-mango="path" value="${escapeHtml(c.path)}"></label>
       <label class="kpi-impw-field"><span class="kpi-impw-label">Username</span>
         <input type="text" data-mango="username" autocomplete="off" value="${escapeHtml(c.username)}"></label>
       <label class="kpi-impw-field"><span class="kpi-impw-label">Password${
@@ -1754,42 +1781,78 @@ function openMangoConnection(): void {
           saved ? '••••••••' : ''
         }"></label>
     </div>
+    <p class="kpi-mango-paths">Tickets are posted to <code>${escapeHtml(
+      mangoCreateUrl(c),
+    )}</code>. The account needs <b>API access</b> switched on inside Mango — an ordinary Mango
+      login is not automatically an API login.</p>
     <p class="kpi-mango-warn">🔒 The sign-in is stored in this browser only — it is not shared with
       other devices and never leaves the page except to Mango. Use a Mango account created for
       raising improvement tickets, not a personal login. Each iPad or PC that files tickets needs
       this set once.</p>
+    <div class="kpi-mango-test" data-mango-result></div>
     <div class="bd-actions kpi-mango-actions">
       ${
         saved
           ? '<button type="button" class="btn-ghost-big" data-mango-clear>Forget sign-in</button>'
           : ''
       }
+      <button type="button" class="btn-ghost-big" data-mango-test>Test sign-in</button>
       <button type="button" class="btn-ghost-big" data-mango-cancel>Cancel</button>
       <button type="button" class="btn-primary-big" data-mango-save>Save</button>
     </div>
   </div>`);
+
+  // What the boxes currently say, with a blank password meaning "keep the
+  // one already stored" — so correcting the URL cannot silently wipe the
+  // sign-in, and Test checks what Save would save.
+  const readConn = (): MangoConnection => {
+    const read = (k: string): string =>
+      mc.querySelector<HTMLInputElement>(`[data-mango="${k}"]`)?.value.trim() ?? '';
+    const password = mc.querySelector<HTMLInputElement>('[data-mango="password"]')?.value ?? '';
+    return {
+      baseUrl: read('baseUrl') || DEFAULT_MANGO_CONNECTION.baseUrl,
+      username: read('username'),
+      password: password || c.password,
+    };
+  };
+
   mc.querySelector('[data-mango-cancel]')?.addEventListener('click', closeModal);
   mc.querySelector('[data-mango-clear]')?.addEventListener('click', () => {
     clearMangoConnection();
     S!.mango = loadMangoConnection();
+    S!.impwOptions = null;
     closeModal();
     toast('Mango sign-in forgotten — tickets copy to the clipboard', 'ok');
     render();
   });
+
+  // Finding out the password is wrong here, at the settings screen, beats
+  // finding out three fields into a ticket in front of the meeting.
+  const result = mc.querySelector<HTMLElement>('[data-mango-result]');
+  mc.querySelector('[data-mango-test]')?.addEventListener('click', () => {
+    const next = readConn();
+    if (!isMangoConfigured(next)) {
+      if (result) {
+        result.innerHTML = `<p class="kpi-impw-bad">Fill in the address, username and password first.</p>`;
+      }
+      return;
+    }
+    if (result) result.innerHTML = `<p class="kpi-impw-ok">Signing in to Mango…</p>`;
+    void mangoSignIn(next).then((r) => {
+      if (!result) return;
+      result.innerHTML = r.ok
+        ? `<p class="kpi-impw-ok">✓ Signed in${r.name ? ` as ${escapeHtml(r.name)}` : ''}. Press Save to keep this sign-in.</p>`
+        : `<p class="kpi-impw-bad" role="alert">${escapeHtml(r.message)}</p>`;
+    });
+  });
+
   mc.querySelector('[data-mango-save]')?.addEventListener('click', () => {
-    const read = (k: string): string =>
-      mc.querySelector<HTMLInputElement>(`[data-mango="${k}"]`)?.value.trim() ?? '';
-    // A blank password box means "keep the one already stored", so a URL
-    // correction doesn't silently wipe the sign-in.
-    const password = mc.querySelector<HTMLInputElement>('[data-mango="password"]')?.value ?? '';
-    const next: MangoConnection = {
-      baseUrl: read('baseUrl') || DEFAULT_MANGO_CONNECTION.baseUrl,
-      path: read('path') || DEFAULT_MANGO_CONNECTION.path,
-      username: read('username'),
-      password: password || c.password,
-    };
+    const next = readConn();
     saveMangoConnection(next);
     S!.mango = next;
+    // The option lists belong to whoever is signed in; a new sign-in must
+    // re-ask rather than offer the last account's coordinators.
+    S!.impwOptions = null;
     closeModal();
     toast(
       isMangoConfigured(next) ? 'Mango connection saved' : 'Saved — sign-in still incomplete',
@@ -1839,68 +1902,119 @@ async function copyImpwText(text: string): Promise<boolean> {
 
 function readImpwForm(mc: HTMLElement, base: ImpwDraft): ImpwDraft {
   const out: ImpwDraft = { ...base };
-  const bag = out as unknown as Record<string, string | boolean>;
   mc.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-impw]').forEach((el) => {
-    const key = el.dataset.impw ?? '';
-    if (!(key in out)) return;
-    bag[key] = el instanceof HTMLInputElement && el.type === 'checkbox' ? el.checked : el.value;
+    // Narrow to the text keys so the assignment stays typed — the two
+    // option fields are objects and are read separately below.
+    switch (el.dataset.impw) {
+      case 'description':
+      case 'originatorName':
+      case 'improvementDetails':
+      case 'region':
+      case 'branch':
+      case 'department':
+      case 'other':
+        out[el.dataset.impw] = el.value;
+        break;
+      default:
+        break;
+    }
+  });
+  // Signed in: the value is Mango's own id, and the name comes back from
+  // the list it was issued in, so the pair can never be half-edited.
+  mc.querySelectorAll<HTMLSelectElement>('[data-impw-opt]').forEach((sel) => {
+    // A select still waiting on Mango holds nothing but the placeholder;
+    // reading it would wipe the pick remembered from the last ticket
+    // before the list that could re-select it has even arrived.
+    if (sel.disabled) return;
+    const key = sel.dataset.impwOpt === 'coordinator' ? 'coordinator' : 'typeOfImprovement';
+    const list = S!.impwOptions?.[key] ?? [];
+    out[key] = list.find((o) => o.id === sel.value) ?? { ...EMPTY_OPTION };
+  });
+  // Clipboard mode: no lists to pick from, so the name is typed and there
+  // is no id — which is all the web form needs.
+  mc.querySelectorAll<HTMLInputElement>('[data-impw-opt-name]').forEach((inp) => {
+    const key = inp.dataset.impwOptName === 'coordinator' ? 'coordinator' : 'typeOfImprovement';
+    out[key] = { id: '', name: inp.value.trim() };
   });
   return out;
 }
 
-function impwIssuesHtml(draft: ImpwDraft): string {
-  const issues = impwDraftIssues(draft);
+function impwIssuesHtml(draft: ImpwDraft, target: ImpwTarget): string {
+  const issues = impwDraftIssues(draft, target);
   if (!issues.length) {
-    return `<p class="kpi-impw-ok">✓ Every field Mango marks required is filled.</p>`;
+    return `<p class="kpi-impw-ok">✓ Every field Mango requires is filled.</p>`;
   }
   return `<p class="kpi-impw-bad" role="alert">Mango will reject this as-is — ${issues
     .map((i) => escapeHtml(i))
     .join(' · ')}</p>`;
 }
 
+/** The two fields Mango will only accept as one of its own {id, name}
+ *  entries. Everything else on the create body is free text. */
+const IMPW_OPTION_FIELDS: Array<{ field: 'typeOfImprovement' | 'coordinator'; label: string }> = [
+  { field: 'typeOfImprovement', label: 'Type of Improvement' },
+  { field: 'coordinator', label: 'Coordinator' },
+];
+
 /**
- * The ticket itself: PMD's draft of Mango's IMPW form, every field editable
- * before it goes anywhere. The categorisation answers (Region, Branch,
- * Type…) are the tenant's own dropdown values, which PMD cannot know — they
- * start blank, fail validation until filled, and are remembered afterwards
- * so only the first ticket ever asks.
+ * The ticket itself: PMD's draft of the improvement, every field editable
+ * before it goes anywhere.
+ *
+ * Type of Improvement and Coordinator are the plant's own lists, and PMD
+ * asks Mango for them rather than guessing — GET /api/v4/improvement/new
+ * returns the exact {id, name} pairs the POST will accept, so a pick here
+ * cannot be a value Mango has never heard of. Without a sign-in there is
+ * nothing to ask, so they fall back to typed names for the paste-in path.
+ * Region / Branch / Other are remembered after the first ticket.
  */
 function openImpwTicket(finding: ImpwFinding): void {
+  // The dialog does two genuinely different things depending on whether the
+  // Mango sign-in is set, so it must not promise the same one in both.
+  const direct = isMangoConfigured(S!.mango);
+  const target: ImpwTarget = direct ? 'api' : 'paste';
   let draft = buildImpwDraft(finding, S!.who, S!.impwSite);
 
   const textRow = (spec: (typeof IMPW_TEXT_FIELDS)[number]): string => {
-    const req = IMPW_REQUIRED_FIELDS.has(spec.field);
-    const value = String(draft[spec.field] ?? '');
+    const value = draft[spec.field];
+    const cap = spec.maxLength ? ` maxlength="${spec.maxLength}"` : '';
     const control = spec.area
-      ? `<textarea data-impw="${spec.field}" rows="${
-          spec.field === 'details' ? 12 : 3
-        }">${escapeHtml(value)}</textarea>`
-      : `<input type="text" data-impw="${spec.field}" value="${escapeHtml(value)}">`;
+      ? `<textarea data-impw="${spec.field}" rows="14"${cap}>${escapeHtml(value)}</textarea>`
+      : `<input type="text" data-impw="${spec.field}" value="${escapeHtml(value)}"${cap}>`;
     return `<label class="kpi-impw-field${spec.area ? ' is-area' : ''}${
       spec.site ? ' is-site' : ''
     }">
       <span class="kpi-impw-label">${escapeHtml(spec.label)}${
-        req ? ' <b class="kpi-impw-req">*</b>' : ''
-      }${spec.site ? ' <em>site</em>' : ''}</span>
+        spec.required ? ' <b class="kpi-impw-req">*</b>' : ''
+      }${spec.site ? ' <em>site</em>' : ''}${
+        spec.hint ? ` <em>${escapeHtml(spec.hint)}</em>` : ''
+      }</span>
       ${control}
     </label>`;
   };
-  const checks = IMPW_CHECK_FIELDS.map(
-    (c) =>
-      `<label class="kpi-impw-check"><input type="checkbox" data-impw="${c.field}"${
-        draft[c.field] ? ' checked' : ''
-      }> ${escapeHtml(c.label)}</label>`,
-  ).join('');
 
-  // The button does two genuinely different things depending on whether the
-  // Mango sign-in is set, so it must not promise the same one in both.
-  const direct = isMangoConfigured(S!.mango);
+  // Signed in: a <select> that starts empty and is filled once Mango
+  // answers. Not signed in: a plain name, which is all the web form needs.
+  const optionRow = (spec: (typeof IMPW_OPTION_FIELDS)[number]): string => {
+    const current = draft[spec.field];
+    const control = direct
+      ? `<select data-impw-opt="${spec.field}" disabled>
+           <option value="">Loading Mango's list…</option>
+         </select>`
+      : `<input type="text" data-impw-opt-name="${spec.field}" value="${escapeHtml(current.name)}">`;
+    return `<label class="kpi-impw-field">
+      <span class="kpi-impw-label">${escapeHtml(spec.label)} <b class="kpi-impw-req">*</b>${
+        direct ? ' <em>from Mango</em>' : ' <em>site</em>'
+      }</span>
+      ${control}
+    </label>`;
+  };
+
   const submitLabel = direct ? '🥭 File in Mango' : '🥭 Copy &amp; open IMPW ↗';
   const submitNote = direct
-    ? `<b>File in Mango</b> posts this straight into IMPW as ${escapeHtml(
+    ? `<b>File in Mango</b> posts this straight into the improvement register as ${escapeHtml(
         S!.mango.username,
       )} and shows you the ticket number.`
-    : '<b>Copy &amp; open IMPW</b> copies the whole form to your clipboard and opens IMPW in a new tab; paste it there and submit.';
+    : '<b>Copy &amp; open IMPW</b> copies the filled form to your clipboard and opens IMPW in a new tab; paste it there and submit.';
   const mc = openModal(`<div class="bd-modal kpi-impw-modal">
     <div class="kpi-impw-modal-head">
       <div>
@@ -1911,12 +2025,19 @@ function openImpwTicket(finding: ImpwFinding): void {
       </div>
       <button type="button" class="btn-ghost-big kpi-impw-cancel" data-impw-cancel>Cancel</button>
     </div>
-    <div class="kpi-impw-issues">${impwIssuesHtml(draft)}</div>
+    <div class="kpi-impw-issues">${impwIssuesHtml(draft, target)}</div>
     <div class="kpi-impw-form">
-      ${IMPW_TEXT_FIELDS.map(textRow).join('')}
-      <div class="kpi-impw-checks">${checks}</div>
+      ${IMPW_TEXT_FIELDS.filter((f) => !f.area).map(textRow).join('')}
+      ${IMPW_OPTION_FIELDS.map(optionRow).join('')}
+      <div class="kpi-impw-field kpi-impw-when-field">
+        <span class="kpi-impw-label">Date of occurrence <b class="kpi-impw-req">*</b></span>
+        <output data-impw-when>${escapeHtml(
+          impwIsoToFormDate(draft.improvementDate),
+        )} — start of the ${escapeHtml(impwWhen(finding.shiftId))}</output>
+      </div>
+      ${IMPW_TEXT_FIELDS.filter((f) => f.area).map(textRow).join('')}
     </div>
-    <p class="kpi-impw-note">Fields marked <b>site</b> are this plant's Mango dropdown values —
+    <p class="kpi-impw-note">Fields marked <b>site</b> are this plant's own names in Mango —
       set them once and PMD remembers them for the next ticket. ${submitNote}</p>
     <div class="bd-actions kpi-impw-modal-actions">
       <button type="button" class="btn-ghost-big" data-impw-copy>Copy details</button>
@@ -1928,13 +2049,21 @@ function openImpwTicket(finding: ImpwFinding): void {
   const submitBtn = mc.querySelector<HTMLButtonElement>('[data-impw-submit]');
   const revalidate = (): void => {
     draft = readImpwForm(mc, draft);
-    if (issuesHost) issuesHost.innerHTML = impwIssuesHtml(draft);
-    if (submitBtn) submitBtn.disabled = impwDraftIssues(draft).length > 0;
+    if (issuesHost) issuesHost.innerHTML = impwIssuesHtml(draft, target);
+    if (submitBtn) submitBtn.disabled = impwDraftIssues(draft, target).length > 0;
+  };
+  const wire = (): void => {
+    mc.querySelectorAll('[data-impw], [data-impw-opt], [data-impw-opt-name]').forEach((el) => {
+      el.addEventListener('change', revalidate);
+    });
   };
   revalidate();
-  mc.querySelectorAll('[data-impw]').forEach((el) => {
-    el.addEventListener('change', revalidate);
-  });
+  wire();
+  if (direct) {
+    void fillImpwOptions(mc, () => draft, revalidate, () => {
+      handOffImpwByClipboard(finding, readImpwForm(mc, draft));
+    });
+  }
 
   mc.querySelector('[data-impw-cancel]')?.addEventListener('click', closeModal);
   mc.querySelector('[data-impw-copy]')?.addEventListener('click', () => {
@@ -1945,27 +2074,79 @@ function openImpwTicket(finding: ImpwFinding): void {
   });
   mc.querySelector('[data-impw-submit]')?.addEventListener('click', () => {
     draft = readImpwForm(mc, draft);
-    const issues = impwDraftIssues(draft);
+    const issues = impwDraftIssues(draft, target);
     if (issues.length) {
-      if (issuesHost) issuesHost.innerHTML = impwIssuesHtml(draft);
+      if (issuesHost) issuesHost.innerHTML = impwIssuesHtml(draft, target);
       toast('Fill the required fields first', 'warn');
       return;
     }
-    // Remember the tenant's categorisation answers for the next ticket.
+    // Remember the plant's own answers for the next ticket. Department is
+    // not among them — it follows the breakdown, not the site.
     S!.impwSite = {
-      typeOfImprovement: draft.typeOfImprovement,
-      source: draft.source,
-      type: draft.type,
       region: draft.region,
       branch: draft.branch,
       other: draft.other,
-      email: draft.email,
-      phone: draft.phone,
+      typeOfImprovement: { ...draft.typeOfImprovement },
+      coordinator: { ...draft.coordinator },
     };
     saveImpwSite(S!.impwSite);
-    if (isMangoConfigured(S!.mango)) void fileImpwViaApi(finding, draft, mc);
+    if (direct) void fileImpwViaApi(finding, draft, mc);
     else handOffImpwByClipboard(finding, draft);
   });
+}
+
+/**
+ * Fetch the tenant's Type of Improvement and Coordinator lists and put them
+ * in the dialog's two selects, pre-selecting whatever was picked last time.
+ *
+ * A failure here is not fatal: the selects say so, and the paste-in path is
+ * offered in their place — the same rule as everywhere else in this
+ * feature, that Mango being unreachable must never stop a ticket being
+ * written.
+ */
+async function fillImpwOptions(
+  mc: HTMLElement,
+  currentDraft: () => ImpwDraft,
+  revalidate: () => void,
+  onFallback: () => void,
+): Promise<void> {
+  let lists = S!.impwOptions;
+  if (!lists) {
+    const res = await fetchImpwOptions(S!.mango);
+    if (!res.ok) {
+      mc.querySelectorAll<HTMLSelectElement>('[data-impw-opt]').forEach((sel) => {
+        sel.innerHTML = `<option value="">Mango's list unavailable</option>`;
+      });
+      const issuesHost = mc.querySelector<HTMLElement>('.kpi-impw-issues');
+      if (issuesHost) {
+        issuesHost.innerHTML = `<p class="kpi-impw-bad" role="alert">${escapeHtml(res.message)}</p>
+          <p class="kpi-impw-fallback">Type of Improvement and Coordinator have to come from
+            Mango, so this ticket cannot be filed directly right now — but you can still
+            <button type="button" class="kpi-impw-linkbtn" data-impw-fallback>copy it and open IMPW</button>.</p>`;
+        issuesHost.querySelector('[data-impw-fallback]')?.addEventListener('click', onFallback);
+      }
+      return;
+    }
+    lists = { typeOfImprovement: res.typeOfImprovement, coordinator: res.coordinator };
+    S!.impwOptions = lists;
+  }
+  const draft = currentDraft();
+  mc.querySelectorAll<HTMLSelectElement>('[data-impw-opt]').forEach((sel) => {
+    const key = sel.dataset.impwOpt === 'coordinator' ? 'coordinator' : 'typeOfImprovement';
+    const list = lists![key];
+    const chosen = draft[key].id;
+    sel.innerHTML = [
+      `<option value="">${list.length ? 'Choose…' : 'Mango returned no options'}</option>`,
+      ...list.map(
+        (o) =>
+          `<option value="${escapeHtml(o.id)}"${o.id === chosen ? ' selected' : ''}>${escapeHtml(
+            o.name,
+          )}</option>`,
+      ),
+    ].join('');
+    sel.disabled = false;
+  });
+  revalidate();
 }
 
 /**
@@ -1988,7 +2169,7 @@ async function fileImpwViaApi(
   }
   const res = await submitImpwToMango(draft, S!.mango);
   if (res.ok) {
-    recordImpwDecision(finding.key, 'yes', res.ticketId);
+    recordImpwDecision(finding.key, 'yes', res.ticketRef);
     closeModal();
     toast(res.message, 'ok');
     render();
@@ -3186,6 +3367,7 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     impwFindings: [],
     impwDecisions: loadImpwDecisions(),
     impwSite: loadImpwSite(),
+    impwOptions: null,
     impwShowDecided: false,
     mango: loadMangoConnection(),
     who: { name: '' },

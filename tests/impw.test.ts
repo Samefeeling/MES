@@ -2,23 +2,29 @@ import { describe, expect, it } from 'vitest';
 import {
   buildImpwDraft,
   describeImpwApiFailure,
+  describeMangoAuthFailure,
   detectImpwFindings,
-  extractImpwTicketId,
   foldBreakdowns,
   impwApiPayload,
   impwDepartmentOf,
   impwEndpoint,
   impwDraftIssues,
   impwFindingKey,
+  impwIsoToFormDate,
   impwOccurrenceDate,
+  impwOccurrenceIso,
   impwPlainText,
+  impwTicketRef,
   missingImpwFields,
   overlongImpwFields,
+  parseImpwCreated,
+  parseImpwOptions,
   suggestImpwDepartment,
   yieldPctOf,
   EMPTY_IMPW_SITE,
-  IMPW_API_FIELDS,
-  IMPW_REQUIRED,
+  EMPTY_OPTION,
+  IMPW_DESCRIPTION_MAX,
+  type ImpwDraft,
   type ImpwFinding,
   type ImpwSiteConfig,
   type ImpwSlice,
@@ -43,15 +49,14 @@ function slice(partial: Partial<ImpwSlice> = {}): ImpwSlice {
   return { ...base, ...partial };
 }
 
+/** The plant's answers, as they look once the first ticket has been filed:
+ *  three names that exist in Mango, and two picks out of Mango's own lists. */
 const SITE: ImpwSiteConfig = {
-  typeOfImprovement: 'Corrective Action',
-  source: 'Internal',
-  type: 'Production',
   region: 'QLD',
   branch: 'Wacol',
   other: 'Precision Moulding',
-  email: 'plant@example.com',
-  phone: '',
+  typeOfImprovement: { id: 'toi-1', name: 'Corrective Action' },
+  coordinator: { id: 'co-1', name: 'Felicity Kidwell' },
 };
 
 describe('detectImpwFindings', () => {
@@ -292,6 +297,40 @@ describe('impwOccurrenceDate', () => {
   });
 });
 
+describe('impwOccurrenceIso', () => {
+  it("is the shift's own start instant, not midnight", () => {
+    // A Night shift's ShiftId carries its START date and it begins at 23:00,
+    // so dating it 00:00 would file a Tuesday-night stoppage as Tuesday
+    // morning. Compared against a locally-built Date so the assertion holds
+    // in any site timezone.
+    expect(impwOccurrenceIso('2026-08-26-Night')).toBe(
+      new Date(2026, 7, 26, 23, 0, 0, 0).toISOString(),
+    );
+    expect(impwOccurrenceIso('2026-08-26-Day')).toBe(
+      new Date(2026, 7, 26, 7, 0, 0, 0).toISOString(),
+    );
+    expect(impwOccurrenceIso('2026-08-26-Afternoon')).toBe(
+      new Date(2026, 7, 26, 15, 0, 0, 0).toISOString(),
+    );
+  });
+
+  it('is ISO 8601 UTC, which is what the API takes — not the form’s dd/mm/yyyy', () => {
+    expect(impwOccurrenceIso('2026-08-26-Day')).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    );
+  });
+
+  it('is empty for an unparseable id', () => {
+    expect(impwOccurrenceIso('rubbish')).toBe('');
+  });
+
+  it('converts back to the form’s date for the paste-in path', () => {
+    expect(impwIsoToFormDate(impwOccurrenceIso('2026-08-26-Night'))).toBe('26/08/2026');
+    expect(impwIsoToFormDate('')).toBe('');
+    expect(impwIsoToFormDate('not a date')).toBe('');
+  });
+});
+
 describe('buildImpwDraft', () => {
   const finding = (partial: Partial<ImpwSlice> = {}): ImpwFinding =>
     detectImpwFindings([slice(partial)], RULES)[0];
@@ -305,47 +344,39 @@ describe('buildImpwDraft', () => {
   });
 
   it('lists exactly the blank site answers as missing, never inventing one', () => {
+    // Type of Improvement and Coordinator only exist inside the tenant, so
+    // PMD asks Mango for them rather than guessing a plausible value.
     const d = buildImpwDraft(finding({ breakdownHrs: 2 }), raiser, EMPTY_IMPW_SITE);
-    expect(missingImpwFields(d)).toEqual([
-      'Type of Improvement',
-      'Source',
-      'Type',
-      'Region',
-      'Branch',
-      'Other',
-    ]);
+    expect(missingImpwFields(d)).toEqual(['Type of Improvement', 'Coordinator']);
   });
 
-  it('takes Coordinator from the signed-in user and flags a missing one', () => {
-    expect(buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, SITE).coordinator).toBe(
+  it('takes Name from the signed-in user and flags a missing one', () => {
+    expect(buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, SITE).originatorName).toBe(
       'Christopher King',
     );
     const anon = buildImpwDraft(finding({ breakdownHrs: 1 }), { name: '' }, SITE);
-    expect(missingImpwFields(anon)).toContain('Coordinator');
+    expect(missingImpwFields(anon)).toContain('Name');
   });
 
-  it("prefers the site's own contact address over the raiser's", () => {
-    expect(buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, SITE).email).toBe(
-      'plant@example.com',
-    );
-    expect(
-      buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, { ...SITE, email: '' }).email,
-    ).toBe('ck@example.com');
+  it('carries the coordinator through as the id-and-name pair Mango issued', () => {
+    const d = buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, SITE);
+    expect(d.coordinator).toEqual({ id: 'co-1', name: 'Felicity Kidwell' });
+    expect(d.typeOfImprovement).toEqual({ id: 'toi-1', name: 'Corrective Action' });
   });
 
   it('dates the ticket from the shift', () => {
-    expect(buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, SITE).dateOfOccurrence).toBe(
-      '26/08/2026',
+    expect(buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, SITE).improvementDate).toBe(
+      new Date(2026, 7, 26, 23, 0, 0, 0).toISOString(),
     );
   });
 
   it('leads Brief Description with the press — Mango lists tickets by it', () => {
     const d = buildImpwDraft(finding({ output: 900, reject: 100, yieldPct: 90 }), raiser, SITE);
-    expect(d.briefDescription.startsWith('1600T Night shift 26/08/2026 — ')).toBe(true);
-    expect(d.briefDescription).toContain('Yield 90%');
+    expect(d.description.startsWith('1600T Night shift 26/08/2026 — ')).toBe(true);
+    expect(d.description).toContain('Yield 90%');
   });
 
-  it('keeps Brief Description inside Mango’s 256-character cap', () => {
+  it('keeps Brief Description inside the API’s 255-character cap', () => {
     const wordy = finding({
       breakdownHrs: 3,
       breakdowns: Array.from({ length: 8 }, (_, i) => ({
@@ -357,13 +388,30 @@ describe('buildImpwDraft', () => {
       })),
     });
     const d = buildImpwDraft(wordy, raiser, SITE);
-    expect(d.briefDescription.length).toBeLessThanOrEqual(256);
+    expect(IMPW_DESCRIPTION_MAX).toBe(255);
+    expect(d.description.length).toBeLessThanOrEqual(255);
+    expect(overlongImpwFields(d)).toEqual([]);
+  });
+
+  it('keeps Details inside the API’s 4096-character cap', () => {
+    const wordy = finding({
+      breakdownHrs: 8,
+      breakdowns: Array.from({ length: 60 }, (_, i) => ({
+        code: `MEC-${i}`,
+        label: 'A very long breakdown cause description that runs on and on and on',
+        owner: 'Maintenance',
+        hours: 0.1,
+        note: 'The operator wrote a great deal about this one, at some length',
+      })),
+    });
+    const d = buildImpwDraft(wordy, raiser, SITE);
+    expect(d.improvementDetails.length).toBeLessThanOrEqual(4096);
     expect(overlongImpwFields(d)).toEqual([]);
   });
 
   it('reduces a taxonomy owner to one Mango department', () => {
     // "Operator → Maintenance" is an escalation path and "Maintenance /
-    // Setter" a shared job; Mango's Department is one pick from a list.
+    // Setter" a shared job; Mango's Department is one existing name.
     expect(impwDepartmentOf('Operator → Maintenance')).toBe('Maintenance');
     expect(impwDepartmentOf('Maintenance / Setter')).toBe('Maintenance');
     expect(impwDepartmentOf('Setter / Maintenance')).toBe('Setter');
@@ -388,10 +436,10 @@ describe('buildImpwDraft', () => {
     expect(suggestImpwDepartment(f)).toBe('Production');
   });
 
-  it('names the press as Plant/Equipment the way Mango lists it', () => {
-    expect(buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, SITE).plantEquipment).toBe(
-      '1600T — Injection 1600T',
-    );
+  it('names the press inside Details — the API has no Plant/Equipment to put it in', () => {
+    expect(
+      buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, SITE).improvementDetails,
+    ).toContain('Plant/Equipment: 1600T (Injection 1600T)');
   });
 
   it("carries the operator's own words into the ticket body", () => {
@@ -411,12 +459,7 @@ describe('buildImpwDraft', () => {
       raiser,
       SITE,
     );
-    expect(d.details).toContain('Operator: Drive tripped on start, 3rd time this week');
-  });
-
-  it('points Related documents back at the shift it came from', () => {
-    const d = buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, SITE);
-    expect(d.relatedDocuments).toBe('PMD Dashboard KPI — 2026-08-26-Night — 1600T');
+    expect(d.improvementDetails).toContain('Operator: Drive tripped on start, 3rd time this week');
   });
 
   it('writes a body that stands on its own away from the dashboard', () => {
@@ -425,61 +468,85 @@ describe('buildImpwDraft', () => {
       raiser,
       SITE,
     );
-    expect(d.details).toContain('1600T');
-    expect(d.details).toContain('2026-08-26-Night');
-    expect(d.details).toContain('SFM507205');
-    expect(d.details).toContain('900 pcs');
-    expect(d.details).toContain('100 pcs');
-    expect(d.details).toContain('90%');
-    expect(d.details).toContain('1.5 h');
-  });
-
-  it('leaves every tick-box unticked for the coordinator to answer', () => {
-    const d = buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, SITE);
-    expect([
-      d.sendCopyToCustomer,
-      d.authoritiesNotified,
-      d.customerNotified,
-      d.proceduresReviewed,
-      d.processToBeChanged,
-      d.trainingReviewed,
-    ]).toEqual([false, false, false, false, false, false]);
+    const body = d.improvementDetails;
+    expect(body).toContain('1600T');
+    expect(body).toContain('2026-08-26-Night');
+    expect(body).toContain('SFM507205');
+    expect(body).toContain('900 pcs');
+    expect(body).toContain('100 pcs');
+    expect(body).toContain('90%');
+    expect(body).toContain('1.5 h');
+    // The risk and the provenance have no fields of their own on the API,
+    // so they have to survive here or not at all.
+    expect(body).toContain('Risk:');
+    expect(body).toContain('Christopher King');
+    expect(body).toContain('PMD_Production');
   });
 });
 
 describe('IMPW validation', () => {
-  it('covers exactly the fields Mango stars', () => {
-    expect(IMPW_REQUIRED.map((f) => f.label)).toEqual([
+  const blank = (): ImpwDraft => ({
+    description: '',
+    typeOfImprovement: { ...EMPTY_OPTION },
+    originatorName: '',
+    improvementDate: '',
+    improvementDetails: '',
+    region: '',
+    branch: '',
+    department: '',
+    other: '',
+    coordinator: { ...EMPTY_OPTION },
+  });
+
+  it('requires exactly the six fields the API documents as required', () => {
+    expect(missingImpwFields(blank())).toEqual([
       'Brief Description',
       'Type of Improvement',
-      'Source',
+      'Name',
       'Date of occurrence',
       'Details of Improvement and/or Proposed Action',
-      'Type',
-      'Region',
-      'Branch',
-      'Department',
-      'Other',
       'Coordinator',
     ]);
+  });
+
+  it('leaves the four placement fields optional, because the API does', () => {
+    // The web form stars Region, Branch and Other; the API's own parameter
+    // table says each "can leave it blank". The API is what PMD posts to.
+    const missing = missingImpwFields(blank());
+    for (const label of ['Region', 'Branch', 'Department', 'Other']) {
+      expect(missing).not.toContain(label);
+    }
+  });
+
+  it('demands Mango’s own id for the API but takes a typed name for pasting', () => {
+    // A name typed by hand is not a valid API pick — Mango matches on the
+    // id it issued. A person pasting into the web form picks from its own
+    // dropdown, so there the name is all that is needed.
+    const found = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
+    const d: ImpwDraft = {
+      ...buildImpwDraft(found, { name: 'CK' }, SITE),
+      typeOfImprovement: { id: '', name: 'Customer Contact' },
+    };
+    expect(missingImpwFields(d, 'api')).toEqual(['Type of Improvement']);
+    expect(missingImpwFields(d, 'paste')).toEqual([]);
   });
 
   it('treats whitespace as blank', () => {
     const found = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
     const d = buildImpwDraft(found, { name: '   ' }, SITE);
-    expect(missingImpwFields(d)).toEqual(['Coordinator']);
+    expect(missingImpwFields(d)).toEqual(['Name']);
   });
 
   it('reports an over-long capped field', () => {
     const found = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
-    const d = { ...buildImpwDraft(found, { name: 'A' }, SITE), email: 'x'.repeat(300) };
-    expect(overlongImpwFields(d)).toEqual(['Email (max 256)']);
-    expect(impwDraftIssues(d)).toEqual(['Too long: Email (max 256)']);
+    const d = { ...buildImpwDraft(found, { name: 'A' }, SITE), branch: 'x'.repeat(300) };
+    expect(overlongImpwFields(d)).toEqual(['Branch (max 255)']);
+    expect(impwDraftIssues(d)).toEqual(['Too long: Branch (max 255)']);
   });
 });
 
 describe('Mango API contract', () => {
-  const draft = (): ReturnType<typeof buildImpwDraft> =>
+  const draft = (): ImpwDraft =>
     buildImpwDraft(
       detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0],
       { name: 'CK' },
@@ -487,63 +554,120 @@ describe('Mango API contract', () => {
     );
 
   it('joins the base and path without doubling or dropping the slash', () => {
-    expect(impwEndpoint('https://api.mangolive.com', '/api/v4/improvement/new')).toBe(
-      'https://api.mangolive.com/api/v4/improvement/new',
+    expect(impwEndpoint('https://api.mangolive.com', '/api/v4/improvement')).toBe(
+      'https://api.mangolive.com/api/v4/improvement',
     );
-    expect(impwEndpoint('https://api.mangolive.com/', 'api/v4/improvement/new')).toBe(
-      'https://api.mangolive.com/api/v4/improvement/new',
+    expect(impwEndpoint('https://api.mangolive.com/', 'api/auth/authenticate')).toBe(
+      'https://api.mangolive.com/api/auth/authenticate',
     );
-    expect(impwEndpoint(' https://api.mangolive.com// ', '//api/v4/improvement/new ')).toBe(
-      'https://api.mangolive.com/api/v4/improvement/new',
+    // Mango's paths must not end with a slash or whitespace.
+    expect(impwEndpoint(' https://api.mangolive.com// ', '//api/v4/improvement/ ')).toBe(
+      'https://api.mangolive.com/api/v4/improvement',
     );
   });
 
-  it('maps every draft field to an API property', () => {
-    // The mapping is the one guess in this module; a field silently missing
-    // from it would be a field silently missing from every ticket.
-    const d = draft();
-    for (const key of Object.keys(d)) expect(IMPW_API_FIELDS).toHaveProperty(key);
-    expect(Object.keys(IMPW_API_FIELDS).sort()).toEqual(Object.keys(d).sort());
+  it('sends exactly the ten fields the API documents, and nothing else', () => {
+    // The web form asks for 26 things. Anything extra here would be a field
+    // Mango ignores at best and 422s at worst.
+    expect(Object.keys(impwApiPayload(draft())).sort()).toEqual([
+      'branch',
+      'coordinator',
+      'department',
+      'description',
+      'improvementDate',
+      'improvementDetails',
+      'originatorName',
+      'other',
+      'region',
+      'typeOfImprovement',
+    ]);
   });
 
-  it('always sends the required fields and every tick-box', () => {
-    const payload = impwApiPayload(draft());
-    for (const f of IMPW_REQUIRED) expect(payload).toHaveProperty(IMPW_API_FIELDS[f.field]);
-    expect(payload.sendCopyToCustomer).toBe(false);
-    expect(payload.trainingReviewed).toBe(false);
+  it('sends the two option fields as {id, name} objects', () => {
+    const p = impwApiPayload(draft());
+    expect(p.typeOfImprovement).toEqual({ id: 'toi-1', name: 'Corrective Action' });
+    expect(p.coordinator).toEqual({ id: 'co-1', name: 'Felicity Kidwell' });
   });
 
-  it('omits blank optional fields rather than sending empty strings', () => {
-    const payload = impwApiPayload({ ...draft(), fax: '', relatedFiles: '', phone: '  ' });
-    expect(payload).not.toHaveProperty('fax');
-    expect(payload).not.toHaveProperty('relatedFiles');
-    expect(payload).not.toHaveProperty('phone');
+  it('sends the date as ISO 8601 UTC', () => {
+    expect(String(impwApiPayload(draft()).improvementDate)).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    );
   });
 
-  it('keeps a blank REQUIRED field so Mango reports it, not PMD hiding it', () => {
-    const payload = impwApiPayload({ ...draft(), region: '' });
-    expect(payload.region).toBe('');
+  it('omits a blank placement field rather than asking Mango to match an empty name', () => {
+    const p = impwApiPayload({ ...draft(), region: '', other: '   ' });
+    expect(p).not.toHaveProperty('region');
+    expect(p).not.toHaveProperty('other');
+    expect(p.branch).toBe('Wacol');
   });
 
-  it('finds the new ticket id whatever Mango calls it', () => {
-    expect(extractImpwTicketId({ ticketNumber: 'IMP-2291' })).toBe('IMP-2291');
-    expect(extractImpwTicketId({ id: 88123 })).toBe('88123');
-    expect(extractImpwTicketId({ data: { reference: 'IMP-7' } })).toBe('IMP-7');
-    expect(extractImpwTicketId({ result: { id: 5 } })).toBe('5');
+  it('reads back the created ticket the way the API documents it', () => {
+    const c = parseImpwCreated({
+      id: 'GfuUaXy',
+      formTitle: 'Improvement',
+      abbreviation: 'IMP',
+      number: '0123',
+    });
+    expect(c).toEqual({
+      id: 'GfuUaXy',
+      formTitle: 'Improvement',
+      abbreviation: 'IMP',
+      number: '0123',
+    });
+    expect(impwTicketRef(c)).toBe('IMP 0123');
   });
 
-  it('reports no id rather than inventing one', () => {
-    expect(extractImpwTicketId(null)).toBe('');
-    expect(extractImpwTicketId('created')).toBe('');
-    expect(extractImpwTicketId({ status: 'ok' })).toBe('');
+  it('still names the ticket when Mango returns only part of it', () => {
+    expect(impwTicketRef(parseImpwCreated({ number: '0123' }))).toBe('0123');
+    expect(impwTicketRef(parseImpwCreated({ id: 'abc' }))).toBe('abc');
+    expect(impwTicketRef(parseImpwCreated(null))).toBe('');
+    expect(impwTicketRef(parseImpwCreated('created'))).toBe('');
+  });
+
+  it('reads the tenant option lists and drops anything unusable', () => {
+    const body = {
+      typeOfImprovement: [
+        { id: 'b', name: 'Customer complaint' },
+        { id: 'a', name: 'Audit finding' },
+        { id: '', name: 'No id' },
+        { name: 'Name only' },
+        null,
+        'nonsense',
+      ],
+      coordinator: [{ id: 'c1', name: 'Felicity Kidwell' }],
+    };
+    expect(parseImpwOptions(body, 'typeOfImprovement')).toEqual([
+      { id: 'a', name: 'Audit finding' },
+      { id: 'b', name: 'Customer complaint' },
+    ]);
+    expect(parseImpwOptions(body, 'coordinator')).toEqual([{ id: 'c1', name: 'Felicity Kidwell' }]);
+    expect(parseImpwOptions(null, 'coordinator')).toEqual([]);
+    expect(parseImpwOptions({ coordinator: 'nope' }, 'coordinator')).toEqual([]);
   });
 
   it('turns a failure into an instruction, not a status code', () => {
     expect(describeImpwApiFailure(0, '')).toMatch(/could not reach mango/i);
     expect(describeImpwApiFailure(0, '')).toMatch(/CORS/);
-    expect(describeImpwApiFailure(401, '')).toMatch(/re-enter the mango username/i);
-    expect(describeImpwApiFailure(404, '')).toMatch(/API path/);
+    expect(describeImpwApiFailure(401, '')).toMatch(/Mango connection/);
+    expect(describeImpwApiFailure(404, '')).toMatch(/API address/);
     expect(describeImpwApiFailure(503, '')).toMatch(/not the ticket/i);
+  });
+
+  it('tells a 422 what it almost always is — a name Mango does not have', () => {
+    const msg = describeImpwApiFailure(422, '');
+    expect(msg).toMatch(/Region, Branch, Department and Other/);
+    expect(msg).toMatch(/already exists in Mango/);
+  });
+
+  it('says a failed sign-in is the account, not the ticket', () => {
+    const msg = describeMangoAuthFailure(400, '{"message":"Username or password is incorrect"}');
+    expect(msg).toMatch(/username and password/i);
+    // An ordinary Mango login is not automatically an API login, and that
+    // is the second thing to check when the password is definitely right.
+    expect(msg).toMatch(/API access/);
+    expect(msg).toContain('Username or password is incorrect');
+    expect(describeMangoAuthFailure(0, '')).toMatch(/could not reach mango/i);
   });
 
   it("quotes Mango's own words so a rejected field can be found", () => {
@@ -559,12 +683,24 @@ describe('Mango API contract', () => {
 });
 
 describe('impwPlainText', () => {
-  it('labels every field the way Mango does and stars the required ones', () => {
+  it('labels the fields the way the web form does, for pasting in by hand', () => {
     const found = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
     const text = impwPlainText(buildImpwDraft(found, { name: 'CK' }, SITE));
     expect(text.startsWith('IMPW — Improvement Workflow')).toBe(true);
-    for (const f of IMPW_REQUIRED) expect(text).toContain(`${f.label} *`);
-    expect(text).toContain('Plant/Equipment involved: 1600T — Injection 1600T');
-    expect(text).toContain('Send copy to customer: No');
+    expect(text).toContain('Brief Description *');
+    expect(text).toContain('Type of Improvement *: Corrective Action');
+    expect(text).toContain('Name *: CK');
+    // The form takes dd/mm/yyyy even though the API takes ISO.
+    expect(text).toContain('Date of occurrence *: 26/08/2026');
+    expect(text).toContain('Coordinator *: Felicity Kidwell');
+    expect(text).toContain('Region: QLD');
+    expect(text).toContain('Branch: Wacol');
+  });
+
+  it('never leaks an id into text a person retypes', () => {
+    const found = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
+    const text = impwPlainText(buildImpwDraft(found, { name: 'CK' }, SITE));
+    expect(text).not.toContain('toi-1');
+    expect(text).not.toContain('co-1');
   });
 });

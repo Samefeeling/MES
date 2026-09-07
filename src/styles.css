@@ -161,18 +161,23 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-impw-label{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.35px;color:#64748b}
 .kpi-impw-req{color:#dc2626}
 .kpi-impw-label em{font-style:normal;font-size:9.5px;font-weight:800;color:#92400e;background:#fef3c7;border-radius:4px;padding:0 4px;text-transform:uppercase}
-.kpi-impw-field input,.kpi-impw-field textarea{width:100%;font-size:13px;padding:6px 8px;border:1px solid var(--bd);border-radius:8px;font-family:inherit;box-sizing:border-box}
+.kpi-impw-field input,.kpi-impw-field textarea,.kpi-impw-field select{width:100%;font-size:13px;padding:6px 8px;border:1px solid var(--bd);border-radius:8px;font-family:inherit;box-sizing:border-box;background:#fff}
 .kpi-impw-field textarea{resize:vertical;line-height:1.45;white-space:pre-wrap}
+.kpi-impw-field select{min-height:33px}
+.kpi-impw-field select:disabled{background:#f8fafc;color:#94a3b8}
 .kpi-impw-field.is-site input{background:#fffbeb}
-.kpi-impw-checks{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px 16px;padding-top:4px;border-top:1px solid var(--bd)}
-.kpi-impw-check{display:flex;align-items:center;gap:6px;font-size:12px;color:#334155}
+/* Date of occurrence is the shift's own start instant, not a choice. */
+.kpi-impw-when-field output{font-size:13px;padding:7px 8px;color:#334155;background:#f8fafc;border:1px dashed var(--bd);border-radius:8px}
 .kpi-impw-note{flex:0 0 auto;margin:0;font-size:11px;line-height:1.55;color:var(--mu)}
 .kpi-impw-fallback{margin:6px 0 0;font-size:12px;line-height:1.5;color:#475569}
 .kpi-impw-linkbtn{background:none;border:0;padding:0;font:inherit;font-weight:700;color:#b45309;text-decoration:underline;cursor:pointer}
 /* Mango API sign-in, entered on the device (the password rotates). */
 .mdl:has(.kpi-mango-modal){max-width:min(560px,94vw)}
 .kpi-mango-form{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin:12px 0}
+.kpi-mango-paths{margin:0 0 10px;font-size:11.5px;line-height:1.6;color:#475569}
+.kpi-mango-paths code{font-size:11px;background:#f1f5f9;border-radius:4px;padding:1px 5px;overflow-wrap:anywhere}
 .kpi-mango-warn{margin:0;font-size:11.5px;line-height:1.6;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:9px 11px}
+.kpi-mango-test:not(:empty){margin-top:10px}
 .kpi-mango-actions{margin-top:12px}
 .kpi-impw-modal-actions{flex:0 0 auto}
 .kpi-impw-modal-actions button[disabled]{opacity:.5;cursor:not-allowed}

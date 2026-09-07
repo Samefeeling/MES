@@ -37,16 +37,30 @@ ok (~76 KB JS / 24 KB gzip).
   breakdown (B slots only — *not* the Down h column, which counts Smoko),
   missed the yield threshold, or blew the per-shift reject allowance raise a
   "ready to raise" card with Yes / No, open to anyone at the screen. Yes
-  drafts Mango's Improvement Workflow form (`core/impw.ts`) and validates
-  every field Mango marks required, then either **POSTs it** to Mango's API
-  (`ui/mango-api.ts` → `POST {base}/api/v4/improvement/new`, HTTP Basic) or,
-  when no sign-in is stored, copies the filled form and opens IMPW to paste
-  into. An API failure falls back to that same clipboard path and quotes
+  drafts the improvement (`core/impw.ts`) and files it through **Mango's
+  Public API v4** (`ui/mango-api.ts`), transcribed from the vendor document
+  into `docs/mango-api-v4.md` — that file is the authority, nothing here is
+  inferred from the web form:
+  - `POST /api/auth/authenticate` → bearer token (in memory only; Mango
+    ties a token to the acquiring IP, and one 401 retry re-authenticates);
+  - `GET /api/v4/improvement/new` → the tenant's own Type of Improvement
+    and Coordinator lists, so those two are **picked from Mango**, never
+    guessed;
+  - `POST /api/v4/improvement` → the ticket; the reply's
+    `abbreviation + number` ("IMP 0123") is shown on the card.
+
+  The API takes 10 fields where the web form asks for 26, so what PMD can
+  actually prove — press, orders, output/reject/yield, every breakdown
+  cause with the operator's own note — goes into `improvementDetails`
+  (4096 chars) rather than into invented fields. Region / Branch /
+  Department / Other are optional to the API but must name something that
+  already exists in the tenant; a blank one is omitted rather than sent.
+  With no sign-in stored, Yes copies the filled form and opens IMPW to
+  paste into, and any API failure falls back to that same path quoting
   Mango's own response — filing a ticket never depends on the API being
   reachable. Mango stays the system of record; PMD keeps no register.
   Decisions are remembered per browser (`pmd.impwDecisions`, with the
-  returned ticket id), as are the plant's Mango dropdown answers
-  (`pmd.impwSite`).
+  ticket reference), as are the plant's answers (`pmd.impwSite`).
 
 ## Action needed on the SharePoint side
 
@@ -86,14 +100,25 @@ KPI page opens for the copy-and-paste path — **confirm the real path**.
 
 The Mango **API** sign-in is deliberately NOT build-time config: the account
 password is rotated, and an env var would mean a rebuild every rotation. It
-is entered on the device from KPI → 🥭 Mango connection (supervisor only)
+is entered on the device from KPI → ⚙ Mango connection (supervisor only)
 and stored in that browser's localStorage under `pmd.mangoApi`
-(`{baseUrl, path, username, password}`, defaults
-`https://api.mangolive.com` + `/api/v4/improvement/new`). Each device that
-files tickets needs it set once. Two things to check on the first live run:
-the auth scheme (Basic is assumed) and whether `api.mangolive.com` returns
-CORS headers for the SharePoint origin — a browser reports a CORS refusal
-exactly like being offline, and `describeImpwApiFailure` says so.
+(`{baseUrl, username, password}`, default host `https://api.mangolive.com`;
+`https://api-uk.mangolive.com` for a UK-hosted account). The API paths are
+fixed by Mango and are not configurable. Each device that files tickets
+needs it set once, and the dialog's **Test sign-in** answers on the spot.
+
+Two things must be true on the first live run, and neither is a code
+change:
+
+1. **API access is enabled on that Mango account.** An ordinary Mango login
+   is not automatically an API login — it is switched on per user inside
+   Mango. A 400 from `/api/auth/authenticate` says so.
+2. **`api.mangolive.com` must return CORS headers for the SharePoint
+   origin.** The calls are cross-origin from the browser, so Mango has to
+   allow them; no front-end change can work around a refusal. A browser
+   reports a CORS refusal exactly like being offline, and
+   `describeImpwApiFailure` names both causes. The copy-and-paste path is
+   kept precisely so this cannot block the plant.
 
 ## Immediate next action
 
