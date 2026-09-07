@@ -508,6 +508,122 @@ export function impwPlainText(d: ImpwDraft): string {
   ].join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// Mango's REST API
+// ---------------------------------------------------------------------------
+
+/**
+ * ImpwDraft key → the JSON property Mango's API expects.
+ *
+ * Split out as a table because it is the one thing here that is a guess:
+ * Mango published the FORM (the labels and which are required), and the
+ * property names below are those labels in camelCase. When the live API
+ * rejects a name, correct it HERE and nothing else changes — the draft,
+ * the validation and the dialog all key off ImpwDraft.
+ */
+export const IMPW_API_FIELDS: Record<keyof ImpwDraft, string> = {
+  briefDescription: 'briefDescription',
+  typeOfImprovement: 'typeOfImprovement',
+  source: 'source',
+  email: 'email',
+  phone: 'phone',
+  fax: 'fax',
+  sendCopyToCustomer: 'sendCopyToCustomer',
+  dateOfOccurrence: 'dateOfOccurrence',
+  details: 'details',
+  additionalInformation: 'additionalInformation',
+  authoritiesNotified: 'authoritiesNotified',
+  customerNotified: 'customerNotified',
+  proceduresReviewed: 'proceduresReviewed',
+  processToBeChanged: 'processToBeChanged',
+  trainingReviewed: 'trainingReviewed',
+  investigationDetails: 'investigationDetails',
+  type: 'type',
+  region: 'region',
+  branch: 'branch',
+  department: 'department',
+  other: 'other',
+  plantEquipment: 'plantEquipment',
+  risks: 'risks',
+  relatedDocuments: 'relatedDocuments',
+  relatedFiles: 'relatedFiles',
+  coordinator: 'coordinator',
+};
+
+/** The draft as Mango's API wants it. Empty optional strings are dropped —
+ *  an API that validates its own optional fields should not be handed a
+ *  blank Fax to reject. */
+export function impwApiPayload(d: ImpwDraft): Record<string, string | boolean> {
+  const required = new Set<string>(IMPW_REQUIRED.map((f) => f.field));
+  const out: Record<string, string | boolean> = {};
+  for (const [key, name] of Object.entries(IMPW_API_FIELDS) as Array<
+    [keyof ImpwDraft, string]
+  >) {
+    const v = d[key];
+    if (typeof v === 'boolean') out[name] = v;
+    else if (String(v ?? '').trim() || required.has(key)) out[name] = String(v ?? '');
+  }
+  return out;
+}
+
+/** Join the configured base and path without doubling or dropping the '/'. */
+export function impwEndpoint(base: string, path: string): string {
+  return `${base.trim().replace(/\/+$/, '')}/${path.trim().replace(/^\/+/, '')}`;
+}
+
+/**
+ * Whatever Mango calls the new ticket, found without knowing its response
+ * shape: the first string/number under a plausible id key, at the top level
+ * or one level in (APIs of this vintage wrap in `data` or `result` about
+ * half the time). Returns '' when nothing looks like an id — the caller
+ * still reports success, just without a number to quote.
+ */
+export function extractImpwTicketId(body: unknown): string {
+  const KEYS = ['ticketNumber', 'ticketNo', 'ticketId', 'reference', 'number', 'id'];
+  const pick = (o: unknown): string => {
+    if (!o || typeof o !== 'object') return '';
+    const rec = o as Record<string, unknown>;
+    for (const k of KEYS) {
+      const v = rec[k];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+      if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+    }
+    return '';
+  };
+  const top = pick(body);
+  if (top) return top;
+  for (const nest of ['data', 'result', 'improvement', 'record']) {
+    const inner = pick((body as Record<string, unknown> | null)?.[nest]);
+    if (inner) return inner;
+  }
+  return '';
+}
+
+/**
+ * Turn a failed call into a sentence that says what to DO. The floor cannot
+ * read an HTTP status, and "it didn't work" wastes the trip to the office.
+ */
+export function describeImpwApiFailure(status: number, body: string): string {
+  const detail = body.trim().slice(0, 300);
+  const withDetail = (s: string): string => (detail ? `${s} — Mango said: ${detail}` : s);
+  if (status === 0) {
+    return 'Could not reach Mango from this browser — check the network, or ask IT whether api.mangolive.com allows requests from this site (CORS).';
+  }
+  if (status === 401 || status === 403) {
+    return withDetail('Mango rejected the sign-in. Re-enter the Mango username and password under 🥭 Mango connection.');
+  }
+  if (status === 404) {
+    return withDetail('Mango has no endpoint at that address — check the API path in 🥭 Mango connection.');
+  }
+  if (status === 400 || status === 422) {
+    return withDetail('Mango would not accept the ticket contents.');
+  }
+  if (status >= 500) {
+    return withDetail(`Mango returned a server error (${status}). It is not the ticket — try again shortly.`);
+  }
+  return withDetail(`Mango returned ${status}.`);
+}
+
 /**
  * Fold a shift's slots into one entry per breakdown cause.
  *

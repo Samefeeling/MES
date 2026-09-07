@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildImpwDraft,
+  describeImpwApiFailure,
   detectImpwFindings,
+  extractImpwTicketId,
   foldBreakdowns,
+  impwApiPayload,
   impwDepartmentOf,
+  impwEndpoint,
   impwDraftIssues,
   impwFindingKey,
   impwOccurrenceDate,
@@ -13,6 +17,7 @@ import {
   suggestImpwDepartment,
   yieldPctOf,
   EMPTY_IMPW_SITE,
+  IMPW_API_FIELDS,
   IMPW_REQUIRED,
   type ImpwFinding,
   type ImpwSiteConfig,
@@ -470,6 +475,86 @@ describe('IMPW validation', () => {
     const d = { ...buildImpwDraft(found, { name: 'A' }, SITE), email: 'x'.repeat(300) };
     expect(overlongImpwFields(d)).toEqual(['Email (max 256)']);
     expect(impwDraftIssues(d)).toEqual(['Too long: Email (max 256)']);
+  });
+});
+
+describe('Mango API contract', () => {
+  const draft = (): ReturnType<typeof buildImpwDraft> =>
+    buildImpwDraft(
+      detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0],
+      { name: 'CK' },
+      SITE,
+    );
+
+  it('joins the base and path without doubling or dropping the slash', () => {
+    expect(impwEndpoint('https://api.mangolive.com', '/api/v4/improvement/new')).toBe(
+      'https://api.mangolive.com/api/v4/improvement/new',
+    );
+    expect(impwEndpoint('https://api.mangolive.com/', 'api/v4/improvement/new')).toBe(
+      'https://api.mangolive.com/api/v4/improvement/new',
+    );
+    expect(impwEndpoint(' https://api.mangolive.com// ', '//api/v4/improvement/new ')).toBe(
+      'https://api.mangolive.com/api/v4/improvement/new',
+    );
+  });
+
+  it('maps every draft field to an API property', () => {
+    // The mapping is the one guess in this module; a field silently missing
+    // from it would be a field silently missing from every ticket.
+    const d = draft();
+    for (const key of Object.keys(d)) expect(IMPW_API_FIELDS).toHaveProperty(key);
+    expect(Object.keys(IMPW_API_FIELDS).sort()).toEqual(Object.keys(d).sort());
+  });
+
+  it('always sends the required fields and every tick-box', () => {
+    const payload = impwApiPayload(draft());
+    for (const f of IMPW_REQUIRED) expect(payload).toHaveProperty(IMPW_API_FIELDS[f.field]);
+    expect(payload.sendCopyToCustomer).toBe(false);
+    expect(payload.trainingReviewed).toBe(false);
+  });
+
+  it('omits blank optional fields rather than sending empty strings', () => {
+    const payload = impwApiPayload({ ...draft(), fax: '', relatedFiles: '', phone: '  ' });
+    expect(payload).not.toHaveProperty('fax');
+    expect(payload).not.toHaveProperty('relatedFiles');
+    expect(payload).not.toHaveProperty('phone');
+  });
+
+  it('keeps a blank REQUIRED field so Mango reports it, not PMD hiding it', () => {
+    const payload = impwApiPayload({ ...draft(), region: '' });
+    expect(payload.region).toBe('');
+  });
+
+  it('finds the new ticket id whatever Mango calls it', () => {
+    expect(extractImpwTicketId({ ticketNumber: 'IMP-2291' })).toBe('IMP-2291');
+    expect(extractImpwTicketId({ id: 88123 })).toBe('88123');
+    expect(extractImpwTicketId({ data: { reference: 'IMP-7' } })).toBe('IMP-7');
+    expect(extractImpwTicketId({ result: { id: 5 } })).toBe('5');
+  });
+
+  it('reports no id rather than inventing one', () => {
+    expect(extractImpwTicketId(null)).toBe('');
+    expect(extractImpwTicketId('created')).toBe('');
+    expect(extractImpwTicketId({ status: 'ok' })).toBe('');
+  });
+
+  it('turns a failure into an instruction, not a status code', () => {
+    expect(describeImpwApiFailure(0, '')).toMatch(/could not reach mango/i);
+    expect(describeImpwApiFailure(0, '')).toMatch(/CORS/);
+    expect(describeImpwApiFailure(401, '')).toMatch(/re-enter the mango username/i);
+    expect(describeImpwApiFailure(404, '')).toMatch(/API path/);
+    expect(describeImpwApiFailure(503, '')).toMatch(/not the ticket/i);
+  });
+
+  it("quotes Mango's own words so a rejected field can be found", () => {
+    expect(describeImpwApiFailure(422, '{"error":"region is not a valid option"}')).toContain(
+      'region is not a valid option',
+    );
+  });
+
+  it('truncates a runaway error body instead of pasting a page into a toast', () => {
+    const msg = describeImpwApiFailure(400, 'x'.repeat(5000));
+    expect(msg.length).toBeLessThan(400);
   });
 });
 

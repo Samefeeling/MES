@@ -36,12 +36,17 @@ ok (~76 KB JS / 24 KB gzip).
 - **Mango IMPW actions** (`#/kpi`): signed-off shifts that lost time to a
   breakdown (B slots only — *not* the Down h column, which counts Smoko),
   missed the yield threshold, or blew the per-shift reject allowance raise a
-  "ready to raise" card with Yes / No. Yes drafts Mango's Improvement
-  Workflow form (`core/impw.ts`), validates every field Mango marks
-  required, copies it to the clipboard and opens IMPW in a new tab. Mango
-  stays the system of record — PMD never keeps a second register. Yes / No
-  is supervisor-gated and remembered per browser (`pmd.impwDecisions`); the
-  plant's Mango dropdown answers are remembered too (`pmd.impwSite`).
+  "ready to raise" card with Yes / No, open to anyone at the screen. Yes
+  drafts Mango's Improvement Workflow form (`core/impw.ts`) and validates
+  every field Mango marks required, then either **POSTs it** to Mango's API
+  (`ui/mango-api.ts` → `POST {base}/api/v4/improvement/new`, HTTP Basic) or,
+  when no sign-in is stored, copies the filled form and opens IMPW to paste
+  into. An API failure falls back to that same clipboard path and quotes
+  Mango's own response — filing a ticket never depends on the API being
+  reachable. Mango stays the system of record; PMD keeps no register.
+  Decisions are remembered per browser (`pmd.impwDecisions`, with the
+  returned ticket id), as are the plant's Mango dropdown answers
+  (`pmd.impwSite`).
 
 ## Action needed on the SharePoint side
 
@@ -76,11 +81,19 @@ VITE_SITE_URL=https://reseroglobal.sharepoint.com/sites/ReseroOperationsAU
 VITE_PLANNING_PATH=Shared Documents/General/Planning/PMD/PMD Schedule_master_epicor 300424.xlsm
 VITE_MANGO_IMPW_URL=https://my.mangolive.com/improvement-workflow
 ```
-Default (no env) = `memory`. `VITE_MANGO_IMPW_URL` is the deep link the KPI
-"Raise in Mango" button opens — **confirm the real IMPW path and set it**;
-the default is the best guess, and Mango exposes no write API for this form,
-so the handoff is clipboard + form, exactly like the maintenance-request
-link on the Die tab.
+Default (no env) = `memory`. `VITE_MANGO_IMPW_URL` is the human IMPW form the
+KPI page opens for the copy-and-paste path — **confirm the real path**.
+
+The Mango **API** sign-in is deliberately NOT build-time config: the account
+password is rotated, and an env var would mean a rebuild every rotation. It
+is entered on the device from KPI → 🥭 Mango connection (supervisor only)
+and stored in that browser's localStorage under `pmd.mangoApi`
+(`{baseUrl, path, username, password}`, defaults
+`https://api.mangolive.com` + `/api/v4/improvement/new`). Each device that
+files tickets needs it set once. Two things to check on the first live run:
+the auth scheme (Basic is assumed) and whether `api.mangolive.com` returns
+CORS headers for the SharePoint origin — a browser reports a CORS refusal
+exactly like being offline, and `describeImpwApiFailure` says so.
 
 ## Immediate next action
 

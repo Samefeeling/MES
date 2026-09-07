@@ -117,8 +117,12 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-impw-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .kpi-impw-head h3{margin:0;font-size:14px;font-weight:800;color:#92400e;display:flex;align-items:center;gap:8px}
 .kpi-impw-count{background:#f59e0b;color:#fff;border-radius:999px;min-width:22px;padding:1px 8px;font-size:12px;font-weight:800;text-align:center}
-.kpi-impw-toggle{margin-left:auto;font-size:12px;font-weight:600;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:4px 10px;cursor:pointer}
-.kpi-impw-toggle:hover{background:#fde68a}
+.kpi-impw-toggle,.kpi-impw-conn-btn{font-size:12px;font-weight:600;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:4px 10px;cursor:pointer;white-space:nowrap}
+.kpi-impw-toggle{margin-left:auto}
+.kpi-impw-toggle:hover,.kpi-impw-conn-btn:hover{background:#fde68a}
+/* How a Yes will actually reach Mango — filed by API, or copied to paste. */
+.kpi-impw-conn{font-size:11.5px;font-weight:700;color:#a16207;white-space:nowrap}
+.kpi-impw-conn.is-on{color:#15803d}
 .kpi-impw-intro{margin:0;font-size:11.5px;line-height:1.6;color:#a16207}
 .kpi-impw-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:44vh;overflow-y:auto;overscroll-behavior:contain}
 .kpi-impw-card{display:grid;grid-template-columns:170px minmax(0,1fr) auto;gap:12px;align-items:center;background:#fff;border:1px solid #fde68a;border-radius:10px;padding:8px 12px}
@@ -163,6 +167,13 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-impw-checks{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px 16px;padding-top:4px;border-top:1px solid var(--bd)}
 .kpi-impw-check{display:flex;align-items:center;gap:6px;font-size:12px;color:#334155}
 .kpi-impw-note{flex:0 0 auto;margin:0;font-size:11px;line-height:1.55;color:var(--mu)}
+.kpi-impw-fallback{margin:6px 0 0;font-size:12px;line-height:1.5;color:#475569}
+.kpi-impw-linkbtn{background:none;border:0;padding:0;font:inherit;font-weight:700;color:#b45309;text-decoration:underline;cursor:pointer}
+/* Mango API sign-in, entered on the device (the password rotates). */
+.mdl:has(.kpi-mango-modal){max-width:min(560px,94vw)}
+.kpi-mango-form{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin:12px 0}
+.kpi-mango-warn{margin:0;font-size:11.5px;line-height:1.6;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:9px 11px}
+.kpi-mango-actions{margin-top:12px}
 .kpi-impw-modal-actions{flex:0 0 auto}
 .kpi-impw-modal-actions button[disabled]{opacity:.5;cursor:not-allowed}
 @media (max-width:760px){
