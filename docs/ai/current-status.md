@@ -59,6 +59,15 @@ ok (~76 KB JS / 24 KB gzip).
     document describes. The three progress fields are then kept on the
     decision and shown on the row **with the time they were read** — a
     stage from last week is not today's stage.
+  - **Never raised twice.** A confirmed ticket is written into that shift's
+    Handover (`IMPW: IMP 0123`), which lives in SharePoint, so *every*
+    device reads the same answer: `impwTicketFromHandovers()` puts it on the
+    slice, and a shift that already carries one is listed with its ticket
+    number instead of a Raise button, is out of the pending count, and is
+    refused by `openImpwTicket()` even if a stale render lets the click
+    through. The Yes / No ledger is per browser and cannot do this on its
+    own — before it, a second iPad (or cleared site data) would offer the
+    same shift again and put two people on one night's fault.
 
   The API takes 10 fields where the web form asks for 26, so what PMD can
   actually prove — press, orders, output/reject/yield, every breakdown

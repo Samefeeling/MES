@@ -82,6 +82,7 @@ import {
   impwIsoToFormDate,
   impwMangoDate,
   impwPlainText,
+  impwTicketFromHandovers,
   yieldPctOf,
   EMPTY_IMPW_SITE,
   EMPTY_OPTION,
@@ -1117,6 +1118,10 @@ async function compute(now = new Date()): Promise<void> {
           breakdownHrs: +bdFolded.reduce((a, b) => a + b.hours, 0).toFixed(2),
           breakdowns: bdFolded,
           jobNumbers: [...new Set(recs.map((r) => r.jobNumber).filter(Boolean))],
+          // Written into the shift's Handover when Mango confirmed a ticket,
+          // so every device knows it is already raised — not just the browser
+          // that raised it.
+          raisedTicket: impwTicketFromHandovers(recs.map((r) => r.handoverNote)),
         });
         const std = setupStandardHours(countSetupEvents(recs));
         const comparison =
@@ -1730,6 +1735,23 @@ function impwSince(at: number): string {
 }
 
 /**
+ * The Mango ticket this finding already has, or '' if it has none.
+ *
+ * Two sources, and the shift's own Handover is the one that counts: it is
+ * written when Mango confirms a ticket and it lives in SharePoint, so every
+ * device sees it. The local ledger is the second source, for the browser
+ * that filed the ticket in the moment before the Handover write lands (and
+ * for a site where the Handover column is not wired up yet).
+ *
+ * Non-empty means the improvement exists. Nothing may offer to raise it
+ * again — that is how one bad shift ends up with two tickets and two people
+ * investigating the same night.
+ */
+function impwTicketFor(f: ImpwFinding): string {
+  return f.raisedTicket || S!.impwDecisions.get(f.key)?.ticket || '';
+}
+
+/**
  * Where the ticket got to, as of the last time anyone asked — stage and due
  * date on the row itself, the rest in the tooltip, because the row is one
  * dense line and the stage is the part a meeting scans for.
@@ -1768,14 +1790,17 @@ function impwProgressChip(d: ImpwDecision): string {
  */
 function buildImpwPanel(): string {
   if (S!.loading) return '';
-  const open = S!.impwFindings.filter((f) => !S!.impwDecisions.has(f.key));
+  const open = S!.impwFindings.filter((f) => !impwTicketFor(f) && !S!.impwDecisions.has(f.key));
   const shown = S!.impwShowDecided ? S!.impwFindings : S!.impwFindings.filter((f) => !S!.impwDecisions.has(f.key) || S!.impwDecisions.get(f.key)?.decision === 'yes');
   const rows = shown.map((f) => {
     const d = S!.impwDecisions.get(f.key);
+    const ticket = impwTicketFor(f);
     // A confirmed ticket number is a button: pressing it asks Mango where
     // the ticket has got to, and the answer stays on the row afterwards.
-    const action = d?.ticket
-      ? `<button type="button" class="kpi-impw-ticket" data-impw-open="${escapeHtml(f.key)}" title="Ask Mango where ${escapeHtml(d.ticket)} has got to">${escapeHtml(d.ticket)}</button>${impwProgressChip(d)}${!d.handoverSaved ? `<button type="button" data-impw-sync="${escapeHtml(f.key)}">Save to Handover</button>` : '<span>Saved</span>'}`
+    // The Handover already holds the ticket when that is where it came
+    // from, so only a locally-filed one still offers to save it.
+    const action = ticket
+      ? `<button type="button" class="kpi-impw-ticket" data-impw-open="${escapeHtml(f.key)}" title="Ask Mango where ${escapeHtml(ticket)} has got to">${escapeHtml(ticket)}</button>${d ? impwProgressChip(d) : ''}${d?.ticket && !d.handoverSaved ? `<button type="button" data-impw-sync="${escapeHtml(f.key)}">Save to Handover</button>` : '<span>Saved</span>'}`
       : d?.decision === 'no' ? `<button type="button" data-impw-undo="${escapeHtml(f.key)}">Undo skip</button>`
       : `<button type="button" class="kpi-impw-yes" data-impw-yes="${escapeHtml(f.key)}">Raise IMPW</button><button type="button" class="kpi-impw-no" data-impw-no="${escapeHtml(f.key)}">Skip</button>`;
     return `<li class="kpi-impw-row"><b>${escapeHtml(f.machineCode)}</b><span>${escapeHtml(impwWhen(f.shiftId))}</span><span class="kpi-impw-summary" title="${escapeHtml(f.reasons.join('; '))}">${escapeHtml(f.reasons.join('; '))}</span><div class="kpi-impw-row-actions">${action}</div></li>`;
@@ -2011,6 +2036,17 @@ const IMPW_OPTION_FIELDS: Array<{ field: 'typeOfImprovement' | 'coordinator'; la
  * Region / Branch / Other are remembered after the first ticket.
  */
 function openImpwTicket(finding: ImpwFinding): void {
+  // Last line of defence against a duplicate. The panel already hides the
+  // Raise button once a ticket exists, but a stale render, a second tab or a
+  // colleague filing the same shift on another device can all put a click
+  // here after the fact — and a second ticket for one shift is two people
+  // investigating the same night.
+  const already = impwTicketFor(finding);
+  if (already) {
+    toast(`${already} was already raised for this shift`, 'warn');
+    render();
+    return;
+  }
   // The dialog does two genuinely different things depending on whether the
   // Mango sign-in is set, so it must not promise the same one in both.
   const direct = isMangoConfigured(S!.mango);
@@ -2309,10 +2345,13 @@ function impwRecordGroupHtml(rec: ImpwRecord, group: ImpwRecordGroup): string {
  * the truth.
  */
 function openImpwStatus(key: string): void {
-  const d = S!.impwDecisions.get(key);
   const finding = findingByKey(key);
-  if (!d || d.decision !== 'yes') return;
-  const ref = (d.ticket ?? '').trim() || 'this ticket';
+  // A ticket read off the shift's Handover has no local decision behind it —
+  // it was filed on another device — and must still be openable, or the
+  // lookup would only work for whoever happened to press Yes.
+  const ref = finding ? impwTicketFor(finding) : (S!.impwDecisions.get(key)?.ticket ?? '');
+  if (!ref) return;
+  const d = S!.impwDecisions.get(key);
   const where = finding
     ? `${finding.machineCode} · ${impwWhen(finding.shiftId)}`
     : 'Raised from the KPI review';
@@ -2322,8 +2361,8 @@ function openImpwStatus(key: string): void {
       <div>
         <h2 class="bd-title">🥭 ${escapeHtml(ref)}</h2>
         <p class="bd-sub">${escapeHtml(where)}${
-          d.by ? ` · raised by ${escapeHtml(d.by)}` : ''
-        }${d.at ? ` ${escapeHtml(impwSince(d.at))}` : ''}</p>
+          d?.by ? ` · raised by ${escapeHtml(d.by)}` : ''
+        }${d?.at ? ` ${escapeHtml(impwSince(d.at))}` : ''}</p>
       </div>
       <button type="button" class="btn-ghost-big" data-status-close>Close</button>
     </div>
@@ -2356,7 +2395,7 @@ function openImpwStatus(key: string): void {
   const load = (): void => {
     if (body) body.innerHTML = `<p class="kpi-impw-ok">Asking Mango about ${escapeHtml(ref)}…</p>`;
     if (refresh) refresh.disabled = true;
-    void fetchImpwRecord({ id: d.ticketId, number: d.ticket }, S!.mango).then((res) => {
+    void fetchImpwRecord({ id: d?.ticketId, number: ref }, S!.mango).then((res) => {
       if (refresh) refresh.disabled = false;
       if (!body) return;
       if (!res.ok || !res.record) {
@@ -2366,10 +2405,11 @@ function openImpwStatus(key: string): void {
         return;
       }
       const rec = res.record;
-      // Keep the three progress fields on the decision so the card can show
+      // Keep the three progress fields on the decision so the row can show
       // them after the dialog closes. Stored with the time read, never as a
       // fact about now.
-      d.progress = {
+      const dec = rememberImpwTicket(key, ref);
+      dec.progress = {
         stage: rec.currentStage,
         investigator: rec.investigator,
         dueDate: rec.dueDate,
@@ -2378,7 +2418,7 @@ function openImpwStatus(key: string): void {
       };
       // Mango's id is worth keeping once seen: a ticket raised before PMD
       // stored ids can then be looked up directly instead of by number.
-      if (!d.ticketId && rec.id) d.ticketId = rec.id;
+      if (!dec.ticketId && rec.id) dec.ticketId = rec.id;
       saveImpwDecisions(S!.impwDecisions);
       const groups = (['progress', 'ticket', 'outcome'] as ImpwRecordGroup[])
         .map((g) => impwRecordGroupHtml(rec, g))
@@ -2392,6 +2432,26 @@ function openImpwStatus(key: string): void {
   };
   refresh?.addEventListener('click', load);
   load();
+}
+
+/**
+ * The local entry for a ticket, creating one when the ticket was read off the
+ * shift's Handover instead of filed here. Such an entry is marked as already
+ * saved to the Handover, because that is literally where it was read from —
+ * offering to write it back would be an offer to duplicate a line.
+ */
+function rememberImpwTicket(key: string, ticket: string): ImpwDecision {
+  const existing = S!.impwDecisions.get(key);
+  if (existing) return existing;
+  const fresh: ImpwDecision = {
+    decision: 'yes',
+    at: 0,
+    by: '',
+    ticket,
+    handoverSaved: true,
+  };
+  S!.impwDecisions.set(key, fresh);
+  return fresh;
 }
 
 /** The no-API path, and the fallback when the API refuses: copy the filled

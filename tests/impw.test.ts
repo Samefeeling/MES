@@ -20,6 +20,7 @@ import {
   impwOccurrenceIso,
   impwPlainText,
   impwRecordIsDetailed,
+  impwTicketFromHandovers,
   impwTicketRef,
   missingImpwFields,
   overlongImpwFields,
@@ -54,6 +55,7 @@ function slice(partial: Partial<ImpwSlice> = {}): ImpwSlice {
     breakdownHrs: 0,
     breakdowns: [],
     jobNumbers: ['SFM507205'],
+    raisedTicket: '',
   };
   return { ...base, ...partial };
 }
@@ -923,5 +925,80 @@ describe('describeImpwLookupFailure', () => {
 
   it('quotes Mango when it said something', () => {
     expect(describeImpwLookupFailure(500, 'upstream timeout')).toContain('upstream timeout');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// "Already raised" — the one signal every device can see
+// ---------------------------------------------------------------------------
+
+/** How appendImpwHandover stores it: JSON 4M, ticket line under Method. */
+const withTicket = (ticket: string, method = ''): string =>
+  JSON.stringify({
+    machine: '',
+    mold: '',
+    material: '',
+    method: [method, `IMPW: ${ticket}`].filter(Boolean).join('\n'),
+  });
+
+describe('impwTicketFromHandovers', () => {
+  it('finds the ticket the writeback left on the shift', () => {
+    expect(impwTicketFromHandovers([withTicket('IMP 0123')])).toBe('IMP 0123');
+  });
+
+  it('finds it alongside whatever the operator wrote', () => {
+    const note = withTicket('IMP 0123', 'Handed over mid-run, mould still warm');
+    expect(impwTicketFromHandovers([note])).toBe('IMP 0123');
+  });
+
+  it('reads the legacy labelled-text note shape too', () => {
+    expect(impwTicketFromHandovers(['Machine: ok\nMethod: IMPW: IMP 0456'])).toBe('IMP 0456');
+  });
+
+  it('scans every record of the shift — the note is stored per job', () => {
+    expect(impwTicketFromHandovers([undefined, '', withTicket('IMP 0789')])).toBe('IMP 0789');
+  });
+
+  it('returns nothing when the shift carries no ticket', () => {
+    expect(impwTicketFromHandovers([withTicket('').replace('IMPW: ', '')])).toBe('');
+    expect(impwTicketFromHandovers(['Method: ran clean all shift'])).toBe('');
+    expect(impwTicketFromHandovers([])).toBe('');
+    expect(impwTicketFromHandovers([null, undefined])).toBe('');
+  });
+
+  it('does not mistake prose about IMPW for the record of a ticket', () => {
+    // The line has to BE the reference. "IMPW: ask the supervisor tomorrow"
+    // is somebody's note, and treating it as a raised ticket would silently
+    // stop the shift ever being raised.
+    const note = JSON.stringify({
+      machine: '', mold: '', material: '',
+      method: 'IMPW: ask the supervisor whether this needs raising tomorrow',
+    });
+    expect(impwTicketFromHandovers([note])).toBe('');
+  });
+
+  it('ignores a ticket number mentioned mid-sentence', () => {
+    const note = JSON.stringify({
+      machine: '', mold: '', material: '',
+      method: 'Same fault as IMPW: IMP 0123 last week, watch it',
+    });
+    // …but only when it does not start its own line.
+    expect(impwTicketFromHandovers([note])).toBe('');
+  });
+});
+
+describe('detectImpwFindings carries the raised ticket', () => {
+  it('marks a shift whose Handover already names a ticket', () => {
+    const found = detectImpwFindings(
+      [slice({ breakdownHrs: 2, raisedTicket: 'IMP 0123' })],
+      RULES,
+    );
+    expect(found).toHaveLength(1);
+    // Still a finding — the meeting wants to see it and follow it up.
+    expect(found[0].raisedTicket).toBe('IMP 0123');
+  });
+
+  it('leaves it blank when nothing has been raised', () => {
+    expect(detectImpwFindings([slice({ breakdownHrs: 2 })], RULES)[0].raisedTicket).toBe('');
   });
 });

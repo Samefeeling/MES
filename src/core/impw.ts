@@ -1,4 +1,5 @@
 import { bdLabelFor, bdOwnerFor } from './breakdown';
+import { parseHandover } from './handover';
 import { shiftBounds, SLOTS_PER_SHIFT, SLOT_MINUTES } from './shifts';
 
 // Mango IMPW (Improvement Workflow) — the company's improvement / corrective
@@ -72,6 +73,16 @@ export interface ImpwSlice {
   breakdowns: ImpwBreakdown[];
   /** Orders that ran in the slice, in the order encountered. */
   jobNumbers: string[];
+  /**
+   * A Mango ticket already raised for this shift, read from the shift's own
+   * Handover note ("IMPW: IMP 0123", written by appendImpwHandover).
+   *
+   * This is the ONLY record of a raised ticket that every device can see.
+   * The Yes / No ledger is per browser, so without this the same shift is
+   * offered again on the next iPad, on a PC, or after someone clears their
+   * site data — and the meeting raises a second ticket for one event.
+   */
+  raisedTicket: string;
 }
 
 /** The thresholds a finding is judged against — passed in rather than
@@ -110,6 +121,10 @@ export interface ImpwFinding {
    * every breakdown no matter how bad.
    */
   severity: number;
+  /** The ticket this shift already carries, from its Handover note. Non-empty
+   *  means the improvement exists in Mango and must not be raised again —
+   *  whatever this browser's own ledger remembers. */
+  raisedTicket: string;
   slice: ImpwSlice;
 }
 
@@ -183,6 +198,10 @@ export function detectImpwFindings(
       triggers: IMPW_TRIGGER_ORDER.filter((t) => triggers.includes(t)),
       reasons,
       severity: +severity.toFixed(4),
+      // A shift that already carries a ticket is still a finding — the
+      // meeting wants to see it and follow it up — but it is a raised one,
+      // and the UI must never offer to raise it a second time.
+      raisedTicket: slice.raisedTicket ?? '',
       slice,
     });
   }
@@ -197,6 +216,42 @@ export function detectImpwFindings(
 
 export function impwFindingKey(machineCode: string, shiftId: string): string {
   return `${machineCode}|${shiftId}`;
+}
+
+/** The line PMD writes into a shift's Handover when Mango confirms a ticket:
+ *  `IMPW: IMP 0123` (see appendImpwHandover in the DAL). Anchored to the
+ *  start of a line so a ticket number mentioned inside a sentence is not
+ *  mistaken for the record of one. */
+const IMPW_HANDOVER_LINE = /(?:^|\n)[ \t]*IMPW[ \t]*[:：][ \t]*([^\n]+)/i;
+
+/**
+ * The Mango ticket already recorded against a shift, from its own Handover
+ * note — '' when there is none.
+ *
+ * This is the cross-device answer to "has this already been raised?". The
+ * Yes / No ledger lives in one browser's localStorage; the Handover lives in
+ * SharePoint, so every iPad and PC reads the same answer, and a device that
+ * has never seen the shift before still knows not to raise it twice.
+ *
+ * Every record of the shift is scanned because the note is stored per
+ * (machine, shift, job) and the ticket lands on whichever rows the writeback
+ * reached. All four 4M fields are read, not just Method: the line is written
+ * to Method, but a note re-typed by hand should still count.
+ */
+export function impwTicketFromHandovers(
+  notes: ReadonlyArray<string | undefined | null>,
+): string {
+  for (const note of notes) {
+    if (!note) continue;
+    const h = parseHandover(note);
+    for (const field of [h.method, h.machine, h.mold, h.material]) {
+      const ref = (IMPW_HANDOVER_LINE.exec(field)?.[1] ?? '').trim();
+      // A reference, not a sentence: PMD writes the number it was given, and
+      // anything long or digitless is somebody's prose about the ticket.
+      if (ref && ref.length <= 40 && /\d/.test(ref)) return ref;
+    }
+  }
+  return '';
 }
 
 function fmtHrs(h: number): string {

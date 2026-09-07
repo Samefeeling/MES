@@ -7,6 +7,7 @@ import { resetMangoToken, submitImpwToMango } from '../src/ui/mango-api';
 const finding = detectImpwFindings([{
   machineCode: '1600T', machineName: 'Press', shiftId: '2026-09-07-Day',
   output: 100, reject: 10, yieldPct: 90, breakdownHrs: 0, breakdowns: [], jobNumbers: ['J1'],
+  raisedTicket: '',
 }], { yieldTarget: 95, rejectPerShiftMax: 5 })[0];
 
 afterEach(() => { vi.unstubAllGlobals(); resetMangoToken(); });
