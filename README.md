@@ -69,3 +69,7 @@ lock/unlock, per-job counts/rejects, handover, auto die-change, 60s polling.
 SharePoint/SQL/Azure adapters are documented skeletons (DAL contract is
 defined and tested via the in-memory backend). Auto-fill rules (§5.9) and
 the Admin/Reports modules (§9, §10) are intentionally out of v1 scope.
+
+## Assembly planning
+
+MES includes PMD and Assembly with separate production data and KPI views. See [Assembly integration](docs/ASSEMBLY.md) for setup, Lists, file paths, migration and deployment.

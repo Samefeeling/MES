@@ -6,7 +6,9 @@ import {
   loadDeviceMachine,
 } from './ui/operator';
 import { unmountTracePanel } from './ui/trace';
-import { renderKpi } from './ui/kpi';
+import { createAssemblyDataLayer } from './dal/assembly';
+import { showAssembly } from './ui/assembly';
+import { renderKpi, unmountKpi } from './ui/kpi';
 import { mountDieTab } from './ui/die';
 import { closeModal, openModal } from './ui/modal';
 import {
@@ -19,6 +21,8 @@ import {
 import { toast } from './ui/toast';
 import { currentBuildId, startAutoUpdate } from './ui/auto-update';
 import { isTupleConfirmed } from './core/confirm';
+
+const assemblyDal = createAssemblyDataLayer(import.meta.env as Record<string, string>);
 
 const dal: PmdDataLayer = createDataLayer(import.meta.env as Record<string, string>);
 
@@ -130,7 +134,7 @@ function updateMirrorBadge(): void {
 updateMirrorBadge();
 
 interface Route {
-  view: 'operator' | 'tool' | 'kpi';
+  view: 'operator' | 'tool' | 'kpi' | 'assembly';
   machineCode?: string;
   /** Die to auto-open in the Tool board's drilldown, from a
    *  `#/tool/die/<dieNumber>` deep link (the operator sheet's Die# pill). */
@@ -147,6 +151,7 @@ function parseRoute(): Route {
     const d = /^#\/tool\/die\/(.+)$/.exec(h);
     return { view: 'tool', openDie: d ? decodeURIComponent(d[1]) : undefined };
   }
+  if (h.startsWith('#/assembly')) return { view: 'assembly' };
   if (h.startsWith('#/kpi')) return { view: 'kpi' };
   const m = /^#\/op\/(.+)$/.exec(h);
   if (m) return { view: 'operator', machineCode: decodeURIComponent(m[1]) };
@@ -165,7 +170,7 @@ function ensureNav(): void {
   // bar. Set from JS so the already-deployed SPFx shell (which bakes the
   // long title into its static HTML) shortens without an .sppkg rebuild.
   const pt = document.getElementById('pt');
-  if (pt) pt.textContent = 'PMD';
+  if (pt) pt.textContent = 'MES';
   const nav = document.querySelector('.top-nav');
   if (!nav) return;
   const sv = isSupervisor();
@@ -175,7 +180,8 @@ function ensureNav(): void {
     // word — visually shorter and lower, which made the icons of the
     // other links land below its baseline. ✏️ matches the "filling in
     // the sheet" mental model the operator already has.
-    '<a href="#/" data-nav>\u{270F}\u{FE0F} Operator</a>' +
+    '<a href="#/" data-nav>\u{270F}\u{FE0F} PMD</a>' +
+    '<a href="#/assembly" data-nav>Assembly</a>' +
     '<a href="#/tool" data-nav>\u{1F6E0}Tool</a>' +
     '<a href="#/kpi" data-nav>\u{1F4CA} KPIs</a>' +
     `<button type="button" class="nav-btn sv-toggle${sv ? ' on' : ''}" data-supervisor title="${
@@ -264,19 +270,26 @@ async function route(): Promise<void> {
   // Stop an embedded KPI Live Status poll before replacing #app. KPI will
   // mount a fresh panel if the destination is #/kpi/live.
   unmountTracePanel();
+  unmountKpi();
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = undefined;
   }
   try {
     const r = parseRoute();
+    document.getElementById('kpi-departments')?.remove();
+    showAssembly(r.view === 'assembly');
+    if (r.view === 'assembly') {
+      document.body.className = 'shift-day';
+      return;
+    }
     if (r.view === 'tool') {
       document.body.className = 'shift-day';
       const app = document.getElementById('app')!;
       app.innerHTML = '<div class="die-host"></div>';
       await mountDieTab(dal, app.querySelector<HTMLElement>('.die-host')!, r.openDie);
     } else if (r.view === 'kpi') {
-      await renderKpi(dal);
+      await renderKpi(dal, assemblyDal);
     } else {
       let mc = r.machineCode ?? '';
       // The press this device was last WORKING on: the per-tab state

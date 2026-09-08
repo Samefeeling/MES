@@ -13,8 +13,8 @@
 // chains it) and the m365 CLI on PATH and logged in.
 
 import { execFileSync, execSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
 
 function readEnvLocal() {
   const out = {};
@@ -50,15 +50,21 @@ const site =
 // index.html that references them FIRST, then version.json LAST. The running
 // iPad clients only learn a new build exists when version.json changes, so it
 // must not advertise the new build until the code it points at is already live.
-const FILES = [
-  ['dist/resero-logo.svg', 'SiteAssets/pmd'],
-  ['dist/assets/index.js', 'SiteAssets/pmd/assets'],
-  ['dist/assets/index.css', 'SiteAssets/pmd/assets'],
-  ['dist/index.html', 'SiteAssets/pmd'],
-  ['dist/assets/version.json', 'SiteAssets/pmd/assets'],
-];
+function builtFiles(dir = 'dist') {
+  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const path = dir + '/' + entry.name;
+    return entry.isDirectory() ? builtFiles(path) : [path];
+  });
+}
+if (!existsSync('dist/assembly/assets/assembly.js')) throw new Error('Build Assembly before deploying MES.');
+const files = builtFiles().filter(path => !path.endsWith('.map'));
+const version = 'dist/assets/version.json';
+const FILES = [...files.filter(path => path !== version), version]
+  .map(path => [path, 'SiteAssets/pmd' + dirname(path).slice(4)]);
 
-function m365(args) {
+
+function m365(args, capture = false) {
+  const options = { stdio: capture ? ['ignore', 'pipe', 'inherit'] : 'inherit', encoding: 'utf8' };
   // m365 on Windows is a .cmd shim. Node 18+ refuses to spawnSync a .cmd
   // directly without shell:true (CVE-2024-27980 hardening), which surfaces
   // as `spawnSync m365.cmd EINVAL`. Go through cmd.exe on Windows and quote
@@ -67,12 +73,18 @@ function m365(args) {
     const quoted = args
       .map((a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a))
       .join(' ');
-    return execSync(`m365.cmd ${quoted}`, { stdio: 'inherit' });
+    return execSync(`m365.cmd ${quoted}`, options);
   }
   return execFileSync('m365', args, { stdio: 'inherit' });
 }
 
 console.log(`[deploy] site = ${site}`);
+for (const folder of [...new Set(FILES.map(([, folder]) => folder))].sort((a,b) => a.length-b.length)) {
+  const split = folder.lastIndexOf('/');
+  const parent = folder.slice(0,split), name = folder.slice(split+1);
+  const existing = JSON.parse(m365(['spo', 'folder', 'list', '--webUrl', site, '--parentFolderUrl', parent, '--output', 'json'], true));
+  if (!existing.some(item => item.Name === name)) m365(['spo', 'folder', 'add', '--webUrl', site, '--parentFolderUrl', parent, '--name', name]);
+}
 for (const [path, folder] of FILES) {
   if (!existsSync(path)) {
     console.error(`[deploy] missing ${path} — run "npm run build" first.`);

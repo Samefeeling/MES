@@ -1460,3 +1460,20 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .kpi-impw-modal-actions .btn-ghost-big{border:1px solid #cbd5e1;background:#fff;color:#334155}
 .kpi-impw-modal-actions [data-impw-copy]{margin-right:auto;background:transparent;border-color:transparent;color:#475569}
 @media(max-width:600px){.kpi-impw-modal-head{padding:16px}.kpi-impw-modal .kpi-impw-form{padding:0 16px 16px}.kpi-impw-issues{padding:10px 16px 0}.kpi-impw-modal .kpi-impw-note{padding:10px 16px}.kpi-impw-modal .kpi-impw-modal-actions{padding:12px 16px;flex-wrap:wrap}}
+
+/* Department-specific Assembly views retain their own table and metric semantics. */
+#kpi-departments { display:flex; gap:8px; padding:12px 18px; background:#edf4f8; }
+#kpi-departments a { padding:8px 18px; border-radius:6px; background:white; color:#095778; font-weight:700; text-decoration:none; }
+.assembly-kpi { padding:18px; background:#fff; }
+.assembly-kpi form { display:flex; flex-wrap:wrap; gap:16px; align-items:center; margin:16px 0; }
+.assembly-kpi input { width:130px; padding:8px; border:1px solid #bbcbd7; border-radius:4px; }
+.assembly-summary { display:flex; flex-wrap:wrap; gap:12px; margin:20px 0; }
+.assembly-summary > div { min-width:130px; padding:16px; border:1px solid #d5e2ec; border-radius:8px; }
+.assembly-summary small, .assembly-summary strong { display:block; }
+.assembly-summary strong { font-size:26px; color:#095778; margin-top:6px; }
+.assembly-results-scroll { overflow:auto; }
+.assembly-kpi table { border-collapse:collapse; width:100%; }
+.assembly-kpi th, .assembly-kpi td { padding:10px; border-bottom:1px solid #d5e2ec; text-align:left; white-space:nowrap; }
+
+#kpi-departments { margin-top:var(--topbar-h,52px); }
+#kpi-departments + #app { margin-top:0; }

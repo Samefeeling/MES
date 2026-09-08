@@ -1,3 +1,4 @@
+import type { AssemblyDataLayer, AssemblyResult } from '../types/assembly';
 import { appendHandoverLine } from '../core/handover';
 import type {
   BdCode,
@@ -5743,4 +5744,65 @@ export function toServerRelativePath(input: string): string {
   }
   if (!p.startsWith('/')) p = '/' + p;
   return p;
+}
+
+export const DEFAULT_ASSEMBLY_FIELDS = {
+  "job": "Title",
+  "date": "Date",
+  "line": "Line",
+  "operators": "Operators",
+  "output": "ShiftOutput",
+  "complete": "Complete",
+  "reject": "Reject",
+  "rework": "Rework",
+  "completed": "JobCompleted",
+  "due": "DueDate",
+  "completedAt": "CompletedAt"
+};
+
+
+/** Separate adapter: no PMD column mapping or machine/shift assumptions. */
+export function createAssemblyDataLayer(env: Record<string, string | undefined>, overrides: Partial<typeof DEFAULT_ASSEMBLY_FIELDS> = {}): AssemblyDataLayer {
+  const fields = { ...DEFAULT_ASSEMBLY_FIELDS, ...overrides };
+  return {
+    async results(from, to) {
+      if (env.VITE_BACKEND !== 'sharepoint') return [];
+      const site = (env.VITE_SHAREPOINT_SITE_URL || env.VITE_SITE_URL || '').replace(/\/$/, '');
+      if (!site) throw new Error('Assembly SharePoint site is not configured.');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) throw new Error('Choose a valid date range.');
+      const end = new Date(`${to}T00:00:00Z`);
+      end.setUTCDate(end.getUTCDate() + 1);
+      const list = encodeURIComponent((env.VITE_PRODUCTION_LIST || 'ASSY_Production').replace(/'/g, "''")).replace(/'/g, '%27');
+      const filter = `${fields.date} ge datetime'${from}T00:00:00Z' and ${fields.date} lt datetime'${end.toISOString()}'`;
+      let url = `${site}/_api/web/lists/getbytitle('${list}')/items?$top=500&$filter=${encodeURIComponent(filter)}`;
+      const output: AssemblyResult[] = [];
+      const keys = new Set<string>();
+      for (let page = 0; url && page < 100; page++) {
+        if (new URL(url).origin !== window.location.origin) throw new Error('Open MES on the configured SharePoint site.');
+        const res = await fetch(url, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json;odata=nometadata' } });
+        if (!res.ok) throw new Error(`Assembly results could not be loaded (${res.status}).`);
+        const body = await res.json() as { value?: Record<string, unknown>[]; 'odata.nextLink'?: string; '@odata.nextLink'?: string };
+        for (const row of body.value ?? []) {
+          const job = String(row[fields.job] ?? '').trim();
+          const day = String(row[fields.date] ?? '').slice(0, 10);
+          const key = `${job}|${day}`;
+          if (!job || !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('Assembly results contain an invalid job/date.');
+          if (keys.has(key)) throw new Error(`Duplicate Assembly result: ${key}. Correct the source before reporting totals.`);
+          keys.add(key);
+          const number = (field: string): number => {
+            const n = Number(row[field] ?? 0);
+            if (!Number.isFinite(n) || n < 0) throw new Error(`Invalid ${field} for ${key}.`);
+            return n;
+          };
+          output.push({ id: String(row.Id), job, day, line: String(row[fields.line] ?? ''), operators: String(row[fields.operators] ?? ''),
+            output: number(fields.output), complete: number(fields.complete), reject: number(fields.reject), rework: number(fields.rework),
+            completed: row[fields.completed] === true, due: row[fields.due] ? String(row[fields.due]) : null,
+            completedAt: row[fields.completedAt] ? String(row[fields.completedAt]) : null });
+        }
+        url = body['odata.nextLink'] ?? body['@odata.nextLink'] ?? '';
+      }
+      if (url) throw new Error('Assembly results exceed the page limit. Select a shorter date range.');
+      return output.sort((a, b) => b.day.localeCompare(a.day) || a.job.localeCompare(b.job));
+    },
+  };
 }

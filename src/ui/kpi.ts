@@ -1,3 +1,5 @@
+import type { AssemblyDataLayer } from '../types/assembly';
+import { renderAssemblyKpi } from './assembly-kpi';
 import type { PmdDataLayer } from '../dal';
 import type {
   Machine,
@@ -536,6 +538,8 @@ type ChartBucket = CoreChartBucket;
 let S: KpiState | null = null;
 let dalRef: PmdDataLayer;
 let computeVersion = 0;
+let kpiMount = 0;
+export function unmountKpi(): void { kpiMount++; computeVersion++; }
 
 /** The 3 most-recently-ENDED shifts as of `now`, oldest → newest. */
 function lastThreeShifts(now: Date): string[] {
@@ -2505,6 +2509,7 @@ function wireKpiNavigation(app: HTMLElement): void {
 }
 
 function render(): void {
+  if (!window.location.hash.startsWith('#/kpi') || window.location.hash.startsWith('#/kpi/assembly')) return;
   const app = document.getElementById('app')!;
   const dataErrors = [...S!.catalogErrors, ...S!.errors];
   const errorBanner = dataErrors.length
@@ -3602,10 +3607,23 @@ function openDowntimeDrill(scopeKey: string): void {
   });
 }
 
-export async function renderKpi(dal: PmdDataLayer): Promise<void> {
+export async function renderKpi(dal: PmdDataLayer, assemblyDal?: AssemblyDataLayer): Promise<void> {
+  const mount = ++kpiMount;
+  document.getElementById('kpi-departments')?.remove();
+  const department = document.createElement('nav');
+  department.id = 'kpi-departments';
+  department.setAttribute('aria-label', 'KPI department');
+  department.innerHTML = '<a href="#/kpi">PMD</a><a href="#/kpi/assembly">Assembly</a>';
+  document.getElementById('app')!.insertAdjacentElement('beforebegin', department);
+  if (window.location.hash.startsWith('#/kpi/assembly') && assemblyDal) {
+    document.body.className = 'shift-day';
+    await renderAssemblyKpi(assemblyDal);
+    return;
+  }
   dalRef = dal;
   document.body.className = 'shift-day';
   const machines = (await dal.listMachines()).sort((a, b) => a.sequence - b.sequence);
+  if (mount !== kpiMount) return;
   // Default custom range: last 7 calendar days, so switching to the
   // Custom tab and pressing nothing still shows a meaningful window.
   const today = new Date();
@@ -3653,6 +3671,7 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
   // without one leaves the fields blank and the ticket dialog asks.
   try {
     const me = await dal.whoAmI();
+    if (mount !== kpiMount) return;
     S.who = { name: me.name, email: me.email };
   } catch (e) {
     console.warn('[pmd] whoAmI failed', e);
@@ -3661,6 +3680,7 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
   // Description column. Cheap, changes rarely; load once at mount.
   try {
     const cats = await dal.listRejectCategories();
+    if (mount !== kpiMount) return;
     S.rejectDescByCode = new Map(
       cats.map((c) => [c.code.trim().toUpperCase(), c.label]),
     );
@@ -3668,6 +3688,7 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     console.warn('[pmd] reject categories load failed', e);
     S.catalogErrors = [`Reject categories: ${(e as Error).message || 'read failed'}`];
   }
+  if (mount !== kpiMount) return;
   // No supervisor-change subscription needed here: main.ts already
   // re-routes (→ renderKpi) on every supervisor toggle, so the threshold
   // editor appears/disappears on unlock without a page reload.

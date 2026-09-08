@@ -1,0 +1,163 @@
+{
+  "version": 1,
+  "lists": [
+    {
+      "name": "ASSY_Operator",
+      "description": "Assembly operator roster and skills.",
+      "fields": [
+        {
+          "name": "Title",
+          "type": "Text",
+          "required": true
+        },
+        {
+          "name": "Position",
+          "type": "Text"
+        },
+        {
+          "name": "Skills",
+          "type": "Text"
+        },
+        {
+          "name": "Supervisor",
+          "type": "Text"
+        },
+        {
+          "name": "OnShift",
+          "type": "Boolean",
+          "default": "1"
+        },
+        {
+          "name": "PlannedAnnualLeave",
+          "type": "Note"
+        }
+      ]
+    },
+    {
+      "name": "ASSY_Plans",
+      "description": "Versioned Assembly working plans. Do not edit PlanJson by hand.",
+      "fields": [
+        {
+          "name": "Title",
+          "type": "Text",
+          "required": true,
+          "indexed": true,
+          "unique": true
+        },
+        {
+          "name": "PlanJson",
+          "type": "Note",
+          "required": true
+        },
+        {
+          "name": "SavedAt",
+          "type": "DateTime"
+        }
+      ]
+    },
+    {
+      "name": "ASSY_Production",
+      "description": "One Assembly job result per production day; separate from PMD machine shifts.",
+      "fields": [
+        {
+          "name": "Title",
+          "type": "Text",
+          "required": true,
+          "indexed": true
+        },
+        {
+          "name": "RecordKey",
+          "type": "Text",
+          "required": true,
+          "indexed": true,
+          "unique": true
+        },
+        {
+          "name": "Date",
+          "type": "DateTime",
+          "format": "DateOnly",
+          "required": true,
+          "indexed": true
+        },
+        {
+          "name": "Line",
+          "type": "Text"
+        },
+        {
+          "name": "Operators",
+          "type": "Text"
+        },
+        {
+          "name": "OperatorIds",
+          "type": "Text"
+        },
+        {
+          "name": "StartDate",
+          "type": "DateTime"
+        },
+        {
+          "name": "ActualStartAt",
+          "type": "DateTime"
+        },
+        {
+          "name": "DueDate",
+          "type": "DateTime"
+        },
+        {
+          "name": "ExpectDate",
+          "type": "DateTime"
+        },
+        {
+          "name": "CompletedAt",
+          "type": "DateTime"
+        },
+        {
+          "name": "StartOverrideReason",
+          "type": "Note"
+        },
+        {
+          "name": "PauseReason",
+          "type": "Note"
+        },
+        {
+          "name": "Notes",
+          "type": "Note"
+        },
+        {
+          "name": "OrderQty",
+          "type": "Number"
+        },
+        {
+          "name": "RemainingQty",
+          "type": "Number"
+        },
+        {
+          "name": "ShiftOutput",
+          "type": "Number"
+        },
+        {
+          "name": "Complete",
+          "type": "Number"
+        },
+        {
+          "name": "Reject",
+          "type": "Number"
+        },
+        {
+          "name": "Rework",
+          "type": "Number"
+        },
+        {
+          "name": "JobCompleted",
+          "type": "Boolean",
+          "default": "0"
+        },
+        {
+          "name": "Paused",
+          "type": "Boolean",
+          "default": "0"
+        }
+      ]
+    }
+  ]
+}

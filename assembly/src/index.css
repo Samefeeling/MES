@@ -1,0 +1,2183 @@
+:root {
+  color-scheme: light;
+  --bg: #f4f7fb;
+  --surface: #ffffff;
+  --surface-2: #f7f9fc;
+  --surface-3: #e8eef7;
+  --border: #c9d3e1;
+  --border-strong: #8494aa;
+  --text: #182230;
+  --muted: #46566c;
+  --faint: #64748b;
+
+  --accent: #5b8cff;
+  --ok: #34d399;
+  --ok-dim: #dcfce7;
+  --warn: #fbbf24;
+  --warn-dim: #fef3c7;
+  --error: #f87171;
+  --error-dim: #fee2e2;
+  --info: #60a5fa;
+
+  --tool: #c084fc; /* die / tool change */
+  --color: #fb923c; /* colour change */
+  --insert: #2dd4bf; /* insert change */
+
+  --lane-h: 64px;
+  --label-w: 150px;
+  --radius: 8px;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
+    Arial, sans-serif;
+  --mono: 'SF Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+}
+
+/* ---- layout ------------------------------------------------------------ */
+/*
+ * Column flex, not `grid-template-rows: auto 1fr` — the row count is not fixed.
+ * A banner between the header and the body would otherwise take the `1fr` and
+ * push the board into an implicit row.
+ */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/*
+ * Keep action buttons clear of the date controls. The middle column wraps
+ * within the remaining space rather than overlapping either side.
+ */
+.app-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.head-side {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.head-side.end {
+  justify-content: flex-end;
+}
+.barcode-lookup { position: relative; }
+.barcode-popover {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 280px;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.22);
+}
+.barcode-popover label { display: block; margin-bottom: 6px; font-size: 11px; font-weight: 700; }
+.barcode-entry { display: flex; gap: 6px; }
+.barcode-entry input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 5px 7px;
+  font-family: var(--mono);
+}
+.barcode-popover small { display: block; margin-top: 6px; color: var(--faint); line-height: 1.35; }
+.barcode-error { display: block; margin-top: 5px; color: var(--error); font-size: 11px; }
+@media (max-width: 1100px) {
+  .app-header { grid-template-columns: minmax(0, 1fr) auto; }
+  .app-header > .board-tools { grid-column: 1 / -1; grid-row: 2; }
+  .head-side.end { grid-column: 2; grid-row: 1; flex-wrap: wrap; }
+}
+.app-header h1 {
+  font-size: 15px;
+  margin: 0;
+  font-weight: 650;
+  letter-spacing: 0.2px;
+}
+.app-header .sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/*
+ * The schedule owns the full width; order detail floats beside the selected
+ * block. The former pull-job side column is intentionally not rendered.
+ */
+.app-body {
+  position: relative;
+  flex: 1;
+  /* The schedule takes what is left after the pool strip, which is usually
+     nothing at all: a column, not a block, so the two can share the height. */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.board-pane {
+  min-width: 0;
+  flex: 1;
+  overflow: auto;
+  background: var(--bg);
+}
+/* ---- ui primitives ----------------------------------------------------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.badge.ok {
+  background: var(--ok-dim);
+  color: var(--ok);
+}
+.badge.warn {
+  background: var(--warn-dim);
+  color: var(--warn);
+}
+.badge.error {
+  background: var(--error-dim);
+  color: var(--error);
+}
+.badge.info {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+.new-order-count,
+.new-order-tag {
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #047857;
+  font-size: 9.5px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.new-order-count { padding: 2px 7px; }
+.new-order-tag { margin-left: 5px; padding: 1px 5px; vertical-align: 1px; }
+.arow.new-order { box-shadow: inset 3px 0 #10b981; }
+.badge.tool {
+  background: #2c1f44;
+  color: var(--tool);
+}
+.badge.color {
+  background: #41260f;
+  color: var(--color);
+}
+.badge.insert {
+  background: #103833;
+  color: var(--insert);
+}
+.badge.neutral {
+  background: var(--surface-3);
+  color: var(--muted);
+}
+
+.btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.btn:hover {
+  background: var(--surface-3);
+  border-color: var(--border);
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn.icon {
+  padding: 5px 8px;
+}
+
+.card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  display: inline-block;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.center-fill {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  gap: 10px;
+  color: var(--muted);
+}
+
+/* ---- job pool ---------------------------------------------------------- */
+/*
+ * A strip along the bottom, not a column down the side — the board owns the
+ * width. Capped, so a big pile of unplaced orders scrolls inside itself
+ * instead of pushing the schedule off screen.
+ */
+.pool {
+  flex: 0 0 auto;
+  max-height: 28vh;
+  overflow: auto;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.pool h2,
+.section-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+.pool-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
+}
+/* The heading spans the row above the cards; the cards then wrap beneath. */
+.pool-list h2 {
+  flex: 1 0 100%;
+}
+.pool-list .ord {
+  flex: 0 0 auto;
+  width: 220px;
+}
+.pool.drop-active {
+  outline: 1px dashed var(--accent);
+  outline-offset: -4px;
+  border-radius: 8px;
+}
+/*
+ * With nothing unassigned the pool renders nothing at all; while a drag is in
+ * flight it becomes this strip, so an order can still be taken off its line.
+ */
+.pool.target-only {
+  padding: 6px 10px;
+}
+.pool-target {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--faint);
+  font-size: 11px;
+  padding: 10px 0;
+  text-align: center;
+}
+
+/* ---- inspector --------------------------------------------------------- */
+/*
+ * The order detail, opened beside the pointer. Fixed to the window rather than
+ * to the board so scrolling the schedule underneath cannot drag it off screen.
+ *
+ * Height follows the content — the panel is exactly as tall as this order
+ * needs, so nothing it has to say sits below a fold. An order with a
+ * dependency list and short components is taller than one without, and past
+ * what the window can show the panel widens instead: three sections in more
+ * room wrap less and come out shorter. Width and height are measured on open,
+ * see AssemblyInspector; `overflow` is the last resort for a window too small
+ * for any of it.
+ */
+.inspector.floating {
+  position: fixed;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.28);
+}
+
+/*
+ * The masthead: what this order is, and how it stands. Named once, across the
+ * full width, so the description reads as a line of prose instead of being
+ * poured down a third of the panel; the badges are the summary a supervisor
+ * reads first, so they sit opposite it rather than buried under the dates.
+ */
+.inspector-title {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px 16px;
+  padding: 11px 14px 10px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(var(--surface-2), var(--surface));
+}
+.inspector-ident {
+  min-width: 0;
+}
+.inspector-job {
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  color: var(--text);
+}
+.inspector-part {
+  margin-left: 9px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  vertical-align: 2px;
+}
+/* Two lines of description, then an ellipsis; the rest is on hover. */
+.inspector-desc {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.inspector-flags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+  max-width: 300px;
+}
+/* Says what the missing close button used to: quietly, and only in the panel. */
+.inspector-dismiss {
+  flex: 1 0 100%;
+  text-align: right;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.inspector-grid {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.5fr) minmax(300px, 1.5fr) minmax(220px, 1fr);
+  align-items: stretch;
+  flex: 1;
+}
+.inspector-section {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  min-width: 0;
+  padding: 11px 14px 12px;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+}
+.inspector-section:first-child {
+  border-left: 0;
+}
+/* A section title is a label for what follows, not a sentence in it: small,
+   spaced, and ruled off, the way a printed spec sheet divides its blocks. */
+.inspector-section h3 {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 9px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+}
+.inspector-section h3 .count {
+  color: var(--faint);
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: none;
+}
+.inspector-subsection {
+  margin-top: 11px;
+}
+.inspector-subsection h4 {
+  margin: 0 0 5px;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+/* Pushes the section's action to the foot of the column, so the three
+   sections end on a line however unevenly their content fills them. */
+.section-foot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 9px;
+}
+.section-foot .hint {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+.section-foot .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* ---- the four dates, read across ---------------------------------------- */
+.date-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-bottom: 14px;
+}
+.date-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 8px;
+}
+.date-cell .date-note { flex-basis: 100%; text-align: right; }
+.date-label {
+  color: var(--faint);
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+.date-value {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.date-value.green { color: #047857; }
+.date-value.red { color: #b91c1c; }
+.date-note {
+  color: #b91c1c;
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+/* ---- how far through it is ---------------------------------------------- */
+.progress-figure {
+  font-variant-numeric: tabular-nums;
+}
+.progress-figure .of {
+  color: var(--faint);
+  font-weight: 400;
+}
+.progress-meter {
+  display: block;
+  height: 3px;
+  margin-top: 3px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.progress-meter i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.inspector-section .kv {
+  grid-template-columns: 62px minmax(0, 1fr);
+  gap: 5px 10px;
+  margin-bottom: 0;
+}
+.inspector-section .kv dt {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  line-height: 1.6;
+}
+@media (max-width: 700px) {
+  .inspector-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .inspector-section:nth-child(odd) {
+    border-left: 0;
+  }
+  .inspector-section:nth-child(n + 3) {
+    border-top: 1px solid var(--border);
+  }
+}
+@media (max-width: 560px) {
+  .inspector-grid {
+    grid-template-columns: 1fr;
+  }
+  .inspector-section,
+  .inspector-section:nth-child(odd) {
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+  .inspector-section:first-child {
+    border-top: 0;
+  }
+}
+.kv {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 2px 7px;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+.kv dt {
+  color: var(--faint);
+}
+.kv dd {
+  min-width: 0;
+  margin: 0;
+  font-weight: 500;
+}
+/* ---- what an order is waiting for -------------------------------------- */
+.dep-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+}
+.dep-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 0;
+}
+.dep-list li + li {
+  border-top: 1px solid var(--border);
+}
+/* The one actually holding the bar back; the others are already clear. */
+.dep-list li.holding .dep-job {
+  color: var(--text);
+  font-weight: 700;
+}
+.dep-job {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  cursor: default;
+}
+.dep-part {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dep-when {
+  color: var(--faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.shortage-row {
+  display: grid;
+  grid-template-columns: minmax(0, auto) 1fr;
+  gap: 4px 10px;
+  padding: 4px 0;
+  font-size: 11.5px;
+}
+.shortage-row + .shortage-row {
+  border-top: 1px solid var(--border);
+}
+.shortage-row .part {
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shortage-row span:last-child {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.zoom {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.banner {
+  padding: 8px 12px;
+  background: var(--error-dim);
+  color: var(--error);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Source data loaded, but something in it needs the planner's attention. */
+.banner.warn {
+  background: var(--warn-dim);
+  color: var(--warn);
+}
+
+/* The way out of a banner that has one — reading the stored plan again. */
+.banner-action {
+  margin-left: 4px;
+  padding: 1px 8px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.banner-action:hover {
+  background: rgb(0 0 0 / 6%);
+}
+
+/* ---- assembly gantt ---------------------------------------------------- */
+.assembly-pane {
+  padding: 0;
+}
+.assy {
+  /* Anchors the day-stripe layer below. */
+  position: relative;
+  --order-w: 200px;
+  --qty-w: 58px;
+  --hours-w: 82px;
+  --date-w: 62px;
+  --team-w: 172px;
+  font-size: 12px;
+}
+/*
+ * What waits for what: one elbow per material link, out of the end of the
+ * order that makes a part and into the start of the order that needs it.
+ *
+ * Under the bars (z-index 2), not over them. A connector's whole job is to
+ * join two blocks, so where it meets one it should pass behind rather than be
+ * drawn across its label; and routing around them to find a clear column sent
+ * lines the length of the board. The run between two rows crosses empty grid
+ * either way, and that run is the part anyone actually reads.
+ */
+.dependency-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  overflow: visible;
+  pointer-events: none;
+}
+/* Off the chain being followed: still there, no longer competing with it. */
+.dependency-link {
+  opacity: 0.35;
+}
+.dependency-link.focused {
+  opacity: 1;
+}
+.dependency-casing,
+.dependency-arrow {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* Enough to keep two crossing links apart, not a white gash down the grid. */
+.dependency-casing {
+  stroke: var(--surface);
+  stroke-width: 3.5;
+  opacity: 0.75;
+}
+.dependency-arrow {
+  stroke: var(--border-strong);
+  stroke-width: 1.4;
+}
+.dependency-link.focused .dependency-arrow {
+  stroke: var(--accent);
+  stroke-width: 1.9;
+}
+.dependency-marker { fill: var(--border-strong); }
+.dependency-marker-focus { fill: var(--accent); }
+
+/*
+ * Ticked with Ctrl to be moved as a set. A dashed outline rather than a solid
+ * one: this is a temporary state the planner is holding, not a property of the
+ * order like its colour band or the ring on the one that is open.
+ */
+.bar.marked {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+.marked-set {
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: rgba(91, 140, 255, 0.16);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.marked-set:hover {
+  background: rgba(91, 140, 255, 0.28);
+}
+/*
+ * A picking sheet, so it is set like one: part numbers in a mono column that
+ * lines up character for character, quantities right-aligned on tabular
+ * figures, and a hairline only *between* rows — a rule under the last one
+ * closes off a list that has not ended.
+ */
+.pick-list { display: grid; }
+.pick-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, minmax(52px, auto));
+  gap: 12px;
+  align-items: baseline;
+  padding: 3px 0;
+  font-size: 11.5px;
+}
+.pick-list-head {
+  color: var(--faint);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.45px;
+  text-transform: uppercase;
+}
+.pick-list-head span:not(:first-child) { text-align: right; }
+.pick-list-row + .pick-list-row {
+  border-top: 1px solid var(--border);
+}
+.pick-list-row .part {
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pick-list-row .qty {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+.pick-list-row .qty.none {
+  color: var(--faint);
+  font-weight: 400;
+}
+.assy-summary {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky;
+  left: 0;
+  z-index: 8;
+}
+.pill {
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+}
+.pill.green { background: var(--ok-dim); color: var(--ok); }
+.pill.orange { background: var(--warn-dim); color: var(--warn); }
+.pill.red { background: var(--error-dim); color: var(--error); }
+.pill.grey { background: var(--surface-3); color: var(--muted); }
+
+.arow,
+.assy-head {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border);
+  min-height: 40px;
+}
+/*
+ * The head block: the roster's load squares and the day columns. It stays put
+ * while the lines scroll under it — "who has room?" is a question asked all
+ * the way down the board. One sticky wrapper rather than two sticky rows, so
+ * the day header never has to know how tall the names row has wrapped to.
+ */
+.assy-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 9;
+  background: var(--surface);
+}
+.assy-head {
+  background: var(--surface);
+  /* Tall enough for the date, the load bar and its percentage — and it grows
+     rather than clipping when a whole shift is free and the Team column has
+     that many names to list. */
+  min-height: 94px;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 650;
+}
+.acell {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+.acell.order {
+  width: var(--order-w);
+  flex: 0 0 var(--order-w);
+  gap: 5px;
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  background: var(--surface);
+}
+.acell.frozen {
+  position: sticky;
+  z-index: 3;
+  background: var(--surface);
+}
+/*
+ * Order column resize grip. Order numbers and descriptions vary wildly in
+ * length between customers, so the one column that carries free text is the
+ * one worth being able to widen.
+ */
+.col-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  border-right: 2px solid transparent;
+}
+.col-resize:hover,
+.col-resize:focus-visible {
+  border-right-color: var(--accent);
+  outline: none;
+}
+/* Keeps the pointer from selecting half the board mid-drag. */
+body.col-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+.assy-head .acell.frozen {
+  z-index: 9;
+}
+/* Ordered quantity, with what is still to make under it. */
+.acell.qty {
+  width: var(--qty-w);
+  flex: 0 0 var(--qty-w);
+  flex-direction: column;
+  justify-content: center;
+  gap: 0;
+  line-height: 1.2;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.assy-head .acell.qty {
+  text-align: center;
+  font-weight: 650;
+}
+.qty-left {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--faint);
+}
+.acell.hours {
+  width: var(--hours-w);
+  flex: 0 0 var(--hours-w);
+  justify-content: center;
+  text-align: center;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.acell.date {
+  width: var(--date-w);
+  flex: 0 0 var(--date-w);
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.acell.date.vert {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  justify-content: flex-start;
+  padding: 6px 4px;
+  font-size: 10px;
+}
+/* Start carries a time of day under the date, so it stacks. */
+.acell.date.start {
+  flex-direction: column;
+  justify-content: center;
+  gap: 0;
+  line-height: 1.2;
+}
+.date-hour {
+  font-size: 9.5px;
+  color: var(--faint);
+  font-weight: 600;
+}
+.acell.date.expect {
+  font-weight: 700;
+}
+.acell.date.expect.green { color: var(--ok); }
+.acell.date.expect.red { color: var(--error); }
+.acell.team {
+  width: var(--team-w);
+  flex: 0 0 var(--team-w);
+  overflow: visible;
+  position: relative;
+  z-index: 5;
+}
+.acell.team.frozen {
+  position: sticky;
+}
+.acell.track {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 0;
+  border-right: 0;
+}
+
+.arow:hover .acell.order,
+.arow.selected .acell.order {
+  background: var(--surface-2);
+}
+.arow.selected {
+  background: rgba(91, 140, 255, 0.07);
+}
+.arow.completed-today {
+  filter: grayscale(1);
+  opacity: 0.58;
+  background: var(--surface-3);
+}
+.arow.completed-today .acell.frozen,
+.arow.completed-today .acell.order {
+  background: var(--surface-3);
+}
+.arow.context {
+  opacity: 0.72;
+}
+.arow.empty .acell.order {
+  color: var(--faint);
+  font-style: italic;
+}
+.order-id {
+  font-weight: 650;
+  white-space: nowrap;
+}
+.order-type {
+  background: var(--surface-3);
+  color: var(--muted);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 9.5px;
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+/* Only two people do the softies, so the step is worth picking out. */
+.order-type.smart-softie {
+  background: #ede9fe;
+  color: #6d28d9;
+}
+.order-desc {
+  color: var(--faint);
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.daycol {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding-bottom: 5px;
+  font-size: 12px;
+  color: var(--muted);
+}
+/*
+ * Load histogram. One bar per day filled to its percentage, so the week reads
+ * as a shape before anyone reads a number. Bands: green under 80%, orange to
+ * 90%, red beyond.
+ */
+.daycol-date {
+  font-size: 11px;
+}
+.day-order-filter {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+.day-order-filter[aria-pressed="true"] {
+  background: var(--accent);
+  color: #fff;
+}
+.day-order-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.day-bar {
+  display: flex;
+  align-items: flex-end;
+  width: 36px;
+  height: 22px;
+  background: var(--surface-3);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.day-bar i {
+  display: block;
+  width: 100%;
+  min-height: 2px;
+  border-radius: 2px 2px 0 0;
+}
+.day-bar.green i { background: var(--ok); }
+.day-bar.orange i { background: var(--warn); }
+.day-bar.red i { background: var(--error); }
+.day-load {
+  font-size: 9.5px;
+  font-weight: 700;
+}
+.day-load.green { color: var(--ok); }
+.day-load.orange { color: var(--warn); }
+.day-load.red { color: var(--error); }
+/*
+ * Day backgrounds for the whole board — one layer, not one per row. Rows leave
+ * their track cells transparent, so these show through; bars sit at z-index 2.
+ */
+.day-stripes {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.stripe {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+/* Behind us: yesterday's shift, kept on screen to compare against the plan. */
+.stripe.past {
+  background: rgba(100, 116, 139, 0.07);
+}
+/* Saturday and Sunday: the factory is closed. */
+.stripe.closed {
+  background: rgba(100, 116, 139, 0.13);
+}
+/*
+ * Today's column. Both edges are drawn the same, deliberately: a heavier left
+ * edge reads as a line *in* the column, which is what the shift clock is, and
+ * the two must not be confused.
+ */
+.stripe.today {
+  background: rgba(37, 99, 235, 0.07);
+  box-shadow:
+    inset 1px 0 0 rgba(37, 99, 235, 0.35),
+    inset -1px 0 0 rgba(37, 99, 235, 0.35);
+}
+
+/*
+ * Where the shift has got to, drawn across today's column between 07:00 and
+ * 15:30 and nudged on every five minutes. Above the bars — the whole point is
+ * to see which of them the shift should have reached by now.
+ */
+.now-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  z-index: 6;
+  background: #ef4444;
+  cursor: help;
+}
+.now-line::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -3px;
+  border: 4px solid transparent;
+  border-top-color: #ef4444;
+}
+
+.crew-window-editor {
+  display: grid;
+  gap: 6px;
+  min-width: 220px;
+  padding: 7px;
+}
+.crew-window-editor label {
+  display: grid;
+  grid-template-columns: 58px 1fr;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.crew-window-editor input {
+  min-width: 0;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.crew-window-actions {
+  display: flex;
+  gap: 5px;
+}
+.crew-window-actions button {
+  flex: 1;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+/* Header columns get the same treatment, above the stripe layer. */
+.daycol.past {
+  background: rgba(100, 116, 139, 0.07);
+  color: var(--muted);
+}
+.past-tag {
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--muted);
+  font-size: 8.5px;
+  font-weight: 800;
+}
+/* Output that was booked, not work that is planned — hollow, not solid. */
+.day-bar.actual {
+  background: transparent;
+  border: 1px dashed var(--border);
+}
+.day-bar.actual i {
+  opacity: 0.55;
+}
+.daycol.weekend {
+  background: rgba(100, 116, 139, 0.13);
+  color: var(--faint);
+}
+.daycol.today {
+  background: rgba(37, 99, 235, 0.09);
+  box-shadow:
+    inset 1px 0 0 rgba(37, 99, 235, 0.35),
+    inset -1px 0 0 rgba(37, 99, 235, 0.35);
+}
+.today-tag {
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 8.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  vertical-align: 1px;
+}
+/* A closed day reads 0% unless overtime was approved, which shows muted. */
+.day-bar.closed i { background: var(--faint); }
+.day-load.closed { color: var(--faint); }
+
+/* An order approved to run through the weekend. */
+.bar-ot {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--warn);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+}
+
+/*
+ * Someone on two orders at the same time. `!` is the accident — the schedule
+ * moved, or nobody looked — and `≡` is the supervisor saying they know: the
+ * person is splitting their day. Both are marked, because the fact matters
+ * more than the paperwork.
+ */
+.chip.clash {
+  border-color: var(--error);
+  background: var(--error-dim);
+  color: #7f1d1d;
+}
+.chip.shared {
+  border-color: var(--warn);
+  background: var(--warn-dim);
+  color: #78350f;
+}
+.chip-clash {
+  margin-left: 3px;
+  font-weight: 800;
+}
+/* Offered last in the picker, and shown with what they are already on. */
+.picker-item.busy .picker-skills {
+  color: var(--error);
+}
+
+.clash-list {
+  margin: 0 0 10px;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text);
+}
+.clash-list li {
+  font-family: var(--mono);
+  margin-bottom: 2px;
+}
+
+/* ---- weekend overtime confirmation ------------------------------------- */
+.ot-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.42);
+}
+.ot-dialog {
+  width: min(430px, calc(100vw - 32px));
+  padding: 16px 18px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.28);
+}
+.ot-dialog h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.ot-dialog p {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.ot-note {
+  color: var(--muted);
+}
+.ot-gate {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(217, 119, 6, 0.12);
+  color: var(--warn);
+  font-weight: 600;
+}
+.ot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* line group */
+/*
+ * The summary row: the line's totals on the left, and its own people on the
+ * right. It is a row rather than one big button because the load chips inside
+ * it open their own popup, and a button cannot hold another button.
+ */
+.agroup-head {
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  width: max-content;
+  min-width: 100%;
+}
+/*
+ * The part that stays put. A sticky box cannot slide inside a containing block
+ * it already fills, so the row spans the whole grid to carry the background
+ * and this inner block — only as wide as its own content — is what pins to the
+ * left edge, the same way the Order and Team columns do.
+ */
+.agroup-head-in {
+  position: sticky;
+  left: 0;
+  /* Above the now line (6): it marks where the shift has reached on the bars,
+     and there are none here — drawn through a name it only obscures it. */
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: 100%;
+  padding: 4px 10px;
+  background: var(--surface-2);
+}
+.agroup-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 0;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  flex: 0 0 auto;
+}
+/*
+ * Everyone in today who is trained on this line, in the order the board picks
+ * them. Wraps rather than scrolls: on a busy line the second row of names is
+ * still the same line's roster, and a horizontal scrollbar here would fight
+ * the board's own.
+ */
+.agroup-roster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 4px;
+  align-items: center;
+  min-width: 0;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+.agroup-name {
+  font-weight: 700;
+  font-size: 12.5px;
+  letter-spacing: 0.3px;
+}
+.agroup-note {
+  font-size: 10px;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.agroup-count {
+  background: var(--surface-3);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 0 7px;
+  font-size: 10px;
+  font-weight: 650;
+}
+/* The line's work load — remaining standard hours and who is on it. */
+.agroup-load {
+  background: #dbeafe;
+  color: #1e3a8a;
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.agroup-crew {
+  font-size: 10px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.agroup-gap {
+  font-size: 10px;
+  font-weight: 650;
+  color: var(--warn);
+  background: var(--warn-dim);
+  border-radius: 999px;
+  padding: 0 7px;
+}
+
+/* bars */
+/*
+ * The bar spans start → Expect Date; the blocks inside it are the stretches
+ * the factory is open. The bar itself is only a frame — colour, background and
+ * border belong to the blocks, so a weekend between two of them shows the grey
+ * closed-day stripe through the gap.
+ */
+.bar {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  cursor: grab;
+  user-select: none;
+  font-size: 11px;
+  font-weight: 650;
+  z-index: 2;
+}
+.bar-piece {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  overflow: hidden;
+}
+.bar.green .bar-piece { background: #bbf7d0; border-color: #16a34a; }
+.bar.red .bar-piece { background: #fecaca; border-color: #dc2626; }
+.bar.grey .bar-piece { background: var(--surface-3); border-color: var(--border); }
+.bar.green { color: #14532d; }
+.bar.red { color: #7f1d1d; }
+.bar.grey { color: var(--muted); }
+.bar.readonly {
+  cursor: default;
+  opacity: 0.75;
+}
+.bar.selected .bar-piece {
+  box-shadow: 0 0 0 2px rgba(91, 140, 255, 0.55);
+}
+.bar.dependency-related .bar-piece {
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.42);
+}
+.bar.dragging {
+  opacity: 0.6;
+  z-index: 5;
+}
+/* All of this order's work is on days the axis is not drawing — a Sunday press
+   run, most often. A marker on the seam those days collapse to, cut on the
+   diagonal so its width is plainly not its length. */
+.bar.off-axis .bar-piece {
+  border-style: dashed;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(15, 23, 42, 0.16) 0 2px,
+    transparent 2px 5px
+  );
+}
+/* An order approved to run through the weekend is one unbroken block. */
+.bar.overtime .bar-piece {
+  outline: 1px dashed rgba(217, 119, 6, 0.85);
+  outline-offset: -2px;
+}
+.bar-progress {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+.bar.green .bar-progress { background: #4ade80; }
+.bar.red .bar-progress { background: #f87171; }
+.bar.grey .bar-progress { background: #94a3b8; }
+/* Over the blocks, not inside one, so the label survives a narrow first
+   stretch — a bar starting on a Friday is one column wide before the break. */
+.bar-tag {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.bar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/*
+ * A couple of hours of work is a few pixels wide, and no label fits in that.
+ * Rather than clip one down to a single letter, it sits in the empty grid
+ * beside the block — to the right, or to the left where the bar is near the
+ * end of the timeline and there is no room the other way.
+ */
+.bar.tagged {
+  padding: 0;
+}
+.bar.tagged .bar-tag {
+  position: absolute;
+  left: 100%;
+  margin-left: 6px;
+  font-weight: 600;
+}
+.bar.tagged.tag-left .bar-tag {
+  left: auto;
+  right: 100%;
+  margin-left: 0;
+  margin-right: 6px;
+}
+/* Down to its minimum width, so the block is a marker rather than a length. */
+.bar.stub .bar-piece {
+  border-radius: 3px;
+}
+.bar-missing {
+  position: absolute;
+  left: 4px;
+  top: 10px;
+  font-size: 10.5px;
+  color: var(--error);
+  border: 1px dashed var(--error);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+/* team chips */
+.team {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  align-items: center;
+}
+.chip {
+  appearance: none;
+  background: #dbeafe;
+  color: #1e3a8a;
+  border: 1px solid #93c5fd;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chip:hover {
+  border-color: var(--error);
+}
+.chip.empty {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--border);
+  color: var(--faint);
+  cursor: default;
+}
+/* Crew changes are the supervisor's; locked chips stay readable, not clickable. */
+.chip.locked,
+.chip.locked:hover {
+  cursor: not-allowed;
+  opacity: 0.72;
+  border-color: var(--border);
+}
+.chip.add {
+  background: var(--surface-3);
+  border-color: var(--border);
+  color: var(--muted);
+  padding: 2px 7px;
+}
+.chip.add:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.chip-add-wrap {
+  position: relative;
+}
+.picker {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 3px;
+  z-index: 20;
+  min-width: 230px;
+  max-height: 260px;
+  overflow: auto;
+  box-shadow: 0 10px 28px rgba(30, 41, 59, 0.24);
+}
+
+.arow:has(.picker) { position: relative; z-index: 30; }
+/* Timeline controls — in the title bar, centred between two equal spacers. */
+.board-tools {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.board-tools strong {
+  color: var(--text);
+  font-weight: 650;
+}
+.board-tools button,
+.date-head button,
+.date-restore {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+}
+.board-tools button {
+  width: 22px;
+  height: 22px;
+  font-size: 14px;
+  line-height: 1;
+}
+/* Brings a hidden date column back. Named in full — "+ ship" beside the
+   hours pill reads as debris rather than as a control. */
+.board-tools .date-restore {
+  width: auto;
+  height: auto;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--muted);
+}
+.board-tools .date-restore:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.order-window {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.board-tools .order-window button {
+  width: auto;
+  height: 22px;
+  padding: 0 7px;
+  border: 0;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.board-tools .order-window button:first-child {
+  border-left: 0;
+}
+.board-tools .order-window button.active {
+  background: var(--accent);
+  color: #fff;
+}
+/* No `margin-left: auto` — the board is far wider than the viewport, so that
+   would push this off the right-hand edge of a scrolled-left page. */
+.board-load {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--muted);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+/* Material links the dependency graph had to drop — hover for which. */
+.board-warn {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--warn-dim);
+  color: #92400e;
+  font-weight: 650;
+  cursor: help;
+}
+
+/* ---- per-person week load ---------------------------------------------- */
+.worker-load-anchor {
+  position: relative;
+}
+.worker-name {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  cursor: pointer;
+}
+.worker-name:hover,
+.worker-name.open {
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+.worker-name:not(.drag-locked) { cursor: grab; }
+.worker-name.dragging { opacity: 0.45; cursor: grabbing; }
+.worker-name.drag-locked { cursor: pointer; }
+.worker-drag-overlay {
+  padding: 5px 10px;
+  border: 1px solid #60a5fa;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 8px 20px rgba(30, 41, 59, 0.2);
+  cursor: grabbing;
+}
+/*
+ * Five squares, one per working day of the window, in the same bands as the
+ * day columns above the board. An idle day is drawn hollow rather than green:
+ * empty and comfortable look nothing alike to a supervisor hunting for room.
+ */
+.wl-dots {
+  display: inline-flex;
+  gap: 2px;
+}
+.wl-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  border: 1px solid transparent;
+}
+.wl-dot.green { background: var(--ok); }
+.wl-dot.orange { background: var(--warn); }
+.wl-dot.red { background: var(--error); }
+.wl-dot.idle {
+  background: transparent;
+  border-color: #93c5fd;
+}
+.wl-dot.leave {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--surface-3) 0 2px,
+    transparent 2px 4px
+  );
+  border-color: var(--border);
+}
+.worker-load {
+  position: fixed;
+  z-index: 70;
+  width: 430px;
+  max-width: 78vw;
+  padding: 9px 11px 11px;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 14px 34px rgba(30, 41, 59, 0.28);
+  cursor: default;
+}
+.wl-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0 8px;
+  align-items: baseline;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.wl-head strong { font-size: 13px; }
+.wl-sub {
+  grid-column: 1;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+.wl-close {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  align-self: start;
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+.wl-summary {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.wl-summary b { color: var(--text); font-size: 13px; }
+.wl-pct {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--ok-dim);
+  color: var(--ok);
+  font-weight: 700;
+}
+.wl-pct.over { background: var(--error-dim); color: var(--error); }
+.wl-days {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-variant-numeric: tabular-nums;
+}
+.wl-days li {
+  display: grid;
+  grid-template-columns: 68px 58px 46px 1fr;
+  gap: 7px;
+  align-items: center;
+  padding: 2.5px 0;
+  font-size: 11px;
+  border-top: 1px solid var(--border);
+}
+.wl-days li.leave,
+.wl-days li.closed { opacity: 0.55; }
+.wl-days li.overtime .wl-day::after {
+  content: ' OT';
+  color: #b45309;
+  font-weight: 700;
+}
+.wl-day { color: var(--muted); }
+.wl-meter {
+  height: 7px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+/* Same bands as the squares beside the name and the day columns above. */
+.wl-meter i {
+  display: block;
+  height: 100%;
+  background: var(--surface-3);
+}
+.wl-meter i.green { background: var(--ok); }
+.wl-meter i.orange { background: var(--warn); }
+.wl-meter i.red { background: var(--error); }
+.wl-hours { font-weight: 650; text-align: right; }
+.wl-hours.over { color: var(--error); }
+.wl-orders {
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wl-warn {
+  margin: 8px 0 0;
+  padding: 5px 7px;
+  border-radius: 5px;
+  background: var(--error-dim);
+  color: var(--error);
+  font-size: 10.5px;
+}
+
+/* ---- supervisor gate ---------------------------------------------------- */
+.supervisor-wrap {
+  position: relative;
+}
+.supervisor-chip {
+  appearance: none;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.supervisor-chip.open {
+  background: var(--ok-dim);
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.supervisor-prompt {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  width: 230px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 14px 34px rgba(30, 41, 59, 0.28);
+}
+.supervisor-prompt label {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.supervisor-prompt input {
+  padding: 6px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.supervisor-error {
+  font-size: 10.5px;
+  color: var(--error);
+}
+.supervisor-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.date-head { flex-direction: column; gap: 3px; text-align: center; line-height: 1.15; }
+.date-head .date-hide { width: 22px; height: 18px; line-height: 12px; }
+.date-head .date-sort {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: auto;
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1.15;
+  cursor: pointer;
+}
+.date-head .date-sort span {
+  color: var(--faint);
+  font-size: 8px;
+}
+.date-head .date-sort.active,
+.date-head .date-sort:hover {
+  color: var(--accent);
+}
+.team-head {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3px;
+}
+/*
+ * Everyone in today with nothing allocated — the people still to reach for.
+ * Wrapped and named in full: a list cut off at the column's edge ends in the
+ * one name you were looking for.
+ */
+.team-free {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 3px;
+  max-width: 100%;
+  /* Grows to fit the names; past a shift's worth it scrolls rather than
+     pushing the day columns off the top of the board. */
+  max-height: 96px;
+  overflow-y: auto;
+  color: #b45309;
+  font-size: 9.5px;
+  font-weight: 650;
+  white-space: normal;
+}
+.team-free-count {
+  background: var(--warn-dim);
+  border-radius: 999px;
+  padding: 0 5px;
+  font-weight: 700;
+}
+.team-free-name {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 3px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.team-free.none {
+  display: block;
+  color: var(--ok);
+}
+.production-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 8px; margin-bottom: 8px; }
+.production-grid label { display: block; }
+.production-grid label > span {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--faint);
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.production-grid input,
+.production-input { width: 100%; padding: 5px 7px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 5px; font: inherit; font-size: 12.5px; }
+.production-grid input { font-variant-numeric: tabular-nums; }
+.production-grid input:focus,
+.production-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+.production-input { margin-top: 6px; }
+.production-entry textarea.production-input { min-height: 52px; resize: vertical; }
+textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
+.production-actions { display: flex; align-items: center; gap: 14px; margin: 2px 0; }
+.pause-toggle { display: flex; align-items: center; gap: 5px; margin: 0; color: var(--muted); font-size: 11.5px; font-weight: 650; white-space: nowrap; }
+/* The start gate is this section's action, so it drops to the foot of the
+   column and its button lands on the same line as Save entry next door,
+   against the same right edge. */
+.production-start {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 9px;
+  text-align: right;
+}
+.production-start > .hint,
+.production-start .production-history {
+  align-self: stretch;
+  margin: 0;
+  text-align: left;
+}
+.production-start .production-input { margin-top: 0; }
+.production-start .btn { white-space: nowrap; }
+.production-start .production-history { padding: 0; border-top: 0; }
+.action-message { margin-top: 5px; margin-bottom: 0; }
+.production-history { padding: 6px 0; border-top: 1px solid var(--border); font-size: 11px; line-height: 1.45; }
+.sr-only { position: absolute !important; width: 1px !important; height: 1px !important; opacity: 0; pointer-events: none; }
+.picker-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  text-align: left;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.picker-name {
+  align-self: center;
+  white-space: nowrap;
+}
+.picker-status {
+  display: grid;
+  justify-items: end;
+  min-width: 0;
+  color: var(--faint);
+  font-size: 9.5px;
+  line-height: 1.25;
+  text-align: right;
+  white-space: nowrap;
+}
+.picker-status.free { color: var(--ok); }
+.picker-status.busy { color: var(--error); }
+.picker-status .picker-next { color: var(--muted); }
+.picker-item:hover {
+  background: var(--surface-3);
+}
+.picker-skills {
+  color: var(--faint);
+  font-size: 9.5px;
+}
+.picker-empty {
+  padding: 8px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.hint {
+  color: var(--faint);
+  font-size: 10.5px;
+  margin: 0 0 10px;
+  line-height: 1.35;
+}
+.expect.green { color: var(--ok); }
+.expect.red { color: var(--error); }
+
+/* pool cards reused by assembly */
+.ord {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  cursor: grab;
+  user-select: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ord:hover { border-color: var(--accent); }
+.ord.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(91,140,255,.35); }
+.ord.dragging { opacity: 0.35; }
+.ord-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.ord-job { font-weight: 660; font-size: 11.5px; }
+.ord-type { background: var(--surface-3); color: var(--muted); border-radius: 4px; padding: 0 5px; font-size: 10px; font-weight: 700; }
+.ord-desc { font-size: 11px; line-height: 1.25; color: var(--muted); }
+.ord-meta { display: flex; gap: 4px; font-size: 10.5px; color: var(--faint); }
+
+/* Reversible local exclusions for orders outside the current production scope. */
+.ignored-order-tools { position: relative; }
+.ignored-order-tools summary { cursor: pointer; font-size: 11px; }
+.ignored-order-tools ul {
+  position: absolute; right: 0; top: 100%; z-index: 85;
+  width: 340px; max-height: 320px; overflow: auto; margin: 6px 0;
+  padding: 10px; list-style: none; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
+}
+.ignored-order-tools li { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+.ignored-order-tools li span { flex: 1; min-width: 0; }
+.pool-ignore { margin-top: 6px; cursor: pointer; }

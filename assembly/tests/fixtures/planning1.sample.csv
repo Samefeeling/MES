@@ -1,0 +1,5 @@
+JobHead_JobNum,JobHead_PartNum,JobHead_PartDescription,JobHead_Department,JobHead_ProdQty,Calculated_RemainingQty,JobHead_StartDate,JobHead_ReqDueDate,Calculated_LaborHrs,JobOper_ProdStandard,JobHead_StartHour
+SFM507615,7911FR,Encore,PMD,34,34,2026-09-29T00:00:00,2026-09-30T00:00:00,0.77,0.022727,23.3
+SFM507616,7912FR,Encore HB,PMD,58,58,2026-09-29T00:00:00,2026-09-30T00:00:00,1.32,0.022727,23.29
+018140-1-1,CSSL01436,"Cosmic Stool, walnut",ASSY,30,30,2026-09-10T00:00:00,2026-09-11T00:00:00,2.1,0.07,21.9
+018321-2-1,DETR00081,Folding Side Table,ASSY,4,4,2026-09-11T00:00:00,2026-09-15T00:00:00,1.67,0.41667,22.33

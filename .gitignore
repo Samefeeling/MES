@@ -7,3 +7,5 @@ coverage/
 scripts/sync-epicor-to-sp.config.json
 scripts/*.pfx
 scripts/*.pem
+
+*.tsbuildinfo
