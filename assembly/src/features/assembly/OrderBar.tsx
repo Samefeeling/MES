@@ -41,6 +41,7 @@ export function OrderBar({
   dependencyRelated,
   marked = false,
   moveWith,
+  floorISO = null,
   onSelect,
   onMark,
   onDependencyHover,
@@ -63,6 +64,12 @@ export function OrderBar({
    * it, but it has to travel in the drag payload, which is set up here.
    */
   moveWith?: MarkedMove[];
+  /**
+   * The earliest day this order may begin, whatever the drag asks for — today,
+   * material still on a PO, a component not finished yet. The drop reads it so
+   * a drag the schedule was always going to refuse writes nothing at all.
+   */
+  floorISO?: string | null;
   onSelect: (jobId: string, at?: { x: number; y: number }) => void;
   onMark: (jobId: string) => void;
   onDependencyHover: (jobId: string | null) => void;
@@ -85,6 +92,7 @@ export function OrderBar({
         // the drag rather than assume the default column width.
         dayWidth,
         showWeekends,
+        floorISO,
         // Only meaningful when this bar is one of the marked ones; the drop
         // handler checks that before moving anything but this order.
         moveWith,
@@ -219,6 +227,19 @@ export function OrderBar({
     ? [{ key: 0, left: 0, width, done: completion }]
     : pieces;
 
+  /*
+   * The left edge is not the planner's to choose.
+   *
+   * A component this order is made from has not been finished yet, so the bar
+   * is standing against that date and a drag towards it comes straight back —
+   * correctly, and, until now, in silence: you could pull the same bar left a
+   * dozen times, watch it return each time, and never be told that the thing
+   * holding it was the cover being sewn on the next line down. The order knows
+   * which one it is waiting for; the bar now says so, and carries a stop
+   * against the edge that will not move.
+   */
+  const heldBy = row.waitingOn ? String(row.waitingOn.onJobId) : null;
+
   // A couple of hours of work is a few pixels of bar; where the label cannot
   // fit inside it, the tag goes in the empty grid beside the block.
   const tag = barTag({
@@ -241,7 +262,7 @@ export function OrderBar({
         readOnly ? 'readonly' : ''
       } ${row.overtime ? 'overtime' : ''} ${
         drawn.length > 1 ? 'split' : ''
-      } ${offAxis ? 'off-axis' : ''} ${tag.stub ? 'stub' : ''} ${
+      } ${offAxis ? 'off-axis' : ''} ${heldBy ? 'held' : ''} ${tag.stub ? 'stub' : ''} ${
         tag.outside ? 'tagged' : ''
       } ${tag.flip ? 'tag-left' : ''} ${marked ? 'marked' : ''}`}
       style={{
@@ -270,6 +291,9 @@ export function OrderBar({
           ? ' · runs entirely on days this axis is hiding — show Weekends to see it'
           : '') +
         (row.overtime ? ' · weekend overtime approved' : '') +
+        (heldBy
+          ? ` · cannot start before ${heldBy} is finished, so it will not drag any earlier`
+          : '') +
         ` · ${Math.round(completion * 100)}% complete` +
         ` · ${row.status.reason}`
       }

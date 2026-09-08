@@ -131,6 +131,8 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
   );
   const startOrder = usePlanStore((s) => s.startOrder);
   const saveProductionEntry = usePlanStore((s) => s.saveProductionEntry);
+  const setOrderStart = usePlanStore((s) => s.setOrderStart);
+  const orderStarts = usePlanStore((s) => s.orderStarts);
   const unlocked = useSupervisorStore((s) => s.unlocked);
   const [draft, setDraft] = useState('');
   const productionByJob = usePlanStore((s) => s.production);
@@ -169,6 +171,8 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
   if (!row) return null;
 
   const { job, status } = row;
+  /** The day the planner dragged this bar to, if they did. */
+  const pinnedStart = orderStarts[String(job.id)];
   const left = remainingQty(job);
   const existingToday = productionEntries.find((entry) => entry.date === today);
   const maxComplete = left + (existingToday?.complete ?? 0);
@@ -366,6 +370,32 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
               </span>
             </div>
           </div>
+          {/*
+            The way back out of a drag.
+
+            Dragging a bar pins it, and a pinned order stops being sequenced
+            against its crew's diary — it holds the day it was given instead of
+            falling in behind whatever those people are already on. That is
+            right for an order somebody has placed deliberately, and wrong for
+            one they were only nudging: there was no way to undo it, so a board
+            worked over for an afternoon ended up pinned order by order, each
+            one frozen out of the packing that would have pulled the week
+            together. Releasing hands the order back to the schedule, which
+            starts it as early as its crew, its line and its components allow.
+          */}
+          {pinnedStart && !row.actualStart && (
+            <div className="pinned-start">
+              <span>
+                Start pinned by hand to <b>{popupDate(new Date(pinnedStart))}</b>
+              </span>
+              <Button
+                onClick={() => setOrderStart(job.id, null)}
+                title="Let the board schedule this order again — as early as its crew, its line and the orders it waits on allow"
+              >
+                Release
+              </Button>
+            </div>
+          )}
           <dl className="kv">
             <dt>Progress</dt>
             <dd>

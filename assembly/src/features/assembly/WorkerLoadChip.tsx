@@ -232,17 +232,31 @@ export function WorkerLoadChip({
                   <span className={`wl-hours ${over ? 'over' : ''}`}>
                     {day.hours > 0 ? hrs(day.hours) : '—'}
                   </span>
+                  {/*
+                    One chip per order, wrapping onto as many lines as the day
+                    needs. This was a single joined string in a cell that
+                    clipped to one line, so a person on three orders in a day
+                    saw the first of them and an ellipsis — while the summary
+                    above said four. The hours were right all along; two of the
+                    orders were simply off the end of the line.
+
+                    The order number and its hours, and nothing else: the
+                    number is what a supervisor says out loud and looks up, and
+                    it is all that fits four-abreast. The line and the
+                    description are on the chip's own hover.
+                  */}
                   <span className="wl-orders">
                     {day.entries.length > 0
-                      ? // The order number first: it is what the supervisor
-                        // says out loud and what they look up. Two orders for
-                        // the same part are told apart by nothing else.
-                        day.entries
-                          .map(
-                            (e) =>
-                              `${String(e.jobId)} · ${e.line} · ${e.description}`,
-                          )
-                          .join('  |  ')
+                      ? day.entries.map((e) => (
+                          <span
+                            key={String(e.jobId)}
+                            className="wl-order"
+                            title={`${String(e.jobId)} · ${e.line} · ${e.description} — ${hrs(e.hours)}`}
+                          >
+                            {String(e.jobId)}
+                            <b>{hrs(e.hours)}</b>
+                          </span>
+                        ))
                       : day.onLeave
                         ? 'planned leave'
                         : day.working

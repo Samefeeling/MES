@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  earliestStart,
   markedSet,
   planGroupMove,
   type MarkedMove,
@@ -244,5 +245,83 @@ describe('which orders a drag carries', () => {
   it('reports where each bar is drawn, not where it was pinned', () => {
     const set = markedSet([row('A', '2025-09-08')], new Set(['A']), today);
     expect(set[0].startISO).toBe(day('2025-09-08'));
+  });
+});
+
+/**
+ * The floor one bar is dragged against. A marked run has asked this since
+ * group moves were added; a single bar used to be written wherever the
+ * pointer left it and let the schedule argue afterwards — which it always
+ * won, silently, while the pin it overruled stayed in the plan.
+ */
+describe('the earliest day one order may begin', () => {
+  const row = (
+    id: string,
+    start: string | null,
+    extra: Partial<MovableRow> = {},
+  ): MovableRow => ({
+    job: { id },
+    start: start === null ? null : new Date(day(start)),
+    material: {},
+    predecessors: [],
+    ...extra,
+  });
+  const today = new Date(day('2025-09-01'));
+  const board = (rows: MovableRow[]) =>
+    new Map(rows.map((r) => [String(r.job.id), r] as const));
+
+  it('is today when nothing else holds the order', () => {
+    const chair = row('chair', '2025-09-10');
+    expect(earliestStart(board([chair]), chair, today)).toEqual(today);
+  });
+
+  it('is the day the last component is finished', () => {
+    const shell = row('shell', '2025-09-02', {
+      expectDate: new Date(day('2025-09-05')),
+    });
+    const cover = row('cover', '2025-09-02', {
+      expectDate: new Date(day('2025-09-09')),
+    });
+    const chair = row('chair', '2025-09-10', {
+      predecessors: [{ onJobId: 'shell' }, { onJobId: 'cover' }],
+    });
+    expect(earliestStart(board([shell, cover, chair]), chair, today)).toEqual(
+      new Date(day('2025-09-09')),
+    );
+  });
+
+  it('is the day material lands when that is later still', () => {
+    const chair = row('chair', '2025-09-10', {
+      material: { earliestStart: new Date(day('2025-09-15')) },
+      predecessors: [{ onJobId: 'shell' }],
+    });
+    const shell = row('shell', '2025-09-02', {
+      expectDate: new Date(day('2025-09-09')),
+    });
+    expect(earliestStart(board([shell, chair]), chair, today)).toEqual(
+      new Date(day('2025-09-15')),
+    );
+  });
+
+  it('ignores a component moving with it, which holds it to nothing', () => {
+    const shell = row('shell', '2025-09-02', {
+      expectDate: new Date(day('2025-09-09')),
+    });
+    const chair = row('chair', '2025-09-10', {
+      predecessors: [{ onJobId: 'shell' }],
+    });
+    const set = board([shell, chair]);
+    expect(earliestStart(set, chair, today, new Set(['shell']))).toEqual(today);
+  });
+
+  it('writes nothing for a bar already sitting on its floor', () => {
+    // A drag towards a predecessor that is holding the bar. It cannot move,
+    // and pinning it there would stop it following that predecessor about.
+    const held = order('chair', '2025-09-09', '2025-09-09');
+    expect(planGroupMove([held], -3, false)).toEqual([]);
+    // One column the other way is a real move, and is written.
+    expect(landed(planGroupMove([held], 1, false))).toEqual({
+      chair: '2025-09-10',
+    });
   });
 });

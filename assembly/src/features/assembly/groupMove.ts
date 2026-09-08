@@ -60,6 +60,39 @@ export interface MovableRow {
  * whole board, since an order can be held by a press job or by one scrolled
  * out of the window.
  */
+const NOTHING_MOVING: ReadonlySet<string> = new Set();
+
+/**
+ * The earliest moment one order may begin, for reasons no drag can argue with:
+ * there is no working yesterday, material that lands on a future PO cannot be
+ * worked before it does, and a component has to be finished before the thing
+ * made from it starts.
+ *
+ * The same question a single dragged bar asks as a marked run — which is why
+ * it is one function. The single-bar path used to ask nothing at all and write
+ * whatever day the pointer reached, so a bar held by its predecessor was
+ * pinned afresh on every attempt to drag it past that predecessor, each pin
+ * silently overruled by the schedule and none of them visible.
+ */
+export function earliestStart(
+  everyRow: ReadonlyMap<string, MovableRow>,
+  row: MovableRow,
+  today: Date,
+  /** Orders moving with this one, which therefore hold it to nothing. */
+  moving: ReadonlySet<string> = NOTHING_MOVING,
+): Date {
+  let floor = today;
+  const at = row.material.earliestStart;
+  if (at && at > floor) floor = at;
+  for (const dependency of row.predecessors) {
+    const id = String(dependency.onJobId);
+    if (moving.has(id)) continue;
+    const finish = everyRow.get(id)?.expectDate;
+    if (finish && finish > floor) floor = finish;
+  }
+  return floor;
+}
+
 export function markedSet(
   rows: readonly MovableRow[],
   markedIds: ReadonlySet<string>,
@@ -70,21 +103,11 @@ export function markedSet(
     (row) => markedIds.has(String(row.job.id)) && row.start && !row.actualStart,
   );
   const moving = new Set(movable.map((row) => String(row.job.id)));
-  return movable.map((row) => {
-    const floors: Date[] = [today];
-    if (row.material.earliestStart) floors.push(row.material.earliestStart);
-    for (const dependency of row.predecessors) {
-      const id = String(dependency.onJobId);
-      if (moving.has(id)) continue;
-      const finish = everyRow.get(id)?.expectDate;
-      if (finish) floors.push(finish);
-    }
-    return {
-      jobId: String(row.job.id),
-      startISO: row.start!.toISOString(),
-      floorISO: floors.reduce((a, b) => (b > a ? b : a)).toISOString(),
-    };
-  });
+  return movable.map((row) => ({
+    jobId: String(row.job.id),
+    startISO: row.start!.toISOString(),
+    floorISO: earliestStart(everyRow, row, today, moving).toISOString(),
+  }));
 }
 
 /** Guards the column walk against a floor years out on a bad export. */

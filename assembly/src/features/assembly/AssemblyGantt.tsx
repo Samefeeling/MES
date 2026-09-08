@@ -60,7 +60,7 @@ import {
   type OrderSortKey,
 } from './boardView';
 import { useStableBoardOrder } from './useStableBoardOrder';
-import { markedSet, type MarkedMove } from './groupMove';
+import { earliestStart, markedSet, type MarkedMove } from './groupMove';
 import { fromDayKey, toDayKey } from '@/lib/time';
 
 // Must match the widths in index.css (--qty-w, --date-w x4, --team-w),
@@ -133,6 +133,7 @@ function OrderRowView({
   dependencyRelated,
   marked,
   moveWith,
+  floorISO,
   onMark,
   onDependencyHover,
 }: {
@@ -151,6 +152,8 @@ function OrderRowView({
   dependencyRelated: boolean;
   marked: boolean;
   moveWith: MarkedMove[];
+  /** Earliest day this order may begin, whatever the drag asks for. */
+  floorISO: string | null;
   onMark: (id: string) => void;
   onDependencyHover: (id: string | null) => void;
 }) {
@@ -262,6 +265,7 @@ function OrderRowView({
           dependencyRelated={dependencyRelated}
           marked={marked}
           moveWith={moveWith}
+          floorISO={floorISO}
           onSelect={onSelect}
           onMark={onMark}
           onDependencyHover={onDependencyHover}
@@ -305,6 +309,7 @@ function LineGroupView({
   relatedJobIds,
   markedIds,
   moveWith,
+  rowFloors,
   onMark,
   onDependencyHover,
 }: {
@@ -333,6 +338,8 @@ function LineGroupView({
   relatedJobIds: ReadonlySet<string>;
   markedIds: ReadonlySet<string>;
   moveWith: MarkedMove[];
+  /** Job id → earliest day it may begin, for the whole board. */
+  rowFloors: ReadonlyMap<string, string>;
   onMark: (id: string) => void;
   onDependencyHover: (id: string | null) => void;
 }) {
@@ -467,6 +474,7 @@ function LineGroupView({
             dependencyRelated={relatedJobIds.has(String(row.job.id))}
             marked={markedIds.has(String(row.job.id))}
             moveWith={moveWith}
+            floorISO={rowFloors.get(String(row.job.id)) ?? null}
             onMark={onMark}
             onDependencyHover={onDependencyHover}
           />
@@ -583,6 +591,23 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
       ),
     [markedIds, board.groups, board.today],
   );
+  /**
+   * The earliest day each order may begin, whoever drags it. A single bar used
+   * to be written wherever the pointer left it and let the schedule argue
+   * afterwards, so a drag the schedule was always going to refuse still pinned
+   * the order — and a pinned order stops falling in behind its crew and its
+   * predecessor. A marked run has asked this question all along; now one bar
+   * asks it too, and a drag that cannot move writes nothing.
+   */
+  const rowFloors = useMemo(() => {
+    const byId = new Map(allRows.map((row) => [String(row.job.id), row]));
+    return new Map(
+      allRows.map((row) => [
+        String(row.job.id),
+        earliestStart(byId, row, board.today).toISOString(),
+      ]),
+    );
+  }, [allRows, board.today]);
 
   const dependencyFocusId = selectedJobId ?? hoveredJobId;
   const relatedJobIds = useMemo(() => {
@@ -876,6 +901,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
           relatedJobIds={relatedJobIds}
           markedIds={markedIds}
           moveWith={moveWith}
+          rowFloors={rowFloors}
           onMark={toggleMark}
           onDependencyHover={setHoveredJobId}
         />

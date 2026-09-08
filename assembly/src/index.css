@@ -1159,6 +1159,14 @@ body.col-resizing {
  * 15:30 and nudged on every five minutes. Above the bars — the whole point is
  * to see which of them the shift should have reached by now.
  */
+/*
+ * The line itself takes no pointer events. It runs the full height of the
+ * board above every bar, so the two pixels it occupies were two pixels of
+ * every bar it crossed that could not be grabbed — and today's column, where
+ * it always is, is exactly where the short orders sit. Its marker keeps the
+ * tooltip: a hover target belongs on the head of the line, not down its whole
+ * length.
+ */
 .now-line {
   position: absolute;
   top: 0;
@@ -1167,7 +1175,7 @@ body.col-resizing {
   margin-left: -1px;
   z-index: 6;
   background: #ef4444;
-  cursor: help;
+  pointer-events: none;
 }
 .now-line::before {
   content: '';
@@ -1176,6 +1184,8 @@ body.col-resizing {
   left: -3px;
   border: 4px solid transparent;
   border-top-color: #ef4444;
+  pointer-events: auto;
+  cursor: help;
 }
 
 .crew-window-editor {
@@ -1537,6 +1547,16 @@ body.col-resizing {
 .bar.grey .bar-progress { background: #94a3b8; }
 /* Over the blocks, not inside one, so the label survives a narrow first
    stretch — a bar starting on a Friday is one column wide before the break. */
+/*
+ * Part of the bar, and grabbable.
+ *
+ * A couple of hours of work is a ten-pixel block with its label out in the
+ * grid beside it, and the label was inert — so the only thing you could take
+ * hold of was the ten pixels, and every attempt to drag a short order by the
+ * thing that names it did nothing at all. The label is the order as far as
+ * the eye is concerned; it is the order as far as the pointer is concerned
+ * too. Nothing else can be under it: a row holds one bar.
+ */
 .bar-tag {
   position: relative;
   z-index: 1;
@@ -1545,7 +1565,6 @@ body.col-resizing {
   gap: 4px;
   min-width: 0;
   white-space: nowrap;
-  pointer-events: none;
 }
 .bar-label {
   overflow: hidden;
@@ -1571,6 +1590,22 @@ body.col-resizing {
   right: 100%;
   margin-left: 0;
   margin-right: 6px;
+}
+/* Standing against a component that is not finished yet. The stop is outside
+   the block, on the edge that will not move, so the bar keeps its length. */
+.bar.held::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: -2px;
+  bottom: -2px;
+  width: 3px;
+  border-radius: 2px;
+  background: repeating-linear-gradient(
+    180deg,
+    var(--warn) 0 4px,
+    transparent 4px 7px
+  );
 }
 /* Down to its minimum width, so the block is a marker rather than a length. */
 .bar.stub .bar-piece {
@@ -1876,8 +1911,10 @@ body.col-resizing {
   display: grid;
   grid-template-columns: 68px 58px 46px 1fr;
   gap: 7px;
-  align-items: center;
-  padding: 2.5px 0;
+  /* Not centred: a day carrying four orders wraps to two lines, and the date
+     and the meter belong beside its first one. */
+  align-items: start;
+  padding: 3.5px 0;
   font-size: 11px;
   border-top: 1px solid var(--border);
 }
@@ -1891,6 +1928,9 @@ body.col-resizing {
 .wl-day { color: var(--muted); }
 .wl-meter {
   height: 7px;
+  /* Centred on the row's first line, which is where the date and hours sit
+     when the orders beside them wrap onto a second. */
+  margin-top: 4px;
   border-radius: 999px;
   background: var(--surface-3);
   overflow: hidden;
@@ -1906,11 +1946,46 @@ body.col-resizing {
 .wl-meter i.red { background: var(--error); }
 .wl-hours { font-weight: 650; text-align: right; }
 .wl-hours.over { color: var(--error); }
+/* Every order on the day, wrapped — never one of them and an ellipsis. */
 .wl-orders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 4px;
   color: var(--faint);
+  min-width: 0;
+}
+.wl-order {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--surface-3);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+.wl-order b {
+  color: var(--muted);
+  font-weight: 650;
+}
+/* The one thing on the order that is a decision rather than a derivation, and
+   the way to take it back. */
+/* Stacked, not side by side: the schedule section is a narrow column, and a
+   date and a button abreast in it wrapped to three lines. */
+.pinned-start {
+  display: grid;
+  gap: 5px;
+  justify-items: start;
+  margin-top: 7px;
+  padding: 5px 7px 6px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+.pinned-start b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 .wl-warn {
   margin: 8px 0 0;

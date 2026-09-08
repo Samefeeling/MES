@@ -138,9 +138,34 @@ export function useDragDrop() {
         : orderStarts[key]
           ? startOfDay(new Date(orderStarts[key]))
           : startOfDay(new Date());
-      const moved = startOfDay(
+      const asked = startOfDay(
         shiftTimelineDays(from, dayShift, showWeekends),
       );
+      /*
+       * Where it may actually come to rest.
+       *
+       * There is no working yesterday, material on a future PO cannot be
+       * worked before it lands, and a component has to be finished before the
+       * thing made from it starts. The schedule enforces all three regardless,
+       * so a bar dragged past them returns to where it was — and writing the
+       * day the pointer reached anyway left a pin that could never be honoured
+       * sitting in the plan, and going out to the production list as this
+       * order's start. A marked run has been asking this since group moves
+       * were added; one bar asks it now too.
+       */
+      const floorISO = active.data.current.floorISO as string | null | undefined;
+      const floor = floorISO
+        ? startOfDay(new Date(floorISO))
+        : startOfDay(new Date());
+      const moved = asked < floor ? floor : asked;
+
+      // It cannot go where it was asked, and it is already as early as it can
+      // be: write nothing. Pinning is not free — a pinned order stops falling
+      // in behind its crew and its predecessor — and paying that for a drag
+      // that moved nothing is how a board ends up pinned order by order
+      // without anybody choosing it. The bar's own stop marker says what is
+      // holding it.
+      if (moved.getTime() === startOfDay(from).getTime()) return;
 
       // The factory is shut at the weekend. Ask before writing work into one;
       // nothing changes until the supervisor answers.
