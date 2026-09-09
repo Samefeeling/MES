@@ -41,7 +41,7 @@ describe('manual orders and migration', () => {
     manualOrders: {}, containers: {}, lineLayoutVersion: 0, lastSeen: {},
     orderActualStarts: {}, orderCrewAssignments: {}, production: {}, progress: {}, progressBaselines: {}, workerLines: {},
   }));
-  const support = { id: 'FG-test', description: 'Warehouse assistance', supportDepartment: 'Warehouse', day: '2026-09-09', plannedHours: 7.5 };
+  const support = { id: 'FG-test', description: 'Cut cardboard for warehouse assistance', supportDepartment: 'Warehouse', day: '2026-09-09', plannedHours: 7.5 };
   it('retains a manual order across exports, including empty exports', () => {
     const plan = usePlanStore.getState();
     plan.addManualOrder(support);

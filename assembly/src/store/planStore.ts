@@ -228,6 +228,7 @@ function emptyContainers(workCenters: WorkCenter[]): Containers {
  * moulding line the workbook has it on.
  */
 function homeContainer(job: Job, known: Set<string>): string {
+  if (job.manual) return known.has('FACTORY_GENERAL') ? 'FACTORY_GENERAL' : POOL_ID;
   const target = job.department === 'assembly' ? (initialLine(job.description, String(job.line ?? '')) ?? job.line) : job.preferredMachine;
   return target && known.has(String(target)) ? String(target) : POOL_ID;
 }
@@ -326,7 +327,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       const known = new Set(workCenters.map((w) => String(w.id)));
       const jobsById = new Map(jobs.map(job => [String(job.id), job]));
       const liveJobs = new Set(jobsById.keys());
-      const cutJobs = new Set(jobs.filter(j => /cut/i.test(j.description)).map(j => String(j.id)));
+      const cutJobs = new Set(jobs.filter(j => !j.manual && /cut/i.test(j.description)).map(j => String(j.id)));
       const next: Containers = emptyContainers(workCenters);
       const placed = new Set<string>();
 
@@ -702,6 +703,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
 
   moveJob(jobId, toContainer, toIndex) {
     set((state) => {
+      if (state.manualOrders[String(jobId)] && toContainer !== 'FACTORY_GENERAL') return state;
       const cleared = withoutJob(state.containers, jobId);
       const target = [...(cleared[toContainer] ?? [])];
       const at = toIndex === undefined ? target.length : Math.max(0, Math.min(toIndex, target.length));
