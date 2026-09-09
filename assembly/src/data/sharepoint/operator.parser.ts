@@ -14,7 +14,7 @@
  */
 
 import { WorkerId } from '@/domain/ids';
-import type { LineKey, Worker, WorkKind } from '@/domain/assembly';
+import { LINES, type LineKey, type Worker, type WorkKind } from '@/domain/assembly';
 import type { ListItemFields } from './lists.client';
 import type { ParseOutcome } from '@/data/excel/parsers/types';
 
@@ -37,7 +37,7 @@ const SKILL_TO_LINE: [RegExp, LineKey][] = [
   [/^(upl|uph|upholster|cutting|sewing|cutsew|cut&sew)/, 'UPL'],
   [/^(table|tbl)/, 'TABLE'],
   [/^(assy|assembl|finalassembl|sofa|chair)/, 'ASSY'],
-  [/^(pmd|mould|mold|press)/, 'PMD'],
+  [/^(pmd|mould|mold)$/, 'PMD'],
 ];
 
 /**
@@ -51,13 +51,17 @@ const SKILL_TO_KIND: [RegExp, WorkKind][] = [
 ];
 
 const skillParts = (raw: unknown): string[] =>
-  Array.isArray(raw) ? raw.map(String) : String(raw ?? '').split(/[,;/|+]+/);
+  Array.isArray(raw) ? raw.map(String) : String(raw ?? '').split(/[,;|+\n]+/);
 
 function readSkills(raw: unknown): LineKey[] {
   const out: LineKey[] = [];
   for (const part of skillParts(raw)) {
     const key = norm(part);
     if (!key) continue;
+    const exact = LINES.find(line => norm(line.key) === key || norm(line.name) === key);
+    if (exact) { if (!out.includes(exact.key)) out.push(exact.key); continue; }
+    const aliases: Record<string, LineKey> = { 'cut/sewing': 'UPL_CUT_SEW', cutsewing: 'UPL_CUT_SEW', cutting: 'UPL_CUT_SEW', sewing: 'UPL_CUT_SEW', 'cut&sew': 'UPL_CUT_SEW', gluing: 'UPL_GLUING', softie: 'UPL_SOFTIE', sss: 'UPL_SOFTIE', stool: 'ASSY_STOOL', seats: 'ASSY' };
+    if (aliases[key]) { if (!out.includes(aliases[key])) out.push(aliases[key]); continue; }
     const hit = SKILL_TO_LINE.find(([re]) => re.test(key));
     if (hit && !out.includes(hit[1])) out.push(hit[1]);
   }

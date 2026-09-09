@@ -73,3 +73,6 @@ npm run deploy
 Deploy uploads both applications, all lazy chunks and nested asset folders. The MES version marker is uploaded last. The SPFx shell continues loading SiteAssets/pmd/assets/index.js and index.css, so this integration does not require a new SPFx package.
 
 Before rollout, verify actual CSV paths, existing field types/keys, roster names and permissions on the signed-in site. Test a new job refresh, a second-session save conflict, barcode lookup and an Assembly daily entry appearing in KPIs. Local mock checks cannot validate tenant permissions or real file contents.
+
+
+See [Operational lines and support work](OPERATIONAL-LINES.md) for the seven production lines, Factory General and additional support fields.

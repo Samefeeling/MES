@@ -45,6 +45,11 @@ export const PRODUCTION_LIST = 'ASSY_Production';
 /** Internal column names. Create the list with these exact names. */
 export const PRODUCTION_COLUMNS = {
   // key
+  workType: 'WorkType',
+  description: 'WorkDescription',
+  supportDepartment: 'SupportDepartment',
+  laborHours: 'LaborHours',
+  plannedHours: 'PlannedHours',
   jobNum: 'Title',
   date: 'Date',
   recordKey: 'RecordKey',
@@ -85,6 +90,7 @@ const ORDER_LEVEL = [
 
 /** What the plan says about an order, regardless of which day's row holds it. */
 export interface OrderFacts {
+  manual?: { description: string; supportDepartment: string; plannedHours: number };
   jobNum: string;
   line: string | null;
   /** Stable worker keys — the SharePoint item ids from `ASSY_Operator`. */
@@ -153,6 +159,7 @@ export function orderFactsFromBoard(
           anchorIds.includes(String(worker.id)),
         );
         return {
+          manual: row.job.manual,
           jobNum: String(row.job.id),
           line: group.line.name,
           operatorIds: anchorCrew.map((worker) => String(worker.id)),
@@ -183,8 +190,9 @@ function orderFields(facts: OrderFacts): ListItemFields {
     [c.startOverrideReason]: facts.startOverrideReason ?? '',
     [c.dueDate]: facts.dueDate,
     [c.expectDate]: facts.expectDate,
-    [c.orderQty]: facts.orderQty,
-    [c.remainingQty]: facts.remainingQty,
+    [c.orderQty]: facts.manual ? 0 : facts.orderQty,
+    [c.remainingQty]: facts.manual ? 0 : facts.remainingQty,
+    ...(facts.manual ? { [c.workType]: 'Support', [c.description]: facts.manual.description, [c.supportDepartment]: facts.manual.supportDepartment, [c.plannedHours]: facts.manual.plannedHours } : {}),
   };
 }
 
@@ -215,7 +223,8 @@ function rowFields(facts: OrderFacts, shift: ProductionEntry): ListItemFields {
     [c.operators]: operatorNames.join(', '),
     [c.operatorIds]: operatorIds.join(','),
     [c.shiftOutput]: shift.shiftOutput,
-    [c.complete]: shift.complete,
+    [c.complete]: facts.manual ? 0 : shift.complete,
+    ...(facts.manual ? { [c.laborHours]: shift.laborHours ?? 0 } : {}),
     [c.reject]: shift.reject,
     [c.rework]: shift.rework,
     [c.jobCompleted]: shift.jobCompleted,

@@ -384,7 +384,7 @@ describe('orderFactsFromBoard', () => {
     expect(facts.length).toBeGreaterThan(0);
     expect(facts.some((f) => mouldingIds.has(f.jobNum))).toBe(false);
     for (const f of facts) {
-      expect(['UPL', 'ASSY', 'TABLE']).toContain(f.line);
+      expect(['UPL - Cut/Sewing', 'UPL - Gluing', 'UPL - ASSY', 'UPL - Softie (SSS)', 'ASSY - Stool', 'ASSY - Seats', 'Table', 'Factory General']).toContain(f.line);
       expect(f.orderQty).toBeGreaterThanOrEqual(f.remainingQty);
       // Every order can open a row, even one with nobody on it yet.
       expect(f.anchorDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
@@ -478,5 +478,20 @@ describe('matching a stored row to its shift', () => {
     expect(written).toHaveLength(1);
     expect(written[0].method).toBe('PATCH');
     expect(written[0].body).toMatchObject({ [C.notes]: 'Wed: trim arrived' });
+  });
+});
+
+it('writes support labour hours without manufactured quantities', async () => {
+  const calls = stubGraph([]);
+  const facts = order({ jobNum: 'FG-support', line: 'Factory General',
+    manual: { description: 'Warehouse assistance', supportDepartment: 'Warehouse', plannedHours: 7.5 },
+    shifts: [shift({ complete: 6, laborHours: 6, jobCompleted: true })],
+  });
+  const result = await syncProduction(CFG, 'ASSY_Production', [facts]);
+  expect(result.errors).toEqual([]);
+  const write = calls.find(call => call.method === 'POST')!;
+  expect(write.body?.fields).toMatchObject({
+    WorkType: 'Support', WorkDescription: 'Warehouse assistance', SupportDepartment: 'Warehouse',
+    LaborHours: 6, PlannedHours: 7.5, Complete: 0, ShiftOutput: 0, OrderQty: 0, RemainingQty: 0,
   });
 });

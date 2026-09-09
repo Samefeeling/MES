@@ -36,12 +36,12 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
       const rows = await dal.results(from, to);
       if (current !== request || !host.isConnected) return;
       const metrics = assemblyMetrics(rows);
-      host.innerHTML = `<div class="assembly-summary">${Object.entries({ Orders: metrics.orders, 'Shift output': metrics.output,
+      host.innerHTML = `<div class="assembly-summary">${Object.entries({ Orders: metrics.orders, 'Support orders': metrics.supportOrders, 'Support hours': metrics.supportHours, 'Shift output': metrics.output,
         Complete: metrics.complete, Reject: metrics.reject, Rework: metrics.rework, 'Completed orders': metrics.completedOrders })
         .map(([label, n]) => `<div><small>${label}</small><strong>${n.toLocaleString('en-AU')}</strong></div>`).join('')}</div>
         <p>Daily booked quantities. Completed orders are counted once within the selected period.</p>
-        ${rows.length ? `<div class="assembly-results-scroll"><table><thead><tr><th>Date</th><th>Order</th><th>Line</th><th>Crew</th><th>Output</th><th>Complete</th><th>Reject</th><th>Rework</th><th>Due</th><th>Completed</th></tr></thead><tbody>${rows.map(row => `<tr>
-          <td>${au(row.day)}</td><td>${escapeHtml(row.job)}</td><td>${escapeHtml(row.line)}</td><td>${escapeHtml(row.operators)}</td>
+        ${rows.length ? `<div class="assembly-results-scroll"><table><thead><tr><th>Date</th><th>Order</th><th>Line</th><th>Support department</th><th>Work</th><th>Labour hours</th><th>Crew</th><th>Output</th><th>Complete</th><th>Reject</th><th>Rework</th><th>Due</th><th>Completed</th></tr></thead><tbody>${rows.map(row => `<tr>
+          <td>${au(row.day)}</td><td>${escapeHtml(row.job)}</td><td>${escapeHtml(row.line)}</td><td>${escapeHtml(row.supportDepartment ?? '')}</td><td>${escapeHtml(row.description ?? '')}</td><td>${row.workType === 'Support' ? row.laborHours ?? 0 : '—'}</td><td>${escapeHtml(row.operators)}</td>
           <td>${row.output}</td><td>${row.complete}</td><td>${row.reject}</td><td>${row.rework}</td><td>${row.due ? au(row.due) : '—'}</td><td>${row.completed ? 'Yes' : 'No'}</td></tr>`).join('')}</tbody></table></div>` : '<p>No Assembly results in this period.</p>'}`;
     } catch (e) {
       if (current === request && host.isConnected) host.textContent = e instanceof Error ? e.message : String(e);

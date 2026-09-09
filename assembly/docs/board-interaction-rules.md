@@ -77,3 +77,8 @@ crew. A line with no available roster remains unstaffed.
 Skills are categorical because the current operator data does not contain a
 numeric skill level. These preferences do not claim to optimize efficiency or
 certification. Future dated attendance remains a separate integration need.
+
+
+## Operational groups
+
+The board now separates Cut/Sewing, Gluing, UPL assembly, Softie, Stool, Seats and Table. Factory General holds support work and is excluded from automatic crewing. Supervisor roster moves release current off-line allocations but retain recorded crew snapshots.

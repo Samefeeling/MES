@@ -323,7 +323,7 @@ function staffOneWave(
 
   let staffed = 0;
   for (const group of board.groups) {
-    if (!group.line.schedulable) continue;
+    if (!group.line.schedulable || group.line.key === 'FACTORY_GENERAL') continue;
 
     // Current line allocation takes priority over legacy Skills. Do not move
     // someone to another line implicitly; rank skills within this roster.

@@ -21,6 +21,8 @@ export interface PersistedPlan {
   assembly?: {
     /** Shared exclusions from automatic crew suggestions. */
     ignoredOrderIds?: string[];
+    lineLayoutVersion?: number;
+    manualOrders?: Record<string, import('@/domain/manualOrder').ManualOrder>;
     /**
      * The shape crew was stored in before it had day windows. Read on the way
      * in and migrated; never written. See `planStore.setAssemblyPlan`.

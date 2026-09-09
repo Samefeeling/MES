@@ -171,12 +171,12 @@ describe('operator production-line placement', () => {
     usePlanStore.getState().moveWorkerToLine('Bill', 'ASSY');
     const state = usePlanStore.getState();
     expect(state.workerLines.Bill).toBe('ASSY');
-    expect(state.orderCrewAssignments['UPL-1']).toBeUndefined();
+    expect(state.orderCrewAssignments['UPL-1']).toEqual([]);
     expect(state.orderCrewAssignments['ASSY-1']).toEqual(crewOf({ x: ['Bill'] }).x);
     expect(state.orderDoubleBooked['UPL-1']).toBeUndefined();
   });
 
-  it('cannot move anyone whose assigned order has started', () => {
+  it('moves a started crew without changing the recorded start snapshot', () => {
     usePlanStore.setState({
       orderActualStarts: {
         'UPL-1': {
@@ -188,10 +188,11 @@ describe('operator production-line placement', () => {
       },
     });
     usePlanStore.getState().moveWorkerToLine('Bill', 'ASSY');
-    expect(usePlanStore.getState().workerLines.Bill).toBeUndefined();
+    expect(usePlanStore.getState().workerLines.Bill).toBe('ASSY');
+    expect(usePlanStore.getState().orderActualStarts['UPL-1'].operatorIds).toEqual(['Bill']);
     expect(
       usePlanStore.getState().orderCrewAssignments['UPL-1'],
-    ).toEqual(crewOf({ x: ['Bill'] }).x);
+    ).toEqual([]);
   });
 });
 

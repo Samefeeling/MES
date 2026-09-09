@@ -107,7 +107,7 @@ describe('PlanningCsvSource', () => {
     expect(calls.filter((u) => u === CSV_URL)).toHaveLength(2);
   });
 
-  it('offers the presses named in the CSV as work centres, plus the four lines', async () => {
+  it('offers the presses named in the CSV as work centres, plus all operational groups', async () => {
     stubNetwork();
     const res = await source().loadAll();
     expect(res.ok).toBe(true);
@@ -115,9 +115,14 @@ describe('PlanningCsvSource', () => {
     expect(res.value.workCenters.map((w) => String(w.id))).toEqual([
       '1300T',
       'PMD',
+      'UPL_CUT_SEW',
+      'UPL_GLUING',
       'UPL',
+      'UPL_SOFTIE',
+      'ASSY_STOOL',
       'ASSY',
       'TABLE',
+      'FACTORY_GENERAL',
     ]);
   });
 

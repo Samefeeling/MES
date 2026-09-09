@@ -14,6 +14,7 @@ import { createPlanRepository, CURRENT_PLAN_ID } from '@/persistence';
 import { useDragDrop } from '@/features/assembly/useDragDrop';
 import { AssemblyGantt } from '@/features/assembly/AssemblyGantt';
 import { BoardTools } from '@/features/assembly/BoardTools';
+import { ManualOrderButton, ManualOrderInspector } from '@/features/assembly/ManualOrders';
 import { AssemblyInspector } from '@/features/assembly/AssemblyInspector';
 import { BarcodeOrderLookup } from '@/features/assembly/BarcodeOrderLookup';
 import { AssemblyPool } from '@/features/assembly/AssemblyPool';
@@ -39,6 +40,9 @@ export default function App() {
 
   const ignoredOrderIds = useIgnoredOrders(s => s.ids);
   const containers = usePlanStore((s) => s.containers);
+  const manualOrders = usePlanStore(s => s.manualOrders);
+  const selectedJobId = useUiStore(s => s.selectedJobId);
+  const lineLayoutVersion = usePlanStore(s => s.lineLayoutVersion);
   const workerLines = usePlanStore((s) => s.workerLines);
   const orderCrewAssignments = usePlanStore((s) => s.orderCrewAssignments);
   const orderStarts = usePlanStore((s) => s.orderStarts);
@@ -154,6 +158,8 @@ export default function App() {
           savedAt: new Date().toISOString(),
           containers,
           assembly: {
+            manualOrders,
+            lineLayoutVersion,
             ignoredOrderIds,
             workerLines,
             orderCrewAssignments,
@@ -173,6 +179,8 @@ export default function App() {
     return () => window.clearTimeout(saveTimer.current);
   }, [
     ignoredOrderIds,
+    lineLayoutVersion,
+    manualOrders,
     stored,
     containers,
     workerLines,
@@ -211,6 +219,7 @@ export default function App() {
         </div>
         <BoardTools board={board} />
         <div className="head-side end">
+          {board && <ManualOrderButton board={board} />}
           <SuggestCrew board={board} />
           <SupervisorLock />
           <BarcodeOrderLookup board={board} />
@@ -285,7 +294,7 @@ export default function App() {
             board holds everything waiting on its parts.
           */}
           {board && <AssemblyPool board={board} />}
-          {board && <AssemblyInspector board={board} />}
+          {board && (selectedJobId && manualOrders[selectedJobId] ? <ManualOrderInspector key={selectedJobId} board={board} id={selectedJobId} /> : <AssemblyInspector board={board} />)}
         </div>
 
         <DragOverlay dropAnimation={null}>

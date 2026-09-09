@@ -705,7 +705,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
     // order is closed, so for a completed row this is the only record left of
     // who actually built it — and for a started one it is what the operator
     // confirmed, which outranks anything allocated afterwards.
-    const recordedCrew = actualStart?.operatorIds ?? latestCrew ?? [];
+    const recordedCrew = latestCrew ?? actualStart?.operatorIds ?? [];
     const configuredAssignments = orderCrewAssignments[id];
     const crewAssignments: CrewAssignment[] = configuredAssignments
       ? configuredAssignments

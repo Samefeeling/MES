@@ -24,6 +24,7 @@ import { JobId, MachineId, PartId, WorkCenterId } from '@/domain/ids';
 import type { Department, Job } from '@/domain/types';
 import {
   LINE_BY_ID,
+  initialLine,
   type MaterialPrepStatus,
   type OrderType,
 } from '@/domain/assembly';
@@ -64,6 +65,7 @@ const ALIASES: Record<Field, readonly string[]> = {
   // looking at the values.
   line: [
     'Line',
+    'PersonID',
     'Department',
     'Dept',
     'ResourceGrpID',
@@ -306,7 +308,7 @@ export function parsePlanningCsv(text: string): ParseOutcome<Job> {
 
     const lineCell = cell(row, col.line);
     const isCut = /cut/i.test(cell(row, col.description));
-    const placement = readPlacement(isCut ? 'UPL' : lineCell);
+    const placement = readPlacement(initialLine(cell(row, col.description), lineCell) ?? lineCell);
     if (!placement && lineCell) {
       unknownLines.set(lineCell, (unknownLines.get(lineCell) ?? 0) + 1);
     }

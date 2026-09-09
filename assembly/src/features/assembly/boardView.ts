@@ -381,7 +381,7 @@ export function lineOfWorkerToday(
       at.set(id, overrides[id]);
       continue;
     }
-    if (!at.has(id) && worker.skills.length > 0) at.set(id, worker.skills[0]);
+    if (!at.has(id)) at.set(id, worker.skills[0] ?? 'FACTORY_GENERAL');
   }
   return at;
 }

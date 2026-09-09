@@ -3,6 +3,7 @@
  * moulding board. Both read the same plan store; only the derivation differs.
  */
 
+import { manualJob } from '@/domain/manualOrder';
 import { useMemo } from 'react';
 import {
   computeAssemblyGantt,
@@ -15,6 +16,7 @@ import { usePlanStore } from './planStore';
 export function useAssemblyGantt(): AssemblyGanttView | null {
   const dataset = useDataStore((s) => s.dataset);
   const indexes = useDataStore((s) => s.indexes);
+  const manualOrders = usePlanStore(s => s.manualOrders);
   const containers = usePlanStore((s) => s.containers);
   const orderCrewAssignments = usePlanStore((s) => s.orderCrewAssignments);
   const orderDoubleBooked = usePlanStore((s) => s.orderDoubleBooked);
@@ -29,7 +31,7 @@ export function useAssemblyGantt(): AssemblyGanttView | null {
     () =>
       dataset && indexes
         ? computeAssemblyGantt({
-            dataset,
+            dataset: { ...dataset, jobs: [...dataset.jobs, ...Object.values(manualOrders).map(manualJob)] },
             indexes,
             containers,
             orderCrewAssignments,
@@ -46,6 +48,7 @@ export function useAssemblyGantt(): AssemblyGanttView | null {
         : null,
     [
       dataset,
+      manualOrders,
       indexes,
       containers,
       orderCrewAssignments,
@@ -79,7 +82,7 @@ export function recomputeAssemblyGantt(
   if (!dataset || !indexes) return null;
   const plan = usePlanStore.getState();
   return computeAssemblyGantt({
-    dataset,
+    dataset: { ...dataset, jobs: [...dataset.jobs, ...Object.values(plan.manualOrders).map(manualJob)] },
     indexes,
     containers: plan.containers,
     orderCrewAssignments: {

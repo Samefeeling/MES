@@ -175,14 +175,14 @@ function OrderRowView({
       className={`arow ${selected ? 'selected' : ''} ${isContext ? 'context' : ''} ${row.completedToday ? 'completed-today' : ''} ${isNew ? 'new-order' : ''}`}
     >
       <div className="acell order">
-        <span className="order-id">{String(row.job.id)}</span>
+        <span className="order-id" title={String(row.job.id)}>{String(row.job.id)}</span>
         {isNew && <span className="new-order-tag">NEW</span>}
         {/* On UPL the badge names the bench: Epicor calls both the softies and
             the upholstering "upholstery", and which of the three steps this is
             is the thing worth reading. */}
         {(row.kind !== 'general' || row.job.orderType) && (
           <span className={`order-type ${row.kind}`}>
-            {row.kind === 'general'
+            {row.job.manual ? 'SUPPORT' : row.kind === 'general'
               ? ORDER_TYPE_SHORT[row.job.orderType!]
               : WORK_KIND_SHORT[row.kind]}
           </span>
@@ -193,10 +193,10 @@ function OrderRowView({
       <div
         className="acell qty frozen"
         style={{ left: orderWidth }}
-        title={`${orderQty} ordered · ${row.job.remainingQty} still to make`}
+        title={row.job.manual ? 'Support work is measured in labour hours' : `${orderQty} ordered · ${row.job.remainingQty} still to make`}
       >
-        <span>{orderQty}</span>
-        {row.job.completedQty > 0 && (
+        <span>{row.job.manual ? '—' : orderQty}</span>
+        {!row.job.manual && row.job.completedQty > 0 && (
           <span className="qty-left">{row.job.remainingQty} left</span>
         )}
       </div>
@@ -249,7 +249,7 @@ function OrderRowView({
             roster={board.workers}
             rows={allRows}
             workerLines={workerLines}
-            disabled={row.completedToday || Boolean(row.actualStart)}
+            disabled={row.completedToday}
           />
         )}
       </div>
@@ -295,7 +295,6 @@ function LineGroupView({
   gridWidth,
   rosterLoads,
   todayLine,
-  startedWorkerIds,
   selectedJobId,
   onSelect,
   dayWidth,
@@ -324,7 +323,6 @@ function LineGroupView({
   /** Which line each person is standing at today — one each. */
   todayLine: Map<string, LineKey>;
   /** People whose work has started, and so cannot be moved to another line. */
-  startedWorkerIds: ReadonlySet<string>;
   selectedJobId: string | null;
   onSelect: (id: string, at?: ClickPoint) => void;
   dayWidth: number;
@@ -436,7 +434,7 @@ function LineGroupView({
                   load={week}
                   line={group.line.key}
                   dragDisabled={
-                    !unlocked || startedWorkerIds.has(String(worker.id))
+                    !unlocked
                   }
                 />
               ) : null;
@@ -635,19 +633,6 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
     () => runningOrdersByDay(allRows, days),
     [allRows, days],
   );
-  /**
-   * Whose work has already started, so their name cannot be moved to another
-   * line. Worked out once for the board rather than by each name in each
-   * line's header rescanning every row on it.
-   */
-  const startedWorkerIds = useMemo(() => {
-    const started = new Set<string>();
-    for (const row of allRows) {
-      if (!row.actualStart) continue;
-      for (const worker of row.workers) started.add(String(worker.id));
-    }
-    return started;
-  }, [allRows]);
   // One row per person: an explicit drag wins; source data supplies only the
   // initial line for plans that have never placed that person.
   const todayLine = useMemo(
@@ -887,7 +872,6 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
           gridWidth={gridWidth}
           rosterLoads={rosterLoads}
           todayLine={todayLine}
-          startedWorkerIds={startedWorkerIds}
           selectedJobId={selectedJobId}
           onSelect={select}
           dayWidth={dayWidth}

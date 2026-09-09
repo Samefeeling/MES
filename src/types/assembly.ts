@@ -1,5 +1,9 @@
 /** Assembly uses job/day results; PMD uses machine/shift records. */
 export interface AssemblyResult {
+  workType?: string;
+  laborHours?: number;
+  description?: string;
+  supportDepartment?: string;
   id: string;
   job: string;
   day: string;

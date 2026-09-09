@@ -150,6 +150,7 @@ export interface JobMaterialLink {
  * assignment (machine, die).
  */
 export interface Job {
+  manual?: import('./manualOrder').ManualOrder;
   id: JobId;
   /** Which department runs it — decides which board it appears on. */
   department: Department;

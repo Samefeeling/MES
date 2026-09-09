@@ -20,7 +20,10 @@ export function demoWorkers(): Worker[] {
     return {
       id: WorkerId(w.id),
       name: w.name,
-      skills: (w.skills ?? []) as LineKey[],
+      skills: [...new Set([
+        ...(trades.includes('smart-softie') ? ['UPL_SOFTIE' as const] : trades.includes('cut-sew') ? ['UPL_CUT_SEW' as const] : w.id === 'W06' ? ['ASSY_STOOL' as const] : []),
+        ...((w.skills ?? []) as LineKey[]),
+      ])],
       ...(trades.length > 0 ? { trades } : {}),
       onShift: Boolean(w.onShift),
       synthetic: true,

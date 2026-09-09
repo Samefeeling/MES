@@ -9,10 +9,12 @@
  */
 
 import { create } from 'zustand';
+import { manualJob, type ManualOrder } from '@/domain/manualOrder';
 import type { JobId } from '@/domain/ids';
 import type { Job, WorkCenter } from '@/domain/types';
 import {
   MAX_WORKERS_PER_ORDER,
+  initialLine,
   type CrewAssignment,
   type LineKey,
 } from '@/domain/assembly';
@@ -63,6 +65,7 @@ export type PauseReason =
 
 /** One daily ASSY_Production booking, shaped for downstream KPI.ts use. */
 export interface ProductionEntry {
+  laborHours?: number;
   date: string;
   /** Quantity confirmed complete during the shift. */
   complete: number;
@@ -100,6 +103,9 @@ export interface ProgressBaseline {
 interface PlanState {
   containers: Containers;
   initialized: boolean;
+  lineLayoutVersion: number;
+  manualOrders: Record<string, ManualOrder>;
+  addManualOrder: (order: ManualOrder) => void;
 
   /** Supervisor-owned current production line for each operator. */
   workerLines: Record<string, LineKey>;
@@ -174,7 +180,7 @@ interface PlanState {
    * supervisor's and is never overwritten.
    */
   assignCrews: (allocations: Record<string, string[]>) => void;
-  /** Move an operator's roster position; started work makes them immovable. */
+  /** Move an operator's current roster position without rewriting recorded work. */
   moveWorkerToLine: (workerId: string, line: LineKey) => void;
   /** Pin an order's bar to a start day (null clears the pin). */
   setOrderStart: (jobId: JobId, isoDay: string | null) => void;
@@ -191,6 +197,8 @@ interface PlanState {
   /** Replace the assembly plan wholesale (e.g. loaded from persistence). */
   setAssemblyPlan: (plan: {
     /** Only read, never written: the older shape, migrated on the way in. */
+    lineLayoutVersion?: number;
+    manualOrders?: Record<string, ManualOrder>;
     orderWorkers?: Record<string, string[]>;
     workerLines?: Record<string, LineKey>;
     orderCrewAssignments?: Record<string, CrewAssignment[]>;
@@ -220,7 +228,7 @@ function emptyContainers(workCenters: WorkCenter[]): Containers {
  * moulding line the workbook has it on.
  */
 function homeContainer(job: Job, known: Set<string>): string {
-  const target = job.department === 'assembly' ? job.line : job.preferredMachine;
+  const target = job.department === 'assembly' ? (initialLine(job.description, String(job.line ?? '')) ?? job.line) : job.preferredMachine;
   return target && known.has(String(target)) ? String(target) : POOL_ID;
 }
 
@@ -304,12 +312,20 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   production: {},
   lastSeen: {},
   initialized: false,
+  lineLayoutVersion: 0,
+  manualOrders: {},
+  addManualOrder(order) {
+    if (!order.id.startsWith('FG-') || !order.description.trim() || !order.supportDepartment.trim() || !Number.isFinite(order.plannedHours) || order.plannedHours <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(order.day)) return;
+    set(state => state.manualOrders[order.id] ? state : ({ manualOrders: { ...state.manualOrders, [order.id]: order }, containers: { ...state.containers, FACTORY_GENERAL: [...(state.containers.FACTORY_GENERAL ?? []), manualJob(order).id] }, orderStarts: { ...state.orderStarts, [order.id]: order.day + 'T07:00:00' } }));
+  },
 
 
   reconcile(workCenters, jobs, now = new Date()) {
     set((state) => {
+      jobs = [...jobs, ...Object.values(state.manualOrders).map(manualJob)];
       const known = new Set(workCenters.map((w) => String(w.id)));
-      const liveJobs = new Set(jobs.map((j) => String(j.id)));
+      const jobsById = new Map(jobs.map(job => [String(job.id), job]));
+      const liveJobs = new Set(jobsById.keys());
       const cutJobs = new Set(jobs.filter(j => /cut/i.test(j.description)).map(j => String(j.id)));
       const next: Containers = emptyContainers(workCenters);
       const placed = new Set<string>();
@@ -344,7 +360,11 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         for (const id of ids) {
           const sid = String(id);
           if (!retained(sid) || placed.has(sid)) continue;
-          const destination = cutJobs.has(sid) && known.has('UPL') ? 'UPL' : target;
+          const job = jobsById.get(sid);
+          const migrated = job && (target === 'UPL' || target === 'ASSY')
+            ? initialLine(job.description, target) : null;
+          const destination = cutJobs.has(sid) && known.has('UPL_CUT_SEW')
+            ? 'UPL_CUT_SEW' : !state.lineLayoutVersion && migrated && known.has(migrated) ? migrated : target;
           next[destination].push(id);
           placed.add(sid);
         }
@@ -389,6 +409,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         production: keep(state.production),
         lastSeen,
         initialized: true,
+        lineLayoutVersion: 1,
       };
     });
   },
@@ -404,7 +425,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   assignWorkerWindow(jobId, workerId, fromDay, toDayExclusive) {
     set((state) => {
       const key = String(jobId);
-      if (state.orderActualStarts[key]) return state;
+      if ((state.production[key] ?? []).some(entry => entry.jobCompleted)) return state;
       if (fromDay && toDayExclusive && fromDay >= toDayExclusive) return state;
       const current = state.orderCrewAssignments[key] ?? [];
       const proposed: CrewAssignment = { workerId, fromDay, toDayExclusive };
@@ -426,7 +447,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   updateWorkerWindow(jobId, workerId, fromDay, toDayExclusive) {
     set((state) => {
       const key = String(jobId);
-      if (state.orderActualStarts[key]) return state;
+      if ((state.production[key] ?? []).some(entry => entry.jobCompleted)) return state;
       if (fromDay && toDayExclusive && fromDay >= toDayExclusive) return state;
       const current = state.orderCrewAssignments[key] ?? [];
       const proposed: CrewAssignment = { workerId, fromDay, toDayExclusive };
@@ -444,7 +465,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   unassignWorker(jobId, workerId) {
     set((state) => {
       const key = String(jobId);
-      if (state.orderActualStarts[key]) return state;
+      if ((state.production[key] ?? []).some(entry => entry.jobCompleted)) return state;
       const assignments = state.orderCrewAssignments[key] ?? [];
       // Any approval to double-book them here goes with them: put the same
       // person back later and the overlap is a fresh decision, not an old one.
@@ -506,21 +527,13 @@ export const usePlanStore = create<PlanState>((set, get) => ({
           (assignment) => assignment.workerId === workerId,
         );
 
-      // Once production has started, the recorded crew is an operational fact
-      // and cannot be rewritten by moving a name in the planning roster.
-      if (
-        Object.keys(state.orderActualStarts).some(
-          (jobId) => state.orderActualStarts[jobId] && hasWorker(jobId),
-        )
-      ) return state;
-
+      // Roster moves change future allocation; recorded shift crews remain immutable.
       const containerByJob = new Map<string, string>();
       for (const [container, jobIds] of Object.entries(state.containers)) {
         for (const jobId of jobIds) containerByJob.set(String(jobId), container);
       }
 
-      // Started work has already returned above, so every remaining order is
-      // unstarted — asking again here could only ever answer yes.
+      // Release off-line current allocations, retaining the recorded shift history.
       const affected = Object.keys(state.orderCrewAssignments).filter(
         (jobId) => hasWorker(jobId) && containerByJob.get(jobId) !== line,
       );
@@ -532,7 +545,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
           (assignment) => assignment.workerId !== workerId,
         );
         if (next.length > 0) orderCrewAssignments[jobId] = next;
-        else delete orderCrewAssignments[jobId];
+        else orderCrewAssignments[jobId] = [];
       }
       // An approval may be stored against either side of the old overlap.
       // Once a line move removes any assignment, expire every approval for
@@ -670,6 +683,8 @@ export const usePlanStore = create<PlanState>((set, get) => ({
             )
           : state.orderCrewAssignments);
       return {
+        lineLayoutVersion: plan.lineLayoutVersion ?? 0,
+        manualOrders: plan.manualOrders ?? state.manualOrders,
         workerLines: plan.workerLines ?? state.workerLines,
         orderCrewAssignments,
         orderStarts: plan.orderStarts ?? state.orderStarts,

@@ -73,7 +73,7 @@ describe('parsePlanningCsv', () => {
     expect(jobs.get('SFM507615')!.line).toBeNull();
 
     expect(jobs.get('018140-1-1')!.department).toBe('assembly');
-    expect(String(jobs.get('018140-1-1')!.line)).toBe('ASSY');
+    expect(String(jobs.get('018140-1-1')!.line)).toBe('ASSY_STOOL');
   });
 
   it('takes the export’s labour hours as the bar length', () => {
@@ -183,7 +183,7 @@ describe('parsePlanningCsv', () => {
     );
     const j = byId(renamed);
     expect(j.get('SFM507615')!.department).toBe('moulding');
-    expect(String(j.get('018140-1-1')!.line)).toBe('ASSY');
+    expect(String(j.get('018140-1-1')!.line)).toBe('ASSY_STOOL');
   });
 
   it('treats a named press as a moulding row', () => {

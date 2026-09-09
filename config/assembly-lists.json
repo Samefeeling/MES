@@ -156,6 +156,26 @@
           "name": "Paused",
           "type": "Boolean",
           "default": "0"
+        },
+        {
+          "name": "WorkType",
+          "type": "Text"
+        },
+        {
+          "name": "WorkDescription",
+          "type": "Note"
+        },
+        {
+          "name": "SupportDepartment",
+          "type": "Text"
+        },
+        {
+          "name": "LaborHours",
+          "type": "Number"
+        },
+        {
+          "name": "PlannedHours",
+          "type": "Number"
         }
       ]
     }

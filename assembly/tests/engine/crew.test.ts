@@ -222,7 +222,7 @@ describe('nobody does two jobs at once', () => {
    * needing a component the other builds would hold it back for a reason that
    * has nothing to do with the crew.
    */
-  const twoOrders = (line: 'UPL' | 'ASSY' | 'TABLE') => {
+  const twoOrders = (line: LineKey) => {
     const b = board();
     const rows = b.groups.find((g) => g.line.key === line)!.rows;
     const first = rows[0];
@@ -239,7 +239,7 @@ describe('nobody does two jobs at once', () => {
   };
 
   it('sees the clash when someone is put on an order running at the same time', () => {
-    const [first, second] = twoOrders('UPL');
+    const [first, second] = twoOrders('UPL_CUT_SEW');
     // Both pinned to the same Monday, so whatever else happens their bars
     // cover the same days.
     const day = new Date('2026-09-14T00:00:00').toISOString();
@@ -252,14 +252,14 @@ describe('nobody does two jobs at once', () => {
   });
 
   it('says nothing about someone who is free across those days', () => {
-    const [first] = twoOrders('UPL');
+    const [first] = twoOrders('UPL_CUT_SEW');
     const b = board({ [first]: ['W01'] });
     // W03 is on nothing at all.
     expect(clashesFor(allRows(b), rowOf(b, first), 'W03')).toEqual([]);
   });
 
   it('does not count an order against itself', () => {
-    const [first] = twoOrders('UPL');
+    const [first] = twoOrders('UPL_CUT_SEW');
     const b = board({ [first]: ['W01'] });
     const clashes = clashesFor(allRows(b), rowOf(b, first), 'W01');
     expect(clashes.map((r) => String(r.job.id))).not.toContain(first);
@@ -268,7 +268,7 @@ describe('nobody does two jobs at once', () => {
   it('answers for an order nobody is on yet', () => {
     // The whole point: the supervisor is deciding *who* to put on it, so the
     // check has to work before anyone is on it.
-    const [first, second] = twoOrders('UPL');
+    const [first, second] = twoOrders('UPL_CUT_SEW');
     const b = board({ [first]: ['W01'] });
     expect(rowOf(b, second).start).toBeNull(); // no crew, no bar
     expect(rowOf(b, second).plannedStart).toBeInstanceOf(Date);
@@ -281,7 +281,7 @@ describe('nobody does two jobs at once', () => {
   it('lets bars that merely touch pass', () => {
     // One ending exactly as the next begins is a hand-over, not a clash, so
     // the boundary is tested exactly rather than hoping the seed lines up.
-    const [first, second] = twoOrders('UPL');
+    const [first, second] = twoOrders('UPL_CUT_SEW');
     const b = board({ [first]: ['W01'] });
     const done = rowOf(b, first).expectDate!;
     // The board plans in whole shifts, so the hand-over is the next shift
@@ -306,7 +306,7 @@ describe('nobody does two jobs at once', () => {
   });
 
   it('ignores an order that has been closed', () => {
-    const [first] = twoOrders('UPL');
+    const [first] = twoOrders('UPL_CUT_SEW');
     const b = board({ [first]: ['W01'] });
     const closed = allRows(b).map((r) =>
       String(r.job.id) === first ? { ...r, completedToday: true } : r,

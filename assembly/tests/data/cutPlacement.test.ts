@@ -8,7 +8,7 @@ describe('Cut routing priority', () => {
     expect(result.values).toHaveLength(1);
     const job = result.values[0];
     expect(job.department).toBe('assembly');
-    expect(job.line).toBe('UPL');
+    expect(job.line).toBe('UPL_CUT_SEW');
     expect(job.orderType).toBe('cutting-sewing');
     expect(workKind(job.description, 'UPL')).toBe('cut-sew');
   });
@@ -25,7 +25,7 @@ it('corrects a saved wrong line without resetting crew or start dates', async ()
     orderCrewAssignments: { SFM507623: [{ workerId: '7', fromDay: null, toDayExclusive: null }] } });
   usePlanStore.getState().reconcile(assemblyWorkCenters(), jobs);
   const state = usePlanStore.getState();
-  expect(state.containers.UPL).toContain(jobs[0].id);
+  expect(state.containers.UPL_CUT_SEW).toContain(jobs[0].id);
   expect(state.containers.ASSY).not.toContain(jobs[0].id);
   expect(state.orderStarts.SFM507623).toBe('2026-09-10');
   expect(state.orderCrewAssignments.SFM507623[0].workerId).toBe('7');

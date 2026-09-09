@@ -11,7 +11,7 @@
 import { WorkCenterId, type WorkerId } from './ids';
 
 /** A physical assembly line — the swimlanes on the board. */
-export type LineKey = 'PMD' | 'UPL' | 'ASSY' | 'TABLE';
+export type LineKey = 'PMD' | 'UPL' | 'ASSY' | 'TABLE' | 'UPL_CUT_SEW' | 'UPL_GLUING' | 'UPL_SOFTIE' | 'ASSY_STOOL' | 'FACTORY_GENERAL';
 
 /** The only three kinds of assembly work order. */
 export type OrderType = 'cutting-sewing' | 'upholstery' | 'final-assembly';
@@ -45,6 +45,9 @@ const KIND_PATTERNS: [RegExp, WorkKind][] = [
 
 /** The trade an order calls for, from its part description. */
 export function workKind(description: string, line: LineKey): WorkKind {
+  if (line === 'UPL_CUT_SEW') return 'cut-sew';
+  if (line === 'UPL_SOFTIE') return 'smart-softie';
+  if (line === 'UPL_GLUING' || line === 'FACTORY_GENERAL') return 'general';
   if (/cut/i.test(description)) return 'cut-sew';
   if (line !== 'UPL') return 'general';
   return KIND_PATTERNS.find(([re]) => re.test(description))?.[1] ?? 'upholstery';
@@ -117,7 +120,7 @@ export const LINES: LineDef[] = [
   {
     key: 'UPL',
     id: LINE_UPL,
-    name: 'UPL',
+    name: 'UPL - ASSY',
     schedulable: true,
     types: ['cutting-sewing', 'upholstery'],
     parallelOrders: PARALLEL_ORDERS_PER_LINE,
@@ -126,7 +129,7 @@ export const LINES: LineDef[] = [
   {
     key: 'ASSY',
     id: LINE_ASSY,
-    name: 'ASSY',
+    name: 'ASSY - Seats',
     schedulable: true,
     types: ['final-assembly'],
     parallelOrders: PARALLEL_ORDERS_PER_LINE,
@@ -135,13 +138,38 @@ export const LINES: LineDef[] = [
   {
     key: 'TABLE',
     id: LINE_TABLE,
-    name: 'TABLE',
+    name: 'Table',
     schedulable: true,
     types: ['final-assembly'],
     parallelOrders: PARALLEL_ORDERS_PER_LINE,
     sortIndex: 3,
   },
 ];
+
+LINES.splice(1, 0,
+  { key: 'UPL_CUT_SEW', id: WorkCenterId('UPL_CUT_SEW'), name: 'UPL - Cut/Sewing', schedulable: true, types: ['cutting-sewing'], parallelOrders: 3, sortIndex: 1 },
+  { key: 'UPL_GLUING', id: WorkCenterId('UPL_GLUING'), name: 'UPL - Gluing', schedulable: true, types: ['upholstery'], parallelOrders: 3, sortIndex: 2 },
+);
+LINES.splice(4, 0,
+  { key: 'UPL_SOFTIE', id: WorkCenterId('UPL_SOFTIE'), name: 'UPL - Softie (SSS)', schedulable: true, types: ['upholstery'], parallelOrders: 3, sortIndex: 4 },
+  { key: 'ASSY_STOOL', id: WorkCenterId('ASSY_STOOL'), name: 'ASSY - Stool', schedulable: true, types: ['final-assembly'], parallelOrders: 3, sortIndex: 5 },
+);
+LINES.push({ key: 'FACTORY_GENERAL', id: WorkCenterId('FACTORY_GENERAL'), name: 'Factory General', schedulable: true, types: ['final-assembly'], parallelOrders: 15, sortIndex: 8 });
+LINES.forEach((line, index) => { line.sortIndex = index; });
+
+/** ERP centres remain coarse; only initial placement is inferred. */
+export function initialLine(description: string, resource: string): LineKey | null {
+  if (/cut/i.test(description)) return 'UPL_CUT_SEW';
+  const key = resource.trim().toUpperCase();
+  if (key === 'UPL') {
+    if (/sew/i.test(description)) return 'UPL_CUT_SEW';
+    if (/glue|gluing|foamed\s*up/i.test(description)) return 'UPL_GLUING';
+    if (/smart\s*soft|softie|\bsss\b|ottoman/i.test(description)) return 'UPL_SOFTIE';
+    return 'UPL';
+  }
+  if (key === 'ASSY') return /stool/i.test(description) ? 'ASSY_STOOL' : 'ASSY';
+  return LINES.find(line => line.key === key)?.key ?? null;
+}
 
 export const LINE_BY_ID = new Map(LINES.map((l) => [String(l.id), l]));
 

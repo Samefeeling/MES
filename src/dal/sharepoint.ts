@@ -5747,6 +5747,7 @@ export function toServerRelativePath(input: string): string {
 }
 
 export const DEFAULT_ASSEMBLY_FIELDS = {
+  workType: "WorkType", laborHours: "LaborHours", description: "WorkDescription", supportDepartment: "SupportDepartment",
   "job": "Title",
   "date": "Date",
   "line": "Line",
@@ -5794,7 +5795,7 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
             if (!Number.isFinite(n) || n < 0) throw new Error(`Invalid ${field} for ${key}.`);
             return n;
           };
-          output.push({ id: String(row.Id), job, day, line: String(row[fields.line] ?? ''), operators: String(row[fields.operators] ?? ''),
+          output.push({ workType: String(row[fields.workType] ?? ""), laborHours: number(fields.laborHours), description: String(row[fields.description] ?? ""), supportDepartment: String(row[fields.supportDepartment] ?? ""), id: String(row.Id), job, day, line: String(row[fields.line] ?? ''), operators: String(row[fields.operators] ?? ''),
             output: number(fields.output), complete: number(fields.complete), reject: number(fields.reject), rework: number(fields.rework),
             completed: row[fields.completed] === true, due: row[fields.due] ? String(row[fields.due]) : null,
             completedAt: row[fields.completedAt] ? String(row[fields.completedAt]) : null });
