@@ -111,12 +111,60 @@ dashboard to Assembly's registry being reachable.
   reference, Mango's record id, and the last progress read), as are the
   plant's answers (`pmd.impwSite`).
 
-## Assembly line routing (`assembly/`)
+## Assembly results (`#/kpi/assembly`)
+
+**PMD / Assembly are the first two buttons of the KPI toolbar**, ahead of
+`Last 24h` (`src/ui/kpi-nav.ts`, shared by both pages). They were their own
+band above the page, which put a third row of navigation under the top bar's
+own; they are the same kind of choice as the period tabs beside them, so they
+are now the same control.
+
+The page carries PMD's own layout — period tabs, From/To, headline tiles, one
+`.kpi-table` with a `TOTAL`, a legend — because the two are read one after the
+other in the same meeting. PMD rolls machine-shifts up per press; Assembly
+rolls order-days up per **line**, each opening into its orders, with the
+day-by-day bookings kept underneath as the evidence. Metrics are Output /
+Complete / Reject / Rework / **Yield%** / **Crew h** / **Std h** /
+**Efficiency\*** / **Support h** / **On time%**, all in `core/assembly-metrics.ts`
+(pure, unit-tested). Two rules keep the figures honest and both are printed on
+the page:
+
+- **Support work is never production.** It has no output at all, so folding
+  its rows in would report a line that made nothing all week.
+- **A day with no standard is out of *both* sides of Efficiency**, not scored
+  zero — an order nobody gave a labour standard is not an order that was
+  worked badly. Same reasoning as PMD dropping an unjudgeable job-shift.
+
+Efficiency needs a standard on the record, so **`PlannedHours` is now written
+on every order** rather than only on support ones (`production.sync.ts`,
+order-level, backfilled on the next sync). No new SharePoint column: it is
+already in the list. `PlannedHours ÷ OrderQty` is the hours one finished unit
+is worth; Crew h is the people on the row × 7.5, the same figure the board
+schedules with, so the KPI measures against the plan the floor was given.
+
+## Assembly line routing and the board (`assembly/`)
 
 The board runs **eight lines — TBP, PMD, UPL-CUT, UPL-Gluing, UPL-SSS, ASM,
 Table, General** (`assembly/src/domain/assembly.ts`). PMD is a read-only
 context lane. The old `UPL` catch-all and `ASSY_STOOL` are retired and
 migrated on read, so saved plans and rosters still open.
+
+**TBP and PMD open folded away** — neither is planned here — each leaving a
+`+ TBP` / `+ PMD` chip in the header, and every line carries a `×` to fold it.
+A folded line's orders still count towards the roster load, the day columns
+and the totals. **All seven frozen columns are dragged** by their right-hand
+edge or moved with ← / →; the widths live in `uiStore` and the grid starts
+where the frozen block ends, so nothing has to keep a second copy of them.
+The **"All orders" / "5 working days" buttons are gone**: the board shows
+everything, and the only narrowing left is the day chip under a timeline
+column, which puts a blue chip in the header naming the day it picked and
+clearing back to everything. A line's row is now a tinted band with a
+dark-blue name in capitals, so it cannot be mistaken for an order row.
+
+One blank-cell warning was dropped: an order whose hours cells are empty is no
+longer named in the banner. The banner is for problems with the *export*, and
+a real one has dozens of those rows — none of which the supervisor can fix
+from that screen. The header-level check (no hours column at all) stays.
 
 Which line builds a part is decided in `engine/assembly/lineRouter`, three
 sources in strict order: **ERP** (`JobHead_PersonID` settles TBP / PMD /

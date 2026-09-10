@@ -277,7 +277,6 @@ async function route(): Promise<void> {
   }
   try {
     const r = parseRoute();
-    document.getElementById('kpi-departments')?.remove();
     showAssembly(r.view === 'assembly');
     if (r.view === 'assembly') {
       document.body.className = 'shift-day';

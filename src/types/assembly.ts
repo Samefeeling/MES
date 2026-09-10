@@ -8,6 +8,15 @@ export interface AssemblyResult {
   job: string;
   day: string;
   line: string;
+  /**
+   * The whole order's standard labour content, from `PlannedHours`. With
+   * `orderQty` it turns a day's finished units back into hours, which is what
+   * Efficiency is measured on. Absent on a record written before the board
+   * started sending it — such a row is left out of Efficiency, not scored zero.
+   */
+  plannedHours?: number;
+  /** Ordered quantity, the denominator of the standard above. */
+  orderQty?: number;
   operators: string;
   output: number;
   complete: number;

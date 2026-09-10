@@ -4,9 +4,27 @@ MES contains two production domains. PMD continues to use its machine/shift DAL 
 
 ## Navigation and runtime
 
-The header reads MES, the former Operator tab reads PMD, and Assembly opens the React planning board. The frame remains mounted when switching departments so pending saves and inspector edits survive. Production uses a same-origin srcdoc frame that loads Assembly JavaScript/CSS, avoiding SharePoint's HTML download behavior. The host passes only its operational supervisor state. SharePoint permissions remain the actual access control.
+The header reads MES, the former Operator tab reads PMD, and Assembly opens the React planning board. The frame remains mounted when switching departments so pending saves and inspector edits survive. Production uses a same-origin srcdoc frame that loads Assembly JavaScript/CSS, avoiding SharePoint's HTML download behavior. The host passes only its operational supervisor state. SharePoint permissions remain the actual access control. The frame carries the dashboard's own `#f1f5f9` ground: it fills the viewport under the top bar, so a white one flashed a white page on every switch and read as a load that had failed.
 
-Assembly results are available under KPIs > Assembly through `src/ui/kpi.ts`. The dedicated Assembly adapter reads ASSY_Production, and its own metrics aggregate daily output, Complete, Reject and Rework while deduplicating order counts. Assembly does not contribute to PMD machine OEE, efficiency or shift sign-off totals. Duplicate job/day rows cause a visible error instead of inflated totals.
+## Assembly results (`#/kpi/assembly`)
+
+`PMD` and `Assembly` are the first two buttons of the KPI toolbar, ahead of the period tabs (`src/ui/kpi-nav.ts`) — the same kind of choice, so the same control, department first because it decides what the rest of the row means. They were their own band above the page until then, a third row of navigation under the top bar's own.
+
+The page is laid out the way the PMD KPI page is, so the two can be read one after the other in the same meeting: period tabs and a From/To range, headline tiles, one table with a `TOTAL` under it, and a legend saying what every colour means. PMD rolls machine-shifts up per press; Assembly rolls order-days up per **line**, and each line opens into the orders behind it. The day-by-day bookings stay underneath as the evidence. Assembly never contributes to PMD machine OEE, efficiency or shift sign-off totals, and duplicate job/day rows cause a visible error instead of inflated totals.
+
+| Column | Definition |
+| --- | --- |
+| Orders / Output / Complete / Reject / Rework | Summed over the window; an order booked on five days is **one** order in every count. |
+| Yield% | Complete ÷ (Complete + Reject) — PMD's own definition. 🟢 ≥ 98% · 🟡 ≥ 95%. |
+| Crew h | People booked on the order that day × 7.5 h — the 07:00–15:30 shift less morning tea and lunch, which is exactly what the board schedules with, so the KPI is measured against the plan the floor was given. |
+| Std h | Units finished × the order's own standard (`PlannedHours ÷ OrderQty`). |
+| Efficiency* | Std h ÷ Crew h. 🟢 ≥ 90% · 🟡 ≥ 75%. A day on an order carrying no standard is left out of **both** sides rather than scored zero — an order nobody gave a labour standard is not an order that was worked badly, and PMD drops an unjudgeable job-shift for the same reason. |
+| Support h | Factory General work, measured in the hours it took. It has no output at all, so it is never folded into Output, Yield or Efficiency. |
+| On time% | Orders finished on or before their Due Date ÷ orders finished with a Due Date to judge. 🟢 ≥ 95% · 🟡 ≥ 85%. |
+
+Thresholds are fixed and printed on the page, not editable: PMD's are argued over in the meeting because its presses are compared with one another, and there is no equivalent argument here yet.
+
+**`PlannedHours` now rides on every row**, not just support ones (`assembly/src/data/sharepoint/production.sync.ts`). It is an order-level column, so the next sync backfills it on rows written weeks ago. Without it the record says what came off the line but not what the work was supposed to take, and no honest efficiency can be read back out of it — which is why a row that still lacks one is excluded rather than counted.
 
 ## SharePoint schema
 

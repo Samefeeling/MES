@@ -126,22 +126,6 @@ export function runningOrdersByDay(
   );
 }
 
-/** Today through the end of the fifth working day, including today if open. */
-export function nextWorkingDaysWindow(
-  today: Date,
-  count = 5,
-): { from: Date; toExclusive: Date } {
-  const todayStart = startOfDay(today);
-  const from = todayStart;
-  let cursor = todayStart;
-  let found = 0;
-  while (found < Math.max(1, count)) {
-    if (!isWeekend(cursor)) found++;
-    if (found < Math.max(1, count)) cursor = addCalendarDays(cursor, 1);
-  }
-  return { from, toExclusive: addCalendarDays(cursor, 1) };
-}
-
 /**
  * Horizontal day position on the timeline. When weekends are hidden their
  * width is zero, so Friday and Monday meet without leaving empty columns.
@@ -233,20 +217,6 @@ export function withPredecessors(
     }
   }
   return keep;
-}
-
-/** An order remains visible when any part of its planned bar touches the window. */
-export function isInNextWorkingDays(
-  row: OrderRow,
-  today: Date,
-  count = 5,
-): boolean {
-  const window = nextWorkingDaysWindow(today, count);
-  const from = row.start ?? row.plannedStart ?? row.job.startDate;
-  if (!from) return false;
-  const to = row.expectDate ?? row.planThrough ?? from;
-  return from < window.toExclusive &&
-    (to > window.from || (to.getTime() === from.getTime() && from >= window.from));
 }
 
 /** Today's available roster and unique allocations, across the whole board. */

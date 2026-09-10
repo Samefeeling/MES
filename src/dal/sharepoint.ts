@@ -5749,6 +5749,10 @@ export function toServerRelativePath(input: string): string {
 
 export const DEFAULT_ASSEMBLY_FIELDS = {
   workType: "WorkType", laborHours: "LaborHours", description: "WorkDescription", supportDepartment: "SupportDepartment",
+  // The order's standard labour content and the quantity it covers. Together
+  // they turn a day's finished units back into earned hours, which is what the
+  // KPI page measures Efficiency on.
+  plannedHours: "PlannedHours", orderQty: "OrderQty",
   "job": "Title",
   "date": "Date",
   "line": "Line",
@@ -5810,6 +5814,7 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
             return n;
           };
           output.push({ workType: String(row[fields.workType] ?? ""), laborHours: number(fields.laborHours), description: String(row[fields.description] ?? ""), supportDepartment: String(row[fields.supportDepartment] ?? ""), id: String(row.Id), job, day, line: String(row[fields.line] ?? ''), operators: String(row[fields.operators] ?? ''),
+            plannedHours: number(fields.plannedHours), orderQty: number(fields.orderQty),
             output: number(fields.output), complete: number(fields.complete), reject: number(fields.reject), rework: number(fields.rework),
             completed: row[fields.completed] === true, due: row[fields.due] ? String(row[fields.due]) : null,
             completedAt: row[fields.completedAt] ? String(row[fields.completedAt]) : null });

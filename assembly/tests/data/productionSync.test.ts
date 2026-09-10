@@ -50,6 +50,7 @@ const order = (over: Partial<OrderFacts> = {}): OrderFacts => ({
   expectDate: '2026-09-16T00:00:00.000Z',
   orderQty: 60,
   remainingQty: 60,
+  stdHours: 30,
   anchorDay: '2026-09-14',
   shifts: [],
   ...over,
@@ -70,6 +71,7 @@ const stored = (over: Record<string, unknown> = {}, id = '1') => ({
     [C.expectDate]: '2026-09-16T00:00:00Z',
     [C.orderQty]: 60,
     [C.remainingQty]: 60,
+    [C.plannedHours]: 30,
     [C.shiftOutput]: 0,
     [C.complete]: 0,
     [C.reject]: 0,
@@ -142,6 +144,9 @@ describe('syncProduction', () => {
         [C.expectDate]: '2026-09-16T00:00:00.000Z',
         [C.orderQty]: 60,
         [C.remainingQty]: 60,
+        // With OrderQty beside it, this is what lets the KPI page turn a
+        // day's finished units back into the hours they were worth.
+        [C.plannedHours]: 30,
         [C.shiftOutput]: 0,
         [C.complete]: 0,
         [C.reject]: 0,
@@ -388,7 +393,41 @@ describe('orderFactsFromBoard', () => {
       expect(f.orderQty).toBeGreaterThanOrEqual(f.remainingQty);
       // Every order can open a row, even one with nobody on it yet.
       expect(f.anchorDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      // The order's standard rides on every row. Without it the record says
+      // what came off the line but not what the work was supposed to take,
+      // and no honest efficiency can be read back out of it.
+      expect(f.stdHours).toBeGreaterThanOrEqual(0);
     }
+    expect(facts.some((f) => f.stdHours > 0)).toBe(true);
+  });
+
+  it('carries the order’s whole labour content, not what is left of it', async () => {
+    const loaded = await new MockSource().loadAll();
+    if (!loaded.ok) throw new Error(loaded.error);
+    const dataset = loaded.value;
+    // A part-run order: the export's hours are already discounted for what is
+    // done, and the board grosses them back up. The standard on the record has
+    // to be the whole order's, or a day's units would be priced from a total
+    // that shrinks as the order progresses.
+    const job = dataset.jobs.find(
+      (j) => j.department !== 'moulding' && j.laborHrs > 0,
+    )!;
+    usePlanStore.getState().reconcile(dataset.workCenters, dataset.jobs);
+    const state = usePlanStore.getState();
+    const board = computeAssemblyGantt({
+      dataset,
+      indexes: buildIndexes(dataset),
+      containers: state.containers,
+      orderCrewAssignments: state.orderCrewAssignments,
+      orderStarts: {},
+      progress: {},
+      production: {},
+      workers: dataset.workers,
+      today: new Date('2026-09-11T00:00:00'),
+    });
+    const facts = orderFactsFromBoard(board, {});
+    const mine = facts.find((f) => f.jobNum === String(job.id));
+    expect(mine?.stdHours).toBeCloseTo(job.laborHrs, 6);
   });
 });
 
@@ -485,6 +524,9 @@ it('writes support labour hours without manufactured quantities', async () => {
   const calls = stubGraph([]);
   const facts = order({ jobNum: 'FG-support', line: 'Factory General',
     manual: { description: 'Warehouse assistance', supportDepartment: 'Warehouse', plannedHours: 7.5 },
+    // Support work's standard is the hours it was planned to take: it has no
+    // quantity, so `orderFactsFromBoard` takes the figure straight across.
+    stdHours: 7.5,
     shifts: [shift({ complete: 6, laborHours: 6, jobCompleted: true })],
   });
   const result = await syncProduction(CFG, 'ASSY_Production', [facts]);

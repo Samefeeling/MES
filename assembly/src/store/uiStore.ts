@@ -6,6 +6,7 @@
  */
 
 import { create } from 'zustand';
+import type { LineKey } from '@/domain/assembly';
 import type { OrderSort, OrderSortKey } from '@/features/assembly/boardView';
 
 /**
@@ -26,10 +27,63 @@ export const DEFAULT_DAY_WIDTH = 92;
 export const MIN_DAY_WIDTH = 44;
 export const MAX_DAY_WIDTH = 160;
 
-/** Order column width, in pixels. Dragged by its edge in the board header. */
-export const DEFAULT_ORDER_WIDTH = 200;
-export const MIN_ORDER_WIDTH = 120;
-export const MAX_ORDER_WIDTH = 520;
+/**
+ * The frozen columns down the left of the board, in the order it draws them,
+ * and how wide each opens.
+ *
+ * Every one of them is dragged by its right-hand edge. Which column needs the
+ * room is not something a default can know: one plant's order numbers are
+ * twice another's, a line running four-handed needs a Team column a line
+ * running singles does not, and the same board is read on a 13" laptop and on
+ * a floor screen. So the widths are the reader's, not ours.
+ */
+export const COLUMN_KEYS = [
+  'order',
+  'qty',
+  'hours',
+  'start',
+  'due',
+  'expect',
+  'team',
+] as const;
+export type ColumnKey = (typeof COLUMN_KEYS)[number];
+export type ColumnWidths = Record<ColumnKey, number>;
+
+export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
+  order: 200,
+  qty: 58,
+  hours: 82,
+  start: 62,
+  due: 62,
+  expect: 62,
+  team: 172,
+};
+
+/**
+ * How far each column may be dragged. The floor is what the heading itself
+ * needs to stay readable — a column dragged to nothing is a column somebody
+ * has to find again — and the ceiling keeps one column from taking the grid.
+ */
+export const COLUMN_LIMITS: Record<ColumnKey, { min: number; max: number }> = {
+  order: { min: 120, max: 520 },
+  qty: { min: 46, max: 200 },
+  hours: { min: 58, max: 220 },
+  start: { min: 48, max: 220 },
+  due: { min: 48, max: 220 },
+  expect: { min: 48, max: 220 },
+  team: { min: 96, max: 460 },
+};
+
+/** CSS custom property carrying each column's width to the stylesheet. */
+export const COLUMN_VAR: Record<ColumnKey, string> = {
+  order: '--order-w',
+  qty: '--qty-w',
+  hours: '--hours-w',
+  start: '--start-w',
+  due: '--due-w',
+  expect: '--expect-w',
+  team: '--team-w',
+};
 
 const clamp = (n: number, lo: number, hi: number): number =>
   Math.min(hi, Math.max(lo, Math.round(n)));
@@ -38,7 +92,16 @@ const clamp = (n: number, lo: number, hi: number): number =>
 export const DATE_COLS = ['start', 'due', 'expect'] as const;
 export type DateCol = (typeof DATE_COLS)[number];
 export type DateCols = Record<DateCol, boolean>;
-export type OrderWindowFilter = 'all' | 'next-five' | 'day';
+
+/**
+ * Lines the board opens folded away.
+ *
+ * TBP and PMD are both context: neither is planned here — PMD mirrors
+ * moulding's own schedule and TBP is scheduled elsewhere — so they were the
+ * first two rows of a board whose subject is the assembly floor. They come
+ * back from a chip in the header, so nothing is hidden without a way to see it.
+ */
+export const LINES_HIDDEN_BY_DEFAULT: readonly LineKey[] = ['TBP', 'PMD'];
 
 /** Column headings, shared by the board and the chip that brings one back. */
 export const DATE_COL_LABEL: Record<DateCol, string> = {
@@ -99,29 +162,24 @@ interface UiState {
    * buttons sit in the app header, above the board that answers to them.
    */
   dayWidth: number;
-  /** Width of the frozen Order column, dragged by its right-hand edge. */
-  orderWidth: number;
+  /** Width of each frozen column, dragged by its right-hand edge. */
+  colWidths: ColumnWidths;
   /** Which date columns are showing; hidden ones come back from the header. */
   dateCols: DateCols;
+  /** Lines folded away; they come back from a chip in the header. */
+  hiddenLines: LineKey[];
   /**
-   * View-only row filter; never changes the underlying line sequence.
+   * The one day the board is narrowed to, as a local YYYY-MM-DD, or null for
+   * every order — which is how it opens.
    *
-   * `all` by default. A board that opens already hiding two thirds of its
-   * orders, with no visible reason, is not a filtered board — it is a wrong
-   * one, and that is exactly how it read: rows appeared as bars were dragged
-   * into the window and the arrows to the press work came and went with them.
-   * Narrowing is now something someone chooses, from the header, and can see
-   * they have chosen.
+   * A board that opens already hiding two thirds of its orders, with no
+   * visible reason, is not a filtered board: it is a wrong one, and that is
+   * exactly how it read — rows appeared as bars were dragged into the window
+   * and the arrows to the press work came and went with them. So the only
+   * narrowing left is the day chip under a column, which says on its face
+   * which day it picked.
    */
-  orderWindow: OrderWindowFilter;
-  /** Local YYYY-MM-DD selected in the date filter. */
   orderDay: string | null;
-  /**
-   * The window the day filter interrupted. Clearing a filter should undo it,
-   * not pick something else — someone reading every order and then checking
-   * one day used to be dropped into the five-day window on the way back.
-   */
-  windowBeforeDay: Exclude<OrderWindowFilter, 'day'>;
   /** Weekend timeline columns; hidden by default to keep the working week compact. */
   showWeekends: boolean;
   /** Sort the displayed rows without changing the scheduler's line sequence. */
@@ -145,9 +203,9 @@ interface UiState {
    */
   dismissTop: () => boolean;
   setDayWidth: (px: number) => void;
-  setOrderWidth: (px: number) => void;
+  setColumnWidth: (key: ColumnKey, px: number) => void;
   toggleDateCol: (key: DateCol) => void;
-  setOrderWindow: (filter: OrderWindowFilter) => void;
+  toggleLine: (key: LineKey) => void;
   setOrderDay: (day: string | null) => void;
   toggleWeekends: () => void;
   changeOrderSort: (key: OrderSortKey) => void;
@@ -169,11 +227,10 @@ export const useUiStore = create<UiState>((set, get) => ({
   workerLoadId: null,
   lastRefresh: null,
   dayWidth: DEFAULT_DAY_WIDTH,
-  orderWidth: DEFAULT_ORDER_WIDTH,
+  colWidths: { ...DEFAULT_COLUMN_WIDTHS },
   dateCols: { start: true, due: true, expect: true },
-  orderWindow: 'all',
+  hiddenLines: [...LINES_HIDDEN_BY_DEFAULT],
   orderDay: null,
-  windowBeforeDay: 'all',
   showWeekends: false,
   orderSort: { key: 'start', direction: 'asc' },
 
@@ -217,27 +274,24 @@ export const useUiStore = create<UiState>((set, get) => ({
   },
   setDayWidth: (px) =>
     set({ dayWidth: clamp(px, MIN_DAY_WIDTH, MAX_DAY_WIDTH) }),
-  setOrderWidth: (px) =>
-    set({ orderWidth: clamp(px, MIN_ORDER_WIDTH, MAX_ORDER_WIDTH) }),
+  setColumnWidth: (key, px) =>
+    set((state) => ({
+      colWidths: {
+        ...state.colWidths,
+        [key]: clamp(px, COLUMN_LIMITS[key].min, COLUMN_LIMITS[key].max),
+      },
+    })),
   toggleDateCol: (key) =>
     set((state) => ({
       dateCols: { ...state.dateCols, [key]: !state.dateCols[key] },
     })),
-  setOrderWindow: (orderWindow) =>
-    set(
-      orderWindow === 'day'
-        ? { orderWindow }
-        : { orderWindow, windowBeforeDay: orderWindow, orderDay: null },
-    ),
-  setOrderDay: (orderDay) =>
+  toggleLine: (key) =>
     set((state) => ({
-      orderDay,
-      orderWindow: orderDay ? 'day' : state.windowBeforeDay,
-      windowBeforeDay:
-        orderDay && state.orderWindow !== 'day'
-          ? (state.orderWindow as Exclude<OrderWindowFilter, 'day'>)
-          : state.windowBeforeDay,
+      hiddenLines: state.hiddenLines.includes(key)
+        ? state.hiddenLines.filter((line) => line !== key)
+        : [...state.hiddenLines, key],
     })),
+  setOrderDay: (orderDay) => set({ orderDay }),
   toggleWeekends: () => set((state) => ({ showWeekends: !state.showWeekends })),
   changeOrderSort: (key) => set((state) => ({
     orderSort: {

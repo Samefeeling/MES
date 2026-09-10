@@ -13,6 +13,8 @@ The board has eight lines. PMD is a read-only context lane mirroring moulding's 
 | Table | TABLE |
 | General | FACTORY_GENERAL |
 
+**TBP and PMD open folded away.** Neither is planned here — PMD mirrors moulding's schedule and TBP is scheduled elsewhere — so they used to lead a board whose subject is the assembly floor. Each leaves a `+ TBP` / `+ PMD` chip in the board header, which is where it comes back from, and every line carries a `×` on its own row to fold it. Nothing is dropped: a folded line's orders still count towards the roster's load, the day columns and the totals.
+
 The keys keep their older spellings on purpose: they are written into saved plans, into `ASSY_Operator` skills and into the SharePoint containers, so renaming them would orphan every plan already on the tenant. Skills can contain the display names, separated by semicolons, or SharePoint multi-choice values. A supervisor's current line allocation controls crew availability; skills rank candidates within that line. Dragging an operator does not grant a permanent skill.
 
 Two lines were retired. `UPL` (the catch-all upholstery lane) and `ASSY_STOOL` no longer exist: the BOM rules below say which upholstery bench a part belongs on, and stools are ordinary ASM work. Anything still filed against either — a saved plan, a roster skill, an ERP export — is read onto its successor (`UPL` → UPL-Gluing, `ASSY_STOOL` → ASM), never dropped into the pool.
@@ -57,6 +59,8 @@ Use New support order with supervisor access. Enter the receiving department, wo
 Select the crew from workers moved to Factory General. Each order supports the existing maximum of four concurrent people; use separate orders for larger teams. Save daily total labour hours and notes, and mark the order complete when finished. Hours are totals across the selected crew, not hours per person. Daily bookings upsert by order and date.
 
 Support records use ASSY_Production with WorkType=Support. OrderQty, RemainingQty, Complete and ShiftOutput are zero in SharePoint; LaborHours carries actual support time. Internally the scheduler measures manual work in hours. MES KPI excludes support records from manufactured orders and quantities and reports support orders/hours separately.
+
+`PlannedHours` is written on **every** order, not only support ones: for support work it is the hours the job was planned to take, and for a manufactured order it is the order's whole standard labour content. With OrderQty beside it, the KPI page can turn a day's finished units back into the hours they were worth — see the Efficiency column in [Assembly in MES](ASSEMBLY.md). It is an order-level column, so the next sync backfills it on rows written before this.
 
 ## Existing SharePoint Lists
 

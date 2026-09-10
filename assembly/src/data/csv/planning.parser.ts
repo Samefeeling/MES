@@ -315,7 +315,7 @@ export function parsePlanningCsv(
    */
   const unknownLines = new Map<string, number>();
 
-  body.forEach((row, i) => {
+  body.forEach((row) => {
     const jobNum = cell(row, col.jobNum);
     const partNum = cell(row, col.partNum);
     if (!jobNum || !partNum) return; // spacer / totals row
@@ -358,17 +358,12 @@ export function parsePlanningCsv(
         ? hoursPerUnit * totalQty
         : (remainingLaborHrs ?? 0);
 
-    // Only orders this board actually schedules. A press job appears in the
-    // PMD lane on moulding's own dates — it is mirrored for context, never
-    // planned here — so hours its row does not carry cost this board nothing,
-    // and saying so on every such row buries the assembly orders that matter.
-    if (laborHrs <= 0 && placement?.department !== 'moulding') {
-      // Names where to look: the cell is blank on this row, not the column.
-      errors.push(
-        `Planning1.csv row ${i + 2} (${jobNum}): no labour hours ` +
-          '(RemaingLaborHrs and ProdStandard are both blank), so it gets no bar',
-      );
-    }
+    // An order whose hours cells are blank gets no bar, and says so where it
+    // matters — on the board, as an order with nothing to run. It is not
+    // reported here: the banner is for problems with the *export*, and one
+    // blank cell per order filled it with a line the supervisor can do nothing
+    // about from this screen. The header check above still catches the case
+    // that is an export problem — the hours column missing altogether.
 
     const line = placement?.line ?? null;
     const predecessor = cell(row, col.predecessor);

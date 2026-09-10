@@ -1,11 +1,30 @@
 # Board interaction rules
 
+## What the board opens with
+
+**Every order it has.** There is no window to choose and nothing to switch
+back from: the "All orders" and "5 working days" buttons are gone, because a
+board that opens already hiding two thirds of its rows — with nothing on
+screen saying so — reads as a board that has lost them.
+
+**Six of the eight lines.** TBP and PMD open folded away: neither is planned
+here — PMD mirrors moulding's own schedule and TBP is scheduled elsewhere —
+so they used to lead a board whose subject is the assembly floor. Each folded
+line leaves a **+ TBP** / **+ PMD** chip in the header, which is where it
+comes back from, and every line carries a **×** on its own row to fold it.
+
+**Whatever column widths the reader last dragged.** All seven frozen columns
+— Order, Order Qty, Required Hours, the three dates and Team — are dragged by
+their right-hand edge, or moved with ← / → once the grip has focus. Which
+column needs the room is not something a default can know.
+
 ## Date filtering
 
-The board opens on **All orders**. The header carries the two windows — All
-orders and 5 working days — and each timeline date has an order-count button:
-select it to show orders with work on that day, select it again to return to
-the window that was showing before.
+The only narrowing left is the **order-count button under each timeline
+date**: select it to show orders with work on that day, select it again — or
+press the day chip that appears in the header — to return to every order. The
+header chip is the filter's only trace, and it is drawn only while a day is
+picked, so a filter cannot be left on unnoticed.
 
 A narrowed board also keeps whatever the shown orders are waiting for, up the
 whole chain. The press job for a shell usually ran before this week, so no
@@ -81,4 +100,11 @@ certification. Future dated attendance remains a separate integration need.
 
 ## Operational groups
 
-The board now separates Cut/Sewing, Gluing, UPL assembly, Softie, Stool, Seats and Table. Factory General holds support work and is excluded from automatic crewing. Supervisor roster moves release current off-line allocations but retain recorded crew snapshots.
+The board runs the eight lines in `docs/OPERATIONAL-LINES.md`. Factory General
+holds support work and is excluded from automatic crewing. Supervisor roster
+moves release current off-line allocations but retain recorded crew snapshots.
+
+A line's own row is deliberately not lettered like an order: it carries a
+tinted band and a dark-blue name in capitals, the one colour on the board no
+order row can take. Scrolling a long board, the band is what tells you which
+line you are inside.

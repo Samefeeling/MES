@@ -1,6 +1,9 @@
 :root {
   color-scheme: light;
-  --bg: #f4f7fb;
+  /* The same ground as the PMD dashboard's `--bg`. The two boards are one
+     application to the floor — Assembly opens in a frame inside it — and two
+     shades of near-white a tab apart read as a page that failed to load. */
+  --bg: #f1f5f9;
   --surface: #ffffff;
   --surface-2: #f7f9fc;
   --surface-3: #e8eef7;
@@ -18,6 +21,11 @@
   --error: #f87171;
   --error-dim: #fee2e2;
   --info: #60a5fa;
+
+  /* A line's row, kept clear of every colour an order row can take. */
+  --line-name: #075985;
+  --line-band: #e0f2fe;
+  --line-band-bd: #bae6fd;
 
   --tool: #c084fc; /* die / tool change */
   --color: #fb923c; /* colour change */
@@ -707,13 +715,20 @@ button {
 .assembly-pane {
   padding: 0;
 }
+/*
+ * Every frozen column's width is pushed in from the store as a custom property
+ * (see COLUMN_VAR); the values here are only what the board falls back to if a
+ * variable is ever missing, and must match DEFAULT_COLUMN_WIDTHS.
+ */
 .assy {
   /* Anchors the day-stripe layer below. */
   position: relative;
   --order-w: 200px;
   --qty-w: 58px;
   --hours-w: 82px;
-  --date-w: 62px;
+  --start-w: 62px;
+  --due-w: 62px;
+  --expect-w: 62px;
   --team-w: 172px;
   font-size: 12px;
 }
@@ -901,9 +916,11 @@ button {
   background: var(--surface);
 }
 /*
- * Order column resize grip. Order numbers and descriptions vary wildly in
- * length between customers, so the one column that carries free text is the
- * one worth being able to widen.
+ * Column resize grip, on the right-hand edge of every frozen heading. Which
+ * column needs the room depends on the plant and on the screen — order numbers
+ * and descriptions vary wildly in length, and a line running four-handed needs
+ * a Team column a line running singles does not — so all of them are dragged
+ * rather than only the one carrying free text.
  */
 .col-resize {
   position: absolute;
@@ -957,12 +974,13 @@ body.col-resizing {
   color: var(--muted);
 }
 .acell.date {
-  width: var(--date-w);
-  flex: 0 0 var(--date-w);
   justify-content: center;
   font-variant-numeric: tabular-nums;
   color: var(--muted);
 }
+.acell.date.start { width: var(--start-w); flex: 0 0 var(--start-w); }
+.acell.date.due { width: var(--due-w); flex: 0 0 var(--due-w); }
+.acell.date.expect { width: var(--expect-w); flex: 0 0 var(--expect-w); }
 .acell.date.vert {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
@@ -1374,9 +1392,18 @@ body.col-resizing {
  * right. It is a row rather than one big button because the load chips inside
  * it open their own popup, and a button cannot hold another button.
  */
+/*
+ * A line's own row. It is not an order, and used to be lettered like one: the
+ * same near-black on the same near-white, one weight apart, so scrolling a
+ * long board you lost track of which line you were inside. The name now
+ * carries the dashboard's own dark blue on a tinted band — the one colour on
+ * this board that never appears on an order row — and the band is what the eye
+ * catches on the way past.
+ */
 .agroup-head {
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border);
+  background: var(--line-band);
+  border-top: 1px solid var(--line-band-bd);
+  border-bottom: 1px solid var(--line-band-bd);
   width: max-content;
   min-width: 100%;
 }
@@ -1398,7 +1425,7 @@ body.col-resizing {
   width: max-content;
   max-width: 100%;
   padding: 4px 10px;
-  background: var(--surface-2);
+  background: var(--line-band);
 }
 .agroup-label {
   display: flex;
@@ -1407,10 +1434,31 @@ body.col-resizing {
   padding: 1px 0;
   background: transparent;
   border: 0;
-  color: var(--text);
+  color: var(--line-name);
   cursor: pointer;
   text-align: left;
   flex: 0 0 auto;
+}
+/* Takes the whole line off the board; the header offers it back. */
+.agroup-hide {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--line-name);
+  opacity: 0.45;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.agroup-hide:hover,
+.agroup-hide:focus-visible {
+  opacity: 1;
+  border-color: var(--line-name);
+  outline: none;
 }
 /*
  * Everyone in today who is trained on this line, in the order the board picks
@@ -1428,9 +1476,11 @@ body.col-resizing {
   border-left: 1px solid var(--border);
 }
 .agroup-name {
-  font-weight: 700;
-  font-size: 12.5px;
-  letter-spacing: 0.3px;
+  color: var(--line-name);
+  font-weight: 800;
+  font-size: 13px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
 }
 .agroup-note {
   font-size: 10px;
@@ -1438,8 +1488,10 @@ body.col-resizing {
   text-transform: uppercase;
   letter-spacing: 0.4px;
 }
+/* Both pills sit on the tinted line band, so they carry the page's white
+   rather than its greys — a grey pill on this band disappears. */
 .agroup-count {
-  background: var(--surface-3);
+  background: var(--surface);
   color: var(--muted);
   border-radius: 999px;
   padding: 0 7px;
@@ -1448,8 +1500,8 @@ body.col-resizing {
 }
 /* The line's work load — remaining standard hours and who is on it. */
 .agroup-load {
-  background: #dbeafe;
-  color: #1e3a8a;
+  background: var(--surface);
+  color: var(--line-name);
   border-radius: 999px;
   padding: 0 8px;
   font-size: 10.5px;
@@ -1458,7 +1510,7 @@ body.col-resizing {
 }
 .agroup-crew {
   font-size: 10px;
-  color: var(--muted);
+  color: #0c4a6e;
   font-variant-numeric: tabular-nums;
 }
 .agroup-gap {
@@ -1733,28 +1785,30 @@ body.col-resizing {
   color: var(--text);
   border-color: var(--accent);
 }
-.order-window {
-  display: inline-flex;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+/* Brings a folded-away line back. Same chip as a hidden date column: both
+   are the board admitting it is showing less than it holds. */
+.board-tools .line-restore {
+  color: #1e3a8a;
+  background: #dbeafe;
+  border-color: #bfdbfe;
 }
-.board-tools .order-window button {
+/*
+ * The one day the board has been narrowed to, and the way out of it. Drawn
+ * only while a day is picked, and it is the filter's only visible trace, so it
+ * is coloured like something that is on rather than like a chip.
+ */
+.board-tools .day-filter-clear {
   width: auto;
-  height: 22px;
-  padding: 0 7px;
-  border: 0;
-  border-left: 1px solid var(--border);
-  border-radius: 0;
-  font-size: 10px;
-  white-space: nowrap;
-}
-.board-tools .order-window button:first-child {
-  border-left: 0;
-}
-.board-tools .order-window button.active {
+  height: auto;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border-color: var(--accent);
   background: var(--accent);
   color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 /* No `margin-left: auto` — the board is far wider than the viewport, so that
    would push this off the right-hand edge of a scrolled-left page. */

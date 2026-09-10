@@ -8,9 +8,10 @@
  */
 
 import type { AssemblyGanttView } from '@/engine/assembly/board';
+import { LINES } from '@/domain/assembly';
 import { DATE_COLS, DATE_COL_LABEL, useUiStore } from '@/store/uiStore';
 import { countRunningOrders } from './boardView';
-import { fromDayKey } from '@/lib/time';
+import { formatShortDay, fromDayKey } from '@/lib/time';
 
 /** How much one press of − or + moves the day column, in pixels. */
 const ZOOM_STEP = 16;
@@ -20,15 +21,17 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
   const setDayWidth = useUiStore((s) => s.setDayWidth);
   const dateCols = useUiStore((s) => s.dateCols);
   const toggleDateCol = useUiStore((s) => s.toggleDateCol);
-  const orderWindow = useUiStore((s) => s.orderWindow);
-  const setOrderWindow = useUiStore((s) => s.setOrderWindow);
+  const hiddenLines = useUiStore((s) => s.hiddenLines);
+  const toggleLine = useUiStore((s) => s.toggleLine);
   const orderDay = useUiStore((s) => s.orderDay);
+  const setOrderDay = useUiStore((s) => s.setOrderDay);
   const showWeekends = useUiStore((s) => s.showWeekends);
   const toggleWeekends = useUiStore((s) => s.toggleWeekends);
 
   if (!board) return null;
   const hidden = DATE_COLS.filter((key) => !dateCols[key]);
-  const running = orderWindow === 'day' && orderDay
+  const foldedLines = LINES.filter((line) => hiddenLines.includes(line.key));
+  const running = orderDay
     ? countRunningOrders(
         board.groups.flatMap((group) => group.rows),
         fromDayKey(orderDay),
@@ -58,30 +61,19 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
       >
         {board.totals.remainingHours.toFixed(0)} h on the board
       </span>
-      {/* Which orders are on screen, and the way back to all of them. The
-          board is filtered from three places — here, the day chip under each
-          column, and nothing else — so this is where a filter has to be
-          visible, whichever of them turned it on. */}
-      <span className="order-window" aria-label="Order date window">
+      {/* The board shows every order it has unless somebody picked a day from
+          the chip under a column, and this is the only place that says so —
+          and the way back. It is not a filter someone can leave on by
+          accident: with nothing picked, nothing is drawn here. */}
+      {orderDay && (
         <button
-          className={orderWindow === 'all' ? 'active' : ''}
-          onClick={() => setOrderWindow('all')}
-          title="Every order on the board"
+          className="day-filter-clear"
+          onClick={() => setOrderDay(null)}
+          title="Back to every order on the board"
         >
-          All orders
+          {formatShortDay(fromDayKey(orderDay))} · {running}{' '}
+          {running === 1 ? 'order' : 'orders'} ×
         </button>
-        <button
-          className={orderWindow === 'next-five' ? 'active' : ''}
-          onClick={() => setOrderWindow('next-five')}
-          title="Orders running today or during the next five working days"
-        >
-          5 working days
-        </button>
-      </span>
-      {orderWindow === 'day' && orderDay && (
-        <span className="board-load" role="status">
-          {running} {running === 1 ? 'order' : 'orders'} running
-        </span>
       )}
       <button
         className="date-restore"
@@ -103,6 +95,18 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
           title={`Show the ${DATE_COL_LABEL[key]} column again`}
         >
           + {DATE_COL_LABEL[key]}
+        </button>
+      ))}
+      {/* The same, for a folded-away line. TBP and PMD start here, so this
+          row is where the board admits it is not showing all eight. */}
+      {foldedLines.map((line) => (
+        <button
+          className="date-restore line-restore"
+          key={line.key}
+          onClick={() => toggleLine(line.key)}
+          title={`Show the ${line.name} line again`}
+        >
+          + {line.name}
         </button>
       ))}
       <MarkedSet />

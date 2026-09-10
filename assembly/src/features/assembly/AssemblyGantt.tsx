@@ -37,11 +37,12 @@ import { usePlanStore } from '@/store/planStore';
 import { useSupervisorStore } from '@/store/supervisorStore';
 import { useDataStore } from '@/store/dataStore';
 import {
+  COLUMN_LIMITS,
   DATE_COLS,
-  MAX_ORDER_WIDTH,
-  MIN_ORDER_WIDTH,
   useUiStore,
   type ClickPoint,
+  type ColumnKey,
+  type ColumnWidths,
   type DateCol,
   type DateCols,
 } from '@/store/uiStore';
@@ -52,7 +53,6 @@ import { DependencyArrows } from './DependencyArrows';
 import { dependencyFocus } from './dependencyRouter';
 import {
   teamSummary,
-  isInNextWorkingDays,
   isRunningOnDay,
   runningOrdersByDay,
   lineOfWorkerToday,
@@ -62,15 +62,6 @@ import {
 import { useStableBoardOrder } from './useStableBoardOrder';
 import { earliestStart, markedSet, type MarkedMove } from './groupMove';
 import { fromDayKey, toDayKey } from '@/lib/time';
-
-// Must match the widths in index.css (--qty-w, --date-w x4, --team-w),
-// otherwise the header's day columns drift out of line with the row tracks.
-// The Order column is the exception: it is dragged, so it comes from the store
-// and is pushed back into CSS as --order-w.
-const QTY_W = 58;
-const HOURS_W = 82;
-const DATE_W = 62;
-const TEAM_W = 172;
 
 /** How often the "now" line catches up with the clock. */
 const CLOCK_TICK_MS = 5 * 60 * 1000;
@@ -84,25 +75,91 @@ const TIME_FMT = new Intl.DateTimeFormat('en-AU', {
 const fmt = (d: Date | null): string => (d ? formatShortDay(d) : '—');
 
 /**
- * Where each frozen column starts, left to right.
+ * Where each frozen column starts, left to right, and how wide the frozen
+ * block ends up.
  *
  * The header and the rows both need these, and each used to walk the visible
  * date columns with its own running total — two counters that had to be kept
  * in step by hand, and drift in either one slides the dates out from under
- * their headings.
+ * their headings. Now that every column is dragged, the same is true of the
+ * total: the grid starts where the frozen block ends.
  */
 function frozenLefts(
   visible: DateCols,
-  orderWidth: number,
-): { date: Partial<Record<DateCol, number>>; team: number } {
+  w: ColumnWidths,
+): {
+  qty: number;
+  hours: number;
+  date: Partial<Record<DateCol, number>>;
+  team: number;
+  total: number;
+} {
   const date: Partial<Record<DateCol, number>> = {};
-  let left = orderWidth + QTY_W + HOURS_W;
+  let left = w.order + w.qty + w.hours;
   for (const key of DATE_COLS) {
     if (!visible[key]) continue;
     date[key] = left;
-    left += DATE_W;
+    left += w[key];
   }
-  return { date, team: left };
+  return {
+    qty: w.order,
+    hours: w.order + w.qty,
+    date,
+    team: left,
+    total: left + w.team,
+  };
+}
+
+/**
+ * The grip on a column's right-hand edge.
+ *
+ * It reads its own width from the store rather than being handed one: the
+ * header draws seven of these, and threading a width and a setter through the
+ * board for each of them would put seven props on every row that never uses
+ * them.
+ */
+function ColumnGrip({ column, label }: { column: ColumnKey; label: string }) {
+  const width = useUiStore((s) => s.colWidths[column]);
+  const setColumnWidth = useUiStore((s) => s.setColumnWidth);
+  const limits = COLUMN_LIMITS[column];
+
+  const startResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const from = e.clientX;
+    const base = width;
+    const move = (ev: PointerEvent) =>
+      setColumnWidth(column, base + ev.clientX - from);
+    const stop = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+      document.body.classList.remove('col-resizing');
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop);
+    document.body.classList.add('col-resizing');
+  };
+
+  return (
+    <span
+      className="col-resize"
+      role="separator"
+      tabIndex={0}
+      aria-label={`Resize the ${label} column`}
+      aria-valuenow={width}
+      aria-valuemin={limits.min}
+      aria-valuemax={limits.max}
+      title="Drag to resize"
+      onPointerDown={startResize}
+      onKeyDown={(e) => {
+        const step =
+          e.key === 'ArrowLeft' ? -16 : e.key === 'ArrowRight' ? 16 : 0;
+        if (!step) return;
+        e.preventDefault();
+        setColumnWidth(column, width + step);
+      }}
+    />
+  );
 }
 
 /** A clock hour as text — 15.5 reads as 15:30. */
@@ -126,7 +183,7 @@ function OrderRowView({
   selected,
   onSelect,
   dayWidth,
-  orderWidth,
+  colWidths,
   visibleDates,
   showWeekends,
   workerLines,
@@ -145,7 +202,7 @@ function OrderRowView({
   selected: boolean;
   onSelect: (id: string, at?: ClickPoint) => void;
   dayWidth: number;
-  orderWidth: number;
+  colWidths: ColumnWidths;
   visibleDates: DateCols;
   showWeekends: boolean;
   workerLines: ReadonlyMap<string, LineKey>;
@@ -161,7 +218,7 @@ function OrderRowView({
     state.newOrderIds.includes(String(row.job.id)),
   );
   const isContext = !row.line.schedulable;
-  const lefts = frozenLefts(visibleDates, orderWidth);
+  const lefts = frozenLefts(visibleDates, colWidths);
   const at = (key: DateCol): React.CSSProperties | undefined =>
     lefts.date[key] === undefined ? undefined : { left: lefts.date[key] };
   const startStyle = at('start');
@@ -192,7 +249,7 @@ function OrderRowView({
       {/* Ordered quantity, with what is still to make under it. */}
       <div
         className="acell qty frozen"
-        style={{ left: orderWidth }}
+        style={{ left: lefts.qty }}
         title={row.job.manual ? 'Support work is measured in labour hours' : `${orderQty} ordered · ${row.job.remainingQty} still to make`}
       >
         <span>{row.job.manual ? '—' : orderQty}</span>
@@ -202,7 +259,7 @@ function OrderRowView({
       </div>
       <div
         className="acell hours frozen"
-        style={{ left: orderWidth + QTY_W }}
+        style={{ left: lefts.hours }}
         title="Remaining standard labour hours used by the schedule"
       >
         {remainingHours(row.job).toFixed(1)} h
@@ -236,7 +293,7 @@ function OrderRowView({
           )}
         </div>
       )}
-      {visibleDates.due && <div className="acell date frozen" style={dueStyle}>{fmt(row.job.dueDate)}</div>}
+      {visibleDates.due && <div className="acell date due frozen" style={dueStyle}>{fmt(row.job.dueDate)}</div>}
       {visibleDates.expect && <div className={`acell date expect frozen ${row.status.color}`} style={expectStyle}>
         {fmt(row.expectDate)}
       </div>}
@@ -298,11 +355,12 @@ function LineGroupView({
   selectedJobId,
   onSelect,
   dayWidth,
-  orderWidth,
+  colWidths,
   visibleDates,
   showWeekends,
   collapsed,
   onToggle,
+  onHide,
   filtered,
   unlocked,
   relatedJobIds,
@@ -326,11 +384,13 @@ function LineGroupView({
   selectedJobId: string | null;
   onSelect: (id: string, at?: ClickPoint) => void;
   dayWidth: number;
-  orderWidth: number;
+  colWidths: ColumnWidths;
   visibleDates: DateCols;
   showWeekends: boolean;
   collapsed: boolean;
   onToggle: () => void;
+  /** Fold the whole line away; it comes back from the header. */
+  onHide: () => void;
   filtered: boolean;
   unlocked: boolean;
   relatedJobIds: ReadonlySet<string>;
@@ -420,6 +480,19 @@ function LineGroupView({
           )}
         </button>
 
+        {/* Outside the label — a button cannot hold another button, and this
+            one does something the label does not: it takes the line off the
+            board altogether. */}
+        <button
+          type="button"
+          className="agroup-hide"
+          onClick={onHide}
+          title={`Hide the ${group.line.name} line — bring it back from the header`}
+          aria-label={`Hide the ${group.line.name} line`}
+        >
+          ×
+        </button>
+
         {crew.length > 0 && (
           <span
             className="agroup-roster"
@@ -465,7 +538,7 @@ function LineGroupView({
             selected={selectedJobId === String(row.job.id)}
             onSelect={onSelect}
             dayWidth={dayWidth}
-            orderWidth={orderWidth}
+            colWidths={colWidths}
             visibleDates={visibleDates}
             showWeekends={showWeekends}
             workerLines={todayLine}
@@ -487,11 +560,11 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
   const select = useUiStore((s) => s.select);
   const selectedJobId = useUiStore((s) => s.selectedJobId);
   const dayWidth = useUiStore((s) => s.dayWidth);
-  const orderWidth = useUiStore((s) => s.orderWidth);
-  const setOrderWidth = useUiStore((s) => s.setOrderWidth);
+  const colWidths = useUiStore((s) => s.colWidths);
   const visibleDates = useUiStore((s) => s.dateCols);
   const toggleDate = useUiStore((s) => s.toggleDateCol);
-  const orderWindow = useUiStore((s) => s.orderWindow);
+  const hiddenLines = useUiStore((s) => s.hiddenLines);
+  const toggleLine = useUiStore((s) => s.toggleLine);
   const orderDay = useUiStore((s) => s.orderDay);
   const setOrderDay = useUiStore((s) => s.setOrderDay);
   const showWeekends = useUiStore((s) => s.showWeekends);
@@ -519,9 +592,8 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
     return showWeekends ? calendar : calendar.filter((day) => !isWeekend(day));
   }, [board.horizonDays, board.horizonStart, showWeekends]);
   const gridWidth = days.length * dayWidth;
-  const dateCount = Object.values(visibleDates).filter(Boolean).length;
-  const labelWidth =
-    orderWidth + QTY_W + HOURS_W + DATE_W * dateCount + TEAM_W;
+  const headLefts = frozenLefts(visibleDates, colWidths);
+  const labelWidth = headLefts.total;
   const allRows = useMemo(
     () => board.groups.flatMap((group) => group.rows),
     [board],
@@ -536,23 +608,22 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
    * come and go as bars were dragged.
    */
   const visibleIds = useMemo(() => {
-    const chosen =
-      orderWindow === 'next-five'
-        ? (row: OrderRow) => isInNextWorkingDays(row, board.today)
-        : orderWindow === 'day' && orderDay
-          ? (row: OrderRow) => row.line.schedulable && isRunningOnDay(row, fromDayKey(orderDay))
-          : null;
-    if (!chosen) return null;
-    const selected = withPredecessors(allRows, chosen);
+    if (!orderDay) return null;
+    const selected = withPredecessors(
+      allRows,
+      (row: OrderRow) =>
+        row.line.schedulable && isRunningOnDay(row, fromDayKey(orderDay)),
+    );
     // Daily Assembly filtering excludes PMD, including PMD predecessors.
-    if (orderWindow === 'day') {
-      for (const row of allRows) if (!row.line.schedulable) selected.delete(String(row.job.id));
-    }
+    for (const row of allRows) if (!row.line.schedulable) selected.delete(String(row.job.id));
     return selected;
-  }, [allRows, board.today, orderWindow, orderDay]);
+  }, [allRows, orderDay]);
   const visibleGroups = useMemo(
     () =>
-      orderedGroups.filter(group => orderWindow !== 'day' || group.line.schedulable).map((group) => ({
+      orderedGroups.filter(group =>
+        !hiddenLines.includes(group.line.key) &&
+        (!orderDay || group.line.schedulable),
+      ).map((group) => ({
         ...group,
         rows: visibleIds
           ? group.rows.filter((row) => visibleIds.has(String(row.job.id)))
@@ -567,7 +638,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
         // of them — this used to throw that away and count the filtered rows.
         total: group.rows.length,
       })),
-    [orderedGroups, visibleIds, orderWindow],
+    [orderedGroups, visibleIds, hiddenLines, orderDay],
   );
   const visibleRows = useMemo(
     () => visibleGroups.flatMap((group) => group.rows),
@@ -645,25 +716,6 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
       ),
     [board.workers, allRows, board.today, workerLineOverrides],
   );
-  const headLefts = frozenLefts(visibleDates, orderWidth);
-
-  /** Drag the Order column's right-hand edge. */
-  const startColumnResize = (e: React.PointerEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const from = e.clientX;
-    const base = orderWidth;
-    const move = (ev: PointerEvent) => setOrderWidth(base + ev.clientX - from);
-    const stop = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', stop);
-      document.body.classList.remove('col-resizing');
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', stop);
-    document.body.classList.add('col-resizing');
-  };
-
   // Hours booked per day against the hours the shift can deliver — the same
   // arithmetic as the per-person and per-line loads, so the three agree. The
   // columns behind today instead carry what was booked as output.
@@ -696,7 +748,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
     sortable: boolean,
   ) =>
     visibleDates[key] && (
-      <div className="acell date date-head frozen" style={{ left: headLefts.date[key] }}>
+      <div className={`acell date ${key} date-head frozen`} style={{ left: headLefts.date[key] }}>
         {sortable ? (
           <button
             className={`date-sort ${sort?.key === key ? 'active' : ''}`}
@@ -718,6 +770,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
         >
           −
         </button>
+        <ColumnGrip column={key} label={label} />
       </div>
     );
 
@@ -728,7 +781,13 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
       style={
         {
           minWidth: labelWidth + gridWidth,
-          '--order-w': `${orderWidth}px`,
+          '--order-w': `${colWidths.order}px`,
+          '--qty-w': `${colWidths.qty}px`,
+          '--hours-w': `${colWidths.hours}px`,
+          '--start-w': `${colWidths.start}px`,
+          '--due-w': `${colWidths.due}px`,
+          '--expect-w': `${colWidths.expect}px`,
+          '--team-w': `${colWidths.team}px`,
         } as React.CSSProperties
       }
     >
@@ -772,31 +831,18 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
           <div className="acell order">
             Order
             {/* Grab the edge to give the description more room. */}
-            <span
-              className="col-resize"
-              role="separator"
-              tabIndex={0}
-              aria-label="Resize the Order column"
-              aria-valuenow={orderWidth}
-              aria-valuemin={MIN_ORDER_WIDTH}
-              aria-valuemax={MAX_ORDER_WIDTH}
-              title="Drag to resize"
-              onPointerDown={startColumnResize}
-              onKeyDown={(e) => {
-                const step =
-                  e.key === 'ArrowLeft' ? -16 : e.key === 'ArrowRight' ? 16 : 0;
-                if (!step) return;
-                e.preventDefault();
-                setOrderWidth(orderWidth + step);
-              }}
-            />
+            <ColumnGrip column="order" label="Order" />
           </div>
-          <div className="acell qty frozen" style={{ left: orderWidth }}>Order Qty</div>
+          <div className="acell qty frozen" style={{ left: headLefts.qty }}>
+            Order Qty
+            <ColumnGrip column="qty" label="Order Qty" />
+          </div>
           <div
             className="acell hours frozen"
-            style={{ left: orderWidth + QTY_W }}
+            style={{ left: headLefts.hours }}
           >
             Required Hours
+            <ColumnGrip column="hours" label="Required Hours" />
           </div>
           {dateHead('start', 'Start Date', true)}
           {dateHead('due', 'Due Date', true)}
@@ -813,6 +859,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
             >
               {team.label}
             </span>
+            <ColumnGrip column="team" label="Team" />
           </div>
           {/* Load histogram: one column per day, coloured by band. */}
           <div className="acell track" style={{ width: gridWidth }}>
@@ -848,9 +895,9 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
                   <button
                     className="day-order-filter"
                     aria-label={`Filter orders running on ${toDayKey(d)}`}
-                    aria-pressed={orderWindow === 'day' && orderDay === toDayKey(d)}
+                    aria-pressed={orderDay === toDayKey(d)}
                     onClick={() => setOrderDay(
-                      orderWindow === 'day' && orderDay === toDayKey(d) ? null : toDayKey(d),
+                      orderDay === toDayKey(d) ? null : toDayKey(d),
                     )}
                   >
                     {running} {running === 1 ? 'order' : 'orders'}
@@ -875,12 +922,13 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
           selectedJobId={selectedJobId}
           onSelect={select}
           dayWidth={dayWidth}
-          orderWidth={orderWidth}
+          colWidths={colWidths}
           visibleDates={visibleDates}
           showWeekends={showWeekends}
           collapsed={Boolean(collapsed[group.line.key])}
           onToggle={() => setCollapsed((current) => ({ ...current, [group.line.key]: !current[group.line.key] }))}
-          filtered={orderWindow !== 'all'}
+          onHide={() => toggleLine(group.line.key)}
+          filtered={orderDay !== null}
           unlocked={unlocked}
           relatedJobIds={relatedJobIds}
           markedIds={markedIds}

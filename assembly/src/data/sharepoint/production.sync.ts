@@ -79,6 +79,7 @@ export const PRODUCTION_COLUMNS = {
 /** The order-level columns, kept identical across every row of a job. */
 const ORDER_LEVEL = [
   PRODUCTION_COLUMNS.line,
+  PRODUCTION_COLUMNS.plannedHours,
   PRODUCTION_COLUMNS.startDate,
   PRODUCTION_COLUMNS.actualStartAt,
   PRODUCTION_COLUMNS.startOverrideReason,
@@ -99,6 +100,16 @@ export interface OrderFacts {
   operatorNames: string[];
   /** True when the roster is the built-in fallback; those ids must not sync. */
   hasSyntheticCrew?: boolean;
+  /**
+   * The order's whole standard labour content, in hours.
+   *
+   * Written on every row, not just support ones: with OrderQty beside it, the
+   * KPI page can turn a day's finished units back into the hours they were
+   * worth and report an efficiency. Without it the record says how much came
+   * off the line but not what that work was supposed to take, and no honest
+   * efficiency can be computed from it at all.
+   */
+  stdHours: number;
   /** Effective start: the later of the drag, the queue and the predecessor. */
   startDate: string | null;
   actualStartAt?: string | null;
@@ -165,6 +176,9 @@ export function orderFactsFromBoard(
           operatorIds: anchorCrew.map((worker) => String(worker.id)),
           operatorNames: anchorCrew.map((worker) => worker.name),
           hasSyntheticCrew: anchorCrew.some((worker) => worker.synthetic),
+          stdHours: row.job.manual
+            ? row.job.manual.plannedHours
+            : Math.max(0, row.job.laborHrs),
           startDate: iso(row.plannedStart),
           actualStartAt: row.actualStart?.startedAt ?? null,
           startOverrideReason: row.actualStart?.overrideReason ?? null,
@@ -185,6 +199,7 @@ function orderFields(facts: OrderFacts): ListItemFields {
   const c = PRODUCTION_COLUMNS;
   return {
     [c.line]: facts.line ?? '',
+    [c.plannedHours]: facts.stdHours,
     [c.startDate]: facts.startDate,
     [c.actualStartAt]: facts.actualStartAt ?? null,
     [c.startOverrideReason]: facts.startOverrideReason ?? '',
@@ -192,7 +207,7 @@ function orderFields(facts: OrderFacts): ListItemFields {
     [c.expectDate]: facts.expectDate,
     [c.orderQty]: facts.manual ? 0 : facts.orderQty,
     [c.remainingQty]: facts.manual ? 0 : facts.remainingQty,
-    ...(facts.manual ? { [c.workType]: 'Support', [c.description]: facts.manual.description, [c.supportDepartment]: facts.manual.supportDepartment, [c.plannedHours]: facts.manual.plannedHours } : {}),
+    ...(facts.manual ? { [c.workType]: 'Support', [c.description]: facts.manual.description, [c.supportDepartment]: facts.manual.supportDepartment } : {}),
   };
 }
 

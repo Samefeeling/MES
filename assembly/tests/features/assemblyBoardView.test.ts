@@ -16,8 +16,6 @@ import {
   retainLineRows,
   barTag,
   lineOfWorkerToday,
-  isInNextWorkingDays,
-  nextWorkingDaysWindow,
   shiftTimelineDays,
   sortLineRows,
   teamSummary,
@@ -125,17 +123,6 @@ describe('assembly board view controls', () => {
       .toEqual(['B', 'A', 'missing']);
   });
 
-  it('uses five working days and keeps bars that overlap the window', () => {
-    const window = nextWorkingDaysWindow(new Date('2026-09-03T00:00:00'));
-    expect(window.from).toEqual(new Date('2026-09-03T00:00:00'));
-    expect(window.toExclusive).toEqual(new Date('2026-09-10T00:00:00'));
-
-    const active = row('active', { start: '2026-09-01', due: '2026-09-04' });
-    const later = row('later', { start: '2026-09-10', due: '2026-09-11' });
-    expect(isInNextWorkingDays(active, new Date('2026-09-03'))).toBe(true);
-    expect(isInNextWorkingDays(later, new Date('2026-09-03'))).toBe(false);
-  });
-
   it('sorts by when work starts, not the must-start deadline, after a crew change', () => {
     const a = row('A', { start: '2026-09-08', due: '2026-09-09' });
     const b = row('B', { start: '2026-09-04', due: '2026-09-20' });
@@ -182,19 +169,8 @@ describe('assembly board view controls', () => {
       .toBe(3);
   });
 
-  it('excludes yesterday-only work and the sixth working day', () => {
-    const today = new Date('2026-09-04T00:00:00');
-    const ended = row('ended', { start: '2026-09-03T00:00:00', due: '2026-09-04T00:00:00' });
-    const fifth = row('fifth', { start: '2026-09-10T00:00:00' });
-    const sixth = row('sixth', { start: '2026-09-11T00:00:00' });
-    expect(isInNextWorkingDays(ended, today)).toBe(false);
-    expect(isInNextWorkingDays(fifth, today)).toBe(true);
-    expect(isInNextWorkingDays(sixth, today)).toBe(false);
-  });
-
-  it('advances the five-day window and timeline through a DST weekend', () => {
+  it('advances the timeline through a DST weekend', () => {
     const friday = new Date('2027-04-02T00:00:00');
-    expect(nextWorkingDaysWindow(friday).toExclusive).toEqual(new Date('2027-04-09T00:00:00'));
     expect(shiftTimelineDays(friday, 1, false)).toEqual(new Date('2027-04-05T00:00:00'));
     expect(timelineDayOffset(new Date('2027-04-05T00:00:00'), friday, false)).toBe(1);
   });

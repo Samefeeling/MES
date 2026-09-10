@@ -262,19 +262,28 @@ describe('the labour-hours column', () => {
     expect(complaint[0]).toContain('SomethingElse');
   });
 
-  it('names the row when an assembly order’s cells are blank', () => {
+  /*
+   * One blank cell is not a broken export. The banner is read at a glance,
+   * from the floor, and it used to carry a line per order whose hours cells
+   * were empty — dozens of them on a real export, none of which the
+   * supervisor can do anything about from this screen, all of them burying
+   * whatever else the load had to say. The order still loads, and a bar with
+   * no hours in it says the same thing where it is actually looked at.
+   */
+  it('says nothing about one order whose hours cells are blank', () => {
     const blank = sample.replace(
       /^(018140-1-1,.*?,ASSY,30,30,[^,]*,[^,]*),[^,]*,[^,]*,/m,
       '$1,,,',
     );
-    const { errors } = parsePlanningCsv(blank);
-    expect(errors.some((e) => e.includes('018140-1-1'))).toBe(true);
+    const { values, errors } = parsePlanningCsv(blank);
+    const order = byId(blank).get('018140-1-1')!;
+    expect(order).toBeDefined();
+    expect(remainingHours(order)).toBe(0);
+    expect(values.map((j) => String(j.id))).toContain('018140-1-1');
+    expect(errors.some((e) => e.includes('018140-1-1'))).toBe(false);
   });
 
-  it('says nothing about a press job, which this board never schedules', () => {
-    // The PMD lane mirrors moulding's own plan on moulding's own dates, so
-    // hours it does not carry are not this board's problem — and a real
-    // export has enough of these rows to bury the orders that matter.
+  it('says nothing about a press job either, which this board never schedules', () => {
     const blank = sample.replace(
       'SFM507615,7911FR,Encore,PMD,34,34,2026-09-29T00:00:00,2026-09-30T00:00:00,0.77,0.022727,23.3',
       'SFM507615,7911FR,Encore,PMD,34,34,2026-09-29T00:00:00,2026-09-30T00:00:00,,,23.3',

@@ -1,5 +1,6 @@
 import type { AssemblyDataLayer } from '../types/assembly';
 import { renderAssemblyKpi } from './assembly-kpi';
+import { departmentTabs } from './kpi-nav';
 import type { PmdDataLayer } from '../dal';
 import type {
   Machine,
@@ -2532,7 +2533,9 @@ function render(): void {
         .map((e) => escapeHtml(e))
         .join(' · ')}</div>`
     : '';
-  const tabs = PERIODS.map(
+  // Department first: which half of the factory this is decides what every
+  // control after it means.
+  const tabs = departmentTabs('pmd') + PERIODS.map(
     (p) =>
       `<button class="shift-btn${S!.view === 'metrics' && p.key === S!.period ? ' a' : ''}" data-period="${p.key}">${escapeHtml(
         p.label,
@@ -3624,12 +3627,6 @@ function openDowntimeDrill(scopeKey: string): void {
 
 export async function renderKpi(dal: PmdDataLayer, assemblyDal?: AssemblyDataLayer): Promise<void> {
   const mount = ++kpiMount;
-  document.getElementById('kpi-departments')?.remove();
-  const department = document.createElement('nav');
-  department.id = 'kpi-departments';
-  department.setAttribute('aria-label', 'KPI department');
-  department.innerHTML = '<a href="#/kpi">PMD</a><a href="#/kpi/assembly">Assembly</a>';
-  document.getElementById('app')!.insertAdjacentElement('beforebegin', department);
   if (window.location.hash.startsWith('#/kpi/assembly') && assemblyDal) {
     document.body.className = 'shift-day';
     await renderAssemblyKpi(assemblyDal);

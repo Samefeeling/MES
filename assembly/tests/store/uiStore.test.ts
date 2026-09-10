@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { useUiStore } from '@/store/uiStore';
+import { LINES } from '@/domain/assembly';
+import {
+  COLUMN_KEYS,
+  COLUMN_LIMITS,
+  DEFAULT_COLUMN_WIDTHS,
+  LINES_HIDDEN_BY_DEFAULT,
+  useUiStore,
+} from '@/store/uiStore';
 
 describe('single employee picker', () => {
   beforeEach(() => {
@@ -29,7 +36,7 @@ describe('board display defaults', () => {
     const state = useUiStore.getState();
     // Every order. A board that opens already hiding most of its rows, with
     // nothing on screen saying so, reads as a board that has lost them.
-    expect(state.orderWindow).toBe('all');
+    expect(state.orderDay).toBeNull();
     expect(state.showWeekends).toBe(false);
     expect(state.orderSort).toEqual({ key: 'start', direction: 'asc' });
     state.toggleWeekends();
@@ -48,14 +55,12 @@ describe('board display defaults', () => {
     expect(useUiStore.getState().orderSort).not.toBe(snapshot);
   });
 
-  it('selects a day without changing the order snapshot and clears back to the window it interrupted', () => {
+  it('selects a day without changing the order snapshot, and clears back to every order', () => {
     const sort = useUiStore.getState().orderSort;
     useUiStore.getState().setOrderDay('2026-09-04');
-    expect(useUiStore.getState().orderWindow).toBe('day');
     expect(useUiStore.getState().orderDay).toBe('2026-09-04');
     expect(useUiStore.getState().orderSort).toBe(sort);
     useUiStore.getState().setOrderDay(null);
-    expect(useUiStore.getState().orderWindow).toBe('all');
     expect(useUiStore.getState().orderDay).toBeNull();
   });
 });
@@ -188,49 +193,75 @@ describe('the two popups over the board', () => {
 });
 
 /**
- * Clearing a filter should undo it, not choose something else. Reading every
- * order, checking one day and clearing the date used to drop you into the
- * five-day window, which is neither where you were nor what you asked for.
+ * The two lines the board opens without.
+ *
+ * Neither is planned here — PMD mirrors moulding's own schedule and TBP is
+ * scheduled elsewhere — so they led a board whose subject is the assembly
+ * floor. Hiding them is only defensible while they can be got back, which is
+ * what these hold: the state has to say a line is missing, by name.
  */
-describe('the date filter and the window behind it', () => {
+describe('folded-away lines', () => {
   beforeEach(() => {
-    useUiStore.setState({
-      orderWindow: 'next-five',
-      orderDay: null,
-      windowBeforeDay: 'next-five',
-    });
+    useUiStore.setState({ hiddenLines: [...LINES_HIDDEN_BY_DEFAULT] });
   });
 
   const state = () => useUiStore.getState();
 
-  it('goes back to the window the day filter interrupted', () => {
-    state().setOrderWindow('all');
-    state().setOrderDay('2026-09-14');
-    expect(state().orderWindow).toBe('day');
-    state().setOrderDay(null);
-    expect(state().orderWindow).toBe('all');
-    expect(state().orderDay).toBeNull();
+  it('opens with TBP and PMD folded away and nothing else', () => {
+    expect(state().hiddenLines).toEqual(['TBP', 'PMD']);
   });
 
-  it('still returns to the five-day window when that is where it came from', () => {
-    state().setOrderDay('2026-09-14');
-    state().setOrderDay(null);
-    expect(state().orderWindow).toBe('next-five');
+  it('every folded line can be named, so the header can offer it back', () => {
+    const names = LINES.filter((line) => state().hiddenLines.includes(line.key));
+    expect(names.map((line) => line.name)).toEqual(['TBP', 'PMD']);
   });
 
-  it('does not lose the window when the day is changed twice', () => {
-    state().setOrderWindow('all');
-    state().setOrderDay('2026-09-14');
-    state().setOrderDay('2026-09-15');
-    expect(state().orderWindow).toBe('day');
-    state().setOrderDay(null);
-    expect(state().orderWindow).toBe('all');
+  it('brings one back without disturbing the other', () => {
+    state().toggleLine('PMD');
+    expect(state().hiddenLines).toEqual(['TBP']);
+    state().toggleLine('PMD');
+    expect(state().hiddenLines).toEqual(['TBP', 'PMD']);
   });
 
-  it('clears the day when a window is picked instead', () => {
-    state().setOrderDay('2026-09-14');
-    state().setOrderWindow('all');
-    expect(state().orderDay).toBeNull();
-    expect(state().orderWindow).toBe('all');
+  it('folds a line the board opened with', () => {
+    state().toggleLine('UPL_GLUING');
+    expect(state().hiddenLines).toContain('UPL_GLUING');
+  });
+});
+
+/**
+ * Column widths. Every frozen column is dragged by its edge, and the board
+ * draws the grid where the frozen block ends — so a width that can run away
+ * takes the day columns off screen with it.
+ */
+describe('column widths', () => {
+  beforeEach(() => {
+    useUiStore.setState({ colWidths: { ...DEFAULT_COLUMN_WIDTHS } });
+  });
+
+  const state = () => useUiStore.getState();
+
+  it('opens at the widths the stylesheet falls back to', () => {
+    expect(state().colWidths).toEqual(DEFAULT_COLUMN_WIDTHS);
+  });
+
+  it('moves one column without moving the rest', () => {
+    state().setColumnWidth('team', 300);
+    expect(state().colWidths.team).toBe(300);
+    expect(state().colWidths.order).toBe(DEFAULT_COLUMN_WIDTHS.order);
+  });
+
+  it('never lets a column be dragged to nothing, or over the grid', () => {
+    for (const key of COLUMN_KEYS) {
+      state().setColumnWidth(key, -500);
+      expect(state().colWidths[key]).toBe(COLUMN_LIMITS[key].min);
+      state().setColumnWidth(key, 5000);
+      expect(state().colWidths[key]).toBe(COLUMN_LIMITS[key].max);
+    }
+  });
+
+  it('rounds to whole pixels — a drag reports fractions', () => {
+    state().setColumnWidth('qty', 91.4);
+    expect(state().colWidths.qty).toBe(91);
   });
 });

@@ -1451,19 +1451,32 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .kpi-impw-modal-actions [data-impw-copy]{margin-right:auto;background:transparent;border-color:transparent;color:#475569}
 @media(max-width:600px){.kpi-impw-modal-head{padding:16px}.kpi-impw-modal .kpi-impw-form{padding:0 16px 16px}.kpi-impw-issues{padding:10px 16px 0}.kpi-impw-modal .kpi-impw-note{padding:10px 16px}.kpi-impw-modal .kpi-impw-modal-actions{padding:12px 16px;flex-wrap:wrap}}
 
-/* Department-specific Assembly views retain their own table and metric semantics. */
-#kpi-departments { display:flex; gap:8px; padding:12px 18px; background:#edf4f8; }
-#kpi-departments a { padding:8px 18px; border-radius:6px; background:white; color:#095778; font-weight:700; text-decoration:none; }
-.assembly-kpi { padding:18px; background:#fff; }
-.assembly-kpi form { display:flex; flex-wrap:wrap; gap:16px; align-items:center; margin:16px 0; }
-.assembly-kpi input { width:130px; padding:8px; border:1px solid #bbcbd7; border-radius:4px; }
-.assembly-summary { display:flex; flex-wrap:wrap; gap:12px; margin:20px 0; }
-.assembly-summary > div { min-width:130px; padding:16px; border:1px solid #d5e2ec; border-radius:8px; }
-.assembly-summary small, .assembly-summary strong { display:block; }
-.assembly-summary strong { font-size:26px; color:#095778; margin-top:6px; }
-.assembly-results-scroll { overflow:auto; }
-.assembly-kpi table { border-collapse:collapse; width:100%; }
-.assembly-kpi th, .assembly-kpi td { padding:10px; border-bottom:1px solid #d5e2ec; text-align:left; white-space:nowrap; }
+/* ===== KPI department tabs (PMD / Assembly) =====
+   The first two buttons of the KPI toolbar, ahead of the period tabs, because
+   which half of the factory you are looking at decides what the rest of the
+   row means. Anchors, so the hash does the routing — hence the display and
+   text-decoration a <button> would not need. */
+.kpi-head .kpi-dept{display:inline-flex;align-items:center;text-decoration:none}
+/* A wider gap after the pair, so department and period read as two groups in
+   one row rather than as four unrelated buttons. A rule between them was
+   tried first and could not be seen: every button here already carries a 2px
+   border, so one more vertical line is just another button edge. */
+.kpi-head .kpi-dept+.kpi-dept{margin-right:14px}
 
-#kpi-departments { margin-top:var(--topbar-h,52px); }
-#kpi-departments + #app { margin-top:0; }
+/* ===== Assembly results =====
+   Everything here rides on the PMD KPI table's own styles; these are only the
+   places Assembly's record needs something PMD has no equivalent of. */
+.assembly-kpi-table{min-width:1042px}
+/* Per-order rows under a line, the way PMD sets its shift sub-rows apart. */
+.assembly-kpi .kpi-sub>th{padding-left:34px;font-weight:600;color:var(--mu)}
+.assembly-kpi .kpi-sub-note{display:block;font-size:11px;font-weight:600;color:var(--mu)}
+.assembly-kpi .kpi-empty{padding:18px;text-align:center;color:var(--mu)}
+/* The day-by-day bookings behind the summary. Shorter than the table above it:
+   it is evidence, not the headline, and it must not push the legend off.
+   Sized to its content rather than to equal columns — the summary above has
+   eleven columns of the same numeric width and this has a work description
+   next to a date, so the fixed layout clipped both. */
+.assembly-kpi .kpi-bookings{max-height:40vh}
+.assembly-kpi .kpi-bookings .kpi-table{table-layout:auto;min-width:0;width:100%}
+.assembly-kpi .kpi-bookings td,.assembly-kpi .kpi-bookings th{font-size:12px;white-space:nowrap}
+.assembly-kpi .kpi-bookings .kpi-work{white-space:normal;min-width:180px}

@@ -20,7 +20,10 @@ export function showAssembly(active: boolean): void {
       // SharePoint may download HTML files. srcdoc loads the built module directly.
       frame.srcdoc = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="${css}"></head><body><div id="root"></div><script type="module" src="${js}"></script></body></html>`;
     }
-    frame.style.cssText = 'display:block;width:100%;height:calc(100dvh - var(--topbar-h,52px));margin-top:var(--topbar-h,52px);border:0;background:white;';
+    // Same ground as the dashboard's own pages (--bg): the frame fills the
+    // viewport under the top bar, so a white one flashed a white page on every
+    // switch to Assembly and read as a load that had failed.
+    frame.style.cssText = 'display:block;width:100%;height:calc(100dvh - var(--topbar-h,52px));margin-top:var(--topbar-h,52px);border:0;background:#f1f5f9;';
     frame.addEventListener('load', () => {
       notifyAssembly();
       if (!frame!.hidden) frame!.contentWindow?.focus();
