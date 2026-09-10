@@ -188,11 +188,23 @@ cause was in the scheduler: a person's availability for one order was a single
 window that **closed at their first other booking and never reopened**, so one
 day elsewhere next week cost the order every day after it — five days of work
 covered two, and the date went blank while the crew were plainly not full.
-`planVariableCrew` now takes a per-day `BusyOnDay` predicate instead
-(`crewSchedule.ts`, `board.ts:busyOnDay`). Two rules are deliberately kept:
-one person's day is still never split between two orders, and the hand-over
-seam — somebody coming off at eleven takes the next order from eleven — is
-still exact. Covered by `tests/engine/crewDiary.test.ts`.
+`planVariableCrew` now takes a per-day `TakenOnDay` instead
+(`crewSchedule.ts`, `board.ts:takenOnDay`). Covered by
+`tests/engine/crewDiary.test.ts`.
+
+**And a shift is filled continuously.** `TakenOnDay` returns *how much* of a
+person's day is gone, not whether any of it is — the diary already stores the
+instant they come off, so the fraction is how far into the day that lands.
+`planVariableCrew` starts each day at the latest of what the order was waiting
+for and what its crew were already on, so orders queue into a person's 7.5
+hours back to back, in the middle of a run exactly as they always did on an
+order's opening day. It was a yes/no before and a booked day was refused whole:
+an order whose crew lost two hours of a Monday skipped the Monday, finished a
+day later and drew a hole over five and a half hours nobody was using. Only a
+day with nothing left in it now costs the order the day — so `pauses` still
+fire, but only for real ones. The floor's own numbers are the tests: nineteen
+hours over five orders is 7.5 / 7.5 / 4 for one person and 15 / 4 for two, and
+no one is ever charged more than a shift in a day.
 
 **A bar is no longer drawn in pieces.** The per-day availability above is what
 lets an order keep the Friday and the Tuesday while somebody else has the

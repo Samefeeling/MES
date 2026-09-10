@@ -134,19 +134,29 @@ describe('a day already spoken for', () => {
     ]);
   });
 
-  it('still refuses to split one person’s day between two orders', () => {
-    // W0 gives LATER a fifth of the Monday. The rest of that day is not
-    // offered to BIG: capacity is charged a day at a time, so a sliver of an
-    // afternoon cannot be handed to a second order.
+  it('never charges one person more than a shift in a day', () => {
+    // The rest of a part-used day IS offered to the next order now, so the
+    // guard that matters is the other end: however many orders queue into a
+    // person's day, they are still only in it for 7.5 hours.
+    const jobs = [job('LATER', 0.2), job('BIG', 4), job('AFTER', 1)];
     const b = board(
-      [job('LATER', 0.2), job('BIG', 2)],
-      { LATER: ['W0'], BIG: ['W0'] },
+      jobs,
+      { LATER: ['W0'], BIG: ['W0'], AFTER: ['W0'] },
       { LATER: '2026-09-14' },
     );
-    expect(b.rowsByJob.get('BIG')!.crewDays.map((d) => d.day)).toEqual([
-      '2026-09-10',
-      '2026-09-11',
-    ]);
+    const perWorkerDay = new Map<string, number>();
+    for (const row of b.rowsByJob.values())
+      for (const d of row.crewDays)
+        for (const workerId of d.workerIds) {
+          const key = `${workerId}|${d.day}`;
+          perWorkerDay.set(key, (perWorkerDay.get(key) ?? 0) + d.perWorkerHours);
+        }
+
+    expect(perWorkerDay.size).toBeGreaterThan(0);
+    for (const [key, hrs] of perWorkerDay)
+      expect(`${key} ${hrs.toFixed(4)}`).toBe(
+        `${key} ${Math.min(hrs, PRODUCTIVE_HOURS_PER_PERSON).toFixed(4)}`,
+      );
   });
 
   it('lets each of a pair work around their own bookings', () => {
@@ -218,9 +228,10 @@ function computeBounded() {
  * What the board says about the days in the middle of an order that nobody on
  * it is free.
  *
- * The plan is right to have them: capacity is charged a whole day at a time,
- * so a person on another order on the Monday gives this one the Friday and the
- * Tuesday. Drawn as a hole it read as two orders, and the answer the board
+ * The plan is right to have them: a person whose shift is fully spoken for on
+ * the Monday gives this order the Friday and the Tuesday. (A day only *part*
+ * used is not one of these — the next order takes the rest of it.) Drawn as a
+ * hole it read as two orders, and the answer the board
  * invited — drag the bar back together — pins it, and a pinned order consults
  * no diary at all, so it books the same person on both. The bar is joined
  * instead, and the pause is named.
@@ -314,5 +325,96 @@ describe('a day spent twice', () => {
     const big = b.rowsByJob.get('BIG')!;
     expect(big.doubleBooked).toEqual([]);
     expect(big.crewDays.map((d) => d.day)).not.toContain('2026-09-14');
+  });
+});
+
+/**
+ * A person's shift is 7.5 hours of continuous capacity, and orders queue into
+ * it back to back — the rule the floor gave, in the floor's own numbers.
+ *
+ * It used to hold only at a seam: an order could pick up the rest of the day
+ * it *started* on, but a day part-used in the middle of a run was refused
+ * whole. So an order whose crew lost two hours of a Monday skipped the Monday
+ * altogether, finished a day later, and drew a hole over five and a half hours
+ * nobody was using.
+ */
+describe('a shift is 7.5 hours, and orders queue into it', () => {
+  /** Standard hours, as the `job` helper's day-equivalents. */
+  const hours = (h: number) => h / PRODUCTIVE_HOURS_PER_PERSON;
+
+  /** Five orders, 19 h between them: 5 + 4 + 4 + 3 + 3. */
+  const five = () => [
+    job('A', hours(5)),
+    job('B', hours(4)),
+    job('C', hours(4)),
+    job('D', hours(3)),
+    job('E', hours(3)),
+  ];
+
+  /** What the board plans that day, over every order on it. */
+  const perDay = (b: ReturnType<typeof board>): [string, number][] => {
+    const totals = new Map<string, number>();
+    for (const row of b.rowsByJob.values())
+      for (const d of row.crewDays)
+        totals.set(d.day, (totals.get(d.day) ?? 0) + d.hours);
+    // Hours are divided out of a shift, so a whole number arrives as
+    // 3.9999999999999996. Round where the board rounds to display it.
+    return [...totals.entries()]
+      .map(([day, h]): [string, number] => [day, Math.round(h * 1e6) / 1e6])
+      .sort();
+  };
+
+  it('gives one person 7.5, 7.5 and 4 for nineteen hours of work', () => {
+    const jobs = five();
+    const b = board(jobs, Object.fromEntries(jobs.map((j) => [String(j.id), ['W0']])));
+    expect(perDay(b)).toEqual([
+      ['2026-09-10', 7.5],
+      ['2026-09-11', 7.5],
+      // The weekend is skipped whole; Monday takes what is left.
+      ['2026-09-14', 4],
+    ]);
+    for (const j of jobs) expect(b.rowsByJob.get(String(j.id))!.uncoveredHours).toBe(0);
+  });
+
+  it('and two people the same nineteen hours in two days', () => {
+    const jobs = five();
+    const b = board(jobs, Object.fromEntries(jobs.map((j) => [String(j.id), ['W0', 'W1']])));
+    // 15 h on the first day is 7.5 each; 4 h on the second is 2 each.
+    expect(perDay(b)).toEqual([
+      ['2026-09-10', 15],
+      ['2026-09-11', 4],
+    ]);
+  });
+
+  it('takes the rest of a day another order only part-used', () => {
+    // LITTLE is pinned to the Monday and needs two hours of it.
+    const b = board(
+      [job('LITTLE', hours(2)), job('BIG', 5)],
+      { LITTLE: ['W0'], BIG: ['W0'] },
+      { LITTLE: '2026-09-14' },
+    );
+    const big = b.rowsByJob.get('BIG')!;
+    const monday = big.crewDays.find((d) => d.day === '2026-09-14');
+
+    expect(monday).toBeDefined();
+    // Picks up where LITTLE left off, and takes the other five and a half.
+    expect(monday!.from).toBeCloseTo(2 / PRODUCTIVE_HOURS_PER_PERSON, 6);
+    expect(monday!.hours).toBeCloseTo(5.5, 6);
+    // No hole, so nothing to explain and nothing to drag back together.
+    expect(big.pauses).toEqual([]);
+    expect(big.doubleBooked).toEqual([]);
+  });
+
+  it('but still steps over a day that has nothing left in it', () => {
+    // The same order, with LITTLE taking the whole Monday. A pause here is a
+    // real one, and the board keeps saying who took the day.
+    const b = board(
+      [job('FULLDAY', 1), job('BIG', 5)],
+      { FULLDAY: ['W0'], BIG: ['W0'] },
+      { FULLDAY: '2026-09-14' },
+    );
+    const big = b.rowsByJob.get('BIG')!;
+    expect(big.crewDays.map((d) => d.day)).not.toContain('2026-09-14');
+    expect(big.pauses).toEqual([{ days: ['2026-09-14'], heldBy: ['FULLDAY'] }]);
   });
 });

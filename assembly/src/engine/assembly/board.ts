@@ -34,12 +34,13 @@
  * the next the same shift, so the board shows neither the overlap of two bars
  * sharing a person nor the idle days between them.
  *
- * A crew coming free is the one constraint that rounds to the next shift: a
- * day is charged as a whole shift, and one person cannot work two of them.
- * Everything else lands on the day it happens — a component finished at eleven
- * in the morning is finished at eleven in the morning, and the order waiting on
- * it starts that day, which is what keeps a chain of steps tight rather than
- * spending a day at each link.
+ * Nothing here waits for the next morning. A person's shift is 7.5 hours of
+ * continuous capacity and orders queue into it back to back: somebody who
+ * comes off one at eleven picks up the next at eleven, and if that fills the
+ * day the one after takes tomorrow. The same is true of a component — finished
+ * at eleven in the morning, and the order waiting on it starts that day. Only
+ * a shift with nothing left in it costs the next order a day, which is what
+ * keeps a chain of steps tight rather than spending a day at each link.
  *
  * ## Where a bar ends
  *
@@ -90,9 +91,9 @@ import {
   wholeDaysBetween,
   type ScheduleStatus,
 } from './dates';
-import { endOfCrewDay, idleRuns, planVariableCrew, type BusyOnDay, type CrewDayPlan, type VariableCrewPlan } from './crewSchedule';
+import { endOfCrewDay, idleRuns, planVariableCrew, type CrewDayPlan, type TakenOnDay, type VariableCrewPlan } from './crewSchedule';
 import { lineLoad, type LineLoad } from './workload';
-import { toDayKey } from '@/lib/time';
+import { fromDayKey, MS_PER_DAY, toDayKey } from '@/lib/time';
 import type {
   ActualStartRecord,
   ProductionEntry,
@@ -112,9 +113,10 @@ export interface BookedDay {
  * A stretch of open days in the middle of an order that it is not worked,
  * and what had its crew instead.
  *
- * The board plans a whole day at a time, so a person who is on another order
- * on the Wednesday gives this one the Tuesday and the Thursday. That is what
- * really happens on the floor and the plan is right to say so — but a bar with
+ * A person whose Wednesday is fully spoken for gives this order the Tuesday
+ * and the Thursday. That is what really happens on the floor and the plan is
+ * right to say so — a Wednesday only part-used is not one of these, because
+ * the next order takes the rest of it — but a bar with
  * a hole in it reads as two orders, and the planner's instinct is to drag it
  * back together, which pins it and books the person on both at once. So the
  * pause is drawn as part of the bar, with the order that caused it named.
@@ -699,44 +701,49 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
       const busy = bookedUntil.get(`${workerId}|${day}`);
       if (!busy || busy <= cursor) return cursor;
       cursor = busy;
-      // Coming off at the close of a shift means the next open day, not the
-      // sliver left of this one — capacity is charged a whole day at a time.
+      // Coming off at the close of a shift means the next open day: there is
+      // no sliver of this one left to pick up.
       if (toDayKey(cursor) !== day) cursor = nextWorkingDay(cursor);
     }
     return cursor;
   };
 
   /**
-   * Days this order may not have of this person, because something else
-   * already has them.
+   * How much of that person's day this order has already lost to something
+   * else, as a fraction of the shift.
    *
-   * A whole day at a time: capacity is charged by the day, so the sliver left
-   * of an afternoon cannot be handed to a second order. But only the days
-   * themselves — this used to be expressed as a window that closed at the
-   * first booking and never reopened, so one Monday elsewhere cost the order
-   * every day after it, and five days of work covered two. An order with work
-   * left over has no honest finish date, so its Expect Date went blank while
-   * the people on it were plainly not full. They are free on the days they are
-   * free.
+   * The diary stores the moment they come off what is booked, so the fraction
+   * is just how far into the day that moment is — a person who finishes at
+   * eleven has given away 0.53 of the day, and the next order takes the rest.
    *
-   * The order's own opening day is the exception, and it is the whole point of
-   * a hand-over: somebody coming off another order at eleven takes this one
-   * from eleven, and `planVariableCrew` charges this order only the rest of
-   * that shift. So on that one day the question is not "is anything booked"
-   * but "are they still on it when this order reaches them".
+   * This used to answer yes or no, and a booked day was refused whole: the
+   * sliver left of an afternoon could not be handed on, so an order whose
+   * crew lost two hours of a Monday skipped the Monday entirely and finished a
+   * day later, with a hole in the middle of its bar over five and a half hours
+   * nobody was using. A person's shift is 7.5 hours of continuous capacity and
+   * orders queue into it back to back; only a shift with nothing left in it
+   * costs the next order the day.
+   *
+   * It answers per day, not "free from": a person booked next Monday is free
+   * this Thursday *and* next Tuesday. Treating that one Monday as the end of
+   * their availability cost the order every day after it, so five days of work
+   * covered two and the Expect Date went blank while the crew were plainly not
+   * full.
    *
    * `approved` names anyone the supervisor has already agreed may be on two
    * orders at once; their diary is not consulted.
    */
-  const busyOnDay = (approved: readonly string[], from: Date): BusyOnDay => {
-    const seam = toDayKey(from);
-    return (workerId, day) => {
-      if (approved.includes(workerId)) return false;
+  const takenOnDay = (approved: readonly string[]): TakenOnDay =>
+    (workerId, day) => {
+      if (approved.includes(workerId)) return 0;
       const held = bookedUntil.get(`${workerId}|${day}`);
-      if (!held) return false;
-      return day !== seam || held > from;
+      if (!held) return 0;
+      // Against the start of the day being asked about, not of `held`'s own
+      // day — a booking that runs to the close of a shift is stored as the
+      // next midnight, and measuring from there would read as a free day.
+      const gone = (held.getTime() - fromDayKey(day).getTime()) / MS_PER_DAY;
+      return Math.min(1, Math.max(0, gone));
     };
-  };
 
   /**
    * The moment the *first* of a crew can pick this order up.
@@ -917,11 +924,11 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
     // consumes today's capacity from today onward; its confirmed historical
     // start is still retained as the left edge of the bar.
     const capacityStart = start < planStart ? planStart : start;
-    // Each person gives this order the days their own diary still has free,
-    // and skips the ones it does not. The bounds the planner set by hand are
-    // untouched — those are a decision, not an inference — and a bar the
-    // planner pinned consults no diary at all: it was put there on purpose.
-    const busy = sequenced ? busyOnDay(approved, capacityStart) : undefined;
+    // Each person gives this order whatever their own diary has left of each
+    // day, and only a full one costs it the day. The bounds the planner set by
+    // hand are untouched — those are a decision, not an inference — and a bar
+    // the planner pinned consults no diary at all: it was put there on purpose.
+    const taken = sequenced ? takenOnDay(approved) : undefined;
 
     const crewPlan: VariableCrewPlan = predecessorBlocked
       ? {
@@ -937,7 +944,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
           remainingHours(job),
           crewAssignments,
           overtime,
-          busy,
+          taken,
         );
     const expectDate = completedToday ? planStart : crewPlan.expectDate;
     const days = completedToday ? 0 : crewPlan.days;

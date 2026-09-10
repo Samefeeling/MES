@@ -194,11 +194,21 @@ single day elsewhere next week cost the order every day after it — five days
 of work covered two, and the Expect Date went blank while the crew were
 plainly not full.
 
-What has not changed: **one person's day is never split between two orders.**
-Capacity is charged a day at a time, so a shift with anything on it is not
-offered to a second order. The exception is a hand-over — somebody coming off
-an order at eleven takes the next one from eleven, and that day is shared
-exactly once.
+**A person's shift is 7.5 hours of continuous capacity, and orders queue into
+it back to back.** Somebody coming off an order at eleven picks the next one up
+at eleven; if that fills the day, the one after it starts tomorrow morning. Five
+orders totalling nineteen hours are one person's 7.5, 7.5 and 4 — and two
+people's 7.5 each today and 2 each tomorrow.
+
+The one thing charged whole is a **full** day: a person whose shift is entirely
+spoken for is not in this order at all that day. A day with two hours on it has
+five and a half left, and the next order takes them. That used to be true only
+of an order's *opening* day, so a run that lost two hours of a Monday skipped
+the Monday altogether, finished a day later than it needed to, and drew a hole
+over hours nobody was using.
+
+Nobody is ever charged more than one shift in a day, however many orders queue
+into it.
 
 ## Why a bar has a gap in it
 
@@ -210,11 +220,15 @@ them can mean opposite things:
 that is the whole explanation. With the compact working-week axis the two
 blocks meet and there is nothing to see at all.
 
-**An open day** — this order's crew are on another order. The blocks are
-**joined by a dashed rule** and the bar says how many days and which order took
-them; the detail panel carries a **put down N days** badge saying the same. Two
-separate blocks read as two orders, and the answer that invited was to drag the
-bar back together until it looked whole.
+**An open day** — this order's crew are on another order **for the whole of
+it**. The blocks are **joined by a dashed rule** and the bar says how many days
+and which order took them; the detail panel carries a **put down N days** badge
+saying the same. Two separate blocks read as two orders, and the answer that
+invited was to drag the bar back together until it looked whole.
+
+A day the other order only *part*-used is no longer one of these: this order
+takes the rest of it and the bar runs straight through. Most of the gaps the
+floor was dragging bars over were that, not a full day.
 
 **Dragging a bar over its own pause does not find room.** It pins the order,
 and a pinned order consults no diary at all — which is right for a placement

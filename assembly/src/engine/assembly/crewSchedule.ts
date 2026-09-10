@@ -60,17 +60,26 @@ const MAX_PLAN_DAYS = 730;
 const EPSILON = 1e-8;
 
 /**
- * Whether this person already has something else on that day.
+ * How much of that day this person has already given to something else, as a
+ * fraction of the shift — 0 free all day, 1 gone.
  *
  * The board fills one of these in as it plans, and hands it to the next order
- * so that order can work around the days that are gone. It answers per day
- * rather than "free from": a person booked next Monday is free this Thursday
- * *and* next Tuesday, and treating that one Monday as the end of their
- * availability cost the order every day after it.
+ * so that order can work around what is already booked. Two things it is
+ * deliberately not:
+ *
+ * Not "free from": a person booked next Monday is free this Thursday *and*
+ * next Tuesday, and treating that one Monday as the end of their availability
+ * cost the order every day after it.
+ *
+ * Not a yes/no either. A day with two hours on it has five and a half left,
+ * and the next order takes them — orders run back to back through a person's
+ * shift, the same way a hand-over already worked on an order's opening day.
+ * Answering "busy" for that day sent the order to the next one instead and
+ * left a hole in the middle of its bar for hours nobody was using.
  */
-export type BusyOnDay = (workerId: string, day: string) => boolean;
+export type TakenOnDay = (workerId: string, day: string) => number;
 
-const NEVER_BUSY: BusyOnDay = () => false;
+const NOTHING_TAKEN: TakenOnDay = () => 0;
 
 export function assignmentActiveOnDay(
   assignment: CrewAssignment,
@@ -86,12 +95,15 @@ export function crewIdsOnDay(
   assignments: CrewAssignment[],
   day: string,
   orderStartDay: string,
-  busy: BusyOnDay = NEVER_BUSY,
+  taken: TakenOnDay = NOTHING_TAKEN,
 ): string[] {
   const ids = assignments
     .filter((assignment) =>
       assignmentActiveOnDay(assignment, day, orderStartDay) &&
-      !busy(String(assignment.workerId), day),
+      // Only a shift with nothing left in it drops the person from the day.
+      // A part-used one keeps them, and the plan starts from where their last
+      // order left them.
+      taken(String(assignment.workerId), day) < 1 - EPSILON,
     )
     .map((assignment) => assignment.workerId);
   return [...new Set(ids)].slice(0, MAX_WORKERS_PER_ORDER);
@@ -128,7 +140,7 @@ export function planVariableCrew(
   requiredHours: number,
   assignments: CrewAssignment[],
   overtime: boolean,
-  busy: BusyOnDay = NEVER_BUSY,
+  taken: TakenOnDay = NOTHING_TAKEN,
 ): VariableCrewPlan {
   const orderStart = startOfDay(from);
   const orderStartDay = toDayKey(orderStart);
@@ -162,15 +174,31 @@ export function planVariableCrew(
       continue;
     }
     const day = toDayKey(cursor);
-    const workerIds = crewIdsOnDay(assignments, day, orderStartDay, busy);
+    const workerIds = crewIdsOnDay(assignments, day, orderStartDay, taken);
     if (workerIds.length === 0) {
       cursor = nextMidnight(cursor);
       continue;
     }
 
-    // Only the order's own opening day is short; a weekend or an unstaffed day
-    // in between is skipped whole, and the next one starts fresh.
-    const gone = day === orderStartDay ? opening : 0;
+    /*
+     * Where in the shift this order picks the day up.
+     *
+     * Two things can have eaten the front of it, and the later of them wins.
+     * On the order's own opening day, whatever it was waiting for — its
+     * material, the component it follows, the day it was pinned to. On any
+     * day, whatever its own crew were already on: orders run back to back
+     * through a person's 7.5 hours, so an order that finished at eleven hands
+     * the rest of the day to the next one, in the middle of a run exactly as
+     * it always did on the first day.
+     *
+     * The crew is charged as a block, so the day starts when the last of them
+     * comes free. A shift with nothing left in it dropped that person from
+     * `workerIds` above rather than holding the whole order out of the day.
+     */
+    const gone = Math.max(
+      day === orderStartDay ? opening : 0,
+      ...workerIds.map((workerId) => taken(workerId, day)),
+    );
     const shift = workerIds.length * PRODUCTIVE_HOURS_PER_PERSON;
     const capacity = shift * (1 - gone);
     if (capacity <= EPSILON) {
