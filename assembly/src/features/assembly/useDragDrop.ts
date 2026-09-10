@@ -33,8 +33,13 @@ import { toDayKey } from '@/lib/time';
 
 /** Prefer whatever the pointer is actually inside, then the nearest. */
 const collisionDetection: CollisionDetection = (args) => {
-  const hits = pointerWithin(args);
-  return hits.length ? hits : closestCenter(args);
+  const worker = args.active.data.current?.type === 'worker';
+  const targets = worker
+    ? { ...args, droppableContainers: args.droppableContainers.filter(target => target.data.current?.type === 'line') }
+    : args;
+  const hits = pointerWithin(targets);
+  // A worker must land inside a line, not snap to a distant row or the pool.
+  return hits.length ? hits : worker ? [] : closestCenter(targets);
 };
 
 export function useDragDrop() {

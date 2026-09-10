@@ -12,8 +12,9 @@ import { formatDay } from '@/lib/time';
 import { useDraggable } from '@dnd-kit/core';
 import { createPortal } from 'react-dom';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { usePlanStore } from '@/store/planStore';
 import { useUiStore } from '@/store/uiStore';
-import type { LineKey, Worker } from '@/domain/assembly';
+import { LINES, type LineKey, type Worker } from '@/domain/assembly';
 import {
   dayBand,
   loadPreview,
@@ -148,7 +149,7 @@ export function WorkerLoadChip({
         aria-label={`${worker.name} — ${pct}% booked over ${preview.length} working days`}
         title={
           dragDisabled
-            ? `${worker.name} — load details; unlock Supervisor and finish started work before moving lines`
+            ? `${worker.name} — load details; sign in as Supervisor to move between lines`
             : `${worker.name} — click for load, drag to another production line`
         }
         onClick={() => setWorkerLoad(open ? null : String(worker.id))}
@@ -194,6 +195,23 @@ export function WorkerLoadChip({
             </button>
           </header>
 
+          <label className="wl-move">
+            Move to line
+            <select
+              aria-label={'Move ' + worker.name + ' to line'}
+              value={line}
+              disabled={dragDisabled}
+              onChange={event => {
+                usePlanStore.getState().moveWorkerToLine(String(worker.id), event.target.value as LineKey);
+                setWorkerLoad(null);
+              }}
+            >
+              {LINES.filter(target => target.schedulable || target.key === line).map(target =>
+                <option key={target.key} value={target.key} disabled={!target.schedulable}>{target.name}</option>
+              )}
+            </select>
+            {dragDisabled && <span>Sign in as Supervisor to move operators.</span>}
+          </label>
           <div className="wl-summary">
             <span>
               <b>{hrs(totalHours)}</b> booked

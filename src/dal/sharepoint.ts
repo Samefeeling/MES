@@ -1,3 +1,4 @@
+import { resolveField, type ListField } from '../../assembly/src/data/sharepoint/fieldMap';
 import type { AssemblyDataLayer, AssemblyResult } from '../types/assembly';
 import { appendHandoverLine } from '../core/handover';
 import type {
@@ -5764,7 +5765,7 @@ export const DEFAULT_ASSEMBLY_FIELDS = {
 
 /** Separate adapter: no PMD column mapping or machine/shift assumptions. */
 export function createAssemblyDataLayer(env: Record<string, string | undefined>, overrides: Partial<typeof DEFAULT_ASSEMBLY_FIELDS> = {}): AssemblyDataLayer {
-  const fields = { ...DEFAULT_ASSEMBLY_FIELDS, ...overrides };
+  const requestedFields = { ...DEFAULT_ASSEMBLY_FIELDS, ...overrides };
   return {
     async results(from, to) {
       if (env.VITE_BACKEND !== 'sharepoint') return [];
@@ -5774,6 +5775,19 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
       const end = new Date(`${to}T00:00:00Z`);
       end.setUTCDate(end.getUTCDate() + 1);
       const list = encodeURIComponent((env.VITE_PRODUCTION_LIST || 'ASSY_Production').replace(/'/g, "''")).replace(/'/g, '%27');
+      if (new URL(site).origin !== window.location.origin) throw new Error('Open MES on the configured SharePoint site.');
+      const schemaResponse = await fetch(`${site}/_api/web/lists/getbytitle('${list}')/fields?$select=Title,InternalName,ReadOnlyField`, {
+        credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json;odata=nometadata' },
+      });
+      if (!schemaResponse.ok) throw new Error('Assembly column definitions could not be loaded.');
+      const schema = (await schemaResponse.json()).value as ListField[];
+      if (!Array.isArray(schema)) throw new Error('Assembly column definitions are invalid.');
+      const fields = { ...requestedFields };
+      for (const key of Object.keys(fields) as (keyof typeof fields)[]) {
+        const found = resolveField(schema, fields[key]);
+        if (found) fields[key] = found.InternalName;
+        else if (key === 'date' || key === 'job') throw new Error('Missing Assembly column: ' + fields[key]);
+      }
       const filter = `${fields.date} ge datetime'${from}T00:00:00Z' and ${fields.date} lt datetime'${end.toISOString()}'`;
       let url = `${site}/_api/web/lists/getbytitle('${list}')/items?$top=500&$filter=${encodeURIComponent(filter)}`;
       const output: AssemblyResult[] = [];

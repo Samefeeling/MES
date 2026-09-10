@@ -87,3 +87,10 @@ describe('parseOperators', () => {
     expect(parseOperators([{ id: '6', Operator: '' }]).values).toHaveLength(0);
   });
 });
+
+it('keeps former line labels on their intended benches', () => {
+  const labels = ['UPL - Cut/Sewing', 'UPL - Gluing', 'UPL - Softie (SSS)', 'ASSY - Stool', 'ASSY - Seats', 'Table', 'Factory General'];
+  const { values, errors } = parseOperators(labels.map((Skills, index) => ({ id: String(index), PreferName: 'Worker ' + index, Skills })));
+  expect(errors).toEqual([]);
+  expect(values.map(worker => worker.skills)).toEqual([['UPL_CUT_SEW'], ['UPL_GLUING'], ['UPL_SOFTIE'], ['ASSY'], ['ASSY'], ['TABLE'], ['FACTORY_GENERAL']]);
+});

@@ -20,7 +20,7 @@ import type { ParseOutcome } from '@/data/excel/parsers/types';
 
 /** Column aliases, most-specific first; matched case/separator-insensitively. */
 const COLUMNS = {
-  operator: ['Operator', 'OperatorName', 'FullName', 'Name', 'Title'],
+  operator: ['PreferName', 'PreferredName', 'Operator', 'OperatorName', 'FullName', 'Name', 'Title'],
   position: ['Position', 'Role', 'JobTitle'],
   skills: ['Skills', 'Skill', 'SkillSet', 'Lines'],
   supervisor: ['Supervisor', 'Manager', 'TeamLeader'],
@@ -36,7 +36,9 @@ const norm = (s: string): string => s.replace(/[\s_.-]+/g, '').toLowerCase();
 const SKILL_TO_LINE: [RegExp, LineKey][] = [
   // Cutting before upholstery: "cutsew" starts with neither prefix of the
   // other, but the intent is worth being explicit about.
-  [/^(cutting|sewing|cutsew|cut&sew)/, 'UPL_CUT_SEW'],
+  [/^(?:upl)?(?:cut(?:ting)?(?:\/|&|and)?sew(?:ing)?|cutting|sewing|cut)$/, 'UPL_CUT_SEW'],
+  [/^(?:upl)?(?:smartsofties?|softies?|sotie)(?:\(sss\))?$/, 'UPL_SOFTIE'],
+  [/^(?:upl)?(?:glue|gluing)$/, 'UPL_GLUING'],
   // "UPL" / "Upholstery" used to name one lane covering three benches. It now
   // means Gluing, the bench that kept the bulk of that work. Nobody is put on
   // the SSS bench by a word: that one is named, or it is not held.
@@ -58,8 +60,10 @@ const SKILL_TO_KIND: [RegExp, WorkKind][] = [
   [/^(upholster)/, 'upholstery'],
 ];
 
-const skillParts = (raw: unknown): string[] =>
-  Array.isArray(raw) ? raw.map(String) : String(raw ?? '').split(/[,;|+\n]+/);
+const skillParts = (raw: unknown): string[] => {
+  if (raw && typeof raw === 'object' && 'results' in raw) return skillParts(raw.results);
+  return Array.isArray(raw) ? raw.flatMap(skillParts) : String(raw ?? '').split(/[,;|+\n]+/);
+};
 
 function readSkills(raw: unknown): LineKey[] {
   const out: LineKey[] = [];
@@ -106,7 +110,7 @@ function field(row: ListItemFields, column: Column): unknown {
   }
   for (const name of COLUMNS[column]) {
     const v = byName.get(norm(name));
-    if (v !== undefined && v !== null && v !== '') return v;
+    if (v !== undefined && v !== null && (typeof v !== 'string' || v.trim() !== '')) return v;
   }
   return undefined;
 }
@@ -140,7 +144,7 @@ export function parseOperators(rows: ListItemFields[]): ParseOutcome<Worker> {
     if (skills.length === 0) {
       errors.push(
         `ASSY_Operator row ${i + 1} (${name}): no recognised skill — ` +
-          `cannot be allocated to any line`,
+          `shown in General until a supervisor assigns a line`,
       );
     }
 

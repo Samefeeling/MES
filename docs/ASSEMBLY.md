@@ -77,3 +77,19 @@ Before rollout, verify actual CSV paths, existing field types/keys, roster names
 
 
 See [Operational lines and support work](OPERATIONAL-LINES.md) for the eight lines, how a part is routed to one, and the additional support fields.
+
+### Imported list columns and operator moves
+
+Assembly reads each list's column metadata and maps display names to internal
+names for both reads and writes. Lists imported from a spreadsheet can therefore
+keep names such as field_1 internally. PreferName is the roster display name;
+blank values fall back to the existing operator name. Skills accepts text,
+multiple choices, and the current line labels. Missing skills leave a person in
+General until the supervisor places them; they do not grant every skill.
+
+Sign in through the MES Supervisor button to move operators. Drag a name onto
+a line or click the name and use Move to line. This changes the saved roster
+placement without rewriting the operator's skill qualifications. Recorded shift
+history is retained. A missing production column stops that sync at the first
+permanent error; correct the list schema and retry. No columns or list records
+are automatically created or deleted by field discovery.

@@ -2263,3 +2263,7 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .manual-dialog label:has(input[type=checkbox]) { display: flex; align-items: center; gap: 8px; }
 .manual-dialog input:not([type=checkbox]), .manual-dialog textarea { width: 100%; padding: 7px; color: inherit; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; }
 .manual-dialog fieldset { display: flex; flex-wrap: wrap; gap: 12px; }
+
+.worker-name:not(.drag-locked) { touch-action: none; }
+.wl-move { display: grid; gap: 6px; padding: 10px 14px; }
+.wl-move select { font: inherit; padding: 6px; }

@@ -394,7 +394,7 @@ export async function syncProduction(
       if (!found) {
         const res = await createListItem(cfg, list, wanted);
         if (res.ok) out.created++;
-        else note(res.error);
+        else { note(res.error); if (!isTransient(res.error)) return out; }
         continue;
       }
       if (same(found.fields, wanted)) {
@@ -403,7 +403,7 @@ export async function syncProduction(
       }
       const res = await updateListItem(cfg, list, found.id, wanted, ...(cfg.authMode === 'session' ? [found.etag] : []));
       if (res.ok) out.updated++;
-      else note(res.error);
+      else { note(res.error); if (!isTransient(res.error)) return out; }
     }
 
     // Rows for days this board is not booking — older shifts, or entries the
@@ -435,7 +435,7 @@ export async function syncProduction(
       }
       const res = await updateListItem(cfg, list, row.id, stale, ...(cfg.authMode === 'session' ? [row.etag] : []));
       if (res.ok) out.updated++;
-      else note(res.error);
+      else { note(res.error); if (!isTransient(res.error)) return out; }
     }
   }
 

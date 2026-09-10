@@ -2,6 +2,8 @@
 import type { SharePointConfig } from '@/data/excel/sharepoint.client';
 import type { ListItem, ListItemFields } from './lists.write';
 
+import { readableFields, writableFields, type ListField } from './fieldMap';
+
 const digests = new Map<string, { value: string; expires: number }>();
 export const literal = (value: string): string => encodeURIComponent(value.replace(/'/g, "''")).replace(/'/g, '%27');
 export const restList = (cfg: SharePointConfig, list: string): string =>
@@ -50,14 +52,31 @@ export async function sessionRequest(cfg: SharePointConfig, url: string, init: R
   return res;
 }
 
+const schemas = new Map<string, { expires: number; promise: Promise<ListField[]> }>();
+export const clearSessionSchemaCache = (): void => { schemas.clear(); };
+
+async function listFields(cfg: SharePointConfig, list: string): Promise<ListField[]> {
+  const url = restList(cfg, list) + '/fields?$select=Title,InternalName,ReadOnlyField';
+  const cached = schemas.get(url);
+  if (cached && cached.expires > Date.now()) return cached.promise;
+  const promise = sessionRequest(cfg, url).then(async res => {
+    const body = await res.json();
+    if (!Array.isArray(body.value)) throw new Error('SharePoint did not return a column schema.');
+    return body.value as ListField[];
+  }).catch(error => { schemas.delete(url); throw error; });
+  schemas.set(url, { expires: Date.now() + 60000, promise });
+  return promise;
+}
+
 export async function sessionRows(cfg: SharePointConfig, list: string): Promise<ListItem[]> {
+  const schema = await listFields(cfg, list);
   let url = `${restList(cfg, list)}/items?$top=200`;
   const rows: ListItem[] = [];
   for (let page = 0; url && page < 100; page++) {
     const res = await sessionRequest(cfg, url);
     const body = await res.json();
     for (const row of body.value ?? []) {
-      const fields: ListItemFields = { ...row, id: String(row.Id) };
+      const fields: ListItemFields = { ...readableFields(row, schema), id: String(row.Id) };
       for (const [key, value] of Object.entries(fields)) {
         if (value && typeof value === 'object' && 'results' in value) fields[key] = value.results;
       }
@@ -69,8 +88,16 @@ export async function sessionRows(cfg: SharePointConfig, list: string): Promise<
   return rows;
 }
 
+async function mapWrite(cfg: SharePointConfig, list: string, fields: ListItemFields): Promise<ListItemFields> {
+  const schema = await listFields(cfg, list);
+  try { return writableFields(fields, schema); } catch (error) {
+    throw new SharePointHttpError(400, error instanceof Error ? error.message : String(error));
+  }
+}
+
 export async function sessionCreate(cfg: SharePointConfig, list: string, fields: ListItemFields): Promise<string> {
-  const res = await sessionRequest(cfg, `${restList(cfg, list)}/items`, { method: 'POST', body: JSON.stringify(fields) });
+  const mapped = await mapWrite(cfg, list, fields);
+  const res = await sessionRequest(cfg, `${restList(cfg, list)}/items`, { method: 'POST', body: JSON.stringify(mapped) });
   const row = await res.json();
   if (!row.Id) throw new SharePointHttpError(500, 'SharePoint did not return the created item ID.');
   return String(row.Id);
@@ -78,6 +105,7 @@ export async function sessionCreate(cfg: SharePointConfig, list: string, fields:
 
 export async function sessionUpdate(cfg: SharePointConfig, list: string, id: string, fields: ListItemFields, etag?: string): Promise<void> {
   if (!/^\d+$/.test(id)) throw new SharePointHttpError(400, 'Invalid SharePoint item ID.');
+  const mapped = await mapWrite(cfg, list, fields);
   const url = `${restList(cfg, list)}/items(${id})`;
   // Callers with a loaded plan must supply its version, never overwrite it blindly.
   if (!etag) {
@@ -86,5 +114,5 @@ export async function sessionUpdate(cfg: SharePointConfig, list: string, id: str
     etag = res.headers.get('ETag') ?? row['odata.etag'] ?? row['@odata.etag'];
   }
   if (!etag) throw new SharePointHttpError(409, 'SharePoint did not return a record version.');
-  await sessionRequest(cfg, url, { method: 'POST', headers: { 'X-HTTP-Method': 'MERGE', 'IF-MATCH': etag }, body: JSON.stringify(fields) });
+  await sessionRequest(cfg, url, { method: 'POST', headers: { 'X-HTTP-Method': 'MERGE', 'IF-MATCH': etag }, body: JSON.stringify(mapped) });
 }
