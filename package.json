@@ -5,7 +5,9 @@
   "description": "PMD Dashboard - backend-agnostic real-time shift production tracking for Precision Moulding Department",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/check-deps.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/check-deps.mjs --strict",
     "build": "npm run build:mes && npm --prefix assembly run build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",

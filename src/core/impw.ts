@@ -29,6 +29,23 @@ export type ImpwTrigger = 'breakdown' | 'yield' | 'reject';
  *  reason lines are reported in. */
 export const IMPW_TRIGGER_ORDER: ImpwTrigger[] = ['breakdown', 'yield', 'reject'];
 
+/**
+ * One order that ran in the shift, with the material it was making.
+ *
+ * The part number is what a Mango reader can act on: "550T lost two hours"
+ * says which press to look at, and "SF-1234-A Sofa Arm Left" says which
+ * tool, which material and which customer order are affected. PMD already
+ * carries both on every production row (JobHead_PartNum /
+ * JobHead_PartDescription), so a ticket that omitted them was throwing away
+ * the half of the story the investigator needs.
+ */
+export interface ImpwJob {
+  jobNumber: string;
+  /** Epicor Part # — the material number. '' when the row never carried one. */
+  partNumber: string;
+  partDescription: string;
+}
+
 /** One breakdown cause inside a shift, folded from its B slots. */
 export interface ImpwBreakdown {
   /** BD taxonomy code, e.g. 'MEC-02'. */
@@ -71,8 +88,9 @@ export interface ImpwSlice {
    */
   breakdownHrs: number;
   breakdowns: ImpwBreakdown[];
-  /** Orders that ran in the slice, in the order encountered. */
-  jobNumbers: string[];
+  /** Orders that ran in the slice, in the order encountered, each with its
+   *  material. */
+  jobs: ImpwJob[];
   /**
    * A Mango ticket already raised for this shift, read from the shift's own
    * Handover note ("IMPW: IMP 0123", written by appendImpwHandover).
@@ -294,6 +312,9 @@ export interface ImpwDraft {
   /** Web-form fields; retained in API details because v4 has no equivalents. */
   source?: string;
   type?: string;
+  /** Who the plant is asking to investigate. Mango decides the real one — see
+   *  IMPW_DEFAULT_INVESTIGATOR — so this is a request written into the body. */
+  investigator?: string;
   /** "Brief Description" on the form — what the register lists. */
   description: string;
   /** Must be one of the tenant's own types, from /improvement/new. */
@@ -409,9 +430,47 @@ export const EMPTY_IMPW_SITE: ImpwSiteConfig = {
   coordinator: { ...EMPTY_OPTION },
 };
 
-export const IMPW_IMPROVEMENT_TYPES = ['Internal quality', 'supply quality', 'process gap'];
-export const IMPW_TYPES = ['Equipment(breakdown)', 'Process Improvment', 'quality'];
+/**
+ * Type of Improvement — one value, by the plant's own decision.
+ *
+ * Every ticket PMD raises comes from the same place: a shift missed a KPI
+ * because something about how the job ran was not good enough. That is a
+ * process gap whether the cause was a breakdown or scrap, and letting the
+ * meeting pick between three near-synonyms only produced a register that
+ * could not be grouped. The narrower question — what KIND of gap — is what
+ * `Type` below answers.
+ *
+ * Still a list, not a constant: `fillImpwOptions` matches Mango's own
+ * {id, name} entries against it, so the tenant can add a second accepted
+ * name here without any other change.
+ */
+export const IMPW_IMPROVEMENT_TYPES = ['Process Gap'];
+
+/** The one PMD picks. Separate from the list so a rename cannot silently
+ *  leave the draft pointing at a value the tenant no longer offers. */
+export const IMPW_DEFAULT_IMPROVEMENT_TYPE = IMPW_IMPROVEMENT_TYPES[0];
+
+// `Type` — the web form's own classification, kept in improvementDetails
+// because the v4 create body has no field for it (docs/mango-api-v4.md).
+// Named rather than indexed: suggestImpwClassification picks by meaning, and
+// an index would quietly pick the wrong one the day this list is reordered.
+const IMPW_TYPE_EQUIPMENT = 'Equipment';
+const IMPW_TYPE_PROCESS = 'Process Improvement';
+const IMPW_TYPE_QUALITY = 'Quality';
+/** 'Design Defect' is deliberately never auto-picked: calling a part's design
+ *  wrong is an engineering judgement, not something a KPI miss can prove. */
+export const IMPW_TYPES = ['Design Defect', IMPW_TYPE_EQUIPMENT, IMPW_TYPE_PROCESS, IMPW_TYPE_QUALITY];
+
 export const IMPW_OTHERS = ['Maitenance -AU', 'PMD - AU'];
+
+/**
+ * Who the plant expects to investigate an improvement raised from the KPI
+ * review. NOT an API field — v4's create body has no investigator, and Mango
+ * assigns one at its "Assign to Investigation" stage — so it rides in
+ * improvementDetails as a request, and reads back from Mango as fact.
+ * Editable on every ticket; this is the answer, not the rule.
+ */
+export const IMPW_DEFAULT_INVESTIGATOR = 'Avila Pushparaj';
 
 /** Match tenant-issued IDs by name; never manufacture an API ID. */
 export function matchImpwOption(list: MangoOption[], name: string): MangoOption | undefined {
@@ -425,9 +484,8 @@ export function suggestImpwClassification(f: ImpwFinding): { type: string; impro
     (!worst || /Maintenance|Toolroom/i.test(worst.owner));
   const quality = f.triggers.includes('yield') || f.triggers.includes('reject');
   return {
-    type: equipment ? IMPW_TYPES[0] : quality ? IMPW_TYPES[2] : IMPW_TYPES[1],
-    // Material shortages do not prove a supplier quality problem; that choice is manual.
-    improvement: equipment || !quality ? 'process gap' : 'Internal quality',
+    type: equipment ? IMPW_TYPE_EQUIPMENT : quality ? IMPW_TYPE_QUALITY : IMPW_TYPE_PROCESS,
+    improvement: IMPW_DEFAULT_IMPROVEMENT_TYPE,
     other: equipment ? IMPW_OTHERS[0] : IMPW_OTHERS[1],
   };
 }
@@ -490,6 +548,39 @@ export function suggestImpwDepartment(f: ImpwFinding): string {
   return 'Production';
 }
 
+/** The distinct materials a shift ran, first appearance first. A job with no
+ *  part number on any of its rows is dropped rather than listed as a blank. */
+export function impwParts(jobs: ReadonlyArray<ImpwJob>): ImpwJob[] {
+  const by = new Map<string, ImpwJob>();
+  for (const j of jobs) {
+    const num = j.partNumber.trim();
+    if (!num) continue;
+    const hit = by.get(num);
+    // Keep the first description that is not blank — the per-status rows
+    // carry '' and would otherwise wipe the canonical row's answer.
+    if (hit) { if (!hit.partDescription && j.partDescription) hit.partDescription = j.partDescription; }
+    else by.set(num, { ...j, partNumber: num });
+  }
+  return [...by.values()];
+}
+
+/**
+ * The materials in one line, for the Brief Description — which is all the
+ * Mango register shows and is capped at 255. One part gets its description
+ * too; several get their numbers, because a list of full descriptions would
+ * push the reason for the ticket off the end of the line.
+ */
+export function impwPartsSummary(jobs: ReadonlyArray<ImpwJob>): string {
+  const parts = impwParts(jobs);
+  if (!parts.length) return '';
+  if (parts.length === 1) {
+    const p = parts[0];
+    return p.partDescription ? `${p.partNumber} ${p.partDescription}` : p.partNumber;
+  }
+  const head = parts.slice(0, 2).map((p) => p.partNumber).join(', ');
+  return parts.length > 2 ? `${head} +${parts.length - 2} more` : head;
+}
+
 /**
  * Draft the whole ticket from one finding. Everything PMD can prove is
  * filled in; the two option fields and the placement names come from `site`
@@ -512,12 +603,20 @@ export function buildImpwDraft(
   const classification = suggestImpwClassification(f);
   const notes = s.breakdowns.filter((b) => b.note).map((b) => b.note).join('; ');
 
+  // The material belongs in the one line Mango's register lists: a reader
+  // scanning it needs the press AND the part to know whether this is their
+  // problem, and the register shows nothing else.
+  const part = impwPartsSummary(s.jobs);
   return {
-    description: clamp(`${where} — ${headline}${notes ? `; ${notes}` : ''}`, IMPW_DESCRIPTION_MAX),
+    description: clamp(
+      `${where}${part ? ` · ${part}` : ''} — ${headline}${notes ? `; ${notes}` : ''}`,
+      IMPW_DESCRIPTION_MAX,
+    ),
     typeOfImprovement: { ...(matchImpwOption([site.typeOfImprovement], classification.improvement)
       ?? { id: '', name: classification.improvement }) },
     source: 'Employee',
     type: classification.type,
+    investigator: IMPW_DEFAULT_INVESTIGATOR,
     originatorName: clamp(raiser.name, IMPW_NAME_MAX),
     improvementDate: now.toISOString(),
     improvementDetails: clamp(`Investigate rootcause\n\n${impwDetailsBody(f, raiser)}`, IMPW_DETAILS_MAX - 80),
@@ -546,17 +645,31 @@ function impwDetailsBody(f: ImpwFinding, raiser: ImpwRaiser): string {
     ? `${s.machineCode} (${s.machineName})`
     : s.machineCode;
 
+  const parts = impwParts(s.jobs);
   const lines: string[] = [
     `Plant/Equipment: ${press}`,
+    `Material: ${parts.length ? parts.map((p) => p.partNumber).join(', ') : '—'}`,
     `Shift: ${shift || '—'} ${date} (ShiftId ${f.shiftId})`,
-    `Orders run: ${s.jobNumbers.length ? s.jobNumbers.join(', ') : '—'}`,
+  ];
+  // One line per order, each naming what it was making — the investigator's
+  // starting point is the part, not the job number.
+  if (s.jobs.length) {
+    lines.push('Orders run:');
+    for (const j of s.jobs) {
+      const material = [j.partNumber, j.partDescription].filter(Boolean).join(' · ');
+      lines.push(`  ${j.jobNumber}${material ? ` — ${material}` : ''}`);
+    }
+  } else {
+    lines.push('Orders run: —');
+  }
+  lines.push(
     '',
     'Recorded on the shift:',
     `  Good output    ${s.output} pcs`,
     `  Rejects        ${s.reject} pcs`,
     `  Yield          ${s.yieldPct}%`,
     `  Breakdown (B)  ${fmtHrs(s.breakdownHrs)} h`,
-  ];
+  );
   if (s.breakdowns.length) {
     lines.push('', 'Breakdown causes:');
     for (const b of [...s.breakdowns].sort((a, b2) => b2.hours - a.hours)) {
@@ -608,7 +721,16 @@ function clamp(s: string, max: number): string {
  * an empty string is not one of those.
  */
 function impwApiDetails(d: ImpwDraft): string {
-  return `Source: ${d.source || 'Employee'}\nType: ${d.type || 'Process Improvment'}\n\n${d.improvementDetails}`;
+  // Source, Type and Investigator are form fields with no v4 equivalent, so
+  // they lead the body rather than being dropped. Investigator is a REQUEST:
+  // Mango assigns the real one, and the read-back dialog shows that answer.
+  return [
+    `Source: ${d.source || 'Employee'}`,
+    `Type: ${d.type || IMPW_TYPE_PROCESS}`,
+    `Investigator requested: ${d.investigator || IMPW_DEFAULT_INVESTIGATOR}`,
+    '',
+    d.improvementDetails,
+  ].join('\n');
 }
 
 export function impwApiPayload(d: ImpwDraft): Record<string, unknown> {
@@ -640,7 +762,8 @@ export function impwPlainText(d: ImpwDraft): string {
     row('Brief Description', d.description, true),
     row('Type of Improvement', d.typeOfImprovement.name, true),
     row('Source', d.source || 'Employee', true),
-    row('Type', d.type || 'Process Improvment', true),
+    row('Type', d.type || IMPW_TYPE_PROCESS, true),
+    row('Investigator', d.investigator || IMPW_DEFAULT_INVESTIGATOR),
     row('Name', d.originatorName, true),
     row('Date of occurrence', impwIsoToFormDate(d.improvementDate), true),
     row('Details of Improvement and/or Proposed Action', d.improvementDetails, true),

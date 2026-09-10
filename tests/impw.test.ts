@@ -18,6 +18,8 @@ import {
   impwMangoDate,
   impwOccurrenceDate,
   impwOccurrenceIso,
+  impwParts,
+  impwPartsSummary,
   impwPlainText,
   impwRecordIsDetailed,
   impwTicketFromHandovers,
@@ -33,7 +35,9 @@ import {
   EMPTY_IMPW_SITE,
   EMPTY_OPTION,
   IMPW_DESCRIPTION_MAX,
+  IMPW_IMPROVEMENT_TYPES,
   IMPW_RECORD_ROWS,
+  IMPW_TYPES,
   type ImpwDraft,
   type ImpwFinding,
   type ImpwSiteConfig,
@@ -54,7 +58,7 @@ function slice(partial: Partial<ImpwSlice> = {}): ImpwSlice {
     yieldPct: 99.8,
     breakdownHrs: 0,
     breakdowns: [],
-    jobNumbers: ['SFM507205'],
+    jobs: [{ jobNumber: 'SFM507205', partNumber: 'SF-1234-A', partDescription: 'Sofa Arm Left' }],
     raisedTicket: '',
   };
   return { ...base, ...partial };
@@ -384,7 +388,9 @@ describe('buildImpwDraft', () => {
 
   it('leads Brief Description with the press — Mango lists tickets by it', () => {
     const d = buildImpwDraft(finding({ output: 900, reject: 100, yieldPct: 90 }), raiser, SITE);
-    expect(d.description.startsWith('1600T Night shift 26/08/2026 — ')).toBe(true);
+    // Press, then the material it was making, then why: the register shows
+    // this line and nothing else, so it has to answer "is this mine?" first.
+    expect(d.description.startsWith('1600T Night shift 26/08/2026 · SF-1234-A Sofa Arm Left — ')).toBe(true);
     expect(d.description).toContain('Yield 90%');
   });
 
@@ -500,20 +506,58 @@ describe('IMPW validation', () => {
   it('uses the requested Minto defaults and preserves all missed KPI reasons', () => {
     const f = detectImpwFindings([slice({ breakdownHrs: 2, output: 900, reject: 100, yieldPct: 90 })], RULES)[0];
     const d = buildImpwDraft(f, { name: 'CK' }, SITE);
-    expect(d).toMatchObject({ source: 'Employee', type: 'Equipment(breakdown)', region: 'Minto (AU)', branch: 'Resero - Minto', department: 'Manufacturing - AU', other: 'Maitenance -AU' });
+    expect(d).toMatchObject({ source: 'Employee', type: 'Equipment', region: 'Minto (AU)', branch: 'Resero - Minto', department: 'Manufacturing - AU', other: 'Maitenance -AU' });
     for (const reason of f.reasons) expect(d.description).toContain(reason);
     expect(d.improvementDetails.startsWith('Investigate rootcause\n')).toBe(true);
     expect(impwPlainText(d)).toContain('Source *: Employee');
-    expect(impwApiPayload(d).improvementDetails).toContain('Type: Equipment(breakdown)');
+    expect(impwApiPayload(d).improvementDetails).toContain('Type: Equipment');
     expect(impwApiPayload(d)).not.toHaveProperty('source');
   });
 
-  it('suggests quality and process categories without assuming supplier fault', () => {
+  it('classifies the kind of gap, but files every KPI ticket under one Type of Improvement', () => {
     const quality = detectImpwFindings([slice({ output: 900, reject: 100, yieldPct: 90 })], RULES)[0];
-    expect(suggestImpwClassification(quality)).toEqual({ type: 'quality', improvement: 'Internal quality', other: 'PMD - AU' });
+    expect(suggestImpwClassification(quality)).toEqual({ type: 'Quality', improvement: 'Process Gap', other: 'PMD - AU' });
     const process = detectImpwFindings([slice({ breakdownHrs: 1, breakdowns: [{ code: 'MAT-01', label: 'Material shortage', owner: 'Operator', hours: 1, note: '' }] })], RULES)[0];
-    expect(suggestImpwClassification(process)).toEqual({ type: 'Process Improvment', improvement: 'process gap', other: 'PMD - AU' });
-    expect(buildImpwDraft(quality, { name: 'CK' }, SITE).typeOfImprovement).toEqual({ id: '', name: 'Internal quality' });
+    expect(suggestImpwClassification(process)).toEqual({ type: 'Process Improvement', improvement: 'Process Gap', other: 'PMD - AU' });
+    expect(IMPW_IMPROVEMENT_TYPES).toEqual(['Process Gap']);
+  });
+
+  it('offers Design Defect but never picks it — a KPI miss cannot prove a design is wrong', () => {
+    expect(IMPW_TYPES).toEqual(['Design Defect', 'Equipment', 'Process Improvement', 'Quality']);
+    const findings = [
+      slice({ breakdownHrs: 2 }),
+      slice({ output: 900, reject: 100, yieldPct: 90 }),
+      slice({ breakdownHrs: 1, breakdowns: [{ code: 'MAT-01', label: 'Material shortage', owner: 'Operator', hours: 1, note: '' }] }),
+    ].flatMap((s) => detectImpwFindings([s], RULES));
+    expect(findings).toHaveLength(3);
+    for (const f of findings) {
+      expect(IMPW_TYPES).toContain(suggestImpwClassification(f).type);
+      expect(suggestImpwClassification(f).type).not.toBe('Design Defect');
+    }
+  });
+
+  it('keeps the tenant’s own spelling of the type, and invents no id when it disagrees', () => {
+    const f = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
+    // SITE remembers Mango's own 'process gap'; PMD asks for 'Process Gap'.
+    expect(buildImpwDraft(f, { name: 'CK' }, SITE).typeOfImprovement)
+      .toEqual({ id: 'toi-1', name: 'process gap' });
+    // A remembered pick that is a different type is not reused — the id would
+    // be Mango's id for the wrong thing.
+    const stale = { ...SITE, typeOfImprovement: { id: 'toi-9', name: 'Internal quality' } };
+    expect(buildImpwDraft(f, { name: 'CK' }, stale).typeOfImprovement)
+      .toEqual({ id: '', name: 'Process Gap' });
+  });
+
+  it('asks for the plant’s investigator in the body, because v4 has no field for one', () => {
+    const f = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
+    const d = buildImpwDraft(f, { name: 'CK' }, SITE);
+    expect(d.investigator).toBe('Avila Pushparaj');
+    expect(impwApiPayload(d)).not.toHaveProperty('investigator');
+    expect(impwApiPayload(d).improvementDetails).toContain('Investigator requested: Avila Pushparaj');
+    expect(impwPlainText(d)).toContain('Investigator: Avila Pushparaj');
+    // Edited on the ticket, not fixed by the code.
+    expect(impwApiPayload({ ...d, investigator: 'Someone Else' }).improvementDetails)
+      .toContain('Investigator requested: Someone Else');
   });
 
   it('matches an actual tenant option despite case and spacing differences, with no invented ID', () => {
@@ -722,6 +766,56 @@ describe('Mango API contract', () => {
   it('truncates a runaway error body instead of pasting a page into a toast', () => {
     const msg = describeImpwApiFailure(400, 'x'.repeat(5000));
     expect(msg.length).toBeLessThan(400);
+  });
+});
+
+describe('the material on the ticket', () => {
+  const jobs = [
+    { jobNumber: 'J1', partNumber: 'SF-1234-A', partDescription: 'Sofa Arm Left' },
+    { jobNumber: 'J2', partNumber: 'CH-9', partDescription: 'Chair Leg' },
+    { jobNumber: 'J3', partNumber: 'TB-7', partDescription: 'Table Top' },
+  ];
+
+  it('names the part in the Brief Description — the only line Mango’s register shows', () => {
+    const f = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
+    const d = buildImpwDraft(f, { name: 'CK' }, SITE);
+    expect(d.description).toContain('SF-1234-A');
+    expect(d.description).toContain('Sofa Arm Left');
+    expect(d.description).toContain('1600T');
+    expect(d.description.length).toBeLessThanOrEqual(IMPW_DESCRIPTION_MAX);
+  });
+
+  it('lists every order with what it was making, in the details', () => {
+    const f = detectImpwFindings([slice({ breakdownHrs: 1, jobs })], RULES)[0];
+    const body = String(impwApiPayload(buildImpwDraft(f, { name: 'CK' }, SITE)).improvementDetails);
+    expect(body).toContain('Material: SF-1234-A, CH-9, TB-7');
+    expect(body).toContain('J1 — SF-1234-A · Sofa Arm Left');
+    expect(body).toContain('J3 — TB-7 · Table Top');
+  });
+
+  it('keeps several parts short in the Brief Description so the reason still fits', () => {
+    expect(impwPartsSummary(jobs)).toBe('SF-1234-A, CH-9 +1 more');
+    expect(impwPartsSummary(jobs.slice(0, 2))).toBe('SF-1234-A, CH-9');
+    expect(impwPartsSummary(jobs.slice(0, 1))).toBe('SF-1234-A Sofa Arm Left');
+  });
+
+  it('says so rather than lying when a shift carried no part number', () => {
+    const f = detectImpwFindings([slice({ breakdownHrs: 1, jobs: [] })], RULES)[0];
+    const d = buildImpwDraft(f, { name: 'CK' }, SITE);
+    expect(impwPartsSummary([])).toBe('');
+    expect(d.description).not.toContain('·');
+    expect(String(impwApiPayload(d).improvementDetails)).toContain('Material: —');
+    expect(String(impwApiPayload(d).improvementDetails)).toContain('Orders run: —');
+  });
+
+  it('folds the same part run on two orders into one material, keeping the description', () => {
+    // Per-status rows carry a blank description; only the canonical row has it,
+    // so the first non-empty answer has to win or the ticket shows a bare code.
+    expect(impwParts([
+      { jobNumber: 'J1', partNumber: 'SF-1234-A', partDescription: '' },
+      { jobNumber: 'J2', partNumber: ' SF-1234-A ', partDescription: 'Sofa Arm Left' },
+      { jobNumber: 'J3', partNumber: '', partDescription: 'orphan' },
+    ])).toEqual([{ jobNumber: 'J1', partNumber: 'SF-1234-A', partDescription: 'Sofa Arm Left' }]);
   });
 });
 

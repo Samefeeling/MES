@@ -1121,7 +1121,14 @@ async function compute(now = new Date()): Promise<void> {
           yieldPct: yieldPctOf(k.output, k.scrap),
           breakdownHrs: +bdFolded.reduce((a, b) => a + b.hours, 0).toFixed(2),
           breakdowns: bdFolded,
-          jobNumbers: [...new Set(recs.map((r) => r.jobNumber).filter(Boolean))],
+          // Part # / description come from the maps above, not from the row
+          // in hand: they are denormalised onto the canonical slot only, so
+          // reading them off a per-status row would leave the ticket blank.
+          jobs: [...new Set(recs.map((r) => r.jobNumber).filter(Boolean))].map((jobNumber) => ({
+            jobNumber,
+            partNumber: partNumByJob.get(jobNumber) ?? '',
+            partDescription: partDescByJob.get(jobNumber) ?? '',
+          })),
           // Written into the shift's Handover when Mango confirmed a ticket,
           // so every device knows it is already raised — not just the browser
           // that raised it.
@@ -1985,6 +1992,7 @@ function readImpwForm(mc: HTMLElement, base: ImpwDraft): ImpwDraft {
       case 'other':
       case 'source':
       case 'type':
+      case 'investigator':
         out[el.dataset.impw] = el.value;
         break;
       default:
@@ -2123,7 +2131,7 @@ function openImpwTicket(finding: ImpwFinding): void {
           impwIsoToFormDate(draft.improvementDate),
         )}</output>
       </div>
-      ${IMPW_TEXT_FIELDS.filter((f) => f.area).map(textRow).join('')}<h3 class="kpi-impw-section">Assignment</h3>${IMPW_TEXT_FIELDS.filter((f) => f.field === 'originatorName').map(textRow).join('')}${IMPW_OPTION_FIELDS.filter((f) => f.field === 'coordinator').map(optionRow).join('')}<h3 class="kpi-impw-section">Location &amp; department</h3>${IMPW_TEXT_FIELDS.filter((f) => ['region', 'branch', 'department', 'other'].includes(f.field)).map(textRow).join('')}
+      ${IMPW_TEXT_FIELDS.filter((f) => f.area).map(textRow).join('')}<h3 class="kpi-impw-section">Assignment</h3>${IMPW_TEXT_FIELDS.filter((f) => f.field === 'originatorName').map(textRow).join('')}${IMPW_OPTION_FIELDS.filter((f) => f.field === 'coordinator').map(optionRow).join('')}<label class="kpi-impw-field"><span class="kpi-impw-label">Investigator</span><input type="text" data-impw="investigator" title="Who the plant is asking to investigate. Mango's v4 API has no investigator field, so this is written into the details — Mango assigns the real one, and pressing the ticket number reads it back." value="${escapeHtml(draft.investigator ?? '')}"></label><h3 class="kpi-impw-section">Location &amp; department</h3>${IMPW_TEXT_FIELDS.filter((f) => ['region', 'branch', 'department', 'other'].includes(f.field)).map(textRow).join('')}
     </div>
     <p class="kpi-impw-note">${submitNote}</p>
     <div class="bd-actions kpi-impw-modal-actions">
@@ -2224,9 +2232,15 @@ async function fillImpwOptions(
   const draft = currentDraft();
   mc.querySelectorAll<HTMLSelectElement>('[data-impw-opt]').forEach((sel) => {
     const key = sel.dataset.impwOpt === 'coordinator' ? 'coordinator' : 'typeOfImprovement';
-    const list = key === 'typeOfImprovement'
-      ? lists![key].filter((o) => IMPW_IMPROVEMENT_TYPES.some((name) => !!matchImpwOption([o], name)))
-      : lists![key];
+    let list = lists![key];
+    if (key === 'typeOfImprovement') {
+      // The plant files every KPI improvement under one Type of Improvement,
+      // so offer only that — unless this tenant spells it differently, where
+      // narrowing to nothing would leave the ticket unfileable. Mango's own
+      // full list beats an empty select.
+      const narrowed = list.filter((o) => IMPW_IMPROVEMENT_TYPES.some((name) => !!matchImpwOption([o], name)));
+      if (narrowed.length) list = narrowed;
+    }
     const chosen = (matchImpwOption(list, draft[key].name) ?? list.find((o) => o.id === draft[key].id))?.id;
     sel.innerHTML = [
       `<option value="">${list.length ? 'Choose…' : 'Mango returned no options'}</option>`,
@@ -2309,31 +2323,30 @@ const IMPW_GROUP_TITLE: Record<ImpwRecordGroup, string> = {
   outcome: 'What Mango holds',
 };
 
-/** One group of read-back fields. Blank ones are dropped rather than shown
- *  as "—": a list of empty labels buries the two lines that matter. */
+/**
+ * One group of read-back fields, laid out as the new-improvement dialog lays
+ * out its own: the same section heading, the same labelled field, the same
+ * two-column grid. One dialog writes the ticket and the other reads it back,
+ * and they are the same ticket — a reader should not have to re-learn where
+ * to look. The only difference is that nothing here is an input, because
+ * nothing here is PMD's to change.
+ *
+ * Blank fields are dropped rather than shown as "—": a list of empty labels
+ * buries the two lines that matter.
+ */
 function impwRecordGroupHtml(rec: ImpwRecord, group: ImpwRecordGroup): string {
-  const rows = IMPW_RECORD_ROWS.filter((r) => r.group === group);
-  const lines = rows
-    .filter((r) => !r.block && rec[r.field])
-    .map(
-      (r) => `<div class="kpi-impw-rrow"><span>${escapeHtml(r.label)}</span><b>${escapeHtml(
-        r.date ? impwMangoDate(rec[r.field]) : rec[r.field],
-      )}</b></div>`,
-    )
+  const rows = IMPW_RECORD_ROWS.filter((r) => r.group === group && rec[r.field]);
+  if (!rows.length) return '';
+  // The group rides on every element rather than being inferred from
+  // position: a ticket Mango has not started yet has no progress fields at
+  // all, and the next group must not inherit the green the stage earned.
+  const fields = rows
+    .map((r) => `<div class="kpi-impw-field is-${group}${r.block ? ' is-area' : ''}">
+      <span class="kpi-impw-label">${escapeHtml(r.label)}</span>
+      <output>${escapeHtml(r.date ? impwMangoDate(rec[r.field]) : rec[r.field])}</output>
+    </div>`)
     .join('');
-  const blocks = rows
-    .filter((r) => r.block && rec[r.field])
-    .map(
-      (r) => `<div class="kpi-impw-rblock"><span>${escapeHtml(r.label)}</span><pre>${escapeHtml(
-        rec[r.field],
-      )}</pre></div>`,
-    )
-    .join('');
-  if (!lines && !blocks) return '';
-  return `<section class="kpi-impw-rgroup is-${group}">
-    <h3>${escapeHtml(IMPW_GROUP_TITLE[group])}</h3>
-    ${lines}${blocks}
-  </section>`;
+  return `<h3 class="kpi-impw-section is-${group}">${escapeHtml(IMPW_GROUP_TITLE[group])}</h3>${fields}`;
 }
 
 /**
@@ -2360,28 +2373,30 @@ function openImpwStatus(key: string): void {
     ? `${finding.machineCode} · ${impwWhen(finding.shiftId)}`
     : 'Raised from the KPI review';
 
-  const mc = openModal(`<div class="bd-modal kpi-impw-status-modal">
+  // Deliberately carries kpi-impw-modal as well: every rule that shapes the
+  // new-improvement dialog then shapes this one, so the pair cannot drift
+  // apart the next time either is restyled.
+  const mc = openModal(`<div class="bd-modal kpi-impw-modal kpi-impw-status-modal" role="dialog" aria-modal="true" aria-labelledby="impw-status-title">
     <div class="kpi-impw-modal-head">
       <div>
-        <h2 class="bd-title">🥭 ${escapeHtml(ref)}</h2>
+        <h2 class="bd-title" id="impw-status-title">${escapeHtml(ref)}</h2>
         <p class="bd-sub">${escapeHtml(where)}${
           d?.by ? ` · raised by ${escapeHtml(d.by)}` : ''
         }${d?.at ? ` ${escapeHtml(impwSince(d.at))}` : ''}</p>
       </div>
-      <button type="button" class="btn-ghost-big" data-status-close>Close</button>
+      <button type="button" class="kpi-impw-close" data-status-close aria-label="Close dialog">&times;</button>
     </div>
-    <div class="kpi-impw-status-body" data-status-body></div>
-    <div class="bd-actions kpi-impw-status-actions">
-      <a class="btn-ghost-big" href="${escapeHtml(
-        MANGO_IMPW_URL,
-      )}" target="_blank" rel="noopener">Open Mango ↗</a>
+    <div class="kpi-impw-form kpi-impw-status-body" data-status-body></div>
+    <p class="kpi-impw-note">Mango owns every value here — PMD reads it, and never writes it back.</p>
+    <div class="bd-actions kpi-impw-modal-actions">
+      <button type="button" class="btn-ghost-big" data-status-close>Close</button>
       <button type="button" class="btn-primary-big" data-status-refresh>⟳ Ask Mango</button>
     </div>
   </div>`);
 
   const body = mc.querySelector<HTMLElement>('[data-status-body]');
   const refresh = mc.querySelector<HTMLButtonElement>('[data-status-refresh]');
-  mc.querySelector('[data-status-close]')?.addEventListener('click', closeModal);
+  mc.querySelectorAll('[data-status-close]').forEach((b) => b.addEventListener('click', closeModal));
 
   // No sign-in on this device: the number was recorded when the ticket was
   // filed, but reading it back is an API call and there is nothing to make
@@ -2404,7 +2419,7 @@ function openImpwStatus(key: string): void {
       if (!body) return;
       if (!res.ok || !res.record) {
         body.innerHTML = `<p class="kpi-impw-bad" role="alert">${escapeHtml(res.message)}</p>
-          <p class="kpi-impw-note">The ticket is still in Mango either way — this only failed to
+          <p class="kpi-impw-fallback">The ticket is still in Mango either way — this only failed to
             read it back.</p>`;
         return;
       }

@@ -9,6 +9,18 @@
 **Build health**: `tsc --noEmit` clean · 56/56 Vitest pass · `npm run build`
 ok (~76 KB JS / 24 KB gzip).
 
+**Two npm packages, two installs.** The dashboard is this package; the
+Assembly board is `assembly/`, with its own package.json and lockfile. A
+`git pull` that adds a dependency to either half leaves a tree that looks
+installed and is not, and the symptoms name neither npm nor the missing
+package — `Cannot find module 'node:url'` out of `vite.config.ts` (root
+`@types/node`), or a wall of unresolved `react` / `zustand` / `xlsx`
+imports when `vite` starts (Assembly). `npm run dev` and `npm run build`
+now run `scripts/check-deps.mjs` first, which names the missing packages
+and the command to fix them (`npm install` / `npm run setup:assembly`).
+Deliberately not a `postinstall`: that would couple installing the
+dashboard to Assembly's registry being reachable.
+
 ## Done & working
 
 - Full operator sheet UI (Excel-style), trace view, breakdown cascade,
@@ -45,7 +57,16 @@ ok (~76 KB JS / 24 KB gzip).
     ties a token to the acquiring IP, and one 401 retry re-authenticates);
   - `GET /api/v4/improvement/new` → the tenant's own Type of Improvement
     and Coordinator lists, so those two are **picked from Mango**, never
-    guessed;
+    guessed. Every KPI ticket is filed under one Type of Improvement —
+    **Process Gap** — so the register can be grouped; the dialog narrows
+    Mango's list to it, and falls back to the full list if this tenant
+    spells it differently rather than leaving nothing to pick. The web
+    form's own `Type` (Design Defect / Equipment / Process Improvement /
+    Quality) is suggested from what actually went wrong, and never
+    auto-picks Design Defect — a KPI miss cannot prove a design is wrong.
+    **Investigator** defaults to Avila Pushparaj and rides in
+    `improvementDetails` as a request: v4 has no investigator field, Mango
+    assigns the real one, and pressing the ticket number reads that back;
   - `POST /api/v4/improvement` → the ticket; the reply's
     `abbreviation + number` ("IMP 0123") is shown on the card.
   - `GET /api/v4/improvement/{id}` → **the ticket number on the row is a
@@ -53,6 +74,10 @@ ok (~76 KB JS / 24 KB gzip).
     Current Stage / Investigator / "To be completed by" first, then the rest
     of what Mango holds (nothing editable — the API has no PUT, and a second
     place to edit a stage would be a second version of the truth). The
+    dialog carries the same `kpi-impw-modal` shell, sections and labelled
+    fields as the one that wrote the ticket, so the pair cannot drift; it
+    links nowhere, because the vendor document contains no web-app URL and
+    the only path known is the IMPW form's front page, not the record. The
     document's page for this endpoint is a copy-paste of the Compliance one,
     so PMD checks what came back and falls back to `GET /api/v4/improvement`
     (the register, matched on id or number) when it gets the stub the
@@ -70,9 +95,12 @@ ok (~76 KB JS / 24 KB gzip).
     same shift again and put two people on one night's fault.
 
   The API takes 10 fields where the web form asks for 26, so what PMD can
-  actually prove — press, orders, output/reject/yield, every breakdown
-  cause with the operator's own note — goes into `improvementDetails`
-  (4096 chars) rather than into invented fields. Region / Branch /
+  actually prove — press, **material (Part # and description, per order)**,
+  orders, output/reject/yield, every breakdown cause with the operator's own
+  note — goes into `improvementDetails` (4096 chars) rather than into
+  invented fields. The part number also leads the Brief Description: the
+  register lists tickets by that one line, and "which press" without "which
+  part" does not tell a reader whether the ticket is theirs. Region / Branch /
   Department / Other are optional to the API but must name something that
   already exists in the tenant; a blank one is omitted rather than sent.
   With no sign-in stored, Yes copies the filled form and opens IMPW to

@@ -159,6 +159,31 @@ rest rather than inventing values. The same three fields the form stars —
 Region, Branch, Other — are explicitly optional here ("Can leave it blank"),
 but must name something that already exists in the tenant.
 
+`improvementDetails` therefore opens with the three form fields that have no
+column of their own, so nothing is silently lost:
+
+```
+Source: Employee
+Type: Equipment
+Investigator requested: Avila Pushparaj
+
+Investigate rootcause
+…
+```
+
+**Investigator is a request, not an assignment.** The module data table marks
+it GET-only — Mango sets it at its own "Assign to Investigation" stage — so
+this line says who the plant is asking for, and the real answer comes back
+through the read-back below. PMD never presents the requested name as the
+assigned one.
+
+The body proper then names the press, **the material** (Epicor Part # and
+description, per order — this is what tells a reader in Mango which tool and
+which customer order the ticket is about), the shift, the measured numbers,
+every breakdown cause with what the operator wrote, and the rule that fired.
+The part number also leads the Brief Description, because the register lists
+tickets by that line and shows nothing else.
+
 ## Reading a ticket back — `GET /api/v4/improvement`
 
 Everything the API can tell you about an improvement AFTER it is raised —
