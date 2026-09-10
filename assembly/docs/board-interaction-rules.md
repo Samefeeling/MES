@@ -18,13 +18,27 @@ comes back from, and every line carries a **×** on its own row to fold it.
 their right-hand edge, or moved with ← / → once the grip has focus. Which
 column needs the room is not something a default can know.
 
+The title bar, the board's own heading and the orders are three deliberately
+different grounds — slate, the dashboard's dark blue, and white. They used to
+be three shades of the same near-white stacked on each other, so the controls
+read as the first row of the board.
+
 ## Date filtering
 
-The only narrowing left is the **order-count button under each timeline
-date**: select it to show orders with work on that day, select it again — or
-press the day chip that appears in the header — to return to every order. The
-header chip is the filter's only trace, and it is drawn only while a day is
-picked, so a filter cannot be left on unnoticed.
+Two narrowings, and an order has to satisfy both:
+
+**The order-count button under each timeline date.** Select it to show orders
+with work on that day, select it again — or press the day chip that appears in
+the header — to return to every order. The header chip is the filter's only
+trace, and it is drawn only while a day is picked, so a filter cannot be left
+on unnoticed.
+
+**Due ≤ 2d**, in the header, with a count on it. What has to go out before the
+board is next looked at: orders due within two *working* days — asked on a
+Friday it reaches Monday — **and everything already past its Due Date**. An
+order that was due last Tuesday is not less urgent than one due tomorrow, and
+a "due soon" list that quietly drops the late ones is the list you would least
+want to work from.
 
 A narrowed board also keeps whatever the shown orders are waiting for, up the
 whole chain. The press job for a shell usually ran before this week, so no
@@ -108,3 +122,39 @@ A line's own row is deliberately not lettered like an order: it carries a
 tinted band and a dark-blue name in capitals, the one colour on the board no
 order row can take. Scrolling a long board, the band is what tells you which
 line you are inside.
+
+### Lines the supervisor opens
+
+**+ Line** in the header, supervisor only. The plant is built as eight lines;
+what it is *running* this week is a different question — a second table bench
+for a rush, a bay set up for one big order, a crew split off to clear a
+backlog. Those had nowhere to go, so the work sat on a line it was not
+happening on and the people on it read as booked somewhere else.
+
+An added line schedules exactly like a built-in one: it is a drop target, it
+takes crew, it carries its own load, and it appears in the Move-to-line picker
+on every operator. It runs every order type — nothing has said yet what
+belongs there, which is why somebody opened it.
+
+It lives in the **shared plan**, not in one browser: a bench opened this
+morning is a fact about the week. **Close line** on its own row removes it and
+tips whatever is on it back into the unplaced pool — closing a bench is not a
+decision about where its work belongs.
+
+## Why an order has no Expect Date
+
+Because some of its hours have nobody free to do them. The board says how
+many: the Expect Date cell carries it on hover, and the order's detail panel
+shows an **"N h not covered"** badge naming anyone whose diary left no room.
+
+A person's other bookings cost this order only the days they are actually on
+something else. One booking used to close their availability for good, so a
+single day elsewhere next week cost the order every day after it — five days
+of work covered two, and the Expect Date went blank while the crew were
+plainly not full.
+
+What has not changed: **one person's day is never split between two orders.**
+Capacity is charged a day at a time, so a shift with anything on it is not
+offered to a second order. The exception is a hand-over — somebody coming off
+an order at eleven takes the next one from eleven, and that day is shared
+exactly once.

@@ -103,6 +103,13 @@ export type DateCols = Record<DateCol, boolean>;
  */
 export const LINES_HIDDEN_BY_DEFAULT: readonly LineKey[] = ['TBP', 'PMD'];
 
+/**
+ * How far ahead "due soon" reaches, in working days. Two, because that is the
+ * window production asked for: what has to go out before they next sit down
+ * with this board.
+ */
+export const DUE_SOON_DAYS = 2;
+
 /** Column headings, shared by the board and the chip that brings one back. */
 export const DATE_COL_LABEL: Record<DateCol, string> = {
   start: 'Start Date',
@@ -180,6 +187,12 @@ interface UiState {
    * which day it picked.
    */
   orderDay: string | null;
+  /**
+   * Show only what has to go out in the next couple of working days, late
+   * orders included. Off by default — like the day chip, it says on its face
+   * that it is on.
+   */
+  dueSoon: boolean;
   /** Weekend timeline columns; hidden by default to keep the working week compact. */
   showWeekends: boolean;
   /** Sort the displayed rows without changing the scheduler's line sequence. */
@@ -206,6 +219,7 @@ interface UiState {
   setColumnWidth: (key: ColumnKey, px: number) => void;
   toggleDateCol: (key: DateCol) => void;
   toggleLine: (key: LineKey) => void;
+  toggleDueSoon: () => void;
   setOrderDay: (day: string | null) => void;
   toggleWeekends: () => void;
   changeOrderSort: (key: OrderSortKey) => void;
@@ -231,6 +245,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   dateCols: { start: true, due: true, expect: true },
   hiddenLines: [...LINES_HIDDEN_BY_DEFAULT],
   orderDay: null,
+  dueSoon: false,
   showWeekends: false,
   orderSort: { key: 'start', direction: 'asc' },
 
@@ -291,6 +306,7 @@ export const useUiStore = create<UiState>((set, get) => ({
         ? state.hiddenLines.filter((line) => line !== key)
         : [...state.hiddenLines, key],
     })),
+  toggleDueSoon: () => set((state) => ({ dueSoon: !state.dueSoon })),
   setOrderDay: (orderDay) => set({ orderDay }),
   toggleWeekends: () => set((state) => ({ showWeekends: !state.showWeekends })),
   changeOrderSort: (key) => set((state) => ({

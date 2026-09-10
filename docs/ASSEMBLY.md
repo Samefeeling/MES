@@ -14,10 +14,12 @@ The page is laid out the way the PMD KPI page is, so the two can be read one aft
 
 | Column | Definition |
 | --- | --- |
-| Orders / Output / Complete / Reject / Rework | Summed over the window; an order booked on five days is **one** order in every count. |
+| Orders / Complete / Reject / Rework | Summed over the window; an order booked on five days is **one** order in every count. |
+| Output / Plan | What came off the line, over Crew h ÷ the order's standard — what the people actually on it were planned to make. PMD's Output cell reads `Good /expected` and colours itself by that ratio; this is the same reading, with the expectation worked out from the hours the shift had, because Assembly keeps no separate daily schedule. 🟢 ≥ 95% · 🟡 ≥ 80%. |
 | Yield% | Complete ÷ (Complete + Reject) — PMD's own definition. 🟢 ≥ 98% · 🟡 ≥ 95%. |
 | Crew h | People booked on the order that day × 7.5 h — the 07:00–15:30 shift less morning tea and lunch, which is exactly what the board schedules with, so the KPI is measured against the plan the floor was given. |
-| Std h | Units finished × the order's own standard (`PlannedHours ÷ OrderQty`). |
+| Booked h | Output × the order's standard hours per piece — `JobOper_ProdStandard`, which the record carries as `PlannedHours ÷ OrderQty`. |
+| Std h | The same sum over the **good** pieces only, so **Booked h − Std h is what the rejects cost in time**. |
 | Efficiency* | Std h ÷ Crew h. 🟢 ≥ 90% · 🟡 ≥ 75%. A day on an order carrying no standard is left out of **both** sides rather than scored zero — an order nobody gave a labour standard is not an order that was worked badly, and PMD drops an unjudgeable job-shift for the same reason. |
 | Support h | Factory General work, measured in the hours it took. It has no output at all, so it is never folded into Output, Yield or Efficiency. |
 | On time% | Orders finished on or before their Due Date ÷ orders finished with a Due Date to judge. 🟢 ≥ 95% · 🟡 ≥ 85%. |

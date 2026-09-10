@@ -219,6 +219,36 @@ export function withPredecessors(
   return keep;
 }
 
+/**
+ * The last moment of the `count`th working day from today, inclusive.
+ *
+ * Two working days on a Friday afternoon reaches Monday, not Saturday: the
+ * question production asks is "what has to go out before I next see this
+ * board", and nothing goes out at the weekend.
+ */
+export function dueWithin(today: Date, count: number): Date {
+  let cursor = startOfDay(today);
+  for (let found = isWeekend(cursor) ? 0 : 1; found < Math.max(1, count); ) {
+    cursor = addCalendarDays(cursor, 1);
+    if (!isWeekend(cursor)) found++;
+  }
+  // Through the end of that day, so an order due on it is included.
+  return addCalendarDays(cursor, 1);
+}
+
+/**
+ * Orders that have to be finished in the next `count` working days — and
+ * everything already past its Due Date, unfinished.
+ *
+ * An order that was due last Tuesday is not less urgent than one due
+ * tomorrow, and a list of "what is due soon" that quietly drops the late ones
+ * is the list you would least want to work from.
+ */
+export function isDueSoon(row: OrderRow, today: Date, count = 2): boolean {
+  if (!row.job.dueDate || row.completedToday) return false;
+  return row.job.dueDate < dueWithin(today, count);
+}
+
 /** Today's available roster and unique allocations, across the whole board. */
 export function teamSummary(workers: Worker[], rows: OrderRow[], today: Date) {
   const key = toDayKey(today);

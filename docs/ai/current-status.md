@@ -123,10 +123,15 @@ The page carries PMD's own layout — period tabs, From/To, headline tiles, one
 `.kpi-table` with a `TOTAL`, a legend — because the two are read one after the
 other in the same meeting. PMD rolls machine-shifts up per press; Assembly
 rolls order-days up per **line**, each opening into its orders, with the
-day-by-day bookings kept underneath as the evidence. Metrics are Output /
-Complete / Reject / Rework / **Yield%** / **Crew h** / **Std h** /
-**Efficiency\*** / **Support h** / **On time%**, all in `core/assembly-metrics.ts`
-(pure, unit-tested). Two rules keep the figures honest and both are printed on
+day-by-day bookings kept underneath as the evidence. Metrics are **Output / Plan** /
+Complete / Reject / Rework / **Yield%** / **Crew h** / **Booked h** /
+**Std h** / **Efficiency\*** / **Support h** / **On time%**, all in
+`core/assembly-metrics.ts` (pure, unit-tested). Output is read against a plan
+the way PMD reads its own — the figure, a small `/n`, and the colour from the
+ratio — where the plan is Crew h ÷ the order's standard, since Assembly keeps
+no separate daily schedule. Booked h values *everything* that came off the
+line at that standard and Std h only the good pieces, so the gap between them
+is what the rejects cost in time. Two rules keep the figures honest and both are printed on
 the page:
 
 - **Support work is never production.** It has no output at all, so folding
@@ -149,6 +154,18 @@ Table, General** (`assembly/src/domain/assembly.ts`). PMD is a read-only
 context lane. The old `UPL` catch-all and `ASSY_STOOL` are retired and
 migrated on read, so saved plans and rosters still open.
 
+**The supervisor can open a line** (`+ Line`, supervisor only) beyond the
+eight — a second bench for a rush, a bay for one big order. Key `VL_<NAME>`,
+so it stays a `LineKey` everywhere; stored in the shared plan
+(`planStore.virtualLines` → `ASSY_Plans`), not in one browser; schedules,
+takes crew and appears in the Move-to-line picker like a real line; closing it
+tips its orders back into the pool. `reconcile` supplies its work centre
+itself, because the export has never heard of it.
+
+**A `Due ≤ 2d` filter** in the header, with a count: what has to go out within
+two *working* days, **plus everything already late**. It ANDs with the day
+chip.
+
 **TBP and PMD open folded away** — neither is planned here — each leaving a
 `+ TBP` / `+ PMD` chip in the header, and every line carries a `×` to fold it.
 A folded line's orders still count towards the roster load, the day columns
@@ -159,7 +176,23 @@ The **"All orders" / "5 working days" buttons are gone**: the board shows
 everything, and the only narrowing left is the day chip under a timeline
 column, which puts a blue chip in the header naming the day it picked and
 clearing back to everything. A line's row is now a tinted band with a
-dark-blue name in capitals, so it cannot be mistaken for an order row.
+dark-blue name in capitals, so it cannot be mistaken for an order row, and
+chrome is three deliberate tiers — a slate title bar, the dashboard's dark
+blue for the board's own heading, and white for the orders alone. All three
+used to be shades of the same near-white.
+
+**A blank Expect Date now says why.** `uncoveredHours` and `crewWithoutRoom`
+were computed on every row and shown nowhere; the Expect cell carries them on
+hover and the inspector shows an `N h not covered` badge. The underlying
+cause was in the scheduler: a person's availability for one order was a single
+window that **closed at their first other booking and never reopened**, so one
+day elsewhere next week cost the order every day after it — five days of work
+covered two, and the date went blank while the crew were plainly not full.
+`planVariableCrew` now takes a per-day `BusyOnDay` predicate instead
+(`crewSchedule.ts`, `board.ts:busyOnDay`). Two rules are deliberately kept:
+one person's day is still never split between two orders, and the hand-over
+seam — somebody coming off at eleven takes the next order from eleven — is
+still exact. Covered by `tests/engine/crewDiary.test.ts`.
 
 One blank-cell warning was dropped: an order whose hours cells are empty is no
 longer named in the banner. The banner is for problems with the *export*, and

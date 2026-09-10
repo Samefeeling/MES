@@ -62,9 +62,11 @@ import type {
 import {
   DEFAULT_HORIZON_DAYS,
   LINES,
+  virtualLineDef,
   workKind,
   type CrewAssignment,
   type LineDef,
+  type VirtualLine,
   type Worker,
   type WorkKind,
 } from '@/domain/assembly';
@@ -88,7 +90,7 @@ import {
   wholeDaysBetween,
   type ScheduleStatus,
 } from './dates';
-import { endOfCrewDay, planVariableCrew, type CrewDayPlan, type VariableCrewPlan } from './crewSchedule';
+import { endOfCrewDay, planVariableCrew, type BusyOnDay, type CrewDayPlan, type VariableCrewPlan } from './crewSchedule';
 import { lineLoad, type LineLoad } from './workload';
 import { toDayKey } from '@/lib/time';
 import type {
@@ -250,6 +252,11 @@ export interface AssemblyInputs {
   progressBaselines?: Record<string, ProgressBaseline>;
   /** Daily production confirmations, including explicit job completion. */
   production?: Record<string, ProductionEntry[]>;
+  /**
+   * Lines the supervisor opened on the floor, beyond the eight the plant is
+   * built as. They schedule exactly like a built-in line and sit after them.
+   */
+  virtualLines?: readonly VirtualLine[];
   workers: Worker[];
   today: Date;
 }
@@ -367,6 +374,11 @@ function mouldingContextRows(
 
 export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
   const { dataset, indexes, containers, orderStarts, today } = input;
+  // The eight the plant is built as, then whatever the supervisor opened.
+  const boardLines: LineDef[] = [
+    ...LINES,
+    ...(input.virtualLines ?? []).map(virtualLineDef),
+  ];
   const orderOvertime = input.orderOvertime ?? {};
   const progress = input.progress ?? {};
   const progressBaselines = input.progressBaselines ?? {};
@@ -531,7 +543,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
   // build position, so dragging a bar earlier still moves it ahead in the
   // queue rather than being ignored.
   const pending: { line: LineDef; ids: string[]; claiming: string[] }[] = [];
-  for (const line of LINES) {
+  for (const line of boardLines) {
     if (!line.schedulable) continue;
     const ids = (containers[String(line.id)] ?? [])
       .map(String)
@@ -564,8 +576,6 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
    * chipped on three orders" looks like from the floor.
    */
   const bookedUntil = new Map<string, Date>();
-  const diaryKey = (workerId: string, day: Date): string =>
-    `${workerId}|${toDayKey(day)}`;
 
   /**
    * The first moment `workerId` is actually free, at or after `from`.
@@ -589,53 +599,35 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
     return cursor;
   };
 
-  /** The next open day at or after `day`. */
-  const openDay = (day: Date): Date => nextWorkingDay(startOfDay(day));
-
   /**
-   * The first whole open day from `day` on which this person has nothing else
-   * on. Whole, because capacity is charged a day at a time: the sliver left of
-   * an afternoon cannot be split between two orders.
-   */
-  const firstClearDay = (workerId: string, day: Date): Date => {
-    let cursor = openDay(day);
-    for (let guard = 0; guard < 400; guard++) {
-      if (!bookedUntil.has(diaryKey(workerId, cursor))) return cursor;
-      cursor = openDay(addDays(cursor, 1));
-    }
-    return cursor;
-  };
-
-  /** The first open day from `day` this person is already spoken for. */
-  const firstBookedDay = (workerId: string, day: Date): Date | null => {
-    let cursor = openDay(day);
-    for (let guard = 0; guard < 400; guard++) {
-      if (bookedUntil.has(diaryKey(workerId, cursor))) return cursor;
-      cursor = openDay(addDays(cursor, 1));
-    }
-    return null;
-  };
-
-  /**
-   * When this person can give this order time, as the day window the planner
-   * understands: from the first day their diary is clear, until the day their
-   * next booking starts. Both ends matter — bounding only the start read
-   * somebody booked three weeks out as unavailable for all three weeks.
+   * Days this order may not have of this person, because something else
+   * already has them.
    *
-   * A null `from` means "from the order's own start", which is the case worth
-   * keeping exact: somebody who comes off another order at eleven takes this
-   * one from eleven, and the two bars meet at the seam.
+   * A whole day at a time: capacity is charged by the day, so the sliver left
+   * of an afternoon cannot be handed to a second order. But only the days
+   * themselves — this used to be expressed as a window that closed at the
+   * first booking and never reopened, so one Monday elsewhere cost the order
+   * every day after it, and five days of work covered two. An order with work
+   * left over has no honest finish date, so its Expect Date went blank while
+   * the people on it were plainly not full. They are free on the days they are
+   * free.
+   *
+   * The order's own opening day is the exception, and it is the whole point of
+   * a hand-over: somebody coming off another order at eleven takes this one
+   * from eleven, and `planVariableCrew` charges this order only the rest of
+   * that shift. So on that one day the question is not "is anything booked"
+   * but "are they still on it when this order reaches them".
+   *
+   * `approved` names anyone the supervisor has already agreed may be on two
+   * orders at once; their diary is not consulted.
    */
-  const availability = (
-    workerId: string,
-    from: Date,
-  ): { fromDay: string | null; toDayExclusive: string | null } => {
-    const clear = freeFrom(workerId, from) <= from;
-    const start = clear ? startOfDay(from) : firstClearDay(workerId, from);
-    const until = firstBookedDay(workerId, addDays(startOfDay(start), 1));
-    return {
-      fromDay: clear ? null : toDayKey(start),
-      toDayExclusive: until ? toDayKey(until) : null,
+  const busyOnDay = (approved: readonly string[], from: Date): BusyOnDay => {
+    const seam = toDayKey(from);
+    return (workerId, day) => {
+      if (approved.includes(workerId)) return false;
+      const held = bookedUntil.get(`${workerId}|${day}`);
+      if (!held) return false;
+      return day !== seam || held > from;
     };
   };
 
@@ -818,29 +810,11 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
     // consumes today's capacity from today onward; its confirmed historical
     // start is still retained as the left edge of the bar.
     const capacityStart = start < planStart ? planStart : start;
-    // Everyone joins on the first day their own diary is clear, and steps off
-    // again the day their next booking starts. Bounding both ends is what lets
-    // somebody take a gap in the middle of their week: the old rule could only
-    // push their start later, so a person booked three weeks out was treated as
-    // unavailable for the whole three weeks. The bounds the planner set by hand
-    // always win — those are a decision, not an inference.
-    const joining: CrewAssignment[] = sequenced
-      ? crewAssignments.map((assignment) => {
-          const workerId = String(assignment.workerId);
-          if (approved.includes(workerId)) return assignment;
-          const window = availability(workerId, capacityStart);
-          return {
-            ...assignment,
-            fromDay:
-              window.fromDay &&
-              (!assignment.fromDay || assignment.fromDay < window.fromDay)
-                ? window.fromDay
-                : assignment.fromDay,
-            toDayExclusive:
-              assignment.toDayExclusive ?? window.toDayExclusive,
-          };
-        })
-      : crewAssignments;
+    // Each person gives this order the days their own diary still has free,
+    // and skips the ones it does not. The bounds the planner set by hand are
+    // untouched — those are a decision, not an inference — and a bar the
+    // planner pinned consults no diary at all: it was put there on purpose.
+    const busy = sequenced ? busyOnDay(approved, capacityStart) : undefined;
 
     const crewPlan: VariableCrewPlan = predecessorBlocked
       ? {
@@ -854,8 +828,9 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
       : planVariableCrew(
           capacityStart,
           remainingHours(job),
-          joining,
+          crewAssignments,
           overtime,
+          busy,
         );
     const expectDate = completedToday ? planStart : crewPlan.expectDate;
     const days = completedToday ? 0 : crewPlan.days;
@@ -874,10 +849,10 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
       line,
       kind: workKind(line.key),
       workers,
-      // The bounds actually planned against, not the ones handed in: the
-      // difference is where each person's other work left room, and the
-      // inspector is where a supervisor goes to find out why.
-      crewAssignments: joining,
+      // The bounds the planner set, and only those. Which days each person
+      // actually gave the order is `crewDays`, and who could give it none at
+      // all is `crewWithoutRoom` — both worked out against their diaries.
+      crewAssignments,
       crewWithoutRoom: completedToday
         ? []
         : workers.filter(

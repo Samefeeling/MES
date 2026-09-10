@@ -53,6 +53,19 @@ export interface VariableCrewPlan {
 const MAX_PLAN_DAYS = 730;
 const EPSILON = 1e-8;
 
+/**
+ * Whether this person already has something else on that day.
+ *
+ * The board fills one of these in as it plans, and hands it to the next order
+ * so that order can work around the days that are gone. It answers per day
+ * rather than "free from": a person booked next Monday is free this Thursday
+ * *and* next Tuesday, and treating that one Monday as the end of their
+ * availability cost the order every day after it.
+ */
+export type BusyOnDay = (workerId: string, day: string) => boolean;
+
+const NEVER_BUSY: BusyOnDay = () => false;
+
 export function assignmentActiveOnDay(
   assignment: CrewAssignment,
   day: string,
@@ -67,10 +80,12 @@ export function crewIdsOnDay(
   assignments: CrewAssignment[],
   day: string,
   orderStartDay: string,
+  busy: BusyOnDay = NEVER_BUSY,
 ): string[] {
   const ids = assignments
     .filter((assignment) =>
-      assignmentActiveOnDay(assignment, day, orderStartDay),
+      assignmentActiveOnDay(assignment, day, orderStartDay) &&
+      !busy(String(assignment.workerId), day),
     )
     .map((assignment) => assignment.workerId);
   return [...new Set(ids)].slice(0, MAX_WORKERS_PER_ORDER);
@@ -85,6 +100,7 @@ export function planVariableCrew(
   requiredHours: number,
   assignments: CrewAssignment[],
   overtime: boolean,
+  busy: BusyOnDay = NEVER_BUSY,
 ): VariableCrewPlan {
   const orderStart = startOfDay(from);
   const orderStartDay = toDayKey(orderStart);
@@ -118,7 +134,7 @@ export function planVariableCrew(
       continue;
     }
     const day = toDayKey(cursor);
-    const workerIds = crewIdsOnDay(assignments, day, orderStartDay);
+    const workerIds = crewIdsOnDay(assignments, day, orderStartDay, busy);
     if (workerIds.length === 0) {
       cursor = nextMidnight(cursor);
       continue;

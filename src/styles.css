@@ -1466,7 +1466,7 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 /* ===== Assembly results =====
    Everything here rides on the PMD KPI table's own styles; these are only the
    places Assembly's record needs something PMD has no equivalent of. */
-.assembly-kpi-table{min-width:1042px}
+.assembly-kpi-table{min-width:1114px}
 /* Per-order rows under a line, the way PMD sets its shift sub-rows apart. */
 .assembly-kpi .kpi-sub>th{padding-left:34px;font-weight:600;color:var(--mu)}
 .assembly-kpi .kpi-sub-note{display:block;font-size:11px;font-weight:600;color:var(--mu)}

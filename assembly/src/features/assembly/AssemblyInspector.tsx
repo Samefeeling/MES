@@ -342,6 +342,19 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
               Waits on {String(row.waitingOn.onJobId)}
             </Badge>
           )}
+          {/*
+            Why the Expect Date is blank, on the row itself. The board knew all
+            along — it is the work the crew's own diaries left uncovered — and
+            said only "—", which reads as a fault rather than as a shortfall
+            somebody has to allocate their way out of.
+          */}
+          {!closed && (row.uncoveredHours ?? 0) > 0 && (
+            <Badge variant="error">
+              {row.uncoveredHours!.toFixed(1)} h not covered
+              {(row.crewWithoutRoom?.length ?? 0) > 0 &&
+                ` · no room: ${row.crewWithoutRoom!.map((w) => w.name).join(', ')}`}
+            </Badge>
+          )}
           <span className="inspector-dismiss">Esc or click away to close</span>
         </div>
       </header>

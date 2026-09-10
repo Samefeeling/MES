@@ -27,6 +27,20 @@
   --line-band: #e0f2fe;
   --line-band-bd: #bae6fd;
 
+  /*
+   * Chrome, in three tiers, so nothing that frames the board can be mistaken
+   * for something on it: the title bar is a slate band, the board's own
+   * column and timeline heading is the dashboard's dark blue — the same
+   * heading the KPI tables wear — and the orders themselves are the only
+   * white on the page.
+   */
+  --chrome-band: #e2e8f0;
+  --chrome-rule: #075985;
+  --head-bg: #075985;
+  --head-tx: #f0f9ff;
+  --head-dim: #bae6fd;
+  --head-rule: #0c6d9e;
+
   --tool: #c084fc; /* die / tool change */
   --color: #fb923c; /* colour change */
   --insert: #2dd4bf; /* insert change */
@@ -86,8 +100,11 @@ button {
   align-items: center;
   gap: 16px;
   padding: 10px 16px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  /* Not white. The title bar, the board's headings and the orders were three
+     shades of the same near-white stacked on each other, so the eye had
+     nothing to catch on and the controls read as the first row of the board. */
+  background: var(--chrome-band);
+  border-bottom: 2px solid var(--chrome-rule);
 }
 .head-side {
   display: flex;
@@ -131,8 +148,16 @@ button {
 .app-header h1 {
   font-size: 15px;
   margin: 0;
-  font-weight: 650;
-  letter-spacing: 0.2px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  color: var(--chrome-rule);
+  text-transform: uppercase;
+}
+/* The chips and buttons in the bar keep their white ground — on the slate
+   band that is what makes them read as things to press. */
+.app-header .board-tools button,
+.app-header .date-restore {
+  background: var(--surface);
 }
 .app-header .sub {
   color: var(--muted);
@@ -882,18 +907,68 @@ button {
   position: sticky;
   top: 0;
   z-index: 9;
-  background: var(--surface);
+  background: var(--head-bg);
 }
+/*
+ * The board's own heading: column names on the left, the week's load across
+ * the right. It carries the dashboard's dark blue — the same heading the KPI
+ * tables wear — so it cannot be read as the first row of the board, which is
+ * exactly what it looked like when it was white on white.
+ */
 .assy-head {
-  background: var(--surface);
+  background: var(--head-bg);
+  color: var(--head-tx);
+  border-bottom: 2px solid var(--chrome-rule);
   /* Tall enough for the date, the load bar and its percentage — and it grows
      rather than clipping when a whole shift is free and the Team column has
      that many names to list. */
   min-height: 94px;
   font-size: 11px;
-  color: var(--muted);
-  font-weight: 650;
+  font-weight: 700;
 }
+/* The frozen columns carry their own background so they can slide over the
+   rows; in the heading that has to be the heading's. */
+.assy-head .acell,
+.assy-head .acell.order,
+.assy-head .acell.frozen {
+  background: var(--head-bg);
+  border-right-color: var(--head-rule);
+  color: var(--head-tx);
+}
+.assy-head .daycol {
+  border-left-color: var(--head-rule);
+  color: var(--head-dim);
+}
+.assy-head .day-bar { background: rgb(255 255 255 / 18%); }
+.assy-head .day-order-filter {
+  border-color: var(--head-rule);
+  background: rgb(255 255 255 / 12%);
+  color: var(--head-tx);
+}
+.assy-head .day-order-filter[aria-pressed='true'] {
+  background: var(--head-tx);
+  color: var(--head-bg);
+  border-color: var(--head-tx);
+}
+.assy-head .date-head button,
+.assy-head .col-resize {
+  border-color: var(--head-rule);
+}
+.assy-head .date-head button {
+  background: rgb(255 255 255 / 12%);
+  color: var(--head-tx);
+}
+.assy-head .date-head .date-sort.active,
+.assy-head .date-head .date-sort:hover {
+  background: var(--head-tx);
+  color: var(--head-bg);
+}
+.assy-head .team-free { color: var(--head-dim); }
+.assy-head .daycol.today { background: rgb(255 255 255 / 10%); }
+/* Dimmed, not lost: a day already gone still has to be readable against the
+   heading's own blue, which a light-ground opacity of 0.68 was not. */
+.assy-head .daycol.past,
+.assy-head .daycol.weekend { opacity: 0.82; }
 .acell {
   display: flex;
   align-items: center;
@@ -1460,6 +1535,20 @@ body.col-resizing {
   border-color: var(--line-name);
   outline: none;
 }
+/* Closing a line the supervisor opened — a different act from folding one
+   away, and spelled out rather than left as a second × beside the first. */
+.agroup-close {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border: 1px solid var(--error);
+  border-radius: 999px;
+  background: transparent;
+  color: #b91c1c;
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.agroup-close:hover { background: var(--error-dim); }
 /*
  * Everyone in today who is trained on this line, in the order the board picks
  * them. Wraps rather than scrolls: on a busy line the second row of names is
@@ -1810,6 +1899,57 @@ body.col-resizing {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+/* What has to go out in the next couple of working days, late orders in it.
+   Off it is a chip; on it is amber, because that is what the list is about. */
+.board-tools .due-soon {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  height: auto;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.board-tools .due-soon:hover { border-color: var(--warn); }
+.board-tools .due-soon.active {
+  border-color: #d97706;
+  background: #d97706;
+  color: #fff;
+}
+.due-soon-count {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.due-soon.active .due-soon-count { background: rgb(255 255 255 / 28%); color: #fff; }
+
+/* Opening a line that is not one of the eight. Supervisor only. */
+.board-tools .add-line { border-style: dashed; }
+.add-line-entry { display: inline-flex; align-items: center; gap: 4px; }
+.add-line-entry input {
+  width: 130px;
+  padding: 2px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11px;
+}
+.board-tools .add-line-entry button {
+  width: auto;
+  height: auto;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+}
+.add-line-error { color: var(--error); font-size: 10.5px; font-style: normal; }
 /* No `margin-left: auto` — the board is far wider than the viewport, so that
    would push this off the right-hand edge of a scrolled-left page. */
 .board-load {

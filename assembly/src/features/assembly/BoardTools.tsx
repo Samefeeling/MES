@@ -7,10 +7,13 @@
  * which is the number a supervisor quotes when asked how the week looks.
  */
 
+import { useState } from 'react';
 import type { AssemblyGanttView } from '@/engine/assembly/board';
-import { LINES } from '@/domain/assembly';
-import { DATE_COLS, DATE_COL_LABEL, useUiStore } from '@/store/uiStore';
-import { countRunningOrders } from './boardView';
+import { LINES, virtualLineDef } from '@/domain/assembly';
+import { usePlanStore } from '@/store/planStore';
+import { useSupervisorStore } from '@/store/supervisorStore';
+import { DATE_COLS, DATE_COL_LABEL, DUE_SOON_DAYS, useUiStore } from '@/store/uiStore';
+import { countRunningOrders, isDueSoon } from './boardView';
 import { formatShortDay, fromDayKey } from '@/lib/time';
 
 /** How much one press of − or + moves the day column, in pixels. */
@@ -25,18 +28,26 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
   const toggleLine = useUiStore((s) => s.toggleLine);
   const orderDay = useUiStore((s) => s.orderDay);
   const setOrderDay = useUiStore((s) => s.setOrderDay);
+  const dueSoon = useUiStore((s) => s.dueSoon);
+  const toggleDueSoon = useUiStore((s) => s.toggleDueSoon);
   const showWeekends = useUiStore((s) => s.showWeekends);
   const toggleWeekends = useUiStore((s) => s.toggleWeekends);
+  const virtualLines = usePlanStore((s) => s.virtualLines);
 
   if (!board) return null;
   const hidden = DATE_COLS.filter((key) => !dateCols[key]);
-  const foldedLines = LINES.filter((line) => hiddenLines.includes(line.key));
+  const allLines = [...LINES, ...virtualLines.map(virtualLineDef)];
+  const foldedLines = allLines.filter((line) => hiddenLines.includes(line.key));
   const running = orderDay
     ? countRunningOrders(
         board.groups.flatMap((group) => group.rows),
         fromDayKey(orderDay),
       )
     : null;
+  const dueCount = board.groups
+    .flatMap((group) => group.rows)
+    .filter((row) => row.line.schedulable && isDueSoon(row, board.today, DUE_SOON_DAYS))
+    .length;
 
   return (
     <div className="board-tools">
@@ -75,6 +86,19 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
           {running === 1 ? 'order' : 'orders'} ×
         </button>
       )}
+      {/* What has to go out before the board is next looked at. Late orders
+          are in it: one due last Tuesday is not less urgent than one due
+          tomorrow, and a "due soon" list that drops them is the list you would
+          least want to work from. */}
+      <button
+        className={`due-soon${dueSoon ? ' active' : ''}`}
+        onClick={toggleDueSoon}
+        aria-pressed={dueSoon}
+        title={`Only orders due within ${DUE_SOON_DAYS} working days, and anything already late`}
+      >
+        ⏱ Due ≤ {DUE_SOON_DAYS}d
+        <span className="due-soon-count">{dueCount}</span>
+      </button>
       <button
         className="date-restore"
         onClick={toggleWeekends}
@@ -109,8 +133,72 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
           + {line.name}
         </button>
       ))}
+      <AddLine />
       <MarkedSet />
     </div>
+  );
+}
+
+/**
+ * Open a line that is not one of the eight.
+ *
+ * The plant is built as eight lines; what it is *running* this week is a
+ * different question — a second table bench for a rush, a bay set up for one
+ * big order, a crew split off to clear a backlog. Those had nowhere to go, so
+ * the work sat on a line it was not happening on and the people on it read as
+ * booked somewhere else.
+ *
+ * Supervisor only, and it goes into the shared plan rather than this browser:
+ * a bench opened this morning is a fact about the week, and every screen
+ * reading the board has to see the same one.
+ */
+function AddLine() {
+  const unlocked = useSupervisorStore((s) => s.unlocked);
+  const addVirtualLine = usePlanStore((s) => s.addVirtualLine);
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [error, setError] = useState('');
+
+  if (!unlocked) return null;
+
+  const submit = () => {
+    if (!name.trim()) return setOpen(false);
+    const key = addVirtualLine(name);
+    if (!key) return setError('That name is already a line.');
+    setName('');
+    setError('');
+    setOpen(false);
+  };
+
+  if (!open) {
+    return (
+      <button
+        className="date-restore add-line"
+        onClick={() => { setOpen(true); setError(''); }}
+        title="Open another production line on this board"
+      >
+        + Line
+      </button>
+    );
+  }
+
+  return (
+    <span className="add-line-entry">
+      <input
+        autoFocus
+        value={name}
+        maxLength={32}
+        placeholder="Line name"
+        aria-label="New line name"
+        onChange={(e) => { setName(e.target.value); setError(''); }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') submit();
+          if (e.key === 'Escape') { setOpen(false); setName(''); setError(''); }
+        }}
+      />
+      <button onClick={submit} title="Open the line">Add</button>
+      {error && <em className="add-line-error">{error}</em>}
+    </span>
   );
 }
 

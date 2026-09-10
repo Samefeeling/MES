@@ -11,6 +11,8 @@ import {
 import {
   activeWorkerIdsOnDay,
   countRunningOrders,
+  dueWithin,
+  isDueSoon,
   runningOrdersByDay,
   isRunningOnDay,
   retainLineRows,
@@ -453,5 +455,51 @@ describe('PMD remains outside Assembly date controls', () => {
     const day = new Date('2026-09-08T12:00:00');
     expect(countRunningOrders([a,pmd],day)).toBe(1);
     expect(runningOrdersByDay([a,pmd],[day]).get('2026-09-08')).toBe(1);
+  });
+});
+
+/**
+ * What has to go out before this board is next looked at.
+ *
+ * Production asked for it by name: two working days. The two properties that
+ * matter are that "two days" counts working days — asked on a Friday it has to
+ * reach Monday — and that an order already late is in the list, because one
+ * due last Tuesday is not less urgent than one due tomorrow.
+ */
+describe('due soon', () => {
+  const due = (id: string, dueDate: string): OrderRow =>
+    ({ ...row(id), job: { ...row(id).job, dueDate: new Date(dueDate) } }) as OrderRow;
+
+  it('counts working days, so a Friday reaches the Monday', () => {
+    // Friday 11 Sep 2026 → through the end of Monday 14th.
+    expect(dueWithin(new Date('2026-09-11T09:00:00'), 2)).toEqual(
+      new Date('2026-09-15T00:00:00'),
+    );
+    // Thursday → through the end of Friday.
+    expect(dueWithin(new Date('2026-09-10T09:00:00'), 2)).toEqual(
+      new Date('2026-09-12T00:00:00'),
+    );
+  });
+
+  it('opens the weekend on the next working day rather than on itself', () => {
+    // Saturday: no working day has begun yet, so two of them reach Tuesday.
+    expect(dueWithin(new Date('2026-09-12T09:00:00'), 2)).toEqual(
+      new Date('2026-09-16T00:00:00'),
+    );
+  });
+
+  it('takes what is due inside the window, and everything already late', () => {
+    const today = new Date('2026-09-10T09:00:00');
+    expect(isDueSoon(due('today', '2026-09-10T00:00:00'), today, 2)).toBe(true);
+    expect(isDueSoon(due('tomorrow', '2026-09-11T00:00:00'), today, 2)).toBe(true);
+    expect(isDueSoon(due('late', '2026-09-01T00:00:00'), today, 2)).toBe(true);
+    expect(isDueSoon(due('next-week', '2026-09-15T00:00:00'), today, 2)).toBe(false);
+  });
+
+  it('leaves out an order with no due date, and one finished today', () => {
+    const today = new Date('2026-09-10T09:00:00');
+    expect(isDueSoon(row('undated'), today, 2)).toBe(false);
+    const done = { ...due('done', '2026-09-01T00:00:00'), completedToday: true } as OrderRow;
+    expect(isDueSoon(done, today, 2)).toBe(false);
   });
 });

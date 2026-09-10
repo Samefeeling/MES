@@ -26,6 +26,7 @@ export function useAssemblyGantt(): AssemblyGanttView | null {
   const progress = usePlanStore((s) => s.progress);
   const progressBaselines = usePlanStore((s) => s.progressBaselines);
   const production = usePlanStore((s) => s.production);
+  const virtualLines = usePlanStore((s) => s.virtualLines);
 
   return useMemo(
     () =>
@@ -42,6 +43,7 @@ export function useAssemblyGantt(): AssemblyGanttView | null {
             progress,
             progressBaselines,
             production,
+            virtualLines,
             workers: dataset.workers,
             today: new Date(),
           })
@@ -59,6 +61,7 @@ export function useAssemblyGantt(): AssemblyGanttView | null {
       progress,
       progressBaselines,
       production,
+      virtualLines,
     ],
   );
 }

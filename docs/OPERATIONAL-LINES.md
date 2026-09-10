@@ -17,6 +17,16 @@ The board has eight lines. PMD is a read-only context lane mirroring moulding's 
 
 The keys keep their older spellings on purpose: they are written into saved plans, into `ASSY_Operator` skills and into the SharePoint containers, so renaming them would orphan every plan already on the tenant. Skills can contain the display names, separated by semicolons, or SharePoint multi-choice values. A supervisor's current line allocation controls crew availability; skills rank candidates within that line. Dragging an operator does not grant a permanent skill.
 
+**The supervisor can open more.** `+ Line` in the board header (supervisor
+only) adds a line beyond the eight — a second table bench for a rush, a bay
+set up for one big order, a crew split off to clear a backlog. It schedules
+exactly like a built-in line, takes crew, and appears in every operator's
+Move-to-line picker. Its key is `VL_<NAME>`, so it is still a line key
+everywhere a line key is read, and a stored plan can always be told apart from
+one of the eight by looking at it. It lives in the shared plan (`virtualLines`
+in `ASSY_Plans`), not in one browser, and closing it tips its orders back into
+the unplaced pool. See `assembly/docs/board-interaction-rules.md`.
+
 Two lines were retired. `UPL` (the catch-all upholstery lane) and `ASSY_STOOL` no longer exist: the BOM rules below say which upholstery bench a part belongs on, and stools are ordinary ASM work. Anything still filed against either — a saved plan, a roster skill, an ERP export — is read onto its successor (`UPL` → UPL-Gluing, `ASSY_STOOL` → ASM), never dropped into the pool.
 
 ## Which line builds a part

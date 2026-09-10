@@ -14,7 +14,7 @@ import { createPortal } from 'react-dom';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { usePlanStore } from '@/store/planStore';
 import { useUiStore } from '@/store/uiStore';
-import { LINES, type LineKey, type Worker } from '@/domain/assembly';
+import { LINES, virtualLineDef, type LineKey, type Worker } from '@/domain/assembly';
 import {
   dayBand,
   loadPreview,
@@ -40,6 +40,7 @@ export function WorkerLoadChip({
   // has to know this is open to decide whether it is the thing to close.
   const openWorkerId = useUiStore((s) => s.workerLoadId);
   const setWorkerLoad = useUiStore((s) => s.setWorkerLoad);
+  const virtualLines = usePlanStore((s) => s.virtualLines);
   const open = openWorkerId === String(worker.id);
   const [position, setPosition] = useState({ left: 0, top: 0 });
   const wrap = useRef<HTMLSpanElement>(null);
@@ -206,7 +207,10 @@ export function WorkerLoadChip({
                 setWorkerLoad(null);
               }}
             >
-              {LINES.filter(target => target.schedulable || target.key === line).map(target =>
+              {/* The lines the supervisor opened are in here too — putting
+                  people on them is what they are for. */}
+              {[...LINES, ...virtualLines.map(virtualLineDef)]
+                .filter(target => target.schedulable || target.key === line).map(target =>
                 <option key={target.key} value={target.key} disabled={!target.schedulable}>{target.name}</option>
               )}
             </select>

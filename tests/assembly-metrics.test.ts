@@ -8,6 +8,7 @@ import {
   efficiencyPct,
   emptyAssemblyAgg,
   onTimePct,
+  plannedPct,
   yieldPct,
 } from '../src/core/assembly-metrics';
 import type { AssemblyResult } from '../src/types/assembly';
@@ -122,6 +123,42 @@ describe('efficiency', () => {
 
   it('is also blind to an order with a standard but no quantity', () => {
     expect(efficiencyPct(assemblyMetrics([day({ orderQty: 0 })]))).toBeNull();
+  });
+});
+
+describe('output against plan', () => {
+  /*
+   * Assembly keeps no separate daily schedule, so the plan is what the people
+   * who were actually on the order were capable of at its own standard. Two
+   * people for a day is 15 crew hours; at half an hour a unit the plan is 30.
+   */
+  it('is what came off the line over what the crew were planned to make', () => {
+    expect(plannedPct(assemblyMetrics([day({ output: 30 })]))).toBe(100);
+    expect(plannedPct(assemblyMetrics([day({ output: 24 })]))).toBe(80);
+    expect(assemblyMetrics([day({ output: 24 })]).plannedOutput).toBe(30);
+  });
+
+  it('says nothing when the order carried no standard to plan against', () => {
+    const agg = assemblyMetrics([day({ plannedHours: undefined, output: 30 })]);
+    expect(agg.plannedOutput).toBe(0);
+    expect(plannedPct(agg)).toBeNull();
+    // The output itself is still reported — the pieces were made.
+    expect(agg.output).toBe(30);
+  });
+});
+
+describe('booked hours', () => {
+  it('value everything that came off the line, good or not', () => {
+    // 30 output at half an hour each, of which 28 were good.
+    const agg = assemblyMetrics([day({ output: 30, complete: 28, reject: 2 })]);
+    expect(agg.bookedHours).toBe(15);
+    expect(agg.earnedHours).toBe(14);
+    // The gap between the two is what the rejects cost in time.
+    expect(agg.bookedHours - agg.earnedHours).toBe(1);
+  });
+
+  it('are left out with the rest when there is no standard', () => {
+    expect(assemblyMetrics([day({ orderQty: 0, output: 30 })]).bookedHours).toBe(0);
   });
 });
 

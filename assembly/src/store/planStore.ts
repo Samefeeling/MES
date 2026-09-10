@@ -14,9 +14,14 @@ import type { JobId } from '@/domain/ids';
 import type { Job, WorkCenter } from '@/domain/types';
 import {
   MAX_WORKERS_PER_ORDER,
+  isVirtualLine,
   readLineKey,
+  virtualLineDef,
+  virtualLineKey,
   type CrewAssignment,
   type LineKey,
+  type VirtualLine,
+  type VirtualLineKey,
 } from '@/domain/assembly';
 
 /** Container id for the un-scheduled job pool. */
@@ -110,6 +115,17 @@ interface PlanState {
   /** Supervisor-owned current production line for each operator. */
   workerLines: Record<string, LineKey>;
   /**
+   * Lines the supervisor set up on the floor, beyond the eight the plant is
+   * built as. Part of the plan, not of this browser: a second bench opened for
+   * a rush is a fact about the week, and everyone reading the board has to see
+   * the same one.
+   */
+  virtualLines: VirtualLine[];
+  /** Open a new line. Returns its key, or null when the name is taken/blank. */
+  addVirtualLine: (name: string) => VirtualLineKey | null;
+  /** Close one, tipping whatever is on it back into the unplaced pool. */
+  removeVirtualLine: (key: VirtualLineKey) => void;
+  /**
    * Who is on each order, and between which days.
    *
    * The only record of it. There used to be a second, `orderWorkers`, holding
@@ -201,6 +217,7 @@ interface PlanState {
     manualOrders?: Record<string, ManualOrder>;
     orderWorkers?: Record<string, string[]>;
     workerLines?: Record<string, LineKey>;
+    virtualLines?: VirtualLine[];
     orderCrewAssignments?: Record<string, CrewAssignment[]>;
     orderStarts?: Record<string, string>;
     orderActualStarts?: Record<string, ActualStartRecord>;
@@ -221,6 +238,28 @@ function emptyContainers(workCenters: WorkCenter[]): Containers {
   const c: Containers = { [POOL_ID]: [] };
   for (const w of workCenters) c[w.id] = [];
   return c;
+}
+
+/**
+ * Work centres for the lines the supervisor added.
+ *
+ * Reconciliation builds its containers from the work centres it is handed, and
+ * those come from the export — which has never heard of a line somebody opened
+ * this morning. Without these, every order on an added line would be tipped
+ * into the pool on the next refresh.
+ */
+export function virtualWorkCenters(lines: readonly VirtualLine[]): WorkCenter[] {
+  return lines.map((line, i) => {
+    const def = virtualLineDef(line, i);
+    return {
+      id: def.id,
+      kind: 'area' as const,
+      department: 'assembly' as const,
+      name: def.name,
+      short: def.name,
+      sortIndex: def.sortIndex,
+    };
+  });
 }
 
 /**
@@ -309,6 +348,7 @@ const withinCrewLimit = (assignments: CrewAssignment[]): boolean => {
 export const usePlanStore = create<PlanState>((set, get) => ({
   containers: { [POOL_ID]: [] },
   workerLines: {},
+  virtualLines: [],
   orderCrewAssignments: {},
   orderStarts: {},
   orderActualStarts: {},
@@ -330,6 +370,9 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   reconcile(workCenters, jobs, now = new Date()) {
     set((state) => {
       jobs = [...jobs, ...Object.values(state.manualOrders).map(manualJob)];
+      // The lines the supervisor added are the plan's own, so it supplies them
+      // rather than waiting for an export that will never carry them.
+      workCenters = [...workCenters, ...virtualWorkCenters(state.virtualLines)];
       const known = new Set(workCenters.map((w) => String(w.id)));
       const jobsById = new Map(jobs.map(job => [String(job.id), job]));
       const liveJobs = new Set(jobsById.keys());
@@ -676,6 +719,45 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     });
   },
 
+  addVirtualLine(name) {
+    const clean = name.trim().replace(/\s+/g, ' ').slice(0, 32);
+    if (!clean) return null;
+    const key = virtualLineKey(clean);
+    const state = get();
+    // Two lines with the same key would share one container, so the second
+    // would silently take the first's orders. Refuse instead.
+    if (state.virtualLines.some((line) => line.key === key)) return null;
+    if (readLineKey(clean) && !isVirtualLine(readLineKey(clean)!)) return null;
+    set({
+      virtualLines: [...state.virtualLines, { key, name: clean }],
+      containers: { ...state.containers, [key]: [] },
+    });
+    return key;
+  },
+
+  removeVirtualLine(key) {
+    set((state) => {
+      if (!state.virtualLines.some((line) => line.key === key)) return state;
+      const { [key]: onIt = [], ...rest } = state.containers;
+      // Orders go back to the pool rather than to a line nobody chose for
+      // them: closing a bench is not a decision about where its work belongs.
+      const containers: Containers = {
+        ...rest,
+        [POOL_ID]: [...(state.containers[POOL_ID] ?? []), ...onIt],
+      };
+      // Anyone standing on it loses only that placement; their skills and
+      // their bookings are untouched.
+      const workerLines = Object.fromEntries(
+        Object.entries(state.workerLines).filter(([, line]) => line !== key),
+      );
+      return {
+        virtualLines: state.virtualLines.filter((line) => line.key !== key),
+        containers,
+        workerLines,
+      };
+    });
+  },
+
   setAssemblyPlan(plan) {
     set((state) => {
       // A plan stored before crew had windows carries `orderWorkers` and no
@@ -694,6 +776,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         lineLayoutVersion: plan.lineLayoutVersion ?? 0,
         manualOrders: plan.manualOrders ?? state.manualOrders,
         workerLines: plan.workerLines ?? state.workerLines,
+        virtualLines: plan.virtualLines ?? state.virtualLines,
         orderCrewAssignments,
         orderStarts: plan.orderStarts ?? state.orderStarts,
         orderActualStarts: plan.orderActualStarts ?? state.orderActualStarts,

@@ -25,7 +25,28 @@ import { WorkCenterId, type WorkerId } from './ids';
  * ordinary ASM work. `LEGACY_LINE_KEYS` maps both onto their successors so a
  * plan saved before this change still opens.
  */
-export type LineKey = 'TBP' | 'PMD' | 'UPL_CUT_SEW' | 'UPL_GLUING' | 'UPL_SOFTIE' | 'ASSY' | 'TABLE' | 'FACTORY_GENERAL';
+export type BuiltInLineKey = 'TBP' | 'PMD' | 'UPL_CUT_SEW' | 'UPL_GLUING' | 'UPL_SOFTIE' | 'ASSY' | 'TABLE' | 'FACTORY_GENERAL';
+
+/**
+ * A line the supervisor added on the floor.
+ *
+ * Eight lines are what the plant is built as; what it is *running* on a given
+ * week is a different question — a second table bench for a rush, a bay set up
+ * for one big order, a crew split off to clear a backlog. Those have nowhere
+ * to go on a fixed list, so the work lands on a line that is not where it is
+ * happening and the people on it read as booked somewhere else.
+ *
+ * Kept as a prefixed key rather than a free string so it is still a `LineKey`
+ * everywhere — the roster, the containers, the placements — and so a stored
+ * plan can always be told apart from a built-in line by looking at it.
+ */
+export type VirtualLineKey = `VL_${string}`;
+export const VIRTUAL_LINE_PREFIX = 'VL_';
+
+export type LineKey = BuiltInLineKey | VirtualLineKey;
+
+export const isVirtualLine = (key: string): key is VirtualLineKey =>
+  key.startsWith(VIRTUAL_LINE_PREFIX);
 
 /** The only three kinds of assembly work order. */
 export type OrderType = 'cutting-sewing' | 'upholstery' | 'final-assembly';
@@ -171,7 +192,49 @@ const LINE_NAMES = new Map<string, LineKey>(
 export function readLineKey(raw: string): LineKey | null {
   const key = raw.trim().toUpperCase().replace(/[\s/-]+/g, '_');
   if (LINE_KEYS.has(key)) return key as LineKey;
+  // A line the supervisor added. There is no list of these to check against
+  // here — the plan holds them — so the prefix is what identifies one, and a
+  // key naming a line this plan no longer has is handled where the containers
+  // are, not by pretending it was never a line.
+  if (isVirtualLine(key)) return key;
   return LINE_NAMES.get(key) ?? LEGACY_LINE_KEYS[key] ?? null;
+}
+
+/** A line the supervisor set up, as the plan stores it. */
+export interface VirtualLine {
+  key: VirtualLineKey;
+  name: string;
+}
+
+/** The key a new line gets from its name. Stable, and readable in a saved plan. */
+export function virtualLineKey(name: string): VirtualLineKey {
+  const slug = name
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 24);
+  return `${VIRTUAL_LINE_PREFIX}${slug || 'LINE'}`;
+}
+
+/**
+ * An added line as the board understands one: schedulable, running the same
+ * number of build positions as a real one, and sorted after the eight.
+ *
+ * It runs every order type. A line somebody set up this morning has no routing
+ * behind it to say what belongs there — that is exactly why they set it up —
+ * so nothing is refused from it.
+ */
+export function virtualLineDef(line: VirtualLine, index: number): LineDef {
+  return {
+    key: line.key,
+    id: WorkCenterId(line.key),
+    name: line.name,
+    schedulable: true,
+    types: ['cutting-sewing', 'upholstery', 'final-assembly'],
+    parallelOrders: PARALLEL_ORDERS_PER_LINE,
+    sortIndex: LINES.length + index,
+  };
 }
 
 /**

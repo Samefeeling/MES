@@ -42,6 +42,8 @@ export const ASSEMBLY_THRESHOLDS = {
   yieldAmber: 95,
   effGreen: 90,
   effAmber: 75,
+  planGreen: 95,
+  planAmber: 80,
   onTimeGreen: 95,
   onTimeAmber: 85,
 } as const;
@@ -69,10 +71,22 @@ export interface AssemblyAgg {
   supportHours: number;
   /** Crew hours the production rows consumed, at 7.5 h a head a day. */
   crewHours: number;
+  /**
+   * Hours the shift booked: everything that came off the line, at the order's
+   * own standard. `earnedHours` is the same sum over the *good* pieces only,
+   * so the gap between the two is what the rejects cost in time.
+   */
+  bookedHours: number;
   /** Standard hours those rows earned: units finished x the order's standard. */
   earnedHours: number;
   /** Crew hours on rows that carried a standard, so Efficiency has a base. */
   judgedHours: number;
+  /**
+   * What the crew on those rows was expected to produce: their hours divided
+   * by the order's standard. The denominator of Output/Plan, and PMD's
+   * schedule expectation said in Assembly's terms.
+   */
+  plannedOutput: number;
 }
 
 export function emptyAssemblyAgg(): AssemblyAgg {
@@ -89,8 +103,10 @@ export function emptyAssemblyAgg(): AssemblyAgg {
     supportOrders: 0,
     supportHours: 0,
     crewHours: 0,
+    bookedHours: 0,
     earnedHours: 0,
     judgedHours: 0,
+    plannedOutput: 0,
   };
 }
 
@@ -136,8 +152,10 @@ function addRow(agg: AssemblyAgg, row: AssemblyResult): void {
   agg.crewHours += hours;
   const perUnit = hoursPerUnit(row);
   if (perUnit !== null) {
+    agg.bookedHours += row.output * perUnit;
     agg.earnedHours += row.complete * perUnit;
     agg.judgedHours += hours;
+    agg.plannedOutput += hours / perUnit;
   }
 }
 
@@ -270,6 +288,21 @@ export function yieldPct(agg: AssemblyAgg): number | null {
 export function efficiencyPct(agg: AssemblyAgg): number | null {
   return agg.judgedHours > 0
     ? +((agg.earnedHours / agg.judgedHours) * 100).toFixed(1)
+    : null;
+}
+
+/**
+ * What came off the line against what the plan asked of the crew who were on
+ * it. PMD's Output cell reads `Good /expected` and takes its colour from that
+ * ratio; this is the same reading, with the expectation worked out from the
+ * hours the shift had rather than from a schedule Assembly does not keep.
+ *
+ * Rows with no standard are out of both sides, as they are out of Efficiency:
+ * a plan cannot be computed for an order nobody costed.
+ */
+export function plannedPct(agg: AssemblyAgg): number | null {
+  return agg.plannedOutput > 0
+    ? +((agg.output / agg.plannedOutput) * 100).toFixed(1)
     : null;
 }
 

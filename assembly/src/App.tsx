@@ -44,6 +44,7 @@ export default function App() {
   const selectedJobId = useUiStore(s => s.selectedJobId);
   const lineLayoutVersion = usePlanStore(s => s.lineLayoutVersion);
   const workerLines = usePlanStore((s) => s.workerLines);
+  const virtualLines = usePlanStore((s) => s.virtualLines);
   const orderCrewAssignments = usePlanStore((s) => s.orderCrewAssignments);
   const orderStarts = usePlanStore((s) => s.orderStarts);
   const orderActualStarts = usePlanStore((s) => s.orderActualStarts);
@@ -162,6 +163,7 @@ export default function App() {
             lineLayoutVersion,
             ignoredOrderIds,
             workerLines,
+            virtualLines,
             orderCrewAssignments,
             orderStarts,
             orderActualStarts,
@@ -184,6 +186,7 @@ export default function App() {
     stored,
     containers,
     workerLines,
+    virtualLines,
     orderCrewAssignments,
     orderStarts,
     orderActualStarts,

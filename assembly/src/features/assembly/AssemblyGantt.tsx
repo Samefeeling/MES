@@ -21,10 +21,12 @@ import type {
 import {
   ORDER_TYPE_SHORT,
   PRODUCTIVE_HOURS_PER_PERSON,
+  isVirtualLine,
   SHIFT_END_HOUR,
   SHIFT_START_HOUR,
   WORK_KIND_SHORT,
   type LineKey,
+  type VirtualLineKey,
 } from '@/domain/assembly';
 import { addCalendarDays, isWeekend, shiftFraction } from '@/engine/assembly/dates';
 import { remainingHours } from '@/engine/assembly/duration';
@@ -39,6 +41,7 @@ import { useDataStore } from '@/store/dataStore';
 import {
   COLUMN_LIMITS,
   DATE_COLS,
+  DUE_SOON_DAYS,
   useUiStore,
   type ClickPoint,
   type ColumnKey,
@@ -53,6 +56,7 @@ import { DependencyArrows } from './DependencyArrows';
 import { dependencyFocus } from './dependencyRouter';
 import {
   teamSummary,
+  isDueSoon,
   isRunningOnDay,
   runningOrdersByDay,
   lineOfWorkerToday,
@@ -294,7 +298,22 @@ function OrderRowView({
         </div>
       )}
       {visibleDates.due && <div className="acell date due frozen" style={dueStyle}>{fmt(row.job.dueDate)}</div>}
-      {visibleDates.expect && <div className={`acell date expect frozen ${row.status.color}`} style={expectStyle}>
+      {/* A blank Expect Date is not a fault, it is a shortfall — say which,
+          and how big, where the dash is. */}
+      {visibleDates.expect && <div
+        className={`acell date expect frozen ${row.status.color}`}
+        style={expectStyle}
+        title={
+          row.expectDate
+            ? row.status.reason
+            : (row.uncoveredHours ?? 0) > 0
+              ? `${row.uncoveredHours!.toFixed(1)} h of this order has nobody free to do it, so it has no finish date` +
+                ((row.crewWithoutRoom?.length ?? 0) > 0
+                  ? ` — ${row.crewWithoutRoom!.map((w) => w.name).join(', ')} are booked elsewhere every day of it`
+                  : '')
+              : row.status.reason
+        }
+      >
         {fmt(row.expectDate)}
       </div>}
       <div className="acell team frozen" style={{ left: lefts.team }}>
@@ -361,6 +380,7 @@ function LineGroupView({
   collapsed,
   onToggle,
   onHide,
+  onClose,
   filtered,
   unlocked,
   relatedJobIds,
@@ -391,6 +411,8 @@ function LineGroupView({
   onToggle: () => void;
   /** Fold the whole line away; it comes back from the header. */
   onHide: () => void;
+  /** Close a line the supervisor opened. Absent on the eight built-in ones. */
+  onClose?: () => void;
   filtered: boolean;
   unlocked: boolean;
   relatedJobIds: ReadonlySet<string>;
@@ -492,6 +514,27 @@ function LineGroupView({
         >
           ×
         </button>
+        {/* Closing a line the supervisor opened is a different act from
+            folding it away, and it is theirs alone: the orders on it go back
+            to the unplaced pool for somebody to file again. */}
+        {onClose && (
+          <button
+            type="button"
+            className="agroup-close"
+            onClick={() => {
+              if (
+                group.rows.length === 0 ||
+                window.confirm(
+                  `Close ${group.line.name}? Its ${group.rows.length} order` +
+                    `${group.rows.length === 1 ? '' : 's'} go back to the unplaced pool.`,
+                )
+              ) onClose();
+            }}
+            title={`Close the ${group.line.name} line`}
+          >
+            Close line
+          </button>
+        )}
 
         {crew.length > 0 && (
           <span
@@ -567,12 +610,14 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
   const toggleLine = useUiStore((s) => s.toggleLine);
   const orderDay = useUiStore((s) => s.orderDay);
   const setOrderDay = useUiStore((s) => s.setOrderDay);
+  const dueSoon = useUiStore((s) => s.dueSoon);
   const showWeekends = useUiStore((s) => s.showWeekends);
   const sort = useUiStore((s) => s.orderSort);
   const changeSort = useUiStore((s) => s.changeOrderSort);
   const marked = useUiStore((s) => s.marked);
   const toggleMark = useUiStore((s) => s.toggleMark);
   const workerLineOverrides = usePlanStore((s) => s.workerLines);
+  const removeVirtualLine = usePlanStore((s) => s.removeVirtualLine);
   const unlocked = useSupervisorStore((s) => s.unlocked);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [hoveredJobId, setHoveredJobId] = useState<string | null>(null);
@@ -608,16 +653,24 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
    * come and go as bars were dragged.
    */
   const visibleIds = useMemo(() => {
-    if (!orderDay) return null;
-    const selected = withPredecessors(
-      allRows,
-      (row: OrderRow) =>
-        row.line.schedulable && isRunningOnDay(row, fromDayKey(orderDay)),
-    );
+    // Two narrowings, and an order has to satisfy both. Each keeps whatever
+    // the orders it shows are waiting for, all the way up the chain: a chain
+    // shown with its middle missing says less than no chain at all.
+    const chosen: ((row: OrderRow) => boolean)[] = [];
+    if (orderDay) {
+      chosen.push((row) => row.line.schedulable && isRunningOnDay(row, fromDayKey(orderDay)));
+    }
+    if (dueSoon) {
+      chosen.push((row) => row.line.schedulable && isDueSoon(row, board.today, DUE_SOON_DAYS));
+    }
+    if (chosen.length === 0) return null;
+    const selected = withPredecessors(allRows, (row) => chosen.every((f) => f(row)));
     // Daily Assembly filtering excludes PMD, including PMD predecessors.
-    for (const row of allRows) if (!row.line.schedulable) selected.delete(String(row.job.id));
+    if (orderDay) {
+      for (const row of allRows) if (!row.line.schedulable) selected.delete(String(row.job.id));
+    }
     return selected;
-  }, [allRows, orderDay]);
+  }, [allRows, board.today, orderDay, dueSoon]);
   const visibleGroups = useMemo(
     () =>
       orderedGroups.filter(group =>
@@ -928,7 +981,12 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
           collapsed={Boolean(collapsed[group.line.key])}
           onToggle={() => setCollapsed((current) => ({ ...current, [group.line.key]: !current[group.line.key] }))}
           onHide={() => toggleLine(group.line.key)}
-          filtered={orderDay !== null}
+          onClose={
+            unlocked && isVirtualLine(group.line.key)
+              ? () => removeVirtualLine(group.line.key as VirtualLineKey)
+              : undefined
+          }
+          filtered={orderDay !== null || dueSoon}
           unlocked={unlocked}
           relatedJobIds={relatedJobIds}
           markedIds={markedIds}

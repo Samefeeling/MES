@@ -30,6 +30,12 @@ export interface PersistedPlan {
     orderWorkers?: Record<string, string[]>;
     /** Supervisor-owned roster placement, independent of legacy Skills data. */
     workerLines?: Record<string, LineKey>;
+    /**
+     * Lines the supervisor opened on the floor. Part of the plan rather than
+     * of one browser: a bench opened for a rush is a fact about the week, and
+     * every screen reading the board has to see the same one.
+     */
+    virtualLines?: import('@/domain/assembly').VirtualLine[];
     /** Date-bounded crew plan; supersedes static `orderWorkers`. */
     orderCrewAssignments?: Record<string, CrewAssignment[]>;
     orderStarts?: Record<string, string>;
