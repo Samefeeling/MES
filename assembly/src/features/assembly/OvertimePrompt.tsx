@@ -14,7 +14,7 @@
 
 import { JobId } from '@/domain/ids';
 import { usePlanStore } from '@/store/planStore';
-import { useSupervisorStore } from '@/store/supervisorStore';
+import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { useUiStore } from '@/store/uiStore';
 import { Button } from '@/ui';
 import { fromDayKey, formatDay } from '@/lib/time';
@@ -30,6 +30,7 @@ export function OvertimePrompt() {
   // is simply a confirmation step.
   const unlocked = useSupervisorStore((s) => s.unlocked);
   const gated = useSupervisorStore((s) => s.required) && !unlocked;
+  const gate = signInAt(useSupervisorStore((s) => s.hosted));
 
   if (!request) return null;
 
@@ -69,7 +70,7 @@ export function OvertimePrompt() {
         </p>
         {gated && (
           <p className="ot-gate">
-            Unlock Supervisor in the header to approve overtime.
+            Sign in as {gate} to approve overtime.
           </p>
         )}
         <div className="ot-actions">

@@ -22,7 +22,7 @@ import type { OrderRow } from '@/engine/assembly/board';
 import { addDays, openDaysBetween, workingSpans } from '@/engine/assembly/dates';
 import { completedFraction, remainingHours } from '@/engine/assembly/duration';
 import { MS_PER_DAY } from '@/lib/time';
-import { useSupervisorStore } from '@/store/supervisorStore';
+import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { barTag, timelineDayOffset } from './boardView';
 import type { MarkedMove } from './groupMove';
 
@@ -85,6 +85,7 @@ export function OrderBar({
    * gate is and is not.
    */
   const unlocked = useSupervisorStore((s) => s.unlocked);
+  const gate = signInAt(useSupervisorStore((s) => s.hosted));
   const dragLocked =
     readOnly || !unlocked || Boolean(row.actualStart) || row.completedToday;
   const { attributes, listeners, setNodeRef, transform, isDragging } =
@@ -365,7 +366,7 @@ export function OrderBar({
         ` · ${Math.round(completion * 100)}% complete` +
         ` · ${row.status.reason}` +
         (!unlocked && !readOnly
-          ? ' · sign in as Supervisor to move it'
+          ? ` · sign in as ${gate} to move it`
           : '')
       }
       {...(dragLocked ? {} : listeners)}

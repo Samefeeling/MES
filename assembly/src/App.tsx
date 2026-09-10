@@ -9,6 +9,7 @@ import { useDataStore } from '@/store/dataStore';
 import { useIgnoredOrders } from '@/store/ignoredOrders';
 import { usePlanStore } from '@/store/planStore';
 import { useUiStore } from '@/store/uiStore';
+import { useSupervisorStore } from '@/store/supervisorStore';
 import { useAssemblyGantt } from '@/store/assemblySelectors';
 import { createPlanRepository, CURRENT_PLAN_ID } from '@/persistence';
 import { useDragDrop } from '@/features/assembly/useDragDrop';
@@ -37,6 +38,7 @@ export default function App() {
   const load = useDataStore((s) => s.load);
   const warnings = useDataStore((s) => s.warnings);
   const sourceName = useDataStore((s) => s.source.name);
+  const hosted = useSupervisorStore((s) => s.hosted);
 
   const ignoredOrderIds = useIgnoredOrders(s => s.ids);
   const containers = usePlanStore((s) => s.containers);
@@ -210,14 +212,23 @@ export default function App() {
   return (
     <div className="app">
       {/*
-        Title on the left, timeline controls dead centre, the controls that
-        write something on the right. The schedule's own counts used to sit up
-        here; they say nothing the coloured bars do not say better, and a
-        header carrying only what is asked of it reads quicker across a floor.
+        Timeline controls dead centre, the controls that write something on
+        the right. The schedule's own counts used to sit up here; they say
+        nothing the coloured bars do not say better, and a header carrying
+        only what is asked of it reads quicker across a floor.
+
+        This row and the column heading under it are one block of chrome, on
+        one ground — MES's top bar is the other, and the page gets no more
+        than the two.
       */}
       <header className="app-header">
         <div className="head-side">
-          <h1>Assembly Board</h1>
+          {/*
+            Inside MES the top bar names the department and lights the
+            Assembly button, so a title here is the same word twice, one band
+            apart. Standalone there is no top bar and the board says it.
+          */}
+          {!hosted && <h1>Assembly Board</h1>}
           <Badge variant="info">{sourceName}</Badge>
         </div>
         <BoardTools board={board} />

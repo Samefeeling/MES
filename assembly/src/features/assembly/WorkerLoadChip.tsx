@@ -14,6 +14,7 @@ import { createPortal } from 'react-dom';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { usePlanStore } from '@/store/planStore';
 import { useUiStore } from '@/store/uiStore';
+import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { LINES, virtualLineDef, type LineKey, type Worker } from '@/domain/assembly';
 import {
   dayBand,
@@ -41,6 +42,7 @@ export function WorkerLoadChip({
   const openWorkerId = useUiStore((s) => s.workerLoadId);
   const setWorkerLoad = useUiStore((s) => s.setWorkerLoad);
   const virtualLines = usePlanStore((s) => s.virtualLines);
+  const gate = signInAt(useSupervisorStore((s) => s.hosted));
   const open = openWorkerId === String(worker.id);
   const [position, setPosition] = useState({ left: 0, top: 0 });
   const wrap = useRef<HTMLSpanElement>(null);
@@ -150,7 +152,7 @@ export function WorkerLoadChip({
         aria-label={`${worker.name} — ${pct}% booked over ${preview.length} working days`}
         title={
           dragDisabled
-            ? `${worker.name} — load details; sign in as Supervisor to move between lines`
+            ? `${worker.name} — load details; sign in as ${gate} to move between lines`
             : `${worker.name} — click for load, drag to another production line`
         }
         onClick={() => setWorkerLoad(open ? null : String(worker.id))}
@@ -214,7 +216,7 @@ export function WorkerLoadChip({
                 <option key={target.key} value={target.key} disabled={!target.schedulable}>{target.name}</option>
               )}
             </select>
-            {dragDisabled && <span>Sign in as Supervisor to move operators.</span>}
+            {dragDisabled && <span>Sign in as {gate} to move operators.</span>}
           </label>
           <div className="wl-summary">
             <span>

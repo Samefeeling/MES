@@ -17,7 +17,7 @@ import { startEligibility } from '@/engine/assembly/release';
 import { formatDay, formatTime } from '@/lib/time';
 import { Badge, Button } from '@/ui';
 import type { PauseReason, ProductionEntry } from '@/store/planStore';
-import { useSupervisorStore } from '@/store/supervisorStore';
+import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { useDataStore } from '@/store/dataStore';
 
 const NO_PRODUCTION: ProductionEntry[] = [];
@@ -134,6 +134,7 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
   const setOrderStart = usePlanStore((s) => s.setOrderStart);
   const orderStarts = usePlanStore((s) => s.orderStarts);
   const unlocked = useSupervisorStore((s) => s.unlocked);
+  const gate = signInAt(useSupervisorStore((s) => s.hosted));
   const [draft, setDraft] = useState('');
   const productionByJob = usePlanStore((s) => s.production);
   const productionEntries = selectedJobId
@@ -234,7 +235,7 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
         return;
       }
       if (!unlocked) {
-        setStartMessage('Unlock Supervisor to override the start gate.');
+        setStartMessage(`Sign in as ${gate} to override the start gate.`);
         return;
       }
       if (!reason) {
@@ -462,7 +463,7 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
                 title={
                   unlocked
                     ? 'Let the board schedule this order again — as early as its crew, its line and the orders it waits on allow'
-                    : 'Sign in as Supervisor to release the pinned start'
+                    : `Sign in as ${gate} to release the pinned start`
                 }
               >
                 Release

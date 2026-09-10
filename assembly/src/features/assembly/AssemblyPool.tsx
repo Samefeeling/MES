@@ -20,7 +20,7 @@ import { ORDER_TYPE_SHORT } from '@/domain/assembly';
 import { POOL_ID } from '@/store/planStore';
 import { useUiStore } from '@/store/uiStore';
 import { useIgnoredOrders } from '@/store/ignoredOrders';
-import { useSupervisorStore } from '@/store/supervisorStore';
+import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { formatDay } from '@/lib/time';
 
 function PoolCard({
@@ -35,6 +35,7 @@ function PoolCard({
   const id = String(job.id);
   const ignore = useIgnoredOrders((s) => s.ignore);
   const unlocked = useSupervisorStore((s) => s.unlocked);
+  const gate = signInAt(useSupervisorStore((s) => s.hosted));
   // Filing an unplaced order onto a line is the same decision as moving one
   // that is already on a board, and behind the same gate.
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -48,7 +49,7 @@ function PoolCard({
       className={`ord ${selected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${
         unlocked ? '' : 'locked'
       }`}
-      title={unlocked ? undefined : 'Sign in as Supervisor to put this order on a line'}
+      title={unlocked ? undefined : `Sign in as ${gate} to put this order on a line`}
       onClick={(e) => onSelect(id, { x: e.clientX, y: e.clientY })}
       {...listeners}
       {...attributes}

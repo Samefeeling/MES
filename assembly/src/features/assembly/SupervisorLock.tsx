@@ -1,6 +1,14 @@
 /**
- * The header lock. Shown only when `VITE_SUPERVISOR_PASSWORD` is configured —
- * with no password there is nothing to unlock, so the control would be noise.
+ * The board's own lock — for the board on its own.
+ *
+ * Inside MES there is exactly one Supervisor button and it is in the top bar,
+ * above every screen. Drawing a second one down here would mean two controls
+ * for one session: sign in on the board, walk to PMD, and the top bar still
+ * says signed out. So when a host has claimed the board this renders nothing
+ * and the top bar's button is the only one there is.
+ *
+ * Shown only when `VITE_SUPERVISOR_PASSWORD` is configured — with no password
+ * there is nothing to unlock, so the control would be noise.
  *
  * See `store/supervisorStore` for what this gate is and is not.
  */
@@ -11,6 +19,7 @@ import { Button } from '@/ui';
 
 export function SupervisorLock() {
   const required = useSupervisorStore((s) => s.required);
+  const hosted = useSupervisorStore((s) => s.hosted);
   const unlocked = useSupervisorStore((s) => s.unlocked);
   const error = useSupervisorStore((s) => s.error);
   const unlock = useSupervisorStore((s) => s.unlock);
@@ -25,7 +34,7 @@ export function SupervisorLock() {
     if (asking) input.current?.focus();
   }, [asking]);
 
-  if (window.parent !== window) return null;
+  if (hosted) return null;
   if (!required) return null;
 
   const submit = () => {

@@ -28,18 +28,32 @@
   --line-band-bd: #bae6fd;
 
   /*
-   * Chrome, in three tiers, so nothing that frames the board can be mistaken
-   * for something on it: the title bar is a slate band, the board's own
-   * column and timeline heading is the dashboard's dark blue — the same
-   * heading the KPI tables wear — and the orders themselves are the only
-   * white on the page.
+   * Chrome, in two tiers — not three.
+   *
+   * MES's own top bar is above this frame on every screen of the application
+   * and is the darkest thing on the page: it says which department you are
+   * in and it holds the Supervisor button. Everything the board puts under it
+   * — the controls row and the column/timeline heading — shares one ground
+   * and closes with one rule, so it reads as a single block of chrome rather
+   * than as a second and a third title bar. The orders are the only white.
+   *
+   * The blue is deliberately a step lighter than the top bar's own #075985.
+   * The heading used to be that exact colour with a slate band wedged between
+   * the two, which gave the page two identical dark bars and no way to tell
+   * which of them owned the board. A shade down, and the block is plainly the
+   * top bar's subordinate rather than its twin.
    */
-  --chrome-band: #e2e8f0;
-  --chrome-rule: #075985;
-  --head-bg: #075985;
-  --head-tx: #f0f9ff;
-  --head-dim: #bae6fd;
-  --head-rule: #0c6d9e;
+  --chrome-rule: #075985; /* the top bar's blue, closing the block */
+  --head-bg: #0369a1;
+  --head-tx: #f0f9ff; /* 5.6:1 on --head-bg */
+  --head-dim: #d6ecfb; /* 4.9:1 — a shade lighter than the old #bae6fd, which
+                          fell under 4.5:1 once the ground was lightened */
+  --head-rule: #2a90c8;
+  /* A control sitting on the block, and one under the pointer. The same
+     translucent white the MES top bar gives its own nav buttons, so the two
+     tiers of chrome offer their controls in one language. */
+  --chrome-tint: rgb(255 255 255 / 12%);
+  --chrome-tint-hi: rgb(255 255 255 / 24%);
 
   --tool: #c084fc; /* die / tool change */
   --color: #fb923c; /* colour change */
@@ -99,12 +113,14 @@ button {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px;
-  padding: 10px 16px;
-  /* Not white. The title bar, the board's headings and the orders were three
-     shades of the same near-white stacked on each other, so the eye had
-     nothing to catch on and the controls read as the first row of the board. */
-  background: var(--chrome-band);
-  border-bottom: 2px solid var(--chrome-rule);
+  padding: 8px 16px;
+  /* The top half of the chrome block: the same ground as the column heading
+     below it, parted by a hairline rather than by a rule. Two rows of one
+     block — what the board is being asked to show, and what it is showing —
+     not two bands. */
+  background: var(--head-bg);
+  color: var(--head-tx);
+  border-bottom: 1px solid rgb(255 255 255 / 14%);
 }
 .head-side {
   display: flex;
@@ -145,23 +161,93 @@ button {
   .app-header > .board-tools { grid-column: 1 / -1; grid-row: 2; }
   .head-side.end { grid-column: 2; grid-row: 1; flex-wrap: wrap; }
 }
+/*
+ * Standalone only — inside MES the top bar's own Assembly button is lit, and
+ * a page that repeats its name under a bar already carrying it is the extra
+ * band this block exists to remove.
+ */
 .app-header h1 {
-  font-size: 15px;
+  font-size: 13px;
   margin: 0;
   font-weight: 800;
-  letter-spacing: 0.3px;
-  color: var(--chrome-rule);
+  letter-spacing: 0.4px;
+  color: var(--head-tx);
   text-transform: uppercase;
 }
-/* The chips and buttons in the bar keep their white ground — on the slate
-   band that is what makes them read as things to press. */
+/*
+ * Every control on the block, in one voice: translucent white on the blue,
+ * the way the MES top bar draws its own nav buttons. They used to be white
+ * pills on slate, which is the right answer on a light band and the wrong
+ * one here — a row of white pills on blue reads as a row of lit-up states.
+ */
+.app-header .btn,
 .app-header .board-tools button,
-.app-header .date-restore {
-  background: var(--surface);
+.app-header .date-restore,
+.app-header .supervisor-chip {
+  background: var(--chrome-tint);
+  border-color: rgb(255 255 255 / 30%);
+  color: var(--head-tx);
+}
+.app-header .btn:hover:not(:disabled),
+.app-header .board-tools button:hover,
+.app-header .date-restore:hover,
+.app-header .supervisor-chip:hover {
+  background: var(--chrome-tint-hi);
+  border-color: rgb(255 255 255 / 45%);
+  color: var(--head-tx);
+}
+/* Filled, not tinted: the one control that is doing something, and the two
+   that are saying a filter is on, have to leave the row rather than sit in
+   it. Accent blue is the same value as the ground and vanished into it. */
+.app-header .btn.primary,
+.app-header .board-tools .day-filter-clear,
+.app-header .supervisor-chip.open {
+  background: var(--head-tx);
+  border-color: var(--head-tx);
+  color: var(--head-bg);
+}
+.app-header .board-tools,
+.app-header .add-line-error {
+  color: var(--head-dim);
+}
+.app-header .board-tools strong {
+  color: var(--head-tx);
+}
+/* A figure, not a control — no border, so it cannot be pressed by mistake. */
+.app-header .board-load {
+  background: var(--chrome-tint);
+  color: var(--head-tx);
+}
+/* Amber on this blue is its own colour and needs no help; off, it is a chip
+   like the others. A folded-away line keeps a brighter chip than a hidden
+   column: it is a whole line missing from the board, not one column. */
+.app-header .board-tools .line-restore {
+  background: var(--chrome-tint-hi);
+  border-color: rgb(255 255 255 / 45%);
+  color: var(--head-tx);
+}
+.app-header .board-tools .due-soon-count {
+  background: rgb(255 255 255 / 26%);
+  color: var(--head-tx);
+}
+.app-header .marked-set {
+  background: var(--chrome-tint-hi);
+  border-color: var(--head-tx);
+  color: var(--head-tx);
 }
 .app-header .sub {
-  color: var(--muted);
+  color: var(--head-dim);
   font-size: 12px;
+}
+.app-header .badge.info {
+  background: var(--chrome-tint);
+  color: var(--head-tx);
+  border-color: rgb(255 255 255 / 30%);
+}
+/* The spinner's own track is a light-ground border. */
+.app-header .spinner {
+  border-color: rgb(255 255 255 / 30%);
+  border-top-color: var(--head-tx);
 }
 
 /*
@@ -966,9 +1052,32 @@ button {
 .assy-head .team-free { color: var(--head-dim); }
 .assy-head .daycol.today { background: rgb(255 255 255 / 10%); }
 /* Dimmed, not lost: a day already gone still has to be readable against the
-   heading's own blue, which a light-ground opacity of 0.68 was not. */
+   heading's own blue, which a light-ground opacity of 0.68 was not — and the
+   greys it is dimmed with on a white board (--muted, --faint) are near-black,
+   so the date of a past day was disappearing into the ground entirely. Dim it
+   with opacity and keep the heading's own ink. */
 .assy-head .daycol.past,
-.assy-head .daycol.weekend { opacity: 0.82; }
+.assy-head .daycol.weekend {
+  opacity: 0.82;
+  color: var(--head-dim);
+}
+.assy-head .past-tag {
+  background: rgb(255 255 255 / 22%);
+  color: var(--head-tx);
+}
+/*
+ * The load figures, lightened for this ground.
+ *
+ * The bar above each one carries the band at full strength and is what the
+ * week is read as a shape from; the number under it only confirms the bar, so
+ * it can afford the paler tint it needs to clear 4.5:1 on the blue. The board
+ * proper keeps the saturated colours — this is the heading only.
+ */
+.assy-head .day-load.green { color: #a7f3d0; }
+.assy-head .day-load.orange { color: #fde68a; }
+.assy-head .day-load.red { color: #ffe4e6; }
+.assy-head .day-load.closed { color: var(--head-dim); }
+.assy-head .day-bar.closed i { background: rgb(255 255 255 / 45%); }
 .acell {
   display: flex;
   align-items: center;

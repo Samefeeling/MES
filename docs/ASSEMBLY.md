@@ -6,6 +6,8 @@ MES contains two production domains. PMD continues to use its machine/shift DAL 
 
 The header reads MES, the former Operator tab reads PMD, and Assembly opens the React planning board. The frame remains mounted when switching departments so pending saves and inspector edits survive. Production uses a same-origin srcdoc frame that loads Assembly JavaScript/CSS, avoiding SharePoint's HTML download behavior. The host passes only its operational supervisor state. SharePoint permissions remain the actual access control. The frame carries the dashboard's own `#f1f5f9` ground: it fills the viewport under the top bar, so a white one flashed a white page on every switch and read as a load that had failed.
 
+**The top bar is the application's only chrome, and it does the whole job.** It lights the page you are on (`aria-current`), and it holds the one Supervisor button — the framed board draws no lock of its own and no title of its own, because both would be the top bar's work repeated one band lower. What the board adds under it is a single block: its controls row and its column/timeline heading on one ground, a step lighter than the top bar's `#075985`, so the page carries two tiers of chrome rather than four.
+
 ## Assembly results (`#/kpi/assembly`)
 
 `PMD` and `Assembly` are the first two buttons of the KPI toolbar, ahead of the period tabs (`src/ui/kpi-nav.ts`) — the same kind of choice, so the same control, department first because it decides what the rest of the row means. They were their own band above the page until then, a third row of navigation under the top bar's own.
@@ -107,7 +109,8 @@ blank values fall back to the existing operator name. Skills accepts text,
 multiple choices, and the current line labels. Missing skills leave a person in
 General until the supervisor places them; they do not grant every skill.
 
-Sign in through the MES Supervisor button to move operators **or orders**.
+Sign in through the MES top bar's Supervisor button — the only one there is —
+to move operators **or orders**.
 Drag a name onto a line or click the name and use Move to line. This changes
 the saved roster placement without rewriting the operator's skill
 qualifications. Recorded shift history is retained. The same gate now covers

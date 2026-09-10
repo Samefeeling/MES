@@ -180,16 +180,32 @@ function ensureNav(): void {
     // word — visually shorter and lower, which made the icons of the
     // other links land below its baseline. ✏️ matches the "filling in
     // the sheet" mental model the operator already has.
-    '<a href="#/" data-nav>\u{270F}\u{FE0F} PMD</a>' +
-    '<a href="#/assembly" data-nav>Assembly</a>' +
-    '<a href="#/tool" data-nav>\u{1F6E0}Tool</a>' +
-    '<a href="#/kpi" data-nav>\u{1F4CA} KPIs</a>' +
+    '<a href="#/" data-nav data-view="operator">\u{270F}\u{FE0F} PMD</a>' +
+    '<a href="#/assembly" data-nav data-view="assembly">Assembly</a>' +
+    '<a href="#/tool" data-nav data-view="tool">\u{1F6E0}Tool</a>' +
+    '<a href="#/kpi" data-nav data-view="kpi">\u{1F4CA} KPIs</a>' +
     `<button type="button" class="nav-btn sv-toggle${sv ? ' on' : ''}" data-supervisor title="${
       sv ? 'Supervisor mode is on — tap to sign out' : 'Sign in as supervisor to unlock signed-off shifts'
     }">${sv ? '🔒 Supervisor (on)' : '🔓 Supervisor'}</button>`;
   nav
     .querySelector<HTMLButtonElement>('[data-supervisor]')
     ?.addEventListener('click', onSupervisorClick);
+  markNav();
+}
+
+// Which of the four the reader is looking at. The top bar is the only chrome
+// the whole application shares, so it is the only honest place to say where
+// you are — and once it says so, an inner page repeating its own name in a
+// band of its own is a second title bar for nothing. Assembly dropped exactly
+// that band, so this has to be right for the board to still be identifiable.
+function markNav(): void {
+  const view = parseRoute().view;
+  for (const link of document.querySelectorAll<HTMLAnchorElement>(
+    '.top-nav a[data-view]',
+  )) {
+    if (link.dataset.view === view) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  }
 }
 
 function onSupervisorClick(): void {
@@ -277,6 +293,7 @@ async function route(): Promise<void> {
   }
   try {
     const r = parseRoute();
+    markNav();
     showAssembly(r.view === 'assembly');
     if (r.view === 'assembly') {
       document.body.className = 'shift-day';

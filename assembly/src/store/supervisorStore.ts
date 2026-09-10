@@ -29,6 +29,16 @@ interface SupervisorState {
   unlocked: boolean;
   /** False when no password is set — the UI hides the lock entirely. */
   required: boolean;
+  /**
+   * True once MES has claimed this board (see `mesBridge`).
+   *
+   * The gate is then the host's own top-bar button, which is on every screen
+   * of the application rather than only this one — there is one place to sign
+   * in and one place to sign out. This board must therefore not offer a
+   * second lock of its own, and must not tell the reader to use "the header",
+   * because the header they are looking at has no such control on it.
+   */
+  hosted: boolean;
   /** Set after a wrong attempt, cleared on the next try. */
   error: string | null;
 
@@ -38,12 +48,24 @@ interface SupervisorState {
   clearError: () => void;
 }
 
+/**
+ * Where the reader has to go to sign in, named for the screen they are on.
+ *
+ * Inside MES that is the top bar above this board; standalone — the demo and
+ * the dev server — the board carries its own lock. Every "you need to be
+ * signed in" line on the board is built from this, so none of them can drift
+ * into pointing at a control that is not there.
+ */
+export const signInAt = (hosted: boolean): string =>
+  hosted ? 'Supervisor in the MES top bar' : 'Supervisor in the board header';
+
 const configured = (): string =>
   (import.meta.env.VITE_SUPERVISOR_PASSWORD ?? '').trim();
 
 export const useSupervisorStore = create<SupervisorState>((set) => ({
   unlocked: configured() === '',
   required: configured() !== '',
+  hosted: false,
   error: null,
 
   unlock(password) {

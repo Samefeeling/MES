@@ -224,6 +224,27 @@ permissions decide who may write and its Modified By records which supervisor
 did. A real boundary means restricting write on `ASSY_Plans` /
 `ASSY_Production` to a SharePoint group.
 
+**The gate is the host's, and now says so.** `mesBridge.connectMes` sets
+`hosted` on the supervisor store; `SupervisorLock` renders nothing when it is
+set, so inside MES the top bar's button is the only one — the board used to
+hide its lock on `window.parent !== window`, which was the right behaviour for
+an accidental reason. Every "you need to be signed in" line is built from
+`signInAt(hosted)` (`store/supervisorStore`): they all said "in the header",
+and inside MES that is the one header with no such control on it.
+
+**The board's chrome is two tiers, not four.** MES's top bar now lights the
+page you are on (`markNav`, `aria-current`, `main.ts` + `.top-nav a` in
+`styles.css`), which is what let the board stop titling itself — the `<h1>`
+renders only when the board is unhosted. `.app-header` and `.assy-head` share
+one ground (`--head-bg`, moved from `#075985` to `#0369a1`) parted by a
+hairline, so the controls row and the column heading read as one block instead
+of a slate band plus a dark-blue band identical to the top bar's. Controls on
+it are translucent white, the same language as the top bar's own nav buttons.
+Lightening the ground cost contrast, so the heading's greys (`--muted` /
+`--faint` on past and weekend columns, which were near-black on blue and
+already wrong) and its load figures are lightened to clear 4.5:1 —
+`board-chrome-e2e.mjs` measures the ratios rather than trusting the eye.
+
 One blank-cell warning was dropped: an order whose hours cells are empty is no
 longer named in the banner. The banner is for problems with the *export*, and
 a real one has dozens of those rows — none of which the supervisor can fix

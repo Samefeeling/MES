@@ -18,7 +18,7 @@
 
 import { JobId } from '@/domain/ids';
 import { usePlanStore } from '@/store/planStore';
-import { useSupervisorStore } from '@/store/supervisorStore';
+import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { useUiStore } from '@/store/uiStore';
 import { Button } from '@/ui';
 
@@ -32,6 +32,7 @@ export function ClashPrompt() {
   // heavier one than most.
   const unlocked = useSupervisorStore((s) => s.unlocked);
   const gated = useSupervisorStore((s) => s.required) && !unlocked;
+  const gate = signInAt(useSupervisorStore((s) => s.hosted));
 
   if (!request) return null;
 
@@ -81,7 +82,7 @@ export function ClashPrompt() {
         </p>
         {gated && (
           <p className="ot-gate">
-            Unlock Supervisor in the header to allocate.
+            Sign in as {gate} to allocate.
           </p>
         )}
         <div className="ot-actions">

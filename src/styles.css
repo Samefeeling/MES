@@ -63,6 +63,11 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .top-nav a,.top-nav .nav-btn{flex:0 0 auto;white-space:nowrap}
 .top-nav a{color:var(--theme-on-dark);text-decoration:none;padding:7px 14px;border-radius:8px;font-size:14px;font-weight:700;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25)}
 .top-nav a:hover{background:rgba(255,255,255,.24)}
+/* Where you are. Filled white against the bar's own dark ground, so the four
+   links read as one control with one of them pressed — the inner pages no
+   longer carry a title band of their own to say it for them. */
+.top-nav a[aria-current="page"]{background:var(--theme-on-dark);color:var(--theme-dark);border-color:var(--theme-on-dark);cursor:default}
+.top-nav a[aria-current="page"]:hover{background:var(--theme-on-dark)}
 .vw{padding:14px;margin-top:var(--topbar-h,52px)}
 
 /* KPI / meeting view */

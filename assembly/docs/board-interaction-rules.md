@@ -18,10 +18,18 @@ comes back from, and every line carries a **×** on its own row to fold it.
 their right-hand edge, or moved with ← / → once the grip has focus. Which
 column needs the room is not something a default can know.
 
-The title bar, the board's own heading and the orders are three deliberately
-different grounds — slate, the dashboard's dark blue, and white. They used to
-be three shades of the same near-white stacked on each other, so the controls
-read as the first row of the board.
+**Two tiers of chrome, and MES owns the upper one.** The application's own top
+bar is above this frame on every screen — it names the department, lights the
+page you are on, and holds the Supervisor button. Everything the board puts
+under it is a single block: the controls row and the column/timeline heading
+share one ground and close with one rule, so it reads as one thing rather than
+as a second and a third title bar. The orders are the only white on the page.
+
+That block's blue is deliberately a step lighter than the top bar's. It was
+that exact colour, with a slate band wedged between the two, which gave the
+page two identical dark bars and nothing to say which of them owned the board.
+The board also stopped titling itself: the top bar already says Assembly, and a
+page repeating its own name one band lower is the extra band this removes.
 
 ## Date filtering
 
@@ -76,6 +84,17 @@ the gate since the beginning; moving the order itself was not, which had it
 backwards. Signed out, a bar and an unplaced card still open for reading and
 still say what is holding them; they no longer offer to be picked up, and
 **Release** on a pinned start is disabled with the same reason.
+
+**There is one Supervisor button and it is in the MES top bar.** Inside MES the
+board draws no lock of its own: a second control for one session would let
+somebody sign in here, walk to PMD, and find the top bar still saying signed
+out. `mesBridge` marks the board *hosted* on connect, which both removes the
+board's lock and shuts the gate until the host says who is signed in — an open
+board in that gap is a board anybody can rearrange. Every "you need to be
+signed in" line on the board is built from `signInAt(hosted)` for the same
+reason: they used to send the reader to "the header", which is the one place
+the control is not. The board keeps its own lock only when it is opened on its
+own — the mock demo and the dev server, which have no top bar above them.
 
 What the gate is has not changed, and is worth restating: `VITE_SUPERVISOR_PASSWORD`
 is one shared password compiled into the JavaScript bundle, so anyone who opens

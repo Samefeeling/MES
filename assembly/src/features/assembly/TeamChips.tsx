@@ -25,7 +25,7 @@ import {
   type FreeCrewWindow,
 } from '@/engine/assembly/crew';
 import { usePlanStore } from '@/store/planStore';
-import { useSupervisorStore } from '@/store/supervisorStore';
+import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { useUiStore } from '@/store/uiStore';
 import { formatDay, fromDayKey, toDayKey } from '@/lib/time';
 
@@ -135,6 +135,7 @@ export function TeamChips({
   const approved = usePlanStore((s) => s.orderDoubleBooked);
   const askClash = useUiStore((s) => s.askClash);
   const unlocked = useSupervisorStore((s) => s.unlocked);
+  const hosted = useSupervisorStore((s) => s.hosted);
 
   useEffect(() => {
     if (!picking) {
@@ -151,7 +152,7 @@ export function TeamChips({
   const full =
     row.crewDays.length > 0 &&
     row.crewDays.every((day) => day.workerIds.length >= MAX_WORKERS_PER_ORDER);
-  const LOCKED = 'Unlock Supervisor in the header to change the crew';
+  const LOCKED = `Sign in as ${signInAt(hosted)} to change the crew`;
 
   // What the schedule actually planned — a chip marks a real overlap, not one
   // that would only happen if this person worked the whole order. Somebody
