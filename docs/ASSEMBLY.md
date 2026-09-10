@@ -107,9 +107,16 @@ blank values fall back to the existing operator name. Skills accepts text,
 multiple choices, and the current line labels. Missing skills leave a person in
 General until the supervisor places them; they do not grant every skill.
 
-Sign in through the MES Supervisor button to move operators. Drag a name onto
-a line or click the name and use Move to line. This changes the saved roster
-placement without rewriting the operator's skill qualifications. Recorded shift
-history is retained. A missing production column stops that sync at the first
+Sign in through the MES Supervisor button to move operators **or orders**.
+Drag a name onto a line or click the name and use Move to line. This changes
+the saved roster placement without rewriting the operator's skill
+qualifications. Recorded shift history is retained. The same gate now covers
+moving an order — dragging a bar to a new day or line, filing an unplaced order
+onto a line, and releasing a pinned start — because each writes the shared plan
+and the pinned day goes out to the production list. It remains an operational
+gate on one compiled-in password, not access control: SharePoint's permissions
+on ASSY_Plans and ASSY_Production are what actually decide who may write, and
+its Modified By is what records which supervisor did. See
+`assembly/docs/board-interaction-rules.md`. A missing production column stops that sync at the first
 permanent error; correct the list schema and retry. No columns or list records
 are automatically created or deleted by field discovery.

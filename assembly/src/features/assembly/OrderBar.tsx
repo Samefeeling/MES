@@ -19,9 +19,10 @@
 import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import type { OrderRow } from '@/engine/assembly/board';
-import { addDays, workingSpans } from '@/engine/assembly/dates';
+import { addDays, openDaysBetween, workingSpans } from '@/engine/assembly/dates';
 import { completedFraction, remainingHours } from '@/engine/assembly/duration';
 import { MS_PER_DAY } from '@/lib/time';
+import { useSupervisorStore } from '@/store/supervisorStore';
 import { barTag, timelineDayOffset } from './boardView';
 import type { MarkedMove } from './groupMove';
 
@@ -75,7 +76,17 @@ export function OrderBar({
   onDependencyHover: (jobId: string | null) => void;
 }) {
   const id = String(row.job.id);
-  const dragLocked = readOnly || Boolean(row.actualStart) || row.completedToday;
+  /*
+   * Moving an order is a change to the shared plan — it pins a start day, it
+   * can move the order to another line, and the pinned day goes out to the
+   * production list as this order's start. Putting a name on an order has been
+   * behind the supervisor gate since the beginning; moving the order itself
+   * was not, which had it backwards. See `store/supervisorStore` for what this
+   * gate is and is not.
+   */
+  const unlocked = useSupervisorStore((s) => s.unlocked);
+  const dragLocked =
+    readOnly || !unlocked || Boolean(row.actualStart) || row.completedToday;
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({
       id: `bar:${id}`,
@@ -183,6 +194,8 @@ export function OrderBar({
     spans.length > 0
       ? spans.map((piece) => ({
           key: piece.from.getTime(),
+          from: piece.from,
+          to: piece.to,
           left: (axisOffset(piece.from) - offsetDays) * dayWidth,
           width: Math.max(
             (axisOffset(piece.to) - axisOffset(piece.from)) * dayWidth,
@@ -198,13 +211,51 @@ export function OrderBar({
               : 0,
         }))
       : // A closed order has no span left to draw, but still needs a handle.
-        [{ key: 0, left: 0, width, done: 1 }]
+        [{ key: 0, from: row.start, to: end, left: 0, width, done: 1 }]
   )
     .filter((piece) => piece.width > 0)
     .map((piece) => ({
       ...piece,
       width: Math.max(piece.width, MIN_PIECE_PX),
     }));
+
+  /*
+   * The days in the middle of the run that the order is not worked, drawn as
+   * part of the bar rather than as the absence of one.
+   *
+   * Two holes can open between two blocks and they mean opposite things. A
+   * weekend is the factory being shut: the closed-day stripe shows through and
+   * that is the whole explanation. An *open* day is this order's crew being on
+   * another one — and drawn the same way it read as two orders, so the planner
+   * dragged the bar back together, which pins it and books that person on both
+   * at once. So the pause keeps the bar joined, says how long it is, and the
+   * title says which order took the days.
+   */
+  const links = pieces.slice(1).flatMap((piece, i) => {
+    const previous = pieces[i];
+    const idle = openDaysBetween(previous.to, piece.from, continuous);
+    const left = previous.left + previous.width;
+    const linkWidth = piece.left - left;
+    return idle.length > 0 && linkWidth > 0
+      ? [{ key: `link-${previous.key}`, left, width: linkWidth, idle: idle.length }]
+      : [];
+  });
+  const idleDays = links.reduce((sum, link) => sum + link.idle, 0);
+  const pausedFor = [
+    ...new Set((row.pauses ?? []).flatMap((pause) => pause.heldBy)),
+  ];
+  /*
+   * The other half of the same story. Dragging a bar over its own pause closes
+   * the hole, and it is easy to read that as the board having found room —
+   * what it actually did was pin the order, and a pinned order consults no
+   * diary. So the bar says whose day it is now spending twice.
+   */
+  const nameOf = (workerId: string) =>
+    row.workers.find((worker) => String(worker.id) === workerId)?.name ??
+    workerId;
+  const clashes = row.doubleBooked ?? [];
+  const clashedWith = [...new Set(clashes.map((clash) => clash.withJob))];
+  const clashedNames = [...new Set(clashes.map((clash) => nameOf(clash.workerId)))];
 
   /*
    * Every stretch of this bar can come out zero-width, and the whole bar used
@@ -262,7 +313,11 @@ export function OrderBar({
         readOnly ? 'readonly' : ''
       } ${row.overtime ? 'overtime' : ''} ${
         drawn.length > 1 ? 'split' : ''
-      } ${offAxis ? 'off-axis' : ''} ${heldBy ? 'held' : ''} ${tag.stub ? 'stub' : ''} ${
+      } ${idleDays > 0 ? 'paused' : ''} ${
+        offAxis ? 'off-axis' : ''
+      } ${!unlocked ? 'locked' : ''} ${clashes.length > 0 ? 'clash' : ''} ${
+        heldBy ? 'held' : ''
+      } ${tag.stub ? 'stub' : ''} ${
         tag.outside ? 'tagged' : ''
       } ${tag.flip ? 'tag-left' : ''} ${marked ? 'marked' : ''}`}
       style={{
@@ -286,7 +341,14 @@ export function OrderBar({
       title={
         `${row.job.id} · ${row.days.toFixed(1)} d worked with ${row.workers.length}` +
         (readOnly ? '' : ` · position ${row.slot + 1} of ${row.line.parallelOrders}`) +
-        (drawn.length > 1 ? ' · pauses over the weekend' : '') +
+        (idleDays > 0
+          ? ` · put down for ${idleDays} working day${idleDays === 1 ? '' : 's'}` +
+            (pausedFor.length > 0
+              ? ` — its crew are on ${pausedFor.join(', ')}`
+              : ' — nobody on it is free those days')
+          : drawn.length > 1
+            ? ' · pauses over the weekend'
+            : '') +
         (offAxis
           ? ' · runs entirely on days this axis is hiding — show Weekends to see it'
           : '') +
@@ -294,12 +356,29 @@ export function OrderBar({
         (heldBy
           ? ` · cannot start before ${heldBy} is finished, so it will not drag any earlier`
           : '') +
+        (clashes.length > 0
+          ? ` · ${clashedNames.join(', ')} ${
+              clashedNames.length === 1 ? 'is' : 'are'
+            } on ${clashedWith.join(', ')} the same day — only one of the two ` +
+            'can have them'
+          : '') +
         ` · ${Math.round(completion * 100)}% complete` +
-        ` · ${row.status.reason}`
+        ` · ${row.status.reason}` +
+        (!unlocked && !readOnly
+          ? ' · sign in as Supervisor to move it'
+          : '')
       }
       {...(dragLocked ? {} : listeners)}
       {...(dragLocked ? {} : attributes)}
     >
+      {links.map((link) => (
+        <div
+          key={link.key}
+          className="bar-link"
+          style={{ left: link.left, width: link.width }}
+          aria-hidden="true"
+        />
+      ))}
       {drawn.map((piece) => (
         <div
           key={piece.key}

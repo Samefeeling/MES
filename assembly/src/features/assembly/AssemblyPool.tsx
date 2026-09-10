@@ -35,14 +35,20 @@ function PoolCard({
   const id = String(job.id);
   const ignore = useIgnoredOrders((s) => s.ignore);
   const unlocked = useSupervisorStore((s) => s.unlocked);
+  // Filing an unplaced order onto a line is the same decision as moving one
+  // that is already on a board, and behind the same gate.
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id,
+    disabled: !unlocked,
     data: { type: 'job', jobId: id },
   });
   return (
     <div
       ref={setNodeRef}
-      className={`ord ${selected ? 'selected' : ''} ${isDragging ? 'dragging' : ''}`}
+      className={`ord ${selected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${
+        unlocked ? '' : 'locked'
+      }`}
+      title={unlocked ? undefined : 'Sign in as Supervisor to put this order on a line'}
       onClick={(e) => onSelect(id, { x: e.clientX, y: e.clientY })}
       {...listeners}
       {...attributes}

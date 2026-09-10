@@ -194,6 +194,36 @@ one person's day is still never split between two orders, and the hand-over
 seam — somebody coming off at eleven takes the next order from eleven — is
 still exact. Covered by `tests/engine/crewDiary.test.ts`.
 
+**A bar is no longer drawn in pieces.** The per-day availability above is what
+lets an order keep the Friday and the Tuesday while somebody else has the
+Monday — right, and drawn as two separate blocks it read as two orders, so the
+floor dragged the bar back together until it looked whole. Two holes mean
+opposite things: a weekend is the factory being shut (`openDaysBetween` in
+`dates.ts` counts none), an open day is the crew being elsewhere. The second
+kind is **joined by a dashed rule** (`.bar-link`), counted, and named —
+`OrderRow.pauses` (`board.ts`, from `crewSchedule.idleRuns` plus a
+`worker|day → jobId` diary) says which order took the days, on the bar's title
+and as a `put down N days` badge in the inspector.
+
+And the drag itself is answered: pinning is what closes the hole, because a
+pinned order consults no diary — so both orders are then **hatched in amber**
+and each names the person and the other order (`OrderRow.doubleBooked`,
+`markDoubleBookings`, read off the finished board so it is symmetric rather
+than landing on whichever resolved second). A hand-over is not a clash: both
+sides of one are computed by division, so the overlap test carries a `1e-6`
+tolerance — without it every clean hand-over on the board reads as a double
+booking (seven of them on the demo seed).
+
+**Moving an order is behind the supervisor gate**, like allocating crew has
+always been: the bar drag (pin day / change line / drop to the pool), filing an
+unplaced card, and **Release** on a pinned start. `OrderBar` and the pool card
+disable their draggable and say why; `useDragDrop.onDragEnd` refuses as the
+backstop. Unchanged and worth restating: one shared password compiled into the
+bundle is an operational gate, not authorization — SharePoint's list
+permissions decide who may write and its Modified By records which supervisor
+did. A real boundary means restricting write on `ASSY_Plans` /
+`ASSY_Production` to a SharePoint group.
+
 One blank-cell warning was dropped: an order whose hours cells are empty is no
 longer named in the banner. The banner is for problems with the *export*, and
 a real one has dozens of those rows — none of which the supervisor can fix

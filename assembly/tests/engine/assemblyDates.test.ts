@@ -4,6 +4,7 @@ import {
   isWeekend,
   nextMidnight,
   nextWorkingDay,
+  openDaysBetween,
   prevMidnight,
   prevWorkingDay,
   scheduleStatus,
@@ -279,5 +280,38 @@ describe('crossing the day the clocks change', () => {
     const worked = spans.reduce((sum, span) => sum + span.worked, 0);
     // Friday, then Monday to Friday: six open days, not six and an hour.
     expect(worked).toBeCloseTo(6, 6);
+  });
+});
+
+/**
+ * The two kinds of hole in a bar. A weekend is the factory being shut and
+ * explains itself; an open day in the middle of an order is its crew being
+ * somewhere else, and is the one that needs saying out loud.
+ */
+describe('open days lost in the middle of a run', () => {
+  it('counts nothing across a weekend', () => {
+    // Friday worked, Monday worked: nothing was skipped.
+    expect(openDaysBetween(d('2026-09-11'), d('2026-09-14'))).toEqual([]);
+  });
+
+  it('counts the working day nobody was on it', () => {
+    // Friday worked, Tuesday worked: the Monday is the pause.
+    expect(openDaysBetween(d('2026-09-11'), d('2026-09-15'))).toEqual([
+      '2026-09-14',
+    ]);
+  });
+
+  it('counts neither end of the stretch', () => {
+    expect(openDaysBetween(d('2026-09-10'), d('2026-09-11'))).toEqual([]);
+    expect(openDaysBetween(d('2026-09-10'), d('2026-09-10'))).toEqual([]);
+  });
+
+  it('reads the weekend itself as lost once overtime is approved', () => {
+    // An order approved to run through the weekend and not worked on it has
+    // genuinely lost those days.
+    expect(openDaysBetween(d('2026-09-11'), d('2026-09-14'), true)).toEqual([
+      '2026-09-12',
+      '2026-09-13',
+    ]);
   });
 });

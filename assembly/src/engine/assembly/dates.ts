@@ -14,7 +14,7 @@
  * its due date a day late.
  */
 
-import { MS_PER_DAY } from '@/lib/time';
+import { MS_PER_DAY, toDayKey } from '@/lib/time';
 
 export type ScheduleColor = 'green' | 'red' | 'grey';
 
@@ -205,6 +205,25 @@ export function shiftFraction(
 
 /** Stops the walk below on a duration that could never be real. */
 const MAX_SPAN_DAYS = 2000;
+
+/**
+ * The open days strictly between two moments — the days a factory that was
+ * working could have worked, and did not.
+ *
+ * This is what separates the two kinds of hole in a bar. A weekend is the
+ * factory being shut and needs no explanation; an open day in the middle of an
+ * order is the crew being somewhere else, and does.
+ */
+export function openDaysBetween(from: Date, to: Date, overtime = false): string[] {
+  const out: string[] = [];
+  let cursor = nextMidnight(startOfDay(from));
+  const end = startOfDay(to);
+  for (let guard = 0; guard < MAX_SPAN_DAYS && cursor < end; guard++) {
+    if (overtime || !isWeekend(cursor)) out.push(toDayKey(cursor));
+    cursor = nextMidnight(cursor);
+  }
+  return out;
+}
 
 /** A stretch of open days, and how much of the order's work falls in it. */
 export interface WorkingSpan {

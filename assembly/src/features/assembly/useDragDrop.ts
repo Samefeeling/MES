@@ -18,6 +18,7 @@ import {
 } from '@dnd-kit/core';
 import { JobId } from '@/domain/ids';
 import { POOL_ID, usePlanStore } from '@/store/planStore';
+import { useSupervisorStore } from '@/store/supervisorStore';
 import { useUiStore } from '@/store/uiStore';
 import { DEFAULT_DAY_WIDTH } from '@/store/uiStore';
 import { DRAG_TYPE_BAR } from '@/features/assembly/OrderBar';
@@ -69,6 +70,16 @@ export function useDragDrop() {
     setActiveJobId(null);
     setActiveWorkerId(null);
     const { over, active, delta } = e;
+
+    /*
+     * Nothing here is a view preference: every branch below writes to the plan
+     * every screen on the floor is reading. The draggables are disabled while
+     * the board is locked, so this is the backstop rather than the gate — but
+     * it is the one place all of them come through, and a drop that wrote a
+     * pinned start after the gate was somehow got past is exactly the write
+     * that is hardest to notice afterwards.
+     */
+    if (!useSupervisorStore.getState().unlocked) return;
 
     if (active.data.current?.type === 'worker') {
       if (over?.data.current?.type !== 'line') return;

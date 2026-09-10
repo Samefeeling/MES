@@ -213,3 +213,106 @@ function computeBounded() {
     today: THU,
   }).rowsByJob.get('BIG')!;
 }
+
+/**
+ * What the board says about the days in the middle of an order that nobody on
+ * it is free.
+ *
+ * The plan is right to have them: capacity is charged a whole day at a time,
+ * so a person on another order on the Monday gives this one the Friday and the
+ * Tuesday. Drawn as a hole it read as two orders, and the answer the board
+ * invited — drag the bar back together — pins it, and a pinned order consults
+ * no diary at all, so it books the same person on both. The bar is joined
+ * instead, and the pause is named.
+ */
+describe('a bar that is put down', () => {
+  it('names the order that took the day', () => {
+    const b = board(
+      [job('LATER', 1), job('BIG', 5)],
+      { LATER: ['W0'], BIG: ['W0'] },
+      { LATER: '2026-09-14' },
+    );
+    expect(b.rowsByJob.get('BIG')!.pauses).toEqual([
+      { days: ['2026-09-14'], heldBy: ['LATER'] },
+    ]);
+  });
+
+  it('does not call the weekend a pause', () => {
+    // Thu, Fri, Mon with nobody else on W0: the bar breaks over the weekend
+    // and that break explains itself.
+    const b = board([job('SOLO', 3)], { SOLO: ['W0'] });
+    const solo = b.rowsByJob.get('SOLO')!;
+    expect(solo.crewDays.map((d) => d.day)).toEqual([
+      '2026-09-10',
+      '2026-09-11',
+      '2026-09-14',
+    ]);
+    expect(solo.pauses).toEqual([]);
+  });
+
+  it('says nothing about an order that runs straight through', () => {
+    expect(board([job('SOLO', 2)], { SOLO: ['W0'] }).rowsByJob.get('SOLO')!.pauses)
+      .toEqual([]);
+  });
+});
+
+/**
+ * The other half of the same story.
+ *
+ * Dragging a bar over its own pause closes the hole, and it is easy to read
+ * that as the board having found room. What it did was pin the order, and a
+ * pinned order consults no diary at all — the right rule for a decision
+ * somebody made on purpose, and one that has to be said out loud when it costs
+ * a person's day twice.
+ */
+describe('a day spent twice', () => {
+  it('names the person and the order they are already on', () => {
+    const b = board(
+      [job('LATER', 1), job('BIG', 2)],
+      { LATER: ['W0'], BIG: ['W0'] },
+      // Both put on the Monday by hand, so neither works around the other.
+      { LATER: '2026-09-14', BIG: '2026-09-14' },
+    );
+    // Both of them, not whichever the board happened to plan second: sharing a
+    // person is a fact about the pair, and the one that has to give way is not
+    // decided here.
+    expect(b.rowsByJob.get('BIG')!.doubleBooked).toEqual([
+      { day: '2026-09-14', workerId: 'W0', withJob: 'LATER' },
+    ]);
+    expect(b.rowsByJob.get('LATER')!.doubleBooked).toEqual([
+      { day: '2026-09-14', workerId: 'W0', withJob: 'BIG' },
+    ]);
+  });
+
+  it('is not raised by a hand-over part-way through a day', () => {
+    // W0 finishes a fifth of the Monday on LATER and picks the next order up
+    // where it left off. One day, two orders, one person, no clash.
+    const b = board(
+      // Pinned to today, so it is planned first and NEXT falls in behind it.
+      [job('LATER', 0.2), job('NEXT', 1)],
+      { LATER: ['W0'], NEXT: ['W0'] },
+      { LATER: '2026-09-10' },
+    );
+    const first = b.rowsByJob.get('LATER')!.crewDays[0];
+    const second = b.rowsByJob.get('NEXT')!.crewDays[0];
+    // One day, two orders: the second picks up exactly where the first left
+    // off, which is the whole point of the seam.
+    expect(second.day).toBe(first.day);
+    expect(second.from).toBeCloseTo(first.from + first.used, 6);
+    expect(b.rowsByJob.get('LATER')!.doubleBooked).toEqual([]);
+    expect(b.rowsByJob.get('NEXT')!.doubleBooked).toEqual([]);
+  });
+
+  it('is empty on an order the board scheduled itself', () => {
+    // The same clash, left to the board: it works around the Monday instead of
+    // taking it, so there is nothing to warn about.
+    const b = board(
+      [job('LATER', 1), job('BIG', 2)],
+      { LATER: ['W0'], BIG: ['W0'] },
+      { LATER: '2026-09-14' },
+    );
+    const big = b.rowsByJob.get('BIG')!;
+    expect(big.doubleBooked).toEqual([]);
+    expect(big.crewDays.map((d) => d.day)).not.toContain('2026-09-14');
+  });
+});

@@ -1640,6 +1640,24 @@ body.col-resizing {
   border: 1px solid transparent;
   overflow: hidden;
 }
+/*
+ * The days in the middle of an order that nobody on it is free.
+ *
+ * A weekend between two blocks needs nothing: the closed-day stripe shows
+ * through and everyone can read it. An *open* day is this order's crew being
+ * on another one, and drawn as the same hole it read as two orders — so the
+ * bar was dragged back together, which pins it and books that person twice.
+ * The pause is part of the bar: joined, plainly not worked, and the title says
+ * which order took the days.
+ */
+.bar-link {
+  position: absolute;
+  top: 50%;
+  height: 0;
+  border-top: 2px dashed currentColor;
+  opacity: 0.5;
+  pointer-events: none;
+}
 .bar.green .bar-piece { background: #bbf7d0; border-color: #16a34a; }
 .bar.red .bar-piece { background: #fecaca; border-color: #dc2626; }
 .bar.grey .bar-piece { background: var(--surface-3); border-color: var(--border); }
@@ -1649,6 +1667,12 @@ body.col-resizing {
 .bar.readonly {
   cursor: default;
   opacity: 0.75;
+}
+/* Nobody is signed in, so the board reads rather than plans. The bar keeps its
+   colour — the schedule is still the thing being read — and only stops
+   offering to be picked up. */
+.bar.locked {
+  cursor: default;
 }
 .bar.selected .bar-piece {
   box-shadow: 0 0 0 2px rgba(91, 140, 255, 0.55);
@@ -1670,6 +1694,22 @@ body.col-resizing {
     rgba(15, 23, 42, 0.16) 0 2px,
     transparent 2px 5px
   );
+}
+/*
+ * This order has somebody another one already has, on the same day.
+ *
+ * Only a pinned or a started bar can: those consult no diary, which is right
+ * for a decision somebody made, and is also why dragging a bar over its own
+ * pause appears to work. The hatch is on the blocks rather than beside them —
+ * the whole bar is standing on borrowed people.
+ */
+.bar.clash .bar-piece {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(180, 83, 9, 0.28) 0 3px,
+    transparent 3px 7px
+  );
+  border-color: #b45309;
 }
 /* An order approved to run through the weekend is one unbroken block. */
 .bar.overtime .bar-piece {
@@ -2431,6 +2471,9 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .ord:hover { border-color: var(--accent); }
 .ord.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(91,140,255,.35); }
 .ord.dragging { opacity: 0.35; }
+/* Reading the pile is not filing it: the card still opens for inspection, it
+   just no longer offers to be dropped on a line. */
+.ord.locked { cursor: default; }
 .ord-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
 .ord-job { font-weight: 660; font-size: 11.5px; }
 .ord-type { background: var(--surface-3); color: var(--muted); border-radius: 4px; padding: 0 5px; font-size: 10px; font-weight: 700; }

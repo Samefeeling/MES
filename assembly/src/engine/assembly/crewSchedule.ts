@@ -14,7 +14,13 @@ import {
   PRODUCTIVE_HOURS_PER_PERSON,
   type CrewAssignment,
 } from '@/domain/assembly';
-import { addDays, isWeekend, nextMidnight, startOfDay } from './dates';
+import {
+  addDays,
+  isWeekend,
+  nextMidnight,
+  openDaysBetween,
+  startOfDay,
+} from './dates';
 import { toDayKey } from '@/lib/time';
 import { MS_PER_DAY } from '@/lib/time';
 
@@ -94,6 +100,28 @@ export function crewIdsOnDay(
 /** The moment one of these day plans hands the day on. */
 export const endOfCrewDay = (day: CrewDayPlan): Date =>
   addDays(day.date, day.from + day.used);
+
+/**
+ * The open days in the middle of a run that the order is not worked, grouped
+ * into the stretches they fall in.
+ *
+ * A day plan is allowed to have holes: capacity is charged a whole day at a
+ * time, so a person who is on something else on the Monday gives this order
+ * the Friday and the Tuesday and nothing in between. That is an operational
+ * fact and the board draws it — but a *weekend* is a different fact, and only
+ * these days need a reason attached to them.
+ */
+export function idleRuns(
+  crewDays: readonly CrewDayPlan[],
+  overtime = false,
+): string[][] {
+  const runs: string[][] = [];
+  for (let i = 1; i < crewDays.length; i++) {
+    const idle = openDaysBetween(crewDays[i - 1].date, crewDays[i].date, overtime);
+    if (idle.length > 0) runs.push(idle);
+  }
+  return runs;
+}
 
 export function planVariableCrew(
   from: Date,

@@ -65,6 +65,28 @@ waits for the source load and then sorts by ascending start time again.
 Automatic refresh preserves the current row order. Display order is separate
 from the scheduler's resource and dependency sequence.
 
+## Who may move an order
+
+**The supervisor gate covers every change to the plan, moving orders
+included.** Dragging a bar pins a start day, dropping it on another line moves
+it there, dropping it on the strip takes it off the schedule, and the pinned
+day goes out to the production list as this order's start — all of it read by
+every other screen on the floor. Putting a *name* on an order has been behind
+the gate since the beginning; moving the order itself was not, which had it
+backwards. Signed out, a bar and an unplaced card still open for reading and
+still say what is holding them; they no longer offer to be picked up, and
+**Release** on a pinned start is disabled with the same reason.
+
+What the gate is has not changed, and is worth restating: `VITE_SUPERVISOR_PASSWORD`
+is one shared password compiled into the JavaScript bundle, so anyone who opens
+the browser's dev tools can read it. It stops the board being changed by
+whoever is standing at the terminal. It is not authorization, and it does not
+say *which* supervisor made a change — SharePoint's own Modified By does that,
+because the board writes as the signed-in user. Real authorization means
+restricting write permission on `ASSY_Plans` and `ASSY_Production` to a
+SharePoint group, so the server refuses the write rather than our JavaScript.
+See `store/supervisorStore`.
+
 ## Dragging a bar
 
 A bar is grabbed by the block **or by its label**. A couple of hours of work is
@@ -158,3 +180,28 @@ Capacity is charged a day at a time, so a shift with anything on it is not
 offered to a second order. The exception is a hand-over — somebody coming off
 an order at eleven takes the next one from eleven, and that day is shared
 exactly once.
+
+## Why a bar has a gap in it
+
+Because its crew are on something else for those days, and that is a real day
+on the floor rather than a fault in the drawing. Two blocks with a hole between
+them can mean opposite things:
+
+**A weekend** — the factory is shut, the closed-day stripe shows through, and
+that is the whole explanation. With the compact working-week axis the two
+blocks meet and there is nothing to see at all.
+
+**An open day** — this order's crew are on another order. The blocks are
+**joined by a dashed rule** and the bar says how many days and which order took
+them; the detail panel carries a **put down N days** badge saying the same. Two
+separate blocks read as two orders, and the answer that invited was to drag the
+bar back together until it looked whole.
+
+**Dragging a bar over its own pause does not find room.** It pins the order,
+and a pinned order consults no diary at all — which is right for a placement
+somebody made on purpose, and is exactly why the hole closes. The person is
+then on both orders on the same day, so both bars are **hatched in amber** and
+each names the other and the person they are sharing. The ways out are to take
+somebody off the other order, add crew to this one, or accept the pause. Only a
+pinned or a started order can be hatched; the board's own schedule never
+double-books anybody.

@@ -90,7 +90,7 @@ import {
   wholeDaysBetween,
   type ScheduleStatus,
 } from './dates';
-import { endOfCrewDay, planVariableCrew, type BusyOnDay, type CrewDayPlan, type VariableCrewPlan } from './crewSchedule';
+import { endOfCrewDay, idleRuns, planVariableCrew, type BusyOnDay, type CrewDayPlan, type VariableCrewPlan } from './crewSchedule';
 import { lineLoad, type LineLoad } from './workload';
 import { toDayKey } from '@/lib/time';
 import type {
@@ -106,6 +106,32 @@ export interface BookedDay {
   qty: number;
   /** `qty` valued at the order's standard hours per unit. */
   hours: number;
+}
+
+/**
+ * A stretch of open days in the middle of an order that it is not worked,
+ * and what had its crew instead.
+ *
+ * The board plans a whole day at a time, so a person who is on another order
+ * on the Wednesday gives this one the Tuesday and the Thursday. That is what
+ * really happens on the floor and the plan is right to say so — but a bar with
+ * a hole in it reads as two orders, and the planner's instinct is to drag it
+ * back together, which pins it and books the person on both at once. So the
+ * pause is drawn as part of the bar, with the order that caused it named.
+ */
+export interface CrewPause {
+  /** The open days lost, in order. */
+  days: string[];
+  /** Orders that had this order's crew on those days. */
+  heldBy: string[];
+}
+
+/** One day this order has somebody another order has as well. */
+export interface CrewClash {
+  day: string;
+  workerId: string;
+  /** The other order holding them that day. */
+  withJob: string;
 }
 
 export interface OrderRow {
@@ -130,6 +156,13 @@ export interface OrderRow {
    * whose crew is managed off this board entirely.
    */
   crewDays: CrewDayPlan[];
+  /** Open days inside the run with nobody on it, and what took them. */
+  pauses?: CrewPause[];
+  /**
+   * Days this order shares a person with another one. Both orders carry it —
+   * see `markDoubleBookings`.
+   */
+  doubleBooked?: CrewClash[];
   /** End of the last covered shift when a bounded crew leaves work unfinished. */
   planThrough?: Date | null;
   /** Remaining standard hours with no crew currently assigned to cover them. */
@@ -372,6 +405,70 @@ function mouldingContextRows(
     .sort((a, b) => a.start!.getTime() - b.start!.getTime());
 }
 
+/**
+ * Who has been given the same person, on the same day, as somebody else.
+ *
+ * Read off the finished board rather than worked out while it is being built,
+ * because the answer belongs to *both* orders and the one that happens to be
+ * resolved second is not the one at fault. Only a pinned or a started order
+ * can produce one: those are decisions somebody made and consult no diary, so
+ * they take the days they were given. Which is exactly what makes dragging a
+ * bar over its own pause appear to work — the hole closes because the order
+ * stopped asking, not because anyone came free.
+ *
+ * A hand-over is not a clash: somebody coming off one order at eleven and
+ * starting the next at eleven shares the day without being in two places, and
+ * the fractions say so.
+ */
+function markDoubleBookings(
+  rows: Map<string, OrderRow>,
+  approvals: Record<string, string[]>,
+): void {
+  interface Booking { jobId: string; from: number; to: number }
+  const diary = new Map<string, Booking[]>();
+  /*
+   * A hand-over meets exactly, and both sides of it are worked out by
+   * division — hours over a crew's shift — so the two fractions agree to
+   * fifteen places and not to seventeen. Compared on the bare edge, every
+   * clean hand-over on the board reads as a double booking. A tolerance of
+   * about a tenth of a second of a shift is far below anything the day plan
+   * means and far above anything the arithmetic can lose.
+   */
+  const TOUCHING = 1e-6;
+  for (const row of rows.values()) {
+    const jobId = String(row.job.id);
+    for (const day of row.crewDays) {
+      for (const workerId of day.workerIds) {
+        const key = `${String(workerId)}|${day.day}`;
+        const held = diary.get(key) ?? [];
+        held.push({ jobId, from: day.from, to: day.from + day.used });
+        diary.set(key, held);
+      }
+    }
+  }
+
+  for (const row of rows.values()) {
+    const jobId = String(row.job.id);
+    const approved = approvals[jobId] ?? [];
+    row.doubleBooked = row.crewDays.flatMap((day) =>
+      day.workerIds
+        .map(String)
+        .filter((workerId) => !approved.includes(workerId))
+        .flatMap((workerId) => {
+          const mineTo = day.from + day.used;
+          return (diary.get(`${workerId}|${day.day}`) ?? [])
+            .filter(
+              (other) =>
+                other.jobId !== jobId &&
+                other.from < mineTo - TOUCHING &&
+                day.from < other.to - TOUCHING,
+            )
+            .map((other) => ({ day: day.day, workerId, withJob: other.jobId }));
+        }),
+    );
+  }
+}
+
 export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
   const { dataset, indexes, containers, orderStarts, today } = input;
   // The eight the plant is built as, then whatever the supervisor opened.
@@ -576,6 +673,16 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
    * chipped on three orders" looks like from the floor.
    */
   const bookedUntil = new Map<string, Date>();
+
+  /**
+   * `worker|day` → the order that took it. The same diary as `bookedUntil`,
+   * asked the other question: not "is this day gone" but "where did it go".
+   *
+   * A hole in the middle of a bar is not a fault to be drawn around; it is one
+   * order having been given a day that another one wanted. Naming it turns a
+   * bar in pieces into a decision the supervisor can actually take.
+   */
+  const bookedBy = new Map<string, string>();
 
   /**
    * The first moment `workerId` is actually free, at or after `from`.
@@ -862,6 +969,22 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
               ),
           ),
       crewDays: completedToday ? [] : crewPlan.crewDays,
+      // Filled once every row has a plan — see `markDoubleBookings` below.
+      doubleBooked: [],
+      pauses: completedToday
+        ? []
+        : idleRuns(crewPlan.crewDays, overtime).map((days) => ({
+            days,
+            heldBy: [
+              ...new Set(
+                days.flatMap((day) =>
+                  crewAssignments
+                    .map((a) => bookedBy.get(`${String(a.workerId)}|${day}`))
+                    .filter((jobId): jobId is string => Boolean(jobId)),
+                ),
+              ),
+            ],
+          })),
       planThrough: completedToday ? planStart : crewPlan.coveredUntil,
       uncoveredHours: completedToday ? 0 : crewPlan.uncoveredHours,
       actualStart,
@@ -922,6 +1045,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
           const key = `${String(workerId)}|${day.day}`;
           const held = bookedUntil.get(key);
           if (!held || until > held) bookedUntil.set(key, until);
+          if (!bookedBy.has(key)) bookedBy.set(key, id);
         }
       }
     }
@@ -959,6 +1083,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
     .flatMap((p) => p.claiming)
     .sort((a, b) => claimRank(a) - claimRank(b) || urgency(a) - urgency(b));
   for (const id of claimOrder) resolve(id, new Set());
+  markDoubleBookings(rowsByJob, orderDoubleBooked);
   for (const { line, ids } of pending) {
     const rows = ids
       .map((id) => rowsByJob.get(id))

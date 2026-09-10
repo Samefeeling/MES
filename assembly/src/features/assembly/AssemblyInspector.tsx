@@ -179,6 +179,28 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
   // Closed by the supervisor: the bar greys out and there is nothing left to
   // book, but the history stays readable.
   const closed = row.completedToday;
+  // Open days in the middle of the run with nobody on the order, and what has
+  // its crew on them.
+  const pausedDays = (row.pauses ?? []).reduce(
+    (sum, pause) => sum + pause.days.length,
+    0,
+  );
+  const pausedFor = [
+    ...new Set((row.pauses ?? []).flatMap((pause) => pause.heldBy)),
+  ];
+  // Days this order takes somebody another one already has — only ever a
+  // pinned or started order, which consults no diary.
+  const clashes = row.doubleBooked ?? [];
+  const clashJobs = [...new Set(clashes.map((clash) => clash.withJob))];
+  const clashNames = [
+    ...new Set(
+      clashes.map(
+        (clash) =>
+          row.workers.find((w) => String(w.id) === clash.workerId)?.name ??
+          clash.workerId,
+      ),
+    ),
+  ];
   /*
    * Who to record against today's shift.
    *
@@ -355,6 +377,39 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
                 ` · no room: ${row.crewWithoutRoom!.map((w) => w.name).join(', ')}`}
             </Badge>
           )}
+          {/*
+            The bar is joined across the days nobody on it is free, so the one
+            place that can say how many there are and what took them is here.
+            Dragging the bar "back together" is the wrong answer — a pinned
+            order consults no diary, so it only books the same person twice.
+          */}
+          {!closed && clashes.length > 0 && (
+            <Badge
+              variant="error"
+              title={
+                'A pinned or started order takes the days it was given without ' +
+                'asking anyone’s diary. That is right for a decision somebody ' +
+                'made — but the same person is on both orders on these days, ' +
+                'so one of the two will not get them.'
+              }
+            >
+              double-booked · {clashNames.join(', ')} also on{' '}
+              {clashJobs.join(', ')}
+            </Badge>
+          )}
+          {!closed && pausedDays > 0 && (
+            <Badge
+              variant="warn"
+              title={
+                'The order is put down on these days because everyone on it is ' +
+                'elsewhere. Take somebody off the other order, or add crew to ' +
+                'this one — dragging the bar only books the same person twice.'
+              }
+            >
+              put down {pausedDays} day{pausedDays === 1 ? '' : 's'}
+              {pausedFor.length > 0 && ` · crew on ${pausedFor.join(', ')}`}
+            </Badge>
+          )}
           <span className="inspector-dismiss">Esc or click away to close</span>
         </div>
       </header>
@@ -403,7 +458,12 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
               </span>
               <Button
                 onClick={() => setOrderStart(job.id, null)}
-                title="Let the board schedule this order again — as early as its crew, its line and the orders it waits on allow"
+                disabled={!unlocked}
+                title={
+                  unlocked
+                    ? 'Let the board schedule this order again — as early as its crew, its line and the orders it waits on allow'
+                    : 'Sign in as Supervisor to release the pinned start'
+                }
               >
                 Release
               </Button>
