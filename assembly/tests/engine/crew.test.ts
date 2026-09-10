@@ -158,8 +158,10 @@ describe('suggestCrew', () => {
 
   it('leaves an allocation the supervisor already made', () => {
     const b = board();
+    // The first schedulable line that actually has orders on it — TBP leads
+    // the board and the demo export has nothing on it.
     const first = String(
-      b.groups.find((g) => g.line.schedulable)!.rows[0].job.id,
+      b.groups.find((g) => g.line.schedulable && g.rows.length > 0)!.rows[0].job.id,
     );
     const mine = { [first]: ['W01'] };
 
@@ -312,7 +314,7 @@ describe('nobody does two jobs at once', () => {
       String(r.job.id) === first ? { ...r, completedToday: true } : r,
     );
     const other = closed.find(
-      (r) => r.line.key === 'UPL' && String(r.job.id) !== first,
+      (r) => r.line.key === 'UPL_GLUING' && String(r.job.id) !== first,
     )!;
     expect(clashesFor(closed, other, 'W01')).toEqual([]);
   });
@@ -385,21 +387,21 @@ describe('crew size and selection policy', () => {
   });
 
   it('respects current line allocation before legacy line skills', () => {
-    const b = fixture('ASSY', 4, [person('Elsewhere'), person('Moved', ['UPL'])]);
+    const b = fixture('ASSY', 4, [person('Elsewhere'), person('Moved', ['UPL_GLUING'])]);
     const lines = new Map<string, LineKey>([['Elsewhere', 'TABLE'], ['Moved', 'ASSY']]);
     expect(Object.values(suggestCrew(b, undefined, lines).allocations)).toEqual([['Moved']]);
   });
 
   it('prefers a matching skill to the first person in the allocated line roster', () => {
-    const b = fixture('ASSY', 4, [person('Legacy', ['UPL']), person('Skilled')]);
+    const b = fixture('ASSY', 4, [person('Legacy', ['UPL_GLUING']), person('Skilled')]);
     const lines = new Map<string, LineKey>([['Legacy', 'ASSY'], ['Skilled', 'ASSY']]);
     expect(Object.values(suggestCrew(b, undefined, lines).allocations)).toEqual([['Skilled']]);
   });
 
   it('prefers the matching trade within a production line', () => {
-    const cutter = { ...person('Cutter', ['UPL']), trades: ['cut-sew' as const] };
-    const upholsterer = { ...person('Upholsterer', ['UPL']), trades: ['upholstery' as const] };
-    const b = fixture('UPL', 4, [cutter, upholsterer]);
+    const cutter = { ...person('Cutter', ['UPL_GLUING']), trades: ['cut-sew' as const] };
+    const upholsterer = { ...person('Upholsterer', ['UPL_GLUING']), trades: ['upholstery' as const] };
+    const b = fixture('UPL_GLUING', 4, [cutter, upholsterer]);
     b.groups[0].rows[0].kind = 'upholstery';
     expect(Object.values(suggestCrew(b).allocations)).toEqual([['Upholsterer']]);
   });

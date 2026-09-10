@@ -14,7 +14,7 @@ import type { JobId } from '@/domain/ids';
 import type { Job, WorkCenter } from '@/domain/types';
 import {
   MAX_WORKERS_PER_ORDER,
-  initialLine,
+  readLineKey,
   type CrewAssignment,
   type LineKey,
 } from '@/domain/assembly';
@@ -229,7 +229,13 @@ function emptyContainers(workCenters: WorkCenter[]): Containers {
  */
 function homeContainer(job: Job, known: Set<string>): string {
   if (job.manual) return known.has('FACTORY_GENERAL') ? 'FACTORY_GENERAL' : POOL_ID;
-  const target = job.department === 'assembly' ? (initialLine(job.description, String(job.line ?? '')) ?? job.line) : job.preferredMachine;
+  // The line is already decided — by ERP for TBP/PMD/Table/General, by the
+  // routing table or the BOM for the rest (see engine/assembly/lineRouter).
+  // Re-deriving it here from the part description is exactly the guess those
+  // rules exist to replace, so this only migrates a retired line name.
+  const target = job.department === 'assembly'
+    ? (readLineKey(String(job.line ?? '')) ?? job.line)
+    : job.preferredMachine;
   return target && known.has(String(target)) ? String(target) : POOL_ID;
 }
 
@@ -327,7 +333,6 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       const known = new Set(workCenters.map((w) => String(w.id)));
       const jobsById = new Map(jobs.map(job => [String(job.id), job]));
       const liveJobs = new Set(jobsById.keys());
-      const cutJobs = new Set(jobs.filter(j => !j.manual && /cut/i.test(j.description)).map(j => String(j.id)));
       const next: Containers = emptyContainers(workCenters);
       const placed = new Set<string>();
 
@@ -357,16 +362,18 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       //    this export, which keeps its line and its place in it so that a
       //    partial export cannot shuffle the board.
       for (const [key, ids] of Object.entries(state.containers)) {
-        const target = key === POOL_ID || known.has(key) ? key : POOL_ID;
+        // A plan saved against a line that no longer exists is carried over to
+        // whichever line took that work, not tipped into the pool: the orders
+        // on it were placed by a person, and the line going away is not a
+        // reason to un-place them.
+        const successor = key === POOL_ID ? null : readLineKey(key);
+        const target = key === POOL_ID || known.has(key)
+          ? key
+          : successor && known.has(successor) ? successor : POOL_ID;
         for (const id of ids) {
           const sid = String(id);
           if (!retained(sid) || placed.has(sid)) continue;
-          const job = jobsById.get(sid);
-          const migrated = job && (target === 'UPL' || target === 'ASSY')
-            ? initialLine(job.description, target) : null;
-          const destination = cutJobs.has(sid) && known.has('UPL_CUT_SEW')
-            ? 'UPL_CUT_SEW' : !state.lineLayoutVersion && migrated && known.has(migrated) ? migrated : target;
-          next[destination].push(id);
+          next[target].push(id);
           placed.add(sid);
         }
       }

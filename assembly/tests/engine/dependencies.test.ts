@@ -44,6 +44,8 @@ const link = (jobNum: string, parent: string, child: string): JobMaterialLink =>
   parentPart: PartId(parent),
   childPart: PartId(child),
   requiredQty: 1,
+  childDescription: '',
+  uom: '',
 });
 
 /** `A→B` pairs, sorted, so an expectation reads as the graph itself. */
@@ -95,15 +97,15 @@ describe('buildDependencies', () => {
   it('chains through several stages', () => {
     const jobs = [
       job('CUT', 'FABRIC'),
-      job('UPL', 'COVER'),
+      job('UPL_GLUING', 'COVER'),
       job('ASSY', 'CHAIR'),
     ];
     const g = buildDependencies(jobs, [
       link('CUT', 'FABRIC', 'RAW-FABRIC'),
-      link('UPL', 'COVER', 'FABRIC'),
+      link('UPL_GLUING', 'COVER', 'FABRIC'),
       link('ASSY', 'CHAIR', 'COVER'),
     ]);
-    expect(edges(g)).toEqual(['ASSY→UPL', 'UPL→CUT']);
+    expect(edges(g)).toEqual(['ASSY→UPL_GLUING', 'UPL_GLUING→CUT']);
   });
 
   it('ignores a component nobody is making — it is bought or in stock', () => {

@@ -22,7 +22,7 @@ import {
 import { isWeekend } from '@/engine/assembly/dates';
 import type { Job, JobMaterialLink, PlanningDataset } from '@/domain/types';
 
-const UPL = LINES.find((l) => l.key === 'UPL')!;
+const UPL = LINES.find((l) => l.key === 'UPL_GLUING')!;
 
 /** Thursday 10 Sep 2026 — two working days before the weekend. */
 const THU = new Date(2026, 8, 10);
@@ -31,7 +31,7 @@ const day = (n: number, hour = 0) => new Date(2026, 8, n, hour);
 const worker = (id: string): Worker => ({
   id: WorkerId(id),
   name: id,
-  skills: ['UPL'],
+  skills: ['UPL_GLUING'],
   onShift: true,
 });
 
@@ -88,7 +88,7 @@ function board(
       {
         id: WorkCenterId(String(UPL.id)),
         kind: 'area',
-        name: 'UPL',
+        name: 'UPL_GLUING',
         department: 'assembly',
         sortIndex: 1,
       },
@@ -275,6 +275,8 @@ describe('waiting on the orders that build the components', () => {
     parentPart: PartId(parent),
     childPart: PartId(child),
     requiredQty: 1,
+    childDescription: '',
+    uom: '',
   });
 
   it('starts the parent when the child order finishes, not before', () => {
@@ -545,6 +547,8 @@ describe('one order against the next', () => {
     parentPart: PartId(parent),
     childPart: PartId(child),
     requiredQty: 1,
+    childDescription: '',
+    uom: '',
   });
 
   it('starts a successor the moment its component is finished', () => {

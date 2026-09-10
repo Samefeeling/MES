@@ -114,12 +114,11 @@ describe('PlanningCsvSource', () => {
     if (!res.ok) return;
     expect(res.value.workCenters.map((w) => String(w.id))).toEqual([
       '1300T',
+      'TBP',
       'PMD',
       'UPL_CUT_SEW',
       'UPL_GLUING',
-      'UPL',
       'UPL_SOFTIE',
-      'ASSY_STOOL',
       'ASSY',
       'TABLE',
       'FACTORY_GENERAL',

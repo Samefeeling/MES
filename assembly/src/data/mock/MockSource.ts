@@ -31,6 +31,7 @@ import type {
   OrderType,
   Worker,
 } from '@/domain/assembly';
+import { readLineKey } from '@/domain/assembly';
 import {
   assemblyWorkCenters,
   makeMachine,
@@ -103,7 +104,9 @@ export class MockSource extends BaseDataSource {
       tool: j.die ? ToolId(j.die) : null,
       preferredMachine: j.machine ? MachineId(j.machine) : null,
       orderType: (j.orderType ?? null) as OrderType | null,
-      line: j.line ? WorkCenterId(j.line) : null,
+      // The seed was written when UPL was one lane. Read through readLineKey
+      // so the demo lands on the lines the board actually has.
+      line: j.line ? WorkCenterId(readLineKey(j.line) ?? j.line) : null,
       completedQty: j.completedQty ?? 0,
       // Explicit predecessors only; the seed's material links carry the rest.
       predecessors: j.predecessor ? [JobId(j.predecessor)] : [],
@@ -122,6 +125,10 @@ export class MockSource extends BaseDataSource {
       parentPart: PartId(l.parentPart),
       childPart: PartId(l.childPart),
       requiredQty: l.requiredQty ?? null,
+      // The demo seed carries no descriptions or units; the line rules read
+      // both, so demo orders are placed by the ERP column alone.
+      childDescription: '',
+      uom: '',
     }));
     return delay(links);
   }

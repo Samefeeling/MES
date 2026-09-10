@@ -43,6 +43,7 @@ VITE_SITE_URL=https://reseroglobal.sharepoint.com/sites/ReseroOperationsAU
 VITE_ASSEMBLY_PLANNING_CSV_PATH=/Shared Documents/Planning1.csv
 VITE_JOB_MATERIAL_CSV_PATH=/Shared Documents/JobMaterialReq.csv
 VITE_ON_HAND_INVENTORY_CSV_PATH=/Shared Documents/OnHandInventory.csv
+VITE_PRODUCT_LINES_PATH=/Shared Documents/product-lines.v3.json
 VITE_PRODUCTION_LIST=ASSY_Production
 VITE_ASSEMBLY_PLAN_LIST=ASSY_Plans
 ```
@@ -51,7 +52,7 @@ Do not reuse PMD's VITE_PLANNING_CSV_PATH for Assembly. A production Assembly bu
 
 ## Incremental planning and conflicts
 
-Refresh reconciles jobs by job number and retains existing crew and pinned dates. Orders absent from a partial export keep their plan for 14 days. Date sorting leaves PMD source order unchanged; daily Assembly filtering and counts exclude PMD. Crew orders fills unallocated eligible orders; it does not reset already allocated work. Cut anywhere in a description takes precedence and corrects an old saved non-UPL placement on refresh. Softie remains a subsequent trade; real material links determine predecessors.
+Refresh reconciles jobs by job number and retains existing crew and pinned dates. Orders absent from a partial export keep their plan for 14 days. Date sorting leaves PMD source order unchanged; daily Assembly filtering and counts exclude PMD. Crew orders fills unallocated eligible orders; it does not reset already allocated work. Which line an order goes to comes from ERP, then `product-lines.v3.json`, then its BOM — see [Operational lines and support work](OPERATIONAL-LINES.md); a supervisor's own move survives refresh. Real material links determine predecessors.
 
 ASSY_Plans stores a versioned JSON snapshot. An ETag mismatch stops autosave and production sync; reload the saved plan before editing again. Failed reads never save an empty replacement. The initial release limits the snapshot to 60,000 characters and reports an error without replacing the saved plan if exceeded. A partitioned plan repository is required for larger histories.
 
@@ -75,4 +76,4 @@ Deploy uploads both applications, all lazy chunks and nested asset folders. The 
 Before rollout, verify actual CSV paths, existing field types/keys, roster names and permissions on the signed-in site. Test a new job refresh, a second-session save conflict, barcode lookup and an Assembly daily entry appearing in KPIs. Local mock checks cannot validate tenant permissions or real file contents.
 
 
-See [Operational lines and support work](OPERATIONAL-LINES.md) for the seven production lines, Factory General and additional support fields.
+See [Operational lines and support work](OPERATIONAL-LINES.md) for the eight lines, how a part is routed to one, and the additional support fields.

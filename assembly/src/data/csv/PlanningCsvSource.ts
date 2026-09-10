@@ -37,12 +37,15 @@ import {
   fetchJobMaterialCsv,
   fetchPlanningCsv,
   fetchOnHandInventoryCsv,
+  fetchProductLinesJson,
   readCsvConfigFromEnv,
   type CsvSourceConfig,
 } from './csv.client';
 import { parsePlanningCsv } from './planning.parser';
 import { parseJobMaterialCsv } from './materialReq.parser';
 import { parseOnHandInventoryCsv } from './onHandInventory.parser';
+import { parseProductLines, EMPTY_PRODUCT_LINES } from '@/domain/productLines';
+import { makeLineRouter, type LineRouter } from '@/engine/assembly/lineRouter';
 
 /** Display name of the roster list in SharePoint. */
 export const OPERATOR_LIST = 'ASSY_Operator';
@@ -56,6 +59,7 @@ export class PlanningCsvSource extends BaseDataSource {
   private jobsOnce: Promise<Job[]> | null = null;
   private linksOnce: Promise<JobMaterialLink[]> | null = null;
   private inventoryOnce: Promise<InventoryItem[]> | null = null;
+  private routerOnce: Promise<LineRouter> | null = null;
 
   constructor(
     private readonly csv: CsvSourceConfig = readCsvConfigFromEnv(),
@@ -69,15 +73,47 @@ export class PlanningCsvSource extends BaseDataSource {
    * two of them need the CSV, so the promise is memoised.
    */
   private get orders(): Promise<Job[]> {
-    return (this.jobsOnce ??= fetchPlanningCsv(this.csv, this.sp).then((res) => {
+    return (this.jobsOnce ??= (async () => {
+      // The router is needed to parse: ERP names only a department for most
+      // assembly orders, and which line inside it comes from the BOM. Both
+      // its inputs are memoised, so this costs no extra fetch.
+      const [res, router] = await Promise.all([
+        fetchPlanningCsv(this.csv, this.sp),
+        this.lineRouter,
+      ]);
       if (!res.ok) throw new Error(res.error);
-      const { values, errors } = parsePlanningCsv(res.value);
+      const { values, errors } = parsePlanningCsv(res.value, router);
       this.warnings.push(...errors);
       if (values.length === 0) {
         throw new Error(errors[0] ?? 'Planning1.csv held no orders');
       }
       return values;
-    }));
+    })());
+  }
+
+  /**
+   * Which line builds what: the reviewed routing table first, the material
+   * export behind it for anything the table has never seen.
+   *
+   * Neither file failing stops the load. Without them every order falls back
+   * to the line ERP named, which is where the board put them before there
+   * were any BOM rules at all.
+   */
+  private get lineRouter(): Promise<LineRouter> {
+    return (this.routerOnce ??= (async () => {
+      const [tableRes, links] = await Promise.all([
+        fetchProductLinesJson(this.csv, this.sp).catch(() => null),
+        this.fetchJobLinks(),
+      ]);
+      let table = EMPTY_PRODUCT_LINES;
+      if (tableRes && !tableRes.ok) {
+        this.warnings.push(tableRes.error);
+      } else if (tableRes && tableRes.value !== null) {
+        table = parseProductLines(tableRes.value);
+        this.warnings.push(...table.errors);
+      }
+      return makeLineRouter(table, links);
+    })());
   }
 
   /** Drop the memoised CSVs so the next load re-fetches. */
@@ -85,6 +121,7 @@ export class PlanningCsvSource extends BaseDataSource {
     this.jobsOnce = null;
     this.linksOnce = null;
     this.inventoryOnce = null;
+    this.routerOnce = null;
     this.warnings.length = 0;
   }
 

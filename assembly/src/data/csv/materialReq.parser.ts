@@ -22,7 +22,13 @@ import type { JobMaterialLink } from '@/domain/types';
 import { mapHeaders, parseCsv, type CsvRow } from '@/lib/csv';
 import type { ParseOutcome } from '@/data/excel/parsers/types';
 
-type Field = 'jobNum' | 'parentPart' | 'childPart' | 'requiredQty';
+type Field =
+  | 'jobNum'
+  | 'parentPart'
+  | 'childPart'
+  | 'requiredQty'
+  | 'childDescription'
+  | 'uom';
 
 /**
  * Accepted header spellings per field, most specific first.
@@ -47,6 +53,12 @@ const ALIASES: Record<Field, readonly string[]> = {
     'QtyPer',
     'ReqQty',
   ],
+  // Both feed the line rules rather than the schedule, so a file without them
+  // still loads — it just cannot classify a part the routing table has never
+  // seen. Same reason `childDescription` will not accept a bare
+  // `Description`: on this export that could as easily be the parent's.
+  childDescription: ['JobMtl_Description', 'MtlDescription', 'ComponentDescription'],
+  uom: ['JobMtl_IUM', 'IUM', 'JobMtl_UOM', 'UOM', 'Measurement'],
 };
 
 const cell = (row: CsvRow, at: number | undefined): string =>
@@ -117,6 +129,8 @@ export function parseJobMaterialCsv(
       parentPart: PartId(cell(row, col.parentPart) || ''),
       childPart: PartId(childPart),
       requiredQty: num(cell(row, col.requiredQty)),
+      childDescription: cell(row, col.childDescription),
+      uom: cell(row, col.uom),
     });
   });
 

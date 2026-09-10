@@ -1,27 +1,48 @@
 # Operational lines and support work
 
-The board has seven production lines and a normally empty Factory General group. PMD remains a separate, read-only context lane.
+The board has eight lines. PMD is a read-only context lane mirroring moulding's plan; the other seven are scheduled here.
 
 | Display name / Skills value | Stable key |
 | --- | --- |
-| UPL - Cut/Sewing | UPL_CUT_SEW |
-| UPL - Gluing | UPL_GLUING |
-| UPL - ASSY | UPL |
-| UPL - Softie (SSS) | UPL_SOFTIE |
-| ASSY - Stool | ASSY_STOOL |
-| ASSY - Seats | ASSY |
+| TBP | TBP |
+| PMD | PMD |
+| UPL-CUT | UPL_CUT_SEW |
+| UPL-Gluing | UPL_GLUING |
+| UPL-SSS | UPL_SOFTIE |
+| ASM | ASSY |
 | Table | TABLE |
-| Factory General | FACTORY_GENERAL |
+| General | FACTORY_GENERAL |
 
-The UPL and ASSY keys remain stable for compatibility with saved plans. Skills can contain the display names, separated by semicolons, or SharePoint multi-choice values. A supervisor's current line allocation controls crew availability; skills rank candidates within that line. Dragging an operator does not grant a permanent skill.
+The keys keep their older spellings on purpose: they are written into saved plans, into `ASSY_Operator` skills and into the SharePoint containers, so renaming them would orphan every plan already on the tenant. Skills can contain the display names, separated by semicolons, or SharePoint multi-choice values. A supervisor's current line allocation controls crew availability; skills rank candidates within that line. Dragging an operator does not grant a permanent skill.
 
-## Initial order placement
+Two lines were retired. `UPL` (the catch-all upholstery lane) and `ASSY_STOOL` no longer exist: the BOM rules below say which upholstery bench a part belongs on, and stools are ordinary ASM work. Anything still filed against either — a saved plan, a roster skill, an ERP export — is read onto its successor (`UPL` → UPL-Gluing, `ASSY_STOOL` → ASM), never dropped into the pool.
 
-- Cut anywhere in the description has highest priority: UPL - Cut/Sewing.
-- Other UPL orders: Sewing goes to Cut/Sewing; Glue, Gluing or Foamed Up goes to Gluing; Smart Softies, Softie, SSS or Ottoman goes to Softie; the remainder goes to UPL - ASSY.
-- ASSY orders containing Stool go to ASSY - Stool. All other ASSY orders, including rails, arms and trolleys, go to ASSY - Seats.
-- Table remains Table. PMD parts remain PMD regardless of product names. Unknown resources remain unassigned.
-- Old UPL/ASSY placements are migrated once, preserving crew and pinned dates. Later supervisor moves survive refresh. Cut continues to enforce the explicit Cut/Sewing rule.
+## Which line builds a part
+
+Three sources, in strict order. Nothing below invents a line: when all three come up empty the order stays where ERP put it.
+
+**1. ERP names the line.** `JobHead_PersonID` settles TBP, PMD, Table and General outright, and no BOM overrides that. `UPL` and `ASSY` name a *department*, not a line, so they fall through to the rules below.
+
+**2. `product-lines.v3.json`** — the reviewed routing table, sitting beside `JobMaterialReq.csv` in the document library. It is the output of the plant's `classify-lines.mjs` run over the full BOM export and then corrected by hand. That review is the point: a part already in this file is never re-derived, because re-deriving it every load would throw the correction away. Rows read `{ code, description, line, key, confidence, evidence }`; `EXCLUDE` marks a configurator placeholder that is never scheduled, and `UNKNOWN` hands the part to the rules below.
+
+**3. The BOM**, for a part nobody has made before: its direct components out of `JobMaterialReq.csv`, put through `src/domain/lineRules.ts` — a transcription of `classify-lines.mjs` v4, rule numbers and evidence wording included.
+
+| Rule | Fires on | Line |
+| --- | --- | --- |
+| P0 | part number starts `CP-` | never scheduled |
+| P1 | no BOM rows for the part | UPL-CUT (ruled: usually a fabric colourway) |
+| R1 | resin / masterbatch issued by the kilo | PMD |
+| R1s | part number `HST*`/`STMP*`, or "Hot Stamp" in the description | PMD |
+| R2 | description starts "Cut Fab", or every component is cloth by the metre | UPL-CUT |
+| R3 | foam, adhesive or lining, or it consumes a Cut Fab sub-assembly | UPL-Gluing |
+| R4 | anything else that is built | ASM |
+| R5 | an R3 hit whose description says "Smart Soft", or that rolls up into an `SSOT*` product | UPL-SSS |
+
+Priority when several fire is PMD > UPL-CUT > UPL-Gluing > ASM, and the result is reported as `ruled` rather than `high` so the report can list it for someone to check.
+
+Two properties are load-bearing and both come straight from the plant's script. **Direct children only:** the BOM expresses the process boundary in its levels, so recursing into grandchildren drags the downstream operation's materials up and every assembly starts looking like moulding. **Units matter:** resin only counts as moulding feedstock when it is issued by the kilo, and cloth only counts as face fabric by the metre.
+
+Everything that used to be inferred from the part description — "contains cut", "contains softie", "contains stool" — is gone. A description is what somebody typed; the BOM is what the part is made of.
 
 ## People and production records
 

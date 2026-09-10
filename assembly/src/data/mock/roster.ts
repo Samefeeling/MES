@@ -9,7 +9,7 @@
  */
 
 import { WorkerId } from '@/domain/ids';
-import type { LineKey, Worker, WorkKind } from '@/domain/assembly';
+import { readLineKey, type LineKey, type Worker, type WorkKind } from '@/domain/assembly';
 import seed from './seed.json';
 
 export function demoWorkers(): Worker[] {
@@ -21,8 +21,10 @@ export function demoWorkers(): Worker[] {
       id: WorkerId(w.id),
       name: w.name,
       skills: [...new Set([
-        ...(trades.includes('smart-softie') ? ['UPL_SOFTIE' as const] : trades.includes('cut-sew') ? ['UPL_CUT_SEW' as const] : w.id === 'W06' ? ['ASSY_STOOL' as const] : []),
-        ...((w.skills ?? []) as LineKey[]),
+        ...(trades.includes('smart-softie') ? ['UPL_SOFTIE' as const] : trades.includes('cut-sew') ? ['UPL_CUT_SEW' as const] : []),
+        ...((w.skills ?? []) as string[])
+          .map((s) => readLineKey(s))
+          .filter((k): k is LineKey => k !== null),
       ])],
       ...(trades.length > 0 ? { trades } : {}),
       onShift: Boolean(w.onShift),

@@ -34,9 +34,17 @@ const norm = (s: string): string => s.replace(/[\s_.-]+/g, '').toLowerCase();
 
 /** What people write in the Skills column → the line it qualifies them for. */
 const SKILL_TO_LINE: [RegExp, LineKey][] = [
-  [/^(upl|uph|upholster|cutting|sewing|cutsew|cut&sew)/, 'UPL'],
+  // Cutting before upholstery: "cutsew" starts with neither prefix of the
+  // other, but the intent is worth being explicit about.
+  [/^(cutting|sewing|cutsew|cut&sew)/, 'UPL_CUT_SEW'],
+  // "UPL" / "Upholstery" used to name one lane covering three benches. It now
+  // means Gluing, the bench that kept the bulk of that work. Nobody is put on
+  // the SSS bench by a word: that one is named, or it is not held.
+  [/^(upl|uph|upholster)/, 'UPL_GLUING'],
+  [/^(tbp)/, 'TBP'],
   [/^(table|tbl)/, 'TABLE'],
-  [/^(assy|assembl|finalassembl|sofa|chair)/, 'ASSY'],
+  [/^(assy|asm|assembl|finalassembl|sofa|chair)/, 'ASSY'],
+  [/^(general|factory)/, 'FACTORY_GENERAL'],
   [/^(pmd|mould|mold)$/, 'PMD'],
 ];
 
@@ -60,7 +68,7 @@ function readSkills(raw: unknown): LineKey[] {
     if (!key) continue;
     const exact = LINES.find(line => norm(line.key) === key || norm(line.name) === key);
     if (exact) { if (!out.includes(exact.key)) out.push(exact.key); continue; }
-    const aliases: Record<string, LineKey> = { 'cut/sewing': 'UPL_CUT_SEW', cutsewing: 'UPL_CUT_SEW', cutting: 'UPL_CUT_SEW', sewing: 'UPL_CUT_SEW', 'cut&sew': 'UPL_CUT_SEW', gluing: 'UPL_GLUING', softie: 'UPL_SOFTIE', sss: 'UPL_SOFTIE', stool: 'ASSY_STOOL', seats: 'ASSY' };
+    const aliases: Record<string, LineKey> = { 'cut/sewing': 'UPL_CUT_SEW', cutsewing: 'UPL_CUT_SEW', cutting: 'UPL_CUT_SEW', sewing: 'UPL_CUT_SEW', 'cut&sew': 'UPL_CUT_SEW', gluing: 'UPL_GLUING', softie: 'UPL_SOFTIE', sss: 'UPL_SOFTIE', stool: 'ASSY', seats: 'ASSY' };
     if (aliases[key]) { if (!out.includes(aliases[key])) out.push(aliases[key]); continue; }
     const hit = SKILL_TO_LINE.find(([re]) => re.test(key));
     if (hit && !out.includes(hit[1])) out.push(hit[1]);

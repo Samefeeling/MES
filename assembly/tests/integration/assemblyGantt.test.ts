@@ -76,14 +76,14 @@ function build(over: {
 }
 
 describe('assembly Gantt (mock data)', () => {
-  it('loads a roster and shows the four line groups in order', () => {
+  it('loads a roster and shows every line group in the floor’s order', () => {
     const b = build();
     expect(dataset.workers.length).toBeGreaterThan(10);
     expect(b.groups.map((g) => g.line.key)).toEqual(
       LINES.map((l) => l.key),
     );
-    // PMD is context only.
-    expect(b.groups[0].line.schedulable).toBe(false);
+    // PMD is context only — it mirrors moulding's plan and is scheduled there.
+    expect(b.groups.find((g) => g.line.key === 'PMD')!.line.schedulable).toBe(false);
   });
 
   it('puts every assembly order on a schedulable line or in the pool', () => {

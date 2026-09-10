@@ -24,10 +24,11 @@ import { JobId, MachineId, PartId, WorkCenterId } from '@/domain/ids';
 import type { Department, Job } from '@/domain/types';
 import {
   LINE_BY_ID,
-  initialLine,
+  readLineKey,
   type MaterialPrepStatus,
   type OrderType,
 } from '@/domain/assembly';
+import { NULL_LINE_ROUTER, type LineRouter } from '@/engine/assembly/lineRouter';
 import { isVisibleMachine } from '@/domain/constants';
 import { mapHeaders, normalizeHeader, parseCsv, type CsvRow } from '@/lib/csv';
 import type { ParseOutcome } from '@/data/excel/parsers/types';
@@ -163,7 +164,11 @@ function startInstant(day: string, hour: string): Date | null {
 
 /**
  * Which line/department a row belongs to. `PMD` and the moulding press names
- * are moulding; `UPL` / `ASSY` / `TABLE` are the assembly lines.
+ * are moulding; everything else that names a line is assembly.
+ *
+ * Read through `readLineKey`, so a value ERP still exports under a retired
+ * name (`UPL`, `ASSY_STOOL`) lands on the line that took that work over
+ * rather than falling off the board.
  */
 function readPlacement(raw: string): {
   department: Department;
@@ -171,14 +176,15 @@ function readPlacement(raw: string): {
   preferredMachine: Job['preferredMachine'];
 } | null {
   if (raw === '') return null;
-  const id = WorkCenterId(raw);
-  const known = LINE_BY_ID.get(String(id));
+  const key = readLineKey(raw);
+  const known = key ? LINE_BY_ID.get(key) : undefined;
 
   if (known) {
     return known.key === 'PMD'
       ? { department: 'moulding', line: null, preferredMachine: MachineId(raw) }
-      : { department: 'assembly', line: id, preferredMachine: null };
+      : { department: 'assembly', line: known.id, preferredMachine: null };
   }
+  const id = WorkCenterId(raw);
   // A named press (1300T, BATT1, …) — still a moulding row.
   if (isVisibleMachine(String(id))) {
     return { department: 'moulding', line: null, preferredMachine: id };
@@ -243,8 +249,18 @@ function readPrep(raw: string): MaterialPrepStatus {
   return PREP_VALUES.has(p) ? p : 'unknown';
 }
 
-/** Parse the text of `Planning1.csv` into production orders. */
-export function parsePlanningCsv(text: string): ParseOutcome<Job> {
+/**
+ * Parse the text of `Planning1.csv` into production orders.
+ *
+ * `router` decides which line an order goes to when ERP only named a
+ * department — see `engine/assembly/lineRouter`. Without one (the mock
+ * source, and every test that does not care) placement falls back to the ERP
+ * column alone, exactly as it behaved before the BOM rules existed.
+ */
+export function parsePlanningCsv(
+  text: string,
+  router: LineRouter = NULL_LINE_ROUTER,
+): ParseOutcome<Job> {
   const rows = parseCsv(text);
   if (rows.length === 0) return { values: [], errors: ['Planning1.csv is empty'] };
 
@@ -307,8 +323,13 @@ export function parsePlanningCsv(text: string): ParseOutcome<Job> {
     seen.add(jobNum);
 
     const lineCell = cell(row, col.line);
-    const isCut = /cut/i.test(cell(row, col.description));
-    const placement = readPlacement(initialLine(cell(row, col.description), lineCell) ?? lineCell);
+    const description = cell(row, col.description);
+    // The BOM decides the line wherever ERP only named a department. Where it
+    // cannot (no routing-table row and no material export for this part) the
+    // ERP column still places the order — an order on a roughly-right line is
+    // worth more to the floor than one in the unplaced pool.
+    const placed = router.place(partNum, lineCell, description);
+    const placement = readPlacement(placed.line ?? '') ?? readPlacement(lineCell);
     if (!placement && lineCell) {
       unknownLines.set(lineCell, (unknownLines.get(lineCell) ?? 0) + 1);
     }
@@ -357,7 +378,7 @@ export function parsePlanningCsv(text: string): ParseOutcome<Job> {
       id: JobId(jobNum),
       department: placement?.department ?? 'assembly',
       partNum: PartId(partNum),
-      description: cell(row, col.description),
+      description,
       remainingQty,
       qtyPerHr: hoursPerUnit && hoursPerUnit > 0 ? 1 / hoursPerUnit : null,
       laborHrs,
@@ -380,7 +401,7 @@ export function parsePlanningCsv(text: string): ParseOutcome<Job> {
       materialPrep: readPrep(cell(row, col.materialPrep)),
       tool: null,
       preferredMachine: placement?.preferredMachine ?? null,
-      orderType: isCut ? 'cutting-sewing' : readOrderType(cell(row, col.orderType), line),
+      orderType: readOrderType(cell(row, col.orderType), line),
       line,
       completedQty,
       // The order export rarely names one; the material file is where the

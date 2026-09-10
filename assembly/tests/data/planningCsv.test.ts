@@ -73,7 +73,7 @@ describe('parsePlanningCsv', () => {
     expect(jobs.get('SFM507615')!.line).toBeNull();
 
     expect(jobs.get('018140-1-1')!.department).toBe('assembly');
-    expect(String(jobs.get('018140-1-1')!.line)).toBe('ASSY_STOOL');
+    expect(String(jobs.get('018140-1-1')!.line)).toBe('ASSY');
   });
 
   it('takes the export’s labour hours as the bar length', () => {
@@ -168,12 +168,17 @@ describe('parsePlanningCsv', () => {
     expect(jobs.get('018140-1-1')!.orderType).toBe('final-assembly');
   });
 
-  it('leaves the order type blank for UPL, which runs two of them', () => {
+  it('reads the order type off the line, now that no line runs two of them', () => {
+    // ERP's coarse "UPL" used to be one lane running both cutting/sewing and
+    // upholstery, so the type had to stay blank. With no BOM to refine it the
+    // row falls to Gluing, which runs upholstery and nothing else.
     const upl = sample.replace(
       '"Cosmic Stool, walnut",ASSY',
       '"Cosmic Stool, walnut",UPL',
     );
-    expect(byId(upl).get('018140-1-1')!.orderType).toBeNull();
+    const job = byId(upl).get('018140-1-1')!;
+    expect(String(job.line)).toBe('UPL_GLUING');
+    expect(job.orderType).toBe('upholstery');
   });
 
   it('finds the PMD/ASSY column by its values when the header is unfamiliar', () => {
@@ -183,7 +188,7 @@ describe('parsePlanningCsv', () => {
     );
     const j = byId(renamed);
     expect(j.get('SFM507615')!.department).toBe('moulding');
-    expect(String(j.get('018140-1-1')!.line)).toBe('ASSY_STOOL');
+    expect(String(j.get('018140-1-1')!.line)).toBe('ASSY');
   });
 
   it('treats a named press as a moulding row', () => {

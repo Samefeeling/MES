@@ -1,7 +1,12 @@
 /**
- * Benches within a line. UPL is not one workstation: cutting and sewing,
- * building the softies, and upholstering the frame are different trades and
- * the people are not interchangeable between them.
+ * Benches within upholstery. Cutting and sewing, building the softies, and
+ * upholstering the frame are different trades and the people are not
+ * interchangeable between them.
+ *
+ * The bench used to be guessed from the part description, because `UPL` was
+ * one lane holding all three. The BOM rules split that lane into UPL-CUT,
+ * UPL-Gluing and UPL-SSS, so the line already names the bench and there is
+ * nothing left to guess — which is the point of these first tests.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -11,40 +16,30 @@ import { WorkerId } from '@/domain/ids';
 const person = (trades?: Worker['trades']): Worker => ({
   id: WorkerId('W'),
   name: 'W',
-  skills: ['UPL', 'ASSY'],
+  skills: ['UPL_GLUING', 'ASSY'],
   onShift: true,
   ...(trades ? { trades } : {}),
 });
 
 describe('workKind', () => {
-  it('reads the bench off the description', () => {
-    expect(workKind('Podium Chair - Cut & Sew Charcoal', 'UPL')).toBe('cut-sew');
-    expect(workKind('Lounge Sofa 3-Seat Smart Softies Storm', 'UPL')).toBe(
-      'smart-softie',
-    );
-    expect(workKind('Ottoman 600 Smart Softies - Charcoal', 'UPL')).toBe(
-      'smart-softie',
-    );
-    expect(workKind('Viva Sidechair Upholstery - Black', 'UPL')).toBe(
-      'upholstery',
-    );
+  it('takes the bench from the line, which is what the BOM decided', () => {
+    expect(workKind('UPL_CUT_SEW')).toBe('cut-sew');
+    expect(workKind('UPL_SOFTIE')).toBe('smart-softie');
+    expect(workKind('UPL_GLUING')).toBe('upholstery');
   });
 
-  it('gives cutting priority over Softie descriptions', () => {
-    // Cutting precedes Softie assembly.
-    expect(workKind('Smart Softie Cut & Sew - Ottoman', 'UPL')).toBe(
-      'cut-sew',
-    );
+  it('leaves every other line qualified by the line itself', () => {
+    for (const line of ['TBP', 'PMD', 'ASSY', 'TABLE', 'FACTORY_GENERAL'] as const) {
+      expect(workKind(line)).toBe('general');
+    }
   });
 
-  it('calls anything it cannot place upholstery, which UPL mostly is', () => {
-    expect(workKind('Integra Chair - UV', 'UPL')).toBe('upholstery');
-  });
-
-  it('recognises Cut regardless of the supplied line', () => {
-    // Description takes priority over the exported line.
-    expect(workKind('Classroom Table 1200 Cut', 'TABLE')).toBe('cut-sew');
-    expect(workKind('Podium Chair Final Assy & Pack', 'ASSY')).toBe('general');
+  it('no longer reads the description, however suggestive it is', () => {
+    // "Cut Fabric for Smart Softie" on an ASM order used to be dragged onto
+    // cutting by its wording. The part's BOM says where it goes; a phrase in
+    // the description that happens to contain "cut" does not get a vote.
+    expect(workKind('ASSY')).toBe('general');
+    expect(workKind('TABLE')).toBe('general');
   });
 });
 
@@ -68,7 +63,7 @@ describe('canWorkKind', () => {
   });
 
   it('leaves the other lines alone', () => {
-    // A cutter is still a whole ASSY hand — the trade says which bench on the
+    // A cutter is still a whole ASM hand — the trade says which bench on the
     // line that has benches, not which lines they may work at all.
     expect(canWorkKind(person(['cut-sew']), 'general')).toBe(true);
     expect(canWorkKind(person(['smart-softie']), 'general')).toBe(true);

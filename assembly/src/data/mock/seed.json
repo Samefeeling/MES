@@ -1867,7 +1867,7 @@
       "partNum": "PDSC00747",
       "description": "Podium Chair - Cut & Sew Charcoal",
       "department": "assembly",
-      "line": "UPL",
+      "line": "UPL_CUT_SEW",
       "orderType": "cutting-sewing",
       "remainingQty": 60,
       "completedQty": 0,
@@ -1895,7 +1895,7 @@
       "partNum": "PDSC00747U",
       "description": "Podium Chair Upholstery - Charcoal",
       "department": "assembly",
-      "line": "UPL",
+      "line": "UPL_GLUING",
       "orderType": "upholstery",
       "remainingQty": 60,
       "completedQty": 0,
@@ -1923,7 +1923,7 @@
       "partNum": "SFA2S-CHAR",
       "description": "Lounge Sofa 2-Seat Cut & Sew",
       "department": "assembly",
-      "line": "UPL",
+      "line": "UPL_CUT_SEW",
       "orderType": "cutting-sewing",
       "remainingQty": 6,
       "completedQty": 8,
@@ -1951,7 +1951,7 @@
       "partNum": "SFA2S-CHARU",
       "description": "Lounge Sofa 2-Seat Upholstery",
       "department": "assembly",
-      "line": "UPL",
+      "line": "UPL_GLUING",
       "orderType": "upholstery",
       "remainingQty": 6,
       "completedQty": 0,
@@ -1979,7 +1979,7 @@
       "partNum": "INSC00052U",
       "description": "Integra Chair Upholstery - UV",
       "department": "assembly",
-      "line": "UPL",
+      "line": "UPL_GLUING",
       "orderType": "upholstery",
       "remainingQty": 35,
       "completedQty": 6,
@@ -2006,7 +2006,7 @@
       "partNum": "PDSC00760",
       "description": "Podium Chair - Cut & Sew Forest",
       "department": "assembly",
-      "line": "UPL",
+      "line": "UPL_CUT_SEW",
       "orderType": "cutting-sewing",
       "remainingQty": 48,
       "completedQty": 0,
@@ -2033,7 +2033,7 @@
       "partNum": "VVSC00210",
       "description": "Viva Sidechair Upholstery - Black",
       "department": "assembly",
-      "line": "UPL",
+      "line": "UPL_GLUING",
       "orderType": "upholstery",
       "remainingQty": 30,
       "completedQty": 0,
@@ -2338,7 +2338,7 @@
       "partNum": "SFA3S-STRM",
       "description": "Lounge Sofa 3-Seat - Cut & Sew Storm",
       "department": "assembly",
-      "line": "UPL",
+      "line": "UPL_CUT_SEW",
       "orderType": "cutting-sewing",
       "remainingQty": 18,
       "completedQty": 0,
@@ -2366,7 +2366,7 @@
       "partNum": "SFA3S-STRM-SS",
       "description": "Lounge Sofa 3-Seat Smart Softies Storm",
       "department": "assembly",
-      "line": "UPL",
+      "line": "UPL_SOFTIE",
       "orderType": "upholstery",
       "remainingQty": 18,
       "completedQty": 0,
@@ -2394,7 +2394,7 @@
       "partNum": "SFA3S-STRMU",
       "description": "Lounge Sofa 3-Seat Upholstery Storm",
       "department": "assembly",
-      "line": "UPL",
+      "line": "UPL_GLUING",
       "orderType": "upholstery",
       "remainingQty": 18,
       "completedQty": 0,
@@ -2450,7 +2450,7 @@
       "partNum": "OTTO00311",
       "description": "Ottoman 600 Smart Softies - Charcoal",
       "department": "assembly",
-      "line": "UPL",
+      "line": "UPL_SOFTIE",
       "orderType": "upholstery",
       "remainingQty": 24,
       "completedQty": 0,
@@ -13215,7 +13215,7 @@
       "id": "W01",
       "name": "Bill",
       "skills": [
-        "UPL",
+        "UPL_GLUING",
         "ASSY"
       ],
       "onShift": true,
@@ -13227,7 +13227,7 @@
       "id": "W02",
       "name": "Gate",
       "skills": [
-        "UPL"
+        "UPL_GLUING"
       ],
       "onShift": true,
       "trades": [
@@ -13238,7 +13238,7 @@
       "id": "W03",
       "name": "Mary",
       "skills": [
-        "UPL",
+        "UPL_GLUING",
         "ASSY",
         "TABLE"
       ],
@@ -13251,7 +13251,7 @@
       "id": "W04",
       "name": "Jones",
       "skills": [
-        "UPL"
+        "UPL_GLUING"
       ],
       "onShift": true
     },
@@ -13276,7 +13276,7 @@
       "id": "W07",
       "name": "Amy",
       "skills": [
-        "UPL",
+        "UPL_GLUING",
         "TABLE"
       ],
       "onShift": true
@@ -13285,7 +13285,7 @@
       "id": "W08",
       "name": "Sue",
       "skills": [
-        "UPL"
+        "UPL_GLUING"
       ],
       "onShift": false
     },
@@ -13318,7 +13318,7 @@
       "id": "W12",
       "name": "Nina",
       "skills": [
-        "UPL",
+        "UPL_GLUING",
         "ASSY"
       ],
       "onShift": true,
@@ -13338,7 +13338,7 @@
       "id": "W14",
       "name": "Eve",
       "skills": [
-        "UPL",
+        "UPL_GLUING",
         "TABLE"
       ],
       "onShift": true
@@ -13353,10 +13353,14 @@
     }
   ],
   "assemblyLines": [
+    "TBP",
     "PMD",
-    "UPL",
+    "UPL_CUT_SEW",
+    "UPL_GLUING",
+    "UPL_SOFTIE",
     "ASSY",
-    "TABLE"
+    "TABLE",
+    "FACTORY_GENERAL"
   ],
   "jobLinks": [
     {

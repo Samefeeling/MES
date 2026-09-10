@@ -28,8 +28,10 @@ describe('parseOperators', () => {
   });
 
   it('maps written-out skills onto lines', () => {
-    expect(values[0].skills).toEqual(['UPL']); // Cutting/Sewing runs on UPL
-    expect(values[1].skills).toEqual(['UPL', 'ASSY']);
+    // "Cutting/Sewing" is its own line now that UPL is three benches, so a
+    // sewer is rostered onto UPL-CUT rather than onto all of upholstery.
+    expect(values[0].skills).toEqual(['UPL_CUT_SEW']);
+    expect(values[1].skills).toEqual(['UPL_GLUING', 'ASSY']);
   });
 
   it('splits a delimited skills string', () => {
@@ -69,7 +71,7 @@ describe('parseOperators', () => {
       { id: '4', Title: 'Legacy Row', skills: 'upl', 'Team Leader': 'Mei' },
     ]);
     expect(v[0].name).toBe('Legacy Row');
-    expect(v[0].skills).toEqual(['UPL']);
+    expect(v[0].skills).toEqual(['UPL_GLUING']);
     expect(v[0].supervisor).toBe('Mei');
   });
 

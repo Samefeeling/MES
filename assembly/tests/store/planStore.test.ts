@@ -153,7 +153,7 @@ describe('operator production-line placement', () => {
   beforeEach(() => {
     usePlanStore.setState({
       containers: {
-        UPL: [JobId('UPL-1')],
+        UPL_GLUING: [JobId('UPL-1')],
         ASSY: [JobId('ASSY-1')],
         TABLE: [JobId('TABLE-1')],
       },
@@ -225,7 +225,7 @@ describe('weekend overtime approvals', () => {
  */
 describe('surviving a twice-daily export', () => {
   const centres = [
-    { id: 'UPL', name: 'Upholstery', sortIndex: 1 },
+    { id: 'UPL_GLUING', name: 'Upholstery', sortIndex: 1 },
     { id: 'ASSY', name: 'Assembly', sortIndex: 2 },
   ] as unknown as Parameters<
     ReturnType<typeof usePlanStore.getState>['reconcile']
@@ -242,7 +242,7 @@ describe('surviving a twice-daily export', () => {
       ReturnType<typeof usePlanStore.getState>['reconcile']
     >[1][number];
 
-  const planned = [job('A', 'UPL'), job('B', 'UPL'), job('C', 'ASSY')];
+  const planned = [job('A', 'UPL_GLUING'), job('B', 'UPL_GLUING'), job('C', 'ASSY')];
   const day = (iso: string) => new Date(`${iso}T09:00:00`);
 
   beforeEach(() => {
@@ -279,11 +279,11 @@ describe('surviving a twice-daily export', () => {
     expect(state().orderOvertime.B).toBe(true);
     // And in its own place on its own line, so the row does not come back at
     // the bottom of the pool when the export is fixed.
-    expect(state().containers.UPL.map(String)).toEqual(['A', 'B']);
+    expect(state().containers.UPL_GLUING.map(String)).toEqual(['A', 'B']);
 
     // The export is fixed that afternoon and nothing was lost.
     state().reconcile(centres, planned, day('2026-09-08'));
-    expect(state().containers.UPL.map(String)).toEqual(['A', 'B']);
+    expect(state().containers.UPL_GLUING.map(String)).toEqual(['A', 'B']);
     expect(state().orderStarts.B).toBe('2026-09-14');
   });
 
@@ -292,13 +292,13 @@ describe('surviving a twice-daily export', () => {
     const without = [planned[0], planned[2]];
     state().reconcile(centres, without, day('2026-09-21'));
     expect(state().orderStarts.B).toBe('2026-09-14');
-    expect(state().containers.UPL.map(String)).toEqual(['A', 'B']);
+    expect(state().containers.UPL_GLUING.map(String)).toEqual(['A', 'B']);
 
     // Fifteen days after it was last exported.
     state().reconcile(centres, without, day('2026-09-23'));
     expect('B' in state().orderStarts).toBe(false);
     expect('B' in state().orderCrewAssignments).toBe(false);
-    expect(state().containers.UPL.map(String)).toEqual(['A']);
+    expect(state().containers.UPL_GLUING.map(String)).toEqual(['A']);
     expect('B' in state().lastSeen).toBe(false);
   });
 
@@ -306,10 +306,10 @@ describe('surviving a twice-daily export', () => {
     const state = () => usePlanStore.getState();
     state().reconcile(
       centres,
-      [...planned, job('D', 'UPL')],
+      [...planned, job('D', 'UPL_GLUING')],
       day('2026-09-08'),
     );
-    expect(state().containers.UPL.map(String)).toEqual(['A', 'B', 'D']);
+    expect(state().containers.UPL_GLUING.map(String)).toEqual(['A', 'B', 'D']);
     expect(state().orderStarts.B).toBe('2026-09-14');
   });
 

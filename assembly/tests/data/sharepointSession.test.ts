@@ -14,11 +14,11 @@ describe('SharePoint session transport', () => {
   it('reads all pages and retains IDs, versions and multi-choice values', async () => {
     context();
     vi.stubGlobal('fetch', vi.fn()
-      .mockResolvedValueOnce(json({ value: [{ Id: 7, Title: 'Tom', Skills: { results: ['UPL'] }, 'odata.etag': '"2"' }], 'odata.nextLink': cfg.siteUrl + '/next' }))
+      .mockResolvedValueOnce(json({ value: [{ Id: 7, Title: 'Tom', Skills: { results: ['UPL_GLUING'] }, 'odata.etag': '"2"' }], 'odata.nextLink': cfg.siteUrl + '/next' }))
       .mockResolvedValueOnce(json({ value: [{ Id: 8, Title: 'Mary' }] })));
     const rows = await sessionRows(cfg, 'ASSY_Operator');
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toEqual({ id: '7', etag: '"2"', fields: { Id: 7, id: '7', Title: 'Tom', Skills: ['UPL'], 'odata.etag': '"2"' } });
+    expect(rows[0]).toEqual({ id: '7', etag: '"2"', fields: { Id: 7, id: '7', Title: 'Tom', Skills: ['UPL_GLUING'], 'odata.etag': '"2"' } });
   });
   it('does not retry a stale version with a wildcard', async () => {
     context();

@@ -42,7 +42,7 @@ const shift = (over: Partial<ProductionEntry> = {}): ProductionEntry => ({
 
 const order = (over: Partial<OrderFacts> = {}): OrderFacts => ({
   jobNum: 'ASM8001',
-  line: 'UPL',
+  line: 'UPL_GLUING',
   operatorIds: ['W02'],
   operatorNames: ['Gate'],
   startDate: '2026-09-14T00:00:00.000Z',
@@ -61,7 +61,7 @@ const stored = (over: Record<string, unknown> = {}, id = '1') => ({
   fields: {
     [C.jobNum]: 'ASM8001',
     [C.date]: '2026-09-14',
-    [C.line]: 'UPL',
+    [C.line]: 'UPL_GLUING',
     [C.operators]: 'Gate',
     [C.operatorIds]: 'W02',
     // Graph echoes dates back without the milliseconds we sent.
@@ -132,7 +132,7 @@ describe('syncProduction', () => {
         [C.jobNum]: 'ASM8001',
         [C.date]: '2026-09-14',
         [C.recordKey]: 'ASM8001|2026-09-14',
-        [C.line]: 'UPL',
+        [C.line]: 'UPL_GLUING',
         [C.operators]: 'Gate',
         [C.operatorIds]: 'W02',
         [C.startDate]: '2026-09-14T00:00:00.000Z',
@@ -384,7 +384,7 @@ describe('orderFactsFromBoard', () => {
     expect(facts.length).toBeGreaterThan(0);
     expect(facts.some((f) => mouldingIds.has(f.jobNum))).toBe(false);
     for (const f of facts) {
-      expect(['UPL - Cut/Sewing', 'UPL - Gluing', 'UPL - ASSY', 'UPL - Softie (SSS)', 'ASSY - Stool', 'ASSY - Seats', 'Table', 'Factory General']).toContain(f.line);
+      expect(['TBP', 'UPL-CUT', 'UPL-Gluing', 'UPL-SSS', 'ASM', 'Table', 'General']).toContain(f.line);
       expect(f.orderQty).toBeGreaterThanOrEqual(f.remainingQty);
       // Every order can open a row, even one with nobody on it yet.
       expect(f.anchorDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);

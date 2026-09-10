@@ -111,6 +111,32 @@ dashboard to Assembly's registry being reachable.
   reference, Mango's record id, and the last progress read), as are the
   plant's answers (`pmd.impwSite`).
 
+## Assembly line routing (`assembly/`)
+
+The board runs **eight lines — TBP, PMD, UPL-CUT, UPL-Gluing, UPL-SSS, ASM,
+Table, General** (`assembly/src/domain/assembly.ts`). PMD is a read-only
+context lane. The old `UPL` catch-all and `ASSY_STOOL` are retired and
+migrated on read, so saved plans and rosters still open.
+
+Which line builds a part is decided in `engine/assembly/lineRouter`, three
+sources in strict order: **ERP** (`JobHead_PersonID` settles TBP / PMD /
+Table / General; `UPL` and `ASSY` name only a department), then
+**`product-lines.v3.json`** — the plant's reviewed routing table, beside
+`JobMaterialReq.csv` in the document library — then **the part's BOM** out of
+`JobMaterialReq.csv` through `domain/lineRules`, a transcription of the
+plant's `classify-lines.mjs` v4 (rule numbers and evidence wording kept, so a
+result reads against that script's `--report` line for line). A reviewed part
+is never re-derived: doing that every load would throw the hand review away.
+Nothing invents a line — all three coming up empty leaves the order where ERP
+put it.
+
+Every description-keyword rule is gone: "contains cut" → cutting, "contains
+softie" → SSS, "contains stool" → the stool line. A description is what
+somebody typed; the BOM is what the part is made of. `workKind` is now a
+property of the line for the same reason. Set `VITE_PRODUCT_LINES_PATH` if
+the routing table is not at `/Shared Documents/product-lines.v3.json`. Full
+rules table in `docs/OPERATIONAL-LINES.md`.
+
 ## Action needed on the SharePoint side
 
 - **Add a multi-line `Handover` column to PMD_Production**, then set the

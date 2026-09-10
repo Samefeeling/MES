@@ -349,7 +349,7 @@ describe('lineOfWorkerToday', () => {
     }) as unknown as OrderRow;
 
   it('puts them on the line their work today is on', () => {
-    const bill = person('W1', ['UPL', 'ASSY']);
+    const bill = person('W1', ['UPL_GLUING', 'ASSY']);
     const at = lineOfWorkerToday(
       [bill],
       [onLine('J1', 'ASSY', TODAY, ['W1'])],
@@ -359,30 +359,30 @@ describe('lineOfWorkerToday', () => {
   });
 
   it('falls back to the line they normally work', () => {
-    const bill = person('W1', ['UPL', 'ASSY']);
+    const bill = person('W1', ['UPL_GLUING', 'ASSY']);
     // Work, but not today — so today they are at their usual bench.
     const at = lineOfWorkerToday(
       [bill],
       [onLine('J1', 'ASSY', new Date(2026, 8, 14), ['W1'])],
       TODAY,
     );
-    expect(at.get('W1')).toBe('UPL');
+    expect(at.get('W1')).toBe('UPL_GLUING');
   });
 
   it('uses the supervisor drag placement ahead of legacy skills and work', () => {
-    const bill = person('Bill', ['UPL', 'ASSY']);
-    const rows = [onLine('OLD', 'UPL', TODAY, ['Bill'])];
+    const bill = person('Bill', ['UPL_GLUING', 'ASSY']);
+    const rows = [onLine('OLD', 'UPL_GLUING', TODAY, ['Bill'])];
     expect(
       lineOfWorkerToday([bill], rows, TODAY, { Bill: 'TABLE' }).get('Bill'),
     ).toBe('TABLE');
   });
 
   it('never lands anyone on two lines at once', () => {
-    const mary = person('W3', ['UPL', 'ASSY', 'TABLE']);
+    const mary = person('W3', ['UPL_GLUING', 'ASSY', 'TABLE']);
     const at = lineOfWorkerToday(
       [mary],
       [
-        onLine('J1', 'UPL', TODAY, ['W3']),
+        onLine('J1', 'UPL_GLUING', TODAY, ['W3']),
         onLine('J2', 'TABLE', TODAY, ['W3']),
       ],
       TODAY,
@@ -390,7 +390,7 @@ describe('lineOfWorkerToday', () => {
     // An approved double-booking is still one row on the board; the chips on
     // the orders themselves are what say they are on both.
     expect([...at.values()]).toHaveLength(1);
-    expect(at.get('W3')).toBe('UPL');
+    expect(at.get('W3')).toBe('UPL_GLUING');
   });
 
   it('ignores a line the board does not schedule', () => {

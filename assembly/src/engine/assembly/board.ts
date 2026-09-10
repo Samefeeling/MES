@@ -872,7 +872,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
       sourceRemainingQty: sourceJobsById.get(id)?.remainingQty ?? job.remainingQty,
       sourceCompletedQty: sourceJobsById.get(id)?.completedQty ?? job.completedQty,
       line,
-      kind: workKind(job.description, line.key),
+      kind: workKind(line.key),
       workers,
       // The bounds actually planned against, not the ones handed in: the
       // difference is where each person's other work left room, and the

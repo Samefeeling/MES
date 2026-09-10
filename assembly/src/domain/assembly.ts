@@ -10,8 +10,22 @@
 
 import { WorkCenterId, type WorkerId } from './ids';
 
-/** A physical assembly line — the swimlanes on the board. */
-export type LineKey = 'PMD' | 'UPL' | 'ASSY' | 'TABLE' | 'UPL_CUT_SEW' | 'UPL_GLUING' | 'UPL_SOFTIE' | 'ASSY_STOOL' | 'FACTORY_GENERAL';
+/**
+ * A physical assembly line — the swimlanes on the board.
+ *
+ * Eight, and the plant names them TBP, PMD, UPL-CUT, UPL-Gluing, UPL-SSS,
+ * ASM, Table and General (see `LINES` for the display names). The keys keep
+ * their older spellings on purpose: they are written into saved plans, into
+ * `ASSY_Operator` skills and into the SharePoint containers, and renaming
+ * them would orphan every plan already on the tenant for no gain the floor
+ * would ever see.
+ *
+ * `UPL` (the catch-all upholstery lane) and `ASSY_STOOL` are gone — the BOM
+ * rules now say which upholstery bench a part belongs on, and stools are
+ * ordinary ASM work. `LEGACY_LINE_KEYS` maps both onto their successors so a
+ * plan saved before this change still opens.
+ */
+export type LineKey = 'TBP' | 'PMD' | 'UPL_CUT_SEW' | 'UPL_GLUING' | 'UPL_SOFTIE' | 'ASSY' | 'TABLE' | 'FACTORY_GENERAL';
 
 /** The only three kinds of assembly work order. */
 export type OrderType = 'cutting-sewing' | 'upholstery' | 'final-assembly';
@@ -35,22 +49,25 @@ export type WorkKind = 'general' | 'cut-sew' | 'smart-softie' | 'upholstery';
  */
 const RESTRICTED_KINDS: WorkKind[] = ['smart-softie'];
 
-/** Cutting is the first process and always takes precedence over Softie. */
-const KIND_PATTERNS: [RegExp, WorkKind][] = [
-  [/cut/i, 'cut-sew'],
-  [/smart\s*softie|ottoman/i, 'smart-softie'],
-  [/\bcut\b|cut\s*&\s*sew|cut\s*and\s*sew|sewing/i, 'cut-sew'],
-  [/upholster/i, 'upholstery'],
-];
-
-/** The trade an order calls for, from its part description. */
-export function workKind(description: string, line: LineKey): WorkKind {
+/**
+ * The trade an order calls for.
+ *
+ * Now purely a property of the line. It used to fall back to reading keywords
+ * out of the part description, because `UPL` was one lane holding three
+ * different benches and the description was the only hint available. The BOM
+ * rules split that lane into UPL-CUT / UPL-Gluing / UPL-SSS, so the line
+ * already *is* the answer, and guessing from a description that happens to
+ * contain "cut" can only disagree with it.
+ */
+export function workKind(line: LineKey): WorkKind {
   if (line === 'UPL_CUT_SEW') return 'cut-sew';
   if (line === 'UPL_SOFTIE') return 'smart-softie';
-  if (line === 'UPL_GLUING' || line === 'FACTORY_GENERAL') return 'general';
-  if (/cut/i.test(description)) return 'cut-sew';
-  if (line !== 'UPL') return 'general';
-  return KIND_PATTERNS.find(([re]) => re.test(description))?.[1] ?? 'upholstery';
+  // Gluing is upholstery, and now says so. It read as `general` only because
+  // the catch-all `UPL` lane beside it was where upholstery work actually
+  // landed; with that lane gone, a cutter is no longer implicitly qualified
+  // to glue — which is what `trades` was always for.
+  if (line === 'UPL_GLUING') return 'upholstery';
+  return 'general';
 }
 
 /**
@@ -102,73 +119,86 @@ export interface LineDef {
 /** Build positions on a line — how many orders it runs at the same time. */
 export const PARALLEL_ORDERS_PER_LINE = 3;
 
+export const LINE_TBP = WorkCenterId('TBP');
 export const LINE_PMD = WorkCenterId('PMD');
-export const LINE_UPL = WorkCenterId('UPL');
 export const LINE_ASSY = WorkCenterId('ASSY');
 export const LINE_TABLE = WorkCenterId('TABLE');
 
+/**
+ * The eight lines, in the order the floor lists them.
+ *
+ * TBP, PMD, Table and General are named by ERP itself (`JobHead_PersonID`);
+ * UPL-CUT, UPL-Gluing, UPL-SSS and ASM are decided from the BOM — see
+ * `domain/lineRules`. PMD is shown for context only: it mirrors moulding's
+ * plan so the supervisor can see what is feeding assembly, and is scheduled
+ * on the PMD dashboard, not here.
+ */
 export const LINES: LineDef[] = [
-  {
-    key: 'PMD',
-    id: LINE_PMD,
-    name: 'PMD',
-    schedulable: false,
-    types: [],
-    parallelOrders: 0,
-    sortIndex: 0,
-  },
-  {
-    key: 'UPL',
-    id: LINE_UPL,
-    name: 'UPL - ASSY',
-    schedulable: true,
-    types: ['cutting-sewing', 'upholstery'],
-    parallelOrders: PARALLEL_ORDERS_PER_LINE,
-    sortIndex: 1,
-  },
-  {
-    key: 'ASSY',
-    id: LINE_ASSY,
-    name: 'ASSY - Seats',
-    schedulable: true,
-    types: ['final-assembly'],
-    parallelOrders: PARALLEL_ORDERS_PER_LINE,
-    sortIndex: 2,
-  },
-  {
-    key: 'TABLE',
-    id: LINE_TABLE,
-    name: 'Table',
-    schedulable: true,
-    types: ['final-assembly'],
-    parallelOrders: PARALLEL_ORDERS_PER_LINE,
-    sortIndex: 3,
-  },
+  { key: 'TBP', id: LINE_TBP, name: 'TBP', schedulable: true, types: ['final-assembly'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 0 },
+  { key: 'PMD', id: LINE_PMD, name: 'PMD', schedulable: false, types: [], parallelOrders: 0, sortIndex: 1 },
+  { key: 'UPL_CUT_SEW', id: WorkCenterId('UPL_CUT_SEW'), name: 'UPL-CUT', schedulable: true, types: ['cutting-sewing'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 2 },
+  { key: 'UPL_GLUING', id: WorkCenterId('UPL_GLUING'), name: 'UPL-Gluing', schedulable: true, types: ['upholstery'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 3 },
+  { key: 'UPL_SOFTIE', id: WorkCenterId('UPL_SOFTIE'), name: 'UPL-SSS', schedulable: true, types: ['upholstery'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 4 },
+  { key: 'ASSY', id: LINE_ASSY, name: 'ASM', schedulable: true, types: ['final-assembly'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 5 },
+  { key: 'TABLE', id: LINE_TABLE, name: 'Table', schedulable: true, types: ['final-assembly'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 6 },
+  { key: 'FACTORY_GENERAL', id: WorkCenterId('FACTORY_GENERAL'), name: 'General', schedulable: true, types: ['final-assembly'], parallelOrders: 15, sortIndex: 7 },
 ];
 
-LINES.splice(1, 0,
-  { key: 'UPL_CUT_SEW', id: WorkCenterId('UPL_CUT_SEW'), name: 'UPL - Cut/Sewing', schedulable: true, types: ['cutting-sewing'], parallelOrders: 3, sortIndex: 1 },
-  { key: 'UPL_GLUING', id: WorkCenterId('UPL_GLUING'), name: 'UPL - Gluing', schedulable: true, types: ['upholstery'], parallelOrders: 3, sortIndex: 2 },
-);
-LINES.splice(4, 0,
-  { key: 'UPL_SOFTIE', id: WorkCenterId('UPL_SOFTIE'), name: 'UPL - Softie (SSS)', schedulable: true, types: ['upholstery'], parallelOrders: 3, sortIndex: 4 },
-  { key: 'ASSY_STOOL', id: WorkCenterId('ASSY_STOOL'), name: 'ASSY - Stool', schedulable: true, types: ['final-assembly'], parallelOrders: 3, sortIndex: 5 },
-);
-LINES.push({ key: 'FACTORY_GENERAL', id: WorkCenterId('FACTORY_GENERAL'), name: 'Factory General', schedulable: true, types: ['final-assembly'], parallelOrders: 15, sortIndex: 8 });
-LINES.forEach((line, index) => { line.sortIndex = index; });
+/**
+ * Lines that no longer exist, and where their work goes.
+ *
+ * `UPL` was one lane covering three benches; anything still filed against it
+ * lands on Gluing, which is where the bulk of it was. `ASSY_STOOL` was a
+ * split of ASM that the plant does not run separately any more. Applied when
+ * reading saved plans, rosters and exports — never when writing.
+ */
+const LEGACY_LINE_KEYS: Record<string, LineKey> = {
+  UPL: 'UPL_GLUING',
+  UPL_ASSY: 'UPL_GLUING',
+  ASSY_STOOL: 'ASSY',
+};
 
-/** ERP centres remain coarse; only initial placement is inferred. */
-export function initialLine(description: string, resource: string): LineKey | null {
-  if (/cut/i.test(description)) return 'UPL_CUT_SEW';
-  const key = resource.trim().toUpperCase();
-  if (key === 'UPL') {
-    if (/sew/i.test(description)) return 'UPL_CUT_SEW';
-    if (/glue|gluing|foamed\s*up/i.test(description)) return 'UPL_GLUING';
-    if (/smart\s*soft|softie|\bsss\b|ottoman/i.test(description)) return 'UPL_SOFTIE';
-    return 'UPL';
-  }
-  if (key === 'ASSY') return /stool/i.test(description) ? 'ASSY_STOOL' : 'ASSY';
-  return LINES.find(line => line.key === key)?.key ?? null;
+const LINE_KEYS = new Set<string>(LINES.map((l) => l.key));
+
+/** Display names, normalised the same way: "UPL-CUT" is what people write in
+ *  a roster's Skills cell and in `product-lines.v3.json`, and it has to mean
+ *  the same line as the stored key `UPL_CUT_SEW`. */
+const LINE_NAMES = new Map<string, LineKey>(
+  LINES.map((l) => [l.name.toUpperCase().replace(/[\s/-]+/g, '_'), l.key]),
+);
+
+/** A line key out of anything stored, exported or typed — null if it is none. */
+export function readLineKey(raw: string): LineKey | null {
+  const key = raw.trim().toUpperCase().replace(/[\s/-]+/g, '_');
+  if (LINE_KEYS.has(key)) return key as LineKey;
+  return LINE_NAMES.get(key) ?? LEGACY_LINE_KEYS[key] ?? null;
+}
+
+/**
+ * Words ERP writes that name a DEPARTMENT, not a line.
+ *
+ * `UPL` covers cutting, gluing and the softies; `ASSY` covers everything
+ * assembled. Which line inside them is what the BOM rules answer, so these
+ * are the values that must fall through to `engine/assembly/lineRouter`
+ * rather than being taken at face value.
+ */
+const ERP_DEPARTMENT_WORDS = new Set(['UPL', 'UPL_ASSY', 'ASSY', 'ASSY_STOOL']);
+
+/**
+ * The line ERP itself named — TBP, PMD, Table or General — or null when it
+ * only named a department and the BOM has to decide.
+ *
+ * This is all that is left of the old `initialLine`. Everything it used to
+ * infer from the part description — "contains cut", "contains softie",
+ * "contains stool" — is gone: a description is what somebody typed, and the
+ * BOM is what the part is actually made of.
+ */
+export function erpNamedLine(resource: string): LineKey | null {
+  const raw = resource.trim().toUpperCase().replace(/[\s/-]+/g, '_');
+  if (ERP_DEPARTMENT_WORDS.has(raw)) return null;
+  // Anything else that names a real line is honoured: a saved plan can carry
+  // one of the BOM-decided lines, and that is a placement someone made.
+  return readLineKey(raw);
 }
 
 export const LINE_BY_ID = new Map(LINES.map((l) => [String(l.id), l]));

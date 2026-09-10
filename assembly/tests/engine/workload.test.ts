@@ -29,14 +29,14 @@ import {
   workerLoad,
 } from '@/engine/assembly/workload';
 
-const UPL = LINES.find((l) => l.key === 'UPL')!;
+const UPL = LINES.find((l) => l.key === 'UPL_GLUING')!;
 const PMD = LINES.find((l) => l.key === 'PMD')!;
 const MON = new Date(2026, 8, 14); // Mon 14 Sep 2026, local midnight
 
 const worker = (id: string, leave: string[] = []): Worker => ({
   id: WorkerId(id),
   name: id,
-  skills: ['UPL'],
+  skills: ['UPL_GLUING'],
   onShift: true,
   plannedLeave: leave,
 });

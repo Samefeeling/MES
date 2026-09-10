@@ -138,6 +138,13 @@ export interface JobMaterialLink {
   childPart: PartId;
   /** Quantity of the component the order needs, when the export carries it. */
   requiredQty: number | null;
+  /** `JobMtl_Description` — what the component is called. Read by the line
+   *  rules, which classify foam, glue and fabric by their descriptions. */
+  childDescription: string;
+  /** `JobMtl_IUM` — the issue unit. The line rules need it: resin only counts
+   *  as moulding feedstock when it is issued by the kilo, and cloth only
+   *  counts as face fabric by the metre. */
+  uom: string;
 }
 
 // ---------------------------------------------------------------------------
