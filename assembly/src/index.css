@@ -292,8 +292,7 @@ button {
 .app-body {
   position: relative;
   flex: 1;
-  /* The schedule takes what is left after the pool strip, which is usually
-     nothing at all: a column, not a block, so the two can share the height. */
+  /* The schedule fills the height above the reserved pool strip. */
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -466,12 +465,14 @@ button {
   border-radius: 8px;
 }
 /*
- * With nothing unassigned the pool renders nothing at all; while a drag is in
- * flight it becomes this strip, so an order can still be taken off its line.
+ * With nothing unassigned the strip keeps its height but stays invisible.
+ * Revealing the drop target must not resize the board during a drag.
  */
 .pool.target-only {
+  height: 48px;
   padding: 6px 10px;
 }
+.pool.target-only.inactive { visibility: hidden; pointer-events: none; }
 .pool-target {
   border: 1px dashed var(--border);
   border-radius: 8px;
@@ -990,26 +991,6 @@ button {
   color: var(--faint);
   font-weight: 400;
 }
-.assy-summary {
-  display: flex;
-  gap: 6px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-  position: sticky;
-  left: 0;
-  z-index: 8;
-}
-.pill {
-  padding: 2px 9px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 650;
-}
-.pill.green { background: var(--ok-dim); color: var(--ok); }
-.pill.orange { background: var(--warn-dim); color: var(--warn); }
-.pill.red { background: var(--error-dim); color: var(--error); }
-.pill.grey { background: var(--surface-3); color: var(--muted); }
 
 .arow,
 .assy-head {
@@ -1063,7 +1044,6 @@ button {
 }
 .assy-head .day-bar {
   background: rgb(255 255 255 / 16%);
-  border-color: rgb(255 255 255 / 38%);
 }
 .assy-head .daycol { padding: 5px 5px; }
 .assy-head .day-order-filter {
@@ -1428,7 +1408,7 @@ body.col-resizing {
   align-items: flex-end;
   flex: 0 0 auto;
   width: 22px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 2px;
   background: var(--surface-3);
   overflow: hidden;
@@ -1582,10 +1562,9 @@ body.col-resizing {
   font-size: 8.5px;
   font-weight: 800;
 }
-/* Output that was booked, not work that is planned — hollow, not solid. */
+/* Recorded output is muted; planned work uses the full fill. */
 .day-bar.actual {
   background: transparent;
-  border: 1px dashed var(--border);
 }
 .day-bar.actual i {
   opacity: 0.55;
@@ -2859,3 +2838,13 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .worker-name:not(.drag-locked) { touch-action: none; }
 .wl-move { display: grid; gap: 6px; padding: 10px 14px; }
 .wl-move select { font: inherit; padding: 6px; }
+
+/* Keep the read time immediately below its refresh action. */
+.refresh-control { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 0 0 auto; }
+.refresh-control .sub { font-size: 10px; line-height: 12px; white-space: nowrap; }
+.refresh-control .spinner { position: absolute; margin-left: -92px; margin-top: 5px; }
+.refresh-control .new-order-count { font-size: 9px; }
+.bar { touch-action: none; }
+/* Overlay only: the alignment aid never moves rows or catches the pointer. */
+.drag-time-guide { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed #0869ad; z-index: 12; pointer-events: none; }
+.drag-time-guide span { position: sticky; top: 58px; display: block; width: max-content; margin-left: 5px; padding: 3px 6px; border-radius: 3px; background: #075985; color: #fff; font-size: 11px; font-variant-numeric: tabular-nums; box-shadow: 0 1px 4px #0003; }

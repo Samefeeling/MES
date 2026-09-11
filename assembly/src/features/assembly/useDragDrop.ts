@@ -1,8 +1,8 @@
 /**
- * @dnd-kit wiring for the board. Jobs are draggable; lanes, the pool, and other
- * job cards are drop targets. Dropping onto a lane/pool appends; dropping onto
- * a card inserts before it (re-ordering). All mutations go through the plan
- * store, which the selectors re-derive into a fresh timeline.
+ * @dnd-kit wiring for the board. Bars move along the shift clock; lines and
+ * the pool accept order moves. Worker and line-header drags have their own
+ * targets. All mutations go through the plan store, which the selectors
+ * re-derive into a fresh timeline.
  */
 
 import { useState } from 'react';
@@ -25,16 +25,10 @@ import { DRAG_TYPE_BAR } from '@/features/assembly/OrderBar';
 import { DRAG_TYPE_LINE } from '@/features/assembly/lineDrag';
 import type { LineKey } from '@/domain/assembly';
 import { isWeekend } from '@/engine/assembly/dates';
-import {
-  DRAG_STEP_MINUTES,
-  nextWorkingMoment,
-  shiftOpensOn,
-} from '@/engine/assembly/shift';
-import { landAfterDrag, shiftTimelineKeepingClock } from './boardView';
+import { shiftOpensOn } from '@/engine/assembly/shift';
+import { shiftTimelineKeepingClock } from './boardView';
+import { barDragLanding } from './barDrag';
 import { planGroupMove, type MarkedMove } from './groupMove';
-
-/** A drag smaller than one landing step has not moved the bar. */
-const DRAG_STEP_MS = DRAG_STEP_MINUTES * 60_000;
 
 /** Prefer whatever the pointer is actually inside, then the nearest. */
 const collisionDetection: CollisionDetection = (args) => {
@@ -52,6 +46,7 @@ const collisionDetection: CollisionDetection = (args) => {
 export function useDragDrop() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [activeWorkerId, setActiveWorkerId] = useState<string | null>(null);
+  const [activeBar, setActiveBar] = useState(false);
   const [activeLineName, setActiveLineName] = useState<string | null>(null);
 
   const sensors = useSensors(
@@ -62,6 +57,7 @@ export function useDragDrop() {
     // Bars and line rows carry a prefixed id; the overlay only wants plain job
     // cards, so everything with a type of its own is excluded by name.
     const type = e.active.data.current?.type;
+    setActiveBar(type === DRAG_TYPE_BAR);
     setActiveWorkerId(
       type === 'worker' ? String(e.active.data.current?.workerId ?? '') : null,
     );
@@ -77,12 +73,14 @@ export function useDragDrop() {
     );
   };
   const onDragCancel = () => {
+    setActiveBar(false);
     setActiveJobId(null);
     setActiveWorkerId(null);
     setActiveLineName(null);
   };
 
   const onDragEnd = (e: DragEndEvent) => {
+    setActiveBar(false);
     setActiveJobId(null);
     setActiveWorkerId(null);
     setActiveLineName(null);
@@ -196,24 +194,10 @@ export function useDragDrop() {
         : orderStarts[key]
           ? new Date(orderStarts[key])
           : shiftOpensOn(new Date());
-      const asked = landAfterDrag(from, columns, showWeekends);
-      /*
-       * Where it may actually come to rest.
-       *
-       * There is no working yesterday, material on a future PO cannot be
-       * worked before it lands, and a component has to be finished before the
-       * thing made from it starts. The schedule enforces all three regardless,
-       * so a bar dragged past them returns to where it was — and writing the
-       * day the pointer reached anyway left a pin that could never be honoured
-       * sitting in the plan, and going out to the production list as this
-       * order's start. A marked run has been asking this since group moves
-       * were added; one bar asks it now too.
-       */
-      const floorISO = active.data.current.floorISO as string | null | undefined;
-      const floor = nextWorkingMoment(
-        floorISO ? new Date(floorISO) : new Date(),
-      );
-      const moved = asked < floor ? floor : asked;
+      const moved = barDragLanding({
+        jobId: key, startISO: from.toISOString(), dayWidth, showWeekends,
+        floorISO: active.data.current.floorISO as string | null | undefined,
+      }, delta?.x ?? 0);
 
       // It cannot go where it was asked, and it is already as early as it can
       // be: write nothing. Pinning is not free — a pinned order stops falling
@@ -222,7 +206,7 @@ export function useDragDrop() {
       // without anybody choosing it. The bar's own stop marker says what is
       // holding it. "Nothing" is a landing step rather than an exact match:
       // below five minutes there is no move to write.
-      if (Math.abs(moved.getTime() - from.getTime()) < DRAG_STEP_MS) return;
+      if (moved.getTime() === from.getTime()) return;
 
       // The factory is shut at the weekend. Ask before writing work into one;
       // nothing changes until the supervisor answers.
@@ -258,6 +242,7 @@ export function useDragDrop() {
   return {
     sensors,
     activeJobId,
+    activeBar,
     activeWorkerId,
     activeLineName,
     onDragStart,

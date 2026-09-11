@@ -160,7 +160,7 @@ export const LINES: LineDef[] = [
   { key: 'UPL_CUT_SEW', id: WorkCenterId('UPL_CUT_SEW'), name: 'UPL-CUT', schedulable: true, types: ['cutting-sewing'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 2 },
   { key: 'UPL_GLUING', id: WorkCenterId('UPL_GLUING'), name: 'UPL-Gluing', schedulable: true, types: ['upholstery'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 3 },
   { key: 'UPL_SOFTIE', id: WorkCenterId('UPL_SOFTIE'), name: 'UPL-SSS', schedulable: true, types: ['upholstery'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 4 },
-  { key: 'ASSY', id: LINE_ASSY, name: 'ASM', schedulable: true, types: ['final-assembly'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 5 },
+  { key: 'ASSY', id: LINE_ASSY, name: 'Assembly Seats', schedulable: true, types: ['final-assembly'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 5 },
   { key: 'TABLE', id: LINE_TABLE, name: 'Table', schedulable: true, types: ['final-assembly'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 6 },
   { key: 'FACTORY_GENERAL', id: WorkCenterId('FACTORY_GENERAL'), name: 'General', schedulable: true, types: ['final-assembly'], parallelOrders: 15, sortIndex: 7 },
 ];
@@ -174,6 +174,7 @@ export const LINES: LineDef[] = [
  * reading saved plans, rosters and exports — never when writing.
  */
 const LEGACY_LINE_KEYS: Record<string, LineKey> = {
+  ASM: 'ASSY',
   UPL: 'UPL_GLUING',
   UPL_ASSY: 'UPL_GLUING',
   ASSY_STOOL: 'ASSY',

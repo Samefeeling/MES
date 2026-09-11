@@ -2,10 +2,9 @@
  * Assembly orders not on a line yet. Drop an order here to take it off the
  * schedule, and drag one out of here onto a line to put it back.
  *
- * It shows nothing at all when every order is on a line, which is the normal
- * state of a working board — the drop zone reappears the moment something is
- * being dragged, so an order can still be taken off a line. A strip along the
- * bottom rather than a column down the side: the schedule owns the width.
+ * When every order is on a line, a reserved bottom strip stays invisible
+ * until an order is dragged. Revealing the target does not resize the board
+ * or move the last row away from the pointer.
  *
  * Something ends up here for two reasons, and both need a way out of it. The
  * planner put it here; or the export named a line the board does not know, in
@@ -21,6 +20,7 @@ import { POOL_ID } from '@/store/planStore';
 import { useUiStore } from '@/store/uiStore';
 import { useIgnoredOrders } from '@/store/ignoredOrders';
 import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
+import { DRAG_TYPE_BAR } from './OrderBar';
 import { formatDay } from '@/lib/time';
 
 function PoolCard({
@@ -76,23 +76,25 @@ function PoolCard({
 }
 
 export function AssemblyPool({ board }: { board: AssemblyGanttView }) {
+  const { active } = useDndContext();
+  const orderDragging = active?.data.current?.type === DRAG_TYPE_BAR || active?.data.current?.type === 'job';
   const { setNodeRef, isOver } = useDroppable({
     id: POOL_ID,
     data: { type: 'pool' },
+    disabled: !orderDragging,
   });
   const select = useUiStore((s) => s.select);
   const selectedJobId = useUiStore((s) => s.selectedJobId);
-  const { active } = useDndContext();
-
   const ignoredIds = useIgnoredOrders((s) => s.ids);
   const pool = board.pool.filter((job) => !ignoredIds.includes(String(job.id)));
   const empty = pool.length === 0;
-  if (empty && !active) return null;
+  // Reserve the empty strip before pointer-down so the last row never jumps.
 
   return (
     <div
       ref={setNodeRef}
-      className={`pool ${empty ? 'target-only' : ''} ${isOver ? 'drop-active' : ''}`}
+      aria-hidden={empty && !orderDragging}
+      className={`pool ${empty ? 'target-only' + (orderDragging ? '' : ' inactive') : ''} ${isOver ? 'drop-active' : ''}`}
     >
       {empty ? (
         <div className="pool-target">Drop here to take the order off its line</div>

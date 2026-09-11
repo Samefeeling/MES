@@ -410,3 +410,24 @@ each names the other and the person they are sharing. The ways out are to take
 somebody off the other order, add crew to this one, or accept the pause. Only a
 pinned or a started order can be hatched; the board's own schedule never
 double-books anybody.
+
+## Drag alignment and stable viewport
+
+Dragging a bar shows a dashed vertical guide with its requested start in
+Australian date format and 24-hour time. The guide and drop use the same
+landing function, including breaks, predecessor floors, the five-minute
+minimum movement, and the existing marked-group rules. It is a visual aid;
+it does not silently change another order's crew or end time.
+
+The empty unplaced-order strip reserves 48 px even before a drag begins.
+Only its visibility changes while dragging an order. This prevents the board
+viewport shrinking under the last row when the drop target appears. Workers
+and line headers do not activate this order-only target. Automatic edge
+scrolling is disabled during bar drags so a move near the bottom cannot run
+away. Scroll
+the board to the desired area before dragging; worker and line drags retain
+their existing automatic scrolling.
+
+The line label is Assembly Seats. Stored ASSY keys and legacy ASM values
+continue to resolve to the same line. The Refresh action carries its updated
+HH:mm time underneath; day load bars have no outline.

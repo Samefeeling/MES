@@ -39,7 +39,7 @@ const LINE_ORDER = [
   'UPL-CUT',
   'UPL-Gluing',
   'UPL-SSS',
-  'ASM',
+  'Assembly Seats',
   'Table',
   'General',
   'Factory General',

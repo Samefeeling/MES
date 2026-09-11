@@ -9,12 +9,12 @@ import { JobId, WorkCenterId } from '@/domain/ids';
 describe('operational lines', () => {
   it('is the eight lines the floor names, in the floor’s own order', () => {
     expect(LINES.map((l) => l.name)).toEqual([
-      'TBP', 'PMD', 'UPL-CUT', 'UPL-Gluing', 'UPL-SSS', 'ASM', 'Table', 'General',
+      'TBP', 'PMD', 'UPL-CUT', 'UPL-Gluing', 'UPL-SSS', 'Assembly Seats', 'Table', 'General',
     ]);
     // PMD mirrors moulding's plan for context; it is scheduled on the PMD
     // dashboard, not here.
     expect(LINES.filter((l) => l.schedulable).map((l) => l.name)).toEqual([
-      'TBP', 'UPL-CUT', 'UPL-Gluing', 'UPL-SSS', 'ASM', 'Table', 'General',
+      'TBP', 'UPL-CUT', 'UPL-Gluing', 'UPL-SSS', 'Assembly Seats', 'Table', 'General',
     ]);
   });
 

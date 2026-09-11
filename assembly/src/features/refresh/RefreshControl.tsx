@@ -1,6 +1,6 @@
 import { useDataStore } from '@/store/dataStore';
 import { Button, Spinner } from '@/ui';
-import { formatTime } from '@/lib/time';
+const UPDATED_TIME = new Intl.DateTimeFormat('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false });
 
 export function RefreshControl({
   source,
@@ -16,13 +16,14 @@ export function RefreshControl({
   const newOrderIds = useDataStore((s) => s.newOrderIds);
 
   return (
-    <div className="zoom">
+    <div className="refresh-control">
+      <Button onClick={onRefresh} disabled={loading}>Refresh</Button>
       {loading && <Spinner />}
       <span
         className="sub"
         title={source ? `Read from ${source}` : undefined}
       >
-        {fetchedAt ? `updated ${formatTime(fetchedAt)}` : 'Update time unavailable'}
+        {fetchedAt ? `updated ${UPDATED_TIME.format(fetchedAt)}` : 'Update time unavailable'}
       </span>
       {newOrderIds.length > 0 && (
         <span
@@ -32,9 +33,6 @@ export function RefreshControl({
           {newOrderIds.length} new today
         </span>
       )}
-      <Button onClick={onRefresh} disabled={loading}>
-        Refresh
-      </Button>
     </div>
   );
 }

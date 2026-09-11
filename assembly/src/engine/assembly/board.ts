@@ -94,7 +94,7 @@ import {
 import { endOfCrewDay, idleRuns, planVariableCrew, type CrewDayPlan, type TakenOnDay, type VariableCrewPlan } from './crewSchedule';
 import { lineLoad, type LineLoad } from './workload';
 import { nextWorkingMoment, workFractionAt } from './shift';
-import { toDayKey } from '@/lib/time';
+import { fromDayKey, toDayKey } from '@/lib/time';
 import type {
   ActualStartRecord,
   ProductionEntry,
@@ -600,7 +600,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
     if (actual) return startOfDay(new Date(actual.startedAt));
     const pinned = orderStarts[id];
     if (!pinned) return planStart;
-    const wanted = nextWorkingMoment(new Date(pinned));
+    const wanted = nextWorkingMoment(/^\d{4}-\d{2}-\d{2}$/.test(pinned) ? fromDayKey(pinned) : new Date(pinned));
     return wanted > planStart ? wanted : planStart;
   };
 

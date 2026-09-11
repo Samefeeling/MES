@@ -52,6 +52,7 @@ import {
   type DateCol,
   type DateCols,
 } from '@/store/uiStore';
+import { DragTimeGuide } from './DragTimeGuide';
 import { OrderBar } from './OrderBar';
 import { DRAG_TYPE_LINE, lineDragId } from './lineDrag';
 import { TeamChips } from './TeamChips';
@@ -1001,6 +1002,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
         />
       )}
 
+      <DragTimeGuide horizonStart={board.horizonStart} labelWidth={labelWidth} />
       <DependencyArrows
         root={root}
         rows={visibleRows}

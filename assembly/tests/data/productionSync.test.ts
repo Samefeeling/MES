@@ -389,7 +389,7 @@ describe('orderFactsFromBoard', () => {
     expect(facts.length).toBeGreaterThan(0);
     expect(facts.some((f) => mouldingIds.has(f.jobNum))).toBe(false);
     for (const f of facts) {
-      expect(['TBP', 'UPL-CUT', 'UPL-Gluing', 'UPL-SSS', 'ASM', 'Table', 'General']).toContain(f.line);
+      expect(['TBP', 'UPL-CUT', 'UPL-Gluing', 'UPL-SSS', 'Assembly Seats', 'Table', 'General']).toContain(f.line);
       expect(f.orderQty).toBeGreaterThanOrEqual(f.remainingQty);
       // Every order can open a row, even one with nobody on it yet.
       expect(f.anchorDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);

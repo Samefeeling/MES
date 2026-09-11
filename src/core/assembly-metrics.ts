@@ -217,6 +217,9 @@ export interface AssemblyLineRoll {
   orders: AssemblyOrderRoll[];
 }
 
+/** Older production rows retain ASM; group them with the renamed line. */
+const lineLabel = (name: string): string => /^(ASM|Assembly Seats)$/i.test(name.trim()) ? 'Assembly Seats' : name.trim() || NO_LINE;
+
 /**
  * The window split by line, and each line by order.
  *
@@ -230,13 +233,13 @@ export function assemblyByLine(
 ): AssemblyLineRoll[] {
   const byLine = new Map<string, AssemblyResult[]>();
   for (const row of rows) {
-    const key = row.line.trim() || NO_LINE;
+    const key = lineLabel(row.line);
     const held = byLine.get(key);
     if (held) held.push(row);
     else byLine.set(key, [row]);
   }
 
-  const rank = new Map(lineOrder.map((name, i) => [name.toUpperCase(), i]));
+  const rank = new Map(lineOrder.map((name, i) => [lineLabel(name).toUpperCase(), i]));
   const place = (line: string): number =>
     rank.get(line.toUpperCase()) ?? lineOrder.length;
 
@@ -267,7 +270,7 @@ function rollOrders(rows: readonly AssemblyResult[]): AssemblyOrderRoll[] {
         // The description travels on the support rows; a manufactured order
         // carries it nowhere in this list, so an empty one is honest.
         description: jobRows.find((row) => row.description)?.description ?? '',
-        line: jobRows[0].line.trim() || NO_LINE,
+        line: lineLabel(jobRows[0].line),
         days: new Set(jobRows.map((row) => row.day)).size,
         due: jobRows.find((row) => row.due)?.due ?? null,
         completed: finishedRow !== null,

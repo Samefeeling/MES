@@ -287,6 +287,7 @@ export default function App() {
 
       <DndContext
         sensors={dnd.sensors}
+        autoScroll={!dnd.activeBar}
         collisionDetection={dnd.collisionDetection}
         onDragStart={dnd.onDragStart}
         onDragEnd={dnd.onDragEnd}
@@ -309,10 +310,8 @@ export default function App() {
             )}
           </div>
           {/*
-            Orders on no line. Renders nothing at all while there are none and
-            nothing is being dragged, so on a working board it costs no room —
-            but an order that lands here is otherwise unreachable, and the
-            board holds everything waiting on its parts.
+            Orders on no line remain reachable in the bottom strip. Reserve the
+            empty target before dragging so the board viewport stays stable.
           */}
           {board && <AssemblyPool board={board} />}
           {board && (selectedJobId && manualOrders[selectedJobId] ? <ManualOrderInspector key={selectedJobId} board={board} id={selectedJobId} /> : <AssemblyInspector board={board} />)}
