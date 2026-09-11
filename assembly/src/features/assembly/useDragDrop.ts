@@ -22,6 +22,7 @@ import { useSupervisorStore } from '@/store/supervisorStore';
 import { useUiStore } from '@/store/uiStore';
 import { DEFAULT_DAY_WIDTH } from '@/store/uiStore';
 import { DRAG_TYPE_BAR } from '@/features/assembly/OrderBar';
+import { DRAG_TYPE_LINE } from '@/features/assembly/lineDrag';
 import type { LineKey } from '@/domain/assembly';
 import {
   isWeekend,
@@ -34,41 +35,54 @@ import { toDayKey } from '@/lib/time';
 
 /** Prefer whatever the pointer is actually inside, then the nearest. */
 const collisionDetection: CollisionDetection = (args) => {
-  const worker = args.active.data.current?.type === 'worker';
-  const targets = worker
+  // A worker must land inside a line, not snap to a distant row or the pool —
+  // and a line being arranged can only land on another line.
+  const type = args.active.data.current?.type;
+  const linesOnly = type === 'worker' || type === DRAG_TYPE_LINE;
+  const targets = linesOnly
     ? { ...args, droppableContainers: args.droppableContainers.filter(target => target.data.current?.type === 'line') }
     : args;
   const hits = pointerWithin(targets);
-  // A worker must land inside a line, not snap to a distant row or the pool.
-  return hits.length ? hits : worker ? [] : closestCenter(targets);
+  return hits.length ? hits : linesOnly ? [] : closestCenter(targets);
 };
 
 export function useDragDrop() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [activeWorkerId, setActiveWorkerId] = useState<string | null>(null);
+  const [activeLineName, setActiveLineName] = useState<string | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
   );
 
   const onDragStart = (e: DragStartEvent) => {
-    // Bars carry a prefixed id; the overlay only wants plain job cards.
+    // Bars and line rows carry a prefixed id; the overlay only wants plain job
+    // cards, so everything with a type of its own is excluded by name.
     const type = e.active.data.current?.type;
     setActiveWorkerId(
       type === 'worker' ? String(e.active.data.current?.workerId ?? '') : null,
     );
+    setActiveLineName(
+      type === DRAG_TYPE_LINE
+        ? String(e.active.data.current?.lineName ?? '')
+        : null,
+    );
     setActiveJobId(
-      type === DRAG_TYPE_BAR || type === 'worker' ? null : String(e.active.id),
+      type === DRAG_TYPE_BAR || type === 'worker' || type === DRAG_TYPE_LINE
+        ? null
+        : String(e.active.id),
     );
   };
   const onDragCancel = () => {
     setActiveJobId(null);
     setActiveWorkerId(null);
+    setActiveLineName(null);
   };
 
   const onDragEnd = (e: DragEndEvent) => {
     setActiveJobId(null);
     setActiveWorkerId(null);
+    setActiveLineName(null);
     const { over, active, delta } = e;
 
     /*
@@ -88,6 +102,22 @@ export function useDragDrop() {
       usePlanStore
         .getState()
         .moveWorkerToLine(String(active.data.current.workerId), line);
+      return;
+    }
+
+    /*
+     * A line dropped on another line takes its place. Nothing about the
+     * schedule moves — the orders, their crews and their days are where they
+     * were — but the sequence is in the shared plan rather than in this
+     * browser, because what order the floor runs its benches in is a fact
+     * about the floor and not a preference of whoever is reading.
+     */
+    if (active.data.current?.type === DRAG_TYPE_LINE) {
+      if (over?.data.current?.type !== 'line') return;
+      const moved = active.data.current.lineKey as LineKey | undefined;
+      const onto = over.data.current.lineKey as LineKey | undefined;
+      if (!moved || !onto || moved === onto) return;
+      usePlanStore.getState().moveLine(moved, onto);
       return;
     }
 
@@ -212,6 +242,7 @@ export function useDragDrop() {
     sensors,
     activeJobId,
     activeWorkerId,
+    activeLineName,
     onDragStart,
     onDragEnd,
     onDragCancel,

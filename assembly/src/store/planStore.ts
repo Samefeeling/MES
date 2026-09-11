@@ -13,7 +13,9 @@ import { manualJob, type ManualOrder } from '@/domain/manualOrder';
 import type { JobId } from '@/domain/ids';
 import type { Job, WorkCenter } from '@/domain/types';
 import {
+  LINES,
   MAX_WORKERS_PER_ORDER,
+  arrangeLines,
   isVirtualLine,
   readLineKey,
   virtualLineDef,
@@ -126,6 +128,21 @@ interface PlanState {
   /** Close one, tipping whatever is on it back into the unplaced pool. */
   removeVirtualLine: (key: VirtualLineKey) => void;
   /**
+   * The sequence the board draws its lines in — see `arrangeLines`.
+   *
+   * In the plan rather than in this browser, for the same reason a line opened
+   * this morning is: which order the lines run in is a fact about the floor,
+   * and a board two supervisors read in two different sequences is two boards.
+   * Empty on a plan nobody has arranged, which means the built-in order.
+   */
+  lineOrder: LineKey[];
+  /**
+   * Put one line where another currently is, the way a dragged list item lands:
+   * dropped on a line below, it comes to rest under that line; dropped on one
+   * above, it takes that line's place and pushes it down.
+   */
+  moveLine: (key: LineKey, onto: LineKey) => void;
+  /**
    * Who is on each order, and between which days.
    *
    * The only record of it. There used to be a second, `orderWorkers`, holding
@@ -218,6 +235,7 @@ interface PlanState {
     orderWorkers?: Record<string, string[]>;
     workerLines?: Record<string, LineKey>;
     virtualLines?: VirtualLine[];
+    lineOrder?: LineKey[];
     orderCrewAssignments?: Record<string, CrewAssignment[]>;
     orderStarts?: Record<string, string>;
     orderActualStarts?: Record<string, ActualStartRecord>;
@@ -349,6 +367,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   containers: { [POOL_ID]: [] },
   workerLines: {},
   virtualLines: [],
+  lineOrder: [],
   orderCrewAssignments: {},
   orderStarts: {},
   orderActualStarts: {},
@@ -735,6 +754,33 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     return key;
   },
 
+  moveLine(key, onto) {
+    set((state) => {
+      /*
+       * Arranged first, so the move is made against what the board is actually
+       * drawing rather than against a half-written list. A plan nobody has
+       * arranged holds no order at all, and the whole sequence is written out
+       * here — a list that named only the moved line would leave the other
+       * seven to be inferred, and inference is the thing a stored order exists
+       * to stop.
+       */
+      const known: LineKey[] = [
+        ...LINES.map((line) => line.key),
+        ...state.virtualLines.map((line) => line.key),
+      ];
+      const order = arrangeLines(
+        known.map((lineKey) => ({ key: lineKey })),
+        state.lineOrder,
+      ).map((line) => line.key as LineKey);
+      const from = order.indexOf(key);
+      const to = order.indexOf(onto);
+      if (from < 0 || to < 0 || from === to) return state;
+      const next = [...order];
+      next.splice(to, 0, next.splice(from, 1)[0]);
+      return { lineOrder: next };
+    });
+  },
+
   removeVirtualLine(key) {
     set((state) => {
       if (!state.virtualLines.some((line) => line.key === key)) return state;
@@ -754,6 +800,8 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         virtualLines: state.virtualLines.filter((line) => line.key !== key),
         containers,
         workerLines,
+        // A closed bench leaves no gap in the arrangement to trip over.
+        lineOrder: state.lineOrder.filter((line) => line !== key),
       };
     });
   },
@@ -777,6 +825,9 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         manualOrders: plan.manualOrders ?? state.manualOrders,
         workerLines: plan.workerLines ?? state.workerLines,
         virtualLines: plan.virtualLines ?? state.virtualLines,
+        // A plan saved before the lines could be arranged carries none, which
+        // reads as the built-in order rather than as an empty board.
+        lineOrder: plan.lineOrder ?? state.lineOrder,
         orderCrewAssignments,
         orderStarts: plan.orderStarts ?? state.orderStarts,
         orderActualStarts: plan.orderActualStarts ?? state.orderActualStarts,

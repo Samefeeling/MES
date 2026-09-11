@@ -36,6 +36,12 @@ export interface PersistedPlan {
      * every screen reading the board has to see the same one.
      */
     virtualLines?: import('@/domain/assembly').VirtualLine[];
+    /**
+     * The sequence the lines are drawn in, arranged by dragging one onto
+     * another. Absent on a plan nobody has arranged, which reads as the order
+     * the plant lists them in — see `domain/assembly.arrangeLines`.
+     */
+    lineOrder?: LineKey[];
     /** Date-bounded crew plan; supersedes static `orderWorkers`. */
     orderCrewAssignments?: Record<string, CrewAssignment[]>;
     orderStarts?: Record<string, string>;

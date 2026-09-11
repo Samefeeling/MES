@@ -230,6 +230,57 @@ describe('folded-away lines', () => {
 });
 
 /**
+ * "Show all" — one press back to the whole board.
+ *
+ * Each narrowing can be undone where it was made, and for the one column
+ * somebody hid a minute ago that is the right size of undo. It is not how you
+ * get back from a board that opened with two lines folded, then had a day
+ * picked on it, then Due ≤ 2d: four presses in four places, and the reader has
+ * to notice all four are on before making any of them.
+ */
+describe('showing everything again', () => {
+  const state = () => useUiStore.getState();
+
+  beforeEach(() => {
+    useUiStore.setState({
+      hiddenLines: [...LINES_HIDDEN_BY_DEFAULT],
+      dateCols: { start: true, due: true, expect: true },
+      orderDay: null,
+      dueSoon: false,
+      showWeekends: false,
+    });
+  });
+
+  it('unfolds every line, brings back every column and drops both filters', () => {
+    state().toggleLine('UPL_GLUING');
+    state().toggleDateCol('expect');
+    state().setOrderDay('2026-09-14');
+    state().toggleDueSoon();
+
+    state().showEverything();
+
+    expect(state().hiddenLines).toEqual([]);
+    expect(state().dateCols).toEqual({ start: true, due: true, expect: true });
+    expect(state().orderDay).toBeNull();
+    expect(state().dueSoon).toBe(false);
+  });
+
+  /*
+   * Saturday and Sunday are absent because the factory is shut, which is the
+   * axis the board draws rather than something anybody hid. Sweeping them in
+   * here would leave two empty columns behind every "show me everything" — and
+   * would put the chip that says so on screen for the life of every board.
+   */
+  it('and leaves the working-week axis alone', () => {
+    state().showEverything();
+    expect(state().showWeekends).toBe(false);
+    state().toggleWeekends();
+    state().showEverything();
+    expect(state().showWeekends).toBe(true);
+  });
+});
+
+/**
  * Column widths. Every frozen column is dragged by its edge, and the board
  * draws the grid where the frozen block ends — so a width that can run away
  * takes the day columns off screen with it.

@@ -11,7 +11,7 @@ import { formatDay, formatShortDay, formatTime } from '@/lib/time';
  * column says where the shift has got to.
  */
 
-import { useDroppable } from '@dnd-kit/core';
+import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AssemblyGanttView,
@@ -21,6 +21,7 @@ import type {
 import {
   ORDER_TYPE_SHORT,
   PRODUCTIVE_HOURS_PER_PERSON,
+  arrangeLines,
   isVirtualLine,
   SHIFT_END_HOUR,
   SHIFT_START_HOUR,
@@ -37,7 +38,7 @@ import {
   type WorkerLoad,
 } from '@/engine/assembly/workload';
 import { usePlanStore } from '@/store/planStore';
-import { useSupervisorStore } from '@/store/supervisorStore';
+import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { useDataStore } from '@/store/dataStore';
 import {
   COLUMN_LIMITS,
@@ -51,12 +52,12 @@ import {
   type DateCols,
 } from '@/store/uiStore';
 import { OrderBar } from './OrderBar';
+import { DRAG_TYPE_LINE, lineDragId } from './lineDrag';
 import { TeamChips } from './TeamChips';
 import { WorkerLoadChip } from './WorkerLoadChip';
 import { DependencyArrows } from './DependencyArrows';
 import { dependencyFocus } from './dependencyRouter';
 import {
-  teamSummary,
   isDueSoon,
   isRunningOnDay,
   runningOrdersByDay,
@@ -180,6 +181,48 @@ const hourLabel = (h: number): string =>
 const startTime = (d: Date | null): string | null =>
   d && (d.getHours() !== 0 || d.getMinutes() !== 0) ? TIME_FMT.format(d) : null;
 
+/**
+ * The order number, and the grip that moves the order to another line.
+ *
+ * Filing an order somewhere else used to mean dragging its *bar*, which is a
+ * different question with a different answer: a bar carries a day as well as a
+ * line, so a sideways drag onto another line also pinned whatever start day the
+ * pointer happened to be over — and on a board scrolled six weeks out the bar
+ * is not on screen at all while its number is. Dragged by the number, an order
+ * changes line and nothing else: it keeps falling in behind its crew and its
+ * predecessor, exactly as it did on the line it left.
+ *
+ * Same id and same drag type as an unplaced card, so the two are one gesture:
+ * an order is on a line or in the pool, never both, so the ids cannot collide.
+ */
+function OrderGrip({ id, movable }: { id: string; movable: boolean }) {
+  const unlocked = useSupervisorStore((s) => s.unlocked);
+  const gate = signInAt(useSupervisorStore((s) => s.hosted));
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id,
+    disabled: !movable || !unlocked,
+    data: { type: 'job', jobId: id },
+  });
+  const draggable = movable && unlocked;
+  return (
+    <span
+      ref={setNodeRef}
+      className={`order-id ${draggable ? 'movable' : ''} ${isDragging ? 'dragging' : ''}`}
+      title={
+        movable
+          ? unlocked
+            ? `${id} — drag onto another line to move it there`
+            : `${id} — sign in as ${gate} to move it to another line`
+          : id
+      }
+      {...(draggable ? listeners : {})}
+      {...(draggable ? attributes : {})}
+    >
+      {id}
+    </span>
+  );
+}
+
 function OrderRowView({
   row,
   board,
@@ -237,7 +280,9 @@ function OrderRowView({
       className={`arow ${selected ? 'selected' : ''} ${isContext ? 'context' : ''} ${row.completedToday ? 'completed-today' : ''} ${isNew ? 'new-order' : ''}`}
     >
       <div className="acell order">
-        <span className="order-id" title={String(row.job.id)}>{String(row.job.id)}</span>
+        {/* A manual support order belongs to Factory General and the plan
+            refuses to file it anywhere else, so it carries no grip. */}
+        <OrderGrip id={String(row.job.id)} movable={!isContext && !row.job.manual} />
         {isNew && <span className="new-order-tag">NEW</span>}
         {/* On UPL the badge names the bench: Epicor calls both the softies and
             the upholstering "upholstery", and which of the three steps this is
@@ -382,6 +427,8 @@ function LineGroupView({
   onToggle,
   onHide,
   onClose,
+  neighbours,
+  onArrange,
   filtered,
   unlocked,
   relatedJobIds,
@@ -414,6 +461,10 @@ function LineGroupView({
   onHide: () => void;
   /** Close a line the supervisor opened. Absent on the eight built-in ones. */
   onClose?: () => void;
+  /** The lines drawn either side of this one, for arranging by keyboard. */
+  neighbours: { before: LineKey | null; after: LineKey | null };
+  /** Put this line where `onto` currently is. */
+  onArrange: (onto: LineKey) => void;
   filtered: boolean;
   unlocked: boolean;
   relatedJobIds: ReadonlySet<string>;
@@ -424,6 +475,8 @@ function LineGroupView({
   onMark: (id: string) => void;
   onDependencyHover: (id: string | null) => void;
 }) {
+  const { active } = useDndContext();
+  const arranging = active?.data.current?.type === DRAG_TYPE_LINE;
   const { setNodeRef, isOver } = useDroppable({
     id: String(group.line.id),
     data: {
@@ -431,7 +484,24 @@ function LineGroupView({
       lineId: String(group.line.id),
       lineKey: group.line.key,
     },
-    disabled: !group.line.schedulable,
+    // PMD takes no orders and no people, but it is still somewhere another
+    // line can be dropped: arranging the board is not filing work on it.
+    disabled: !group.line.schedulable && !arranging,
+  });
+  /*
+   * The row is also the grip that arranges the lines. It is the row and not a
+   * separate handle because the row is what the pointer is already on — and it
+   * is why the fold is now its own triangle: holding the name used to mean
+   * "collapse this", and one gesture cannot mean two things.
+   */
+  const arrange = useDraggable({
+    id: lineDragId(group.line.key),
+    disabled: !unlocked,
+    data: {
+      type: DRAG_TYPE_LINE,
+      lineKey: group.line.key,
+      lineName: group.line.name,
+    },
   });
   const load = group.load;
   const crew = useMemo(
@@ -457,13 +527,55 @@ function LineGroupView({
           itself has to span the whole grid to carry the background. */}
       <div className="agroup-head">
        <div className="agroup-head-in">
+        {/* Its own control, in the Order column where the row starts. Folding
+            used to be what clicking the line's name did, and the name is now
+            the grip that arranges the lines — a press that might mean either
+            is a press nobody makes twice. */}
         <button
           type="button"
-          className="agroup-label"
+          className="agroup-fold"
           onClick={onToggle}
           aria-expanded={!collapsed}
+          aria-label={
+            collapsed
+              ? `Show the ${group.line.name} orders`
+              : `Fold the ${group.line.name} orders away`
+          }
+          title={
+            collapsed
+              ? `Show the ${group.line.name} orders`
+              : `Fold the ${group.line.name} orders away`
+          }
         >
-          <span className="agroup-chevron">{collapsed ? '▸' : '▾'}</span>
+          <span aria-hidden="true">{collapsed ? '▸' : '▾'}</span>
+        </button>
+        <div
+          ref={arrange.setNodeRef}
+          className={`agroup-label ${unlocked ? 'arrangeable' : ''} ${arrange.isDragging ? 'arranging' : ''}`}
+          title={
+            unlocked
+              ? `${group.line.name} — drag onto another line to put it there` +
+                '\nAlt + ↑ / ↓ moves it one place'
+              : group.line.name
+          }
+          onKeyDown={(e) => {
+            // The same move without a pointer. Alt rather than a bare arrow:
+            // the row is in the tab order for reading, and a board that
+            // re-arranged itself on ↓ would do it to somebody scrolling.
+            if (!e.altKey) return;
+            const onto =
+              e.key === 'ArrowUp'
+                ? neighbours.before
+                : e.key === 'ArrowDown'
+                  ? neighbours.after
+                  : null;
+            if (!onto || !unlocked) return;
+            e.preventDefault();
+            onArrange(onto);
+          }}
+          {...(unlocked ? arrange.listeners : {})}
+          {...(unlocked ? arrange.attributes : {})}
+        >
           <span className="agroup-name">{group.line.name}</span>
           {!group.line.schedulable && (
             <span className="agroup-note">plan only</span>
@@ -501,11 +613,10 @@ function LineGroupView({
           {load.needsCrew > 0 && (
             <span className="agroup-gap">{load.needsCrew} need crew</span>
           )}
-        </button>
+        </div>
 
-        {/* Outside the label — a button cannot hold another button, and this
-            one does something the label does not: it takes the line off the
-            board altogether. */}
+        {/* Outside the label — it does something the label does not: it takes
+            the line off the board altogether. */}
         <button
           type="button"
           className="agroup-hide"
@@ -619,6 +730,8 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
   const toggleMark = useUiStore((s) => s.toggleMark);
   const workerLineOverrides = usePlanStore((s) => s.workerLines);
   const removeVirtualLine = usePlanStore((s) => s.removeVirtualLine);
+  const lineOrder = usePlanStore((s) => s.lineOrder);
+  const moveLine = usePlanStore((s) => s.moveLine);
   const unlocked = useSupervisorStore((s) => s.unlocked);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [hoveredJobId, setHoveredJobId] = useState<string | null>(null);
@@ -674,7 +787,12 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
   }, [allRows, board.today, orderDay, dueSoon]);
   const visibleGroups = useMemo(
     () =>
-      orderedGroups.filter(group =>
+      // Arranged before it is narrowed: the sequence is the whole board's, so
+      // folding a line away must not change where the rest of them sit.
+      arrangeLines(
+        orderedGroups.map((group) => ({ ...group, key: group.line.key })),
+        lineOrder,
+      ).filter(group =>
         !hiddenLines.includes(group.line.key) &&
         (!orderDay || group.line.schedulable),
       ).map((group) => ({
@@ -692,7 +810,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
         // of them — this used to throw that away and count the filtered rows.
         total: group.rows.length,
       })),
-    [orderedGroups, visibleIds, hiddenLines, orderDay],
+    [orderedGroups, visibleIds, hiddenLines, orderDay, lineOrder],
   );
   const visibleRows = useMemo(
     () => visibleGroups.flatMap((group) => group.rows),
@@ -749,10 +867,6 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
   const rosterLoads = useMemo(
     () => rosterLoad(board.workers, allRows, board.today),
     [board, allRows],
-  );
-  const team = useMemo(
-    () => teamSummary(board.workers, allRows, board.today),
-    [board.workers, allRows, board.today],
   );
   const runningByDay = useMemo(
     () => runningOrdersByDay(allRows, days),
@@ -901,18 +1015,16 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
           {dateHead('start', 'Start Date', true)}
           {dateHead('due', 'Due Date', true)}
           {dateHead('expect', 'Expect Date', false)}
+          {/* Just the heading. How many of the roster are allocated today is a
+              figure about the whole board, not about this column, and it now
+              stands with the other three in the header — a count that changes
+              as orders are crewed, read a column heading at a time, was the
+              one number on this board nobody could find twice. */}
           <div
             className="acell team team-head frozen"
             style={{ left: headLefts.team }}
           >
             <span>Team</span>
-            <span
-              className={`team-free ${team.free.length === 0 ? 'none' : ''}`}
-              title="Allocated today / staff on site; includes orders outside the current view"
-              aria-live="polite"
-            >
-              {team.label}
-            </span>
             <ColumnGrip column="team" label="Team" />
           </div>
           {/* Load histogram: one column per day, coloured by band. */}
@@ -963,7 +1075,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
         </div>
       </div>
 
-      {visibleGroups.map((group) => (
+      {visibleGroups.map((group, i) => (
         <LineGroupView
           key={group.line.key}
           group={group}
@@ -987,6 +1099,11 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
               ? () => removeVirtualLine(group.line.key as VirtualLineKey)
               : undefined
           }
+          neighbours={{
+            before: visibleGroups[i - 1]?.line.key ?? null,
+            after: visibleGroups[i + 1]?.line.key ?? null,
+          }}
+          onArrange={(onto) => moveLine(group.line.key, onto)}
           filtered={orderDay !== null || dueSoon}
           unlocked={unlocked}
           relatedJobIds={relatedJobIds}

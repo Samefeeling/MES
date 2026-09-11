@@ -105,14 +105,15 @@ button {
 }
 
 /*
- * Keep action buttons clear of the date controls. The middle column wraps
- * within the remaining space rather than overlapping either side.
+ * One row: what the board is being asked to show, how far it is zoomed, what it
+ * comes back with, and the controls that act on the whole of it. It was three
+ * columns of a grid, with the figures in a band above — the band is gone, so
+ * the row simply runs and wraps.
  */
 .app-header {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
   padding: 8px 16px;
   /* The top half of the chrome block: the same ground as the column heading
      below it, parted by a hairline rather than by a rule. Two rows of one
@@ -157,9 +158,8 @@ button {
 .barcode-popover small { display: block; margin-top: 6px; color: var(--faint); line-height: 1.35; }
 .barcode-error { display: block; margin-top: 5px; color: var(--error); font-size: 11px; }
 @media (max-width: 1100px) {
-  .app-header { grid-template-columns: minmax(0, 1fr) auto; }
-  .app-header > .board-tools { grid-column: 1 / -1; grid-row: 2; }
-  .head-side.end { grid-column: 2; grid-row: 1; flex-wrap: wrap; }
+  .app-header { flex-wrap: wrap; }
+  .head-side.end { flex-wrap: wrap; }
 }
 /*
  * Standalone only — inside MES the top bar's own Assembly button is lit, and
@@ -181,7 +181,7 @@ button {
  * one here — a row of white pills on blue reads as a row of lit-up states.
  */
 .app-header .btn,
-.app-header .board-tools button,
+.app-header .board-tools button:not(.metric),
 .app-header .date-restore,
 .app-header .supervisor-chip {
   background: var(--chrome-tint);
@@ -189,22 +189,67 @@ button {
   color: var(--head-tx);
 }
 .app-header .btn:hover:not(:disabled),
-.app-header .board-tools button:hover,
+.app-header .board-tools button:not(.metric):hover,
 .app-header .date-restore:hover,
 .app-header .supervisor-chip:hover {
   background: var(--chrome-tint-hi);
   border-color: rgb(255 255 255 / 45%);
   color: var(--head-tx);
 }
-/* Filled, not tinted: the one control that is doing something, and the two
-   that are saying a filter is on, have to leave the row rather than sit in
-   it. Accent blue is the same value as the ground and vanished into it. */
+/* Filled, not tinted: the one control that is doing something, and the ones
+   saying a filter is on, have to leave the row rather than sit in it. Accent
+   blue is the same value as the ground and vanished into it. */
 .app-header .btn.primary,
 .app-header .board-tools .day-filter-clear,
+.app-header .board-tools .due-soon.active,
+.app-header .board-tools .review-open.active,
 .app-header .supervisor-chip.open {
   background: var(--head-tx);
   border-color: var(--head-tx);
   color: var(--head-bg);
+}
+/* The one board-tools button that is not a 22px square. */
+.app-header .board-tools .show-all {
+  background: var(--chrome-tint);
+  border-color: rgb(255 255 255 / 45%);
+  color: var(--head-tx);
+}
+/*
+ * The figures. A label has to stay readable at 9.5px on this blue, which the
+ * dimmed ink is not at that size — so the label takes the full ink at reduced
+ * opacity and the value takes all of it.
+ */
+.app-header .metric { color: var(--head-tx); }
+.app-header .metric-label { opacity: 0.78; }
+/* A figure, not a control: no tint behind the two that cannot be pressed. */
+.app-header .board-tools .board-load,
+.app-header .board-tools .team-free {
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+/*
+ * The panel hangs off the header but is not part of it: it is a white surface,
+ * so the header's translucent-white-on-blue controls would be white on white.
+ * Everything inside it goes back to the board's own colours.
+ */
+.app-header .review-panel { color: var(--text); }
+.app-header .board-tools .review-panel .btn,
+.app-header .board-tools .review-panel button:not(.metric) {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text);
+}
+.app-header .board-tools .review-panel .btn:hover:not(:disabled),
+.app-header .board-tools .review-panel button:not(.metric):hover:not(:disabled) {
+  background: var(--surface-3);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.app-header .board-tools .review-panel .btn:disabled,
+.app-header .board-tools .review-panel button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .app-header .board-tools,
 .app-header .add-line-error {
@@ -213,21 +258,11 @@ button {
 .app-header .board-tools strong {
   color: var(--head-tx);
 }
-/* A figure, not a control — no border, so it cannot be pressed by mistake. */
-.app-header .board-load {
-  background: var(--chrome-tint);
-  color: var(--head-tx);
-}
-/* Amber on this blue is its own colour and needs no help; off, it is a chip
-   like the others. A folded-away line keeps a brighter chip than a hidden
-   column: it is a whole line missing from the board, not one column. */
+/* A folded-away line keeps a brighter chip than a hidden column: it is a whole
+   line missing from the board, not one column. */
 .app-header .board-tools .line-restore {
   background: var(--chrome-tint-hi);
   border-color: rgb(255 255 255 / 45%);
-  color: var(--head-tx);
-}
-.app-header .board-tools .due-soon-count {
-  background: rgb(255 255 255 / 26%);
   color: var(--head-tx);
 }
 .app-header .marked-set {
@@ -1049,7 +1084,6 @@ button {
   background: var(--head-tx);
   color: var(--head-bg);
 }
-.assy-head .team-free { color: var(--head-dim); }
 .assy-head .daycol.today { background: rgb(255 255 255 / 10%); }
 /* Dimmed, not lost: a day already gone still has to be readable against the
    heading's own blue, which a light-ground opacity of 0.68 was not — and the
@@ -1229,10 +1263,25 @@ body.col-resizing {
   color: var(--faint);
   font-style: italic;
 }
+/*
+ * The order number, and — while somebody is signed in — the grip that files the
+ * order onto another line. Dragging the *bar* sideways does that too, but a bar
+ * carries a day as well as a line: it pins whatever start the pointer was over,
+ * and on a board scrolled weeks out it is not on screen at all. So the number
+ * is the handle for "this belongs on another line" and the bar stays the handle
+ * for "this starts on another day".
+ */
 .order-id {
   font-weight: 650;
   white-space: nowrap;
 }
+.order-id.movable { cursor: grab; touch-action: none; }
+.order-id.movable:hover {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+.order-id.dragging { opacity: 0.4; cursor: grabbing; }
 .order-type {
   background: var(--surface-3);
   color: var(--muted);
@@ -1611,6 +1660,39 @@ body.col-resizing {
   padding: 4px 10px;
   background: var(--line-band);
 }
+/*
+ * Folding the line's orders away, in the Order column where its row starts.
+ *
+ * This used to be what clicking the line's *name* did, with the triangle along
+ * for decoration. The name is now the grip that arranges the lines, and one
+ * press cannot mean both "collapse this" and "pick this up" — so the triangle
+ * became the control it was already drawn as.
+ */
+.agroup-fold {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--line-name);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.agroup-fold:hover,
+.agroup-fold:focus-visible {
+  border-color: var(--line-name);
+  background: var(--surface);
+  outline: none;
+}
+/*
+ * The line's name and its totals — and the grip that puts the line somewhere
+ * else on the board. The row is the grip rather than a separate handle beside
+ * it because the row is what the pointer is already on; `grab` is the only
+ * thing that says so before it is tried.
+ */
 .agroup-label {
   display: flex;
   align-items: center;
@@ -1619,10 +1701,11 @@ body.col-resizing {
   background: transparent;
   border: 0;
   color: var(--line-name);
-  cursor: pointer;
   text-align: left;
   flex: 0 0 auto;
 }
+.agroup-label.arrangeable { cursor: grab; touch-action: none; }
+.agroup-label.arranging { opacity: 0.45; cursor: grabbing; }
 /* Takes the whole line off the board; the header offers it back. */
 .agroup-hide {
   flex: 0 0 auto;
@@ -1979,19 +2062,76 @@ body.col-resizing {
 
 .arow:has(.picker) { position: relative; z-index: 30; }
 /* Timeline controls — in the title bar, centred between two equal spacers. */
+/*
+ * Controls to the left, figures to the right, and a named group for each so it
+ * is obvious which chip belongs to which question. The whole row takes the
+ * space the end controls leave; the figures are pushed to the far side of it.
+ */
 .board-tools {
   display: flex;
+  flex: 1 1 auto;
   flex-wrap: wrap;
-  justify-content: center;
   min-width: 0;
   align-items: center;
-  gap: 6px;
+  gap: 6px 18px;
   font-size: 12px;
   color: var(--muted);
 }
+.tool-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+/* A label that wraps mid-word is a control nobody can size by eye. Groups wrap
+   between their chips instead, and the row wraps between its groups. */
+.tool-group .btn,
+.tool-group .date-restore,
+.tool-group strong { white-space: nowrap; }
 .board-tools strong {
   color: var(--text);
   font-weight: 650;
+}
+/*
+ * The four things the board answers with. Label over value, so the figure is
+ * what the eye lands on from a distance and the label is there when it is
+ * needed — and tabular, so a count going from 9 to 10 does not shift the
+ * three beside it.
+ */
+.head-metrics {
+  display: flex;
+  align-items: center;
+  gap: 6px 16px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.metric {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.metric-label {
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+.metric-value {
+  font-size: 14px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+/* The second half of a ratio, and the half that does not change. */
+.metric-value i {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 650;
+  opacity: 0.72;
 }
 .board-tools button,
 .date-head button,
@@ -2002,7 +2142,11 @@ body.col-resizing {
   color: var(--text);
   cursor: pointer;
 }
-.board-tools button {
+/* The two zoom squares, and only those. This used to size every button in the
+   row, so each of the six chips beside them had to undo it — and the day
+   anything wider than a square joined the row, "New support order" came out as
+   three lines inside a 22px box. */
+.board-tools .zoom-step {
   width: 22px;
   height: 22px;
   font-size: 14px;
@@ -2011,8 +2155,6 @@ body.col-resizing {
 /* Brings a hidden date column back. Named in full — "+ ship" beside the
    hours pill reads as debris rather than as a control. */
 .board-tools .date-restore {
-  width: auto;
-  height: auto;
   padding: 2px 9px;
   border-radius: 999px;
   font-size: 11px;
@@ -2036,8 +2178,6 @@ body.col-resizing {
  * is coloured like something that is on rather than like a chip.
  */
 .board-tools .day-filter-clear {
-  width: auto;
-  height: auto;
   padding: 2px 10px;
   border-radius: 999px;
   border-color: var(--accent);
@@ -2048,36 +2188,66 @@ body.col-resizing {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-/* What has to go out in the next couple of working days, late orders in it.
-   Off it is a chip; on it is amber, because that is what the list is about. */
-.board-tools .due-soon {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  width: auto;
-  height: auto;
+/*
+ * A figure that is also a narrowing. It is the one pressable thing among the
+ * four, so it is drawn as a figure and lights up when it is on.
+ *
+ * It used to go amber when active, which broke the rule the rest of this board
+ * keeps: red, amber and green say what state an order is in, and nothing else
+ * may borrow them. An amber Due ≤ 2d was a filter wearing a schedule's colour,
+ * and on a board whose whole point is spotting the amber bars it is exactly the
+ * wrong thing to have glowing in the corner.
+ */
+.board-tools .due-soon,
+.board-tools .review-open {
+  padding: 2px 9px;
+  margin: -2px -9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.board-tools .due-soon:hover,
+.board-tools .review-open:hover {
+  border-color: currentColor;
+  background: transparent;
+}
+
+/*
+ * One press back to the whole board. Drawn only while something is being held
+ * back, so an untouched board never carries it — which is what keeps it from
+ * reading as a permanent part of the row.
+ */
+.board-tools .show-all {
   padding: 2px 10px;
   border-radius: 999px;
+  border-style: dashed;
   font-size: 11px;
-  font-weight: 700;
-  white-space: nowrap;
+  font-weight: 650;
 }
-.board-tools .due-soon:hover { border-color: var(--warn); }
-.board-tools .due-soon.active {
-  border-color: #d97706;
-  background: #d97706;
-  color: #fff;
+
+/* The queue, and the two things that can be done about it. */
+.review-orders { position: relative; }
+.review-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 85;
+  width: 340px;
+  max-height: 340px;
+  overflow: auto;
+  padding: 10px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
 }
-.due-soon-count {
-  min-width: 16px;
-  padding: 0 4px;
-  border-radius: 999px;
-  background: var(--surface-3);
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-}
-.due-soon.active .due-soon-count { background: rgb(255 255 255 / 28%); color: #fff; }
+.review-panel ul { margin: 8px 0 0; padding: 0; list-style: none; }
+.review-panel li { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+.review-panel li span { flex: 1; min-width: 0; }
 
 /* Opening a line that is not one of the eight. Supervisor only. */
 .board-tools .add-line { border-style: dashed; }
@@ -2091,24 +2261,12 @@ body.col-resizing {
   font-size: 11px;
 }
 .board-tools .add-line-entry button {
-  width: auto;
-  height: auto;
   padding: 2px 9px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 650;
 }
 .add-line-error { color: var(--error); font-size: 10.5px; font-style: normal; }
-/* No `margin-left: auto` — the board is far wider than the viewport, so that
-   would push this off the right-hand edge of a scrolled-left page. */
-.board-load {
-  padding: 2px 9px;
-  border-radius: 999px;
-  background: var(--surface-3);
-  color: var(--muted);
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-}
 /* Material links the dependency graph had to drop — hover for which. */
 .board-warn {
   padding: 2px 9px;
@@ -2145,7 +2303,8 @@ body.col-resizing {
 .worker-name:not(.drag-locked) { cursor: grab; }
 .worker-name.dragging { opacity: 0.45; cursor: grabbing; }
 .worker-name.drag-locked { cursor: pointer; }
-.worker-drag-overlay {
+.worker-drag-overlay,
+.line-drag-overlay {
   padding: 5px 10px;
   border: 1px solid #60a5fa;
   border-radius: 6px;
@@ -2155,6 +2314,15 @@ body.col-resizing {
   font-weight: 700;
   box-shadow: 0 8px 20px rgba(30, 41, 59, 0.2);
   cursor: grabbing;
+}
+/* A line under the pointer is drawn as the line band it came from, so it is
+   plainly a line being arranged and not an order being filed. */
+.line-drag-overlay {
+  border-color: var(--line-band-bd);
+  background: var(--line-band);
+  color: var(--line-name);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
 }
 /*
  * Five squares, one per working day of the window, in the same bands as the
@@ -2429,43 +2597,12 @@ body.col-resizing {
   gap: 3px;
 }
 /*
- * Everyone in today with nothing allocated — the people still to reach for.
- * Wrapped and named in full: a list cut off at the column's edge ends in the
- * one name you were looking for.
+ * How much of the roster is spoken for today. It used to live over the Team
+ * column and name everybody still free, wrapped across several lines — which
+ * pushed the day columns down the page as the list grew, and put a figure
+ * about the whole board inside one column's heading. It is one of the four
+ * header figures now; the names it used to list are on its hover.
  */
-.team-free {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px 3px;
-  max-width: 100%;
-  /* Grows to fit the names; past a shift's worth it scrolls rather than
-     pushing the day columns off the top of the board. */
-  max-height: 96px;
-  overflow-y: auto;
-  color: #b45309;
-  font-size: 9.5px;
-  font-weight: 650;
-  white-space: normal;
-}
-.team-free-count {
-  background: var(--warn-dim);
-  border-radius: 999px;
-  padding: 0 5px;
-  font-weight: 700;
-}
-.team-free-name {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 0 3px;
-  color: var(--muted);
-  font-weight: 600;
-}
-.team-free.none {
-  display: block;
-  color: var(--ok);
-}
 .production-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 8px; margin-bottom: 8px; }
 .production-grid label { display: block; }
 .production-grid label > span {
@@ -2590,17 +2727,6 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .ord-meta { display: flex; gap: 4px; font-size: 10.5px; color: var(--faint); }
 
 /* Reversible local exclusions for orders outside the current production scope. */
-.ignored-order-tools { position: relative; }
-.ignored-order-tools summary { cursor: pointer; font-size: 11px; }
-.ignored-order-tools ul {
-  position: absolute; right: 0; top: 100%; z-index: 85;
-  width: 340px; max-height: 320px; overflow: auto; margin: 6px 0;
-  padding: 10px; list-style: none; background: var(--surface);
-  border: 1px solid var(--border); border-radius: 6px;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
-}
-.ignored-order-tools li { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
-.ignored-order-tools li span { flex: 1; min-width: 0; }
 .pool-ignore { margin-top: 6px; cursor: pointer; }
 
 .manual-backdrop { position: fixed; inset: 0; z-index: 1000; background: #0f172a55; display: grid; place-items: center; }

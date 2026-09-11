@@ -31,6 +31,89 @@ page two identical dark bars and nothing to say which of them owned the board.
 The board also stopped titling itself: the top bar already says Assembly, and a
 page repeating its own name one band lower is the extra band this removes.
 
+## What the one row of chrome holds
+
+Left to right it reads as a question and its answer.
+
+**Show** — what the board is being asked to draw. Weekends, any folded line, any
+hidden column, **+ Line**, and **New support order**, which is the one control
+on the row that adds to the board instead of narrowing it. It used to have the
+far corner, which is the position a board's most frequent action takes, and
+opening a support order is not that.
+
+**Show all**, beside them, and only while something is being held back: every
+line unfolded, every column back, both filters off. Each of those can already be
+undone where it was made, which is the right size of undo for the one column
+somebody hid a minute ago — it is not how anybody gets back from a board that
+opened with two lines folded, then had a day picked on it, then Due ≤ 2d.
+Saturday and Sunday are not in it: the compact working week is the axis the
+board draws, not something a reader hid, and sweeping it in would leave two
+empty columns behind every "show me everything" and put the chip on screen for
+the life of every board.
+
+**Timeline** — how wide a day column is.
+
+**Then four figures**, right-aligned: hours on the board, what is due within two
+working days, how much of today's roster is allocated, and how many orders are
+waiting to be looked at. **Due within 2 days** is also a narrowing, and it is
+the only pressable thing among them; it used to go amber when it was on, which
+is a filter wearing a schedule's colour on a board whose whole point is spotting
+the amber bars. **Crew allocated** came up from the Team column heading, where a
+figure about the whole board sat inside one column's title and pushed the day
+columns down the page as the list of free names grew.
+
+**Review orders** is the fourth. Two counts used to sit side by side up here —
+*Crew N orders*, the orders with nobody on them, and *Review orders*, the ones
+somebody had set aside — which are the same question asked twice: which orders
+is this board not carrying yet. One chip, one count, and the button that crews
+them is inside it, next to the list it acts on.
+
+The source name and the time it was read are at the far end, beside the button
+that re-reads them. They are what is left of a band the board used to open with,
+above the row that actually does something — and inside MES that band sat one
+step under a top bar already carrying the name.
+
+## Folding and arranging the lines
+
+**The triangle in the Order column folds a line's orders away.** It used to be
+what clicking the line's *name* did, with the triangle along as decoration.
+
+**The line's name is now the grip that arranges the lines.** Drag one onto
+another and it takes that line's place: dropped on a line below it comes to rest
+under it, dropped on one above it pushes that line down. Alt + ↑ / ↓ does the
+same without a pointer. One press cannot mean both "collapse this" and "pick
+this up", which is why the triangle became the control it was already drawn as.
+
+`LINES` is the order the plant lists its benches in, which is not the order any
+particular floor runs them — cutting feeds gluing on one shift and the other way
+round on the next, and reading the board against the bench order is most of what
+makes it quick to read. So the sequence is in the **shared plan**, not in one
+browser, for the same reason a line opened this morning is: a board two
+supervisors read in two different orders is two boards. It is behind the
+supervisor gate like every other change to that plan.
+
+A plan saved before there was an arrangement holds none, which reads as the
+built-in order rather than as an empty board; a bench opened after one was made
+joins at the end until somebody moves it; and a bench that closes takes its key
+with it.
+
+## Filing an order onto another line
+
+**Drag the order number in the Order column.** It changes the order's line and
+nothing else: it keeps falling in behind its crew and its predecessor, exactly
+as it did on the line it left.
+
+Dragging the *bar* sideways onto another line does this too, and will go on
+doing it — but a bar carries a day as well as a line, so that gesture also pins
+whatever start day the pointer happened to be over. On a board scrolled six
+weeks out the bar is not on screen at all while its number is. The number is the
+handle for *this belongs on another line*; the bar stays the handle for *this
+starts on another day*.
+
+Same gesture as an unplaced card from the strip, and behind the same gate.
+Factory General support orders carry no grip: the plan files them to that line
+and refuses to move them.
+
 ## Date filtering
 
 Two narrowings, and an order has to satisfy both:

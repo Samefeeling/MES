@@ -15,14 +15,13 @@ import { createPlanRepository, CURRENT_PLAN_ID } from '@/persistence';
 import { useDragDrop } from '@/features/assembly/useDragDrop';
 import { AssemblyGantt } from '@/features/assembly/AssemblyGantt';
 import { BoardTools } from '@/features/assembly/BoardTools';
-import { ManualOrderButton, ManualOrderInspector } from '@/features/assembly/ManualOrders';
+import { ManualOrderInspector } from '@/features/assembly/ManualOrders';
 import { AssemblyInspector } from '@/features/assembly/AssemblyInspector';
 import { BarcodeOrderLookup } from '@/features/assembly/BarcodeOrderLookup';
 import { AssemblyPool } from '@/features/assembly/AssemblyPool';
 import { OvertimePrompt } from '@/features/assembly/OvertimePrompt';
 import { ClashPrompt } from '@/features/assembly/ClashPrompt';
 import { SupervisorLock } from '@/features/assembly/SupervisorLock';
-import { SuggestCrew } from '@/features/assembly/SuggestCrew';
 import { useScheduledRefresh } from '@/features/refresh/useScheduledRefresh';
 import { RefreshControl } from '@/features/refresh/RefreshControl';
 import { usePlanSync } from '@/features/sync/usePlanSync';
@@ -47,6 +46,7 @@ export default function App() {
   const lineLayoutVersion = usePlanStore(s => s.lineLayoutVersion);
   const workerLines = usePlanStore((s) => s.workerLines);
   const virtualLines = usePlanStore((s) => s.virtualLines);
+  const lineOrder = usePlanStore((s) => s.lineOrder);
   const orderCrewAssignments = usePlanStore((s) => s.orderCrewAssignments);
   const orderStarts = usePlanStore((s) => s.orderStarts);
   const orderActualStarts = usePlanStore((s) => s.orderActualStarts);
@@ -166,6 +166,7 @@ export default function App() {
             ignoredOrderIds,
             workerLines,
             virtualLines,
+            lineOrder,
             orderCrewAssignments,
             orderStarts,
             orderActualStarts,
@@ -189,6 +190,7 @@ export default function App() {
     containers,
     workerLines,
     virtualLines,
+    lineOrder,
     orderCrewAssignments,
     orderStarts,
     orderActualStarts,
@@ -212,31 +214,35 @@ export default function App() {
   return (
     <div className="app">
       {/*
-        Timeline controls dead centre, the controls that write something on
-        the right. The schedule's own counts used to sit up here; they say
-        nothing the coloured bars do not say better, and a header carrying
-        only what is asked of it reads quicker across a floor.
+        One row, and it reads left to right as a question and its answer: what
+        the board is being asked to show, how far the timeline is zoomed, and
+        then the four figures it comes back with.
+        `BoardTools` holds all three.
+
+        There is no identity band. The board used to open with its own name, its
+        source and its counts across the top, above the row that actually does
+        something — and inside MES that name sits one band under a top bar
+        already carrying it. What is left of that row is here: the source and
+        the time it was read, at the end, where the control that re-reads it is.
 
         This row and the column heading under it are one block of chrome, on
         one ground — MES's top bar is the other, and the page gets no more
         than the two.
       */}
       <header className="app-header">
-        <div className="head-side">
-          {/*
-            Inside MES the top bar names the department and lights the
-            Assembly button, so a title here is the same word twice, one band
-            apart. Standalone there is no top bar and the board says it.
-          */}
-          {!hosted && <h1>Assembly Board</h1>}
-          <Badge variant="info">{sourceName}</Badge>
-        </div>
+        {/*
+          Standalone only — the dev server and the mock demo have no top bar
+          above them, and a page with nothing naming it is a page nobody can
+          say they are on.
+        */}
+        {!hosted && <h1>Assembly Board</h1>}
         <BoardTools board={board} />
         <div className="head-side end">
-          {board && <ManualOrderButton board={board} />}
-          <SuggestCrew board={board} />
           <SupervisorLock />
           <BarcodeOrderLookup board={board} />
+          {/* Which export, and when it was read: one fact in two halves, so
+              they sit together and beside the button that re-reads it. */}
+          <Badge variant="info">{sourceName}</Badge>
           <RefreshControl onRefresh={async () => {
             await refresh();
             resetOrderSort();
@@ -312,7 +318,9 @@ export default function App() {
         </div>
 
         <DragOverlay dropAnimation={null}>
-          {activeWorker ? (
+          {dnd.activeLineName ? (
+            <div className="line-drag-overlay">{dnd.activeLineName}</div>
+          ) : activeWorker ? (
             <div className="worker-drag-overlay">{activeWorker.name}</div>
           ) : activeJob ? (
             <div className="ord" style={{ cursor: 'grabbing', width: 240 }}>

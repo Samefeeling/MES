@@ -219,6 +219,21 @@ interface UiState {
   setColumnWidth: (key: ColumnKey, px: number) => void;
   toggleDateCol: (key: DateCol) => void;
   toggleLine: (key: LineKey) => void;
+  /**
+   * Every line, every column and every order back on screen.
+   *
+   * Each of those can be restored one chip at a time, and for the one column
+   * somebody hid a minute ago that is the right size of undo. It is not how you
+   * get back from a board that opened with two lines folded, then had a day
+   * picked on it, then Due ≤ 2d — four presses in four places, and the reader
+   * has to notice all four are on.
+   *
+   * Weekends are not in it. Saturday and Sunday are absent because the factory
+   * is shut, which is the axis the board draws rather than something anybody
+   * hid, and sweeping them in here would leave two empty columns behind every
+   * "show me everything".
+   */
+  showEverything: () => void;
   toggleDueSoon: () => void;
   setOrderDay: (day: string | null) => void;
   toggleWeekends: () => void;
@@ -306,6 +321,13 @@ export const useUiStore = create<UiState>((set, get) => ({
         ? state.hiddenLines.filter((line) => line !== key)
         : [...state.hiddenLines, key],
     })),
+  showEverything: () =>
+    set({
+      dateCols: { start: true, due: true, expect: true },
+      hiddenLines: [],
+      orderDay: null,
+      dueSoon: false,
+    }),
   toggleDueSoon: () => set((state) => ({ dueSoon: !state.dueSoon })),
   setOrderDay: (orderDay) => set({ orderDay }),
   toggleWeekends: () => set((state) => ({ showWeekends: !state.showWeekends })),

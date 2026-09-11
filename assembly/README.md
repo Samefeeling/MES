@@ -395,11 +395,16 @@ ones and far more than none.
 ### Crewing a fresh import
 
 `Planning1.csv` says what to build, never who builds it, so every order arrives
-with nobody on it. **Crew N orders** in the header staffs them all at once from
-the qualified people on shift, behind the same supervisor lock as allocating by
-hand. It only ever *adds*: an order that already has a crew is left exactly as
-it is, and the button disappears once nothing is unstaffed. It is a starting
-point to argue with, not an answer.
+with nobody on it. **Crew N orders**, inside the header's **Review orders**
+queue, staffs them all at once from the qualified people on shift, behind the
+same supervisor lock as allocating by hand. It only ever *adds*: an order that
+already has a crew is left exactly as it is, and the button disappears once
+nothing is unstaffed. It is a starting point to argue with, not an answer.
+
+It is inside that queue rather than beside it because the two were the same
+question asked twice — *Crew N orders* counted the orders with nobody on them
+and *Review orders* listed the ones somebody had set aside, and both answer
+"which orders is this board not carrying yet".
 
 **Who it reaches for first** is the roster's own order. `Skills` is read as
 written, so whoever has this line *first* leads on it and comes before someone

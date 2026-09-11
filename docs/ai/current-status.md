@@ -177,9 +177,43 @@ everything, and the only narrowing left is the day chip under a timeline
 column, which puts a blue chip in the header naming the day it picked and
 clearing back to everything. A line's row is now a tinted band with a
 dark-blue name in capitals, so it cannot be mistaken for an order row, and
-chrome is three deliberate tiers — a slate title bar, the dashboard's dark
-blue for the board's own heading, and white for the orders alone. All three
-used to be shades of the same near-white.
+chrome is **two** deliberate tiers — MES's own top bar, then one block for the
+board's controls row and column heading together, with white for the orders
+alone. All of it used to be shades of the same near-white, and the block used
+to be two bands of its own under a third.
+
+**The header is one row, and it reads as a question and its answer.**
+`Show` (weekends, folded lines, hidden columns, `+ Line`, `New support order`,
+and `Show all` while anything is held back) · `Timeline` · then four figures:
+hours on the board, `Due within 2 days`, `Crew allocated` and `Review orders`.
+`Crew allocated` came up out of the Team column heading — a figure about the
+whole board that sat in one column's title and pushed the day columns down the
+page as its list of free names grew. `Review orders` absorbed the old
+`Crew N orders` chip, which counted the same thing from the other end: the
+button that crews them is inside the queue, beside the list it acts on.
+`Due within 2 days` no longer goes amber when it is on — a filter wearing a
+schedule's colour, on a board whose point is spotting the amber bars.
+`showEverything` in `uiStore` is `Show all`; it deliberately leaves the
+working-week axis alone. Covered by `tests/store/uiStore.test.ts`.
+
+**The lines are arranged by dragging one onto another** — it takes that line's
+place, the way a dragged list item lands; `Alt` + `↑`/`↓` does the same by
+keyboard. `LINES` is the order the plant lists its benches in, not the order a
+floor runs them, so the sequence is in the **shared plan**
+(`planStore.lineOrder` → `ASSY_Plans`), supervisor-gated, applied by
+`domain/assembly.arrangeLines` in `AssemblyGantt`. Additive and optional: a
+plan saved before it existed reads as the built-in order, a bench opened later
+joins at the end, a closed one takes its key with it, and a repeated or unknown
+key can never draw a line twice. Folding moved off the line's *name* onto its
+own `▸` triangle in the Order column, because the name is now the grip.
+Covered by `tests/store/lineOrder.test.ts`.
+
+**An order is filed onto another line by dragging its number** in the Order
+column (`OrderGrip`, same `type: 'job'` payload as an unplaced card). The bar
+drag still changes line too, but a bar carries a day as well — it pins whatever
+start the pointer was over, and on a board scrolled weeks out it is off screen
+while its number is not. Support orders carry no grip: the plan refuses to move
+them off Factory General.
 
 **A blank Expect Date now says why.** `uncoveredHours` and `crewWithoutRoom`
 were computed on every row and shown nowhere; the Expect cell carries them on
@@ -335,6 +369,21 @@ rules table in `docs/OPERATIONAL-LINES.md`.
 3. **Graph token wiring** — `window.__pmdGraphToken` is set by the SPFx
    `onInit()` (`aadTokenProviderFactory`). Until SPFx is live, Excel sync
    can't run; list CRUD still works once same-origin.
+4. **The banner prototype — waiting on the user's three hex values.** The
+   layout is in (one row, Show / Timeline / four figures), and the
+   interaction-vs-status colour rule is now kept: `Due within 2 days` no
+   longer borrows amber. Still to come with the palette: the filter chips as
+   empty box / filled check rather than `+`, IBM Plex bundled into the build
+   (the app makes **zero** external requests, so Google Fonts is not an
+   option and `scripts/deploy-assets.mjs` would upload the bundled faces),
+   tabular numerals on `body`, and the Timeline's named stops
+   (Week / Day / Shift / Hour) disabled at each end — which is the same
+   feature as the zoomable time view the 5-minute drag landing needs.
+5. **Two questions only the user can answer**: how often `New support order`
+   is really used (it has been moved out of the primary corner into the Show
+   row on the assumption that it is not the board's most frequent action),
+   and what TBP stands for — nothing in the code or the docs expands it, it
+   arrives as Epicor's `JobHead_PersonID`.
 
 ## Environment config (build-time)
 

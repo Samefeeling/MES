@@ -218,6 +218,41 @@ export function virtualLineKey(name: string): VirtualLineKey {
 }
 
 /**
+ * The lines in the sequence somebody arranged them in.
+ *
+ * `LINES` is the order the plant lists its lines in, which is not the order any
+ * particular floor runs them: cutting feeds gluing feeds the softies on one
+ * shift and the other way round on the next, and reading a board against the
+ * bench order is most of what makes it quick to read. So the arrangement is the
+ * supervisor's, and this is where it is applied.
+ *
+ * `arranged` need not be complete, and usually is not. Anything it does not
+ * name — a line opened after the arrangement was made, one of the eight in a
+ * plan saved before there was an arrangement at all — keeps its built-in place
+ * at the end, in the built-in order. That is what lets a plan stored last month
+ * and a bench opened this morning both land somewhere sensible without anybody
+ * having to keep this list exhaustive.
+ */
+export function arrangeLines<T extends { key: string }>(
+  lines: readonly T[],
+  arranged: readonly string[],
+): T[] {
+  const byKey = new Map(lines.map((line) => [line.key, line]));
+  const placed = new Set<string>();
+  const named: T[] = [];
+  for (const key of arranged) {
+    const line = byKey.get(key);
+    // A key naming no line is a bench that has since closed; a key named twice
+    // is a plan somebody merged by hand. Neither may put a line on the board
+    // twice — two rows for one line means two drop targets with one id.
+    if (line === undefined || placed.has(key)) continue;
+    placed.add(key);
+    named.push(line);
+  }
+  return [...named, ...lines.filter((line) => !placed.has(line.key))];
+}
+
+/**
  * An added line as the board understands one: schedulable, running the same
  * number of build positions as a real one, and sorted after the eight.
  *
