@@ -22,7 +22,12 @@
  */
 
 import { isWeekend, nextWorkingDay, startOfDay } from '@/engine/assembly/dates';
-import { shiftTimelineDays } from './boardView';
+import {
+  atColumnMinute,
+  columnMinuteOf,
+  nextWorkingMoment,
+} from '@/engine/assembly/shift';
+import { shiftTimelineDays, shiftTimelineKeepingClock } from './boardView';
 
 /** One order in the marked set, and what it may not begin before. */
 export interface MarkedMove {
@@ -128,9 +133,15 @@ function columnsBetween(from: Date, to: Date, showWeekends: boolean): number {
  * Weekends are shut unless overtime is approved, and a bulk move is not where
  * that gets decided — so a bar landing on one opens on the Monday. With weekend
  * columns hidden this never fires: the column axis has no weekends on it.
+ *
+ * The time of day is kept either way. A marked run is a shape, and half of what
+ * gives it its shape is where in the shift each order sits — flattening all of
+ * them to the open of their day is not moving the run, it is redrawing it.
  */
-const onShift = (day: Date): Date =>
-  isWeekend(day) ? startOfDay(nextWorkingDay(day)) : startOfDay(day);
+const onShift = (at: Date): Date =>
+  isWeekend(at)
+    ? atColumnMinute(nextWorkingDay(at), columnMinuteOf(at))
+    : at;
 
 /**
  * The day each marked order that is actually moving should be pinned to.
@@ -149,22 +160,27 @@ export function planGroupMove(
 ): { jobId: string; startISO: string }[] {
   if (orders.length === 0) return [];
 
+  /*
+   * Where each bar is drawn, read as a moment work could actually happen at.
+   * Every one of them already is — `markedSet` takes them off the board — but
+   * a start stored before pins carried a time is a midnight, and midnight is
+   * not a moment on this shift. Normalising here is what lets the landing be
+   * compared against it: otherwise a run that moved nowhere would be written
+   * out anyway, because 07:00 is not midnight.
+   */
+  const drawnAt = orders.map((order) =>
+    nextWorkingMoment(new Date(order.startISO)),
+  );
   // Where the drag alone would put each of them, before anything says no.
-  const asked = orders.map((order) =>
-    startOfDay(
-      shiftTimelineDays(
-        startOfDay(new Date(order.startISO)),
-        dayShift,
-        showWeekends,
-      ),
-    ),
+  const asked = drawnAt.map((at) =>
+    shiftTimelineKeepingClock(at, dayShift, showWeekends),
   );
 
   // The furthest any one of them has to be pushed to sit somewhere legal.
   let push = 0;
   orders.forEach((order, index) => {
     if (!order.floorISO) return;
-    const floor = startOfDay(new Date(order.floorISO));
+    const floor = nextWorkingMoment(new Date(order.floorISO));
     if (floor <= asked[index]) return;
     const need = columnsBetween(asked[index], floor, showWeekends);
     if (need > push) push = need;
@@ -174,10 +190,9 @@ export function planGroupMove(
     const landing = onShift(
       push === 0
         ? asked[index]
-        : shiftTimelineDays(asked[index], push, showWeekends),
+        : shiftTimelineKeepingClock(asked[index], push, showWeekends),
     );
-    const drawn = startOfDay(new Date(order.startISO));
-    if (landing.getTime() === drawn.getTime()) return [];
+    if (landing.getTime() === drawnAt[index].getTime()) return [];
     return [{ jobId: order.jobId, startISO: landing.toISOString() }];
   });
 }

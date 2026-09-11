@@ -213,6 +213,27 @@ export function shiftColumnFraction(instant: Date): number {
   return Math.min(1, Math.max(0, offset));
 }
 
+/**
+ * How fine a dragged bar may land: **five minutes** on the clock.
+ *
+ * A drag used to round to a whole day, which meant a bar drawn at a quarter to
+ * three could be moved to the next column and never put back — every pinned
+ * order began at 07:00 because a pin could only name a day. Five minutes is
+ * finer than anybody plans a bench to and coarse enough that the landing is
+ * repeatable: the same drag twice writes the same time.
+ */
+export const DRAG_STEP_MINUTES = 5;
+
+/** Minutes into a day's column — 0 is 07:00 and `SHIFT_SPAN_MINUTES` is 15:30. */
+export function atColumnMinute(day: Date, minutes: number): Date {
+  return atMinuteOfDay(day, SHIFT_OPEN_MINUTE + minutes);
+}
+
+/** The inverse: how far into its own column an instant is drawn. */
+export function columnMinuteOf(instant: Date): number {
+  return shiftColumnFraction(instant) * SHIFT_SPAN_MINUTES;
+}
+
 /** The break covering this instant, for saying why a bar has a notch in it. */
 export function breakAt(instant: Date): ShiftBreak | null {
   const minute = minuteOfDay(instant);

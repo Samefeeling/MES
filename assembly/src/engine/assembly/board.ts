@@ -93,7 +93,7 @@ import {
 } from './dates';
 import { endOfCrewDay, idleRuns, planVariableCrew, type CrewDayPlan, type TakenOnDay, type VariableCrewPlan } from './crewSchedule';
 import { lineLoad, type LineLoad } from './workload';
-import { workFractionAt } from './shift';
+import { nextWorkingMoment, workFractionAt } from './shift';
 import { toDayKey } from '@/lib/time';
 import type {
   ActualStartRecord,
@@ -584,16 +584,23 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
   const groups: LineGroup[] = [];
 
   /**
-   * The day an order asks to begin: what the planner dragged it to, else the
+   * The moment an order asks to begin: what the planner dragged it to, else the
    * day Epicor scheduled it. Anything already in the past starts as soon as
    * the board opens — there is no working yesterday.
+   *
+   * A pin is a moment, not a day. It used to be flattened to midnight here, so
+   * every dragged bar restarted at the open of its shift — which meant a bar
+   * drawn at a quarter to three could be moved and never put back, and a hand
+   * that only meant to nudge it an hour moved it most of a day. A pin saved
+   * before that is a midnight, and `nextWorkingMoment` reads one as 07:00 that
+   * morning, which is exactly what it used to mean.
    */
   const wantedStart = (id: string): Date => {
     const actual = orderActualStarts[id];
     if (actual) return startOfDay(new Date(actual.startedAt));
     const pinned = orderStarts[id];
     if (!pinned) return planStart;
-    const wanted = startOfDay(new Date(pinned));
+    const wanted = nextWorkingMoment(new Date(pinned));
     return wanted > planStart ? wanted : planStart;
   };
 

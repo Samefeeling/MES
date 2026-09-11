@@ -43,6 +43,7 @@ import { useDataStore } from '@/store/dataStore';
 import {
   COLUMN_LIMITS,
   DATE_COLS,
+  DATE_COL_LABEL,
   DUE_SOON_DAYS,
   useUiStore,
   type ClickPoint,
@@ -58,6 +59,7 @@ import { WorkerLoadChip } from './WorkerLoadChip';
 import { DependencyArrows } from './DependencyArrows';
 import { dependencyFocus } from './dependencyRouter';
 import {
+  teamSummary,
   isDueSoon,
   isRunningOnDay,
   runningOrdersByDay,
@@ -816,6 +818,12 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
     () => visibleGroups.flatMap((group) => group.rows),
     [visibleGroups],
   );
+  // Whether the master triangle in the Order block is offering to open the
+  // board or to fold it. An empty board offers to fold, which does nothing and
+  // says nothing false.
+  const allFolded =
+    visibleGroups.length > 0 &&
+    visibleGroups.every((group) => collapsed[group.line.key]);
   const markedIds = useMemo(() => new Set(marked), [marked]);
   /*
    * The marked set and where each of its bars is drawn, so dragging any one of
@@ -867,6 +875,12 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
   const rosterLoads = useMemo(
     () => rosterLoad(board.workers, allRows, board.today),
     [board, allRows],
+  );
+  // Who is on site today with nothing allocated — the people still to reach
+  // for, read while deciding who goes on the order in front of you.
+  const team = useMemo(
+    () => teamSummary(board.workers, allRows, board.today),
+    [board.workers, allRows, board.today],
   );
   const runningByDay = useMemo(
     () => runningOrdersByDay(allRows, days),
@@ -997,34 +1011,74 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
       <div className="assy-sticky">
         <div className="assy-head">
           <div className="acell order">
-            Order
+            <span className="head-name">Order</span>
+            {/* One press for the whole board. Each line has its own triangle on
+                its own row, which is the right size of control for one line and
+                eight presses for the question a supervisor actually asks —
+                "show me the lines, not the orders" — on the way to finding
+                which line a job is on. */}
+            <button
+              type="button"
+              className="fold-all"
+              onClick={() =>
+                setCollapsed(
+                  allFolded
+                    ? {}
+                    : Object.fromEntries(
+                        visibleGroups.map((group) => [group.line.key, true]),
+                      ),
+                )
+              }
+              aria-expanded={!allFolded}
+              aria-label={allFolded ? 'Show every line’s orders' : 'Fold every line’s orders away'}
+              title={allFolded ? 'Show every line’s orders' : 'Fold every line’s orders away'}
+            >
+              <span aria-hidden="true">{allFolded ? '▶' : '▼'}</span>
+            </button>
             {/* Grab the edge to give the description more room. */}
             <ColumnGrip column="order" label="Order" />
           </div>
           <div className="acell qty frozen" style={{ left: headLefts.qty }}>
-            Order Qty
-            <ColumnGrip column="qty" label="Order Qty" />
+            Qty
+            <ColumnGrip column="qty" label="Qty" />
           </div>
           <div
             className="acell hours frozen"
             style={{ left: headLefts.hours }}
           >
-            Required Hours
-            <ColumnGrip column="hours" label="Required Hours" />
+            Hours
+            <ColumnGrip column="hours" label="Hours" />
           </div>
-          {dateHead('start', 'Start Date', true)}
-          {dateHead('due', 'Due Date', true)}
-          {dateHead('expect', 'Expect Date', false)}
-          {/* Just the heading. How many of the roster are allocated today is a
-              figure about the whole board, not about this column, and it now
-              stands with the other three in the header — a count that changes
-              as orders are crewed, read a column heading at a time, was the
-              one number on this board nobody could find twice. */}
+          {dateHead('start', DATE_COL_LABEL.start, true)}
+          {dateHead('due', DATE_COL_LABEL.due, true)}
+          {dateHead('expect', DATE_COL_LABEL.expect, false)}
+          {/* How many of the roster are allocated today is a figure about the
+              whole board and stands with the other three in the header. Who is
+              *not* allocated belongs here: it is the list you read while
+              deciding who to put on the order you are looking at, and it is
+              names rather than a number for the same reason. */}
           <div
             className="acell team team-head frozen"
             style={{ left: headLefts.team }}
           >
             <span>Team</span>
+            <span
+              className={`team-free ${team.free.length === 0 ? 'none' : ''}`}
+              title={
+                team.free.length === 0
+                  ? 'Everybody on site today is on an order'
+                  : `Not allocated today: ${team.free.map((w) => w.name).join(', ')}`
+              }
+              aria-live="polite"
+            >
+              {team.free.length === 0
+                ? 'all allocated'
+                : team.free.map((worker) => (
+                    <span className="team-free-name" key={String(worker.id)}>
+                      {worker.name}
+                    </span>
+                  ))}
+            </span>
             <ColumnGrip column="team" label="Team" />
           </div>
           {/* Load histogram: one column per day, coloured by band. */}
@@ -1049,25 +1103,36 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
                     (load.working ? '' : ' · factory closed, needs overtime')
                   }
                 >
-                  <span className="daycol-date">
-                    {formatShortDay(d)}
-                    {load.isToday && <b className="today-tag">today</b>}
-                    {load.past && <b className="past-tag">done</b>}
-                  </span>
+                  {/* The load stands the height of the cell on the left and the
+                      date takes the rest, rather than the two stacking with the
+                      count under them: four things in a column is four lines
+                      tall, and this heading has to sit level with the seven
+                      column titles beside it. */}
                   <span className={`day-bar ${band} ${load.actual ? 'actual' : ''}`}>
                     <i style={{ height: `${Math.min(100, pct)}%` }} />
+                    <b className={`day-load ${band}`}>{pct}%</b>
                   </span>
-                  <span className={`day-load ${band}`}>{pct}%</span>
-                  <button
-                    className="day-order-filter"
-                    aria-label={`Filter orders running on ${toDayKey(d)}`}
-                    aria-pressed={orderDay === toDayKey(d)}
-                    onClick={() => setOrderDay(
-                      orderDay === toDayKey(d) ? null : toDayKey(d),
-                    )}
-                  >
-                    {running} {running === 1 ? 'order' : 'orders'}
-                  </button>
+                  <span className="daycol-main">
+                    <span className="daycol-date">{formatShortDay(d)}</span>
+                    {/* The count and whichever tag the day carries share the
+                        second line. On the date's own line the tag left a
+                        column too narrow to print a date in. */}
+                    <span className="daycol-sub">
+                      <button
+                        className="day-order-filter"
+                        aria-label={`Filter orders running on ${toDayKey(d)}`}
+                        aria-pressed={orderDay === toDayKey(d)}
+                        title={`${running} ${running === 1 ? 'order' : 'orders'} running — select to show only those`}
+                        onClick={() => setOrderDay(
+                          orderDay === toDayKey(d) ? null : toDayKey(d),
+                        )}
+                      >
+                        {running}
+                      </button>
+                      {load.isToday && <b className="today-tag">today</b>}
+                      {load.past && <b className="past-tag">done</b>}
+                    </span>
+                  </span>
                 </div>
               );
             })}

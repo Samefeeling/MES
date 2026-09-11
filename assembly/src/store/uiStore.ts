@@ -16,10 +16,15 @@ import type { OrderSort, OrderSortKey } from '@/features/assembly/boardView';
  */
 export interface OvertimeRequest {
   jobId: string;
-  /** ISO day the bar was dropped on. */
-  isoDay: string;
-  /** First working day at or after `isoDay` — the "move it to Monday" answer. */
-  nextWorkingIsoDay: string;
+  /**
+   * The moment the bar was dropped, not merely the day. A drag lands on five
+   * minutes of the shift clock, and an approval that came back with midnight
+   * would quietly move the order to the open of the shift as the price of
+   * saying yes.
+   */
+  atISO: string;
+  /** The same time of day on the first working day after it — the "Monday" answer. */
+  nextWorkingISO: string;
 }
 
 /** Day column width, in pixels: the default, and how far it may be pushed. */
@@ -110,11 +115,18 @@ export const LINES_HIDDEN_BY_DEFAULT: readonly LineKey[] = ['TBP', 'PMD'];
  */
 export const DUE_SOON_DAYS = 2;
 
-/** Column headings, shared by the board and the chip that brings one back. */
+/**
+ * Column headings, shared by the board and the chip that brings one back.
+ *
+ * One word each. "Start Date" wrapped to two lines in a column narrow enough to
+ * hold a date, which made the whole heading block taller than the day columns
+ * beside it — and the second word was "Date" three times over, in a row of
+ * columns that are all dates.
+ */
 export const DATE_COL_LABEL: Record<DateCol, string> = {
-  start: 'Start Date',
-  due: 'Due Date',
-  expect: 'Expect Date',
+  start: 'Start',
+  due: 'Due',
+  expect: 'Expect',
 };
 
 /** Where on screen an order was clicked, so its detail opens beside it. */

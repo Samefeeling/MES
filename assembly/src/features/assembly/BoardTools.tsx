@@ -199,7 +199,7 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
           <b className="metric-value">{dueCount}</b>
         </button>
         <span
-          className={`metric team-free ${team.free.length === 0 ? 'none' : ''}`}
+          className="metric crew-allocated"
           title={
             'Allocated today / staff on site; includes orders outside the current view' +
             (team.free.length > 0

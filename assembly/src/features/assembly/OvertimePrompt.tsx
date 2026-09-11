@@ -17,7 +17,7 @@ import { usePlanStore } from '@/store/planStore';
 import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { useUiStore } from '@/store/uiStore';
 import { Button } from '@/ui';
-import { fromDayKey, formatDay } from '@/lib/time';
+import { formatDay } from '@/lib/time';
 
 
 export function OvertimePrompt() {
@@ -35,8 +35,8 @@ export function OvertimePrompt() {
   if (!request) return null;
 
   const jobId = JobId(request.jobId);
-  const dropped = fromDayKey(request.isoDay);
-  const monday = fromDayKey(request.nextWorkingIsoDay);
+  const dropped = new Date(request.atISO);
+  const monday = new Date(request.nextWorkingISO);
 
   const confirm = () => {
     setOvertime(jobId, true);

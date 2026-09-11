@@ -2,7 +2,14 @@ import { useDataStore } from '@/store/dataStore';
 import { Button, Spinner } from '@/ui';
 import { formatTime } from '@/lib/time';
 
-export function RefreshControl({ onRefresh }: { onRefresh: () => void }) {
+export function RefreshControl({
+  source,
+  onRefresh,
+}: {
+  /** Which export the board was built from — on the hover, not in the row. */
+  source?: string;
+  onRefresh: () => void;
+}) {
   const status = useDataStore((s) => s.status);
   const fetchedAt = useDataStore((s) => s.dataset?.fetchedAt ?? null);
   const loading = status === 'loading';
@@ -11,7 +18,10 @@ export function RefreshControl({ onRefresh }: { onRefresh: () => void }) {
   return (
     <div className="zoom">
       {loading && <Spinner />}
-      <span className="sub">
+      <span
+        className="sub"
+        title={source ? `Read from ${source}` : undefined}
+      >
         {fetchedAt ? `updated ${formatTime(fetchedAt)}` : 'Update time unavailable'}
       </span>
       {newOrderIds.length > 0 && (

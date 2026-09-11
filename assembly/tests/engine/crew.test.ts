@@ -30,6 +30,7 @@ import {
   type Worker,
   type CrewAssignment,
 } from '@/domain/assembly';
+import { shiftOpensOn } from '@/engine/assembly/shift';
 import { WorkerId } from '@/domain/ids';
 import type { PlanningDataset } from '@/domain/types';
 
@@ -247,8 +248,10 @@ describe('nobody does two jobs at once', () => {
     const day = new Date('2026-09-14T00:00:00').toISOString();
     const b = board({ [first]: ['W01'] }, { [first]: day, [second]: day });
 
-    // Nothing else moved them, so they really are on the same days.
-    expect(rowOf(b, second).plannedStart).toEqual(new Date(day));
+    // Nothing else moved them, so they really are on the same days. A pin is a
+    // moment now, and one stored as a midnight — which is every pin saved
+    // before they carried a time — is read as the open of that shift.
+    expect(rowOf(b, second).plannedStart).toEqual(shiftOpensOn(new Date(day)));
     const clashes = clashesFor(allRows(b), rowOf(b, second), 'W01');
     expect(clashes.map((r) => String(r.job.id))).toEqual([first]);
   });

@@ -24,14 +24,17 @@ import { DEFAULT_DAY_WIDTH } from '@/store/uiStore';
 import { DRAG_TYPE_BAR } from '@/features/assembly/OrderBar';
 import { DRAG_TYPE_LINE } from '@/features/assembly/lineDrag';
 import type { LineKey } from '@/domain/assembly';
+import { isWeekend } from '@/engine/assembly/dates';
 import {
-  isWeekend,
-  nextWorkingDay,
-  startOfDay,
-} from '@/engine/assembly/dates';
-import { shiftTimelineDays } from './boardView';
+  DRAG_STEP_MINUTES,
+  nextWorkingMoment,
+  shiftOpensOn,
+} from '@/engine/assembly/shift';
+import { landAfterDrag, shiftTimelineKeepingClock } from './boardView';
 import { planGroupMove, type MarkedMove } from './groupMove';
-import { toDayKey } from '@/lib/time';
+
+/** A drag smaller than one landing step has not moved the bar. */
+const DRAG_STEP_MS = DRAG_STEP_MINUTES * 60_000;
 
 /** Prefer whatever the pointer is actually inside, then the nearest. */
 const collisionDetection: CollisionDetection = (args) => {
@@ -129,7 +132,15 @@ export function useDragDrop() {
       const jobId = JobId(String(active.data.current.jobId));
       const dayWidth = Number(active.data.current.dayWidth) || DEFAULT_DAY_WIDTH;
       const showWeekends = active.data.current.showWeekends === true;
-      const dayShift = Math.round((delta?.x ?? 0) / dayWidth);
+      /*
+       * How far the pointer went, in columns — and a column is a shift, so two
+       * thirds of one is two thirds of a shift rather than a rounding error.
+       * This used to be `Math.round`, which is why a bar could not be put back
+       * where it came from: every drag landed on a whole day and every pinned
+       * order therefore began at 07:00.
+       */
+      const columns = (delta?.x ?? 0) / dayWidth;
+      const dayShift = Math.round(columns);
 
       const { orderStarts, setOrderStart, setOvertime, containerOf, moveJob } =
         usePlanStore.getState();
@@ -152,7 +163,7 @@ export function useDragDrop() {
       if (droppedOn && droppedOn !== containerOf(jobId)) {
         moveJob(jobId, droppedOn);
       }
-      if (dayShift === 0) return;
+      if (columns === 0) return;
 
       /*
        * A set marked with Ctrl moves as one.
@@ -175,18 +186,17 @@ export function useDragDrop() {
         return;
       }
 
-      // Move from where the bar is drawn. The pinned day is only a request —
-      // the line's capacity, a predecessor or a weekend may have pushed the
-      // bar past it, and dragging from the pin would then snap it backwards.
+      // Move from where the bar is drawn, to the minute. The pinned start is
+      // only a request — the line's capacity, a predecessor or a weekend may
+      // have pushed the bar past it, and dragging from the pin would then snap
+      // it backwards.
       const drawn = active.data.current.startISO as string | null | undefined;
       const from = drawn
-        ? startOfDay(new Date(drawn))
+        ? new Date(drawn)
         : orderStarts[key]
-          ? startOfDay(new Date(orderStarts[key]))
-          : startOfDay(new Date());
-      const asked = startOfDay(
-        shiftTimelineDays(from, dayShift, showWeekends),
-      );
+          ? new Date(orderStarts[key])
+          : shiftOpensOn(new Date());
+      const asked = landAfterDrag(from, columns, showWeekends);
       /*
        * Where it may actually come to rest.
        *
@@ -200,9 +210,9 @@ export function useDragDrop() {
        * were added; one bar asks it now too.
        */
       const floorISO = active.data.current.floorISO as string | null | undefined;
-      const floor = floorISO
-        ? startOfDay(new Date(floorISO))
-        : startOfDay(new Date());
+      const floor = nextWorkingMoment(
+        floorISO ? new Date(floorISO) : new Date(),
+      );
       const moved = asked < floor ? floor : asked;
 
       // It cannot go where it was asked, and it is already as early as it can
@@ -210,16 +220,23 @@ export function useDragDrop() {
       // in behind its crew and its predecessor — and paying that for a drag
       // that moved nothing is how a board ends up pinned order by order
       // without anybody choosing it. The bar's own stop marker says what is
-      // holding it.
-      if (moved.getTime() === startOfDay(from).getTime()) return;
+      // holding it. "Nothing" is a landing step rather than an exact match:
+      // below five minutes there is no move to write.
+      if (Math.abs(moved.getTime() - from.getTime()) < DRAG_STEP_MS) return;
 
       // The factory is shut at the weekend. Ask before writing work into one;
       // nothing changes until the supervisor answers.
       if (isWeekend(moved)) {
         useUiStore.getState().askOvertime({
           jobId: key,
-          isoDay: toDayKey(moved),
-          nextWorkingIsoDay: toDayKey(nextWorkingDay(moved)),
+          atISO: moved.toISOString(),
+          // The same time of day on the Monday: saying "not the weekend then"
+          // should not also move the order to the open of the shift.
+          nextWorkingISO: shiftTimelineKeepingClock(
+            moved,
+            1,
+            false,
+          ).toISOString(),
         });
         return;
       }

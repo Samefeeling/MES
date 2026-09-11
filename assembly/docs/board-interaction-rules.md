@@ -59,8 +59,10 @@ waiting to be looked at. **Due within 2 days** is also a narrowing, and it is
 the only pressable thing among them; it used to go amber when it was on, which
 is a filter wearing a schedule's colour on a board whose whole point is spotting
 the amber bars. **Crew allocated** came up from the Team column heading, where a
-figure about the whole board sat inside one column's title and pushed the day
-columns down the page as the list of free names grew.
+figure about the whole board sat inside one column's title. Who is *not*
+allocated stayed there, as names: that is the list you read while deciding who
+to put on the order in front of you, and it is capped at two lines so a shift
+with nobody on anything cannot push the day columns down the page.
 
 **Review orders** is the fourth. Two counts used to sit side by side up here —
 *Crew N orders*, the orders with nobody on them, and *Review orders*, the ones
@@ -68,15 +70,40 @@ somebody had set aside — which are the same question asked twice: which orders
 is this board not carrying yet. One chip, one count, and the button that crews
 them is inside it, next to the list it acts on.
 
-The source name and the time it was read are at the far end, beside the button
-that re-reads them. They are what is left of a band the board used to open with,
-above the row that actually does something — and inside MES that band sat one
-step under a top bar already carrying the name.
+The time the export was read is at the far end, beside the button that re-reads
+it, with the source itself on its hover — which export this is has not changed
+since the board was built and cannot change while anybody is looking at it, so
+as a chip in the header it was a word answering a question nobody had. That and
+the read time are what is left of a band the board used to open with, above the
+row that actually does something — and inside MES that band sat one step under a
+top bar already carrying the name.
+
+## The heading under it
+
+Seven column titles on the left and one cell per day on the right, and they have
+to be the same height, because they are the same row.
+
+The titles are **one word each**: Order, Qty, Hours, Start, Due, Expect, Team.
+"Required Hours" and "Start Date" wrapped to two lines in columns narrow enough
+to hold what they label, and "Date" appeared three times in a row of columns
+that are all dates.
+
+Each day cell is the **load standing on the left** — a bar filled to the day's
+percentage, with the figure inside the top of its own track — and the **date
+over its order count** taking the rest. Those four things used to stack, which
+made this heading four lines deep while the titles beside it were one, and the
+whole block was then as tall as three rows of orders. The count is a figure
+rather than "10 orders": the column it sits under is the only thing it could be
+counting.
 
 ## Folding and arranging the lines
 
 **The triangle in the Order column folds a line's orders away.** It used to be
 what clicking the line's *name* did, with the triangle along as decoration.
+
+**The triangle in the Order heading folds every line at once**, and opens them
+all again. Each line keeps its own; this is the one to reach for on the way to
+"which line is this job on", where eight presses is seven too many.
 
 **The line's name is now the grip that arranges the lines.** Drag one onto
 another and it takes that line's place: dropped on a line below it comes to rest
@@ -195,20 +222,46 @@ A bar is grabbed by the block **or by its label**. A couple of hours of work is
 a ten-pixel block with its label out in the grid beside it, and the label is
 part of the bar for the pointer as well as for the eye.
 
-A drag pins the order to the day it lands on, and asks the same question a
-marked run asks: the earliest day it may begin, which is the latest of today,
-the day its material lands, and the finish of every component it waits on. A
-drag past that floor comes to rest on the floor. A drag that cannot move the
-order at all writes nothing — pinning is not free, because a pinned order
-stops falling in behind its crew and its predecessor, and paying that for a
-drag that changed nothing is how a board ends up pinned order by order.
+**A drag pins the order to a moment, and lands on five minutes of the shift
+clock.** A day column *is* the shift, so two thirds of a column is two thirds of
+a shift: half an hour along the row moves the order half an hour.
+
+This used to round to the nearest whole column, and that made a drag something
+you could not take back. A bar drawn at a quarter to three — because that is
+when its crew came off the last order — went to 07:00 the moment anybody touched
+it, since a pin could only name a day and every pinned order began at the open
+of its shift. Dragging it home then only ever offered 07:00 on the day it came
+from, never the quarter to three it left. The floor's report was "I moved it once
+and can never move it back", and it was exactly right.
+
+Ties break the way the pointer is going, so out and back is the same moment
+rather than five minutes further on each trip. Running off either end of a
+column carries into the next one **the reader can see** — with the compact
+working week that is Monday, not Saturday — and a landing inside a break
+resolves forward to the moment the crew come back.
+
+A pin stored before any of this is a midnight, which reads as 07:00 that
+morning: exactly what it used to mean.
+
+A drag asks the same question a marked run asks: the earliest moment it may
+begin, which is the latest of today, the time its material lands, and the finish
+of every component it waits on. A drag past that floor comes to rest on the
+floor. A drag that cannot move the order at all writes nothing — pinning is not
+free, because a pinned order stops falling in behind its crew and its
+predecessor, and paying that for a drag that changed nothing is how a board ends
+up pinned order by order.
+
+A marked run moves whole columns, and every bar in it keeps its own time of day.
+Half of what gives a run its shape is where in the shift each order sits;
+flattening all of them to the open of their day is not moving the run, it is
+redrawing it.
 
 A bar standing against a component that is not finished yet carries a dashed
 amber stop on its left edge, and says which order is holding it on hover.
 
-The order detail shows the pinned day with a **Release** button, which hands
-the order back to the schedule: it then starts as early as its crew, its line
-and the orders it waits on allow.
+The order detail shows the pinned start — to the minute — with a **Release**
+button, which hands the order back to the schedule: it then starts as early as
+its crew, its line and the orders it waits on allow.
 
 ## Crew orders
 

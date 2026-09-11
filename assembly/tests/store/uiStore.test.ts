@@ -109,8 +109,8 @@ describe('what Escape closes', () => {
     useUiStore.setState({
       overtimeRequest: {
         jobId: 'ASM8001',
-        isoDay: '2026-09-12',
-        nextWorkingIsoDay: '2026-09-14',
+        atISO: '2026-09-12T10:30:00',
+        nextWorkingISO: '2026-09-14T10:30:00',
       },
       clashRequest: {
         jobId: 'ASM8002',

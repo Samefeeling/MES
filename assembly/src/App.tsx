@@ -26,7 +26,7 @@ import { useScheduledRefresh } from '@/features/refresh/useScheduledRefresh';
 import { RefreshControl } from '@/features/refresh/RefreshControl';
 import { usePlanSync } from '@/features/sync/usePlanSync';
 import { ORDER_TYPE_SHORT } from '@/domain/assembly';
-import { Badge, Spinner } from '@/ui';
+import { Spinner } from '@/ui';
 
 const repo = createPlanRepository();
 
@@ -240,10 +240,11 @@ export default function App() {
         <div className="head-side end">
           <SupervisorLock />
           <BarcodeOrderLookup board={board} />
-          {/* Which export, and when it was read: one fact in two halves, so
-              they sit together and beside the button that re-reads it. */}
-          <Badge variant="info">{sourceName}</Badge>
-          <RefreshControl onRefresh={async () => {
+          {/* Which export this is stays on the hover of the time it was read,
+              rather than as a chip: the source has not changed since the board
+              was built and never changes while anybody is looking at it, so it
+              was a word in the header that answered a question nobody had. */}
+          <RefreshControl source={sourceName} onRefresh={async () => {
             await refresh();
             resetOrderSort();
           }} />

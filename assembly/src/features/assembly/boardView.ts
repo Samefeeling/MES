@@ -9,7 +9,14 @@ import {
 } from '@/engine/assembly/dates';
 import type { LineKey, Worker } from '@/domain/assembly';
 import { toDayKey } from '@/lib/time';
-import { shiftColumnFraction } from '@/engine/assembly/shift';
+import {
+  DRAG_STEP_MINUTES,
+  SHIFT_SPAN_MINUTES,
+  atColumnMinute,
+  columnMinuteOf,
+  nextWorkingMoment,
+  shiftColumnFraction,
+} from '@/engine/assembly/shift';
 
 export type OrderSortKey = 'start' | 'due';
 export type SortDirection = 'asc' | 'desc';
@@ -183,6 +190,68 @@ export function shiftTimelineDays(
     if (!isWeekend(cursor)) left--;
   }
   return cursor;
+}
+
+/** The same move, keeping the time of day the bar is drawn at. */
+export function shiftTimelineKeepingClock(
+  from: Date,
+  days: number,
+  showWeekends: boolean,
+): Date {
+  return atColumnMinute(
+    shiftTimelineDays(from, days, showWeekends),
+    columnMinuteOf(from),
+  );
+}
+
+/** Enough columns to cross the widest horizon twice; a drag cannot exceed it. */
+const MAX_COLUMNS = 800;
+
+/**
+ * Where a dragged bar comes to rest.
+ *
+ * `columns` is what the pointer moved, in day columns, and it is **not** a whole
+ * number: two thirds of a column is two thirds of a shift. That is the whole
+ * point of this function. A drag used to round to the nearest column, so a bar
+ * drawn at a quarter to three — because that is when its crew came off the last
+ * order — moved to 07:00 the moment anybody touched it, and could never be put
+ * back: every pinned order began at the open of its shift, and dragging it home
+ * only ever offered 07:00 on the day it came from.
+ *
+ * So the move is measured along the column, which is the shift as the floor
+ * stands in it, and lands on five minutes. Running off either end of a column
+ * carries into the next one the reader can see — with the compact working week
+ * that is Monday, not Saturday. A landing inside a break resolves forward to
+ * the moment they come back, because nobody picks a job up during lunch.
+ */
+export function landAfterDrag(
+  drawn: Date,
+  columns: number,
+  showWeekends: boolean,
+): Date {
+  const step = DRAG_STEP_MINUTES;
+  /*
+   * Ties break the way the pointer is going, and that is what makes out-and-back
+   * exact. Rounding halves the same way both times drifts: a bar moved a quarter
+   * of a column and moved back gained five minutes on every trip, so a board
+   * worked over for an afternoon walked away from where it started — which is
+   * the complaint this whole function exists to answer.
+   */
+  const snap = (m: number): number =>
+    columns < 0
+      ? Math.ceil(m / step - 0.5) * step
+      : Math.floor(m / step + 0.5) * step;
+  let minutes = snap(columnMinuteOf(drawn) + columns * SHIFT_SPAN_MINUTES);
+  let day = startOfDay(drawn);
+  for (let guard = 0; minutes >= SHIFT_SPAN_MINUTES && guard < MAX_COLUMNS; guard++) {
+    day = shiftTimelineDays(day, 1, showWeekends);
+    minutes -= SHIFT_SPAN_MINUTES;
+  }
+  for (let guard = 0; minutes < 0 && guard < MAX_COLUMNS; guard++) {
+    day = shiftTimelineDays(day, -1, showWeekends);
+    minutes += SHIFT_SPAN_MINUTES;
+  }
+  return nextWorkingMoment(atColumnMinute(day, minutes));
 }
 
 /**

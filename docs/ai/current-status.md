@@ -215,6 +215,28 @@ start the pointer was over, and on a board scrolled weeks out it is off screen
 while its number is not. Support orders carry no grip: the plan refuses to move
 them off Factory General.
 
+**A dragged bar lands on five minutes, and a pin is a moment.** The floor's
+report was "I moved it once and can never move it back", and it was right: the
+drag rounded to a whole column and `wantedStart` flattened the pin to midnight,
+so every dragged order restarted at **07:00** and a bar drawn at 14:45 could
+never be put back at 14:45. `boardView.landAfterDrag` measures the move along
+the column — which *is* the shift — snaps to `DRAG_STEP_MINUTES`, carries into
+the next **visible** column, and resolves a landing inside a break forward;
+ties break the way the pointer is going so out-and-back is exact rather than
+drifting five minutes a trip. `board.wantedStart` now reads the pin with
+`nextWorkingMoment`, which makes every pin stored as a midnight read as 07:00
+that morning — **no storage change, and old plans behave exactly as before**.
+`planGroupMove` keeps whole columns but preserves each bar's clock, and
+`OvertimeRequest` carries moments so approving a weekend does not also move the
+order to the open of the shift. Covered by `tests/features/dragLanding.test.ts`.
+
+**The column heading is two lines, not four.** Titles are one word each (Qty,
+Hours, Start, Due, Expect) and each day cell puts the load bar on the left —
+with its percentage inside the top of its own track — beside the date over its
+order count. It was 94 px of heading against one line of column titles. The
+Order title carries a master `▶` that folds every line at once. The source-name
+chip is gone from the header; it lives on the hover of the read time.
+
 **A blank Expect Date now says why.** `uncoveredHours` and `crewWithoutRoom`
 were computed on every row and shown nowhere; the Expect cell carries them on
 hover and the inspector shows an `N h not covered` badge. The underlying
@@ -293,12 +315,12 @@ multi-day bar would come apart at every night. A gap **inside** a day is now
 drawable, so `OrderBar` links any visible gap rather than only one swallowing
 whole days, and says *put down for part of a day*.
 
-**Still to do on this:** dragging is whole-column and ignores a move inside a
-day. Landing on 5 minutes needs the pinned start to carry a time, and
-`orderStarts` is a `YYYY-MM-DD` map in the shared plan that goes out to
-`ASSY_Production` — a stored-format change with back-compatibility, which is
-why it is not in this commit. The zoomable time view is the same feature as the
-Timeline stops in the banner prototype.
+**Done since:** the drag lands on five minutes and a pin is a moment — see
+*A dragged bar lands on five minutes* above. It needed no storage change after
+all: `orderStarts` values were already ISO strings, they were merely flattened
+to midnight on the way in and out, and a stored midnight still reads as 07:00.
+The zoomable time view remains the same feature as the Timeline stops in the
+banner prototype.
 
 **The gate is the host's, and now says so.** `mesBridge.connectMes` sets
 `hosted` on the supervisor store; `SupervisorLock` renders nothing when it is
@@ -377,8 +399,9 @@ rules table in `docs/OPERATIONAL-LINES.md`.
    (the app makes **zero** external requests, so Google Fonts is not an
    option and `scripts/deploy-assets.mjs` would upload the bundled faces),
    tabular numerals on `body`, and the Timeline's named stops
-   (Week / Day / Shift / Hour) disabled at each end — which is the same
-   feature as the zoomable time view the 5-minute drag landing needs.
+   (Week / Day / Shift / Hour) disabled at each end — the zoomable time view.
+   The drag already lands on five minutes at any zoom; the stops are what let
+   a reader get close enough to see one.
 5. **Two questions only the user can answer**: how often `New support order`
    is really used (it has been moved out of the primary corner into the Show
    row on the assumption that it is not the board's most frequent action),

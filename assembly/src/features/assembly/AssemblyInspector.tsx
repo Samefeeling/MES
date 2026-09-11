@@ -14,6 +14,7 @@ import { usePlanStore } from '@/store/planStore';
 import { useUiStore } from '@/store/uiStore';
 import { remainingQty } from '@/engine/assembly/duration';
 import { startEligibility } from '@/engine/assembly/release';
+import { nextWorkingMoment } from '@/engine/assembly/shift';
 import { formatDay, formatTime } from '@/lib/time';
 import { Badge, Button } from '@/ui';
 import type { PauseReason, ProductionEntry } from '@/store/planStore';
@@ -455,7 +456,13 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
           {pinnedStart && !row.actualStart && (
             <div className="pinned-start">
               <span>
-                Start pinned by hand to <b>{popupDate(new Date(pinnedStart))}</b>
+                {/* To the minute, because a drag lands on five of them. A pin
+                    saved before that reads as the open of its shift. */}
+                Start pinned by hand to{' '}
+                <b>
+                  {popupDate(new Date(pinnedStart))}{' '}
+                  {formatTime(nextWorkingMoment(new Date(pinnedStart)))}
+                </b>
               </span>
               <Button
                 onClick={() => setOrderStart(job.id, null)}

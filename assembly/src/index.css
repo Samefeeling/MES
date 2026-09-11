@@ -223,7 +223,7 @@ button {
 .app-header .metric-label { opacity: 0.78; }
 /* A figure, not a control: no tint behind the two that cannot be pressed. */
 .app-header .board-tools .board-load,
-.app-header .board-tools .team-free {
+.app-header .board-tools .crew-allocated {
   background: transparent;
   border: 0;
   padding: 0;
@@ -1040,10 +1040,11 @@ button {
   background: var(--head-bg);
   color: var(--head-tx);
   border-bottom: 2px solid var(--chrome-rule);
-  /* Tall enough for the date, the load bar and its percentage — and it grows
-     rather than clipping when a whole shift is free and the Team column has
-     that many names to list. */
-  min-height: 94px;
+  /* Two lines: the column titles on the left, the date over its count on the
+     right, with the load bar standing beside them. It grows rather than
+     clipping when a whole shift is free and the Team column has that many
+     names to list. */
+  min-height: 56px;
   font-size: 11px;
   font-weight: 700;
 }
@@ -1060,7 +1061,11 @@ button {
   border-left-color: var(--head-rule);
   color: var(--head-dim);
 }
-.assy-head .day-bar { background: rgb(255 255 255 / 18%); }
+.assy-head .day-bar {
+  background: rgb(255 255 255 / 16%);
+  border-color: rgb(255 255 255 / 38%);
+}
+.assy-head .daycol { padding: 5px 5px; }
 .assy-head .day-order-filter {
   border-color: var(--head-rule);
   background: rgb(255 255 255 / 12%);
@@ -1271,6 +1276,37 @@ body.col-resizing {
  * is the handle for "this belongs on another line" and the bar stays the handle
  * for "this starts on another day".
  */
+/*
+ * Folds every line's orders away at once, from the block the lines are named
+ * in. Each line keeps its own triangle; this is the one a supervisor reaches
+ * for on the way to "which line is this job on", where eight presses is seven
+ * too many.
+ */
+.fold-all {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 18px;
+  margin-left: 2px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--head-tx);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.fold-all:hover,
+.fold-all:focus-visible {
+  border-color: var(--head-tx);
+  background: rgb(255 255 255 / 16%);
+  outline: none;
+}
+.assy-head .acell.order { gap: 6px; }
+.head-name { white-space: nowrap; }
+
 .order-id {
   font-weight: 650;
   white-space: nowrap;
@@ -1304,38 +1340,75 @@ body.col-resizing {
   text-overflow: ellipsis;
 }
 
+/*
+ * A day column's heading: the load standing on the left, the date and its
+ * order count taking the rest.
+ *
+ * It used to stack all four — date, bar, percentage, count — which made this
+ * heading four lines tall while the seven column titles beside it are one, and
+ * the whole block was then as deep as three rows of orders. Side by side it is
+ * two lines, the date is big enough to read across a floor, and the load is
+ * still the shape the week is read from.
+ */
 .daycol {
   position: absolute;
   top: 0;
   bottom: 0;
   border-left: 1px solid var(--border);
   display: flex;
-  align-items: center;
-  flex-direction: column;
-  justify-content: center;
-  gap: 3px;
-  padding-bottom: 5px;
+  align-items: stretch;
+  gap: 6px;
+  padding: 5px 5px;
   font-size: 12px;
   color: var(--muted);
+}
+.daycol-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+}
+.daycol-sub {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
 }
 /*
  * Load histogram. One bar per day filled to its percentage, so the week reads
  * as a shape before anyone reads a number. Bands: green under 80%, orange to
  * 90%, red beyond.
  */
+/* The figure on the column, so a date is legible from the floor. */
 .daycol-date {
-  font-size: 11px;
-}
-.day-order-filter {
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--surface-2);
-  color: var(--text);
-  cursor: pointer;
-  font-size: 10px;
-  padding: 1px 4px;
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  font-size: 15px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.2px;
   white-space: nowrap;
 }
+/* How many orders run on the day, and the way to narrow to them. A figure
+   rather than "10 orders": the column it sits under is the only thing it could
+   be counting, and the word cost the heading its width. */
+.day-order-filter {
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  padding: 0 6px;
+  white-space: nowrap;
+}
+.day-order-filter:hover { border-color: currentColor; }
 .day-order-filter[aria-pressed="true"] {
   background: var(--accent);
   color: #fff;
@@ -1344,20 +1417,39 @@ body.col-resizing {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+/*
+ * The load, standing the height of the heading rather than lying across it.
+ * A column of bars down the week is read as a skyline in one glance; a row of
+ * short horizontal ones is read one at a time.
+ */
 .day-bar {
+  position: relative;
   display: flex;
   align-items: flex-end;
-  width: 36px;
-  height: 22px;
-  background: var(--surface-3);
+  flex: 0 0 auto;
+  width: 22px;
+  border: 1px solid var(--border);
   border-radius: 2px;
+  background: var(--surface-3);
   overflow: hidden;
 }
 .day-bar i {
   display: block;
   width: 100%;
   min-height: 2px;
-  border-radius: 2px 2px 0 0;
+}
+/* Inside the track, above the fill: the number confirms the shape and must not
+   cost the heading a line of its own to do it. */
+.day-bar .day-load {
+  position: absolute;
+  top: 1px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-style: normal;
+  font-size: 9px;
+  letter-spacing: -0.3px;
+  font-variant-numeric: tabular-nums;
 }
 .day-bar.green i { background: var(--ok); }
 .day-bar.orange i { background: var(--warn); }
@@ -2597,12 +2689,40 @@ body.col-resizing {
   gap: 3px;
 }
 /*
- * How much of the roster is spoken for today. It used to live over the Team
- * column and name everybody still free, wrapped across several lines — which
- * pushed the day columns down the page as the list grew, and put a figure
- * about the whole board inside one column's heading. It is one of the four
- * header figures now; the names it used to list are on its hover.
+ * Who is on site today and on nothing — the people still to reach for, read
+ * while deciding who goes on the order in front of you.
+ *
+ * The ratio this used to carry as well is one of the four header figures now:
+ * that was a number about the whole board sitting inside one column's title.
+ * And it is capped at two lines, then scrolls — unbounded, a shift with nobody
+ * allocated pushed the day columns down the page as the list grew.
  */
+.team-free {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 3px;
+  min-width: 0;
+  max-height: 32px;
+  overflow-y: auto;
+  font-size: 9.5px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+.team-free-name {
+  padding: 0 4px;
+  border: 1px solid var(--head-rule);
+  border-radius: 3px;
+  background: rgb(255 255 255 / 12%);
+  color: var(--head-tx);
+  white-space: nowrap;
+}
+.team-free.none {
+  color: var(--head-dim);
+  font-weight: 600;
+  font-style: italic;
+}
+.assy-head .team-head { gap: 6px; }
 .production-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 8px; margin-bottom: 8px; }
 .production-grid label { display: block; }
 .production-grid label > span {
