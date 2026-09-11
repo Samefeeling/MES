@@ -8,7 +8,8 @@ import {
   wholeDaysBetween,
 } from '@/engine/assembly/dates';
 import type { LineKey, Worker } from '@/domain/assembly';
-import { MS_PER_DAY, toDayKey } from '@/lib/time';
+import { toDayKey } from '@/lib/time';
+import { shiftColumnFraction } from '@/engine/assembly/shift';
 
 export type OrderSortKey = 'start' | 'due';
 export type SortDirection = 'asc' | 'desc';
@@ -129,6 +130,13 @@ export function runningOrdersByDay(
 /**
  * Horizontal day position on the timeline. When weekends are hidden their
  * width is zero, so Friday and Monday meet without leaving empty columns.
+ *
+ * A day column is the *shift*, 07:00 to 15:30 — not midnight to midnight. An
+ * order that starts at seven starts at the left edge of its column and one
+ * that finishes at 15:15 all but fills it; before and after, the position pins
+ * to the column's edges rather than wandering into a night nobody works. The
+ * fraction used to be the calendar one, which drew a bar starting at seven a
+ * third of the way into its own day and left the mornings of the board empty.
  */
 export function timelineDayOffset(
   date: Date,
@@ -137,7 +145,7 @@ export function timelineDayOffset(
 ): number {
   const origin = startOfDay(horizonStart);
   const target = startOfDay(date);
-  const fraction = (date.getTime() - target.getTime()) / MS_PER_DAY;
+  const fraction = shiftColumnFraction(date);
   if (showWeekends) return wholeDaysBetween(target, origin) + fraction;
 
   let offset = 0;

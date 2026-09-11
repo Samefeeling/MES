@@ -236,6 +236,36 @@ permissions decide who may write and its Modified By records which supervisor
 did. A real boundary means restricting write on `ASSY_Plans` /
 `ASSY_Production` to a SharePoint group.
 
+**The board keeps clock times, not fractions of a calendar day.**
+`engine/assembly/shift.ts` is the single place work and the clock meet: the
+07:00–15:30 shift less breaks at 09:00, 12:00 and 15:15, with the work
+stretches *derived* from the breaks and a test tying their 450 minutes to
+`PRODUCTIVE_HOURS_PER_PERSON`. `clockAtWorkMinutes` / `workMinutesAtClock` are
+exact inverses; `shiftClockAt` is the end side of a fraction and `shiftStartAt`
+the start side (they part by a break and nowhere else — a component off a press
+at 12:10 is picked up at 12:30, not 12:00). Sub-minute precision is carried
+rather than rounded, or a successor starts before its own predecessor finishes.
+Wired through `planVariableCrew` (`opening`, `first`, the end of each day),
+`board.ts:takenOnDay` (work done by then, not time elapsed), `latestStart`, and
+`timelineDayOffset` — a day column is now the shift, so bars sit where the work
+sits. `startOfCrewDay`/`endOfCrewDay` derive the two times rather than storing
+them. The old `shiftMoment`/`shiftFraction` in `dates.ts` spread the breaks
+evenly across the span and are gone: three hours before a shift ends must start
+at 11:45, and the even spread said 12:06 — inside lunch, 2.75 h left.
+
+A run of days is one block when nothing open lies between them and neither end
+stops short, rather than when two instants share a midnight — otherwise every
+multi-day bar would come apart at every night. A gap **inside** a day is now
+drawable, so `OrderBar` links any visible gap rather than only one swallowing
+whole days, and says *put down for part of a day*.
+
+**Still to do on this:** dragging is whole-column and ignores a move inside a
+day. Landing on 5 minutes needs the pinned start to carry a time, and
+`orderStarts` is a `YYYY-MM-DD` map in the shared plan that goes out to
+`ASSY_Production` — a stored-format change with back-compatibility, which is
+why it is not in this commit. The zoomable time view is the same feature as the
+Timeline stops in the banner prototype.
+
 **The gate is the host's, and now says so.** `mesBridge.connectMes` sets
 `hosted` on the supervisor store; `SupervisorLock` renders nothing when it is
 set, so inside MES the top bar's button is the only one — the board used to

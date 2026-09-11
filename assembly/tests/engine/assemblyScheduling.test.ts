@@ -27,6 +27,10 @@ const UPL = LINES.find((l) => l.key === 'UPL_GLUING')!;
 /** Thursday 10 Sep 2026 — two working days before the weekend. */
 const THU = new Date(2026, 8, 10);
 const day = (n: number, hour = 0) => new Date(2026, 8, n, hour);
+/** 07:00 on the nth — when the crew clock on, and where a bar starts. */
+const opens = (n: number) => new Date(2026, 8, n, 7);
+/** 15:15 on the nth — when they stop; the last quarter hour is the pack-up. */
+const closes = (n: number) => new Date(2026, 8, n, 15, 15);
 
 const worker = (id: string): Worker => ({
   id: WorkerId(id),
@@ -133,7 +137,7 @@ describe('parallel build positions', () => {
     const b = board([job('A', 1), job('B', 1), job('C', 1)]);
     const rows = ['A', 'B', 'C'].map((id) => b.rowsByJob.get(id)!);
 
-    for (const row of rows) expect(row.start).toEqual(THU);
+    for (const row of rows) expect(row.start).toEqual(opens(10));
     // Each took a different position on the line.
     expect(new Set(rows.map((r) => r.slot)).size).toBe(
       PARALLEL_ORDERS_PER_LINE,
@@ -146,7 +150,10 @@ describe('parallel build positions', () => {
     const a = b.rowsByJob.get('A')!;
     const d = b.rowsByJob.get('D')!;
 
-    expect(d.start).toEqual(a.expectDate);
+    // A stops at 15:15 with nothing left of the day, so D has the next
+    // morning — the position it frees, at the hour the floor opens.
+    expect(a.expectDate).toEqual(closes(10));
+    expect(d.start).toEqual(opens(11));
     expect(d.slot).toBe(a.slot);
   });
 
@@ -154,8 +161,8 @@ describe('parallel build positions', () => {
     const b = board([job('A', 1), job('B', 1)], {
       orderStarts: { B: day(16).toISOString() },
     });
-    expect(b.rowsByJob.get('A')!.start).toEqual(THU);
-    expect(b.rowsByJob.get('B')!.start).toEqual(day(16));
+    expect(b.rowsByJob.get('A')!.start).toEqual(opens(10));
+    expect(b.rowsByJob.get('B')!.start).toEqual(opens(16));
   });
 
   it('moves any order on the line, not only the first', () => {
@@ -164,14 +171,14 @@ describe('parallel build positions', () => {
     // start before it simply lost.
     const jobs = [job('A', 2), job('B', 2), job('C', 2), job('D', 2)];
     const before = board(jobs);
-    expect(before.rowsByJob.get('D')!.start).toEqual(day(14)); // queued to Mon
+    expect(before.rowsByJob.get('D')!.start).toEqual(opens(14)); // queued to Mon
 
     const after = board(jobs, { orderStarts: { D: day(11).toISOString() } });
-    expect(after.rowsByJob.get('D')!.start).toEqual(day(11));
+    expect(after.rowsByJob.get('D')!.start).toEqual(opens(11));
     // The three it joined stay where they were: a drag over-commits the line
     // rather than shuffling everyone else around behind the planner's back.
     for (const id of ['A', 'B', 'C']) {
-      expect(after.rowsByJob.get(id)!.start).toEqual(THU);
+      expect(after.rowsByJob.get(id)!.start).toEqual(opens(10));
     }
   });
 
@@ -187,9 +194,9 @@ describe('parallel build positions', () => {
     ];
     const b = board(jobs, { orderStarts: { D: day(11).toISOString() } });
 
-    expect(b.rowsByJob.get('D')!.start).toEqual(day(11));
+    expect(b.rowsByJob.get('D')!.start).toEqual(opens(11));
     // A, B and C free their positions on Monday; E takes the first of them.
-    expect(b.rowsByJob.get('E')!.start).toEqual(day(14));
+    expect(b.rowsByJob.get('E')!.start).toEqual(opens(14));
   });
 
   it('starts as soon as it can, not on the day Epicor pencilled in', () => {
@@ -197,7 +204,7 @@ describe('parallel build positions', () => {
     // day this could begin, not an instruction to stand idle until then. The
     // board carries it as `Must start` and schedules the work now.
     const b = board([job('A', 1, { startDate: new Date(2026, 8, 16, 7, 30) })]);
-    expect(b.rowsByJob.get('A')!.start).toEqual(THU);
+    expect(b.rowsByJob.get('A')!.start).toEqual(opens(10));
     expect(b.rowsByJob.get('A')!.job.startDate).toEqual(
       new Date(2026, 8, 16, 7, 30),
     );
@@ -205,7 +212,7 @@ describe('parallel build positions', () => {
 
   it('never starts before the board opens, however old the export is', () => {
     const b = board([job('A', 1, { startDate: day(1) })]);
-    expect(b.rowsByJob.get('A')!.start).toEqual(THU);
+    expect(b.rowsByJob.get('A')!.start).toEqual(opens(10));
   });
 });
 
@@ -214,8 +221,8 @@ describe('the closed weekend', () => {
     // Three days from Thursday: Thu, Fri, then Monday.
     const b = board([job('A', 3)]);
     const row = b.rowsByJob.get('A')!;
-    expect(row.start).toEqual(THU);
-    expect(row.expectDate).toEqual(day(15));
+    expect(row.start).toEqual(opens(10));
+    expect(row.expectDate).toEqual(closes(14));
     expect(row.overtime).toBe(false);
   });
 
@@ -225,7 +232,7 @@ describe('the closed weekend', () => {
     });
     const start = b.rowsByJob.get('A')!.start!;
     expect(isWeekend(start)).toBe(false);
-    expect(start).toEqual(day(14));
+    expect(start).toEqual(opens(14));
   });
 
   it('honours a weekend once the supervisor approves overtime', () => {
@@ -234,20 +241,20 @@ describe('the closed weekend', () => {
       orderOvertime: { A: true },
     });
     const row = b.rowsByJob.get('A')!;
-    expect(row.start).toEqual(day(12)); // Saturday, as dropped
-    expect(row.expectDate).toEqual(day(14)); // straight through Sunday
+    expect(row.start).toEqual(opens(12)); // Saturday, as dropped
+    expect(row.expectDate).toEqual(closes(13)); // straight through Sunday
     expect(row.overtime).toBe(true);
   });
 
   it('finishing during the due date is on time, even after a weekend', () => {
     // Two days of work from Friday would finish Saturday if the factory ran;
-    // it does not, so the second day is the Monday. The bar therefore ends at
-    // Monday's close — Tuesday midnight — and an order due Monday has made it.
+    // it does not, so the second day is the Monday. The bar therefore ends
+    // when Monday's shift stops, and an order due Monday has made it.
     const jobs = [job('A', 2, { dueDate: day(14) })];
     const b = board(jobs, { orderStarts: { A: day(11).toISOString() } });
     const row = b.rowsByJob.get('A')!;
 
-    expect(row.expectDate).toEqual(day(15));
+    expect(row.expectDate).toEqual(closes(14));
     expect(row.status.color).toBe('green');
     expect(row.job.dueDate).toEqual(day(14));
   });
@@ -258,7 +265,7 @@ describe('the closed weekend', () => {
     const b = board(jobs, { orderStarts: { A: day(11).toISOString() } });
     const row = b.rowsByJob.get('A')!;
 
-    expect(row.expectDate).toEqual(day(16));
+    expect(row.expectDate).toEqual(closes(15));
     expect(row.status.color).toBe('red');
     // The commitment itself is untouched — only the expectation moved.
     expect(row.job.dueDate).toEqual(day(14));
@@ -294,9 +301,11 @@ describe('waiting on the orders that build the components', () => {
 
     // Both could have started today — the line has three free positions — so
     // the only thing holding the chair back is the cover.
-    expect(upstream.start).toEqual(THU);
-    expect(downstream.start).toEqual(upstream.expectDate);
-    expect(downstream.start).toEqual(day(11));
+    expect(upstream.start).toEqual(opens(10));
+    // The cover fills Thursday, so the chair has Friday morning: a component
+    // finished at the close of a shift hands over when the next one opens.
+    expect(upstream.expectDate).toEqual(closes(10));
+    expect(downstream.start).toEqual(opens(11));
     expect(String(downstream.waitingOn!.onJobId)).toBe('COVER1');
     expect(String(downstream.waitingOn!.part)).toBe('COVER');
   });
@@ -313,8 +322,8 @@ describe('waiting on the orders that build the components', () => {
       ],
     });
 
-    expect(b.rowsByJob.get('COVER1')!.expectDate).toEqual(day(12));
-    expect(b.rowsByJob.get('CHAIR1')!.start).toEqual(day(14));
+    expect(b.rowsByJob.get('COVER1')!.expectDate).toEqual(closes(11));
+    expect(b.rowsByJob.get('CHAIR1')!.start).toEqual(opens(14));
   });
 
   it('waits for the last component, not the first one it reads', () => {
@@ -332,7 +341,9 @@ describe('waiting on the orders that build the components', () => {
 
     const row = b.rowsByJob.get('CHAIR1')!;
     expect(row.predecessors).toHaveLength(2);
-    expect(row.start).toEqual(b.rowsByJob.get('FRAME1')!.expectDate);
+    // The frame fills the Monday, so the chair opens on the Tuesday.
+    expect(b.rowsByJob.get('FRAME1')!.expectDate).toEqual(closes(14));
+    expect(row.start).toEqual(opens(15));
     expect(String(row.waitingOn!.onJobId)).toBe('FRAME1');
   });
 
@@ -354,7 +365,7 @@ describe('waiting on the orders that build the components', () => {
     });
 
     const row = b.rowsByJob.get('CHAIR1')!;
-    expect(row.start).toEqual(day(17));
+    expect(row.start).toEqual(opens(17));
     expect(String(row.waitingOn!.onJobId)).toBe('SFM1');
 
     // And the press job is on the PMD row, so it can be seen and chased.
@@ -366,7 +377,7 @@ describe('waiting on the orders that build the components', () => {
     const table = job('TBL1', 1, { partNum: PartId('TABLE') });
     const b = board([table], { jobLinks: [link('TBL1', 'TABLE', 'MDF-TOP')] });
 
-    expect(b.rowsByJob.get('TBL1')!.start).toEqual(THU);
+    expect(b.rowsByJob.get('TBL1')!.start).toEqual(opens(10));
     expect(b.rowsByJob.get('TBL1')!.waitingOn).toBeNull();
   });
 
@@ -384,8 +395,8 @@ describe('waiting on the orders that build the components', () => {
       orderStarts: { COVER1: day(14).toISOString() },
     });
 
-    expect(before.rowsByJob.get('CHAIR1')!.start).toEqual(day(11));
-    expect(after.rowsByJob.get('CHAIR1')!.start).toEqual(day(15));
+    expect(before.rowsByJob.get('CHAIR1')!.start).toEqual(opens(11));
+    expect(after.rowsByJob.get('CHAIR1')!.start).toEqual(opens(15));
     // Pushed out by three working days, and still nothing touched a Due Date.
     expect(after.rowsByJob.get('CHAIR1')!.job.dueDate).toEqual(day(30));
   });
@@ -423,9 +434,9 @@ describe('the crew hand-over', () => {
     // Thursday and Friday finish FIRST, so it ends at the close of the week;
     // SECOND takes the next shift going rather than waiting for the day
     // Epicor had pencilled in.
-    expect(first.start).toEqual(THU);
-    expect(first.expectDate).toEqual(day(12));
-    expect(second.start).toEqual(day(14));
+    expect(first.start).toEqual(opens(10));
+    expect(first.expectDate).toEqual(closes(11));
+    expect(second.start).toEqual(opens(14));
   });
 
   it('never has one person on two orders at once', () => {
@@ -444,8 +455,8 @@ describe('the crew hand-over', () => {
     const b = board(pair(day(28)), {
       crew: { FIRST: ['W0'], SECOND: ['W1'] },
     });
-    expect(b.rowsByJob.get('SECOND')!.start).toEqual(THU);
-    expect(b.rowsByJob.get('FIRST')!.start).toEqual(THU);
+    expect(b.rowsByJob.get('SECOND')!.start).toEqual(opens(10));
+    expect(b.rowsByJob.get('FIRST')!.start).toEqual(opens(10));
   });
 
   it('starts with whoever is free and lets the rest catch up', () => {
@@ -460,11 +471,11 @@ describe('the crew hand-over', () => {
     const long = b.rowsByJob.get('LONG')!;
     const both = b.rowsByJob.get('BOTH')!;
 
-    expect(short.expectDate).toEqual(day(12)); // the end of Friday
-    expect(long.expectDate).toEqual(day(16));
+    expect(short.expectDate).toEqual(closes(11)); // the end of Friday
+    expect(long.expectDate).toEqual(closes(15));
     // Starts the moment W0 is free — the Monday, the weekend being shut —
     // rather than waiting for W1 on the Wednesday.
-    expect(both.start).toEqual(day(14));
+    expect(both.start).toEqual(opens(14));
     // W0 alone at first; W1 is on it only from the day after they finish LONG.
     expect(both.crewDays![0].workerIds).toEqual(['W0']);
     expect(both.crewDays!.at(-1)!.workerIds).toEqual(['W0', 'W1']);
@@ -482,8 +493,8 @@ describe('the crew hand-over', () => {
     // there is no reason for the week in front of the drag to go to waste.
     const first = after.rowsByJob.get('FIRST')!;
     const second = after.rowsByJob.get('SECOND')!;
-    expect(first.start).toEqual(day(16));
-    expect(second.start).toEqual(day(10));
+    expect(first.start).toEqual(opens(16));
+    expect(second.start).toEqual(opens(10));
     // And Bill is never on both at once: SECOND is done before FIRST opens.
     expect(second.expectDate!.getTime()).toBeLessThanOrEqual(
       first.start!.getTime(),
@@ -509,7 +520,7 @@ describe('the crew hand-over', () => {
     ] as const) {
       const first = b.rowsByJob.get('FIRST')!;
       const second = b.rowsByJob.get('SECOND')!;
-      expect(second.start, name).toEqual(day(10));
+      expect(second.start, name).toEqual(opens(10));
       expect(second.expectDate!.getTime(), name).toBeLessThanOrEqual(
         first.start!.getTime(),
       );
@@ -524,7 +535,7 @@ describe('the crew hand-over', () => {
     });
     // Explicitly allowed, so SECOND is not held back for W0 and the two run
     // together — the board marks that rather than rescheduling around it.
-    expect(b.rowsByJob.get('SECOND')!.start).toEqual(THU);
+    expect(b.rowsByJob.get('SECOND')!.start).toEqual(opens(10));
     expect(b.rowsByJob.get('FIRST')!.expectDate!.getTime()).toBeGreaterThan(
       b.rowsByJob.get('SECOND')!.start!.getTime(),
     );
@@ -565,9 +576,11 @@ describe('one order against the next', () => {
     const first = b.rowsByJob.get('COVER1')!;
     const next = b.rowsByJob.get('CHAIR1')!;
 
-    // A day and a half ends at noon on the Friday, and the chair starts then —
+    // A day and a half is 675 minutes of work: a full Thursday, then two
+    // hours to morning tea and an hour and three quarters after it. The cover
+    // is off the bench at eleven on the Friday and the chair starts then —
     // not on the Monday, and not at midnight on the Friday either.
-    expect(first.expectDate).toEqual(day(11, 12));
+    expect(first.expectDate).toEqual(day(11, 11));
     expect(next.start).toEqual(first.expectDate);
   });
 
@@ -588,7 +601,9 @@ describe('one order against the next', () => {
       ['2026-09-11', 0.5, 0.5],
       ['2026-09-14', 0, 0.5],
     ]);
-    expect(next.expectDate).toEqual(day(14, 12));
+    // Half a shift of work ends at eleven, not at noon: two hours of it went
+    // before morning tea and the urn took a quarter of an hour.
+    expect(next.expectDate).toEqual(day(14, 11));
   });
 
   it('hands a crew straight on, with neither a gap nor a double shift', () => {

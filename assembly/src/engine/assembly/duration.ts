@@ -9,11 +9,10 @@
 import {
   MAX_WORKERS_PER_ORDER,
   PRODUCTIVE_HOURS_PER_PERSON,
-  SHIFT_END_HOUR,
-  SHIFT_START_HOUR,
 } from '@/domain/assembly';
 import type { Job } from '@/domain/types';
-import { isWeekend, prevWorkingDay, shiftMoment, startOfDay } from './dates';
+import { isWeekend, prevWorkingDay, startOfDay } from './dates';
+import { shiftStartAt } from './shift';
 
 /** Fraction of the order already finished, clamped to [0, 1]. */
 export function completedFraction(job: Job): number {
@@ -121,5 +120,7 @@ export function latestStart(
     left -= 1;
     day = prevWorkingDay(day);
   }
-  return shiftMoment(day, 1 - left, SHIFT_START_HOUR, SHIFT_END_HOUR);
+  // On the clock, stepping over the breaks — and on the *start* side of the
+  // fraction, because this is the last moment the order can be picked up.
+  return shiftStartAt(day, 1 - left);
 }

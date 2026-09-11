@@ -15,14 +15,13 @@ import {
   type CrewAssignment,
 } from '@/domain/assembly';
 import {
-  addDays,
   isWeekend,
   nextMidnight,
   openDaysBetween,
   startOfDay,
 } from './dates';
+import { shiftClockAt, shiftStartAt, workFractionAt } from './shift';
 import { toDayKey } from '@/lib/time';
-import { MS_PER_DAY } from '@/lib/time';
 
 export interface CrewDayPlan {
   day: string;
@@ -109,9 +108,19 @@ export function crewIdsOnDay(
   return [...new Set(ids)].slice(0, MAX_WORKERS_PER_ORDER);
 }
 
+/*
+ * The two fractions above, read off the clock — 07:00 to 15:15, stepping over
+ * the breaks. Derived rather than stored beside them: they are the same fact
+ * in two units, and a copy is a copy to keep in step.
+ */
+
+/** The moment the crew pick this order up that day. */
+export const startOfCrewDay = (day: CrewDayPlan): Date =>
+  shiftStartAt(day.date, day.from);
+
 /** The moment one of these day plans hands the day on. */
 export const endOfCrewDay = (day: CrewDayPlan): Date =>
-  addDays(day.date, day.from + day.used);
+  shiftClockAt(day.date, day.from + day.used);
 
 /**
  * The open days in the middle of a run that the order is not worked, grouped
@@ -147,10 +156,11 @@ export function planVariableCrew(
   // What is left of the opening day. An order picking up where another left
   // off starts part-way through a shift and gets only the rest of it, which is
   // what makes a hand-over exact rather than a day of waiting.
-  const opening = Math.min(
-    1,
-    Math.max(0, (from.getTime() - orderStart.getTime()) / MS_PER_DAY),
-  );
+  //
+  // Read as work done, not as time elapsed: a hand-over at half past twelve
+  // has 285 minutes of the shift behind it, not the 52% of a calendar day the
+  // clock happens to show.
+  const opening = workFractionAt(from);
   let remaining = Math.max(0, requiredHours);
   let cursor = orderStart;
   let first: Date | null = null;
@@ -206,7 +216,7 @@ export function planVariableCrew(
       continue;
     }
 
-    first ??= addDays(cursor, gone);
+    first ??= shiftStartAt(cursor, gone);
     const hours = Math.min(remaining, capacity);
     const used = hours / shift;
     crewDays.push({
@@ -222,7 +232,7 @@ export function planVariableCrew(
     remaining -= hours;
 
     if (remaining <= EPSILON) {
-      const end = addDays(cursor, gone + used);
+      const end = shiftClockAt(cursor, gone + used);
       return {
         start: first,
         expectDate: end,

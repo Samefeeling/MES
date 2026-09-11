@@ -194,6 +194,36 @@ single day elsewhere next week cost the order every day after it — five days
 of work covered two, and the Expect Date went blank while the crew were
 plainly not full.
 
+**The working day is 07:00 to 15:30, less three breaks**, and the board plans
+to the clock rather than to a fraction of a calendar day:
+
+| | |
+| --- | --- |
+| 07:00 – 09:00 | two hours |
+| 09:00 – 09:15 | morning tea |
+| 09:15 – 12:00 | two and three quarters |
+| 12:00 – 12:30 | lunch |
+| 12:30 – 15:15 | two and three quarters |
+| 15:15 – 15:30 | afternoon tea, and putting the bench away |
+
+That is **450 minutes on the job**, which is the 7.5 hours every duration on
+this board is divided by — a test holds the two together, because a break moved
+without the arithmetic following would have the board planning to a different
+day than it draws. Work is laid into those stretches in order and the breaks
+are stepped over: two hours of work ends at **09:00**, two and a quarter ends
+at **09:30**. A bar can finish at 15:15 and never at 15:30.
+
+The same fraction means two different times depending on which end is asking.
+Two hours of work is *reached* at 09:00 and *resumes* at 09:15, so the order
+following it starts at 09:15 — nobody picks a job up during morning tea. Ends
+ask one question of the clock and starts ask the other; mid-stretch they are
+the same moment, which is what a hand-over is.
+
+Day columns are the shift, 07:00 at the left edge and 15:30 at the right, so a
+bar sits where the work sits. They used to be midnight to midnight, which drew
+an order that starts at seven a third of the way into its own column and left
+every morning on the board empty.
+
 **A person's shift is 7.5 hours of continuous capacity, and orders queue into
 it back to back.** Somebody coming off an order at eleven picks the next one up
 at eleven; if that fills the day, the one after it starts tomorrow morning. Five
@@ -229,6 +259,12 @@ invited was to drag the bar back together until it looked whole.
 A day the other order only *part*-used is no longer one of these: this order
 takes the rest of it and the bar runs straight through. Most of the gaps the
 floor was dragging bars over were that, not a full day.
+
+**Part of a day** — the newest kind, and only expressible now that the board
+keeps clock times. The crew are on another order until quarter to three, so
+this one has the last half hour of the day; the hole is narrower than a column
+and means the same thing. It is joined by the same dashed rule and the bar says
+**put down for part of a day**, naming what took it.
 
 **Dragging a bar over its own pause does not find room.** It pins the order,
 and a pinned order consults no diary at all — which is right for a placement

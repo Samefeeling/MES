@@ -139,9 +139,12 @@ describe('latestStart', () => {
 
   it('puts part of a day at the hour it has to begin', () => {
     // Three productive hours — 0.4 of a day — due Thursday 10 Sep. It has to
-    // be on the bench with 0.4 of Thursday's shift left: 07:00 + 0.6 × 8.5 h.
+    // be on the bench with three working hours of Thursday left, and the clock
+    // is what says when that is: a quarter of an hour before lunch, then the
+    // two and three quarters after it. Spread evenly across the shift instead
+    // the answer was 12:06, which is in the middle of lunch and leaves 2.75 h.
     const j = order(0.4 * PRODUCTIVE_HOURS_PER_PERSON);
-    expect(latestStart(j, 1, due(10))).toEqual(at(10, 12, 6));
+    expect(latestStart(j, 1, due(10))).toEqual(at(10, 11, 45));
   });
 
   it('never lands outside the shift, whatever the work comes to', () => {
@@ -160,6 +163,8 @@ describe('latestStart', () => {
 
   it('leaves an order with no work left until its due date closes', () => {
     const done = { ...order(20), remainingQty: 0, completedQty: 10 };
-    expect(latestStart(done, 1, due(10))).toEqual(at(10, 15, 30));
+    // The last moment work can be booked, which is when the crew stop rather
+    // than when they walk out — the quarter to four is putting the bench away.
+    expect(latestStart(done, 1, due(10))).toEqual(at(10, 15, 15));
   });
 });

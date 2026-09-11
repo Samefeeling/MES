@@ -93,7 +93,8 @@ import {
 } from './dates';
 import { endOfCrewDay, idleRuns, planVariableCrew, type CrewDayPlan, type TakenOnDay, type VariableCrewPlan } from './crewSchedule';
 import { lineLoad, type LineLoad } from './workload';
-import { fromDayKey, MS_PER_DAY, toDayKey } from '@/lib/time';
+import { workFractionAt } from './shift';
+import { toDayKey } from '@/lib/time';
 import type {
   ActualStartRecord,
   ProductionEntry,
@@ -738,11 +739,10 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
       if (approved.includes(workerId)) return 0;
       const held = bookedUntil.get(`${workerId}|${day}`);
       if (!held) return 0;
-      // Against the start of the day being asked about, not of `held`'s own
-      // day — a booking that runs to the close of a shift is stored as the
-      // next midnight, and measuring from there would read as a free day.
-      const gone = (held.getTime() - fromDayKey(day).getTime()) / MS_PER_DAY;
-      return Math.min(1, Math.max(0, gone));
+      // Work done by then, not time elapsed: somebody coming off at half past
+      // twelve has 285 of the shift's 450 minutes behind them, and the hour
+      // they spent at the urn and over lunch bought this order nothing.
+      return workFractionAt(held);
     };
 
   /**

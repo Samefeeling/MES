@@ -161,47 +161,14 @@ export function prevWorkingDay(d: Date): Date {
   return out;
 }
 
-/**
- * A clock time on `day`, from a fraction of the shift.
- *
- * The inverse of `shiftFraction`: 0 is the moment the crew clocks on, 1 the
- * moment they leave. Nothing this returns can land in the evening, which is
- * the whole point — every date the board works out for itself is a moment
- * somebody is actually on the floor, whatever hour the export happens to
- * carry. The two breaks are spread across the span rather than cut out of it,
- * the same simplification the "now" line makes.
+/*
+ * `shiftMoment` and `shiftFraction` lived here and have gone to
+ * `engine/assembly/shift`, which does the same two jobs against the real
+ * working day rather than spreading the breaks evenly across the span. The
+ * simplification was not free: three hours of work before the end of a shift
+ * has to begin at 11:45, and an even spread put it at 12:06 — in the middle
+ * of lunch, with only two and three quarter hours left after it.
  */
-export function shiftMoment(
-  day: Date,
-  fraction: number,
-  startHour: number,
-  endHour: number,
-): Date {
-  const at = Math.min(1, Math.max(0, fraction));
-  const hour = startHour + at * (endHour - startHour);
-  const out = startOfDay(day);
-  out.setHours(Math.floor(hour), Math.round((hour % 1) * 60), 0, 0);
-  return out;
-}
-
-/**
- * Where `now` falls in the working day, as a fraction of the shift.
- *
- * Zero before the crew clocks on, one after they leave; the board draws its
- * "now" line at that fraction across today's column. Outside the shift the
- * line pins to the edge of the column rather than wandering into the night,
- * which would read as progress nobody is making.
- */
-export function shiftFraction(
-  now: Date,
-  startHour: number,
-  endHour: number,
-): number {
-  const hours = now.getHours() + now.getMinutes() / 60;
-  if (hours <= startHour) return 0;
-  if (hours >= endHour) return 1;
-  return (hours - startHour) / (endHour - startHour);
-}
 
 /** Stops the walk below on a duration that could never be real. */
 const MAX_SPAN_DAYS = 2000;

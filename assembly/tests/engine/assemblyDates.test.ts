@@ -8,7 +8,6 @@ import {
   prevMidnight,
   prevWorkingDay,
   scheduleStatus,
-  shiftFraction,
   wholeDaysBetween,
   workingSpans,
 } from '@/engine/assembly/dates';
@@ -133,7 +132,8 @@ describe('the working week', () => {
   });
 });
 
-describe('the day before, and the hour of the day', () => {
+
+describe('the day before', () => {
   const MON = d('2026-09-14');
   const TUE = d('2026-09-15');
   const FRI = d('2026-09-11');
@@ -154,23 +154,13 @@ describe('the day before, and the hour of the day', () => {
   it('drops the time of day rather than carrying it back', () => {
     expect(prevWorkingDay(new Date('2026-09-15T14:30:00'))).toEqual(MON);
   });
-
-  it('places the hour inside the shift', () => {
-    const at = (h: number, m = 0) => new Date(2026, 8, 15, h, m);
-    // 07:00–15:30, so 11:15 is halfway.
-    expect(shiftFraction(at(11, 15), 7, 15.5)).toBeCloseTo(0.5, 6);
-    expect(shiftFraction(at(7), 7, 15.5)).toBe(0);
-    expect(shiftFraction(at(15, 30), 7, 15.5)).toBe(1);
-  });
-
-  it('pins to the edge outside the shift instead of running off the column', () => {
-    const at = (h: number) => new Date(2026, 8, 15, h);
-    // Before the crew clock on, and long after they have gone home.
-    expect(shiftFraction(at(3), 7, 15.5)).toBe(0);
-    expect(shiftFraction(at(22), 7, 15.5)).toBe(1);
-  });
 });
 
+/*
+ * The hour of the day moved to `tests/engine/shiftClock.test.ts` with the
+ * functions that answer it: an even spread across the shift was close enough
+ * to look right and wrong by a break wherever it mattered.
+ */
 describe('drawing a bar across the closed days', () => {
   const THU = d('2026-09-10');
   const FRI = d('2026-09-11');

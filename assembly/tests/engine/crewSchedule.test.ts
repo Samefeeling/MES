@@ -61,15 +61,16 @@ describe('date-bounded crew capacity', () => {
       20 - 2 * PRODUCTIVE_HOURS_PER_PERSON,
       6,
     );
-    expect(plan.coveredUntil).toEqual(new Date('2026-09-04T00:00:00'));
+    // The end of Bill's last shift, on the clock: work stops at 15:15.
+    expect(plan.coveredUntil).toEqual(new Date('2026-09-03T15:15:00'));
   });
 });
 
 /*
  * The clocks change on a Sunday and the factory is shut for it, so no shift
  * ever gains or loses the hour. What the plan used to lose was the step over
- * that Sunday: every day after it came out an hour short of midnight, and the
- * Expect Date — and with it the moment the crew came free — drifted with them.
+ * that Sunday: every day after it came out an hour short, and the Expect Date
+ * — and with it the moment the crew came free — drifted with them.
  */
 describe('planning across the day the clocks change', () => {
   const crewOf = (...ids: string[]) =>
@@ -99,14 +100,14 @@ describe('planning across the day the clocks change', () => {
     }
   });
 
-  it('finishes on the midnight that ends the last shift, not an hour before', () => {
-    // Six full shifts from Friday 3 April end where Friday 10 April ends.
+  it('finishes when the last shift stops, not an hour before', () => {
+    // Six full shifts from Friday 3 April end when Friday 10 April's does.
     expect(runs('2026-04-03', 6).expectDate).toEqual(
-      new Date('2026-04-11T00:00:00'),
+      new Date('2026-04-10T15:15:00'),
     );
     // And the same across October, when the hour goes the other way.
     expect(runs('2026-10-02', 6).expectDate).toEqual(
-      new Date('2026-10-10T00:00:00'),
+      new Date('2026-10-09T15:15:00'),
     );
   });
 

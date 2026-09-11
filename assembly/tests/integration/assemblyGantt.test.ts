@@ -19,6 +19,7 @@ import {
 } from '@/domain/assembly';
 import { overlapsOnBoard, suggestCrew } from '@/engine/assembly/crew';
 import { addDays } from '@/engine/assembly/dates';
+import { shiftOpensOn } from '@/engine/assembly/shift';
 import { activeWorkerIdsOnDay } from '@/features/assembly/boardView';
 import type { PlanningDataset } from '@/domain/types';
 import type {
@@ -613,7 +614,8 @@ describe('the board the planner laid out', () => {
       orderStarts: { [last]: new Date('2026-09-11T00:00:00').toISOString() },
     });
     const row = after.rowsByJob.get(last)!;
-    expect(row.start!.getTime()).toBe(after.today.getTime());
+    // The day the board opens on, at the hour the floor opens on it.
+    expect(row.start!.getTime()).toBe(shiftOpensOn(after.today).getTime());
   });
 });
 

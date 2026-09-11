@@ -28,7 +28,8 @@ import {
   type LineKey,
   type VirtualLineKey,
 } from '@/domain/assembly';
-import { addCalendarDays, isWeekend, shiftFraction } from '@/engine/assembly/dates';
+import { addCalendarDays, isWeekend } from '@/engine/assembly/dates';
+import { shiftColumnFraction } from '@/engine/assembly/shift';
 import { remainingHours } from '@/engine/assembly/duration';
 import {
   boardDayLoads,
@@ -792,7 +793,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
   const nowOffset =
     todayIndex < 0
       ? null
-      : (todayIndex + shiftFraction(now, SHIFT_START_HOUR, SHIFT_END_HOUR)) *
+      : (todayIndex + shiftColumnFraction(now)) *
         dayWidth;
 
   const dateHead = (

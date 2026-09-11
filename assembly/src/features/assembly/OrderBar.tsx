@@ -19,9 +19,10 @@
 import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import type { OrderRow } from '@/engine/assembly/board';
-import { addDays, openDaysBetween, workingSpans } from '@/engine/assembly/dates';
+import { openDaysBetween, workingSpans } from '@/engine/assembly/dates';
 import { completedFraction, remainingHours } from '@/engine/assembly/duration';
 import { MS_PER_DAY } from '@/lib/time';
+import { endOfCrewDay, startOfCrewDay } from '@/engine/assembly/crewSchedule';
 import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { barTag, timelineDayOffset } from './boardView';
 import type { MarkedMove } from './groupMove';
@@ -29,6 +30,9 @@ import type { MarkedMove } from './groupMove';
 export const DRAG_TYPE_BAR = 'order-bar';
 
 /** Narrowest a block may be drawn and still be seen. */
+/** Fractions of a shift are divided out, so flush ends agree to about here. */
+const SEAM = 1e-6;
+
 const MIN_PIECE_PX = 10;
 
 export function OrderBar({
@@ -160,17 +164,30 @@ export function OrderBar({
   // and this lane mirrors their plan rather than restating it in our hours.
   const continuous = row.overtime || readOnly;
   const plannedSpans = row.crewDays.map((day) => ({
-    from: addDays(day.date, day.from),
-    to: addDays(day.date, day.from + day.used),
+    from: startOfCrewDay(day),
+    to: endOfCrewDay(day),
   }));
-  const merged = plannedSpans.reduce<{ from: Date; to: Date }[]>(
-    (out, next) => {
-      const previous = out.at(-1);
-      if (previous && previous.to.getTime() === next.from.getTime()) {
-        previous.to = next.to;
-      } else {
-        out.push({ ...next });
-      }
+  /*
+   * One run of work is one block, and two days running are one run.
+   *
+   * On the clock a day ends at 15:15 and the next opens at 07:00, so spans
+   * that used to meet at a shared midnight no longer meet at all — compared on
+   * the instant alone, every multi-day bar would come apart into a block per
+   * day. They are the same run when nothing open lies between them and neither
+   * end stops short inside its own shift, which is also exactly the test that
+   * still parts a bar around a day its crew lost to another order.
+   */
+  const merged = row.crewDays.reduce<{ from: Date; to: Date }[]>(
+    (out, day, i) => {
+      const previous = row.crewDays[i - 1];
+      const span = plannedSpans[i];
+      const joined =
+        previous !== undefined &&
+        previous.from + previous.used >= 1 - SEAM &&
+        day.from <= SEAM &&
+        openDaysBetween(previous.date, day.date, continuous).length === 0;
+      if (joined) out.at(-1)!.to = span.to;
+      else out.push({ ...span });
       return out;
     },
     [],
@@ -237,11 +254,17 @@ export function OrderBar({
     const idle = openDaysBetween(previous.to, piece.from, continuous);
     const left = previous.left + previous.width;
     const linkWidth = piece.left - left;
-    return idle.length > 0 && linkWidth > 0
+    // Any visible gap is joined, not only one that swallows whole days. On the
+    // clock a hole can be an afternoon — the crew are on another order until
+    // quarter to three — and half a column of white between two blocks reads
+    // as two orders exactly as a whole column did.
+    return linkWidth > 1
       ? [{ key: `link-${previous.key}`, left, width: linkWidth, idle: idle.length }]
       : [];
   });
   const idleDays = links.reduce((sum, link) => sum + link.idle, 0);
+  /** A hole that costs less than a whole day — an hour, or an afternoon. */
+  const partDayGap = links.some((link) => link.idle === 0);
   const pausedFor = [
     ...new Set((row.pauses ?? []).flatMap((pause) => pause.heldBy)),
   ];
@@ -314,7 +337,7 @@ export function OrderBar({
         readOnly ? 'readonly' : ''
       } ${row.overtime ? 'overtime' : ''} ${
         drawn.length > 1 ? 'split' : ''
-      } ${idleDays > 0 ? 'paused' : ''} ${
+      } ${idleDays > 0 || partDayGap ? 'paused' : ''} ${
         offAxis ? 'off-axis' : ''
       } ${!unlocked ? 'locked' : ''} ${clashes.length > 0 ? 'clash' : ''} ${
         heldBy ? 'held' : ''
@@ -347,9 +370,14 @@ export function OrderBar({
             (pausedFor.length > 0
               ? ` — its crew are on ${pausedFor.join(', ')}`
               : ' — nobody on it is free those days')
-          : drawn.length > 1
-            ? ' · pauses over the weekend'
-            : '') +
+          : partDayGap
+            ? ' · put down for part of a day' +
+              (pausedFor.length > 0
+                ? ` — its crew are on ${pausedFor.join(', ')}`
+                : ' — its crew are on something else')
+            : drawn.length > 1
+              ? ' · pauses over the weekend'
+              : '') +
         (offAxis
           ? ' · runs entirely on days this axis is hiding — show Weekends to see it'
           : '') +
