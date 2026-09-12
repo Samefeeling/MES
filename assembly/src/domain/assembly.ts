@@ -125,6 +125,13 @@ export interface LineDef {
    * supervisor can see what is feeding assembly. It is not scheduled here.
    */
   schedulable: boolean;
+  /**
+   * What the abbreviation stands for, where the floor's own shorthand is not
+   * obvious to somebody new — TBP is To Be Processed. Shown beside the name on
+   * the line's row, which is a board read across a workshop by people who did
+   * not choose the abbreviation.
+   */
+  fullName?: string;
   /** Work-order types this line runs. */
   types: OrderType[];
   /**
@@ -155,7 +162,7 @@ export const LINE_TABLE = WorkCenterId('TABLE');
  * on the PMD dashboard, not here.
  */
 export const LINES: LineDef[] = [
-  { key: 'TBP', id: LINE_TBP, name: 'TBP', schedulable: true, types: ['final-assembly'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 0 },
+  { key: 'TBP', id: LINE_TBP, name: 'TBP', fullName: 'To Be Processed', schedulable: true, types: ['final-assembly'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 0 },
   { key: 'PMD', id: LINE_PMD, name: 'PMD', schedulable: false, types: [], parallelOrders: 0, sortIndex: 1 },
   { key: 'UPL_CUT_SEW', id: WorkCenterId('UPL_CUT_SEW'), name: 'UPL-CUT', schedulable: true, types: ['cutting-sewing'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 2 },
   { key: 'UPL_GLUING', id: WorkCenterId('UPL_GLUING'), name: 'UPL-Gluing', schedulable: true, types: ['upholstery'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 3 },

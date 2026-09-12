@@ -27,6 +27,11 @@ export interface ChartShiftCell {
   runHrs: number;
   downHrs: number;
   setupHrs: number;
+  /** Efficiency's two ingredients — standard hours earned and the run hours
+   *  they were earned in — carried rather than the ratio, for the same reason
+   *  this whole module exists: a month bar is the ratio of the sums. */
+  stdHours: number;
+  effRunHrs: number;
 }
 
 export interface ChartBucket {
@@ -85,10 +90,12 @@ const addInto = (into: ChartShiftCell, from: ChartShiftCell): void => {
   into.runHrs += from.runHrs;
   into.downHrs += from.downHrs;
   into.setupHrs += from.setupHrs;
+  into.stdHours += from.stdHours;
+  into.effRunHrs += from.effRunHrs;
 };
 
 const emptyCell = (): ChartShiftCell => ({
-  good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0,
+  good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, stdHours: 0, effRunHrs: 0,
 });
 
 /**

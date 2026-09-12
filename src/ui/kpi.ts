@@ -181,7 +181,13 @@ interface ShiftAgg {
    *  shift rather than against a total whose size depends on how wide the
    *  row is. */
   shifts: number;
-  oee: number | null;
+  /** Standard hours earned (Σ good × cycle time) and the run hours they were
+   *  earned in. Carried as ingredients rather than as a percentage so a
+   *  rolled-up row is the ratio of the sums — a month with one busy week and
+   *  three quiet ones reads as the month it was, not as the mean of four
+   *  percentages. */
+  stdHours: number;
+  effRunHrs: number;
   /** Comparison numerator. For Schedule Adherence this is per-order Good
    *  capped at that order's expectation; for Vs Target it is Good only
    *  from tuples carrying a valid persisted ShiftTarget. */
@@ -710,7 +716,8 @@ function toAgg(k: Kpi): ShiftAgg {
     insertHrs: k.insertHrs,
     startupHrs: k.startupHrs,
     shifts: k.shifts,
-    oee: k.oee,
+    stdHours: k.stdHours,
+    effRunHrs: k.effRunHrs,
     // Expectation / standards are computed PER SHIFT BUCKET (the runs-of-D
     // counting and the planned-start cut only make sense against one
     // shift's clock window) and summed onto the agg by the caller — a
@@ -738,7 +745,8 @@ function emptyAgg(): ShiftAgg {
     insertHrs: 0,
     startupHrs: 0,
     shifts: 0,
-    oee: null,
+    stdHours: 0,
+    effRunHrs: 0,
     attainedOutput: null,
     expOutput: null,
     comparisonCovered: 0,
@@ -774,7 +782,21 @@ function addStd(
 }
 
 function emptyChartShift(): ChartBucket['byShift'][ShiftCode] {
-  return { good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0 };
+  return { good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, stdHours: 0, effRunHrs: 0 };
+}
+
+/**
+ * Efficiency from its two ingredients: standard hours earned over the run
+ * hours they were earned in.
+ *
+ * One function, so the row, the headline tile and the chart overlay cannot
+ * drift — and so a rolled-up figure is the ratio of the sums rather than the
+ * mean of the percentages under it.
+ */
+function efficiencyOf(parts: { stdHours: number; effRunHrs: number }): number | null {
+  return parts.effRunHrs > 0
+    ? Math.round((parts.stdHours / parts.effRunHrs) * 100)
+    : null;
 }
 
 /** First two words of a part description — keeps the per-job row narrow
@@ -1036,6 +1058,20 @@ async function compute(now = new Date()): Promise<void> {
   const partDescByJob = new Map<string, string>();
   for (const o of planning) partDescByJob.set(o.jobNumber, o.partDescription);
 
+  /*
+   * JobNum → cycle time (hours per piece), for Efficiency.
+   *
+   * A signed-off row carries its own `CycleTime`, stamped at sign-off, and
+   * that is the rate the shift was actually judged by. This is the fallback
+   * for a shift still running, which has not been signed off and therefore has
+   * no stamped rate — without it the current shift's Efficiency reads "—" all
+   * day, which is the shift anybody standing at the board most wants to see.
+   */
+  const ctByJob = new Map<string, number>();
+  for (const o of planning) {
+    if (o.qtyPerHr > 0) ctByJob.set(o.jobNumber, o.qtyPerHr);
+  }
+
   const charts = new Map<string, ChartBucket>();
   // Every (machine, shift instance) in the window, for the Mango IMPW
   // findings. Collected here rather than from the rendered rows because
@@ -1105,7 +1141,7 @@ async function compute(now = new Date()): Promise<void> {
       }> = [];
       for (const [dateKey, recs] of shiftBuckets) {
         flat.push(...recs);
-        const k = aggregate(recs);
+        const k = aggregate(recs, ctByJob);
         // Standards are measured from signed status blocks. The comparison
         // mode changes with the selected period: current schedule for Last
         // 24h, frozen tuple targets for every wider/historical range.
@@ -1152,9 +1188,11 @@ async function compute(now = new Date()): Promise<void> {
         cell.runHrs += k.runHrs;
         cell.downHrs += k.downtimeHrs;
         cell.setupHrs += k.setupHrs;
+        cell.stdHours += k.stdHours;
+        cell.effRunHrs += k.effRunHrs;
         charts.set(dateKey, cb);
       }
-      byShift[code] = toAgg(aggregate(flat));
+      byShift[code] = toAgg(aggregate(flat, ctByJob));
       for (const s of stdAcc) addStd(byShift[code], s.comparison, s.std);
 
       // 3rd-level breakdown: group this shift's records by JobNum,
@@ -1172,13 +1210,13 @@ async function compute(now = new Date()): Promise<void> {
             jobNumber,
             partDescShort: firstTwoWords(desc),
             color: colorForJob(partNumByJob.get(jobNumber) ?? '', desc, dieColors),
-            agg: toAgg(aggregate(recs)),
+            agg: toAgg(aggregate(recs, ctByJob)),
             lastRunAt: lastRunAt(recs),
           };
         })
         .sort(byCompletion);
     }
-    const total = toAgg(aggregate(all));
+    const total = toAgg(aggregate(all, ctByJob));
     // Machine total = Σ of its shift comparisons / standards.
     for (const code of SHIFT_ORDER) {
       const s = byShift[code];
@@ -1214,7 +1252,7 @@ async function compute(now = new Date()): Promise<void> {
           jobNumber,
           partDescShort: firstTwoWords(desc),
           color: colorForJob(partNumByJob.get(jobNumber) ?? '', desc, dieColors),
-          agg: toAgg(aggregate(recs)),
+          agg: toAgg(aggregate(recs, ctByJob)),
           lastRunAt: lastRunAt(recs),
         };
       })
@@ -1314,7 +1352,7 @@ async function compute(now = new Date()): Promise<void> {
   }
   S!.catTotals = Array.from(byCategory.entries())
     .map(([category, recs]) => {
-      const agg = toAgg(aggregate(recs));
+      const agg = toAgg(aggregate(recs, ctByJob));
       const comparison =
         comparisonMode === 'target'
           ? targetAttainmentForRecords(recs)
@@ -1623,7 +1661,8 @@ function aggCells(
 ): string {
   const t = S!.thresholds;
   const yc = colourClass(a.yieldPct, t.yieldGreen, t.yieldAmber);
-  const oc = colourClass(a.oee, t.effGreen, t.effAmber);
+  const eff = efficiencyOf(a);
+  const oc = colourClass(eff, t.effGreen, t.effAmber);
   const planPct = comparisonPct(a);
   const pc = planColourClass(planPct, t);
   // Empty cells render an em-dash instead of "0" / "0.0%" — a literal
@@ -1645,7 +1684,7 @@ function aggCells(
     ${setupCell(a.dieHrs, a.dieStdHrs, DIE_CHANGE_STD_HRS, 'Die change')}
     ${setupCell(a.colorHrs, a.colorStdHrs, COLOR_CHANGE_STD_HRS, 'Colour change')}
     ${setupCell(a.insertHrs, a.insertStdHrs, INSERT_CHANGE_STD_HRS, 'Insert change')}
-    <td class="num ${colourOee ? oc : ''}">${a.oee == null ? '—' : a.oee + '%'}</td>
+    <td class="num ${colourOee ? oc : ''}" title="${a.effRunHrs > 0 ? escapeHtml(`${a.stdHours.toFixed(1)} standard hours earned in ${a.effRunHrs.toFixed(1)} run hours`) : 'No job in this slice carries a cycle time'}">${eff == null ? '—' : eff + '%'}</td>
     <td class="num ${pc}"${a.comparisonTotal ? ` title="${escapeHtml(comparisonTitle(a))}"` : ''}>${planPct == null ? '—' : planPct + '%'}</td>`;
 }
 
@@ -2592,6 +2631,8 @@ function render(): void {
         a.attainedOutput = (a.attainedOutput ?? 0) + r.total.attainedOutput;
       }
       if (r.total.expOutput != null) a.expOutput = (a.expOutput ?? 0) + r.total.expOutput;
+      a.stdHours += r.total.stdHours;
+      a.effRunHrs += r.total.effRunHrs;
       a.comparisonCovered += r.total.comparisonCovered;
       a.comparisonTotal += r.total.comparisonTotal;
       a.dieStdHrs = (a.dieStdHrs ?? 0) + (r.total.dieStdHrs ?? 0);
@@ -2610,6 +2651,8 @@ function render(): void {
       insertHrs: 0,
       startupHrs: 0,
       shifts: 0,
+      stdHours: 0,
+      effRunHrs: 0,
       attainedOutput: null as number | null,
       expOutput: null as number | null,
       comparisonCovered: 0,
@@ -2622,10 +2665,9 @@ function render(): void {
   const totPieces = tot.output + tot.reject;
   const totYield =
     totPieces > 0 ? ((tot.output / totPieces) * 100).toFixed(1) : null;
-  // Floor OEE for the headline tile — run share of all logged hours,
-  // same definition as the per-row OEE* and the hours chart overlay.
-  const totLogged = tot.runHrs + tot.downHrs + tot.setupHrs;
-  const totOee = totLogged > 0 ? Math.round((tot.runHrs / totLogged) * 100) : null;
+  // The headline Efficiency — the same ingredients as the per-row figure and
+  // the chart overlay, summed and divided once.
+  const totOee = efficiencyOf(tot);
 
   let body: string;
   if (S!.loading) {
@@ -2778,11 +2820,14 @@ function render(): void {
     const run = b.byShift.Day.runHrs + b.byShift.Afternoon.runHrs + b.byShift.Night.runHrs;
     const down = b.byShift.Day.downHrs + b.byShift.Afternoon.downHrs + b.byShift.Night.downHrs;
     const setup = b.byShift.Day.setupHrs + b.byShift.Afternoon.setupHrs + b.byShift.Night.setupHrs;
-    const logged = run + down + setup;
     // Ratio of the sums on a month bar too, so a month with one busy week
     // and three quiet ones reads as the month it was.
-    const oee = logged > 0 ? Math.round((run / logged) * 100) : null;
-    return { ...chartMeta[i], label: b.label, run, down, setup, oee };
+    const efficiency = efficiencyOf({
+      stdHours: b.byShift.Day.stdHours + b.byShift.Afternoon.stdHours + b.byShift.Night.stdHours,
+      effRunHrs:
+        b.byShift.Day.effRunHrs + b.byShift.Afternoon.effRunHrs + b.byShift.Night.effRunHrs,
+    });
+    return { ...chartMeta[i], label: b.label, run, down, setup, oee: efficiency };
   });
   // Reject Pareto counts + shift/status splits come from PMD_Rejects; its
   // legend resolves RejectCode through PMD_RejectCategories and displays
@@ -2992,7 +3037,7 @@ function render(): void {
             <th title="D — Die change">Die h</th>
             <th title="C — Colour change">Colour h</th>
             <th title="I — Insert change">Insert h</th>
-            <th>Efficiency*</th><th title="${escapeHtml(comparisonTitle(tot))}">${comparisonLabel()}</th>
+            <th title="Standard hours earned ÷ run hours used — Good × cycle time ÷ R hours">Efficiency*</th><th title="${escapeHtml(comparisonTitle(tot))}">${comparisonLabel()}</th>
             <th class="kpi-ho-head">Handover</th>
           </tr></thead>
           <tbody>${body}</tbody>
@@ -3040,7 +3085,7 @@ function render(): void {
         <div><b>Yield%</b> = Good ÷ (Good + Reject).</div>
         <div><b>Reject 🟢🔴</b> = judged per shift: 🟢 up to ${REJECT_PER_SHIFT_MAX} rejects a shift, 🔴 above. Rows covering several shifts (machine, order, TOTAL) scale the allowance by the shifts they roll up, so a machine isn't red for three green shifts.</div>
         <div><b>Startup h</b> = hours in S blocks (warm-up). Counted separately from the D / C / I changeover columns.</div>
-        <div><b>Efficiency*</b> = Run slots ÷ all filled slots.</div>
+        <div><b>Efficiency*</b> = standard hours earned ÷ run hours used — <b>Good × cycle time ÷ R hours</b>. It was Run slots ÷ all filled slots, which is <i>utilisation</i>: it said how much of the shift the press was running and nothing about how fast, so a press running flat out at half rate scored the same as one making its numbers. A job with no cycle time is left out of <b>both</b> sides rather than scored zero — nobody gave that order a rate, which is not the same as the press having run it badly.</div>
         ${comparisonHelp}
         <div><b>Die / Colour / Insert h 🟢🟡🔴</b> = hours in D / C / I blocks vs standard = changeovers × (die 4 h · colour 0.5 h · insert 0.5 h); 🟢 ≤ std, 🟡 ≤ std + 0.5 h, 🔴 above. <b>One changeover per order</b> — a die change the sheet logged in two pieces earns one 4 h allowance, not two.</div>
         <div>Colour thresholds for Output / Yield / Efficiency are editable in the panel above. Shift sub-rows show each shift's contribution to the period total.</div>

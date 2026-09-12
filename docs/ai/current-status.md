@@ -38,7 +38,7 @@ dashboard to Assembly's registry being reachable.
 - Reject catalog migrated 21 P-codes → **10 flat D-codes (D01-D10)**.
 - SessionStart hook (`.claude/hooks/session-start.sh`) installs deps on web.
 - **KPI meeting view** (`#/kpi`): per-machine Output/Reject/Yield%/Run/Down/
-  Setup/OEE*/Schedule-Adherence, period selector (this/last week/month).
+  Setup/Efficiency*/Schedule-Adherence, period selector (this/last week/month).
 - **Full-screen SPFx web part**: read mode mounts a fixed full-viewport
   overlay (hides SP chrome on iPad); edit mode renders inline.
 - **Reject↔status**: `PMD_Rejects.RejectCategory` now carries the slot's
@@ -237,6 +237,22 @@ order count. It was 94 px of heading against one line of column titles. The
 Order title carries a master `▶` that folds every line at once. The source-name
 chip is gone from the header; it lives on the hover of the read time.
 
+**The chrome block is `#BAE6FD`** — the floor picked the value. Dark MES top bar
+→ pale block → white orders, so the weight falls off as the eye reads down and
+the work is the brightest thing on screen; it was a second dark blue, which put
+two heavy bars over a page whose subject is underneath them. The heading carries
+its own darker load bands (`--head-ok` / `--head-warn` / `--head-error`): the
+board's pastels are chosen for white order rows and green scores 1.5:1 on this
+ground. Measured in `board-chrome-e2e`: heading ink 7.1:1, a past day 5.7:1, the
+load figure 5.4:1.
+
+**The timeline opens at MAX_DAY_WIDTH.** A column is a shift and a drag lands on
+five minutes of it, so column width *is* the board's working precision — at
+44 px a five-minute landing is half a pixel. No Timeline stops: the floor asked
+for the − / + to stay and the board to open zoomed all the way in.
+
+**TBP is To Be Processed**, and the line's row says so (`LineDef.fullName`).
+
 **A blank Expect Date now says why.** `uncoveredHours` and `crewWithoutRoom`
 were computed on every row and shown nowhere; the Expect cell carries them on
 hover and the inspector shows an `N h not covered` badge. The underlying
@@ -378,6 +394,39 @@ rules table in `docs/OPERATIONAL-LINES.md`.
 
 - All 11 SharePoint list field maps confirmed from live schema (2026-05).
 - User has updated `PMD_RejectCategories` list to D01-D10.
+
+## KPI: Efficiency, and Schedule % on the record
+
+**Efficiency\* is standard hours earned ÷ run hours used** —
+`Good × cycle time ÷ R hours`, per job, in `core/metrics.aggregate`. It was run
+slots ÷ all filled slots, which is *utilisation*: it said how much of the shift
+the press was running and nothing at all about how fast, so a press running flat
+out at half rate scored the same as one making its numbers and a press that
+finished early and stood idle scored worse than one that never got going.
+
+A job with no cycle time is out of **both** sides rather than scored zero —
+nobody gave that order a rate, which is not the same as the press having run it
+badly, and its hours in the denominator alone would drag the shift down for a
+missing planning field. `CycleTime` is stamped at sign-off, so a shift still
+running has none; `aggregate` takes an optional `ctByJob` built from planning so
+the live shift — the one anybody standing at the board is looking at — still has
+a figure. `Kpi` now carries `stdHours` / `effRunHrs` as well as the percentage,
+and `ChartShiftCell` carries them too, so a rolled-up row or a month bar is the
+**ratio of the sums** and not the mean of the ratios under it. `Kpi.oee` and
+`oeeColor` were renamed (`efficiency`, `efficiencyColor`) — the old name was
+never OEE.
+
+**The shift's Schedule % is frozen into `PMD_Production.VSPLAN` at sign-off.**
+Schedule Adherence is recomputed live against Planning.csv everywhere else, and
+Epicor drops an order from planning the moment it completes — so the number the
+Monday meeting read could not be reproduced on the Friday. `lockShift` (both
+DALs) calls the same `scheduleAdherenceForShift` the KPI page calls, over the
+whole machine-shift with the tuples being signed now in place of their older
+rows, and writes the percentage onto every header it writes. Optional column,
+fail-soft like `ShiftTarget`/`CycleTime`; and the snapshot is wrapped in a
+try/catch, because a KPI figure must never cost somebody the shift they just
+signed. `normaliseMachineCode` now tolerates a missing value for the same
+reason — a planning row with a blank machine used to throw from inside sign-off.
 
 ## Pending / blocked
 

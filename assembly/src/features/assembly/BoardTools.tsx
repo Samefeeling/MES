@@ -112,7 +112,7 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
             className="date-restore line-restore"
             key={line.key}
             onClick={() => toggleLine(line.key)}
-            title={`Show the ${line.name} line again`}
+            title={`Show the ${line.fullName ?? line.name} line again`}
           >
             + {line.name}
           </button>

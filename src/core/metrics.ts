@@ -6,7 +6,21 @@ import { STATUS_MAP } from './status';
 const SLOT_HOURS = SLOT_MINUTES / 60; // 0.5h per slot
 
 export interface Kpi {
-  oee: number | null; // %
+  /**
+   * Efficiency %: the standard hours the shift earned over the hours it
+   * actually ran them in — `output × cycle time ÷ run hours`.
+   *
+   * It used to be run slots ÷ all filled slots, which is a *utilisation*
+   * figure: it said how much of the shift the press was running and nothing
+   * at all about how fast. A press running flat out at half rate scored the
+   * same as one making its numbers, and a press that finished its order early
+   * and stood idle scored worse than one that never got going.
+   */
+  efficiency: number | null;
+  /** Standard hours earned — Σ good × cycle time, over jobs that have one. */
+  stdHours: number;
+  /** Run hours on those same jobs: Efficiency's denominator, the "R" slots. */
+  effRunHrs: number;
   output: number; // good qty
   scrap: number; // total reject pieces
   scrapPct: number; // %
@@ -22,7 +36,6 @@ export interface Kpi {
    *  part of setupHrs (which is the D/C/I changeover trio §4.1) — it is
    *  warm-up on a die that is already in, not a changeover. Reported on
    *  its own so the hours a shift spends coming up to temperature stop
-   *  being invisible: they count against Efficiency (filled slots) while
    *  appearing in no hours column at all. */
   startupHrs: number;
   runHrs: number;
@@ -68,12 +81,22 @@ function sumRejects(r: ProductionRecord): number {
 /**
  * Roll a flat list of production records into headline KPIs (§4.1).
  *
- * - OEE is the run-slot ratio (Availability-style; matches the seeded demo
- *   rates in Appendix A — full Availability×Performance×Quality is future).
+ * - Efficiency is standard hours earned ÷ run hours used, per job.
  * - Output/scrap are read per canonical (job,shift) at SlotIndex 0 where the
  *   per-job counters live (§3.6); rejects summed across that job's records.
  */
-export function aggregate(records: ProductionRecord[]): Kpi {
+export function aggregate(
+  records: ProductionRecord[],
+  /**
+   * Job → cycle time (hours per piece), for rows that do not carry their own.
+   *
+   * `CycleTime` is stamped onto the canonical slot at sign-off, so a shift
+   * still running has none and its Efficiency would read "—" all day. The KPI
+   * page builds this from the planning list, which is where the rate came
+   * from in the first place.
+   */
+  ctByJob?: ReadonlyMap<string, number>,
+): Kpi {
   let filled = 0;
   let run = 0;
   let downSlots = 0;
@@ -116,19 +139,50 @@ export function aggregate(records: ProductionRecord[]): Kpi {
   let gross = 0;
   let scrap = 0;
   let output = 0;
+  let stdHours = 0;
+  let effRunSlots = 0;
   for (const grp of groups.values()) {
     const canonical = grp.find((r) => r.slotIndex === 0) ?? grp[0];
     const g = canonical
       ? cavityGross(canonical.countStart, canonical.countEnd, canonical.cavities)
       : 0;
     const rej = grp.reduce((a, r) => a + sumRejects(r), 0);
+    const good = Math.max(0, g - rej);
     gross += g;
     scrap += rej;
-    output += Math.max(0, g - rej);
+    output += good;
+
+    /*
+     * Efficiency, per job: the standard hours those pieces were worth against
+     * the hours the press actually spent running them.
+     *
+     * A job with no cycle time is out of BOTH sides, not scored zero. Nobody
+     * gave that order a rate, which is not the same as the press having run it
+     * badly — and leaving its run hours in the denominator would quietly drag
+     * the whole shift down for a missing planning field.
+     */
+    const ct =
+      canonical?.cycleTime && canonical.cycleTime > 0
+        ? canonical.cycleTime
+        : (ctByJob?.get(canonical?.jobNumber ?? '') ?? 0);
+    if (ct > 0) {
+      stdHours += good * ct;
+      for (const r of grp) {
+        if (r.statusCode && STATUS_MAP[r.statusCode]?.kind === 'production') {
+          effRunSlots++;
+        }
+      }
+    }
   }
+  const effRunHrs = effRunSlots * SLOT_HOURS;
 
   return {
-    oee: filled > 0 ? Math.round((run / filled) * 100) : null,
+    // Standard hours earned ÷ hours used. It was run slots ÷ filled slots,
+    // which said how much of the shift the press was running and nothing at
+    // all about how fast it ran.
+    efficiency: effRunHrs > 0 ? Math.round((stdHours / effRunHrs) * 100) : null,
+    stdHours: +stdHours.toFixed(2),
+    effRunHrs: +effRunHrs.toFixed(2),
     output,
     scrap,
     scrapPct: gross > 0 ? +((scrap / gross) * 100).toFixed(1) : 0,
@@ -168,10 +222,12 @@ export function countSetupEvents(records: ProductionRecord[]): {
 }
 
 // §4.2 KPI color thresholds.
-export function oeeColor(oee: number | null): 'green' | 'amber' | 'red' | 'gray' {
-  if (oee == null) return 'gray';
-  if (oee >= 85) return 'green';
-  if (oee >= 70) return 'amber';
+export function efficiencyColor(
+  efficiency: number | null,
+): 'green' | 'amber' | 'red' | 'gray' {
+  if (efficiency == null) return 'gray';
+  if (efficiency >= 85) return 'green';
+  if (efficiency >= 70) return 'amber';
   return 'red';
 }
 

@@ -7,14 +7,15 @@ back from: the "All orders" and "5 working days" buttons are gone, because a
 board that opens already hiding two thirds of its rows — with nothing on
 screen saying so — reads as a board that has lost them.
 
-**Six of the eight lines.** TBP and PMD open folded away: neither is planned
-here — PMD mirrors moulding's own schedule and TBP is scheduled elsewhere —
+**Six of the eight lines.** TBP (**To Be Processed**) and PMD open folded away:
+neither is planned here — PMD mirrors moulding's own schedule and TBP is
+scheduled elsewhere —
 so they used to lead a board whose subject is the assembly floor. Each folded
 line leaves a **+ TBP** / **+ PMD** chip in the header, which is where it
 comes back from, and every line carries a **×** on its own row to fold it.
 
 **Whatever column widths the reader last dragged.** All seven frozen columns
-— Order, Order Qty, Required Hours, the three dates and Team — are dragged by
+— Order, Qty, Hours, the three dates and Team — are dragged by
 their right-hand edge, or moved with ← / → once the grip has focus. Which
 column needs the room is not something a default can know.
 
@@ -25,11 +26,21 @@ under it is a single block: the controls row and the column/timeline heading
 share one ground and close with one rule, so it reads as one thing rather than
 as a second and a third title bar. The orders are the only white on the page.
 
-That block's blue is deliberately a step lighter than the top bar's. It was
-that exact colour, with a slate band wedged between the two, which gave the
-page two identical dark bars and nothing to say which of them owned the board.
+**Dark top bar → pale block (`#BAE6FD`) → white orders**, and the weight falls
+off in that order. The block used to be a second dark blue, which put two heavy
+bars across the top of a page whose whole subject is underneath them; reading
+down, the work is now the brightest thing on the screen. The heading takes the
+three load bands a few steps darker than the board's own pastels — green scores
+1.5:1 against this ground, which is not a colour, it is a suggestion.
+
 The board also stopped titling itself: the top bar already says Assembly, and a
 page repeating its own name one band lower is the extra band this removes.
+
+**The timeline opens fully zoomed in.** A column is a shift and a drag lands on
+five minutes of it, so how wide the column is *is* how finely the board can be
+worked by hand — at the narrowest zoom a five-minute landing is half a pixel.
+Seeing further ahead is one press away and is something a reader asks for
+deliberately; being able to place the work in front of them is not.
 
 ## What the one row of chrome holds
 
@@ -38,8 +49,12 @@ Left to right it reads as a question and its answer.
 **Show** — what the board is being asked to draw. Weekends, any folded line, any
 hidden column, **+ Line**, and **New support order**, which is the one control
 on the row that adds to the board instead of narrowing it. It used to have the
-far corner, which is the position a board's most frequent action takes, and
-opening a support order is not that.
+far corner, which is the position a board's most frequent action takes; this one
+is pressed once or twice a week. Below 1500px the whole Show group takes a line
+of its own, so **New support order** can never come to rest beside **Refresh** —
+one creates a support order and the other re-reads the export, and a support
+order raised by somebody reaching for Refresh is a row in the plan nobody meant
+to make.
 
 **Show all**, beside them, and only while something is being held back: every
 line unfolded, every column back, both filters off. Each of those can already be

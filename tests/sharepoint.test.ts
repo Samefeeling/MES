@@ -1732,6 +1732,100 @@ describe('PMD_Production denormalisation: jobRequired + partDescription survive 
     expect(prod.body.shiftTarget).toBe(160);
   });
 
+  /*
+   * Schedule Adherence is recomputed live against Planning.csv everywhere
+   * else, and Epicor drops an order from planning the moment it completes —
+   * so the number the Monday meeting read could not be reproduced on Friday.
+   * Sign-off freezes it.
+   */
+  it('freezes the shift’s Schedule % into VSPLAN at sign-off', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const writes: Array<{ list: string; body: Record<string, unknown> }> = [];
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+      upsertHeaderInto: (list: string, h: Record<string, unknown>) => Promise<void>;
+      replaceBreakdownEvents: () => Promise<void>;
+      replaceRejectEvents: () => Promise<void>;
+      deleteLiveRow: () => Promise<void>;
+      listPlanning: () => Promise<unknown[]>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [existing507071()] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+    o.upsertHeaderInto = async (list: string, h: Record<string, unknown>): Promise<void> => {
+      writes.push({ list, body: h });
+    };
+    o.replaceBreakdownEvents = async (): Promise<void> => { /* noop */ };
+    o.replaceRejectEvents = async (): Promise<void> => { /* noop */ };
+    o.deleteLiveRow = async (): Promise<void> => { /* noop */ };
+    // The order is scheduled across the whole Day shift (07:00–15:00) at
+    // 0.05 h a piece, so 8 hours of plan is 160 pieces. The tuple made
+    // 115 − 61 − 8 = 46 good.
+    o.listPlanning = async (): Promise<unknown[]> => [
+      {
+        jobNumber: '507071',
+        machineCode: '1300T',
+        orderQty: 176,
+        qtyPerHr: 0.05,
+        isDieChange: false,
+        plannedStart: '2026-06-15T07:00:00',
+        plannedEnd: '2026-06-15T15:00:00',
+      },
+    ];
+
+    await dal.unlockShift('1300T', '2026-06-15-Day', '507071');
+    await dal.lockShift('1300T', '2026-06-15-Day', 'Bounpanh', 'Heng', '507071');
+
+    const prod = writes.find((w) => w.list === 'PMD_Production')!;
+    expect(prod.body.vsPlan).toBe(29); // 46 of 160
+  });
+
+  // A planning row with no machine code must not take the sign-off down with
+  // it: losing a signed shift to a blank column is not a trade anybody made.
+  it('signs off anyway when the Schedule % cannot be worked out', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const writes: Array<{ list: string; body: Record<string, unknown> }> = [];
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+      upsertHeaderInto: (list: string, h: Record<string, unknown>) => Promise<void>;
+      replaceBreakdownEvents: () => Promise<void>;
+      replaceRejectEvents: () => Promise<void>;
+      deleteLiveRow: () => Promise<void>;
+      listPlanning: () => Promise<unknown[]>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [existing507071()] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+    o.upsertHeaderInto = async (list: string, h: Record<string, unknown>): Promise<void> => {
+      writes.push({ list, body: h });
+    };
+    o.replaceBreakdownEvents = async (): Promise<void> => { /* noop */ };
+    o.replaceRejectEvents = async (): Promise<void> => { /* noop */ };
+    o.deleteLiveRow = async (): Promise<void> => { /* noop */ };
+    o.listPlanning = async (): Promise<unknown[]> => [
+      { jobNumber: '507071', orderQty: 176, qtyPerHr: 0.05, isDieChange: false },
+    ];
+
+    await dal.unlockShift('1300T', '2026-06-15-Day', '507071');
+    await dal.lockShift('1300T', '2026-06-15-Day', 'Bounpanh', 'Heng', '507071');
+
+    const prod = writes.find((w) => w.list === 'PMD_Production')!;
+    expect(prod.body.countEnd).toBe(115); // the shift is still written
+    expect(prod.body.vsPlan).toBeNull(); // …just without the snapshot
+  });
+
   it('re-sign-off keeps CycleTime from the rehydrated row when planning has dropped it', async () => {
     store.clear();
     const dal = new SharePointDataLayer({

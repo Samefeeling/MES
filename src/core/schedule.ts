@@ -4,9 +4,14 @@ import { shiftBounds } from './shifts';
 const HOUR_MS = 3_600_000;
 
 /** Machine codes originate in both CSV and SharePoint. Treat whitespace
- * and letter case as presentation details, not scheduling identity. */
-export function normaliseMachineCode(value: string): string {
-  return value.trim().toUpperCase();
+ * and letter case as presentation details, not scheduling identity.
+ *
+ * A missing value reads as "no machine", not as a crash: a planning row can
+ * reach here with the column blank — a hand-added order, a CSV whose header
+ * moved — and this is called from the sign-off path, where throwing would
+ * lose the shift somebody just signed. */
+export function normaliseMachineCode(value: string | null | undefined): string {
+  return (value ?? '').trim().toUpperCase();
 }
 
 /** True when an order belongs to a machine. Supervisor-created manual

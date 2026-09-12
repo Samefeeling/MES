@@ -27,10 +27,18 @@ export interface OvertimeRequest {
   nextWorkingISO: string;
 }
 
-/** Day column width, in pixels: the default, and how far it may be pushed. */
-export const DEFAULT_DAY_WIDTH = 92;
+/**
+ * Day column width, in pixels: how far it may be pushed, and where it opens.
+ *
+ * It opens fully zoomed in. A column is a shift and a drag lands on five
+ * minutes of it, so how wide the column is *is* how finely the board can be
+ * worked by hand — at 44 px a five-minute landing is half a pixel. Seeing
+ * further ahead is one press away and is the thing a reader asks for
+ * deliberately; being able to place the work in front of them is not.
+ */
 export const MIN_DAY_WIDTH = 44;
 export const MAX_DAY_WIDTH = 160;
+export const DEFAULT_DAY_WIDTH = MAX_DAY_WIDTH;
 
 /**
  * The frozen columns down the left of the board, in the order it draws them,

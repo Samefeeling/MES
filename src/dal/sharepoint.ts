@@ -37,6 +37,7 @@ import {
 } from '../core/breakdown';
 import { shiftBounds, slotClock } from '../core/shifts';
 import { hoursUnavailableFor, shiftTargetFor } from '../core/targets';
+import { scheduleAdherenceForShift } from '../core/kpi-attainment';
 import { retroJobLeftFixes, sumGoodStartedBefore } from '../core/jobgood';
 import {
   DIE_COMPONENTS,
@@ -183,6 +184,12 @@ const DEFAULT_FIELDS = {
      *  BI. The app recomputes the authoritative value from CycleTime, so
      *  this is a denormalised convenience, not a read dependency. */
     shiftTarget: 'ShiftTarget',
+    /** The shift's Schedule % frozen at sign-off. Schedule Adherence is
+     *  otherwise recomputed live against Planning.csv, and Epicor drops a
+     *  completed order from planning — so Monday's number could not be
+     *  reproduced on Friday. Optional column; stripRejectedFields tolerates
+     *  absence. */
+    vsPlan: 'VSPLAN',
     countStart: 'CountStart',
     countEnd: 'CountEnd',
     /** Identical cavities on the die (pieces per press cycle). Actual
@@ -2630,6 +2637,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       reopened: F.reopened ? r[F.reopened] === true : false,
       jobLeft: F.jobLeft && r[F.jobLeft] != null ? num(r[F.jobLeft]) : -1,
       shiftTarget: F.shiftTarget && r[F.shiftTarget] != null ? num(r[F.shiftTarget]) : -1,
+      vsPlan: F.vsPlan && r[F.vsPlan] != null ? num(r[F.vsPlan]) : -1,
       plannedStart: F.plannedStart ? str(r[F.plannedStart]) : '',
       // Built-in SP column, always present in the verbose payload.
       modified: str(r['Modified']),
@@ -2881,6 +2889,9 @@ export class SharePointDataLayer implements PmdDataLayer {
     // valid value ("job complete") so guard on >= 0, not truthiness.
     if (h.jobLeft >= 0) slots[0].jobLeft = h.jobLeft;
     if (h.shiftTarget >= 0) slots[0].shiftTarget = h.shiftTarget;
+    // The shift's Schedule % as it stood at sign-off — 0 is a real answer
+    // ("nothing scheduled was made"), so the sentinel is -1, not falsy.
+    if (h.vsPlan >= 0) slots[0].vsPlan = h.vsPlan;
     // Planned start denormalised at sign-off: ride the canonical slot so
     // KPI Schedule Adherence and a re-sign-off (cache-first) can read it
     // after Epicor drops the order from planning.
@@ -3132,6 +3143,40 @@ export class SharePointDataLayer implements PmdDataLayer {
         if (key.startsWith(`${machineCode}|${shiftId}|`)) shiftRows.push(...list);
       }
     }
+    /*
+     * The shift's Schedule % as it stands at this sign-off, frozen onto every
+     * header this call writes.
+     *
+     * It is recomputed live everywhere else, against Planning.csv — and Epicor
+     * drops an order from planning the moment it completes, so the number the
+     * Monday meeting read could not be reproduced on the Friday. This is the
+     * same function the KPI page calls, given the same picture: the shift as
+     * the server has it, with the tuples being signed off now taking the place
+     * of their older rows.
+     *
+     * Null when nothing on the shift was scheduled at all. "No plan to adhere
+     * to" is not "made none of the plan", and 0 would read as the second.
+     */
+    const signedNow = myTuples.flat();
+    const signingJobs = new Set(signedNow.map((r) => r.jobNumber));
+    const shiftAsSigned = [
+      ...shiftRows.filter((r) => !signingJobs.has(r.jobNumber)),
+      ...signedNow,
+    ];
+    let vsPlanSnap: number | null = null;
+    try {
+      vsPlanSnap = scheduleAdherenceForShift(
+        shiftAsSigned,
+        orders,
+        machineCode,
+        shiftId,
+        new Date(),
+      ).pct;
+    } catch (e) {
+      // A KPI snapshot must never cost somebody the shift they just signed.
+      console.warn('[pmd] Schedule % snapshot failed, signing off without it:', e);
+    }
+
     for (const slots of myTuples) {
       const job = slots[0]?.jobNumber ?? jobNumber ?? '';
       const agg = aggregateSlots(slots);
@@ -3261,6 +3306,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           cavities,
           plannedStart: plannedStartOf(job, slots),
           shiftTarget: shiftTargetSnap,
+          vsPlan: vsPlanSnap,
           timeline: agg.timeline,
           countStart: agg.countStart,
           countEnd: agg.countEnd,
@@ -3732,6 +3778,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (F.cycleTime && h.cycleTime > 0) body[F.cycleTime] = h.cycleTime;
     // ShiftTarget snapshot — write when we could compute one.
     if (F.shiftTarget && h.shiftTarget != null) body[F.shiftTarget] = h.shiftTarget;
+    // The shift's Schedule % at sign-off. Null when nothing on the shift was
+    // scheduled at all — there is no adherence to a plan that does not exist,
+    // and writing 0 would read as "made none of what was planned".
+    if (F.vsPlan && h.vsPlan != null) body[F.vsPlan] = h.vsPlan;
     if (F.downTime) body[F.downTime] = h.downTime;
     if (F.runTime) body[F.runTime] = h.runTime;
     if (F.handover) body[F.handover] = formatHandover(h.handover);
@@ -3870,6 +3920,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       F.jobRequired,
       F.cycleTime,
       F.shiftTarget,
+      F.vsPlan,
       F.cavities,
       F.runTime,
       F.downTime,
@@ -4818,6 +4869,10 @@ interface HeaderRow {
    *  column is absent or empty (live rows / legacy signed rows). Stamped
    *  onto the canonical record so Trace can read demand-at-start. */
   jobLeft: number;
+  /** The shift's Schedule % frozen at sign-off from PMD_Production.VSPLAN;
+   *  -1 when the column is absent or was never written. 0 is a real answer
+   *  ("none of what was scheduled was made"), so the sentinel cannot be 0. */
+  vsPlan: number;
   /** Shift Target frozen at job start from PMD_Production.ShiftTarget; -1
    *  when absent. Round-tripped onto the canonical record for Trace. */
   shiftTarget: number;
@@ -4848,6 +4903,9 @@ interface HeaderInput {
    *  only — live pushes omit it; the value derives from signed rows on
    *  read). null/undefined skips the column write. */
   shiftTarget?: number | null;
+  /** The machine-shift's Schedule % at sign-off; null when nothing on the
+   *  shift was scheduled, which is not the same as having made none of it. */
+  vsPlan?: number | null;
   /** Identical cavities on the die (pieces per cycle). 1 (or 0/undefined)
    *  leaves the column at its default; written when > 1. */
   cavities?: number;

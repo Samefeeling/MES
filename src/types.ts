@@ -331,6 +331,18 @@ export interface ProductionRecord {
    *  few presses (550T / 320T / 150T / 125T) ever run a 2-cavity die, and
    *  the operator ticks a box to set it. Undefined / 0 is treated as 1. */
   cavities?: number;
+  /** The shift's Schedule % at the moment it was signed off, persisted to
+   *  PMD_Production.VSPLAN. Schedule Adherence is otherwise recomputed live
+   *  from Planning.csv, and Epicor drops an order from planning the moment it
+   *  completes — so the number the meeting looked at on Monday could not be
+   *  reproduced on Friday. This freezes it: Σ min(Good, that order's elapsed
+   *  scheduled pieces) ÷ Σ those expectations, over every scheduled order on
+   *  the machine-shift, each capped at 100%.
+   *
+   *  It is the WHOLE shift's figure, written onto each of its header rows —
+   *  the same question the KPI page's Schedule Adherence column answers for
+   *  the row. Canonical on slot 0; undefined on tenants without the column. */
+  vsPlan?: number;
   /** Planned start of the order (JobHead_StartDate + StartHour, local ISO
    *  '2026-07-01T18:40:00'), denormalised onto PMD_Production.PlannedStart
    *  at sign-off so KPI Schedule Adherence still knows when the job was

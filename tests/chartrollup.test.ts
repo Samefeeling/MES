@@ -10,7 +10,7 @@ import {
 } from '../src/core/chartrollup';
 
 const cell = (o: Partial<ChartShiftCell> = {}): ChartShiftCell => ({
-  good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, ...o,
+  good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, stdHours: 0, effRunHrs: 0, ...o,
 });
 
 /** One day where only the Day shift worked — enough for the sums. */

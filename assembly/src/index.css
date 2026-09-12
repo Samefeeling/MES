@@ -28,7 +28,7 @@
   --line-band-bd: #bae6fd;
 
   /*
-   * Chrome, in two tiers — not three.
+   * Chrome, in two tiers — not three — and each one lighter than the last.
    *
    * MES's own top bar is above this frame on every screen of the application
    * and is the darkest thing on the page: it says which department you are
@@ -37,23 +37,36 @@
    * and closes with one rule, so it reads as a single block of chrome rather
    * than as a second and a third title bar. The orders are the only white.
    *
-   * The blue is deliberately a step lighter than the top bar's own #075985.
-   * The heading used to be that exact colour with a slate band wedged between
-   * the two, which gave the page two identical dark bars and no way to tell
-   * which of them owned the board. A shade down, and the block is plainly the
-   * top bar's subordinate rather than its twin.
+   * Dark top bar → pale block → white orders, in that order. The block used to
+   * be a second dark blue, which put two heavy bars across the top of a page
+   * whose subject is underneath them; this way the weight falls off as you
+   * read down and the work is the brightest thing on the screen.
    */
   --chrome-rule: #075985; /* the top bar's blue, closing the block */
-  --head-bg: #0369a1;
-  --head-tx: #f0f9ff; /* 5.6:1 on --head-bg */
-  --head-dim: #d6ecfb; /* 4.9:1 — a shade lighter than the old #bae6fd, which
-                          fell under 4.5:1 once the ground was lightened */
-  --head-rule: #2a90c8;
-  /* A control sitting on the block, and one under the pointer. The same
-     translucent white the MES top bar gives its own nav buttons, so the two
-     tiers of chrome offer their controls in one language. */
-  --chrome-tint: rgb(255 255 255 / 12%);
-  --chrome-tint-hi: rgb(255 255 255 / 24%);
+  --head-bg: #bae6fd;
+  --head-tx: #0c4a6e; /* 7.2:1 on --head-bg */
+  --head-dim: #075985; /* 5.7:1 — the line-name blue, for a quieter line */
+  --head-rule: rgb(7 89 133 / 28%);
+  /* A control sitting on the block, and one under the pointer. White, because
+     the ground is pale: on the old dark block these were translucent white,
+     which is the same idea read the other way up. */
+  --chrome-tint: rgb(255 255 255 / 62%);
+  --chrome-tint-hi: #ffffff;
+  /*
+   * The load bands, for the pale block only.
+   *
+   * The board's own --ok / --warn / --error are pastels chosen to sit on white
+   * rows; on this ground green scores 1.5:1, which is not a colour, it is a
+   * suggestion. These are the same three bands taken dark enough to read: the
+   * ink clears 4.5:1 on the block and the bar fill clears 3:1 on its own white
+   * track.
+   */
+  --head-ok: #166534;
+  --head-warn: #92400e;
+  --head-error: #991b1b;
+  --head-ok-bar: #16a34a;
+  --head-warn-bar: #d97706;
+  --head-error-bar: #dc2626;
 
   --tool: #c084fc; /* die / tool change */
   --color: #fb923c; /* colour change */
@@ -121,7 +134,7 @@ button {
      not two bands. */
   background: var(--head-bg);
   color: var(--head-tx);
-  border-bottom: 1px solid rgb(255 255 255 / 14%);
+  border-bottom: 1px solid rgb(7 89 133 / 14%);
 }
 .head-side {
   display: flex;
@@ -157,8 +170,20 @@ button {
 }
 .barcode-popover small { display: block; margin-top: 6px; color: var(--faint); line-height: 1.35; }
 .barcode-error { display: block; margin-top: 5px; color: var(--error); font-size: 11px; }
-@media (max-width: 1100px) {
+/*
+ * Tight, the Show group takes a line of its own.
+ *
+ * Left to itself the row simply wrapped wherever it ran out, which put
+ * **New support order** — the last chip in the Show group — hard against
+ * Refresh at the start of the next line. Those are the two controls on this
+ * row that must never be confused for one another: one creates a support order
+ * and the other re-reads the export, and a support order raised by somebody
+ * reaching for Refresh is a row in the plan nobody meant to make. Giving the
+ * group its own line puts a whole row between them at every width.
+ */
+@media (max-width: 1500px) {
   .app-header { flex-wrap: wrap; }
+  .board-tools > .show-group { flex: 1 0 100%; }
   .head-side.end { flex-wrap: wrap; }
 }
 /*
@@ -185,7 +210,7 @@ button {
 .app-header .date-restore,
 .app-header .supervisor-chip {
   background: var(--chrome-tint);
-  border-color: rgb(255 255 255 / 30%);
+  border-color: var(--head-rule);
   color: var(--head-tx);
 }
 .app-header .btn:hover:not(:disabled),
@@ -193,7 +218,7 @@ button {
 .app-header .date-restore:hover,
 .app-header .supervisor-chip:hover {
   background: var(--chrome-tint-hi);
-  border-color: rgb(255 255 255 / 45%);
+  border-color: rgb(7 89 133 / 50%);
   color: var(--head-tx);
 }
 /* Filled, not tinted: the one control that is doing something, and the ones
@@ -211,7 +236,7 @@ button {
 /* The one board-tools button that is not a 22px square. */
 .app-header .board-tools .show-all {
   background: var(--chrome-tint);
-  border-color: rgb(255 255 255 / 45%);
+  border-color: rgb(7 89 133 / 50%);
   color: var(--head-tx);
 }
 /*
@@ -262,7 +287,7 @@ button {
    line missing from the board, not one column. */
 .app-header .board-tools .line-restore {
   background: var(--chrome-tint-hi);
-  border-color: rgb(255 255 255 / 45%);
+  border-color: rgb(7 89 133 / 50%);
   color: var(--head-tx);
 }
 .app-header .marked-set {
@@ -274,14 +299,8 @@ button {
   color: var(--head-dim);
   font-size: 12px;
 }
-.app-header .badge.info {
-  background: var(--chrome-tint);
-  color: var(--head-tx);
-  border-color: rgb(255 255 255 / 30%);
-}
-/* The spinner's own track is a light-ground border. */
 .app-header .spinner {
-  border-color: rgb(255 255 255 / 30%);
+  border-color: var(--head-rule);
   border-top-color: var(--head-tx);
 }
 
@@ -1043,12 +1062,13 @@ button {
   color: var(--head-dim);
 }
 .assy-head .day-bar {
-  background: rgb(255 255 255 / 16%);
+  background: var(--surface);
+  border-color: var(--head-rule);
 }
 .assy-head .daycol { padding: 5px 5px; }
 .assy-head .day-order-filter {
-  border-color: var(--head-rule);
-  background: rgb(255 255 255 / 12%);
+  border-color: transparent;
+  background: transparent;
   color: var(--head-tx);
 }
 .assy-head .day-order-filter[aria-pressed='true'] {
@@ -1061,7 +1081,7 @@ button {
   border-color: var(--head-rule);
 }
 .assy-head .date-head button {
-  background: rgb(255 255 255 / 12%);
+  background: var(--chrome-tint);
   color: var(--head-tx);
 }
 .assy-head .date-head .date-sort.active,
@@ -1069,34 +1089,35 @@ button {
   background: var(--head-tx);
   color: var(--head-bg);
 }
-.assy-head .daycol.today { background: rgb(255 255 255 / 10%); }
-/* Dimmed, not lost: a day already gone still has to be readable against the
-   heading's own blue, which a light-ground opacity of 0.68 was not — and the
-   greys it is dimmed with on a white board (--muted, --faint) are near-black,
-   so the date of a past day was disappearing into the ground entirely. Dim it
-   with opacity and keep the heading's own ink. */
+.assy-head .daycol.today { background: rgb(255 255 255 / 55%); }
+/* Dimmed, not lost. The greys a past day is dimmed with on a white board
+   (--muted, --faint) are a different family from this block's own ink, so a
+   day already gone drifts out of the heading's palette rather than quietly to
+   the back of it. Dim it with opacity and keep the heading's own ink. */
 .assy-head .daycol.past,
 .assy-head .daycol.weekend {
   opacity: 0.82;
   color: var(--head-dim);
 }
 .assy-head .past-tag {
-  background: rgb(255 255 255 / 22%);
-  color: var(--head-tx);
+  background: var(--chrome-tint);
+  color: var(--head-dim);
 }
 /*
- * The load figures, lightened for this ground.
+ * The load bands, darkened for this ground.
  *
- * The bar above each one carries the band at full strength and is what the
- * week is read as a shape from; the number under it only confirms the bar, so
- * it can afford the paler tint it needs to clear 4.5:1 on the blue. The board
- * proper keeps the saturated colours — this is the heading only.
+ * The board proper keeps its pastels, which are chosen to sit on white order
+ * rows. On the pale block they are barely colours at all — green scores 1.5:1
+ * against it — so the heading takes the same three bands a few steps down.
  */
-.assy-head .day-load.green { color: #a7f3d0; }
-.assy-head .day-load.orange { color: #fde68a; }
-.assy-head .day-load.red { color: #ffe4e6; }
+.assy-head .day-load.green { color: var(--head-ok); }
+.assy-head .day-load.orange { color: var(--head-warn); }
+.assy-head .day-load.red { color: var(--head-error); }
 .assy-head .day-load.closed { color: var(--head-dim); }
-.assy-head .day-bar.closed i { background: rgb(255 255 255 / 45%); }
+.assy-head .day-bar.green i { background: var(--head-ok-bar); }
+.assy-head .day-bar.orange i { background: var(--head-warn-bar); }
+.assy-head .day-bar.red i { background: var(--head-error-bar); }
+.assy-head .day-bar.closed i { background: rgb(7 89 133 / 30%); }
 .acell {
   display: flex;
   align-items: center;
@@ -1281,7 +1302,7 @@ body.col-resizing {
 .fold-all:hover,
 .fold-all:focus-visible {
   border-color: var(--head-tx);
-  background: rgb(255 255 255 / 16%);
+  background: var(--chrome-tint-hi);
   outline: none;
 }
 .assy-head .acell.order { gap: 6px; }
@@ -2692,7 +2713,7 @@ body.col-resizing {
   padding: 0 4px;
   border: 1px solid var(--head-rule);
   border-radius: 3px;
-  background: rgb(255 255 255 / 12%);
+  background: var(--chrome-tint);
   color: var(--head-tx);
   white-space: nowrap;
 }

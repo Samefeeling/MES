@@ -580,6 +580,12 @@ function LineGroupView({
           {...(unlocked ? arrange.attributes : {})}
         >
           <span className="agroup-name">{group.line.name}</span>
+          {/* Spelled out where the floor's shorthand is not obvious — this
+              board is read across a workshop by people who did not choose
+              the abbreviation. */}
+          {group.line.fullName && (
+            <span className="agroup-note">{group.line.fullName}</span>
+          )}
           {!group.line.schedulable && (
             <span className="agroup-note">plan only</span>
           )}
