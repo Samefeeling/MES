@@ -7,8 +7,8 @@ const SLOT_HOURS = SLOT_MINUTES / 60; // 0.5h per slot
 
 export interface Kpi {
   /**
-   * Efficiency %: the standard hours the shift earned over the hours it
-   * actually ran them in — `output × cycle time ÷ run hours`.
+   * Efficiency %: the standard hours the shift's output was worth, over every
+   * hour the press spent running — `(good ÷ JobOper_ProdStandard) ÷ R hours`.
    *
    * It used to be run slots ÷ all filled slots, which is a *utilisation*
    * figure: it said how much of the shift the press was running and nothing
@@ -17,10 +17,12 @@ export interface Kpi {
    * and stood idle scored worse than one that never got going.
    */
   efficiency: number | null;
-  /** Standard hours earned — Σ good × cycle time, over jobs that have one. */
+  /** Standard hours the output was worth, at the PLANNED standard:
+   *  Σ good ÷ ProdStandard, over the jobs that carry one. */
   stdHours: number;
-  /** Run hours on those same jobs: Efficiency's denominator, the "R" slots. */
-  effRunHrs: number;
+  /** Jobs in the slice that carried a standard. Zero means there is nothing
+   *  to judge and Efficiency reads "—" rather than 0%. */
+  ratedJobs: number;
   output: number; // good qty
   scrap: number; // total reject pieces
   scrapPct: number; // %
@@ -81,19 +83,21 @@ function sumRejects(r: ProductionRecord): number {
 /**
  * Roll a flat list of production records into headline KPIs (§4.1).
  *
- * - Efficiency is standard hours earned ÷ run hours used, per job.
+ * - Efficiency is the output's standard hours ÷ every run hour on the slice.
  * - Output/scrap are read per canonical (job,shift) at SlotIndex 0 where the
  *   per-job counters live (§3.6); rejects summed across that job's records.
  */
 export function aggregate(
   records: ProductionRecord[],
   /**
-   * Job → cycle time (hours per piece), for rows that do not carry their own.
+   * Job → the planned standard as hours per piece (the reciprocal the CSV
+   * parser takes of JobOper_ProdStandard, pieces/hour), for rows that do not
+   * carry their own.
    *
-   * `CycleTime` is stamped onto the canonical slot at sign-off, so a shift
-   * still running has none and its Efficiency would read "—" all day. The KPI
-   * page builds this from the planning list, which is where the rate came
-   * from in the first place.
+   * `CycleTime` is stamped onto the canonical slot at sign-off — from this
+   * same planning field — so a shift still running has none and its Efficiency
+   * would read "—" all day. The KPI page builds this from the planning list,
+   * which is where the rate came from in the first place.
    */
   ctByJob?: ReadonlyMap<string, number>,
 ): Kpi {
@@ -140,7 +144,7 @@ export function aggregate(
   let scrap = 0;
   let output = 0;
   let stdHours = 0;
-  let effRunSlots = 0;
+  let ratedJobs = 0;
   for (const grp of groups.values()) {
     const canonical = grp.find((r) => r.slotIndex === 0) ?? grp[0];
     const g = canonical
@@ -153,13 +157,18 @@ export function aggregate(
     output += good;
 
     /*
-     * Efficiency, per job: the standard hours those pieces were worth against
-     * the hours the press actually spent running them.
+     * Efficiency's numerator, per job: what those pieces were worth in standard
+     * hours at the PLANNED rate — good ÷ JobOper_ProdStandard, which in the
+     * app's internal hours-per-piece is good × ct.
      *
-     * A job with no cycle time is out of BOTH sides, not scored zero. Nobody
-     * gave that order a rate, which is not the same as the press having run it
-     * badly — and leaving its run hours in the denominator would quietly drag
-     * the whole shift down for a missing planning field.
+     * The stamped `CycleTime` is preferred over the planning fallback because
+     * it is that same planned standard frozen at sign-off: it is the rate the
+     * shift was signed against, and reading today's planning row instead would
+     * move last month's KPI every time Epicor re-rates a part.
+     *
+     * A job with no rate at all earns no standard hours — it cannot, nobody
+     * gave that order one — but its run hours stay in the denominator with
+     * every other R slot, because they are hours the press spent running.
      */
     const ct =
       canonical?.cycleTime && canonical.cycleTime > 0
@@ -167,22 +176,25 @@ export function aggregate(
         : (ctByJob?.get(canonical?.jobNumber ?? '') ?? 0);
     if (ct > 0) {
       stdHours += good * ct;
-      for (const r of grp) {
-        if (r.statusCode && STATUS_MAP[r.statusCode]?.kind === 'production') {
-          effRunSlots++;
-        }
-      }
+      ratedJobs++;
     }
   }
-  const effRunHrs = effRunSlots * SLOT_HOURS;
+  const runHrs = run * SLOT_HOURS;
 
   return {
-    // Standard hours earned ÷ hours used. It was run slots ÷ filled slots,
-    // which said how much of the shift the press was running and nothing at
-    // all about how fast it ran.
-    efficiency: effRunHrs > 0 ? Math.round((stdHours / effRunHrs) * 100) : null,
+    /*
+     * Standard hours ÷ every run hour. It was run slots ÷ filled slots, which
+     * said how much of the shift the press was running and nothing at all
+     * about how fast it ran.
+     *
+     * The denominator is ALL the R slots, not only the ones on jobs carrying a
+     * standard: an hour the press spent running is an hour it used, and a
+     * shift's Efficiency has to be over its whole run. "—", not 0%, when no
+     * job in the slice has a standard — there is nothing to judge then.
+     */
+    efficiency: ratedJobs > 0 && runHrs > 0 ? Math.round((stdHours / runHrs) * 100) : null,
     stdHours: +stdHours.toFixed(2),
-    effRunHrs: +effRunHrs.toFixed(2),
+    ratedJobs,
     output,
     scrap,
     scrapPct: gross > 0 ? +((scrap / gross) * 100).toFixed(1) : 0,
@@ -192,7 +204,7 @@ export function aggregate(
     colorHrs: +(colorSlots * SLOT_HOURS).toFixed(1),
     insertHrs: +(insertSlots * SLOT_HOURS).toFixed(1),
     startupHrs: +(startupSlots * SLOT_HOURS).toFixed(1),
-    runHrs: +(run * SLOT_HOURS).toFixed(1),
+    runHrs: +runHrs.toFixed(1),
     shifts: shiftIds.size,
     ...countSetupEvents(records),
     filledSlots: filled,

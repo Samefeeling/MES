@@ -24,7 +24,6 @@
  * behind a label.
  */
 
-import { useState } from 'react';
 import { useIgnoredOrders, withoutIgnoredOrders } from '@/store/ignoredOrders';
 import { remainingHours, remainingQty } from '@/engine/assembly/duration';
 import type { AssemblyGanttView } from '@/engine/assembly/board';
@@ -35,11 +34,21 @@ import { useSupervisorStore } from '@/store/supervisorStore';
 import { Button } from '@/ui';
 import { lineOfWorkerToday } from './boardView';
 
-export function ReviewOrders({ board }: { board: AssemblyGanttView | null }) {
+export function ReviewOrders({
+  board,
+  open: openPanel,
+  onOpen,
+}: {
+  board: AssemblyGanttView | null;
+  /** Which figure on the row is open — the header owns the state so two
+   *  panels can never hang off it at once. */
+  open?: string | null;
+  onOpen?: (name: string | null) => void;
+}) {
   const assignCrews = usePlanStore((s) => s.assignCrews);
   const workerLineOverrides = usePlanStore((s) => s.workerLines);
   const unlocked = useSupervisorStore((s) => s.unlocked);
-  const [open, setOpen] = useState(false);
+  const open = openPanel === 'review';
 
   const ignoredIds = useIgnoredOrders((s) => s.ids);
   const ignore = useIgnoredOrders((s) => s.ignore);
@@ -74,11 +83,11 @@ export function ReviewOrders({ board }: { board: AssemblyGanttView | null }) {
   };
 
   return (
-    <div className="review-orders">
+    <div className="metric-slot review-orders">
       <button
         className={`metric review-open${open ? ' active' : ''}`}
         aria-expanded={open}
-        onClick={() => setOpen((was) => !was)}
+        onClick={() => onOpen?.(open ? null : 'review')}
         title={
           `${waiting} order${waiting === 1 ? '' : 's'} with nobody on them` +
           (ignoredIds.length > 0
@@ -93,7 +102,7 @@ export function ReviewOrders({ board }: { board: AssemblyGanttView | null }) {
         </b>
       </button>
       {open && (
-        <div className="review-panel">
+        <div className="metric-panel review-panel">
           {waiting > 0 && (
             <Button
               onClick={crewThem}

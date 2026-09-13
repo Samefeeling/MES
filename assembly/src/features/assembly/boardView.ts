@@ -340,7 +340,7 @@ export function teamSummary(workers: Worker[], rows: OrderRow[], today: Date) {
     : `${allocated}/${attendance.length} ${free.length === 0
       ? 'All allocated'
       : `Free ${free.length}: ${free.map((worker) => worker.name).join(', ')}`}`;
-  return { allocated, total: attendance.length, free, label };
+  return { allocated, total: attendance.length, attendance, free, label };
 }
 
 /** Workers actually allocated on one day; future allocations do not count. */

@@ -104,69 +104,161 @@ export interface ScheduledOutput {
   jobsUsed: string[];
 }
 
-/** Exact elapsed planned pieces for one order in one shift. null means its
- * schedule has not started yet, does not overlap, has no valid rate, or is
- * assigned to another machine. The caller decides when to round. */
+/** How much of the elapsed shift an order's Start–Due window covers, before
+ *  the press's one timeline has been shared out between the orders on it.
+ *  0 when the order does not belong here, has no rate, or has not started. */
+function overlapHoursInShift(
+  shiftId: string,
+  order: PlanningOrder,
+  machineCode: string,
+  asOf: Date,
+): number {
+  const bounds = shiftBounds(shiftId);
+  if (!bounds || asOf <= bounds.start) return 0;
+  if (!planningOrderMatchesMachine(order, machineCode) || order.isDieChange) return 0;
+  if (!(order.qtyPerHr > 0)) return 0;
+  const window = orderWindow(order);
+  if (!window || window.start >= bounds.end || window.end <= bounds.start) return 0;
+  const start = Math.max(bounds.start.getTime(), window.start.getTime());
+  const end = Math.min(bounds.end.getTime(), window.end.getTime(), asOf.getTime());
+  return end > start ? (end - start) / HOUR_MS : 0;
+}
+
+/** Exact elapsed planned pieces for one order in one shift, judged on its own
+ * Start–Due window. null means its schedule has not started yet, does not
+ * overlap, has no valid rate, or is assigned to another machine.
+ *
+ * This is the raw geometry of one order. It is NOT what a shift is judged
+ * against: a press runs one order at a time, so the shift's expectation comes
+ * from `plannedRuntimeForShift`, which shares the shift's runtime out between
+ * however many planned windows happen to cover it. */
 export function expectedScheduledPiecesForOrder(
   shiftId: string,
   order: PlanningOrder,
   machineCode: string,
   asOf: Date = new Date(),
 ): number | null {
-  const bounds = shiftBounds(shiftId);
-  if (!bounds || asOf <= bounds.start) return null;
-  if (!planningOrderMatchesMachine(order, machineCode) || order.isDieChange) return null;
-  if (!(order.qtyPerHr > 0)) return null;
-  const window = orderWindow(order);
-  if (!window || window.start >= bounds.end || window.end <= bounds.start) return null;
-  const start = Math.max(bounds.start.getTime(), window.start.getTime());
-  const end = Math.min(bounds.end.getTime(), window.end.getTime(), asOf.getTime());
-  if (end <= start) return null;
-  return (end - start) / HOUR_MS / order.qtyPerHr;
+  const hours = overlapHoursInShift(shiftId, order, machineCode, asOf);
+  return hours > 0 ? hours / order.qtyPerHr : null;
 }
 
-/** Expected pieces from Planning.csv alone.
+/** One planned order's share of one shift. */
+export interface PlannedRun {
+  order: PlanningOrder;
+  /** Hours of this shift the order was planned to be RUNNING in, after the
+   *  press's single timeline has been shared out. */
+  hours: number;
+  /** hours × JobOper_ProdStandard, floored to whole pieces. */
+  pieces: number;
+}
+
+export interface PlannedRuntime {
+  runs: PlannedRun[];
+  /** Shift hours up to `asOf` — the whole shift once it is over. */
+  elapsedHours: number;
+  /** Hours inside that span the plan could not be run in. */
+  unavailableHours: number;
+  /** What the press was planned to be running for: elapsed − unavailable. */
+  runtimeHours: number;
+  /** Σ of the raw Start–Due overlaps, before they were shared out. Larger
+   *  than `runtimeHours` exactly when the plan is over-subscribed. */
+  demandHours: number;
+}
+
+const NO_RUNTIME: PlannedRuntime = {
+  runs: [],
+  elapsedHours: 0,
+  unavailableHours: 0,
+  runtimeHours: 0,
+  demandHours: 0,
+};
+
+/**
+ * What the plan asked this press for in this shift, in hours and then in
+ * pieces — the floor's own formula:
  *
- * JobOper_ProdStandard is normalised by the CSV parser to hours/piece, so
- * each order contributes elapsed scheduled hours / hours-per-piece. A
- * completed shift uses its whole Start–Due overlap; the current shift stops
- * at `asOf`; future time contributes nothing. Status blocks, shift targets,
- * changeovers and smoko are intentionally not inputs to vs Plan. */
+ *   planned output = Shift Planned Runtime × JobOper_ProdStandard
+ *
+ * **Runtime, not shift length.** The hours a shift can produce in are the
+ * hours it is elapsed, less the ones the plan never had: the standard
+ * changeover allowance and smoko, passed in by the caller (which is the side
+ * that holds the records). A Day shift carrying a die change is asked for four
+ * hours of output, not eight.
+ *
+ * **One press, one order at a time.** Epicor's Start–Due windows overlap each
+ * other freely — `scheduleSegmentsForShift` draws them in lanes for exactly
+ * that reason — so summing each order's overlap asked the press for two and
+ * three times the hours it has. Where the plan is over-subscribed the runtime
+ * is shared out in proportion to what each order asked for, which leaves the
+ * SHIFT's total at what one press could actually make while still giving every
+ * order in the window a figure to be judged against. Where it is not — the
+ * ordinary case of a plan that sequences its orders — every order keeps its own
+ * overlap and nothing changes.
+ *
+ * `qtyPerHr` is the app's internal hours/piece, the reciprocal the CSV parser
+ * takes of JobOper_ProdStandard (pieces/hour) at the boundary, so hours ÷
+ * qtyPerHr is hours × ProdStandard.
+ */
+export function plannedRuntimeForShift(
+  shiftId: string,
+  orders: ReadonlyArray<PlanningOrder>,
+  machineCode: string,
+  asOf: Date = new Date(),
+  unavailableHrs = 0,
+): PlannedRuntime {
+  const bounds = shiftBounds(shiftId);
+  if (!bounds || asOf <= bounds.start) return NO_RUNTIME;
+  const elapsedEnd = Math.min(bounds.end.getTime(), asOf.getTime());
+  const elapsedHours = (elapsedEnd - bounds.start.getTime()) / HOUR_MS;
+  const unavailableHours = Math.min(elapsedHours, Math.max(0, unavailableHrs));
+  const runtimeHours = Math.max(0, elapsedHours - unavailableHours);
+
+  const demand: Array<{ order: PlanningOrder; hours: number }> = [];
+  let demandHours = 0;
+  for (const order of plannedOrdersForShift(orders, machineCode, shiftId)) {
+    const hours = overlapHoursInShift(shiftId, order, machineCode, asOf);
+    if (hours <= 0) continue;
+    demand.push({ order, hours });
+    demandHours += hours;
+  }
+  // Scaled down when the plan wants more press-hours than the shift has;
+  // never scaled up — a plan that fills three of the eight hours expects
+  // three hours of output, not a shift's worth.
+  const share = demandHours > runtimeHours ? runtimeHours / demandHours : 1;
+
+  return {
+    runs: demand.map(({ order, hours }) => {
+      const mine = hours * share;
+      return { order, hours: mine, pieces: Math.floor(mine / order.qtyPerHr) };
+    }),
+    elapsedHours,
+    unavailableHours,
+    runtimeHours,
+    demandHours,
+  };
+}
+
+/** Expected pieces from Planning.csv alone, with no deduction for the hours
+ * the shift spent changing over — planning geometry on its own. The KPI
+ * page's Schedule Adherence goes through `plannedRuntimeForShift` directly so
+ * it can pass the shift's changeover and smoko. */
 export function expectedScheduledOutputForShift(
   shiftId: string,
   orders: ReadonlyArray<PlanningOrder>,
   machineCode: string,
   asOf: Date = new Date(),
 ): ScheduledOutput {
-  const bounds = shiftBounds(shiftId);
-  if (!bounds || asOf <= bounds.start) {
-    return { pieces: null, scheduledHours: 0, jobsUsed: [] };
-  }
-  const elapsedEnd = Math.min(bounds.end.getTime(), asOf.getTime());
+  const planned = plannedRuntimeForShift(shiftId, orders, machineCode, asOf);
+  if (!planned.runs.length) return { pieces: null, scheduledHours: 0, jobsUsed: [] };
   let exactPieces = 0;
   let scheduledHours = 0;
-  const jobsUsed: string[] = [];
-  for (const order of plannedOrdersForShift(orders, machineCode, shiftId)) {
-    const orderPieces = expectedScheduledPiecesForOrder(
-      shiftId,
-      order,
-      machineCode,
-      asOf,
-    );
-    if (orderPieces == null) continue;
-    const window = orderWindow(order)!;
-    const start = Math.max(bounds.start.getTime(), window.start.getTime());
-    const end = Math.min(elapsedEnd, window.end.getTime());
-    if (end <= start) continue;
-    const hours = (end - start) / HOUR_MS;
-    scheduledHours += hours;
-    exactPieces += orderPieces;
-    jobsUsed.push(order.jobNumber);
+  for (const run of planned.runs) {
+    exactPieces += run.hours / run.order.qtyPerHr;
+    scheduledHours += run.hours;
   }
-  if (!jobsUsed.length) return { pieces: null, scheduledHours: 0, jobsUsed: [] };
   return {
     pieces: Math.floor(exactPieces),
     scheduledHours,
-    jobsUsed: Array.from(new Set(jobsUsed)),
+    jobsUsed: Array.from(new Set(planned.runs.map((run) => run.order.jobNumber))),
   };
 }

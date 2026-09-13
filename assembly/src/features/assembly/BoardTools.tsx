@@ -16,13 +16,15 @@
  */
 
 import { useMemo, useState } from 'react';
-import type { AssemblyGanttView } from '@/engine/assembly/board';
+import type { AssemblyGanttView, OrderRow } from '@/engine/assembly/board';
 import { LINES, virtualLineDef } from '@/domain/assembly';
+import { useDataStore } from '@/store/dataStore';
 import { usePlanStore } from '@/store/planStore';
 import { useSupervisorStore } from '@/store/supervisorStore';
 import { DATE_COLS, DATE_COL_LABEL, DUE_SOON_DAYS, useUiStore } from '@/store/uiStore';
-import { countRunningOrders, isDueSoon, teamSummary } from './boardView';
+import { countRunningOrders, isDueSoon, lineOfWorkerToday, teamSummary } from './boardView';
 import { ManualOrderButton } from './ManualOrders';
+import { Metric, MetricNote } from './Metric';
 import { ReviewOrders } from './SuggestCrew';
 import { formatShortDay, fromDayKey } from '@/lib/time';
 
@@ -44,6 +46,10 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
   const showWeekends = useUiStore((s) => s.showWeekends);
   const toggleWeekends = useUiStore((s) => s.toggleWeekends);
   const virtualLines = usePlanStore((s) => s.virtualLines);
+  /* Which figure is open, held here rather than in each of them: they hang off
+     one row an inch apart, and two panels open at once is two panels on top of
+     each other. */
+  const [openPanel, setOpenPanel] = useState<string | null>(null);
 
   const allRows = useMemo(
     () => board?.groups.flatMap((group) => group.rows) ?? [],
@@ -160,8 +166,9 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
       </div>
 
       {/*
-        What the board comes back with. Three figures and one queue, and the
-        only pressable thing among them narrows to what it counts.
+        What the board comes back with: five figures that all open onto what
+        they are made of. Press one and whichever was open closes, so two
+        panels never hang off this row at once.
       */}
       <div className="head-metrics">
         {/* The board shows every order it has unless somebody picked a day from
@@ -178,45 +185,199 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
             {running === 1 ? 'order' : 'orders'} ×
           </button>
         )}
-        <span
-          className="metric board-load"
-          title="Standard hours still to run across every scheduled order"
-        >
-          <span className="metric-label">Hours on board</span>
-          <b className="metric-value">{board.totals.remainingHours.toFixed(0)} h</b>
-        </span>
+        <Metric
+          name="load"
+          className="board-load"
+          label="Hours on board"
+          value={`${board.totals.remainingHours.toFixed(0)} h`}
+          title="Standard hours still to run across every scheduled order — line by line"
+          open={openPanel}
+          onOpen={setOpenPanel}
+          detail={() => <BoardLoadDetail board={board} />}
+        />
         {/* What has to go out before the board is next looked at. Late orders
             are in it: one due last Tuesday is not less urgent than one due
             tomorrow, and a "due soon" list that drops them is the list you would
-            least want to work from. */}
+            least want to work from.
+
+            The one figure whose press narrows the board rather than opening a
+            panel — the orders themselves are the detail, and putting them in a
+            340px box under the header would be the worse copy of a board that
+            is already showing them. */}
         <button
           className={`metric due-soon${dueSoon ? ' active' : ''}`}
           onClick={toggleDueSoon}
           aria-pressed={dueSoon}
-          title={`Only orders due within ${DUE_SOON_DAYS} working days, and anything already late`}
+          title={`Show only the orders due within ${DUE_SOON_DAYS} working days, and anything already late`}
         >
           <span className="metric-label">Due within {DUE_SOON_DAYS} days</span>
           <b className="metric-value">{dueCount}</b>
         </button>
-        <span
-          className="metric crew-allocated"
-          title={
-            'Allocated today / staff on site; includes orders outside the current view' +
-            (team.free.length > 0
-              ? `\nFree: ${team.free.map((worker) => worker.name).join(', ')}`
-              : '')
+        <Metric
+          name="crew"
+          className="crew-allocated"
+          label="Crew allocated"
+          value={
+            <>
+              {team.allocated}
+              <i>/{team.total}</i>
+            </>
           }
-          aria-live="polite"
-        >
-          <span className="metric-label">Crew allocated</span>
-          <b className="metric-value">
-            {team.allocated}
-            <i>/{team.total}</i>
-          </b>
-        </span>
-        <ReviewOrders board={board} />
+          title="Allocated today / staff on site; includes orders outside the current view"
+          open={openPanel}
+          onOpen={setOpenPanel}
+          detail={() => <CrewDetail board={board} rows={allRows} />}
+        />
+        {/* Orders that were not on the board when the day started. It used to
+            be a line of small print under Refresh, which is the one place on
+            this row it must not be: a count nobody is looking for, tucked under
+            the button everyone presses. */}
+        <NewJobsToday board={board} open={openPanel} onOpen={setOpenPanel} />
+        <ReviewOrders board={board} open={openPanel} onOpen={setOpenPanel} />
       </div>
     </div>
+  );
+}
+
+/**
+ * Where the hours on the board actually are.
+ *
+ * The total answers "is this week heavy?" and nothing else; the question it
+ * always leads to is which line is carrying it. Heaviest first, with the crew
+ * on each and how long that crew needs to clear it — a line with 80 hours and
+ * six people is not the same board as a line with 80 hours and one.
+ */
+function BoardLoadDetail({ board }: { board: AssemblyGanttView }) {
+  const lines = board.groups
+    .filter((group) => group.line.schedulable && group.load.hours > 0)
+    .sort((a, b) => b.load.hours - a.load.hours);
+  if (lines.length === 0) return <MetricNote>Nothing left to run on any line.</MetricNote>;
+  return (
+    <>
+      <MetricNote>Standard hours still to run, heaviest line first.</MetricNote>
+      <table className="metric-table">
+        <tbody>
+          {lines.map((group) => (
+            <tr key={group.line.key}>
+              <th title={group.line.fullName ?? group.line.name}>{group.line.name}</th>
+              <td>{group.load.hours.toFixed(0)} h</td>
+              <td title={`${group.load.crew} on the line`}>{group.load.crew || '—'} crew</td>
+              <td title="Working days to clear the queue at that crew">
+                {group.load.daysOfWork == null ? '—' : `${group.load.daysOfWork.toFixed(1)} d`}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  );
+}
+
+/**
+ * Who the ratio is about.
+ *
+ * "11/14" is only half an answer: the useful half is the three names, because
+ * they are who can be put on the order somebody is standing there looking at.
+ * They were on the hover, which is no use on the touchscreen this board spends
+ * most of its life on.
+ */
+function CrewDetail({ board, rows }: { board: AssemblyGanttView; rows: OrderRow[] }) {
+  const overrides = usePlanStore((s) => s.workerLines);
+  const team = teamSummary(board.workers, rows, board.today);
+  const byLine = lineOfWorkerToday(board.workers, rows, board.today, overrides);
+  // The line's own name, not its key: "UPL-Gluing" is what is written on the
+  // row this panel hangs over, and UPL_GLUING is not.
+  const nameOf = new Map(board.groups.map((group) => [group.line.key, group.line.name]));
+  const free = new Set(team.free.map((worker) => String(worker.id)));
+  const placed = new Map<string, string[]>();
+  // Exactly the people the figure's numerator counts: on site today, and on an
+  // order. Anyone else in the roster belongs to the other half of the ratio.
+  for (const worker of team.attendance) {
+    const id = String(worker.id);
+    if (free.has(id)) continue;
+    const line = byLine.get(id);
+    const label = (line && nameOf.get(line)) ?? line ?? '—';
+    placed.set(label, [...(placed.get(label) ?? []), worker.name]);
+  }
+  return (
+    <>
+      <MetricNote>
+        {team.total === 0
+          ? 'Nobody is on site today.'
+          : `${team.allocated} of ${team.total} on site are on an order today.`}
+      </MetricNote>
+      {team.free.length > 0 && (
+        <p className="metric-free">
+          <b>Free</b> {team.free.map((worker) => worker.name).join(', ')}
+        </p>
+      )}
+      <table className="metric-table">
+        <tbody>
+          {[...placed.entries()].map(([line, names]) => (
+            <tr key={line}>
+              <th>{line}</th>
+              <td>{names.length}</td>
+              <td className="metric-names" title={names.join(', ')}>{names.join(', ')}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  );
+}
+
+/**
+ * Orders the export carried today that it did not carry when the day started.
+ *
+ * This is the one figure on the row that is about the data rather than the
+ * work, and it is the reason to press Refresh at all — so it gets the same
+ * treatment as the rest instead of a line of 9px grey under the button.
+ */
+function NewJobsToday({
+  board,
+  open,
+  onOpen,
+}: {
+  board: AssemblyGanttView;
+  open: string | null;
+  onOpen: (name: string | null) => void;
+}) {
+  const newOrderIds = useDataStore((s) => s.newOrderIds);
+  // Nothing arrived today: a zero here says "the export is stale" as loudly as
+  // a three says "look at these", and only one of those is true.
+  if (newOrderIds.length === 0) return null;
+  return (
+    <Metric
+      name="new"
+      className="new-jobs"
+      label="New jobs today"
+      value={newOrderIds.length}
+      title="Assembly orders first seen in the export today"
+      open={open}
+      onOpen={onOpen}
+      detail={() => (
+        <>
+          <MetricNote>First seen in today’s export.</MetricNote>
+          <table className="metric-table">
+            <tbody>
+              {newOrderIds.map((id) => {
+                const row = board.rowsByJob.get(id);
+                const job = row?.job ?? board.jobsById.get(id);
+                return (
+                  <tr key={id}>
+                    <th>{id}</th>
+                    <td className="metric-names" title={job?.description}>
+                      {job?.description ?? 'Not on the board'}
+                    </td>
+                    <td>{row?.line.name ?? '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </>
+      )}
+    />
   );
 }
 

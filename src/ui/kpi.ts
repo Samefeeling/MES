@@ -181,13 +181,14 @@ interface ShiftAgg {
    *  shift rather than against a total whose size depends on how wide the
    *  row is. */
   shifts: number;
-  /** Standard hours earned (Σ good × cycle time) and the run hours they were
-   *  earned in. Carried as ingredients rather than as a percentage so a
-   *  rolled-up row is the ratio of the sums — a month with one busy week and
-   *  three quiet ones reads as the month it was, not as the mean of four
-   *  percentages. */
+  /** What the output was worth in standard hours at the planned rate
+   *  (Σ good ÷ JobOper_ProdStandard), and how many jobs carried a rate at all.
+   *  Carried as ingredients rather than as a percentage so a rolled-up row is
+   *  the ratio of the sums — a month with one busy week and three quiet ones
+   *  reads as the month it was, not as the mean of four percentages.
+   *  Efficiency's denominator is `runHrs`, above. */
   stdHours: number;
-  effRunHrs: number;
+  ratedJobs: number;
   /** Comparison numerator. For Schedule Adherence this is per-order Good
    *  capped at that order's expectation; for Vs Target it is Good only
    *  from tuples carrying a valid persisted ShiftTarget. */
@@ -717,7 +718,7 @@ function toAgg(k: Kpi): ShiftAgg {
     startupHrs: k.startupHrs,
     shifts: k.shifts,
     stdHours: k.stdHours,
-    effRunHrs: k.effRunHrs,
+    ratedJobs: k.ratedJobs,
     // Expectation / standards are computed PER SHIFT BUCKET (the runs-of-D
     // counting and the planned-start cut only make sense against one
     // shift's clock window) and summed onto the agg by the caller — a
@@ -746,7 +747,7 @@ function emptyAgg(): ShiftAgg {
     startupHrs: 0,
     shifts: 0,
     stdHours: 0,
-    effRunHrs: 0,
+    ratedJobs: 0,
     attainedOutput: null,
     expOutput: null,
     comparisonCovered: 0,
@@ -782,20 +783,25 @@ function addStd(
 }
 
 function emptyChartShift(): ChartBucket['byShift'][ShiftCode] {
-  return { good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, stdHours: 0, effRunHrs: 0 };
+  return { good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, stdHours: 0, ratedJobs: 0 };
 }
 
 /**
- * Efficiency from its two ingredients: standard hours earned over the run
- * hours they were earned in.
+ * Efficiency from its ingredients: what the output was worth in standard hours
+ * at the planned rate, over every hour the press spent running.
  *
  * One function, so the row, the headline tile and the chart overlay cannot
  * drift — and so a rolled-up figure is the ratio of the sums rather than the
- * mean of the percentages under it.
+ * mean of the percentages under it. `ratedJobs` is what separates "nothing
+ * here carries a standard" ("—") from "ran the hours and made nothing" (0%).
  */
-function efficiencyOf(parts: { stdHours: number; effRunHrs: number }): number | null {
-  return parts.effRunHrs > 0
-    ? Math.round((parts.stdHours / parts.effRunHrs) * 100)
+function efficiencyOf(parts: {
+  stdHours: number;
+  runHrs: number;
+  ratedJobs: number;
+}): number | null {
+  return parts.ratedJobs > 0 && parts.runHrs > 0
+    ? Math.round((parts.stdHours / parts.runHrs) * 100)
     : null;
 }
 
@@ -1189,7 +1195,7 @@ async function compute(now = new Date()): Promise<void> {
         cell.downHrs += k.downtimeHrs;
         cell.setupHrs += k.setupHrs;
         cell.stdHours += k.stdHours;
-        cell.effRunHrs += k.effRunHrs;
+        cell.ratedJobs += k.ratedJobs;
         charts.set(dateKey, cb);
       }
       byShift[code] = toAgg(aggregate(flat, ctByJob));
@@ -1684,7 +1690,7 @@ function aggCells(
     ${setupCell(a.dieHrs, a.dieStdHrs, DIE_CHANGE_STD_HRS, 'Die change')}
     ${setupCell(a.colorHrs, a.colorStdHrs, COLOR_CHANGE_STD_HRS, 'Colour change')}
     ${setupCell(a.insertHrs, a.insertStdHrs, INSERT_CHANGE_STD_HRS, 'Insert change')}
-    <td class="num ${colourOee ? oc : ''}" title="${a.effRunHrs > 0 ? escapeHtml(`${a.stdHours.toFixed(1)} standard hours earned in ${a.effRunHrs.toFixed(1)} run hours`) : 'No job in this slice carries a cycle time'}">${eff == null ? '—' : eff + '%'}</td>
+    <td class="num ${colourOee ? oc : ''}" title="${a.ratedJobs > 0 ? escapeHtml(`${a.stdHours.toFixed(1)} standard hours of output in ${a.runHrs.toFixed(1)} run hours`) : 'No job in this slice carries a production standard'}">${eff == null ? '—' : eff + '%'}</td>
     <td class="num ${pc}"${a.comparisonTotal ? ` title="${escapeHtml(comparisonTitle(a))}"` : ''}>${planPct == null ? '—' : planPct + '%'}</td>`;
 }
 
@@ -2632,7 +2638,7 @@ function render(): void {
       }
       if (r.total.expOutput != null) a.expOutput = (a.expOutput ?? 0) + r.total.expOutput;
       a.stdHours += r.total.stdHours;
-      a.effRunHrs += r.total.effRunHrs;
+      a.ratedJobs += r.total.ratedJobs;
       a.comparisonCovered += r.total.comparisonCovered;
       a.comparisonTotal += r.total.comparisonTotal;
       a.dieStdHrs = (a.dieStdHrs ?? 0) + (r.total.dieStdHrs ?? 0);
@@ -2652,7 +2658,7 @@ function render(): void {
       startupHrs: 0,
       shifts: 0,
       stdHours: 0,
-      effRunHrs: 0,
+      ratedJobs: 0,
       attainedOutput: null as number | null,
       expOutput: null as number | null,
       comparisonCovered: 0,
@@ -2824,8 +2830,9 @@ function render(): void {
     // and three quiet ones reads as the month it was.
     const efficiency = efficiencyOf({
       stdHours: b.byShift.Day.stdHours + b.byShift.Afternoon.stdHours + b.byShift.Night.stdHours,
-      effRunHrs:
-        b.byShift.Day.effRunHrs + b.byShift.Afternoon.effRunHrs + b.byShift.Night.effRunHrs,
+      runHrs: run,
+      ratedJobs:
+        b.byShift.Day.ratedJobs + b.byShift.Afternoon.ratedJobs + b.byShift.Night.ratedJobs,
     });
     return { ...chartMeta[i], label: b.label, run, down, setup, oee: efficiency };
   });
@@ -3003,7 +3010,7 @@ function render(): void {
   const toVal = S!.period === 'custom' ? S!.customTo : dateKey(activeRange.to);
   const comparisonHelp =
     kpiComparisonMode(S!.period) === 'schedule'
-      ? `<div><b>Schedule Adherence 🟢🟡🔴</b> = Σ min(Good, scheduled expectation) per Job# ÷ total Planning.csv expectation. Each order is capped at 100%, so over-production cannot hide a missed scheduled order; unscheduled output is excluded.</div>`
+      ? `<div><b>Schedule Adherence 🟢🟡🔴</b> = Σ min(Good, planned) per Job# ÷ total planned. Planned is the floor's own formula — <b>Shift Planned Runtime × JobOper_ProdStandard</b>: the hours the shift is elapsed, less the standard changeover allowance (die 4 h · colour/insert 0.5 h) and smoko, at the order's planned rate. A press runs one order at a time, so where Epicor's Start–Due windows overlap, that runtime is shared between them rather than counted once each. Each order is capped at 100%, so over-production cannot hide a missed scheduled order; unscheduled output is excluded.</div>`
       : `<div><b>Vs Target 🟢🟡🔴</b> = Good ÷ persisted PMD_Production.ShiftTarget, paired once per Machine + Shift + Job. A job-shift without a valid target is excluded from both sides; hover a result to see target coverage.</div>`;
   app.innerHTML = `
     <div class="kpi">
@@ -3037,7 +3044,7 @@ function render(): void {
             <th title="D — Die change">Die h</th>
             <th title="C — Colour change">Colour h</th>
             <th title="I — Insert change">Insert h</th>
-            <th title="Standard hours earned ÷ run hours used — Good × cycle time ÷ R hours">Efficiency*</th><th title="${escapeHtml(comparisonTitle(tot))}">${comparisonLabel()}</th>
+            <th title="The output's standard hours at the planned rate ÷ every run hour — (Good ÷ JobOper_ProdStandard) ÷ R hours">Efficiency*</th><th title="${escapeHtml(comparisonTitle(tot))}">${comparisonLabel()}</th>
             <th class="kpi-ho-head">Handover</th>
           </tr></thead>
           <tbody>${body}</tbody>
@@ -3085,7 +3092,7 @@ function render(): void {
         <div><b>Yield%</b> = Good ÷ (Good + Reject).</div>
         <div><b>Reject 🟢🔴</b> = judged per shift: 🟢 up to ${REJECT_PER_SHIFT_MAX} rejects a shift, 🔴 above. Rows covering several shifts (machine, order, TOTAL) scale the allowance by the shifts they roll up, so a machine isn't red for three green shifts.</div>
         <div><b>Startup h</b> = hours in S blocks (warm-up). Counted separately from the D / C / I changeover columns.</div>
-        <div><b>Efficiency*</b> = standard hours earned ÷ run hours used — <b>Good × cycle time ÷ R hours</b>. It was Run slots ÷ all filled slots, which is <i>utilisation</i>: it said how much of the shift the press was running and nothing about how fast, so a press running flat out at half rate scored the same as one making its numbers. A job with no cycle time is left out of <b>both</b> sides rather than scored zero — nobody gave that order a rate, which is not the same as the press having run it badly.</div>
+        <div><b>Efficiency*</b> = the output's standard hours at the planned rate ÷ every run hour — <b>(Good ÷ JobOper_ProdStandard) ÷ R hours</b>. It was Run slots ÷ all filled slots, which is <i>utilisation</i>: it said how much of the shift the press was running and nothing about how fast, so a press running flat out at half rate scored the same as one making its numbers. The denominator is <b>all</b> the R slots — an hour the press spent running is an hour it used, whether or not that order carries a standard. A slice where <i>no</i> job has one reads “—” rather than 0%.</div>
         ${comparisonHelp}
         <div><b>Die / Colour / Insert h 🟢🟡🔴</b> = hours in D / C / I blocks vs standard = changeovers × (die 4 h · colour 0.5 h · insert 0.5 h); 🟢 ≤ std, 🟡 ≤ std + 0.5 h, 🔴 above. <b>One changeover per order</b> — a die change the sheet logged in two pieces earns one 4 h allowance, not two.</div>
         <div>Colour thresholds for Output / Yield / Efficiency are editable in the panel above. Shift sub-rows show each shift's contribution to the period total.</div>

@@ -11,14 +11,14 @@ import { rec } from './helpers';
 
 describe('KPI aggregation (§4.1)', () => {
   /*
-   * Efficiency = standard hours earned ÷ run hours used.
+   * Efficiency = (Good ÷ JobOper_ProdStandard) ÷ every run hour.
    *
    * It used to be run slots ÷ all filled slots, which is utilisation: it said
    * how much of the shift the press was running and nothing at all about how
    * fast. These four slots score 75% on that reading whatever came off the
    * press.
    */
-  it('Efficiency = output × cycle time ÷ run hours', () => {
+  it('Efficiency = the output’s standard hours ÷ run hours', () => {
     const recs = [
       rec({
         jobNumber: 'J1', slotIndex: 0, statusCode: 'R',
@@ -28,10 +28,10 @@ describe('KPI aggregation (§4.1)', () => {
       rec({ jobNumber: 'J1', slotIndex: 2, statusCode: 'R' }),
       rec({ jobNumber: 'J1', slotIndex: 3, statusCode: 'B' }),
     ];
-    // 200 pieces × 0.01 h = 2 standard hours, run in 3 slots = 1.5 h.
+    // 200 pieces at 100/h = 2 standard hours, run in 3 slots = 1.5 h.
     const k = aggregate(recs);
     expect(k.stdHours).toBe(2);
-    expect(k.effRunHrs).toBe(1.5);
+    expect(k.runHrs).toBe(1.5);
     expect(k.efficiency).toBe(133);
     expect(aggregate([]).efficiency).toBeNull();
   });
@@ -47,9 +47,11 @@ describe('KPI aggregation (§4.1)', () => {
     expect(aggregate(recs, new Map([['J1', 0.01]])).efficiency).toBe(100);
   });
 
-  it('leaves a job with no rate out of both sides rather than scoring it zero', () => {
-    // Nobody gave J2 a standard, which is not the same as the press having run
-    // it badly — and its hours in the denominator alone would halve the shift.
+  it('counts every R slot in the denominator, rated or not', () => {
+    // J2 has no standard, so it earns no standard hours — but the hour the
+    // press spent running it is still an hour it used. Four R slots = 2 h,
+    // against J1's one standard hour: 50%, not the 100% you get by judging
+    // the shift on only the half of it that carries a rate.
     const recs = [
       rec({
         jobNumber: 'J1', slotIndex: 0, statusCode: 'R',
@@ -60,8 +62,23 @@ describe('KPI aggregation (§4.1)', () => {
       rec({ jobNumber: 'J2', slotIndex: 3, statusCode: 'R' }),
     ];
     const k = aggregate(recs);
-    expect(k.effRunHrs).toBe(1);
-    expect(k.efficiency).toBe(100);
+    expect(k.stdHours).toBe(1);
+    expect(k.runHrs).toBe(2);
+    expect(k.efficiency).toBe(50);
+  });
+
+  it('reads “—”, not 0%, when nothing in the slice carries a standard', () => {
+    // The press ran and made pieces; nobody ever gave the order a rate. A
+    // zero there is a measurement — "ran the hours, made nothing" — and this
+    // is not that.
+    const recs = [
+      rec({ jobNumber: 'J9', slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: 100 }),
+      rec({ jobNumber: 'J9', slotIndex: 1, statusCode: 'R' }),
+    ];
+    const k = aggregate(recs);
+    expect(k.ratedJobs).toBe(0);
+    expect(k.runHrs).toBe(1);
+    expect(k.efficiency).toBeNull();
   });
 
   it('downtime = (B+M) × 0.5h; setup = (D+C+I) × 0.5h', () => {

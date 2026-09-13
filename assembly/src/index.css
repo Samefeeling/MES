@@ -226,8 +226,7 @@ button {
    blue is the same value as the ground and vanished into it. */
 .app-header .btn.primary,
 .app-header .board-tools .day-filter-clear,
-.app-header .board-tools .due-soon.active,
-.app-header .board-tools .review-open.active,
+.app-header .board-tools .metric.active,
 .app-header .supervisor-chip.open {
   background: var(--head-tx);
   border-color: var(--head-tx);
@@ -246,33 +245,33 @@ button {
  */
 .app-header .metric { color: var(--head-tx); }
 .app-header .metric-label { opacity: 0.78; }
-/* A figure, not a control: no tint behind the two that cannot be pressed. */
-.app-header .board-tools .board-load,
-.app-header .board-tools .crew-allocated {
+/* A figure, not a control: none of them carries the row's button tint, whether
+   or not it can be pressed. They are what the board came back with; the tinted
+   chips to their left are what it was asked. */
+.app-header .board-tools .metric {
   background: transparent;
-  border: 0;
-  padding: 0;
+  border-color: transparent;
 }
 /*
  * The panel hangs off the header but is not part of it: it is a white surface,
  * so the header's translucent-white-on-blue controls would be white on white.
  * Everything inside it goes back to the board's own colours.
  */
-.app-header .review-panel { color: var(--text); }
-.app-header .board-tools .review-panel .btn,
-.app-header .board-tools .review-panel button:not(.metric) {
+.app-header .metric-panel { color: var(--text); }
+.app-header .board-tools .metric-panel .btn,
+.app-header .board-tools .metric-panel button:not(.metric) {
   background: var(--surface-2);
   border-color: var(--border);
   color: var(--text);
 }
-.app-header .board-tools .review-panel .btn:hover:not(:disabled),
-.app-header .board-tools .review-panel button:not(.metric):hover:not(:disabled) {
+.app-header .board-tools .metric-panel .btn:hover:not(:disabled),
+.app-header .board-tools .metric-panel button:not(.metric):hover:not(:disabled) {
   background: var(--surface-3);
   border-color: var(--accent);
   color: var(--text);
 }
-.app-header .board-tools .review-panel .btn:disabled,
-.app-header .board-tools .review-panel button:disabled {
+.app-header .board-tools .metric-panel .btn:disabled,
+.app-header .board-tools .metric-panel button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -352,7 +351,6 @@ button {
   background: #dbeafe;
   color: #1d4ed8;
 }
-.new-order-count,
 .new-order-tag {
   border-radius: 999px;
   background: #dcfce7;
@@ -361,7 +359,6 @@ button {
   font-weight: 750;
   white-space: nowrap;
 }
-.new-order-count { padding: 2px 7px; }
 .new-order-tag { margin-left: 5px; padding: 1px 5px; vertical-align: 1px; }
 .arow.new-order { box-shadow: inset 3px 0 #10b981; }
 .badge.tool {
@@ -2186,18 +2183,25 @@ body.col-resizing {
   font-weight: 650;
 }
 /*
- * The four things the board answers with. Label over value, so the figure is
- * what the eye lands on from a distance and the label is there when it is
- * needed — and tabular, so a count going from 9 to 10 does not shift the
- * three beside it.
+ * The things the board answers with. Label over value, so the figure is what
+ * the eye lands on from a distance and the label is there when it is needed —
+ * and tabular, so a count going from 9 to 10 does not shift the ones beside it.
+ *
+ * `stretch`, not `center`: each figure is two lines of different weights, and
+ * centring them let a one-line label sit half a pixel off its neighbours. They
+ * are a row of readings and have to share a baseline.
  */
 .head-metrics {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 6px 16px;
   margin-left: auto;
   flex-wrap: wrap;
 }
+/* The slot is what the panel hangs off; the figure inside it does the
+   aligning, so a figure with a panel and one without sit identically. */
+.head-metrics > .metric-slot { display: flex; }
+.head-metrics > .metric-slot > .metric { flex: 1; }
 .metric {
   display: flex;
   flex-direction: column;
@@ -2281,17 +2285,23 @@ body.col-resizing {
   font-variant-numeric: tabular-nums;
 }
 /*
- * A figure that is also a narrowing. It is the one pressable thing among the
- * four, so it is drawn as a figure and lights up when it is on.
+ * A figure that can be pressed. All five can now — four open onto what they
+ * are made of and Due ≤ 2d narrows the board to them — so they are all drawn
+ * the same and all light up the same way. Half the row used to be plain text
+ * with a tooltip, and from the metre this board is read at there was no telling
+ * which half.
  *
- * It used to go amber when active, which broke the rule the rest of this board
+ * The lit state used to go amber, which broke the rule the rest of this board
  * keeps: red, amber and green say what state an order is in, and nothing else
  * may borrow them. An amber Due ≤ 2d was a filter wearing a schedule's colour,
  * and on a board whose whole point is spotting the amber bars it is exactly the
  * wrong thing to have glowing in the corner.
+ *
+ * The negative margin is what keeps the hit area off the baseline: the padding
+ * grows the target without moving the label a pixel, so a pressable figure and
+ * a plain one sit on the same line.
  */
-.board-tools .due-soon,
-.board-tools .review-open {
+.board-tools button.metric {
   padding: 2px 9px;
   margin: -2px -9px;
   border: 1px solid transparent;
@@ -2301,8 +2311,7 @@ body.col-resizing {
   font: inherit;
   color: inherit;
 }
-.board-tools .due-soon:hover,
-.board-tools .review-open:hover {
+.board-tools button.metric:hover {
   border-color: currentColor;
   background: transparent;
 }
@@ -2320,14 +2329,23 @@ body.col-resizing {
   font-weight: 650;
 }
 
-/* The queue, and the two things that can be done about it. */
-.review-orders { position: relative; }
-.review-panel {
+/*
+ * What is behind a figure. Hung off the figure that opened it rather than off
+ * the header, so the answer appears under the number it belongs to — and the
+ * header holds which one is open, so there is only ever the one.
+ *
+ * Right-aligned and capped at the viewport: these sit at the end of the row, so
+ * a panel growing leftwards stays on screen where one growing rightwards would
+ * not.
+ */
+.metric-slot { position: relative; }
+.metric-panel {
   position: absolute;
   right: 0;
   top: calc(100% + 8px);
   z-index: 85;
   width: 340px;
+  max-width: calc(100vw - 32px);
   max-height: 340px;
   overflow: auto;
   padding: 10px;
@@ -2337,6 +2355,42 @@ body.col-resizing {
   border-radius: 6px;
   box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
 }
+.metric-note {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.metric-free { margin: 0 0 8px; font-size: 11.5px; line-height: 1.4; }
+.metric-free b { margin-right: 5px; color: var(--muted); font-size: 9.5px; letter-spacing: 0.3px; text-transform: uppercase; }
+.metric-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.metric-table th {
+  text-align: left;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.metric-table td {
+  padding-left: 8px;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.metric-table tr + tr th,
+.metric-table tr + tr td { border-top: 1px solid var(--border); }
+.metric-table th,
+.metric-table td { padding-top: 4px; padding-bottom: 4px; }
+/* The one column that may be long: it gives way first, and says so. */
+.metric-table .metric-names {
+  width: 100%;
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  color: var(--muted);
+}
+
+/* The queue, and the two things that can be done about it. */
+.review-orders { position: relative; }
 .review-panel ul { margin: 8px 0 0; padding: 0; list-style: none; }
 .review-panel li { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
 .review-panel li span { flex: 1; min-width: 0; }
@@ -2864,7 +2918,6 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .refresh-control { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 0 0 auto; }
 .refresh-control .sub { font-size: 10px; line-height: 12px; white-space: nowrap; }
 .refresh-control .spinner { position: absolute; margin-left: -92px; margin-top: 5px; }
-.refresh-control .new-order-count { font-size: 9px; }
 .bar { touch-action: none; }
 /* Overlay only: the alignment aid never moves rows or catches the pointer. */
 .drag-time-guide { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed #0869ad; z-index: 12; pointer-events: none; }

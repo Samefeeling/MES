@@ -184,17 +184,33 @@ to be two bands of its own under a third.
 
 **The header is one row, and it reads as a question and its answer.**
 `Show` (weekends, folded lines, hidden columns, `+ Line`, `New support order`,
-and `Show all` while anything is held back) · `Timeline` · then four figures:
-hours on the board, `Due within 2 days`, `Crew allocated` and `Review orders`.
-`Crew allocated` came up out of the Team column heading — a figure about the
-whole board that sat in one column's title and pushed the day columns down the
-page as its list of free names grew. `Review orders` absorbed the old
-`Crew N orders` chip, which counted the same thing from the other end: the
-button that crews them is inside the queue, beside the list it acts on.
+and `Show all` while anything is held back) · `Timeline` · then the figures:
+`Hours on board`, `Due within 2 days`, `Crew allocated`, `New jobs today` and
+`Review orders`. `Crew allocated` came up out of the Team column heading — a
+figure about the whole board that sat in one column's title and pushed the day
+columns down the page as its list of free names grew. `Review orders` absorbed
+the old `Crew N orders` chip, which counted the same thing from the other end:
+the button that crews them is inside the queue, beside the list it acts on.
 `Due within 2 days` no longer goes amber when it is on — a filter wearing a
 schedule's colour, on a board whose point is spotting the amber bars.
 `showEverything` in `uiStore` is `Show all`; it deliberately leaves the
 working-week axis alone. Covered by `tests/store/uiStore.test.ts`.
+
+**Every figure on the row opens onto what it is made of** (`features/assembly/
+Metric.tsx`): hours by line, who is free and where the rest are, which orders
+arrived today, the review queue. Half of them used to be plain text with a
+tooltip and half were pressable, which from the metre this board is read at is
+indistinguishable — and a tooltip is nothing at all on the touchscreen it spends
+most of its life on. `BoardTools` owns which panel is open, so two can never
+hang off one row at once. `Due within 2 days` is the exception and stays a
+*filter*: the orders are the detail, and a 340px box repeating a board that is
+already showing them is the worse copy.
+
+**`N new today` is a figure, not small print.** It was stacked under `Refresh`
+in 9px grey — a fact about the plan tucked under the button everybody reaches
+for. It is `New jobs today` in the figures now, drawn only when something did
+arrive (a zero there says "the export is stale" as loudly as a three says "look
+at these", and only one of those is true).
 
 **The lines are arranged by dragging one onto another** — it takes that line's
 place, the way a dragged list item lands; `Alt` + `↑`/`↓` does the same by
@@ -395,26 +411,60 @@ rules table in `docs/OPERATIONAL-LINES.md`.
 - All 11 SharePoint list field maps confirmed from live schema (2026-05).
 - User has updated `PMD_RejectCategories` list to D01-D10.
 
-## KPI: Efficiency, and Schedule % on the record
+## KPI: Efficiency, Schedule Adherence, and Schedule % on the record
 
-**Efficiency\* is standard hours earned ÷ run hours used** —
-`Good × cycle time ÷ R hours`, per job, in `core/metrics.aggregate`. It was run
-slots ÷ all filled slots, which is *utilisation*: it said how much of the shift
-the press was running and nothing at all about how fast, so a press running flat
-out at half rate scored the same as one making its numbers and a press that
-finished early and stood idle scored worse than one that never got going.
+`JobOper_ProdStandard` is **pieces per hour** in the Epicor export. The CSV
+parser takes its reciprocal once at the boundary, so the app's internal
+`qtyPerHr` is hours/piece and every calculation downstream is unit-safe. Read
+`hours ÷ qtyPerHr` as `hours × ProdStandard` and `pieces × qtyPerHr` as
+`pieces ÷ ProdStandard`.
 
-A job with no cycle time is out of **both** sides rather than scored zero —
-nobody gave that order a rate, which is not the same as the press having run it
-badly, and its hours in the denominator alone would drag the shift down for a
-missing planning field. `CycleTime` is stamped at sign-off, so a shift still
-running has none; `aggregate` takes an optional `ctByJob` built from planning so
-the live shift — the one anybody standing at the board is looking at — still has
-a figure. `Kpi` now carries `stdHours` / `effRunHrs` as well as the percentage,
-and `ChartShiftCell` carries them too, so a rolled-up row or a month bar is the
+**Efficiency\* is the output's standard hours ÷ every run hour** —
+`(Good ÷ JobOper_ProdStandard) ÷ R hours`, in `core/metrics.aggregate`. It was
+run slots ÷ all filled slots, which is *utilisation*: it said how much of the
+shift the press was running and nothing at all about how fast, so a press
+running flat out at half rate scored the same as one making its numbers and a
+press that finished early and stood idle scored worse than one that never got
+going.
+
+The denominator is **all** the R slots, not only the ones on jobs carrying a
+standard: an hour the press spent running is an hour it used. A job with no
+standard earns no standard hours — nobody gave that order a rate — but its run
+hours stay in. A slice where *nothing* has one reads `—` rather than 0%, which
+is what `Kpi.ratedJobs` is for. The rate is the PLANNED standard: `CycleTime`
+stamped at sign-off is preferred because it is that same planning field frozen
+on the day (reading today's planning row instead would move last month's KPI
+every time Epicor re-rates a part), and `aggregate` takes an optional `ctByJob`
+built from planning for the live shift, which has not been signed and carries
+none. `Kpi` carries `stdHours` / `ratedJobs` alongside the percentage, and
+`ChartShiftCell` carries them too, so a rolled-up row or a month bar is the
 **ratio of the sums** and not the mean of the ratios under it. `Kpi.oee` and
 `oeeColor` were renamed (`efficiency`, `efficiencyColor`) — the old name was
 never OEE.
+
+**Schedule Adherence's bar is Shift Planned Runtime × JobOper_ProdStandard.**
+`core/schedule.plannedRuntimeForShift` works out the hours the shift actually
+had to run in — elapsed at `asOf`, less the standard changeover allowance (die
+4 h, colour/insert 30 min; standard, not actual, so a changeover that dragged
+shows as missed output rather than lowering its own bar) and smoko — then shares
+them between the planned orders. Two things it fixes:
+
+- **One press runs one order at a time.** Epicor's Start–Due windows overlap
+  each other freely (`scheduleSegmentsForShift` draws them in lanes for exactly
+  that reason), and summing each order's overlap asked one press for two and
+  three shifts' worth of hours. Where the plan is over-subscribed the runtime is
+  shared in proportion; where it is not — a plan that sequences its orders — every
+  order keeps its own overlap and nothing changes.
+- **A shift that changed over is not a shift that ran.** The deduction is
+  capped at the hours the press spent NOT running (counted in *distinct* slots),
+  so it can never exceed what was actually lost, and a die change mirrored onto
+  two co-running orders cannot deduct eight hours from an eight-hour shift.
+
+This reverses an earlier deliberate note on `expectedScheduledOutputForShift`
+("changeovers and smoko are intentionally not inputs to vs Plan"). That function
+is now a thin wrapper over `plannedRuntimeForShift` with no deduction — planning
+geometry on its own — so there is one model rather than the four that had drifted
+apart in `core/standards.ts`.
 
 **The shift's Schedule % is frozen into `PMD_Production.VSPLAN` at sign-off.**
 Schedule Adherence is recomputed live against Planning.csv everywhere else, and
@@ -440,22 +490,18 @@ reason — a planning row with a blank machine used to throw from inside sign-of
 3. **Graph token wiring** — `window.__pmdGraphToken` is set by the SPFx
    `onInit()` (`aadTokenProviderFactory`). Until SPFx is live, Excel sync
    can't run; list CRUD still works once same-origin.
-4. **The banner prototype — waiting on the user's three hex values.** The
-   layout is in (one row, Show / Timeline / four figures), and the
-   interaction-vs-status colour rule is now kept: `Due within 2 days` no
-   longer borrows amber. Still to come with the palette: the filter chips as
-   empty box / filled check rather than `+`, IBM Plex bundled into the build
-   (the app makes **zero** external requests, so Google Fonts is not an
-   option and `scripts/deploy-assets.mjs` would upload the bundled faces),
-   tabular numerals on `body`, and the Timeline's named stops
-   (Week / Day / Shift / Hour) disabled at each end — the zoomable time view.
-   The drag already lands on five minutes at any zoom; the stops are what let
-   a reader get close enough to see one.
-5. **Two questions only the user can answer**: how often `New support order`
-   is really used (it has been moved out of the primary corner into the Show
-   row on the assumption that it is not the board's most frequent action),
-   and what TBP stands for — nothing in the code or the docs expands it, it
-   arrives as Epicor's `JobHead_PersonID`.
+4. **The banner prototype — the last of it.** The layout and the ground
+   (`#BAE6FD`) are in, and the interaction-vs-status colour rule is kept:
+   `Due within 2 days` does not borrow amber. Still to come: the filter chips
+   as empty box / filled check rather than `+`, IBM Plex bundled into the
+   build (the app makes **zero** external requests, so Google Fonts is not an
+   option and `scripts/deploy-assets.mjs` would upload the bundled faces), and
+   tabular numerals on `body`. The Timeline's named stops were **cancelled** —
+   the board opens at maximum zoom, where a column is a shift and the drag's
+   five-minute landing is visible; `−`/`+` remain.
+5. **`PMD_Production.VSPLAN` has to be added to the SharePoint list** for the
+   Schedule % snapshot to persist. Optional and fail-soft like `ShiftTarget` /
+   `CycleTime`: without it sign-off works and the figure is simply not stored.
 
 ## Environment config (build-time)
 
