@@ -36,7 +36,6 @@ export default function App() {
   const dataset = useDataStore((s) => s.dataset);
   const load = useDataStore((s) => s.load);
   const warnings = useDataStore((s) => s.warnings);
-  const sourceName = useDataStore((s) => s.source.name);
   const hosted = useSupervisorStore((s) => s.hosted);
 
   const ignoredOrderIds = useIgnoredOrders(s => s.ids);
@@ -240,11 +239,11 @@ export default function App() {
         <div className="head-side end">
           <SupervisorLock />
           <BarcodeOrderLookup board={board} />
-          {/* Which export this is stays on the hover of the time it was read,
-              rather than as a chip: the source has not changed since the board
-              was built and never changes while anybody is looking at it, so it
-              was a word in the header that answered a question nobody had. */}
-          <RefreshControl source={sourceName} onRefresh={async () => {
+          {/* Which export this is has left the row entirely — chip and hover
+              both. The source has not changed since the board was built and
+              never changes while anybody is looking at it, so it was a word in
+              the header that answered a question nobody had. */}
+          <RefreshControl onRefresh={async () => {
             await refresh();
             resetOrderSort();
           }} />

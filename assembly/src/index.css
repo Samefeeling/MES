@@ -67,6 +67,11 @@
   --head-ok-bar: #16a34a;
   --head-warn-bar: #d97706;
   --head-error-bar: #dc2626;
+  /* The unfilled part of a load bar. A white track cut a white stripe down
+     every column of the block; this is the block's own blue a few steps
+     lighter, so an empty day reads as empty rather than as a gap in the
+     heading. The fills above still clear 3:1 on it. */
+  --day-bar-track: #CAEDFB;
 
   --tool: #c084fc; /* die / tool change */
   --color: #fb923c; /* colour change */
@@ -74,6 +79,11 @@
 
   --lane-h: 64px;
   --label-w: 150px;
+  /* The load bar down a day column's left edge. Half what it was: a band this
+     wide still reads as a skyline across the week, and the 11 px it gives back
+     is the difference between a date that fits in the column and one that
+     does not. */
+  --day-bar-w: 11px;
   --radius: 8px;
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
     Arial, sans-serif;
@@ -1059,10 +1069,8 @@ button {
   color: var(--head-dim);
 }
 .assy-head .day-bar {
-  background: var(--surface);
-  border-color: var(--head-rule);
+  background: var(--day-bar-track);
 }
-.assy-head .daycol { padding: 5px 5px; }
 .assy-head .day-order-filter {
   border-color: transparent;
   background: transparent;
@@ -1156,6 +1164,11 @@ button {
 .col-resize:focus-visible {
   border-right-color: var(--accent);
   outline: none;
+}
+/* A day column's grip is over the heading's own contents rather than in a flex
+   row beside them, so it has to be the thing the pointer finds on that edge. */
+.day-resize {
+  z-index: 2;
 }
 /* Keeps the pointer from selecting half the board mid-drag. */
 body.col-resizing {
@@ -1353,37 +1366,46 @@ body.col-resizing {
   top: 0;
   bottom: 0;
   border-left: 1px solid var(--border);
-  display: flex;
-  align-items: stretch;
-  gap: 6px;
-  padding: 5px 5px;
+  padding: 0;
   font-size: 12px;
   color: var(--muted);
+  overflow: hidden;
 }
+/* Three things in one cell, none of them in a row with the others: the load
+   down the left-hand edge, the date in the middle, the count in the corner.
+   Stacked in a column they pushed the date off centre and left the load bar
+   standing in a box it could not fill. */
 .daycol-main {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
+  position: absolute;
+  inset: 0;
 }
 .daycol-sub {
+  position: absolute;
+  right: 4px;
+  bottom: 1px;
   display: flex;
   align-items: center;
   gap: 3px;
-  min-width: 0;
+  max-width: 100%;
 }
 /*
  * Load histogram. One bar per day filled to its percentage, so the week reads
  * as a shape before anyone reads a number. Bands: green under 80%, orange to
  * 90%, red beyond.
  */
-/* The figure on the column, so a date is legible from the floor. */
+/* The figure on the column, so a date is legible from the floor — and in the
+   middle of the cell, which is where the eye goes looking for it. It is
+   centred in what the load bar leaves rather than in the whole cell, so the
+   two never sit on top of each other on a column dragged narrow. */
 .daycol-date {
+  position: absolute;
+  left: var(--day-bar-w);
+  right: 0;
+  top: 0;
+  bottom: 0;
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  justify-content: center;
   gap: 3px;
   font-size: 15px;
   font-weight: 650;
@@ -1421,14 +1443,16 @@ body.col-resizing {
  * short horizontal ones is read one at a time.
  */
 .day-bar {
-  position: relative;
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
   display: flex;
   align-items: flex-end;
-  flex: 0 0 auto;
-  width: 22px;
+  width: var(--day-bar-w);
   border: 0;
-  border-radius: 2px;
-  background: var(--surface-3);
+  border-radius: 0;
+  background: var(--day-bar-track);
   overflow: hidden;
 }
 .day-bar i {
@@ -1436,14 +1460,13 @@ body.col-resizing {
   width: 100%;
   min-height: 2px;
 }
-/* Inside the track, above the fill: the number confirms the shape and must not
-   cost the heading a line of its own to do it. */
-.day-bar .day-load {
+/* Beside the track rather than inside it. Half the width ago the number fitted
+   over the fill; it no longer does, and a clipped "6" is worse than no
+   percentage at all. */
+.day-load {
   position: absolute;
+  left: calc(var(--day-bar-w) + 2px);
   top: 1px;
-  left: 0;
-  right: 0;
-  text-align: center;
   font-style: normal;
   font-size: 9px;
   letter-spacing: -0.3px;
@@ -1452,10 +1475,7 @@ body.col-resizing {
 .day-bar.green i { background: var(--ok); }
 .day-bar.orange i { background: var(--warn); }
 .day-bar.red i { background: var(--error); }
-.day-load {
-  font-size: 9.5px;
-  font-weight: 700;
-}
+.day-load { font-weight: 700; }
 .day-load.green { color: var(--ok); }
 .day-load.orange { color: var(--warn); }
 .day-load.red { color: var(--error); }
@@ -1580,10 +1600,9 @@ body.col-resizing {
   font-size: 8.5px;
   font-weight: 800;
 }
-/* Recorded output is muted; planned work uses the full fill. */
-.day-bar.actual {
-  background: transparent;
-}
+/* Recorded output is muted; planned work uses the full fill. The track stays:
+   the band is the full height of the heading now, and an actual day with no
+   track behind it would be a column-wide hole in the block. */
 .day-bar.actual i {
   opacity: 0.55;
 }
@@ -2193,7 +2212,7 @@ body.col-resizing {
  */
 .head-metrics {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   gap: 6px 16px;
   margin-left: auto;
   flex-wrap: wrap;
@@ -2202,10 +2221,16 @@ body.col-resizing {
    aligning, so a figure with a panel and one without sit identically. */
 .head-metrics > .metric-slot { display: flex; }
 .head-metrics > .metric-slot > .metric { flex: 1; }
+/* Label over figure, both centred on the same axis. Left-aligned, a two-word
+   label and a three-character figure left the row reading as a ragged stack of
+   different-width blocks; centred, the four of them read as one row of four
+   figures, which is what they are. */
 .metric {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
   gap: 0;
   line-height: 1.15;
   white-space: nowrap;

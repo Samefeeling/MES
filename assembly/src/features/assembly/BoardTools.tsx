@@ -4,15 +4,16 @@
  * It reads left to right as a question and its answer. **Show** is what the
  * board is being asked to draw — which lines, which columns, which days — and
  * the one thing that adds to the board rather than narrowing it. **Timeline**
- * is how far the days are zoomed. Then the figures: what is on the board, what
- * is nearly due, how much of the roster is spoken for, and what is waiting to
- * be looked at.
+ * is how far the days are zoomed — every column at once; one day column on its
+ * own is dragged by its right-hand edge in the heading below. Then the figures:
+ * what is on the board, what is nearly due, how much of the roster is spoken
+ * for, and what is waiting to be looked at.
  *
  * Controls to the left, figures to the right, and nothing in the middle that is
  * both. The board used to open with a band above this one carrying its name,
  * its source and two of these counts — and inside MES that band sat under a top
  * bar already naming it. There is no identity band now; what is left of it is
- * the source and its read time, beside the button that re-reads them.
+ * the time the export was read, beside the button that re-reads it.
  */
 
 import { useMemo, useState } from 'react';
@@ -150,7 +151,7 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
           className="zoom-step"
           onClick={() => setDayWidth(dayWidth - ZOOM_STEP)}
           aria-label="Zoom out"
-          title="Narrower days — see further ahead"
+          title="Narrower days — see further ahead. Every day column goes back to one width."
         >
           −
         </button>
@@ -158,7 +159,7 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
           className="zoom-step"
           onClick={() => setDayWidth(dayWidth + ZOOM_STEP)}
           aria-label="Zoom in"
-          title="Wider days"
+          title="Wider days. Every day column goes back to one width."
         >
           +
         </button>
