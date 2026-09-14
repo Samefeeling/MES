@@ -1,3 +1,5 @@
+import { scheduleAdherenceForShift } from '../core/kpi-attainment';
+import { appendHandoverLine } from '../core/handover';
 import type {
   BdCode,
   BreakdownLogDetail,
@@ -25,7 +27,7 @@ import {
   decodeBreakdownCauseMap,
   encodeBreakdownCauseMap,
 } from '../core/breakdown';
-import { dieChangeEventKey } from '../core/die';
+import { dieChangeEventKey, dieSignOffStatus } from '../core/die';
 import {
   seedBdCodes,
   seedDieChangeLogs,
@@ -172,7 +174,9 @@ export class MemoryDataLayer implements PmdDataLayer {
     );
   }
 
-  async createDieChangeLog(log: Omit<DieChangeLog, 'id' | 'createdAt'>): Promise<DieChangeLog> {
+  async createDieChangeLog(
+    log: Omit<DieChangeLog, 'id' | 'createdAt' | 'signOffStatus'>,
+  ): Promise<DieChangeLog> {
     const eventKey = dieChangeEventKey(
       log.machineCode,
       log.date,
@@ -185,6 +189,9 @@ export class MemoryDataLayer implements PmdDataLayer {
       eventKey,
       eventStartSlot: Math.max(0, Math.floor(log.eventStartSlot)),
       eventEndSlot: Math.max(log.eventStartSlot, Math.floor(log.eventEndSlot)),
+      // Derived here as well as in the form, for the same reason as the
+      // SharePoint DAL: the stored status can never contradict the ratings.
+      signOffStatus: dieSignOffStatus(log.components, log.componentsIn),
     };
     const existing = this.dieChangeLogs.find((r) => r.eventKey === eventKey);
     if (existing) {
@@ -364,6 +371,12 @@ export class MemoryDataLayer implements PmdDataLayer {
   }
 
   // Last-write-wins (§5.6): match on composite key, no version check.
+  async appendImpwHandover(machineCode: string, shiftId: string, ticket: string): Promise<void> {
+    const rows = this.production.filter((r) => r.machineCode === machineCode && r.shiftId === shiftId && r.locked && r.slotIndex === 0);
+    if (!rows.length || !ticket.trim()) throw new Error('Missing signed-off row or ticket number');
+    for (const row of rows) row.handoverNote = appendHandoverLine(row.handoverNote, 'method', `IMPW: ${ticket.trim()}`);
+  }
+
   async upsertProductionRecord(record: ProductionRecord): Promise<ProductionRecord> {
     const now = new Date().toISOString();
     const idx =
@@ -465,6 +478,24 @@ export class MemoryDataLayer implements PmdDataLayer {
       });
       return;
     }
+    /*
+     * The shift's Schedule % frozen onto its canonical rows, as the SharePoint
+     * DAL writes it to PMD_Production.VSPLAN. Computed over the WHOLE
+     * machine-shift, not just the tuple being signed: adherence is a question
+     * about the shift's plan, and per-job sign-off only decides when it is
+     * answered. Null when nothing on the shift was scheduled at all.
+     */
+    const shiftRows = this.production.filter(
+      (r) => r.machineCode === machineCode && r.shiftId === shiftId,
+    );
+    const vsPlan = scheduleAdherenceForShift(
+      shiftRows,
+      this.planning,
+      machineCode,
+      shiftId,
+      new Date(),
+    ).pct;
+
     for (const r of rows) {
       r.locked = true;
       r.reopened = false;
@@ -472,6 +503,7 @@ export class MemoryDataLayer implements PmdDataLayer {
       r.lockedAt = now;
       r.supervisor = supervisor;
       if (operator) r.operator = operator;
+      if (r.slotIndex === 0 && vsPlan != null) r.vsPlan = vsPlan;
       r.updatedAt = now;
       this.unlockedTuples.delete(`${r.machineCode}|${r.shiftId}|${r.jobNumber}`);
     }

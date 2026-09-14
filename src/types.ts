@@ -209,6 +209,17 @@ export interface DieMaintenanceRequest {
  *  but worn" / "3. Damaged or can't be used". '' = not assessed. */
 export type DieComponentCondition = '' | 'good' | 'worn' | 'damaged';
 
+/**
+ * `PMD_DieChangeLog.SignOffStatus` — the die's condition as the setter
+ * signed the inspection off, on the same 1 / 2 / 3 scale as the 13
+ * components, boiled down to one number. 0 = nothing was rated.
+ *
+ * The **worst** rating anywhere on the event, because that is what an
+ * inspection is for: a die with twelve good components and one cracked core
+ * is a 3, and any other rule lets the crack hide behind the twelve.
+ */
+export type DieSignOffStatus = 0 | 1 | 2 | 3;
+
 /** One row of PMD_DieChangeLog — exactly one continuous D/I block on a
  *  machine/job timeline. Component keys are the list's column names
  *  (Bolts, Cores, EjectorPins, …, WaterLeaks). */
@@ -236,6 +247,9 @@ export interface DieChangeLog {
   components: Record<string, DieComponentCondition>;
   /** Die IN component key → condition. Kept on the same event row. */
   componentsIn: Record<string, DieComponentCondition>;
+  /** What the setter signed off: the worst condition on the whole event,
+   *  OUT and IN. 0 on a legacy row that predates the column. */
+  signOffStatus: DieSignOffStatus;
   problemDescription: string;
   problemDescriptionIn: string;
   createdAt: string; // ISO
@@ -331,6 +345,18 @@ export interface ProductionRecord {
    *  few presses (550T / 320T / 150T / 125T) ever run a 2-cavity die, and
    *  the operator ticks a box to set it. Undefined / 0 is treated as 1. */
   cavities?: number;
+  /** The shift's Schedule % at the moment it was signed off, persisted to
+   *  PMD_Production.VSPLAN. Schedule Adherence is otherwise recomputed live
+   *  from Planning.csv, and Epicor drops an order from planning the moment it
+   *  completes — so the number the meeting looked at on Monday could not be
+   *  reproduced on Friday. This freezes it: Σ min(Good, that order's elapsed
+   *  scheduled pieces) ÷ Σ those expectations, over every scheduled order on
+   *  the machine-shift, each capped at 100%.
+   *
+   *  It is the WHOLE shift's figure, written onto each of its header rows —
+   *  the same question the KPI page's Schedule Adherence column answers for
+   *  the row. Canonical on slot 0; undefined on tenants without the column. */
+  vsPlan?: number;
   /** Planned start of the order (JobHead_StartDate + StartHour, local ISO
    *  '2026-07-01T18:40:00'), denormalised onto PMD_Production.PlannedStart
    *  at sign-off so KPI Schedule Adherence still knows when the job was
@@ -405,6 +431,10 @@ export interface ProductionCounterRecord {
 export interface UserContext {
   name: string;
   role: Role;
+  /** Signed-in user's email, when the host platform knows one. Fills the
+   *  Email field of a Mango IMPW ticket raised from the KPI page. Optional:
+   *  backends without an identity service (memory) omit it. */
+  email?: string;
 }
 
 export interface PlanningFilter {

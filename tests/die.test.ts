@@ -7,8 +7,10 @@ import {
   assetNamesMachine,
   buildDieTrend,
   defaultPmPlanText,
+  DIE_COMPONENTS,
   dieHealth,
   dieServiceStatus,
+  dieSignOffStatus,
   formatDieNoteLine,
   goodByJob,
   latestConditionByDie,
@@ -18,6 +20,7 @@ import {
   nextPlannedFor,
   parseDieCondition,
   parseDieNotes,
+  parseDieSignOffStatus,
   parsePmPlan,
   parseToolStatus,
   pmShotLevel,
@@ -614,6 +617,80 @@ describe('parseMangoMachineWorkOrdersCsv (machine half of the report)', () => {
 });
 
 
+describe('SignOffStatus (the one number the setter signs off on)', () => {
+  it('is the worst rating anywhere on the event, not the average', () => {
+    // Twelve good components and one cracked core is a 3. Any rule that lets
+    // the twelve outvote the one hides exactly what the form is filled in for.
+    const allGood = Object.fromEntries(
+      DIE_COMPONENTS.map((c) => [c.key, 'good' as const]),
+    );
+    expect(dieSignOffStatus(allGood)).toBe(1);
+    expect(dieSignOffStatus({ ...allGood, Venting: 'worn' })).toBe(2);
+    expect(dieSignOffStatus({ ...allGood, Cores: 'damaged', Venting: 'worn' })).toBe(3);
+  });
+
+  it('reads both sides of the change — a damaged die going IN still counts', () => {
+    expect(dieSignOffStatus({ Bolts: 'good' }, { Cores: 'damaged' })).toBe(3);
+    expect(dieSignOffStatus({ Cores: 'damaged' }, { Bolts: 'good' })).toBe(3);
+    expect(dieSignOffStatus({ Bolts: 'good' }, {})).toBe(1);
+  });
+
+  it('is 0 when nothing was rated, which is not the same as all good', () => {
+    expect(dieSignOffStatus({}, {})).toBe(0);
+    expect(dieSignOffStatus(undefined, undefined)).toBe(0);
+    // A key that is not one of the 13 is not an assessment.
+    expect(dieSignOffStatus({ SomethingElse: 'damaged' } as never)).toBe(0);
+  });
+
+  it('reads back a digit, a number or the old long choice string', () => {
+    expect(parseDieSignOffStatus(3)).toBe(3);
+    expect(parseDieSignOffStatus('2')).toBe(2);
+    expect(parseDieSignOffStatus('1. Good work order')).toBe(1);
+    expect(parseDieSignOffStatus('3. Damaged or can’t be used')).toBe(3);
+    for (const empty of [null, undefined, '', 0, 7, 'n/a']) {
+      expect(parseDieSignOffStatus(empty)).toBe(0);
+    }
+  });
+
+  it('is stamped on the row by the DAL, from the ratings on it', async () => {
+    const dal = new MemoryDataLayer();
+    const event = {
+      eventKey: '550T|2026-07-20|DAY|SFM507300|4',
+      eventStartSlot: 4,
+      eventEndSlot: 7,
+      date: '2026-07-20',
+      shift: 'Day',
+      dieSetter: 'Van Minh Ma',
+      machineCode: '550T',
+      changeOver: ['Die'],
+      jobNumber: 'SFM507300',
+      dieNumberOut: '117',
+      dieDescriptionOut: 'Proteus Seat',
+      dieNumberIn: '174',
+      dieDescriptionIn: 'Podium Seat',
+      problemDescription: 'Guide pins scored.',
+      problemDescriptionIn: '',
+    };
+    const worn = await dal.createDieChangeLog({
+      ...event,
+      components: { GuidePins: 'worn' },
+      componentsIn: {},
+    });
+    expect(worn.signOffStatus).toBe(2);
+    // Re-saving the same block with a worse finding moves the status with it.
+    const damaged = await dal.createDieChangeLog({
+      ...event,
+      components: { GuidePins: 'worn' },
+      componentsIn: { Cores: 'damaged' },
+      problemDescriptionIn: 'Core chipped on fitting.',
+    });
+    expect(damaged.id).toBe(worn.id);
+    expect(damaged.signOffStatus).toBe(3);
+    const stored = (await dal.listDieChangeLog()).find((r) => r.id === worn.id);
+    expect(stored!.signOffStatus).toBe(3);
+  });
+});
+
 describe('latestConditionByDie (PMD_DieChangeLog → toolroom flags)', () => {
   const log = (over: Partial<DieChangeLog>): DieChangeLog => ({
     id: 1,
@@ -632,6 +709,7 @@ describe('latestConditionByDie (PMD_DieChangeLog → toolroom flags)', () => {
     dieDescriptionIn: 'PODIUM SEAT',
     components: {},
     componentsIn: {},
+    signOffStatus: 0,
     problemDescription: '',
     problemDescriptionIn: '',
     createdAt: '2026-07-10T08:00:00Z',

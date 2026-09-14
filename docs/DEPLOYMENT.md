@@ -578,13 +578,29 @@ machine/date/shift/job do not overwrite each other; `EventKey` is indexed
 and unique so simultaneous iPad saves converge on one row. **Skip** is
 allowed. Writers need Edit permission on the list.
 
+`SignOffStatus` is the whole inspection in one digit — **1**, **2** or **3**
+on the same scale as the components, and the **worst** rating anywhere on the
+event, OUT side and IN side together. Worst, not average: an inspection exists
+to surface the one cracked core among twelve good bolts, and any rule that lets
+the twelve outvote the one hides exactly what the form is filled in for. The
+setter sees it live above the Save button as they rate — "Signing off as 2.
+Operational but worn" — so what is stored is what somebody confirmed, and it is
+derived rather than picked, because a 14th control that can disagree with the
+26 ratings beside it is a column that can lie about its own row. An empty cell
+means nothing was rated, which is not the same as all-good and must not read as
+a 1. The column is written as a bare digit, as a **number** or as **text**
+depending on how the site made it — the app reads the column's type off the
+list and shapes the value to match, so both a Number column and a Choice of
+"1" / "2" / "3" work without configuration.
+
 The app provisions these event-model fields on the first save (the first
 writer therefore also needs Manage Lists once): `EventKey` (Single line,
 indexed, unique), `EventStartSlot` (Number), `EventEndSlot` (Number),
-`ComponentsInJson` (Multiple lines, plain text), and
-`ProblemDescriptionIn` (Multiple lines, plain text). The original 13 Choice
-columns hold the OUT ratings; `ComponentsInJson` holds the IN ratings on the
-same row. If auto-provisioning is disallowed, add these five columns by hand.
+`ComponentsInJson` (Multiple lines, plain text),
+`ProblemDescriptionIn` (Multiple lines, plain text), and `SignOffStatus`
+(Number). The original 13 Choice columns hold the OUT ratings;
+`ComponentsInJson` holds the IN ratings on the same row. If auto-provisioning
+is disallowed, add these six columns by hand.
 
 ## PMD_DieMaster (die asset register)
 
@@ -673,3 +689,13 @@ Every step is reversible:
 - **SPFx**: in App Catalog, delete the `.sppkg` → web part disappears from pages.
 - **Epicor sync**: Task Scheduler → disable `PMD Planning Sync`. PMD_Planning will go stale but the app keeps working with the last-synced values.
 - **Lists**: data lives on. If you need to start clean: Site Contents → List Settings → Delete this list.
+
+
+### Assembly styles after a normal refresh
+
+The MES host now appends one fresh revision token to both Assembly asset URLs
+when it creates the iframe. This avoids reusing an old fixed-URL CSS response
+after a new deployment. Deploy the complete output of npm run build, including
+the MES assets and assembly/assets. The host index.js must be updated too; an
+old host still requests the unversioned URLs. A page already open keeps its
+iframe and pending edits until the page is reloaded.

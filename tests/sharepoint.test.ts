@@ -1732,6 +1732,226 @@ describe('PMD_Production denormalisation: jobRequired + partDescription survive 
     expect(prod.body.shiftTarget).toBe(160);
   });
 
+  /*
+   * Schedule Adherence is recomputed live against Planning.csv everywhere
+   * else, and Epicor drops an order from planning the moment it completes —
+   * so the number the Monday meeting read could not be reproduced on Friday.
+   * Sign-off freezes it.
+   */
+  it('freezes the shift’s Schedule % into VSPLAN at sign-off', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const writes: Array<{ list: string; body: Record<string, unknown> }> = [];
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+      upsertHeaderInto: (list: string, h: Record<string, unknown>) => Promise<void>;
+      replaceBreakdownEvents: () => Promise<void>;
+      replaceRejectEvents: () => Promise<void>;
+      deleteLiveRow: () => Promise<void>;
+      listPlanning: () => Promise<unknown[]>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [existing507071()] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+    o.upsertHeaderInto = async (list: string, h: Record<string, unknown>): Promise<void> => {
+      writes.push({ list, body: h });
+    };
+    o.replaceBreakdownEvents = async (): Promise<void> => { /* noop */ };
+    o.replaceRejectEvents = async (): Promise<void> => { /* noop */ };
+    o.deleteLiveRow = async (): Promise<void> => { /* noop */ };
+    // The order is scheduled across the whole Day shift (07:00–15:00) at
+    // 0.05 h a piece, so 8 hours of plan is 160 pieces. The tuple made
+    // 115 − 61 − 8 = 46 good.
+    o.listPlanning = async (): Promise<unknown[]> => [
+      {
+        jobNumber: '507071',
+        machineCode: '1300T',
+        orderQty: 176,
+        qtyPerHr: 0.05,
+        isDieChange: false,
+        plannedStart: '2026-06-15T07:00:00',
+        plannedEnd: '2026-06-15T15:00:00',
+      },
+    ];
+
+    await dal.unlockShift('1300T', '2026-06-15-Day', '507071');
+    await dal.lockShift('1300T', '2026-06-15-Day', 'Bounpanh', 'Heng', '507071');
+
+    const prod = writes.find((w) => w.list === 'PMD_Production')!;
+    expect(prod.body.vsPlan).toBe(29); // 46 of 160
+  });
+
+  // A planning row with no machine code must not take the sign-off down with
+  // it: losing a signed shift to a blank column is not a trade anybody made.
+  it('signs off anyway when the Schedule % cannot be worked out', async () => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const writes: Array<{ list: string; body: Record<string, unknown> }> = [];
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+      upsertHeaderInto: (list: string, h: Record<string, unknown>) => Promise<void>;
+      replaceBreakdownEvents: () => Promise<void>;
+      replaceRejectEvents: () => Promise<void>;
+      deleteLiveRow: () => Promise<void>;
+      listPlanning: () => Promise<unknown[]>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [existing507071()] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+    o.upsertHeaderInto = async (list: string, h: Record<string, unknown>): Promise<void> => {
+      writes.push({ list, body: h });
+    };
+    o.replaceBreakdownEvents = async (): Promise<void> => { /* noop */ };
+    o.replaceRejectEvents = async (): Promise<void> => { /* noop */ };
+    o.deleteLiveRow = async (): Promise<void> => { /* noop */ };
+    o.listPlanning = async (): Promise<unknown[]> => [
+      { jobNumber: '507071', orderQty: 176, qtyPerHr: 0.05, isDieChange: false },
+    ];
+
+    await dal.unlockShift('1300T', '2026-06-15-Day', '507071');
+    await dal.lockShift('1300T', '2026-06-15-Day', 'Bounpanh', 'Heng', '507071');
+
+    const prod = writes.find((w) => w.list === 'PMD_Production')!;
+    expect(prod.body.countEnd).toBe(115); // the shift is still written
+    expect(prod.body.vsPlan).toBeNull(); // …just without the snapshot
+  });
+
+  /*
+   * PMD_DieChangeLog.SignOffStatus — the one digit the setter signs the whole
+   * inspection off on. The site made the column by hand, so it is a Number on
+   * one tenant and a Choice of "1"/"2"/"3" on the next, and sending the wrong
+   * shape fails the entire Die Change Log save. The list's own field type
+   * decides, read off /fields alongside the schema probe.
+   */
+  describe('PMD_DieChangeLog.SignOffStatus', () => {
+    const stubDieChangeLog = (
+      dal: SharePointDataLayer,
+      columnType: string,
+    ): Array<Record<string, unknown>> => {
+      const bodies: Array<Record<string, unknown>> = [];
+      const o = dal as unknown as {
+        getJson: (url: string) => Promise<unknown>;
+        getAllItems: () => Promise<unknown[]>;
+        itemType: () => Promise<string>;
+        post: (url: string, body: unknown, ifMatch?: string) => Promise<unknown>;
+      };
+      o.getJson = async (): Promise<unknown> => ({
+        d: {
+          results: [
+            { Title: 'EventKey', InternalName: 'EventKey', TypeAsString: 'Text' },
+            { Title: 'EventStartSlot', InternalName: 'EventStartSlot', TypeAsString: 'Number' },
+            { Title: 'EventEndSlot', InternalName: 'EventEndSlot', TypeAsString: 'Number' },
+            { Title: 'ComponentsInJson', InternalName: 'ComponentsInJson', TypeAsString: 'Note' },
+            {
+              Title: 'ProblemDescriptionIn',
+              InternalName: 'ProblemDescriptionIn',
+              TypeAsString: 'Note',
+            },
+            { Title: 'SignOffStatus', InternalName: 'SignOffStatus', TypeAsString: columnType },
+          ],
+        },
+      });
+      // An existing row takes the MERGE path, which is all this needs to see.
+      o.getAllItems = async (): Promise<unknown[]> => [
+        {
+          Id: 7,
+          EventKey: '550T|2026-07-20|DAY|SFM507300|4',
+          EventStartSlot: 4,
+          EventEndSlot: 7,
+          Date: '2026-07-20T00:00:00Z',
+          Shift: 'Day',
+          Machine: '550T',
+          JobNumber: 'SFM507300',
+          Created: '2026-07-20T08:00:00Z',
+        },
+      ];
+      o.itemType = async (): Promise<string> => 'SP.Data.PMD_x005f_DieChangeLogListItem';
+      o.post = async (_url: string, body: unknown): Promise<unknown> => {
+        bodies.push(body as Record<string, unknown>);
+        return {};
+      };
+      return bodies;
+    };
+    const event = {
+      eventKey: '550T|2026-07-20|DAY|SFM507300|4',
+      eventStartSlot: 4,
+      eventEndSlot: 7,
+      date: '2026-07-20',
+      shift: 'Day',
+      dieSetter: 'Van Minh Ma',
+      machineCode: '550T',
+      changeOver: ['Die'],
+      jobNumber: 'SFM507300',
+      dieNumberOut: '117',
+      dieDescriptionOut: 'Proteus Seat',
+      dieNumberIn: '174',
+      dieDescriptionIn: 'Podium Seat',
+      problemDescription: 'Core chipped.',
+      problemDescriptionIn: '',
+    };
+
+    it('writes the worst rating as a number when the column is a Number', async () => {
+      const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+      const bodies = stubDieChangeLog(dal, 'Number');
+      const saved = await dal.createDieChangeLog!({
+        ...event,
+        components: { Cores: 'damaged', Bolts: 'good' },
+        componentsIn: { Bolts: 'good' },
+      });
+      expect(saved.signOffStatus).toBe(3);
+      expect(bodies.at(-1)!.SignOffStatus).toBe(3);
+    });
+
+    it('…and as text when it is a Choice of 1 / 2 / 3', async () => {
+      const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+      const bodies = stubDieChangeLog(dal, 'Choice');
+      await dal.createDieChangeLog!({
+        ...event,
+        components: { Venting: 'worn' },
+        componentsIn: {},
+      });
+      expect(bodies.at(-1)!.SignOffStatus).toBe('2');
+    });
+
+    it('leaves the cell empty when nothing was rated', async () => {
+      // Blank says "not inspected". A 1 there would claim the setter checked
+      // thirteen components and found them all good.
+      const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+      const bodies = stubDieChangeLog(dal, 'Number');
+      const saved = await dal.createDieChangeLog!({
+        ...event,
+        components: {},
+        componentsIn: {},
+        problemDescription: '',
+      });
+      expect(saved.signOffStatus).toBe(0);
+      expect(bodies.at(-1)!.SignOffStatus).toBeNull();
+    });
+
+    it('reads a stored status back off the row', async () => {
+      const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+      const o = dal as unknown as { getAllItems: () => Promise<unknown[]> };
+      o.getAllItems = async (): Promise<unknown[]> => [
+        { Id: 1, EventKey: 'A', SignOffStatus: 3, Created: '2026-07-20T08:00:00Z' },
+        { Id: 2, EventKey: 'B', SignOffStatus: '2', Created: '2026-07-19T08:00:00Z' },
+        // A row written before the column existed.
+        { Id: 3, EventKey: 'C', Created: '2026-07-18T08:00:00Z' },
+      ];
+      const rows = await dal.listDieChangeLog!();
+      expect(rows.map((r) => r.signOffStatus)).toEqual([3, 2, 0]);
+    });
+  });
+
   it('re-sign-off keeps CycleTime from the rehydrated row when planning has dropped it', async () => {
     store.clear();
     const dal = new SharePointDataLayer({

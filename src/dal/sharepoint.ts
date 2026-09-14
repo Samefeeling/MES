@@ -1,3 +1,6 @@
+import { resolveField, type ListField } from '../../assembly/src/data/sharepoint/fieldMap';
+import type { AssemblyDataLayer, AssemblyResult } from '../types/assembly';
+import { appendHandoverLine } from '../core/handover';
 import type {
   BdCode,
   BreakdownLogDetail,
@@ -34,12 +37,15 @@ import {
 } from '../core/breakdown';
 import { shiftBounds, slotClock } from '../core/shifts';
 import { hoursUnavailableFor, shiftTargetFor } from '../core/targets';
+import { scheduleAdherenceForShift } from '../core/kpi-attainment';
 import { retroJobLeftFixes, sumGoodStartedBefore } from '../core/jobgood';
 import {
   DIE_COMPONENTS,
   DIE_CONDITION_META,
   dieChangeEventKey,
+  dieSignOffStatus,
   parseDieCondition,
+  parseDieSignOffStatus,
   parseToolStatus,
   TOOL_STATUS_META,
 } from '../core/die';
@@ -180,6 +186,12 @@ const DEFAULT_FIELDS = {
      *  BI. The app recomputes the authoritative value from CycleTime, so
      *  this is a denormalised convenience, not a read dependency. */
     shiftTarget: 'ShiftTarget',
+    /** The shift's Schedule % frozen at sign-off. Schedule Adherence is
+     *  otherwise recomputed live against Planning.csv, and Epicor drops a
+     *  completed order from planning — so Monday's number could not be
+     *  reproduced on Friday. Optional column; stripRejectedFields tolerates
+     *  absence. */
+    vsPlan: 'VSPLAN',
     countStart: 'CountStart',
     countEnd: 'CountEnd',
     /** Identical cavities on the die (pieces per press cycle). Actual
@@ -370,6 +382,11 @@ const DEFAULT_FIELDS = {
      *  the list brittle and hard to provision consistently. */
     componentsInJson: 'ComponentsInJson',
     problemDescriptionIn: 'ProblemDescriptionIn',
+    /** The 1 / 2 / 3 the setter signs the whole inspection off on — the
+     *  worst component rating on the event. Written as a bare digit; the
+     *  column may be Number or Choice depending on how the site made it,
+     *  so the type is read off the list and the value shaped to match. */
+    signOffStatus: 'SignOffStatus',
   },
   dieMaintenance: {
     // Title = DieNumber (natural key into PMD_ProductDieColor.DieNumber).
@@ -1424,6 +1441,16 @@ export class SharePointDataLayer implements PmdDataLayer {
   // ---- die change log (PMD_DieChangeLog) -------------------------------
 
   private dieChangeSchemaReady: Promise<void> | null = null;
+  /**
+   * How `SignOffStatus` wants its 1 / 2 / 3 written.
+   *
+   * The site made the column by hand and it is a plain Number on some
+   * tenants and a Choice of "1" / "2" / "3" on others. A Choice column
+   * rejects the number 3 and a Number column rejects the string — and the
+   * whole Die Change Log save fails with it — so the list's own field type
+   * decides, read once alongside the schema probe. `null` until probed.
+   */
+  private dieSignOffStatusText: boolean | null = null;
 
   /** Add the four event-level columns introduced by the one-row-per-D/I
    *  model. EventKey is indexed and unique: this is the server-side guard
@@ -1435,8 +1462,20 @@ export class SharePointDataLayer implements PmdDataLayer {
       const fieldsUrl = `${this.listUrl(LISTS.dieChangeLog)}/fields`;
       const readFields = async (): Promise<Set<string>> => {
         const env = await this.getJson<{
-          d: { results: Array<{ Title: string; InternalName: string }> };
-        }>(`${fieldsUrl}?$filter=Hidden eq false&$select=Title,InternalName`);
+          d: {
+            results: Array<{ Title: string; InternalName: string; TypeAsString?: string }>;
+          };
+        }>(`${fieldsUrl}?$filter=Hidden eq false&$select=Title,InternalName,TypeAsString`);
+        // Anything but a numeric column takes the digit as text. Choice is
+        // the common hand-made shape; Text / Note behave the same way.
+        const status = env.d.results.find(
+          (f) => f.InternalName === F.signOffStatus || f.Title === F.signOffStatus,
+        );
+        if (status) {
+          this.dieSignOffStatusText = !['Number', 'Counter', 'Currency'].includes(
+            status.TypeAsString ?? '',
+          );
+        }
         return new Set(env.d.results.flatMap((f) => [f.Title, f.InternalName]));
       };
       let present = await readFields();
@@ -1450,6 +1489,9 @@ export class SharePointDataLayer implements PmdDataLayer {
         { name: F.eventEndSlot, kind: 9 },
         { name: F.componentsInJson, kind: 3 },
         { name: F.problemDescriptionIn, kind: 3 },
+        // Made by hand on the site that asked for it; created here as a
+        // Number for anyone deploying fresh.
+        { name: F.signOffStatus, kind: 9 },
       ];
       for (const field of required) {
         if (present.has(field.name)) continue;
@@ -1515,6 +1557,7 @@ export class SharePointDataLayer implements PmdDataLayer {
             DIE_COMPONENTS.map((c) => [c.key, parseDieCondition(str(r[c.key]))]),
           ),
           componentsIn: parseDieComponentsJson(str(r[F.componentsInJson])),
+          signOffStatus: parseDieSignOffStatus(r[F.signOffStatus]),
           problemDescription: str(r[F.problemDescription]),
           problemDescriptionIn: str(r[F.problemDescriptionIn]),
           createdAt: str(r['Created']),
@@ -1529,7 +1572,9 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
   }
 
-  async createDieChangeLog(log: Omit<DieChangeLog, 'id' | 'createdAt'>): Promise<DieChangeLog> {
+  async createDieChangeLog(
+    log: Omit<DieChangeLog, 'id' | 'createdAt' | 'signOffStatus'>,
+  ): Promise<DieChangeLog> {
     await this.ensureDieChangeLogSchema();
     const F = this.F.dieChangeLog;
     const eventKey = dieChangeEventKey(
@@ -1539,11 +1584,16 @@ export class SharePointDataLayer implements PmdDataLayer {
       log.jobNumber,
       log.eventStartSlot,
     );
+    // The one number that summarises the inspection is derived here as well
+    // as offered in the form, so a caller that skipped the preview — or a
+    // row written by an older build — can never carry a status that
+    // disagrees with the 26 ratings sitting beside it on the same row.
     const clean = {
       ...log,
       eventKey,
       eventStartSlot: Math.max(0, Math.floor(log.eventStartSlot)),
       eventEndSlot: Math.max(log.eventStartSlot, Math.floor(log.eventEndSlot)),
+      signOffStatus: dieSignOffStatus(log.components, log.componentsIn),
     };
     const findExisting = async (): Promise<DieChangeLog | undefined> =>
       (await this.listDieChangeLog()).find((r) => r.eventKey === eventKey);
@@ -1571,6 +1621,15 @@ export class SharePointDataLayer implements PmdDataLayer {
       [F.problemDescription]: clean.problemDescription,
       [F.componentsInJson]: JSON.stringify(clean.componentsIn ?? {}),
       [F.problemDescriptionIn]: clean.problemDescriptionIn,
+      // A digit, as a number or as text depending on how the column was
+      // made (see dieSignOffStatusText). null when nothing was rated — an
+      // empty cell says "not inspected", where a 1 would claim "all good".
+      [F.signOffStatus]:
+        clean.signOffStatus === 0
+          ? null
+          : this.dieSignOffStatusText === true
+            ? String(clean.signOffStatus)
+            : clean.signOffStatus,
     };
     for (const c of DIE_COMPONENTS) {
       const cond = clean.components[c.key];
@@ -2627,6 +2686,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       reopened: F.reopened ? r[F.reopened] === true : false,
       jobLeft: F.jobLeft && r[F.jobLeft] != null ? num(r[F.jobLeft]) : -1,
       shiftTarget: F.shiftTarget && r[F.shiftTarget] != null ? num(r[F.shiftTarget]) : -1,
+      vsPlan: F.vsPlan && r[F.vsPlan] != null ? num(r[F.vsPlan]) : -1,
       plannedStart: F.plannedStart ? str(r[F.plannedStart]) : '',
       // Built-in SP column, always present in the verbose payload.
       modified: str(r['Modified']),
@@ -2878,6 +2938,9 @@ export class SharePointDataLayer implements PmdDataLayer {
     // valid value ("job complete") so guard on >= 0, not truthiness.
     if (h.jobLeft >= 0) slots[0].jobLeft = h.jobLeft;
     if (h.shiftTarget >= 0) slots[0].shiftTarget = h.shiftTarget;
+    // The shift's Schedule % as it stood at sign-off — 0 is a real answer
+    // ("nothing scheduled was made"), so the sentinel is -1, not falsy.
+    if (h.vsPlan >= 0) slots[0].vsPlan = h.vsPlan;
     // Planned start denormalised at sign-off: ride the canonical slot so
     // KPI Schedule Adherence and a re-sign-off (cache-first) can read it
     // after Epicor drops the order from planning.
@@ -2963,6 +3026,29 @@ export class SharePointDataLayer implements PmdDataLayer {
       target.rejectCount = Object.values(obj).reduce((a, v) => a + (Number(v) || 0), 0);
     }
     return slots;
+  }
+
+  async appendImpwHandover(machineCode: string, shiftId: string, ticket: string): Promise<void> {
+    if (!ticket.trim()) throw new Error('Missing Mango ticket number');
+    const { shift } = parseShiftIdLoose(shiftId);
+    const rows = (await this.fetchHeaders(LISTS.production, { machineCode, shiftId }))
+      .filter((row) => row.machineCode === machineCode && row.date === shiftId.slice(0, 10) && row.shift === shift);
+    if (!rows.length) throw new Error('No PMD_Production row found for this shift');
+    const field = this.F.production.handover;
+    for (const row of rows) {
+      const url = `${this.listUrl(LISTS.production)}/items(${row.id})`;
+      // Re-read the note and use its ETag so another user's edit cannot be overwritten.
+      const { d } = await this.getJson<{ d: Record<string, unknown> & { __metadata: { etag: string; type: string } } }>(url);
+      const note = str(d[field]);
+      const line = `IMPW: ${ticket.trim()}`;
+      const updated = formatHandover(appendHandoverLine(note, 'method', line));
+      if (updated === note) continue;
+      if (!d.__metadata?.etag) throw new Error('SharePoint did not return an ETag');
+      await this.post(url, {
+        __metadata: { type: d.__metadata.type },
+        [field]: updated,
+      }, d.__metadata.etag);
+    }
   }
 
   async upsertProductionRecord(record: ProductionRecord): Promise<ProductionRecord> {
@@ -3106,6 +3192,40 @@ export class SharePointDataLayer implements PmdDataLayer {
         if (key.startsWith(`${machineCode}|${shiftId}|`)) shiftRows.push(...list);
       }
     }
+    /*
+     * The shift's Schedule % as it stands at this sign-off, frozen onto every
+     * header this call writes.
+     *
+     * It is recomputed live everywhere else, against Planning.csv — and Epicor
+     * drops an order from planning the moment it completes, so the number the
+     * Monday meeting read could not be reproduced on the Friday. This is the
+     * same function the KPI page calls, given the same picture: the shift as
+     * the server has it, with the tuples being signed off now taking the place
+     * of their older rows.
+     *
+     * Null when nothing on the shift was scheduled at all. "No plan to adhere
+     * to" is not "made none of the plan", and 0 would read as the second.
+     */
+    const signedNow = myTuples.flat();
+    const signingJobs = new Set(signedNow.map((r) => r.jobNumber));
+    const shiftAsSigned = [
+      ...shiftRows.filter((r) => !signingJobs.has(r.jobNumber)),
+      ...signedNow,
+    ];
+    let vsPlanSnap: number | null = null;
+    try {
+      vsPlanSnap = scheduleAdherenceForShift(
+        shiftAsSigned,
+        orders,
+        machineCode,
+        shiftId,
+        new Date(),
+      ).pct;
+    } catch (e) {
+      // A KPI snapshot must never cost somebody the shift they just signed.
+      console.warn('[pmd] Schedule % snapshot failed, signing off without it:', e);
+    }
+
     for (const slots of myTuples) {
       const job = slots[0]?.jobNumber ?? jobNumber ?? '';
       const agg = aggregateSlots(slots);
@@ -3235,6 +3355,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           cavities,
           plannedStart: plannedStartOf(job, slots),
           shiftTarget: shiftTargetSnap,
+          vsPlan: vsPlanSnap,
           timeline: agg.timeline,
           countStart: agg.countStart,
           countEnd: agg.countEnd,
@@ -3706,6 +3827,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (F.cycleTime && h.cycleTime > 0) body[F.cycleTime] = h.cycleTime;
     // ShiftTarget snapshot — write when we could compute one.
     if (F.shiftTarget && h.shiftTarget != null) body[F.shiftTarget] = h.shiftTarget;
+    // The shift's Schedule % at sign-off. Null when nothing on the shift was
+    // scheduled at all — there is no adherence to a plan that does not exist,
+    // and writing 0 would read as "made none of what was planned".
+    if (F.vsPlan && h.vsPlan != null) body[F.vsPlan] = h.vsPlan;
     if (F.downTime) body[F.downTime] = h.downTime;
     if (F.runTime) body[F.runTime] = h.runTime;
     if (F.handover) body[F.handover] = formatHandover(h.handover);
@@ -3844,6 +3969,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       F.jobRequired,
       F.cycleTime,
       F.shiftTarget,
+      F.vsPlan,
       F.cavities,
       F.runTime,
       F.downTime,
@@ -4330,7 +4456,11 @@ export class SharePointDataLayer implements PmdDataLayer {
     const res = await this.getJson<{
       d: { Title: string; Email: string; LoginName: string };
     }>(`${this.siteUrl}/_api/web/currentUser`);
-    return { name: res.d.Title || res.d.Email || res.d.LoginName, role: 'operator' };
+    return {
+      name: res.d.Title || res.d.Email || res.d.LoginName,
+      role: 'operator',
+      email: res.d.Email || '',
+    };
   }
 
   // ---- diagnostics ---------------------------------------------------
@@ -4788,6 +4918,10 @@ interface HeaderRow {
    *  column is absent or empty (live rows / legacy signed rows). Stamped
    *  onto the canonical record so Trace can read demand-at-start. */
   jobLeft: number;
+  /** The shift's Schedule % frozen at sign-off from PMD_Production.VSPLAN;
+   *  -1 when the column is absent or was never written. 0 is a real answer
+   *  ("none of what was scheduled was made"), so the sentinel cannot be 0. */
+  vsPlan: number;
   /** Shift Target frozen at job start from PMD_Production.ShiftTarget; -1
    *  when absent. Round-tripped onto the canonical record for Trace. */
   shiftTarget: number;
@@ -4818,6 +4952,9 @@ interface HeaderInput {
    *  only — live pushes omit it; the value derives from signed rows on
    *  read). null/undefined skips the column write. */
   shiftTarget?: number | null;
+  /** The machine-shift's Schedule % at sign-off; null when nothing on the
+   *  shift was scheduled, which is not the same as having made none of it. */
+  vsPlan?: number | null;
   /** Identical cavities on the die (pieces per cycle). 1 (or 0/undefined)
    *  leaves the column at its default; written when > 1. */
   cavities?: number;
@@ -5715,4 +5852,84 @@ export function toServerRelativePath(input: string): string {
   }
   if (!p.startsWith('/')) p = '/' + p;
   return p;
+}
+
+export const DEFAULT_ASSEMBLY_FIELDS = {
+  workType: "WorkType", laborHours: "LaborHours", description: "WorkDescription", supportDepartment: "SupportDepartment",
+  // The order's standard labour content and the quantity it covers. Together
+  // they turn a day's finished units back into earned hours, which is what the
+  // KPI page measures Efficiency on.
+  plannedHours: "PlannedHours", orderQty: "OrderQty",
+  "job": "Title",
+  "date": "Date",
+  "line": "Line",
+  "operators": "Operators",
+  "output": "ShiftOutput",
+  "complete": "Complete",
+  "reject": "Reject",
+  "rework": "Rework",
+  "completed": "JobCompleted",
+  "due": "DueDate",
+  "completedAt": "CompletedAt"
+};
+
+
+/** Separate adapter: no PMD column mapping or machine/shift assumptions. */
+export function createAssemblyDataLayer(env: Record<string, string | undefined>, overrides: Partial<typeof DEFAULT_ASSEMBLY_FIELDS> = {}): AssemblyDataLayer {
+  const requestedFields = { ...DEFAULT_ASSEMBLY_FIELDS, ...overrides };
+  return {
+    async results(from, to) {
+      if (env.VITE_BACKEND !== 'sharepoint') return [];
+      const site = (env.VITE_SHAREPOINT_SITE_URL || env.VITE_SITE_URL || '').replace(/\/$/, '');
+      if (!site) throw new Error('Assembly SharePoint site is not configured.');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) throw new Error('Choose a valid date range.');
+      const end = new Date(`${to}T00:00:00Z`);
+      end.setUTCDate(end.getUTCDate() + 1);
+      const list = encodeURIComponent((env.VITE_PRODUCTION_LIST || 'ASSY_Production').replace(/'/g, "''")).replace(/'/g, '%27');
+      if (new URL(site).origin !== window.location.origin) throw new Error('Open MES on the configured SharePoint site.');
+      const schemaResponse = await fetch(`${site}/_api/web/lists/getbytitle('${list}')/fields?$select=Title,InternalName,ReadOnlyField`, {
+        credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json;odata=nometadata' },
+      });
+      if (!schemaResponse.ok) throw new Error('Assembly column definitions could not be loaded.');
+      const schema = (await schemaResponse.json()).value as ListField[];
+      if (!Array.isArray(schema)) throw new Error('Assembly column definitions are invalid.');
+      const fields = { ...requestedFields };
+      for (const key of Object.keys(fields) as (keyof typeof fields)[]) {
+        const found = resolveField(schema, fields[key]);
+        if (found) fields[key] = found.InternalName;
+        else if (key === 'date' || key === 'job') throw new Error('Missing Assembly column: ' + fields[key]);
+      }
+      const filter = `${fields.date} ge datetime'${from}T00:00:00Z' and ${fields.date} lt datetime'${end.toISOString()}'`;
+      let url = `${site}/_api/web/lists/getbytitle('${list}')/items?$top=500&$filter=${encodeURIComponent(filter)}`;
+      const output: AssemblyResult[] = [];
+      const keys = new Set<string>();
+      for (let page = 0; url && page < 100; page++) {
+        if (new URL(url).origin !== window.location.origin) throw new Error('Open MES on the configured SharePoint site.');
+        const res = await fetch(url, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json;odata=nometadata' } });
+        if (!res.ok) throw new Error(`Assembly results could not be loaded (${res.status}).`);
+        const body = await res.json() as { value?: Record<string, unknown>[]; 'odata.nextLink'?: string; '@odata.nextLink'?: string };
+        for (const row of body.value ?? []) {
+          const job = String(row[fields.job] ?? '').trim();
+          const day = String(row[fields.date] ?? '').slice(0, 10);
+          const key = `${job}|${day}`;
+          if (!job || !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('Assembly results contain an invalid job/date.');
+          if (keys.has(key)) throw new Error(`Duplicate Assembly result: ${key}. Correct the source before reporting totals.`);
+          keys.add(key);
+          const number = (field: string): number => {
+            const n = Number(row[field] ?? 0);
+            if (!Number.isFinite(n) || n < 0) throw new Error(`Invalid ${field} for ${key}.`);
+            return n;
+          };
+          output.push({ workType: String(row[fields.workType] ?? ""), laborHours: number(fields.laborHours), description: String(row[fields.description] ?? ""), supportDepartment: String(row[fields.supportDepartment] ?? ""), id: String(row.Id), job, day, line: String(row[fields.line] ?? ''), operators: String(row[fields.operators] ?? ''),
+            plannedHours: number(fields.plannedHours), orderQty: number(fields.orderQty),
+            output: number(fields.output), complete: number(fields.complete), reject: number(fields.reject), rework: number(fields.rework),
+            completed: row[fields.completed] === true, due: row[fields.due] ? String(row[fields.due]) : null,
+            completedAt: row[fields.completedAt] ? String(row[fields.completedAt]) : null });
+        }
+        url = body['odata.nextLink'] ?? body['@odata.nextLink'] ?? '';
+      }
+      if (url) throw new Error('Assembly results exceed the page limit. Select a shorter date range.');
+      return output.sort((a, b) => b.day.localeCompare(a.day) || a.job.localeCompare(b.job));
+    },
+  };
 }

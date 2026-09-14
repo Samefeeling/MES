@@ -43,12 +43,21 @@ docs/INTEGRATION.md PMD ⇄ Advanced MES integration design
 ## Develop
 
 ```bash
-npm install
-npm run dev        # http://localhost:5173 — uses the in-memory backend
-npm test           # unit tests
-npm run typecheck  # tsc --noEmit
-npm run build      # typecheck + static bundle to dist/
+npm install            # PMD dashboard (this package)
+npm run setup:assembly # Assembly board (assembly/ — its own package.json)
+npm run dev            # http://localhost:5173 — uses the in-memory backend
+npm test               # unit tests
+npm run typecheck      # tsc --noEmit
+npm run build          # typecheck + static bundle to dist/, both apps
 ```
+
+**Both install steps are needed, and both again after a `git pull` that
+changes either package.json.** The repository is two npm packages with two
+lockfiles, so one `npm install` leaves a tree that looks installed and is
+not — which surfaces as `Cannot find module 'node:url'` from
+`vite.config.ts`, or as a wall of unresolved `react` / `zustand` / `xlsx`
+imports when `vite` starts. `npm run dev` and `npm run build` check for this
+first and print the command to run (`scripts/check-deps.mjs`).
 
 ## Switching backend
 
@@ -69,3 +78,7 @@ lock/unlock, per-job counts/rejects, handover, auto die-change, 60s polling.
 SharePoint/SQL/Azure adapters are documented skeletons (DAL contract is
 defined and tested via the in-memory backend). Auto-fill rules (§5.9) and
 the Admin/Reports modules (§9, §10) are intentionally out of v1 scope.
+
+## Assembly planning
+
+MES includes PMD and Assembly with separate production data and KPI views. See [Assembly integration](docs/ASSEMBLY.md) for setup, Lists, file paths, migration and deployment.

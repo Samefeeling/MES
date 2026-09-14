@@ -15,7 +15,7 @@ import type { ShiftCode } from '../types';
  * be opened to its own days by clicking it, and closed again the same way.
  *
  * Everything here sums. That matters for the Efficiency line the hours
- * chart draws on top: it is recomputed as Σrun ÷ Σ(run+down+setup), so a
+ * chart draws on top: it is recomputed as Σstandard hours ÷ Σrun hours (only with complete rate coverage), so a
  * month's figure is the ratio of the sums — the month's real efficiency —
  * and not the average of thirty daily ratios, which would let one quiet
  * Sunday count as much as a full Wednesday.
@@ -27,6 +27,13 @@ export interface ChartShiftCell {
   runHrs: number;
   downHrs: number;
   setupHrs: number;
+  /** Efficiency's ingredients — the output's standard hours, and how many jobs
+   *  carried a standard at all — carried rather than the ratio, for the same
+   *  reason this whole module exists: a month bar is the ratio of the sums.
+   *  Its denominator is `runHrs`, which is already here. */
+  unratedRunHrs: number;
+  stdHours: number;
+  ratedJobs: number;
 }
 
 export interface ChartBucket {
@@ -85,10 +92,13 @@ const addInto = (into: ChartShiftCell, from: ChartShiftCell): void => {
   into.runHrs += from.runHrs;
   into.downHrs += from.downHrs;
   into.setupHrs += from.setupHrs;
+  into.unratedRunHrs += from.unratedRunHrs;
+  into.stdHours += from.stdHours;
+  into.ratedJobs += from.ratedJobs;
 };
 
 const emptyCell = (): ChartShiftCell => ({
-  good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0,
+  good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, unratedRunHrs: 0, stdHours: 0, ratedJobs: 0,
 });
 
 /**

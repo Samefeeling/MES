@@ -97,7 +97,11 @@ export interface PmdDataLayer {
   /** All die-change reports, newest first. */
   listDieChangeLog?(): Promise<DieChangeLog[]>;
   /** Persist a new report (id/createdAt assigned by the backend). */
-  createDieChangeLog?(log: Omit<DieChangeLog, 'id' | 'createdAt'>): Promise<DieChangeLog>;
+  createDieChangeLog?(
+    /** `signOffStatus` is not an input: the DAL derives it from the ratings
+     *  so a stored status can never contradict the row it summarises. */
+    log: Omit<DieChangeLog, 'id' | 'createdAt' | 'signOffStatus'>,
+  ): Promise<DieChangeLog>;
 
   // Planning (read-only — the Epicor → Planning.csv pipeline owns writes)
   listPlanning(filter: PlanningFilter): Promise<PlanningOrder[]>;
@@ -133,6 +137,8 @@ export interface PmdDataLayer {
 
   // Production (hot path)
   listProduction(filter: ProductionFilter): Promise<ProductionRecord[]>;
+  /** Append a confirmed Mango reference to existing signed-off Handover notes only. */
+  appendImpwHandover?(machineCode: string, shiftId: string, ticket: string): Promise<void>;
   /** Canonical slot-0 counters only. The Tool service planner uses this
    *  lightweight path for its rolling annual ledger so it does not have
    *  to download a year of status/reject event detail. */

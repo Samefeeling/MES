@@ -1,4 +1,5 @@
 import { defineConfig, type Plugin } from 'vite';
+import { fileURLToPath, URL } from 'node:url';
 
 // A per-build id (millis, base36). Baked into the bundle as __BUILD_ID__ and
 // written to assets/version.json. The running app polls version.json and, when
@@ -35,6 +36,8 @@ function pmdBuildVersion(): Plugin {
 // across rebuilds (see docs/DEPLOYMENT.md § B).
 export default defineConfig({
   base: './',
+  resolve: { alias: { '@': fileURLToPath(new URL('./assembly/src', import.meta.url)) } },
+  esbuild: { jsx: 'automatic' },
   plugins: [pmdBuildVersion()],
   build: {
     target: 'es2021',

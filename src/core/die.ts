@@ -11,6 +11,7 @@ import type {
   DieChangeLog,
   DieComponentCondition,
   DieMaintenanceRequest,
+  DieSignOffStatus,
   PlanningOrder,
   ProductDieColor,
   ProductionCounterRecord,
@@ -63,6 +64,56 @@ export const DIE_CONDITION_META: Record<
   worn: { label: '2. Operational but worn', short: '2', cls: 'amber' },
   damaged: { label: '3. Damaged or can’t be used', short: '3', cls: 'red' },
 };
+
+/** The condition scale as the number `SignOffStatus` holds. */
+export const DIE_CONDITION_RANK: Record<DieComponentCondition, DieSignOffStatus> = {
+  '': 0,
+  good: 1,
+  worn: 2,
+  damaged: 3,
+};
+
+/** …and back, for anything that draws a stored status. */
+export const DIE_CONDITION_OF_RANK: Record<DieSignOffStatus, DieComponentCondition> = {
+  0: '',
+  1: 'good',
+  2: 'worn',
+  3: 'damaged',
+};
+
+/**
+ * The one number the setter signs the inspection off on — the **worst**
+ * condition rated anywhere on the event, OUT side and IN side together.
+ *
+ * Worst, not average or majority: an inspection exists to surface the one
+ * cracked core among twelve good bolts, and any rule that lets twelve 1s
+ * outvote a 3 would hide exactly the thing the form is filled in for. 0 when
+ * nothing was rated at all, which is not the same as "all good" and must not
+ * read as a 1.
+ */
+export function dieSignOffStatus(
+  ...sides: Array<Record<string, DieComponentCondition> | undefined>
+): DieSignOffStatus {
+  let worst: DieSignOffStatus = 0;
+  for (const side of sides) {
+    for (const c of DIE_COMPONENTS) {
+      const rank = DIE_CONDITION_RANK[side?.[c.key] ?? ''] ?? 0;
+      if (rank > worst) worst = rank;
+    }
+  }
+  return worst;
+}
+
+/** Free text or a number ("3", 3, "3. Damaged or can’t be used") → 0-3.
+ *  The list column now holds the bare digit; older rows may hold the
+ *  long choice string, and both have to read the same. */
+export function parseDieSignOffStatus(raw: unknown): DieSignOffStatus {
+  if (raw == null) return 0;
+  if (typeof raw === 'number') {
+    return raw === 1 || raw === 2 || raw === 3 ? raw : 0;
+  }
+  return DIE_CONDITION_RANK[parseDieCondition(String(raw))] ?? 0;
+}
 
 /** One component the setter rated worse than "1. Good work order". */
 export interface DieConditionFlag {

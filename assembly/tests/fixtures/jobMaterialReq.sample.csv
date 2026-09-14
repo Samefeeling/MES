@@ -1,0 +1,6 @@
+JobMtl_JobNum,JobHead_PartNum,JobMtl_PartNum,JobMtl_Description,JobMtl_RequiredQty,JobMtl_IUM
+018140-1-1,CSSL01436,V11694,"Ned Stool shell, amber",30,EA
+018140-1-1,CSSL01436,FIX-M6-KIT,"Fixings kit, M6",30,EA
+018321-2-1,DETR00081,MDF-TOP-0900,"MDF top, 900x600",4,EA
+018321-2-1,DETR00081,LEG-SET-4,Folding leg set,4,EA
+SFM507615,7911FR,PP-GRAN-CHAR,"Polypropylene granulate, charcoal",41.2,KG

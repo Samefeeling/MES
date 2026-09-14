@@ -3,22 +3,79 @@ import {
   aggregate,
   cavityGross,
   countSetupEvents,
-  oeeColor,
+  efficiencyColor,
   scrapColor,
 } from '../src/core/metrics';
 import { partsCoRun, ordersCoRun } from '../src/core/corun';
 import { rec } from './helpers';
 
 describe('KPI aggregation (§4.1)', () => {
-  it('OEE = run-slot ratio; null when no filled slots', () => {
+  /*
+   * Efficiency = (Good ÷ JobOper_ProdStandard) ÷ every run hour.
+   *
+   * It used to be run slots ÷ all filled slots, which is utilisation: it said
+   * how much of the shift the press was running and nothing at all about how
+   * fast. These four slots score 75% on that reading whatever came off the
+   * press.
+   */
+  it('Efficiency = the output’s standard hours ÷ run hours', () => {
     const recs = [
-      rec({ jobNumber: 'J1', slotIndex: 0, statusCode: 'R' }),
+      rec({
+        jobNumber: 'J1', slotIndex: 0, statusCode: 'R',
+        countStart: 0, countEnd: 200, cycleTime: 0.01,
+      }),
       rec({ jobNumber: 'J1', slotIndex: 1, statusCode: 'R' }),
       rec({ jobNumber: 'J1', slotIndex: 2, statusCode: 'R' }),
       rec({ jobNumber: 'J1', slotIndex: 3, statusCode: 'B' }),
     ];
-    expect(aggregate(recs).oee).toBe(75);
-    expect(aggregate([]).oee).toBeNull();
+    // 200 pieces at 100/h = 2 standard hours, run in 3 slots = 1.5 h.
+    const k = aggregate(recs);
+    expect(k.stdHours).toBe(2);
+    expect(k.runHrs).toBe(1.5);
+    expect(k.efficiency).toBe(133);
+    expect(aggregate([]).efficiency).toBeNull();
+  });
+
+  it('takes the rate from planning when the row has not been signed off yet', () => {
+    // CycleTime is stamped on the canonical slot at SIGN-OFF, so a shift still
+    // running carries none — and would read "—" all day without this.
+    const recs = [
+      rec({ jobNumber: 'J1', slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: 100 }),
+      rec({ jobNumber: 'J1', slotIndex: 1, statusCode: 'R' }),
+    ];
+    expect(aggregate(recs).efficiency).toBeNull();
+    expect(aggregate(recs, new Map([['J1', 0.01]])).efficiency).toBe(100);
+  });
+
+  it('does not report a partial standard-hours numerator over all run hours', () => {
+    const recs = [
+      rec({
+        jobNumber: 'J1', slotIndex: 0, statusCode: 'R',
+        countStart: 0, countEnd: 100, cycleTime: 0.01,
+      }),
+      rec({ jobNumber: 'J1', slotIndex: 1, statusCode: 'R' }),
+      rec({ jobNumber: 'J2', slotIndex: 2, statusCode: 'R', countStart: 0, countEnd: 100 }),
+      rec({ jobNumber: 'J2', slotIndex: 3, statusCode: 'R' }),
+    ];
+    const k = aggregate(recs);
+    expect(k.stdHours).toBe(1);
+    expect(k.runHrs).toBe(2);
+    expect(k.efficiency).toBeNull();
+    expect(k.unratedRunHrs).toBe(1);
+  });
+
+  it('reads “—”, not 0%, when nothing in the slice carries a standard', () => {
+    // The press ran and made pieces; nobody ever gave the order a rate. A
+    // zero there is a measurement — "ran the hours, made nothing" — and this
+    // is not that.
+    const recs = [
+      rec({ jobNumber: 'J9', slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: 100 }),
+      rec({ jobNumber: 'J9', slotIndex: 1, statusCode: 'R' }),
+    ];
+    const k = aggregate(recs);
+    expect(k.ratedJobs).toBe(0);
+    expect(k.runHrs).toBe(1);
+    expect(k.efficiency).toBeNull();
   });
 
   it('downtime = (B+M) × 0.5h; setup = (D+C+I) × 0.5h', () => {
@@ -107,8 +164,9 @@ describe('KPI aggregation (§4.1)', () => {
     // Die/Colour/Insert columns those hours are judged against.
     expect(k.setupHrs).toBe(0.5);
     expect(k.dieHrs).toBe(0.5);
-    // It is still a filled slot, so Efficiency counts it: 1 run of 5.
-    expect(k.oee).toBe(20);
+    // Warm-up is not run time, so it is not in Efficiency's denominator
+    // either — and with no rate on the job there is nothing to judge at all.
+    expect(k.efficiency).toBeNull();
   });
 
   it('reports zero Startup hours for a shift that never warmed up', () => {
@@ -177,14 +235,37 @@ describe('ordersCoRun', () => {
 
 describe('KPI thresholds (§4.2)', () => {
   it('OEE colors', () => {
-    expect(oeeColor(90)).toBe('green');
-    expect(oeeColor(80)).toBe('amber');
-    expect(oeeColor(60)).toBe('red');
-    expect(oeeColor(null)).toBe('gray');
+    expect(efficiencyColor(90)).toBe('green');
+    expect(efficiencyColor(80)).toBe('amber');
+    expect(efficiencyColor(60)).toBe('red');
+    expect(efficiencyColor(null)).toBe('gray');
   });
   it('scrap colors', () => {
     expect(scrapColor(1)).toBe('green');
     expect(scrapColor(3)).toBe('amber');
     expect(scrapColor(7)).toBe('red');
+  });
+});
+
+
+describe('complete KPI tuples', () => {
+  it('counts the same job on two machines separately', () => {
+    const rows = [
+      rec({ machineCode: '1600T', jobNumber: 'J', slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: 50, cycleTime: 0.01 }),
+      rec({ machineCode: '1300T', jobNumber: 'J', slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: 50, cycleTime: 0.01 }),
+    ];
+    expect(aggregate(rows).output).toBe(100);
+    expect(aggregate(rows).efficiency).toBe(100);
+  });
+  it('uses each machine job standard and keeps fractional standard hours', () => {
+    const rows = [rec({ machineCode: '1600T', jobNumber: ' j ', slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: 1 })];
+    const result = aggregate(rows, new Map([['1600T|J', 0.004], ['1300T|J', 1]]));
+    expect(result.stdHours).toBe(0.004);
+    expect(result.efficiency).toBe(1);
+  });
+  it('prefers the saved rate and rejects infinite standards', () => {
+    const rows = [rec({ jobNumber: 'J', slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: 50, cycleTime: 0.01 })];
+    expect(aggregate(rows, new Map([['J', 0.02]])).efficiency).toBe(100);
+    expect(aggregate([{ ...rows[0], cycleTime: Infinity }]).efficiency).toBeNull();
   });
 });

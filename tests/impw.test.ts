@@ -1,0 +1,1098 @@
+import { describe, expect, it } from 'vitest';
+import {
+  buildImpwDraft,
+  matchImpwOption,
+  suggestImpwClassification,
+  describeImpwApiFailure,
+  describeImpwLookupFailure,
+  describeMangoAuthFailure,
+  detectImpwFindings,
+  findImpwRecord,
+  foldBreakdowns,
+  impwApiPayload,
+  impwDepartmentOf,
+  impwEndpoint,
+  impwDraftIssues,
+  impwFindingKey,
+  impwIsoToFormDate,
+  impwMangoDate,
+  impwOccurrenceDate,
+  impwOccurrenceIso,
+  impwParts,
+  impwPartsSummary,
+  impwPlainText,
+  impwRecordIsDetailed,
+  impwTicketFromHandovers,
+  impwTicketRef,
+  missingImpwFields,
+  overlongImpwFields,
+  parseImpwCreated,
+  parseImpwOptions,
+  parseImpwRecord,
+  parseImpwRecords,
+  suggestImpwDepartment,
+  yieldPctOf,
+  EMPTY_IMPW_SITE,
+  EMPTY_OPTION,
+  IMPW_DESCRIPTION_MAX,
+  IMPW_IMPROVEMENT_TYPES,
+  IMPW_RECORD_ROWS,
+  IMPW_TYPES,
+  type ImpwDraft,
+  type ImpwFinding,
+  type ImpwSiteConfig,
+  type ImpwSlice,
+} from '../src/core/impw';
+import { rec } from './helpers';
+
+const RULES = { yieldTarget: 95, rejectPerShiftMax: 5 };
+
+/** A clean shift on 1600T unless the test says otherwise. */
+function slice(partial: Partial<ImpwSlice> = {}): ImpwSlice {
+  const base: ImpwSlice = {
+    machineCode: '1600T',
+    machineName: 'Injection 1600T',
+    shiftId: '2026-08-26-Night',
+    output: 1000,
+    reject: 2,
+    yieldPct: 99.8,
+    breakdownHrs: 0,
+    breakdowns: [],
+    jobs: [{ jobNumber: 'SFM507205', partNumber: 'SF-1234-A', partDescription: 'Sofa Arm Left' }],
+    raisedTicket: '',
+  };
+  return { ...base, ...partial };
+}
+
+/** The plant's answers, as they look once the first ticket has been filed:
+ *  three names that exist in Mango, and two picks out of Mango's own lists. */
+const SITE: ImpwSiteConfig = {
+  region: 'QLD',
+  branch: 'Wacol',
+  other: 'Precision Moulding',
+  typeOfImprovement: { id: 'toi-1', name: 'process gap' },
+  coordinator: { id: 'co-1', name: 'Paul Fiddling (AU)' },
+};
+
+describe('detectImpwFindings', () => {
+  it('raises nothing for a clean shift', () => {
+    expect(detectImpwFindings([slice()], RULES)).toEqual([]);
+  });
+
+  it('raises on any breakdown at all', () => {
+    const found = detectImpwFindings([slice({ breakdownHrs: 0.5 })], RULES);
+    expect(found).toHaveLength(1);
+    expect(found[0].triggers).toEqual(['breakdown']);
+    expect(found[0].reasons[0]).toContain('0.5 h lost');
+  });
+
+  it('names the breakdown causes in the reason', () => {
+    const found = detectImpwFindings(
+      [
+        slice({
+          breakdownHrs: 2,
+          breakdowns: [
+            { code: 'MEC-02', label: 'Ejector jam', owner: 'Maintenance', hours: 2, note: '' },
+          ],
+        }),
+      ],
+      RULES,
+    );
+    expect(found[0].reasons[0]).toContain('MEC-02 Ejector jam');
+  });
+
+  it('raises when yield is below the target', () => {
+    const found = detectImpwFindings([slice({ output: 900, reject: 100, yieldPct: 90 })], RULES);
+    expect(found[0].triggers).toContain('yield');
+    expect(found[0].reasons.some((r) => r.includes('90%') && r.includes('95%'))).toBe(true);
+  });
+
+  it('leaves a shift exactly on the yield target alone', () => {
+    expect(detectImpwFindings([slice({ output: 95, reject: 5, yieldPct: 95 })], RULES)).toEqual([]);
+  });
+
+  it('never reads an empty shift as a yield miss', () => {
+    // yieldPct defaults to 100 with no pieces, but guard it explicitly: a
+    // press that never ran has not missed anything.
+    const empty = slice({ output: 0, reject: 0, yieldPct: 0 });
+    expect(detectImpwFindings([empty], RULES)).toEqual([]);
+  });
+
+  it('raises above the per-shift reject allowance, not at it', () => {
+    expect(detectImpwFindings([slice({ reject: 5, yieldPct: 99 })], RULES)).toEqual([]);
+    const over = detectImpwFindings([slice({ reject: 6, yieldPct: 99 })], RULES);
+    expect(over[0].triggers).toEqual(['reject']);
+    expect(over[0].reasons[0]).toContain('6 rejects');
+  });
+
+  it('uses the caller thresholds, so a tuned KPI colour tunes the trigger', () => {
+    const s = slice({ output: 96, reject: 4, yieldPct: 96 });
+    expect(detectImpwFindings([s], RULES)).toEqual([]);
+    expect(detectImpwFindings([s], { yieldTarget: 98, rejectPerShiftMax: 5 })[0].triggers).toEqual([
+      'yield',
+    ]);
+    expect(detectImpwFindings([s], { yieldTarget: 95, rejectPerShiftMax: 3 })[0].triggers).toEqual([
+      'reject',
+    ]);
+  });
+
+  it('gives one finding per shift no matter how many rules it broke', () => {
+    const found = detectImpwFindings(
+      [slice({ output: 800, reject: 200, yieldPct: 80, breakdownHrs: 1 })],
+      RULES,
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0].triggers).toEqual(['breakdown', 'yield', 'reject']);
+    expect(found[0].reasons).toHaveLength(3);
+  });
+
+  it('keys a finding by machine and shift', () => {
+    const found = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES);
+    expect(found[0].key).toBe(impwFindingKey('1600T', '2026-08-26-Night'));
+    expect(found[0].key).toBe('1600T|2026-08-26-Night');
+  });
+
+  it('never merges two machines on the same shift', () => {
+    const found = detectImpwFindings(
+      [slice({ breakdownHrs: 1 }), slice({ machineCode: '550T', breakdownHrs: 1 })],
+      RULES,
+    );
+    expect(found.map((f) => f.machineCode).sort()).toEqual(['1600T', '550T']);
+  });
+
+  it('ranks a breakdown and a quality miss on one scale — shift lost', () => {
+    // Half the shift gone (0.5) outranks a 10% scrap rate (0.1), even
+    // though that shift is 20× over the reject allowance. Ranking on the
+    // overshoot instead would put every quality finding on top for ever.
+    const found = detectImpwFindings(
+      [
+        slice({
+          machineCode: 'A',
+          shiftId: '2026-08-26-Day',
+          output: 900,
+          reject: 100,
+          yieldPct: 90,
+        }),
+        slice({ machineCode: 'B', shiftId: '2026-08-26-Day', breakdownHrs: 4 }),
+      ],
+      RULES,
+    );
+    expect(found.map((f) => f.machineCode)).toEqual(['B', 'A']);
+    expect(found[0].severity).toBeCloseTo(0.5, 4);
+    expect(found[1].severity).toBeCloseTo(0.1, 4);
+  });
+
+  it('sinks a shift raised only by the flat reject allowance', () => {
+    // 6 rejects in 10,000 pieces breaks the per-shift rule and must still
+    // be raised — but it is not what the meeting opens first.
+    const found = detectImpwFindings(
+      [
+        slice({ machineCode: 'A', output: 9994, reject: 6, yieldPct: 99.9 }),
+        slice({ machineCode: 'B', breakdownHrs: 0.5 }),
+      ],
+      RULES,
+    );
+    expect(found.map((f) => f.machineCode)).toEqual(['B', 'A']);
+    expect(found[1].triggers).toEqual(['reject']);
+  });
+
+  it('breaks a severity tie on the newest shift', () => {
+    const found = detectImpwFindings(
+      [
+        slice({ machineCode: 'A', shiftId: '2026-08-24-Day', breakdownHrs: 1 }),
+        slice({ machineCode: 'B', shiftId: '2026-08-26-Day', breakdownHrs: 1 }),
+      ],
+      RULES,
+    );
+    expect(found.map((f) => f.shiftId)).toEqual(['2026-08-26-Day', '2026-08-24-Day']);
+  });
+});
+
+describe('yieldPctOf', () => {
+  it('is Good ÷ (Good + Reject)', () => {
+    expect(yieldPctOf(900, 100)).toBe(90);
+    expect(yieldPctOf(999, 1)).toBe(99.9);
+  });
+
+  it('is 100 for a shift with no pieces', () => {
+    expect(yieldPctOf(0, 0)).toBe(100);
+  });
+});
+
+describe('foldBreakdowns', () => {
+  const slot = (
+    statusCode: string,
+    bdIssue = '',
+    extra: { bdCause?: string; mangoTicket?: string } = {},
+  ): ReturnType<typeof rec> =>
+    rec({ jobNumber: 'J1', slotIndex: 0, statusCode: statusCode as '', bdIssue, ...extra });
+
+  it('counts B slots only — smoko is not a breakdown', () => {
+    const folded = foldBreakdowns(
+      [slot('M'), slot('M'), slot('R'), slot('D'), slot('B', 'MEC-02')],
+      0.5,
+    );
+    expect(folded).toHaveLength(1);
+    expect(folded[0].code).toBe('MEC-02');
+    expect(folded[0].hours).toBe(0.5);
+  });
+
+  it('folds repeated slots of one cause into its total hours', () => {
+    const folded = foldBreakdowns(
+      [slot('B', 'HYD-04'), slot('B', 'HYD-04'), slot('B', 'HYD-04')],
+      0.5,
+    );
+    expect(folded).toEqual([
+      expect.objectContaining({ code: 'HYD-04', hours: 1.5, owner: 'Maintenance' }),
+    ]);
+  });
+
+  it('resolves the cause text and owner from the taxonomy', () => {
+    const folded = foldBreakdowns([slot('B', 'TOOL-02')], 0.5);
+    expect(folded[0].label).toBe('Mould damage (cavity / core / insert)');
+    expect(folded[0].owner).toBe('Toolroom');
+  });
+
+  it('parks an uncoded breakdown on OTH-99 rather than losing the hours', () => {
+    const folded = foldBreakdowns([slot('B', '')], 0.5);
+    expect(folded[0].code).toBe('OTH-99');
+    expect(folded[0].hours).toBe(0.5);
+    // OTH-99's taxonomy owner is "—", which is no owner at all.
+    expect(folded[0].owner).toBe('');
+  });
+
+  it("keeps what the operator wrote when it adds to the code", () => {
+    const folded = foldBreakdowns(
+      [slot('B', 'ELE-02'), slot('B', 'ELE-02', { bdCause: 'Drive tripped on start, 3rd time' })],
+      0.5,
+    );
+    expect(folded[0].note).toBe('Drive tripped on start, 3rd time');
+  });
+
+  it('drops a cause that only repeats the taxonomy text', () => {
+    // BDCause is pre-filled from the taxonomy unless the operator types
+    // over it, so keeping it would print the same sentence twice.
+    const folded = foldBreakdowns(
+      [slot('B', 'ELE-02', { bdCause: 'Motor fault (drive / pump motor)' })],
+      0.5,
+    );
+    expect(folded[0].note).toBe('');
+  });
+
+  it('still reads the OTH-99 free text off legacy rows', () => {
+    // Before BDCause existed the free text was written to MangoTicket —
+    // which, despite the name, never held a Mango work-order number.
+    const folded = foldBreakdowns(
+      [slot('B', 'OTH-99', { mangoTicket: 'Smell from the cooling unit' })],
+      0.5,
+    );
+    expect(folded[0].note).toBe('Smell from the cooling unit');
+  });
+
+  it('sorts the causes by hours lost', () => {
+    const folded = foldBreakdowns(
+      [slot('B', 'ELE-02'), slot('B', 'HYD-04'), slot('B', 'HYD-04')],
+      0.5,
+    );
+    expect(folded.map((b) => b.code)).toEqual(['HYD-04', 'ELE-02']);
+  });
+});
+
+describe('impwOccurrenceDate', () => {
+  it('is dd/mm/yyyy', () => {
+    expect(impwOccurrenceDate('2026-08-26-Day')).toBe('26/08/2026');
+  });
+
+  it("uses a Night shift's start date, which is what the ShiftId carries", () => {
+    expect(impwOccurrenceDate('2026-08-26-Night')).toBe('26/08/2026');
+  });
+
+  it('is empty for an unparseable id', () => {
+    expect(impwOccurrenceDate('rubbish')).toBe('');
+  });
+});
+
+describe('impwOccurrenceIso', () => {
+  it("is the shift's own start instant, not midnight", () => {
+    // A Night shift's ShiftId carries its START date and it begins at 23:00,
+    // so dating it 00:00 would file a Tuesday-night stoppage as Tuesday
+    // morning. Compared against a locally-built Date so the assertion holds
+    // in any site timezone.
+    expect(impwOccurrenceIso('2026-08-26-Night')).toBe(
+      new Date(2026, 7, 26, 23, 0, 0, 0).toISOString(),
+    );
+    expect(impwOccurrenceIso('2026-08-26-Day')).toBe(
+      new Date(2026, 7, 26, 7, 0, 0, 0).toISOString(),
+    );
+    expect(impwOccurrenceIso('2026-08-26-Afternoon')).toBe(
+      new Date(2026, 7, 26, 15, 0, 0, 0).toISOString(),
+    );
+  });
+
+  it('is ISO 8601 UTC, which is what the API takes — not the form’s dd/mm/yyyy', () => {
+    expect(impwOccurrenceIso('2026-08-26-Day')).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    );
+  });
+
+  it('is empty for an unparseable id', () => {
+    expect(impwOccurrenceIso('rubbish')).toBe('');
+  });
+
+  it('converts back to the form’s date for the paste-in path', () => {
+    expect(impwIsoToFormDate(impwOccurrenceIso('2026-08-26-Night'))).toBe('26/08/2026');
+    expect(impwIsoToFormDate('')).toBe('');
+    expect(impwIsoToFormDate('not a date')).toBe('');
+  });
+});
+
+describe('buildImpwDraft', () => {
+  const finding = (partial: Partial<ImpwSlice> = {}): ImpwFinding =>
+    detectImpwFindings([slice(partial)], RULES)[0];
+
+  const raiser = { name: 'Christopher King', email: 'ck@example.com' };
+
+  it('fills every required field when the site answers are known', () => {
+    const d = buildImpwDraft(finding({ breakdownHrs: 2 }), raiser, SITE);
+    expect(missingImpwFields(d)).toEqual([]);
+    expect(impwDraftIssues(d)).toEqual([]);
+  });
+
+  it('lists exactly the blank site answers as missing, never inventing one', () => {
+    // Type of Improvement and Coordinator only exist inside the tenant, so
+    // PMD asks Mango for them rather than guessing a plausible value.
+    const d = buildImpwDraft(finding({ breakdownHrs: 2 }), raiser, EMPTY_IMPW_SITE);
+    expect(missingImpwFields(d)).toEqual(['Type of Improvement', 'Coordinator']);
+  });
+
+  it('takes Name from the signed-in user and flags a missing one', () => {
+    expect(buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, SITE).originatorName).toBe(
+      'Christopher King',
+    );
+    const anon = buildImpwDraft(finding({ breakdownHrs: 1 }), { name: '' }, SITE);
+    expect(missingImpwFields(anon)).toContain('Name');
+  });
+
+  it('carries the coordinator through as the id-and-name pair Mango issued', () => {
+    const d = buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, SITE);
+    expect(d.coordinator).toEqual({ id: 'co-1', name: 'Paul Fiddling (AU)' });
+    expect(d.typeOfImprovement).toEqual({ id: 'toi-1', name: 'process gap' });
+  });
+
+  it('dates the ticket when the form opens while retaining the historical shift in the evidence', () => {
+    const now = new Date('2026-09-07T07:30:00Z');
+    expect(buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, SITE, now).improvementDate).toBe(
+      now.toISOString(),
+    );
+  });
+
+  it('leads Brief Description with the press — Mango lists tickets by it', () => {
+    const d = buildImpwDraft(finding({ output: 900, reject: 100, yieldPct: 90 }), raiser, SITE);
+    // Press, then the material it was making, then why: the register shows
+    // this line and nothing else, so it has to answer "is this mine?" first.
+    expect(d.description.startsWith('1600T Night shift 26/08/2026 · SF-1234-A Sofa Arm Left — ')).toBe(true);
+    expect(d.description).toContain('Yield 90%');
+  });
+
+  it('keeps Brief Description inside the API’s 255-character cap', () => {
+    const wordy = finding({
+      breakdownHrs: 3,
+      breakdowns: Array.from({ length: 8 }, (_, i) => ({
+        code: `MEC-0${i}`,
+        label: 'A very long breakdown cause description that runs on and on',
+        owner: 'Maintenance',
+        hours: 0.5,
+        note: '',
+      })),
+    });
+    const d = buildImpwDraft(wordy, raiser, SITE);
+    expect(IMPW_DESCRIPTION_MAX).toBe(255);
+    expect(d.description.length).toBeLessThanOrEqual(255);
+    expect(overlongImpwFields(d)).toEqual([]);
+  });
+
+  it('keeps Details inside the API’s 4096-character cap', () => {
+    const wordy = finding({
+      breakdownHrs: 8,
+      breakdowns: Array.from({ length: 60 }, (_, i) => ({
+        code: `MEC-${i}`,
+        label: 'A very long breakdown cause description that runs on and on and on',
+        owner: 'Maintenance',
+        hours: 0.1,
+        note: 'The operator wrote a great deal about this one, at some length',
+      })),
+    });
+    const d = buildImpwDraft(wordy, raiser, SITE);
+    expect(d.improvementDetails.length).toBeLessThanOrEqual(4096);
+    expect(overlongImpwFields(d)).toEqual([]);
+  });
+
+  it('reduces a taxonomy owner to one Mango department', () => {
+    // "Operator → Maintenance" is an escalation path and "Maintenance /
+    // Setter" a shared job; Mango's Department is one existing name.
+    expect(impwDepartmentOf('Operator → Maintenance')).toBe('Maintenance');
+    expect(impwDepartmentOf('Maintenance / Setter')).toBe('Maintenance');
+    expect(impwDepartmentOf('Setter / Maintenance')).toBe('Setter');
+    expect(impwDepartmentOf('Toolroom')).toBe('Toolroom');
+    expect(impwDepartmentOf('')).toBe('');
+  });
+
+  it('routes a breakdown to the department that owns the biggest cause', () => {
+    const f = finding({
+      breakdownHrs: 2.5,
+      breakdowns: [
+        { code: 'ELE-02', label: 'Motor fault', owner: 'Maintenance', hours: 0.5, note: '' },
+        { code: 'TOOL-02', label: 'Mould damage', owner: 'Toolroom', hours: 2, note: '' },
+      ],
+    });
+    expect(suggestImpwDepartment(f)).toBe('Toolroom');
+    expect(buildImpwDraft(f, raiser, SITE).department).toBe('Manufacturing - AU');
+  });
+
+  it('routes a quality-only finding to Production', () => {
+    const f = finding({ output: 900, reject: 100, yieldPct: 90 });
+    expect(suggestImpwDepartment(f)).toBe('Production');
+  });
+
+  it('names the press inside Details — the API has no Plant/Equipment to put it in', () => {
+    expect(
+      buildImpwDraft(finding({ breakdownHrs: 1 }), raiser, SITE).improvementDetails,
+    ).toContain('Plant/Equipment: 1600T (Injection 1600T)');
+  });
+
+  it("carries the operator's own words into the ticket body", () => {
+    const d = buildImpwDraft(
+      finding({
+        breakdownHrs: 1,
+        breakdowns: [
+          {
+            code: 'ELE-02',
+            label: 'Motor fault',
+            owner: 'Maintenance',
+            hours: 1,
+            note: 'Drive tripped on start, 3rd time this week',
+          },
+        ],
+      }),
+      raiser,
+      SITE,
+    );
+    expect(d.improvementDetails).toContain('Operator: Drive tripped on start, 3rd time this week');
+  });
+
+  it('writes a body that stands on its own away from the dashboard', () => {
+    const d = buildImpwDraft(
+      finding({ output: 900, reject: 100, yieldPct: 90, breakdownHrs: 1.5 }),
+      raiser,
+      SITE,
+    );
+    const body = d.improvementDetails;
+    expect(body).toContain('1600T');
+    expect(body).toContain('2026-08-26-Night');
+    expect(body).toContain('SFM507205');
+    expect(body).toContain('900 pcs');
+    expect(body).toContain('100 pcs');
+    expect(body).toContain('90%');
+    expect(body).toContain('1.5 h');
+    // The risk and the provenance have no fields of their own on the API,
+    // so they have to survive here or not at all.
+    expect(body).toContain('Risk:');
+    expect(body).toContain('Christopher King');
+    expect(body).toContain('PMD_Production');
+  });
+});
+
+describe('IMPW validation', () => {
+  it('uses the requested Minto defaults and preserves all missed KPI reasons', () => {
+    const f = detectImpwFindings([slice({ breakdownHrs: 2, output: 900, reject: 100, yieldPct: 90 })], RULES)[0];
+    const d = buildImpwDraft(f, { name: 'CK' }, SITE);
+    expect(d).toMatchObject({ source: 'Employee', type: 'Equipment', region: 'Minto (AU)', branch: 'Resero - Minto', department: 'Manufacturing - AU', other: 'Maitenance -AU' });
+    for (const reason of f.reasons) expect(d.description).toContain(reason);
+    expect(d.improvementDetails.startsWith('Investigate rootcause\n')).toBe(true);
+    expect(impwPlainText(d)).toContain('Source *: Employee');
+    expect(impwApiPayload(d).improvementDetails).toContain('Type: Equipment');
+    expect(impwApiPayload(d)).not.toHaveProperty('source');
+  });
+
+  it('classifies the kind of gap, but files every KPI ticket under one Type of Improvement', () => {
+    const quality = detectImpwFindings([slice({ output: 900, reject: 100, yieldPct: 90 })], RULES)[0];
+    expect(suggestImpwClassification(quality)).toEqual({ type: 'Quality', improvement: 'Process Gap', other: 'PMD - AU' });
+    const process = detectImpwFindings([slice({ breakdownHrs: 1, breakdowns: [{ code: 'MAT-01', label: 'Material shortage', owner: 'Operator', hours: 1, note: '' }] })], RULES)[0];
+    expect(suggestImpwClassification(process)).toEqual({ type: 'Process Improvement', improvement: 'Process Gap', other: 'PMD - AU' });
+    expect(IMPW_IMPROVEMENT_TYPES).toEqual(['Process Gap']);
+  });
+
+  it('offers Design Defect but never picks it — a KPI miss cannot prove a design is wrong', () => {
+    expect(IMPW_TYPES).toEqual(['Design Defect', 'Equipment', 'Process Improvement', 'Quality']);
+    const findings = [
+      slice({ breakdownHrs: 2 }),
+      slice({ output: 900, reject: 100, yieldPct: 90 }),
+      slice({ breakdownHrs: 1, breakdowns: [{ code: 'MAT-01', label: 'Material shortage', owner: 'Operator', hours: 1, note: '' }] }),
+    ].flatMap((s) => detectImpwFindings([s], RULES));
+    expect(findings).toHaveLength(3);
+    for (const f of findings) {
+      expect(IMPW_TYPES).toContain(suggestImpwClassification(f).type);
+      expect(suggestImpwClassification(f).type).not.toBe('Design Defect');
+    }
+  });
+
+  it('keeps the tenant’s own spelling of the type, and invents no id when it disagrees', () => {
+    const f = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
+    // SITE remembers Mango's own 'process gap'; PMD asks for 'Process Gap'.
+    expect(buildImpwDraft(f, { name: 'CK' }, SITE).typeOfImprovement)
+      .toEqual({ id: 'toi-1', name: 'process gap' });
+    // A remembered pick that is a different type is not reused — the id would
+    // be Mango's id for the wrong thing.
+    const stale = { ...SITE, typeOfImprovement: { id: 'toi-9', name: 'Internal quality' } };
+    expect(buildImpwDraft(f, { name: 'CK' }, stale).typeOfImprovement)
+      .toEqual({ id: '', name: 'Process Gap' });
+  });
+
+  it('asks for the plant’s investigator in the body, because v4 has no field for one', () => {
+    const f = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
+    const d = buildImpwDraft(f, { name: 'CK' }, SITE);
+    expect(d.investigator).toBe('Avila Pushparaj');
+    expect(impwApiPayload(d)).not.toHaveProperty('investigator');
+    expect(impwApiPayload(d).improvementDetails).toContain('Investigator requested: Avila Pushparaj');
+    expect(impwPlainText(d)).toContain('Investigator: Avila Pushparaj');
+    // Edited on the ticket, not fixed by the code.
+    expect(impwApiPayload({ ...d, investigator: 'Someone Else' }).improvementDetails)
+      .toContain('Investigator requested: Someone Else');
+  });
+
+  it('matches an actual tenant option despite case and spacing differences, with no invented ID', () => {
+    const options = [{ id: 'real-id', name: ' Internal  Quality ' }];
+    expect(matchImpwOption(options, 'Internal quality')).toEqual(options[0]);
+    expect(matchImpwOption(options, 'supply quality')).toBeUndefined();
+  });
+
+  it('counts Source and Type against the API details limit', () => {
+    const f = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
+    const d = { ...buildImpwDraft(f, { name: 'CK' }, SITE), improvementDetails: 'x'.repeat(4096) };
+    expect(overlongImpwFields(d)).toContain('Details of Improvement and/or Proposed Action (max 4096)');
+  });
+
+  const blank = (): ImpwDraft => ({
+    description: '',
+    typeOfImprovement: { ...EMPTY_OPTION },
+    originatorName: '',
+    improvementDate: '',
+    improvementDetails: '',
+    region: '',
+    branch: '',
+    department: '',
+    other: '',
+    coordinator: { ...EMPTY_OPTION },
+  });
+
+  it('requires exactly the six fields the API documents as required', () => {
+    expect(missingImpwFields(blank())).toEqual([
+      'Brief Description',
+      'Type of Improvement',
+      'Name',
+      'Date of occurrence',
+      'Details of Improvement and/or Proposed Action',
+      'Coordinator',
+    ]);
+  });
+
+  it('leaves the four placement fields optional, because the API does', () => {
+    // The web form stars Region, Branch and Other; the API's own parameter
+    // table says each "can leave it blank". The API is what PMD posts to.
+    const missing = missingImpwFields(blank());
+    for (const label of ['Region', 'Branch', 'Department', 'Other']) {
+      expect(missing).not.toContain(label);
+    }
+  });
+
+  it('demands Mango’s own id for the API but takes a typed name for pasting', () => {
+    // A name typed by hand is not a valid API pick — Mango matches on the
+    // id it issued. A person pasting into the web form picks from its own
+    // dropdown, so there the name is all that is needed.
+    const found = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
+    const d: ImpwDraft = {
+      ...buildImpwDraft(found, { name: 'CK' }, SITE),
+      typeOfImprovement: { id: '', name: 'Customer Contact' },
+    };
+    expect(missingImpwFields(d, 'api')).toEqual(['Type of Improvement']);
+    expect(missingImpwFields(d, 'paste')).toEqual([]);
+  });
+
+  it('treats whitespace as blank', () => {
+    const found = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
+    const d = buildImpwDraft(found, { name: '   ' }, SITE);
+    expect(missingImpwFields(d)).toEqual(['Name']);
+  });
+
+  it('reports an over-long capped field', () => {
+    const found = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
+    const d = { ...buildImpwDraft(found, { name: 'A' }, SITE), branch: 'x'.repeat(300) };
+    expect(overlongImpwFields(d)).toEqual(['Branch (max 255)']);
+    expect(impwDraftIssues(d)).toEqual(['Too long: Branch (max 255)']);
+  });
+});
+
+describe('Mango API contract', () => {
+  const draft = (): ImpwDraft =>
+    buildImpwDraft(
+      detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0],
+      { name: 'CK' },
+      SITE,
+    );
+
+  it('joins the base and path without doubling or dropping the slash', () => {
+    expect(impwEndpoint('https://api.mangolive.com', '/api/v4/improvement')).toBe(
+      'https://api.mangolive.com/api/v4/improvement',
+    );
+    expect(impwEndpoint('https://api.mangolive.com/', 'api/auth/authenticate')).toBe(
+      'https://api.mangolive.com/api/auth/authenticate',
+    );
+    // Mango's paths must not end with a slash or whitespace.
+    expect(impwEndpoint(' https://api.mangolive.com// ', '//api/v4/improvement/ ')).toBe(
+      'https://api.mangolive.com/api/v4/improvement',
+    );
+  });
+
+  it('sends exactly the ten fields the API documents, and nothing else', () => {
+    // The web form asks for 26 things. Anything extra here would be a field
+    // Mango ignores at best and 422s at worst.
+    expect(Object.keys(impwApiPayload(draft())).sort()).toEqual([
+      'branch',
+      'coordinator',
+      'department',
+      'description',
+      'improvementDate',
+      'improvementDetails',
+      'originatorName',
+      'other',
+      'region',
+      'typeOfImprovement',
+    ]);
+  });
+
+  it('sends the two option fields as {id, name} objects', () => {
+    const p = impwApiPayload(draft());
+    expect(p.typeOfImprovement).toEqual({ id: 'toi-1', name: 'process gap' });
+    expect(p.coordinator).toEqual({ id: 'co-1', name: 'Paul Fiddling (AU)' });
+  });
+
+  it('sends the date as ISO 8601 UTC', () => {
+    expect(String(impwApiPayload(draft()).improvementDate)).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    );
+  });
+
+  it('omits a blank placement field rather than asking Mango to match an empty name', () => {
+    const p = impwApiPayload({ ...draft(), region: '', other: '   ' });
+    expect(p).not.toHaveProperty('region');
+    expect(p).not.toHaveProperty('other');
+    expect(p.branch).toBe('Resero - Minto');
+  });
+
+  it('reads back the created ticket the way the API documents it', () => {
+    const c = parseImpwCreated({
+      id: 'GfuUaXy',
+      formTitle: 'Improvement',
+      abbreviation: 'IMP',
+      number: '0123',
+    });
+    expect(c).toEqual({
+      id: 'GfuUaXy',
+      formTitle: 'Improvement',
+      abbreviation: 'IMP',
+      number: '0123',
+    });
+    expect(impwTicketRef(c)).toBe('IMP 0123');
+  });
+
+  it('still names the ticket when Mango returns only part of it', () => {
+    expect(impwTicketRef(parseImpwCreated({ number: '0123' }))).toBe('0123');
+    expect(impwTicketRef(parseImpwCreated({ id: 'abc' }))).toBe('abc');
+    expect(impwTicketRef(parseImpwCreated(null))).toBe('');
+    expect(impwTicketRef(parseImpwCreated('created'))).toBe('');
+  });
+
+  it('reads the tenant option lists and drops anything unusable', () => {
+    const body = {
+      typeOfImprovement: [
+        { id: 'b', name: 'Customer complaint' },
+        { id: 'a', name: 'Audit finding' },
+        { id: '', name: 'No id' },
+        { name: 'Name only' },
+        null,
+        'nonsense',
+      ],
+      coordinator: [{ id: 'c1', name: 'Paul Fiddling (AU)' }],
+    };
+    expect(parseImpwOptions(body, 'typeOfImprovement')).toEqual([
+      { id: 'a', name: 'Audit finding' },
+      { id: 'b', name: 'Customer complaint' },
+    ]);
+    expect(parseImpwOptions(body, 'coordinator')).toEqual([{ id: 'c1', name: 'Paul Fiddling (AU)' }]);
+    expect(parseImpwOptions(null, 'coordinator')).toEqual([]);
+    expect(parseImpwOptions({ coordinator: 'nope' }, 'coordinator')).toEqual([]);
+  });
+
+  it('turns a failure into an instruction, not a status code', () => {
+    expect(describeImpwApiFailure(0, '')).toMatch(/could not reach mango/i);
+    expect(describeImpwApiFailure(0, '')).toMatch(/CORS/);
+    expect(describeImpwApiFailure(401, '')).toMatch(/Mango connection/);
+    expect(describeImpwApiFailure(404, '')).toMatch(/API address/);
+    expect(describeImpwApiFailure(503, '')).toMatch(/not the ticket/i);
+  });
+
+  it('tells a 422 what it almost always is — a name Mango does not have', () => {
+    const msg = describeImpwApiFailure(422, '');
+    expect(msg).toMatch(/Region, Branch, Department and Other/);
+    expect(msg).toMatch(/already exists in Mango/);
+  });
+
+  it('says a failed sign-in is the account, not the ticket', () => {
+    const msg = describeMangoAuthFailure(400, '{"message":"Username or password is incorrect"}');
+    expect(msg).toMatch(/username and password/i);
+    // An ordinary Mango login is not automatically an API login, and that
+    // is the second thing to check when the password is definitely right.
+    expect(msg).toMatch(/API access/);
+    expect(msg).toContain('Username or password is incorrect');
+    expect(describeMangoAuthFailure(0, '')).toMatch(/could not reach mango/i);
+  });
+
+  it("quotes Mango's own words so a rejected field can be found", () => {
+    expect(describeImpwApiFailure(422, '{"error":"region is not a valid option"}')).toContain(
+      'region is not a valid option',
+    );
+  });
+
+  it('truncates a runaway error body instead of pasting a page into a toast', () => {
+    const msg = describeImpwApiFailure(400, 'x'.repeat(5000));
+    expect(msg.length).toBeLessThan(400);
+  });
+});
+
+describe('the material on the ticket', () => {
+  const jobs = [
+    { jobNumber: 'J1', partNumber: 'SF-1234-A', partDescription: 'Sofa Arm Left' },
+    { jobNumber: 'J2', partNumber: 'CH-9', partDescription: 'Chair Leg' },
+    { jobNumber: 'J3', partNumber: 'TB-7', partDescription: 'Table Top' },
+  ];
+
+  it('names the part in the Brief Description — the only line Mango’s register shows', () => {
+    const f = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
+    const d = buildImpwDraft(f, { name: 'CK' }, SITE);
+    expect(d.description).toContain('SF-1234-A');
+    expect(d.description).toContain('Sofa Arm Left');
+    expect(d.description).toContain('1600T');
+    expect(d.description.length).toBeLessThanOrEqual(IMPW_DESCRIPTION_MAX);
+  });
+
+  it('lists every order with what it was making, in the details', () => {
+    const f = detectImpwFindings([slice({ breakdownHrs: 1, jobs })], RULES)[0];
+    const body = String(impwApiPayload(buildImpwDraft(f, { name: 'CK' }, SITE)).improvementDetails);
+    expect(body).toContain('Material: SF-1234-A, CH-9, TB-7');
+    expect(body).toContain('J1 — SF-1234-A · Sofa Arm Left');
+    expect(body).toContain('J3 — TB-7 · Table Top');
+  });
+
+  it('keeps several parts short in the Brief Description so the reason still fits', () => {
+    expect(impwPartsSummary(jobs)).toBe('SF-1234-A, CH-9 +1 more');
+    expect(impwPartsSummary(jobs.slice(0, 2))).toBe('SF-1234-A, CH-9');
+    expect(impwPartsSummary(jobs.slice(0, 1))).toBe('SF-1234-A Sofa Arm Left');
+  });
+
+  it('says so rather than lying when a shift carried no part number', () => {
+    const f = detectImpwFindings([slice({ breakdownHrs: 1, jobs: [] })], RULES)[0];
+    const d = buildImpwDraft(f, { name: 'CK' }, SITE);
+    expect(impwPartsSummary([])).toBe('');
+    expect(d.description).not.toContain('·');
+    expect(String(impwApiPayload(d).improvementDetails)).toContain('Material: —');
+    expect(String(impwApiPayload(d).improvementDetails)).toContain('Orders run: —');
+  });
+
+  it('folds the same part run on two orders into one material, keeping the description', () => {
+    // Per-status rows carry a blank description; only the canonical row has it,
+    // so the first non-empty answer has to win or the ticket shows a bare code.
+    expect(impwParts([
+      { jobNumber: 'J1', partNumber: 'SF-1234-A', partDescription: '' },
+      { jobNumber: 'J2', partNumber: ' SF-1234-A ', partDescription: 'Sofa Arm Left' },
+      { jobNumber: 'J3', partNumber: '', partDescription: 'orphan' },
+    ])).toEqual([{ jobNumber: 'J1', partNumber: 'SF-1234-A', partDescription: 'Sofa Arm Left' }]);
+  });
+});
+
+describe('impwPlainText', () => {
+  it('labels the fields the way the web form does, for pasting in by hand', () => {
+    const found = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
+    const text = impwPlainText(buildImpwDraft(found, { name: 'CK' }, SITE, new Date(2026, 7, 26, 12)));
+    expect(text.startsWith('IMPW — Improvement Workflow')).toBe(true);
+    expect(text).toContain('Brief Description *');
+    expect(text).toContain('Type of Improvement *: process gap');
+    expect(text).toContain('Name *: CK');
+    // The form takes dd/mm/yyyy even though the API takes ISO.
+    expect(text).toContain('Date of occurrence *: 26/08/2026');
+    expect(text).toContain('Coordinator *: Paul Fiddling (AU)');
+    expect(text).toContain('Region: Minto (AU)');
+    expect(text).toContain('Branch: Resero - Minto');
+  });
+
+  it('never leaks an id into text a person retypes', () => {
+    const found = detectImpwFindings([slice({ breakdownHrs: 1 })], RULES)[0];
+    const text = impwPlainText(buildImpwDraft(found, { name: 'CK' }, SITE));
+    expect(text).not.toContain('toi-1');
+    expect(text).not.toContain('co-1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reading a raised ticket back — GET /api/v4/improvement
+// ---------------------------------------------------------------------------
+
+/** One row of the register, spelled the way the document's RETURNS table
+ *  spells it. */
+const REGISTER_ROW = {
+  id: 'GfuUaXy_yPcB-H_Wk4WBMyfYsdlyDw0D8_LgHhRywPI',
+  number: '0123',
+  typeOfImprovement: 'Corrective Action',
+  source: 'Employee',
+  name: 'Christopher King',
+  region: 'QLD',
+  branch: 'Wacol',
+  department: 'Maintenance',
+  other: 'Precision Moulding',
+  potentialSeverity: 'Major',
+  details: 'Plant/Equipment: 1600T…',
+  briefDescription: '1600T Night shift 26/08/2026 — Breakdown 2 h lost',
+  currentStage: 'Investigation',
+  dateOfOccurrence: '2026-08-26',
+  dueDate: '2026-09-15',
+  dateCreated: '2026-09-01T04:12:00.000Z',
+  dateClosed: '',
+  correctiveAction: 'Replaced the heater band.',
+  preventativeAction: '',
+  improvementSummary: '',
+  additionalInformation: '',
+  coordinator: 'Felicity Kidwell',
+  investigator: 'Richie McCaw',
+};
+
+describe('parseImpwRecord', () => {
+  it('reads the fields a review meeting asks about', () => {
+    const r = parseImpwRecord(REGISTER_ROW);
+    expect(r.currentStage).toBe('Investigation');
+    expect(r.investigator).toBe('Richie McCaw');
+    expect(r.dueDate).toBe('2026-09-15');
+    expect(r.number).toBe('0123');
+    expect(r.coordinator).toBe('Felicity Kidwell');
+  });
+
+  it("accepts the document's own misspelling of briefDescription", () => {
+    // The RETURNS table says briefDescription; the JSON sample printed
+    // beside it says briefDecription. Either has to work.
+    const r = parseImpwRecord({ id: 'x', briefDecription: 'Press down 2 h' });
+    expect(r.briefDescription).toBe('Press down 2 h');
+  });
+
+  it('matches keys whatever their capitalisation', () => {
+    const r = parseImpwRecord({ ID: 'x', Investigator: 'Don', CurrentStage: 'Closed' });
+    expect(r.investigator).toBe('Don');
+    expect(r.currentStage).toBe('Closed');
+    expect(r.id).toBe('x');
+  });
+
+  it('leaves anything Mango did not send blank, never undefined', () => {
+    const r = parseImpwRecord({ id: 'x' });
+    expect(r.investigator).toBe('');
+    expect(r.dueDate).toBe('');
+    for (const row of IMPW_RECORD_ROWS) expect(typeof r[row.field]).toBe('string');
+  });
+
+  it('survives a body that is not an object', () => {
+    for (const body of [null, undefined, 'text', 42, []]) {
+      expect(parseImpwRecord(body).id).toBe('');
+    }
+  });
+
+  it('keeps a number Mango sent as a number', () => {
+    expect(parseImpwRecord({ id: 'x', number: 123 }).number).toBe('123');
+  });
+});
+
+describe('parseImpwRecords', () => {
+  it('reads a register listing', () => {
+    const list = parseImpwRecords([REGISTER_ROW, { ...REGISTER_ROW, id: 'b', number: '0124' }]);
+    expect(list).toHaveLength(2);
+    expect(list[1].number).toBe('0124');
+  });
+
+  it('drops rows with neither an id nor a number, and non-arrays', () => {
+    expect(parseImpwRecords([{ currentStage: 'Open' }])).toHaveLength(0);
+    expect(parseImpwRecords({ id: 'x' })).toHaveLength(0);
+    expect(parseImpwRecords(null)).toHaveLength(0);
+  });
+});
+
+describe('impwRecordIsDetailed', () => {
+  it('recognises a real improvement', () => {
+    expect(impwRecordIsDetailed(parseImpwRecord(REGISTER_ROW))).toBe(true);
+  });
+
+  it('rejects the compliance-shaped stub the document prints for /{id}', () => {
+    // The vendor document's page for GET /api/v4/improvement/{id} is a
+    // copy-paste of the Compliance one — this is exactly the shape it
+    // describes, and none of it answers "where has the ticket got to".
+    const stub = parseImpwRecord({
+      id: 'x',
+      number: '0123',
+      typeOfDocument: 'Act',
+      status: 'Compliant',
+      branch: 'Wacol',
+      department: 'HR',
+      region: 'QLD',
+      other: '',
+    });
+    expect(impwRecordIsDetailed(stub)).toBe(false);
+  });
+});
+
+describe('findImpwRecord', () => {
+  const list = parseImpwRecords([
+    { ...REGISTER_ROW, id: 'other', number: '0099' },
+    REGISTER_ROW,
+  ]);
+
+  it('matches on Mango’s own id', () => {
+    expect(findImpwRecord(list, { id: REGISTER_ROW.id })?.number).toBe('0123');
+  });
+
+  it('falls back to the ticket number, abbreviation and all', () => {
+    // Tickets raised before PMD stored ids only have 'IMP 0123' to go on.
+    expect(findImpwRecord(list, { number: 'IMP 0123' })?.id).toBe(REGISTER_ROW.id);
+    expect(findImpwRecord(list, { number: '123' })?.id).toBe(REGISTER_ROW.id);
+  });
+
+  it('prefers the id when both are given', () => {
+    expect(findImpwRecord(list, { id: 'other', number: 'IMP 0123' })?.number).toBe('0099');
+  });
+
+  it('returns null rather than the wrong ticket', () => {
+    expect(findImpwRecord(list, { id: 'nope' })).toBeNull();
+    expect(findImpwRecord(list, { number: 'IMP 7777' })).toBeNull();
+    expect(findImpwRecord(list, {})).toBeNull();
+  });
+});
+
+describe('impwMangoDate', () => {
+  it('shows a yyyy-mm-dd due date as the site reads dates', () => {
+    expect(impwMangoDate('2026-09-15')).toBe('15/09/2026');
+  });
+
+  it('does not shift a bare date by a day in a timezone behind UTC', () => {
+    // Parsing '2026-01-01' through Date makes it UTC midnight, which is
+    // 31 December in the Americas. The whole point of the regex path.
+    expect(impwMangoDate('2026-01-01')).toBe('01/01/2026');
+    expect(impwMangoDate('2026-12-31')).toBe('31/12/2026');
+  });
+
+  it('reformats a full ISO timestamp', () => {
+    const iso = new Date(2026, 8, 15, 9, 30).toISOString();
+    expect(impwMangoDate(iso)).toBe('15/09/2026');
+  });
+
+  it("passes anything that is not a date through in Mango's own words", () => {
+    expect(impwMangoDate('Not set')).toBe('Not set');
+    expect(impwMangoDate('')).toBe('');
+    expect(impwMangoDate('  ')).toBe('');
+  });
+});
+
+describe('describeImpwLookupFailure', () => {
+  it('says the ticket is missing, not the API address, on a 404', () => {
+    const msg = describeImpwLookupFailure(404, '');
+    expect(msg).toMatch(/no improvement with that reference/i);
+    expect(msg).not.toMatch(/check the API address/i);
+  });
+
+  it('never suggests anything was lost — nothing was being written', () => {
+    for (const status of [0, 401, 404, 422, 500]) {
+      expect(describeImpwLookupFailure(status, '')).not.toMatch(/nothing was filed|not accept the ticket/i);
+    }
+  });
+
+  it('quotes Mango when it said something', () => {
+    expect(describeImpwLookupFailure(500, 'upstream timeout')).toContain('upstream timeout');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// "Already raised" — the one signal every device can see
+// ---------------------------------------------------------------------------
+
+/** How appendImpwHandover stores it: JSON 4M, ticket line under Method. */
+const withTicket = (ticket: string, method = ''): string =>
+  JSON.stringify({
+    machine: '',
+    mold: '',
+    material: '',
+    method: [method, `IMPW: ${ticket}`].filter(Boolean).join('\n'),
+  });
+
+describe('impwTicketFromHandovers', () => {
+  it('finds the ticket the writeback left on the shift', () => {
+    expect(impwTicketFromHandovers([withTicket('IMP 0123')])).toBe('IMP 0123');
+  });
+
+  it('finds it alongside whatever the operator wrote', () => {
+    const note = withTicket('IMP 0123', 'Handed over mid-run, mould still warm');
+    expect(impwTicketFromHandovers([note])).toBe('IMP 0123');
+  });
+
+  it('reads the legacy labelled-text note shape too', () => {
+    expect(impwTicketFromHandovers(['Machine: ok\nMethod: IMPW: IMP 0456'])).toBe('IMP 0456');
+  });
+
+  it('scans every record of the shift — the note is stored per job', () => {
+    expect(impwTicketFromHandovers([undefined, '', withTicket('IMP 0789')])).toBe('IMP 0789');
+  });
+
+  it('returns nothing when the shift carries no ticket', () => {
+    expect(impwTicketFromHandovers([withTicket('').replace('IMPW: ', '')])).toBe('');
+    expect(impwTicketFromHandovers(['Method: ran clean all shift'])).toBe('');
+    expect(impwTicketFromHandovers([])).toBe('');
+    expect(impwTicketFromHandovers([null, undefined])).toBe('');
+  });
+
+  it('does not mistake prose about IMPW for the record of a ticket', () => {
+    // The line has to BE the reference. "IMPW: ask the supervisor tomorrow"
+    // is somebody's note, and treating it as a raised ticket would silently
+    // stop the shift ever being raised.
+    const note = JSON.stringify({
+      machine: '', mold: '', material: '',
+      method: 'IMPW: ask the supervisor whether this needs raising tomorrow',
+    });
+    expect(impwTicketFromHandovers([note])).toBe('');
+  });
+
+  it('ignores a ticket number mentioned mid-sentence', () => {
+    const note = JSON.stringify({
+      machine: '', mold: '', material: '',
+      method: 'Same fault as IMPW: IMP 0123 last week, watch it',
+    });
+    // …but only when it does not start its own line.
+    expect(impwTicketFromHandovers([note])).toBe('');
+  });
+});
+
+describe('detectImpwFindings carries the raised ticket', () => {
+  it('marks a shift whose Handover already names a ticket', () => {
+    const found = detectImpwFindings(
+      [slice({ breakdownHrs: 2, raisedTicket: 'IMP 0123' })],
+      RULES,
+    );
+    expect(found).toHaveLength(1);
+    // Still a finding — the meeting wants to see it and follow it up.
+    expect(found[0].raisedTicket).toBe('IMP 0123');
+  });
+
+  it('leaves it blank when nothing has been raised', () => {
+    expect(detectImpwFindings([slice({ breakdownHrs: 2 })], RULES)[0].raisedTicket).toBe('');
+  });
+});

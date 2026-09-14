@@ -63,6 +63,11 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .top-nav a,.top-nav .nav-btn{flex:0 0 auto;white-space:nowrap}
 .top-nav a{color:var(--theme-on-dark);text-decoration:none;padding:7px 14px;border-radius:8px;font-size:14px;font-weight:700;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25)}
 .top-nav a:hover{background:rgba(255,255,255,.24)}
+/* Where you are. Filled white against the bar's own dark ground, so the four
+   links read as one control with one of them pressed — the inner pages no
+   longer carry a title band of their own to say it for them. */
+.top-nav a[aria-current="page"]{background:var(--theme-on-dark);color:var(--theme-dark);border-color:var(--theme-on-dark);cursor:default}
+.top-nav a[aria-current="page"]:hover{background:var(--theme-on-dark)}
 .vw{padding:14px;margin-top:var(--topbar-h,52px)}
 
 /* KPI / meeting view */
@@ -109,6 +114,105 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-stat.is-green{border-top-color:var(--gn)}.kpi-stat.is-green .kpi-stat-value{color:#15803d}
 .kpi-stat.is-amber{border-top-color:var(--am)}.kpi-stat.is-amber .kpi-stat-value{color:#FFA500}
 .kpi-stat.is-red{border-top-color:var(--rd)}.kpi-stat.is-red .kpi-stat-value{color:#b91c1c}
+/* ── Mango IMPW actions ───────────────────────────────────────────────
+   Shifts that broke a KPI rule, each offering Yes / No. Amber card, not
+   red: these are prompts for a decision, not failures in their own right,
+   and the red numbers they came from are already in the table below. */
+.kpi-impw{background:#fffbeb;border:1px solid #fcd34d;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.kpi-impw-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.kpi-impw-head h3{margin:0;font-size:14px;font-weight:800;color:#92400e;display:flex;align-items:center;gap:8px}
+.kpi-impw-count{background:#f59e0b;color:#fff;border-radius:999px;min-width:22px;padding:1px 8px;font-size:12px;font-weight:800;text-align:center}
+.kpi-impw-toggle,.kpi-impw-conn-btn{font-size:12px;font-weight:600;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:4px 10px;cursor:pointer;white-space:nowrap}
+.kpi-impw-toggle{margin-left:auto}
+.kpi-impw-toggle:hover,.kpi-impw-conn-btn:hover{background:#fde68a}
+/* How a Yes will actually reach Mango — filed by API, or copied to paste. */
+.kpi-impw-conn{font-size:11.5px;font-weight:700;color:#a16207;white-space:nowrap}
+.kpi-impw-conn.is-on{color:#15803d}
+.kpi-impw-intro{margin:0;font-size:11.5px;line-height:1.6;color:#a16207}
+.kpi-impw-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:44vh;overflow-y:auto;overscroll-behavior:contain}
+.kpi-impw-card{display:grid;grid-template-columns:170px minmax(0,1fr) auto;gap:12px;align-items:center;background:#fff;border:1px solid #fde68a;border-radius:10px;padding:8px 12px}
+.kpi-impw-card.is-decided{opacity:.62}
+.kpi-impw-row{display:flex;align-items:center;gap:12px;min-width:760px;padding:8px 10px;border-bottom:1px solid #e5e7eb;white-space:nowrap}
+.kpi-impw-row>b{min-width:65px}
+.kpi-impw-summary{flex:1;min-width:100px;overflow:hidden;text-overflow:ellipsis}
+.kpi-impw-row-actions{display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
+.kpi-impw-who{display:flex;flex-direction:column;gap:1px;min-width:0}
+.kpi-impw-mc{font-size:14px;font-weight:800;color:#0f172a}
+.kpi-impw-when{font-size:11px;color:#64748b}
+.kpi-impw-icons{font-size:12px;letter-spacing:2px}
+.kpi-impw-reasons{list-style:none;margin:0;padding:0;min-width:0;display:flex;flex-direction:column;gap:2px}
+.kpi-impw-reasons li{font-size:12.5px;line-height:1.45;color:#334155;overflow-wrap:anywhere}
+.kpi-impw-wo{grid-column:2;margin:0;font-size:11px;color:#a16207}
+/* Pin the buttons to the right edge across both rows: without this the WO
+   note starts a second row and the actions drop to sit beside it, so a
+   card with a work order put Yes / No lower than a card without one. */
+.kpi-impw-actions{grid-column:3;grid-row:1/-1;align-self:center;display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.kpi-impw-yes,.kpi-impw-no,.kpi-impw-undo{font-size:12.5px;font-weight:700;border-radius:8px;padding:6px 12px;cursor:pointer;white-space:nowrap}
+.kpi-impw-yes{background:#f59e0b;border:1px solid #d97706;color:#fff}
+.kpi-impw-yes:hover{background:#d97706}
+.kpi-impw-no{background:#f1f5f9;border:1px solid var(--bd);color:#475569}
+.kpi-impw-no:hover{background:#e2e8f0}
+.kpi-impw-undo{background:transparent;border:1px solid var(--bd);color:#64748b;font-weight:600}
+.kpi-impw-decided{font-size:12px;font-weight:700;color:#475569}
+.kpi-impw-decided.is-yes{color:#15803d}
+.kpi-impw-locked{font-size:11.5px;color:#94a3b8}
+/* A raised ticket's number is a button — it asks Mango where the ticket has
+   got to; the answer comes back beside it as a chip, full detail on hover. */
+.kpi-impw-ticket{background:none;border:0;padding:0 2px;font:inherit;font-weight:800;color:#15803d;text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.kpi-impw-ticket:hover{color:#14532d;background:#dcfce7;border-radius:4px}
+.kpi-impw-progress{font-size:11.5px;font-weight:700;color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:999px;padding:1px 8px;white-space:nowrap;cursor:help}
+.kpi-impw-progress.is-blank{color:#94a3b8;background:#f8fafc;border-color:var(--bd);font-weight:600}
+/* The ticket dialog — Mango's IMPW form, drafted and editable. */
+.mdl:has(.kpi-impw-modal){max-width:min(900px,96vw);max-height:92vh;overflow:hidden;display:flex}
+.kpi-impw-modal{gap:10px;flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
+.kpi-impw-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex:0 0 auto}
+.kpi-impw-cancel{padding:8px 20px;font-size:14px;min-height:40px;flex:0 0 auto}
+.kpi-impw-issues{flex:0 0 auto}
+.kpi-impw-ok{margin:0;font-size:12.5px;font-weight:700;color:#15803d}
+.kpi-impw-bad{margin:0;font-size:12.5px;font-weight:700;color:#b91c1c;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:7px 10px;line-height:1.5}
+.kpi-impw-form{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:8px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 14px;align-content:start}
+.kpi-impw-field{display:flex;flex-direction:column;gap:3px;min-width:0}
+.kpi-impw-field.is-area{grid-column:1/-1}
+.kpi-impw-label{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.35px;color:#64748b}
+.kpi-impw-req{color:#dc2626}
+.kpi-impw-label em{font-style:normal;font-size:9.5px;font-weight:800;color:#92400e;background:#fef3c7;border-radius:4px;padding:0 4px;text-transform:uppercase}
+.kpi-impw-field input,.kpi-impw-field textarea,.kpi-impw-field select{width:100%;font-size:13px;padding:6px 8px;border:1px solid var(--bd);border-radius:8px;font-family:inherit;box-sizing:border-box;background:#fff}
+.kpi-impw-field textarea{resize:vertical;line-height:1.45;white-space:pre-wrap}
+.kpi-impw-field select{min-height:33px}
+.kpi-impw-field select:disabled{background:#f8fafc;color:#94a3b8}
+.kpi-impw-field.is-site input{background:#fffbeb}
+/* Date of occurrence is the shift's own start instant, not a choice. */
+.kpi-impw-when-field output{font-size:13px;padding:7px 8px;color:#334155;background:#f8fafc;border:1px dashed var(--bd);border-radius:8px}
+.kpi-impw-note{flex:0 0 auto;margin:0;font-size:11px;line-height:1.55;color:var(--mu)}
+.kpi-impw-fallback{margin:6px 0 0;font-size:12px;line-height:1.5;color:#475569}
+.kpi-impw-linkbtn{background:none;border:0;padding:0;font:inherit;font-weight:700;color:#b45309;text-decoration:underline;cursor:pointer}
+/* Mango API sign-in, entered on the device (the password rotates). */
+.mdl:has(.kpi-mango-modal){max-width:min(560px,94vw)}
+.kpi-mango-form{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin:12px 0}
+.kpi-mango-paths{margin:0 0 10px;font-size:11.5px;line-height:1.6;color:#475569}
+.kpi-mango-paths code{font-size:11px;background:#f1f5f9;border-radius:4px;padding:1px 5px;overflow-wrap:anywhere}
+.kpi-mango-warn{margin:0;font-size:11.5px;line-height:1.6;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:9px 11px}
+.kpi-mango-test:not(:empty){margin-top:10px}
+.kpi-mango-actions{margin-top:12px}
+.kpi-impw-modal-actions{flex:0 0 auto}
+.kpi-impw-modal-actions button[disabled]{opacity:.5;cursor:not-allowed}
+/* Reading a ticket back. The markup deliberately reuses the new-improvement
+   dialog's classes, so everything below only says what read-only means: an
+   <output> shaped like the inputs beside it, and the first group — the reason
+   anyone opened this — in green so the stage is the first thing seen. */
+.kpi-impw-status-body>p{grid-column:1/-1;margin:0}
+.kpi-impw-status-modal .kpi-impw-field output{display:block;width:100%;box-sizing:border-box;font-size:13px;line-height:1.5;padding:8px 10px;min-height:38px;border:1px solid #e2e8f0;border-radius:6px;background:#f8fafc;color:#1e293b;overflow-wrap:anywhere}
+.kpi-impw-status-modal .kpi-impw-field.is-area output{white-space:pre-wrap;font-size:12.5px;color:#334155;max-height:220px;overflow-y:auto}
+.kpi-impw-status-modal .kpi-impw-section:first-child{margin-top:16px}
+.kpi-impw-status-modal .kpi-impw-section.is-progress{color:#15803d;border-bottom-color:#bbf7d0}
+.kpi-impw-status-modal .kpi-impw-field.is-progress output{border-color:#bbf7d0;background:#f0fdf4;color:#14532d;font-weight:650}
+@media (max-width:760px){
+  .kpi-impw-card{grid-template-columns:minmax(0,1fr);gap:6px}
+  .kpi-impw-wo{grid-column:1}
+  .kpi-impw-actions{grid-column:1;grid-row:auto;justify-content:flex-start}
+  .kpi-impw-form{grid-template-columns:minmax(0,1fr)}
+  .kpi-impw-rrow{grid-template-columns:minmax(0,1fr);gap:0}
+}
 /* Global toggles in the Machine column header. Inherit kpi-toggle for
    look but shave a few px so they sit comfortably next to the "Machine"
    label. */
@@ -523,7 +627,11 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .ab-cd{font-size:34px;font-weight:900;line-height:1}
 .ab-lb{font-size:13px;font-weight:600;line-height:1.1;opacity:.92}
 
-.rej-input{width:100%;height:60px;border:0;background:transparent;text-align:right;font-size:20px;padding:0 8px;font-weight:700;color:var(--tx);font-variant-numeric:tabular-nums}
+/* Centred, like every other cell in the grid. Right-aligned is how a column
+   of figures that gets totalled is set — this is one number per half-hour,
+   read across the row and never added up on screen, and against the cell's
+   right edge it sat under the border rather than in its own half-hour. */
+.rej-input{width:100%;height:60px;border:0;background:transparent;text-align:center;font-size:20px;padding:0 8px;font-weight:700;color:var(--tx);font-variant-numeric:tabular-nums}
 .rej-input:focus{outline:3px solid var(--theme-dark);outline-offset:-3px}
 /* A reject cell that can't take an entry — the sheet is locked/unconfirmed,
    or this half-hour isn't this order's production time. Until now a blocked
@@ -1025,6 +1133,19 @@ th.die-sort.a{color:#1d4ed8}
 .dcl-section .dcl-comps{margin-top:8px}
 .dcl-prob{display:block;margin-top:12px;font-size:13px;font-weight:700;color:var(--mu)}
 .dcl-prob textarea{width:100%;margin-top:4px;font-family:inherit;font-size:15px;padding:8px;border:2px solid var(--bd);border-radius:8px;resize:vertical}
+/* The one number the whole inspection is signed off on (SignOffStatus): the
+   worst rating on either side, over the Save button so it is read on the way
+   past it. Wears the same three colours as the buttons it summarises — a 3
+   here has to look like the 3 that caused it. */
+.dcl-signoff{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-top:14px;padding:9px 12px;border:2px solid var(--bd);border-radius:10px;background:#f8fafc;font-size:14px}
+.dcl-signoff span{font-weight:700;color:var(--mu)}
+.dcl-signoff b{font-size:15px;font-weight:800;color:var(--tx)}
+.dcl-signoff.green{background:#dcfce7;border-color:#16a34a}
+.dcl-signoff.green b{color:#14532d}
+.dcl-signoff.amber{background:#fef3c7;border-color:#FFA500}
+.dcl-signoff.amber b{color:#78350f}
+.dcl-signoff.red{background:#fee2e2;border-color:#dc2626}
+.dcl-signoff.red b{color:#7f1d1d}
 /* Manual order entry (supervisor only): ＋ next to Job#, small form modal. */
 .m-add-order{width:30px;height:30px;margin-left:4px;border:2px dashed var(--bd);border-radius:8px;background:#fff;font-size:16px;font-weight:800;color:#0369a1;cursor:pointer;line-height:1;vertical-align:middle}
 .m-add-order:hover{border-color:#0369a1;background:#f0f9ff}
@@ -1323,3 +1444,61 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .kpi-median-table tr.is-missing{background:#fef2f2;color:#991b1b}
 .kpi-median-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px}
 .kpi-median-status{font-size:12.5px;color:var(--mu)}
+
+/* Compact improvement dialog: fixed header/footer, one scrollable form. */
+.mdl:has(.kpi-impw-modal){width:min(820px,94vw);max-width:820px;padding:0;border-radius:12px;box-shadow:0 24px 70px #0f172a33}
+.kpi-impw-modal{gap:0;max-height:90vh;color:#1e293b}
+.kpi-impw-modal-head{padding:22px 24px 18px;border-bottom:1px solid #e2e8f0}
+.kpi-impw-modal .bd-title{font-size:20px;font-weight:650;letter-spacing:-.3px;color:#172b4d;line-height:1.4}
+.kpi-impw-modal .bd-sub{font-size:12px;line-height:1.5;color:#64748b;margin:5px 0 0}
+.kpi-impw-close{width:32px;height:32px;border:0;border-radius:6px;background:transparent;color:#64748b;font-size:25px;cursor:pointer}
+.kpi-impw-close:hover{background:#f1f5f9}
+.kpi-impw-issues{padding:12px 24px 0}
+.kpi-impw-modal .kpi-impw-bad{font-size:12px;font-weight:500;border:0;background:#fff7ed;color:#9a3412;padding:9px 12px;border-radius:6px}
+.kpi-impw-modal .kpi-impw-ok{font-size:12px;font-weight:500}
+.kpi-impw-modal .kpi-impw-form{padding:0 24px 22px;gap:14px 20px;scrollbar-gutter:auto}
+.kpi-impw-section{grid-column:1/-1;margin:20px 0 0;font-size:13px;font-weight:650;color:#334155;padding-bottom:9px;border-bottom:1px solid #e2e8f0}
+.kpi-impw-modal .kpi-impw-label{font-size:12px;font-weight:500;letter-spacing:0;text-transform:none;color:#475569}
+.kpi-impw-modal .kpi-impw-label em{display:none}
+.kpi-impw-modal .kpi-impw-field{gap:6px}
+.kpi-impw-modal .kpi-impw-field:has([data-impw="description"]){grid-column:1/-1}
+.kpi-impw-modal .kpi-impw-field input,.kpi-impw-modal .kpi-impw-field select,.kpi-impw-modal .kpi-impw-field textarea,.kpi-impw-modal .kpi-impw-when-field output{font-size:13px;line-height:1.5;padding:8px 10px;min-height:38px;border:1px solid #cbd5e1;border-radius:6px;color:#1e293b;background:#fff}
+.kpi-impw-modal .kpi-impw-field textarea{min-height:110px}
+.kpi-impw-modal :is(input,select,textarea,button):focus-visible{outline:2px solid #2563eb;outline-offset:2px}
+.kpi-impw-modal .kpi-impw-note{padding:12px 24px;font-size:12px;background:#f8fafc;border-top:1px solid #e2e8f0}
+.kpi-impw-modal .kpi-impw-modal-actions{margin:0;padding:14px 24px;background:#f8fafc;border-top:0;gap:8px}
+.kpi-impw-modal-actions .btn-ghost-big,.kpi-impw-modal-actions .btn-primary-big{min-height:36px;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;line-height:20px}
+.kpi-impw-modal-actions .btn-primary-big{background:#1d4ed8;color:#fff}
+.kpi-impw-modal-actions .btn-ghost-big{border:1px solid #cbd5e1;background:#fff;color:#334155}
+.kpi-impw-modal-actions [data-impw-copy]{margin-right:auto;background:transparent;border-color:transparent;color:#475569}
+@media(max-width:600px){.kpi-impw-modal-head{padding:16px}.kpi-impw-modal .kpi-impw-form{padding:0 16px 16px}.kpi-impw-issues{padding:10px 16px 0}.kpi-impw-modal .kpi-impw-note{padding:10px 16px}.kpi-impw-modal .kpi-impw-modal-actions{padding:12px 16px;flex-wrap:wrap}}
+
+/* ===== KPI department tabs (PMD / Assembly) =====
+   The first two buttons of the KPI toolbar, ahead of the period tabs, because
+   which half of the factory you are looking at decides what the rest of the
+   row means. Anchors, so the hash does the routing — hence the display and
+   text-decoration a <button> would not need. */
+.kpi-head .kpi-dept{display:inline-flex;align-items:center;text-decoration:none}
+/* A wider gap after the pair, so department and period read as two groups in
+   one row rather than as four unrelated buttons. A rule between them was
+   tried first and could not be seen: every button here already carries a 2px
+   border, so one more vertical line is just another button edge. */
+.kpi-head .kpi-dept+.kpi-dept{margin-right:14px}
+
+/* ===== Assembly results =====
+   Everything here rides on the PMD KPI table's own styles; these are only the
+   places Assembly's record needs something PMD has no equivalent of. */
+.assembly-kpi-table{min-width:1114px}
+/* Per-order rows under a line, the way PMD sets its shift sub-rows apart. */
+.assembly-kpi .kpi-sub>th{padding-left:34px;font-weight:600;color:var(--mu)}
+.assembly-kpi .kpi-sub-note{display:block;font-size:11px;font-weight:600;color:var(--mu)}
+.assembly-kpi .kpi-empty{padding:18px;text-align:center;color:var(--mu)}
+/* The day-by-day bookings behind the summary. Shorter than the table above it:
+   it is evidence, not the headline, and it must not push the legend off.
+   Sized to its content rather than to equal columns — the summary above has
+   eleven columns of the same numeric width and this has a work description
+   next to a date, so the fixed layout clipped both. */
+.assembly-kpi .kpi-bookings{max-height:40vh}
+.assembly-kpi .kpi-bookings .kpi-table{table-layout:auto;min-width:0;width:100%}
+.assembly-kpi .kpi-bookings td,.assembly-kpi .kpi-bookings th{font-size:12px;white-space:nowrap}
+.assembly-kpi .kpi-bookings .kpi-work{white-space:normal;min-width:180px}

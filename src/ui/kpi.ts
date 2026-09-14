@@ -1,3 +1,6 @@
+import type { AssemblyDataLayer } from '../types/assembly';
+import { renderAssemblyKpi } from './assembly-kpi';
+import { departmentTabs } from './kpi-nav';
 import type { PmdDataLayer } from '../dal';
 import type {
   Machine,
@@ -7,6 +10,7 @@ import type {
   ShiftCode,
   StatusCode,
 } from '../types';
+import { planningOrderMatchesMachine } from '../core/schedule';
 import { aggregate, countSetupEvents, type Kpi } from '../core/metrics';
 import {
   COLOR_CHANGE_STD_HRS,
@@ -15,12 +19,9 @@ import {
   setupJudgement,
   setupStandardHours,
 } from '../core/standards';
-import { plannedOrdersForShift } from '../core/schedule';
 import {
-  combineAttainment,
   kpiComparisonLabel,
   kpiComparisonMode,
-  scheduleAdherenceForShift,
   targetAttainmentForRecords,
   type KpiAttainment,
 } from '../core/kpi-attainment';
@@ -39,6 +40,7 @@ import {
   shiftBounds,
   slotTimeRange,
   SHIFTS,
+  SLOT_MINUTES,
 } from '../core/shifts';
 import { closeModal, escapeHtml, openModal } from './modal';
 import { toast } from './toast';
@@ -69,6 +71,48 @@ import {
   type DisplayBucket,
 } from '../core/chartrollup';
 import { parseHandover } from '../core/handover';
+import {
+  buildImpwDraft,
+  IMPW_IMPROVEMENT_TYPES,
+  IMPW_TYPES,
+  IMPW_OTHERS,
+  matchImpwOption,
+  detectImpwFindings,
+  foldBreakdowns,
+  impwDraftIssues,
+  impwIsoToFormDate,
+  impwMangoDate,
+  impwPlainText,
+  impwTicketFromHandovers,
+  yieldPctOf,
+  EMPTY_IMPW_SITE,
+  EMPTY_OPTION,
+  IMPW_DESCRIPTION_MAX,
+  IMPW_DETAILS_MAX,
+  IMPW_RECORD_ROWS,
+  type ImpwDraft,
+  type ImpwFinding,
+  type ImpwRaiser,
+  type ImpwRecord,
+  type ImpwRecordGroup,
+  type ImpwSiteConfig,
+  type ImpwSlice,
+  type ImpwTarget,
+  type MangoOption,
+} from '../core/impw';
+import {
+  clearMangoConnection,
+  fetchImpwOptions,
+  fetchImpwRecord,
+  isMangoConfigured,
+  loadMangoConnection,
+  mangoCreateUrl,
+  mangoSignIn,
+  saveMangoConnection,
+  submitImpwToMango,
+  DEFAULT_MANGO_CONNECTION,
+  type MangoConnection,
+} from './mango-api';
 import { STATUS_MAP } from '../core/status';
 import { isSupervisor } from './supervisor-auth';
 import {
@@ -135,12 +179,20 @@ interface ShiftAgg {
    *  shift rather than against a total whose size depends on how wide the
    *  row is. */
   shifts: number;
-  oee: number | null;
+  /** What the output was worth in standard hours at the planned rate
+   *  (Σ good ÷ JobOper_ProdStandard), and how many jobs carried a rate at all.
+   *  Carried as ingredients rather than as a percentage so a rolled-up row is
+   *  the ratio of the sums — a month with one busy week and three quiet ones
+   *  reads as the month it was, not as the mean of four percentages.
+   *  Efficiency's denominator is `runHrs`, above. */
+  unratedRunHrs: number;
+  stdHours: number;
+  ratedJobs: number;
   /** Comparison numerator. For Schedule Adherence this is per-order Good
    *  capped at that order's expectation; for Vs Target it is Good only
    *  from tuples carrying a valid persisted ShiftTarget. */
   attainedOutput: number | null;
-  /** Comparison denominator: Planning expectation or persisted target. */
+  /** Comparison denominator: persisted ShiftTarget, summed once per tuple. */
   expOutput: number | null;
   comparisonCovered: number;
   comparisonTotal: number;
@@ -324,11 +376,165 @@ interface KpiState {
   /** jobNumber → DieNumber, resolved order → part → PMD_ProductDieColor.
    *  Lets a die change be attributed to the tool it fitted. */
   dieByJob: Map<string, string>;
+  /** Every (machine, shift) in the window, measured against the KPI rules
+   *  — the input the Mango IMPW findings are detected from. */
+  impwSlices: ImpwSlice[];
+  /** Shifts that broke a rule, worst first. One per (machine, shift). */
+  impwFindings: ImpwFinding[];
+  /** Yes / No already recorded against a finding, by its key. */
+  impwDecisions: Map<string, ImpwDecision>;
+  /** The plant's answers to Mango's placement fields and option lists,
+   *  remembered after the first ticket. */
+  impwSite: ImpwSiteConfig;
+  /** The tenant's Type of Improvement / Coordinator lists, once Mango has
+   *  been asked for them. Null until the first ticket dialog fetches them;
+   *  kept for the rest of the meeting so a second ticket opens instantly. */
+  impwOptions: { typeOfImprovement: MangoOption[]; coordinator: MangoOption[] } | null;
+  /** Whether the actions list also shows the ones already decided. */
+  impwShowDecided: boolean;
+  /** This device's Mango API sign-in. Configured = Yes files the ticket
+   *  directly; unconfigured = Yes copies it and opens the form. */
+  mango: MangoConnection;
+  /** Signed-in user — the ticket's Coordinator (and Email when the host
+   *  platform knows one). */
+  who: ImpwRaiser;
   /** Failed reads for the current computation. Values from successful
    *  sources still render, but the banner stops missing rows being read as
    *  real zero production/reject/downtime. */
   errors: string[];
   catalogErrors: string[];
+}
+
+/** A supervisor's answer to one "raise this in Mango?" action. Kept per
+ *  browser: PMD has no list of its own for improvement tickets (Mango is
+ *  the register), so this is only here to stop a decided action nagging
+ *  the next meeting. */
+interface ImpwDecision {
+  handoverSaved?: boolean;
+  decision: 'yes' | 'no';
+  at: number;
+  by: string;
+  /** Mango's own reference for the ticket ('IMP 0123'), when the API filed
+   *  it. Absent on a clipboard hand-off — PMD never saw a ticket number. */
+  ticket?: string;
+  /** Mango's opaque record id, kept so the ticket can be read back later.
+   *  Absent on tickets raised before this was stored, and on clipboard
+   *  hand-offs; the lookup falls back to matching on the number. */
+  ticketId?: string;
+  /** The last answer Mango gave about the ticket's progress. Cached only so
+   *  a decided card can say where it got to without asking on every render —
+   *  never treated as current, always shown with the time it was read. */
+  progress?: ImpwProgress;
+}
+
+/** What the meeting asks about a raised ticket, as Mango last answered it. */
+interface ImpwProgress {
+  stage: string;
+  investigator: string;
+  dueDate: string;
+  closed: string;
+  /** When PMD read it, so the card can say how old the answer is. */
+  at: number;
+}
+
+const IMPW_DECISIONS_KEY = 'pmd.impwDecisions';
+const IMPW_SITE_KEY = 'pmd.impwSite';
+
+function loadImpwDecisions(): Map<string, ImpwDecision> {
+  try {
+    const raw = localStorage.getItem(IMPW_DECISIONS_KEY);
+    if (!raw) return new Map();
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out = new Map<string, ImpwDecision>();
+    for (const [key, v] of Object.entries(parsed)) {
+      const d = normImpwDecision(v);
+      if (d) out.set(key, d);
+    }
+    return out;
+  } catch {
+    return new Map();
+  }
+}
+
+/** Rebuild a stored decision field by field. Everything in here was written
+ *  by an older build at some point — ticket numbers arrived before ids, and
+ *  progress after both — so a missing or wrong-shaped part must degrade to
+ *  "not known" rather than reach the panel as `undefined`. */
+function normImpwDecision(v: unknown): ImpwDecision | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  if (o.decision !== 'yes' && o.decision !== 'no') return null;
+  const str = (k: string): string => (typeof o[k] === 'string' ? (o[k] as string) : '');
+  // A 'yes' with no ticket number is not a raised ticket — nothing in Mango
+  // was ever confirmed — so it is dropped and the finding asks again.
+  if (o.decision === 'yes' && !str('ticket')) return null;
+  const d: ImpwDecision = {
+    decision: o.decision,
+    at: typeof o.at === 'number' ? o.at : 0,
+    by: str('by'),
+    ticket: str('ticket') || undefined,
+    ticketId: str('ticketId') || undefined,
+    handoverSaved: o.handoverSaved === true || undefined,
+  };
+  const p = o.progress;
+  if (p && typeof p === 'object') {
+    const po = p as Record<string, unknown>;
+    const ps = (k: string): string => (typeof po[k] === 'string' ? (po[k] as string) : '');
+    d.progress = {
+      stage: ps('stage'),
+      investigator: ps('investigator'),
+      dueDate: ps('dueDate'),
+      closed: ps('closed'),
+      at: typeof po.at === 'number' ? po.at : 0,
+    };
+  }
+  return d;
+}
+
+function saveImpwDecisions(m: ReadonlyMap<string, ImpwDecision>): void {
+  try {
+    localStorage.setItem(IMPW_DECISIONS_KEY, JSON.stringify(Object.fromEntries(m)));
+  } catch {
+    /* private mode — the in-memory copy still hides decided actions */
+  }
+}
+
+/** Read field by field rather than spreading the parsed object: an earlier
+ *  build stored typeOfImprovement as a plain string, and spreading that
+ *  over the {id,name} shape would put a string where the dialog expects an
+ *  option and break the ticket rather than just asking again. */
+function loadImpwSite(): ImpwSiteConfig {
+  try {
+    const raw = localStorage.getItem(IMPW_SITE_KEY);
+    if (!raw) return { ...EMPTY_IMPW_SITE };
+    const p = JSON.parse(raw) as Record<string, unknown>;
+    const str = (k: string): string => (typeof p[k] === 'string' ? (p[k] as string) : '');
+    const opt = (k: string): MangoOption => {
+      const v = p[k];
+      if (!v || typeof v !== 'object') return { ...EMPTY_OPTION };
+      const o = v as Record<string, unknown>;
+      const id = typeof o.id === 'string' ? o.id : '';
+      const name = typeof o.name === 'string' ? o.name : '';
+      return id && name ? { id, name } : { ...EMPTY_OPTION };
+    };
+    return {
+      region: str('region'),
+      branch: str('branch'),
+      other: str('other'),
+      typeOfImprovement: opt('typeOfImprovement'),
+      coordinator: opt('coordinator'),
+    };
+  } catch {
+    return { ...EMPTY_IMPW_SITE };
+  }
+}
+
+function saveImpwSite(s: ImpwSiteConfig): void {
+  try {
+    localStorage.setItem(IMPW_SITE_KEY, JSON.stringify(s));
+  } catch {
+    /* private mode — remembered for this session only */
+  }
 }
 
 // ChartBucket now lives in core/chartrollup.ts — the month rollup owns the
@@ -339,6 +545,8 @@ type ChartBucket = CoreChartBucket;
 let S: KpiState | null = null;
 let dalRef: PmdDataLayer;
 let computeVersion = 0;
+let kpiMount = 0;
+export function unmountKpi(): void { kpiMount++; computeVersion++; }
 
 /** The 3 most-recently-ENDED shifts as of `now`, oldest → newest. */
 function lastThreeShifts(now: Date): string[] {
@@ -418,28 +626,6 @@ function periodRange(
   };
 }
 
-/** Every physical shift instance whose shift-date belongs to the selected
- * KPI window. An exact preset (Last 3) supplies its own IDs; calendar
- * presets expand each date to Day/Afternoon/Night. */
-function shiftInstancesInRange(
-  from: Date,
-  to: Date,
-  exact?: Set<string>,
-): string[] {
-  if (exact) return Array.from(exact);
-  const out: string[] = [];
-  const cursor = new Date(from);
-  cursor.setHours(0, 0, 0, 0);
-  const last = new Date(to);
-  last.setHours(0, 0, 0, 0);
-  while (cursor <= last) {
-    const day = dateKey(cursor);
-    for (const code of SHIFT_ORDER) out.push(`${day}-${code}`);
-    cursor.setDate(cursor.getDate() + 1);
-  }
-  return out;
-}
-
 function inRange(
   record: ProductionRecord,
   from: Date,
@@ -508,11 +694,11 @@ function toAgg(k: Kpi): ShiftAgg {
     insertHrs: k.insertHrs,
     startupHrs: k.startupHrs,
     shifts: k.shifts,
-    oee: k.oee,
-    // Expectation / standards are computed PER SHIFT BUCKET (the runs-of-D
-    // counting and the planned-start cut only make sense against one
-    // shift's clock window) and summed onto the agg by the caller — a
-    // bare toAgg slice (job rows, category rows) stays unjudged.
+    unratedRunHrs: k.unratedRunHrs,
+    stdHours: k.stdHours,
+    ratedJobs: k.ratedJobs,
+    // Callers attach comparison targets and changeover standards for the
+    // same record slice; bare aggregates carry production measures only.
     attainedOutput: null,
     expOutput: null,
     comparisonCovered: 0,
@@ -536,7 +722,8 @@ function emptyAgg(): ShiftAgg {
     insertHrs: 0,
     startupHrs: 0,
     shifts: 0,
-    oee: null,
+    unratedRunHrs: 0, stdHours: 0,
+    ratedJobs: 0,
     attainedOutput: null,
     expOutput: null,
     comparisonCovered: 0,
@@ -549,7 +736,7 @@ function emptyAgg(): ShiftAgg {
 
 function addComparison(a: ShiftAgg, comparison: KpiAttainment | null): void {
   if (comparison) {
-    if (comparison.expected > 0) {
+    if (comparison.covered > 0) {
       a.attainedOutput = (a.attainedOutput ?? 0) + comparison.actual;
       a.expOutput = (a.expOutput ?? 0) + comparison.expected;
     }
@@ -572,7 +759,27 @@ function addStd(
 }
 
 function emptyChartShift(): ChartBucket['byShift'][ShiftCode] {
-  return { good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0 };
+  return { good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, unratedRunHrs: 0, stdHours: 0, ratedJobs: 0 };
+}
+
+/**
+ * Efficiency from its ingredients: what the output was worth in standard hours
+ * at the planned rate, over every hour the press spent running.
+ *
+ * One function, so the row, the headline tile and the chart overlay cannot
+ * drift — and so a rolled-up figure is the ratio of the sums rather than the
+ * mean of the percentages under it. `ratedJobs` is what separates "nothing
+ * here carries a standard" ("—") from "ran the hours and made nothing" (0%).
+ */
+function efficiencyOf(parts: {
+  unratedRunHrs: number;
+  stdHours: number;
+  runHrs: number;
+  ratedJobs: number;
+}): number | null {
+  return parts.ratedJobs > 0 && parts.runHrs > 0 && parts.unratedRunHrs === 0
+    ? Math.round((parts.stdHours / parts.runHrs) * 100)
+    : null;
 }
 
 /** First two words of a part description — keeps the per-job row narrow
@@ -834,7 +1041,32 @@ async function compute(now = new Date()): Promise<void> {
   const partDescByJob = new Map<string, string>();
   for (const o of planning) partDescByJob.set(o.jobNumber, o.partDescription);
 
+  /*
+   * JobNum → cycle time (hours per piece), for Efficiency.
+   *
+   * A signed-off row carries its own `CycleTime`, stamped at sign-off, and
+   * that is the rate the shift was actually judged by. This is the fallback
+   * for a shift still running, which has not been signed off and therefore has
+   * no stamped rate — without it the current shift's Efficiency reads "—" all
+   * day, which is the shift anybody standing at the board most wants to see.
+   */
+  const ctByJob = new Map<string, number>();
+  for (const o of planning) {
+    if (Number.isFinite(o.qtyPerHr) && o.qtyPerHr > 0) {
+      for (const machine of S!.machines) {
+        if (planningOrderMatchesMachine(o, machine.machineCode, true))
+          ctByJob.set(machine.machineCode.trim().toUpperCase() + '|' + o.jobNumber.trim().toUpperCase(), o.qtyPerHr);
+      }
+    }
+  }
+
   const charts = new Map<string, ChartBucket>();
+  // Every (machine, shift instance) in the window, for the Mango IMPW
+  // findings. Collected here rather than from the rendered rows because
+  // byShift rolls Day/Afternoon/Night across the whole period — an
+  // improvement ticket needs the ONE shift it happened on (Mango's Date of
+  // occurrence is a required field).
+  const impwSlices: ImpwSlice[] = [];
   const rows: KpiRow[] = S!.machines.map((m, i) => {
     const all = perMachineProd[i];
     // PMD_Production / PMD_LiveStatus now carry JobHead_PartNum on
@@ -863,20 +1095,7 @@ async function compute(now = new Date()): Promise<void> {
       arr.push(r);
       m2.set(dateKey, arr);
     }
-    // Last 24h is the only mode backed by the current Planning.csv. A
-    // scheduled shift with zero production must still appear as 0%
-    // adherence. Wider/historical windows use persisted ShiftTarget and
-    // therefore only need the signed production buckets already present.
-    if (comparisonMode === 'schedule') {
-      for (const shiftId of shiftInstancesInRange(from, to, shiftIds)) {
-        if (!plannedOrdersForShift(planning, m.machineCode, shiftId).length) continue;
-        const parsed = parseShiftId(shiftId);
-        if (!parsed) continue;
-        const date = shiftId.slice(0, 10);
-        const shiftMap = buckets.get(parsed.code);
-        if (shiftMap && !shiftMap.has(date)) shiftMap.set(date, []);
-      }
-    }
+    // Signed ShiftTarget snapshots define the comparison buckets for every period.
 
     const byShift: Record<ShiftCode, ShiftAgg> = {
       Day: emptyAgg(),
@@ -897,16 +1116,37 @@ async function compute(now = new Date()): Promise<void> {
       }> = [];
       for (const [dateKey, recs] of shiftBuckets) {
         flat.push(...recs);
-        const k = aggregate(recs);
-        // Standards are measured from signed status blocks. The comparison
-        // mode changes with the selected period: current schedule for Last
-        // 24h, frozen tuple targets for every wider/historical range.
+        const k = aggregate(recs, ctByJob);
+        // Standards use signed status blocks. Every comparison uses the
+        // saved tuple targets; Last 24h caps over-production per job.
         const bShiftId = `${dateKey}-${code}`;
+        // foldBreakdowns keeps B slots only — k.downtimeHrs is the downtime
+        // *kind* and also carries M (Smoko), which every shift books.
+        const bdFolded = foldBreakdowns(recs, SLOT_MINUTES / 60);
+        impwSlices.push({
+          machineCode: m.machineCode,
+          machineName: m.displayName,
+          shiftId: bShiftId,
+          output: k.output,
+          reject: k.scrap,
+          yieldPct: yieldPctOf(k.output, k.scrap),
+          breakdownHrs: +bdFolded.reduce((a, b) => a + b.hours, 0).toFixed(2),
+          breakdowns: bdFolded,
+          // Part # / description come from the maps above, not from the row
+          // in hand: they are denormalised onto the canonical slot only, so
+          // reading them off a per-status row would leave the ticket blank.
+          jobs: [...new Set(recs.map((r) => r.jobNumber).filter(Boolean))].map((jobNumber) => ({
+            jobNumber,
+            partNumber: partNumByJob.get(jobNumber) ?? '',
+            partDescription: partDescByJob.get(jobNumber) ?? '',
+          })),
+          // Written into the shift's Handover when Mango confirmed a ticket,
+          // so every device knows it is already raised — not just the browser
+          // that raised it.
+          raisedTicket: impwTicketFromHandovers(recs.map((r) => r.handoverNote)),
+        });
         const std = setupStandardHours(countSetupEvents(recs));
-        const comparison =
-          comparisonMode === 'schedule'
-            ? scheduleAdherenceForShift(recs, planning, m.machineCode, bShiftId, now)
-            : targetAttainmentForRecords(recs);
+        const comparison = targetAttainmentForRecords(recs, comparisonMode === 'schedule');
         stdAcc.push({ comparison, std });
         const cb = charts.get(dateKey) ?? {
           key: dateKey, // full YYYY-MM-DD — the month rollup groups on it
@@ -919,9 +1159,12 @@ async function compute(now = new Date()): Promise<void> {
         cell.runHrs += k.runHrs;
         cell.downHrs += k.downtimeHrs;
         cell.setupHrs += k.setupHrs;
+        cell.unratedRunHrs += k.unratedRunHrs;
+        cell.stdHours += k.stdHours;
+        cell.ratedJobs += k.ratedJobs;
         charts.set(dateKey, cb);
       }
-      byShift[code] = toAgg(aggregate(flat));
+      byShift[code] = toAgg(aggregate(flat, ctByJob));
       for (const s of stdAcc) addStd(byShift[code], s.comparison, s.std);
 
       // 3rd-level breakdown: group this shift's records by JobNum,
@@ -939,13 +1182,13 @@ async function compute(now = new Date()): Promise<void> {
             jobNumber,
             partDescShort: firstTwoWords(desc),
             color: colorForJob(partNumByJob.get(jobNumber) ?? '', desc, dieColors),
-            agg: toAgg(aggregate(recs)),
+            agg: comparedAgg(recs, ctByJob, comparisonMode === 'schedule'),
             lastRunAt: lastRunAt(recs),
           };
         })
         .sort(byCompletion);
     }
-    const total = toAgg(aggregate(all));
+    const total = toAgg(aggregate(all, ctByJob));
     // Machine total = Σ of its shift comparisons / standards.
     for (const code of SHIFT_ORDER) {
       const s = byShift[code];
@@ -981,7 +1224,7 @@ async function compute(now = new Date()): Promise<void> {
           jobNumber,
           partDescShort: firstTwoWords(desc),
           color: colorForJob(partNumByJob.get(jobNumber) ?? '', desc, dieColors),
-          agg: toAgg(aggregate(recs)),
+          agg: comparedAgg(recs, ctByJob, comparisonMode === 'schedule'),
           lastRunAt: lastRunAt(recs),
         };
       })
@@ -998,6 +1241,13 @@ async function compute(now = new Date()): Promise<void> {
   });
 
   S!.rows = rows;
+  // Judged against the SAME thresholds the table paints with, so a Mango
+  // ticket can never claim a shift missed a target the screen shows as met.
+  S!.impwSlices = impwSlices;
+  S!.impwFindings = detectImpwFindings(impwSlices, {
+    yieldTarget: S!.thresholds.yieldAmber,
+    rejectPerShiftMax: REJECT_PER_SHIFT_MAX,
+  });
 
   // Every changeover and breakdown in the window, floor-wide, for the
   // supervisor's box plot. Collected across all presses at once so the
@@ -1059,46 +1309,10 @@ async function compute(now = new Date()): Promise<void> {
       byCategory.set(cat, arr);
     }
   }
-  const comparisonShiftIds = shiftInstancesInRange(from, to, shiftIds);
-  // A scheduled category with zero output still needs a 0% row in Last
-  // 24h, just as an empty scheduled machine-shift does.
-  if (comparisonMode === 'schedule') {
-    for (const machine of S!.machines) {
-      for (const shiftId of comparisonShiftIds) {
-        for (const order of plannedOrdersForShift(planning, machine.machineCode, shiftId)) {
-          const cat = categoryFor(machine, order.partNumber);
-          if (!byCategory.has(cat)) byCategory.set(cat, []);
-        }
-      }
-    }
-  }
   S!.catTotals = Array.from(byCategory.entries())
     .map(([category, recs]) => {
-      const agg = toAgg(aggregate(recs));
-      const comparison =
-        comparisonMode === 'target'
-          ? targetAttainmentForRecords(recs)
-          : combineAttainment(
-              S!.machines.flatMap((machine) => {
-                const machineKey = machine.machineCode.trim().toUpperCase();
-                const categoryOrders = planning.filter(
-                  (order) => categoryFor(machine, order.partNumber) === category,
-                );
-                return comparisonShiftIds.map((shiftId) =>
-                  scheduleAdherenceForShift(
-                    recs.filter(
-                      (record) =>
-                        record.machineCode.trim().toUpperCase() === machineKey &&
-                        record.shiftId === shiftId,
-                    ),
-                    categoryOrders,
-                    machine.machineCode,
-                    shiftId,
-                    now,
-                  ),
-                );
-              }),
-            );
+      const agg = toAgg(aggregate(recs, ctByJob));
+      const comparison = targetAttainmentForRecords(recs, comparisonMode === 'schedule');
       addComparison(agg, comparison);
       return { category, agg };
     })
@@ -1155,33 +1369,38 @@ type ComparisonSlice = Pick<
 >;
 
 function comparisonPct(a: ComparisonSlice): number | null {
-  return a.attainedOutput != null && a.expOutput != null && a.expOutput > 0
+  return a.comparisonCovered === a.comparisonTotal && a.attainedOutput != null && a.expOutput != null && a.expOutput > 0
     ? Math.round((a.attainedOutput / a.expOutput) * 100)
     : null;
 }
 
 function comparisonTitle(a: ComparisonSlice): string {
-  if (kpiComparisonMode(S!.period) === 'schedule') {
-    return `Schedule Adherence = sum of Good capped at 100% for each scheduled Job# ÷ Planning.csv expectation for this machine and shift. Unscheduled output cannot offset a missed scheduled order — credited ${a.attainedOutput ?? 0} of ${a.expOutput ?? 0} pcs`;
-  }
-  const coverage = `${a.comparisonCovered}/${a.comparisonTotal} job-shifts covered`;
-  if (a.expOutput == null || a.expOutput <= 0) {
-    return `Vs Target unavailable — no valid persisted ShiftTarget (${coverage}). Tuples without a target are excluded from both Good and Target.`;
-  }
-  return `Vs Target = Good from job-shifts with a valid persisted PMD_Production.ShiftTarget ÷ those targets — ${a.attainedOutput ?? 0} of ${a.expOutput} pcs; ${coverage}. Each Machine + Shift + Job target is counted once.`;
+  const coverage = a.comparisonCovered + '/' + a.comparisonTotal + ' job-shifts have ShiftTarget';
+  const missing = a.comparisonCovered < a.comparisonTotal;
+  const rule = kpiComparisonMode(S!.period) === 'schedule'
+    ? 'Sum of min(Good, ShiftTarget) per job-shift / sum of ShiftTarget'
+    : 'Sum of Good / sum of ShiftTarget';
+  return rule + '. Each Machine + Shift + Job snapshot is counted once. ' + coverage
+    + (missing ? '. Incomplete plan: percentage and full plan total are unavailable.' : '')
+    + ' Known targets: ' + (a.expOutput ?? 0) + ' pcs; credited output: ' + (a.attainedOutput ?? 0) + ' pcs.';
 }
 
-/** Output cell judged against the active comparison mode. */
-function outputCell(a: ShiftAgg): string {
-  const n = a.output ? String(a.output) : '—';
-  if (a.expOutput == null || a.expOutput <= 0) {
-    const title = a.comparisonTotal ? ` title="${escapeHtml(comparisonTitle(a))}"` : '';
-    return `<td class="num"${title}>${n}</td>`;
-  }
-  const pct = comparisonPct(a)!;
-  const cls = planColourClass(pct, S!.thresholds);
-  const title = comparisonTitle(a);
-  return `<td class="num ${cls}" title="${escapeHtml(title)}">${n} <span class="kpi-exp">/${a.expOutput}</span></td>`;
+/** Output and plan come from the same signed machine-shift-job tuples. */
+function outputCell(a: ComparisonSlice & { output: number }): string {
+  const hasData = a.comparisonTotal > 0 || a.output > 0;
+  if (!hasData) return '<td class="num">—</td>';
+  const complete = a.comparisonCovered === a.comparisonTotal && a.expOutput != null;
+  const plan = complete ? String(a.expOutput) : '—';
+  const pct = comparisonPct(a);
+  const cls = pct == null ? '' : planColourClass(pct, S!.thresholds);
+  return '<td class="num ' + cls + '" title="' + escapeHtml(comparisonTitle(a)) + '">'
+    + a.output + ' <span class="kpi-exp">/' + plan + '</span></td>';
+}
+
+function comparedAgg(records: ProductionRecord[], rates: ReadonlyMap<string, number>, cap: boolean): ShiftAgg {
+  const agg = toAgg(aggregate(records, rates));
+  addComparison(agg, targetAttainmentForRecords(records, cap));
+  return agg;
 }
 
 /** Die / Colour / Insert hour cell judged against the standard allowance
@@ -1383,7 +1602,8 @@ function aggCells(
 ): string {
   const t = S!.thresholds;
   const yc = colourClass(a.yieldPct, t.yieldGreen, t.yieldAmber);
-  const oc = colourClass(a.oee, t.effGreen, t.effAmber);
+  const eff = efficiencyOf(a);
+  const oc = colourClass(eff, t.effGreen, t.effAmber);
   const planPct = comparisonPct(a);
   const pc = planColourClass(planPct, t);
   // Empty cells render an em-dash instead of "0" / "0.0%" — a literal
@@ -1405,7 +1625,7 @@ function aggCells(
     ${setupCell(a.dieHrs, a.dieStdHrs, DIE_CHANGE_STD_HRS, 'Die change')}
     ${setupCell(a.colorHrs, a.colorStdHrs, COLOR_CHANGE_STD_HRS, 'Colour change')}
     ${setupCell(a.insertHrs, a.insertStdHrs, INSERT_CHANGE_STD_HRS, 'Insert change')}
-    <td class="num ${colourOee ? oc : ''}">${a.oee == null ? '—' : a.oee + '%'}</td>
+    <td class="num ${colourOee ? oc : ''}" title="${a.unratedRunHrs > 0 ? escapeHtml(`${a.unratedRunHrs.toFixed(1)} run hours have no production standard; Efficiency unavailable`) : a.ratedJobs > 0 ? escapeHtml(`${a.stdHours.toFixed(1)} standard hours of output in ${a.runHrs.toFixed(1)} run hours`) : 'No job in this slice carries a production standard'}">${eff == null ? '—' : eff + '%'}</td>
     <td class="num ${pc}"${a.comparisonTotal ? ` title="${escapeHtml(comparisonTitle(a))}"` : ''}>${planPct == null ? '—' : planPct + '%'}</td>`;
 }
 
@@ -1429,6 +1649,826 @@ function buildThresholdEditor(): string {
     <div class="kpi-th-group"><b>Output / ${comparisonLabel()}</b>${field('planBlue', '🟢 ≥')}${field('planAmber', '🟡 ≥')}</div>
     <button type="button" class="kpi-th-reset" data-th-reset title="Restore default thresholds">Reset</button>
   </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Mango IMPW — "ready to raise" actions
+// ---------------------------------------------------------------------------
+
+/**
+ * Mango's Improvement Workflow form. Mango is the system of record for
+ * improvement actions exactly as it is for maintenance work orders, so PMD
+ * deep-links into it with the ticket already written rather than keeping a
+ * second copy of the register. Overridable per tenant — set
+ * VITE_MANGO_IMPW_URL if this site's IMPW form sits on another path.
+ */
+const MANGO_IMPW_URL =
+  (import.meta.env as Record<string, string | undefined>).VITE_MANGO_IMPW_URL ||
+  'https://my.mangolive.com/improvement-workflow';
+
+/** Per-trigger glyph for the action card. */
+
+
+/**
+ * The text fields of POST /api/v4/improvement, in the order the dialog asks
+ * for them. `site` marks the plant-wide answers — those are remembered
+ * between tickets; the rest are drafted fresh from the finding.
+ *
+ * The two option fields (Type of Improvement, Coordinator) are not here:
+ * they are picked from lists Mango issues, and are rendered separately.
+ */
+const IMPW_TEXT_FIELDS: Array<{
+  field: 'description' | 'originatorName' | 'improvementDetails' | 'region' | 'branch' |
+    'department' | 'other';
+  label: string;
+  required?: boolean;
+  area?: boolean;
+  site?: boolean;
+  maxLength?: number;
+  hint?: string;
+}> = [
+  {
+    field: 'description',
+    label: 'Brief Description',
+    required: true,
+    maxLength: IMPW_DESCRIPTION_MAX,
+  },
+  { field: 'originatorName', label: 'Name', required: true, hint: 'who raised it' },
+  {
+    field: 'improvementDetails',
+    label: 'Details of Improvement and/or Proposed Action',
+    required: true,
+    area: true,
+    maxLength: IMPW_DETAILS_MAX,
+  },
+  { field: 'region', label: 'Region', required: true },
+  { field: 'branch', label: 'Branch', required: true },
+  { field: 'department', label: 'Department', required: true },
+  { field: 'other', label: 'Other', required: true },
+];
+
+/** "1600T · Night 26 Aug 2026" — the same date wording the Handover cell
+ *  uses, so one page never dates the same shift two ways. */
+function impwWhen(shiftId: string): string {
+  const s = handoverStamp(shiftId);
+  return s.shift ? `${s.shift} · ${s.date}` : s.date;
+}
+
+/** "just now" / "2 h ago" / "3 d ago" — how old a Mango answer is. A stage
+ *  read last week is not today's stage, and the row has to say so. */
+function impwSince(at: number): string {
+  const mins = Math.max(0, Math.round((Date.now() - at) / 60000));
+  if (!at) return 'at an unknown time';
+  if (mins < 2) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 48) return `${hrs} h ago`;
+  return `${Math.round(hrs / 24)} d ago`;
+}
+
+/**
+ * The Mango ticket this finding already has, or '' if it has none.
+ *
+ * Two sources, and the shift's own Handover is the one that counts: it is
+ * written when Mango confirms a ticket and it lives in SharePoint, so every
+ * device sees it. The local ledger is the second source, for the browser
+ * that filed the ticket in the moment before the Handover write lands (and
+ * for a site where the Handover column is not wired up yet).
+ *
+ * Non-empty means the improvement exists. Nothing may offer to raise it
+ * again — that is how one bad shift ends up with two tickets and two people
+ * investigating the same night.
+ */
+function impwTicketFor(f: ImpwFinding): string {
+  return f.raisedTicket || S!.impwDecisions.get(f.key)?.ticket || '';
+}
+
+/**
+ * Where the ticket got to, as of the last time anyone asked — stage and due
+ * date on the row itself, the rest in the tooltip, because the row is one
+ * dense line and the stage is the part a meeting scans for.
+ *
+ * Shown only once Mango HAS been asked: an empty chip would read as "nobody
+ * has touched it", which is a claim PMD has no right to make.
+ */
+function impwProgressChip(d: ImpwDecision): string {
+  const p = d.progress;
+  if (!p) return '';
+  const short = [
+    p.stage,
+    p.closed ? `closed ${impwMangoDate(p.closed)}` : p.dueDate ? `due ${impwMangoDate(p.dueDate)}` : '',
+  ].filter(Boolean).join(' · ');
+  const full = [
+    p.stage ? `Current Stage: ${p.stage}` : '',
+    p.investigator ? `Investigator: ${p.investigator}` : '',
+    p.dueDate ? `To be completed by: ${impwMangoDate(p.dueDate)}` : '',
+    p.closed ? `Closed: ${impwMangoDate(p.closed)}` : '',
+  ].filter(Boolean).join(' · ');
+  if (!short) {
+    return `<span class="kpi-impw-progress is-blank" title="Read from Mango ${escapeHtml(
+      impwSince(p.at),
+    )}">no stage yet</span>`;
+  }
+  return `<span class="kpi-impw-progress" title="${escapeHtml(full)} — read from Mango ${escapeHtml(
+    impwSince(p.at),
+  )}">${escapeHtml(short)}</span>`;
+}
+
+/**
+ * The actions block: every shift in the window that broke a KPI rule, worst
+ * first, each with Yes / No. Decided ones drop out of the list (the meeting
+ * has moved on) but stay reachable behind the toggle so a "No" can be
+ * undone.
+ */
+function buildImpwPanel(): string {
+  if (S!.loading) return '';
+  const open = S!.impwFindings.filter((f) => !impwTicketFor(f) && !S!.impwDecisions.has(f.key));
+  const shown = S!.impwShowDecided ? S!.impwFindings : S!.impwFindings.filter((f) => !S!.impwDecisions.has(f.key) || S!.impwDecisions.get(f.key)?.decision === 'yes');
+  const rows = shown.map((f) => {
+    const d = S!.impwDecisions.get(f.key);
+    const ticket = impwTicketFor(f);
+    // A confirmed ticket number is a button: pressing it asks Mango where
+    // the ticket has got to, and the answer stays on the row afterwards.
+    // The Handover already holds the ticket when that is where it came
+    // from, so only a locally-filed one still offers to save it.
+    const action = ticket
+      ? `<button type="button" class="kpi-impw-ticket" data-impw-open="${escapeHtml(f.key)}" title="Ask Mango where ${escapeHtml(ticket)} has got to">${escapeHtml(ticket)}</button>${d ? impwProgressChip(d) : ''}${d?.ticket && !d.handoverSaved ? `<button type="button" data-impw-sync="${escapeHtml(f.key)}">Save to Handover</button>` : '<span>Saved</span>'}`
+      : d?.decision === 'no' ? `<button type="button" data-impw-undo="${escapeHtml(f.key)}">Undo skip</button>`
+      : `<button type="button" class="kpi-impw-yes" data-impw-yes="${escapeHtml(f.key)}">Raise IMPW</button><button type="button" class="kpi-impw-no" data-impw-no="${escapeHtml(f.key)}">Skip</button>`;
+    return `<li class="kpi-impw-row"><b>${escapeHtml(f.machineCode)}</b><span>${escapeHtml(impwWhen(f.shiftId))}</span><span class="kpi-impw-summary" title="${escapeHtml(f.reasons.join('; '))}">${escapeHtml(f.reasons.join('; '))}</span><div class="kpi-impw-row-actions">${action}</div></li>`;
+  }).join('');
+  return `<section class="kpi-impw" aria-label="Mango improvement actions"><div class="kpi-impw-head"><h3>IMPW <span class="kpi-impw-count">${open.length}</span></h3>${isSupervisor() ? `<button type="button" class="kpi-impw-conn-btn" data-impw-conn>API access</button>` : ''}<button type="button" class="kpi-impw-toggle" data-impw-toggle>${S!.impwShowDecided ? 'Hide' : 'Show'} skipped</button></div><ul class="kpi-impw-list">${rows || '<li>No pending actions</li>'}</ul></section>`;
+}
+/**
+ * The Mango sign-in, entered on the device rather than compiled in — the
+ * account password is rotated, and a build-time secret would mean a rebuild
+ * and redeploy every rotation.
+ *
+ * Held in this browser's localStorage. That is a real trade-off and the
+ * dialog says so: it buys a sign-in the site can change on its own, at the
+ * cost of a password sitting in browser storage on a shop-floor device. Use
+ * an account scoped to raising improvement tickets, not a person's own
+ * Mango login. The password is never shown back, never logged, and never
+ * goes into the ticket text or the clipboard.
+ */
+function openMangoConnection(): void {
+  if (!isSupervisor()) return;
+  const c = S!.mango;
+  const saved = isMangoConfigured(c);
+  const mc = openModal(`<div class="bd-modal kpi-mango-modal">
+    <h2 class="bd-title">Mango API access</h2>
+    <p class="bd-sub">Set once on this device. With it, <b>Yes</b> files the ticket straight into
+      Mango; without it, PMD copies the filled form and opens IMPW for you to paste.</p>
+    <div class="kpi-mango-form">
+      <label class="kpi-impw-field is-area"><span class="kpi-impw-label">API address</span>
+        <input type="text" data-mango="baseUrl" value="${escapeHtml(c.baseUrl)}"></label>
+      <label class="kpi-impw-field"><span class="kpi-impw-label">Username</span>
+        <input type="text" data-mango="username" autocomplete="off" value="${escapeHtml(c.username)}"></label>
+      <label class="kpi-impw-field"><span class="kpi-impw-label">Password${
+        saved ? ' <em>saved — leave blank to keep</em>' : ''
+      }</span>
+        <input type="password" data-mango="password" autocomplete="new-password" value="" placeholder="${
+          saved ? '••••••••' : ''
+        }"></label>
+    </div>
+    <p class="kpi-mango-paths">Tickets are posted to <code>${escapeHtml(
+      mangoCreateUrl(c),
+    )}</code>. The account needs <b>API access</b> switched on inside Mango — an ordinary Mango
+      login is not automatically an API login.</p>
+    <p class="kpi-mango-warn">🔒 The sign-in is stored in this browser only — it is not shared with
+      other devices and never leaves the page except to Mango. Use a Mango account created for
+      raising improvement tickets, not a personal login. Each iPad or PC that files tickets needs
+      this set once.</p>
+    <div class="kpi-mango-test" data-mango-result></div>
+    <div class="bd-actions kpi-mango-actions">
+      ${
+        saved
+          ? '<button type="button" class="btn-ghost-big" data-mango-clear>Forget sign-in</button>'
+          : ''
+      }
+      <button type="button" class="btn-ghost-big" data-mango-test>Test API access</button>
+      <button type="button" class="btn-ghost-big" data-mango-cancel>Cancel</button>
+      <button type="button" class="btn-primary-big" data-mango-save>Save</button>
+    </div>
+  </div>`);
+
+  // What the boxes currently say, with a blank password meaning "keep the
+  // one already stored" — so correcting the URL cannot silently wipe the
+  // sign-in, and Test checks what Save would save.
+  const readConn = (): MangoConnection => {
+    const read = (k: string): string =>
+      mc.querySelector<HTMLInputElement>(`[data-mango="${k}"]`)?.value.trim() ?? '';
+    const password = mc.querySelector<HTMLInputElement>('[data-mango="password"]')?.value ?? '';
+    return {
+      baseUrl: read('baseUrl') || DEFAULT_MANGO_CONNECTION.baseUrl,
+      username: read('username'),
+      password: password || c.password,
+    };
+  };
+
+  mc.querySelector('[data-mango-cancel]')?.addEventListener('click', closeModal);
+  mc.querySelector('[data-mango-clear]')?.addEventListener('click', () => {
+    clearMangoConnection();
+    S!.mango = loadMangoConnection();
+    S!.impwOptions = null;
+    closeModal();
+    toast('Mango sign-in forgotten — tickets copy to the clipboard', 'ok');
+    render();
+  });
+
+  // Finding out the password is wrong here, at the settings screen, beats
+  // finding out three fields into a ticket in front of the meeting.
+  const result = mc.querySelector<HTMLElement>('[data-mango-result]');
+  mc.querySelector('[data-mango-test]')?.addEventListener('click', () => {
+    const next = readConn();
+    if (!isMangoConfigured(next)) {
+      if (result) {
+        result.innerHTML = `<p class="kpi-impw-bad">Fill in the address, username and password first.</p>`;
+      }
+      return;
+    }
+    if (result) result.innerHTML = `<p class="kpi-impw-ok">Signing in to Mango…</p>`;
+    void mangoSignIn(next).then(async (r) => {
+      if (!result) return;
+      const access = r.ok ? await fetchImpwOptions(next) : r;
+      result.innerHTML = access.ok
+        ? '<p class="kpi-impw-ok">✓ Improvement API accessible. Press Save. Ticket creation is confirmed only when Mango returns a number.</p>'
+        : `<p class="kpi-impw-bad" role="alert">${escapeHtml(access.message)}</p>`;
+    });
+  });
+
+  mc.querySelector('[data-mango-save]')?.addEventListener('click', () => {
+    const next = readConn();
+    saveMangoConnection(next);
+    S!.mango = next;
+    // The option lists belong to whoever is signed in; a new sign-in must
+    // re-ask rather than offer the last account's coordinators.
+    S!.impwOptions = null;
+    closeModal();
+    toast(
+      isMangoConfigured(next) ? 'Mango connection saved' : 'Saved — sign-in still incomplete',
+      isMangoConfigured(next) ? 'ok' : 'warn',
+    );
+    render();
+  });
+}
+
+function findingByKey(key: string): ImpwFinding | undefined {
+  return S!.impwFindings.find((f) => f.key === key);
+}
+
+function recordImpwDecision(
+  key: string,
+  decision: 'yes' | 'no',
+  ticket = '',
+  ticketId = '',
+): void {
+  // The id is what reads the ticket back later; the number is what the floor
+  // calls it. Both are kept — neither substitutes for the other.
+  S!.impwDecisions.set(key, { decision, at: Date.now(), by: S!.who.name, ticket, ticketId });
+  saveImpwDecisions(S!.impwDecisions);
+}
+
+/** Clipboard with a fallback: the async API needs a secure context and a
+ *  live user gesture, and this app is also served from plain-HTTP intranet
+ *  hosts. Returns false only when both paths fail, so the caller can show
+ *  the text to copy by hand. */
+async function copyImpwText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through to the textarea path */
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function readImpwForm(mc: HTMLElement, base: ImpwDraft): ImpwDraft {
+  const out: ImpwDraft = { ...base };
+  mc.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-impw]').forEach((el) => {
+    // Narrow to the text keys so the assignment stays typed — the two
+    // option fields are objects and are read separately below.
+    switch (el.dataset.impw) {
+      case 'description':
+      case 'originatorName':
+      case 'improvementDetails':
+      case 'region':
+      case 'branch':
+      case 'department':
+      case 'other':
+      case 'source':
+      case 'type':
+      case 'investigator':
+        out[el.dataset.impw] = el.value;
+        break;
+      default:
+        break;
+    }
+  });
+  // Signed in: the value is Mango's own id, and the name comes back from
+  // the list it was issued in, so the pair can never be half-edited.
+  mc.querySelectorAll<HTMLSelectElement>('[data-impw-opt]').forEach((sel) => {
+    // A select still waiting on Mango holds nothing but the placeholder;
+    // reading it would wipe the pick remembered from the last ticket
+    // before the list that could re-select it has even arrived.
+    if (sel.disabled) return;
+    const key = sel.dataset.impwOpt === 'coordinator' ? 'coordinator' : 'typeOfImprovement';
+    const list = S!.impwOptions?.[key] ?? [];
+    out[key] = list.find((o) => o.id === sel.value) ?? { ...EMPTY_OPTION };
+  });
+  // Clipboard mode: no lists to pick from, so the name is typed and there
+  // is no id — which is all the web form needs.
+  mc.querySelectorAll<HTMLInputElement>('[data-impw-opt-name]').forEach((inp) => {
+    const key = inp.dataset.impwOptName === 'coordinator' ? 'coordinator' : 'typeOfImprovement';
+    out[key] = { id: '', name: inp.value.trim() };
+  });
+  return out;
+}
+
+function impwIssuesHtml(draft: ImpwDraft, target: ImpwTarget): string {
+  const issues = impwDraftIssues(draft, target);
+  if (!issues.length) {
+    return `<p class="kpi-impw-ok">Ready to submit.</p>`;
+  }
+  return `<p class="kpi-impw-bad" role="alert">Complete the required fields. ${issues
+    .map((i) => escapeHtml(i))
+    .join(' · ')}</p>`;
+}
+
+/** The two fields Mango will only accept as one of its own {id, name}
+ *  entries. Everything else on the create body is free text. */
+const IMPW_OPTION_FIELDS: Array<{ field: 'typeOfImprovement' | 'coordinator'; label: string }> = [
+  { field: 'typeOfImprovement', label: 'Type of Improvement' },
+  { field: 'coordinator', label: 'Coordinator' },
+];
+
+/**
+ * The ticket itself: PMD's draft of the improvement, every field editable
+ * before it goes anywhere.
+ *
+ * Type of Improvement and Coordinator are the plant's own lists, and PMD
+ * asks Mango for them rather than guessing — GET /api/v4/improvement/new
+ * returns the exact {id, name} pairs the POST will accept, so a pick here
+ * cannot be a value Mango has never heard of. Without a sign-in there is
+ * nothing to ask, so they fall back to typed names for the paste-in path.
+ * Region / Branch / Other are remembered after the first ticket.
+ */
+function openImpwTicket(finding: ImpwFinding): void {
+  // Last line of defence against a duplicate. The panel already hides the
+  // Raise button once a ticket exists, but a stale render, a second tab or a
+  // colleague filing the same shift on another device can all put a click
+  // here after the fact — and a second ticket for one shift is two people
+  // investigating the same night.
+  const already = impwTicketFor(finding);
+  if (already) {
+    toast(`${already} was already raised for this shift`, 'warn');
+    render();
+    return;
+  }
+  // The dialog does two genuinely different things depending on whether the
+  // Mango sign-in is set, so it must not promise the same one in both.
+  const direct = isMangoConfigured(S!.mango);
+  const target: ImpwTarget = direct ? 'api' : 'paste';
+  let draft = buildImpwDraft(finding, S!.who, S!.impwSite);
+  let submitting = false;
+
+  const textRow = (spec: (typeof IMPW_TEXT_FIELDS)[number]): string => {
+    const value = draft[spec.field];
+    const cap = spec.maxLength ? ` maxlength="${spec.maxLength}"` : '';
+    const control = spec.field === 'other'
+      ? `<select data-impw="other">${IMPW_OTHERS.map((v) => `<option${v === value ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('')}</select>`
+      : spec.area
+      ? `<textarea data-impw="${spec.field}" rows="5"${cap}>${escapeHtml(value)}</textarea>`
+      : `<input type="text" data-impw="${spec.field}" value="${escapeHtml(value)}"${cap}>`;
+    return `<label class="kpi-impw-field${spec.area ? ' is-area' : ''}${
+      spec.site ? ' is-site' : ''
+    }">
+      <span class="kpi-impw-label">${escapeHtml(spec.label)}${
+        spec.required ? ' <b class="kpi-impw-req">*</b>' : ''
+      }${spec.site ? ' <em>site</em>' : ''}${
+        spec.hint ? ` <em>${escapeHtml(spec.hint)}</em>` : ''
+      }</span>
+      ${control}
+    </label>`;
+  };
+
+  // Signed in: a <select> that starts empty and is filled once Mango
+  // answers. Not signed in: a plain name, which is all the web form needs.
+  const optionRow = (spec: (typeof IMPW_OPTION_FIELDS)[number]): string => {
+    const current = draft[spec.field];
+    const control = direct
+      ? `<select data-impw-opt="${spec.field}" disabled>
+           <option value="">Loading Mango's list…</option>
+         </select>`
+      : spec.field === 'typeOfImprovement'
+        ? `<select data-impw-opt-name="${spec.field}">${IMPW_IMPROVEMENT_TYPES.map((v) => `<option${v === current.name ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('')}</select>`
+        : `<input type="text" data-impw-opt-name="${spec.field}" value="${escapeHtml(current.name)}">`;
+    return `<label class="kpi-impw-field">
+      <span class="kpi-impw-label">${escapeHtml(spec.label)} <b class="kpi-impw-req">*</b>${
+        direct ? ' <em>from Mango</em>' : ' <em>site</em>'
+      }</span>
+      ${control}
+    </label>`;
+  };
+
+  const submitLabel = direct ? 'Create ticket' : 'Copy &amp; open Mango';
+  const submitNote = direct
+    ? 'The ticket number will be saved to this shift’s Handover.'
+    : 'Copy the draft, then complete submission in Mango.';
+  const mc = openModal(`<div class="bd-modal kpi-impw-modal" role="dialog" aria-modal="true" aria-labelledby="impw-dialog-title">
+    <div class="kpi-impw-modal-head">
+      <div>
+        <h2 class="bd-title" id="impw-dialog-title">New improvement</h2>
+        <p class="bd-sub">${escapeHtml(finding.machineCode)} · ${escapeHtml(impwWhen(finding.shiftId))} · ${escapeHtml(
+          finding.reasons.join(' · '),
+        )}</p>
+      </div>
+      <button type="button" class="kpi-impw-close" data-impw-cancel aria-label="Close dialog">&times;</button>
+    </div>
+    <div class="kpi-impw-issues">${impwIssuesHtml(draft, target)}</div>
+    <div class="kpi-impw-form">
+      <h3 class="kpi-impw-section">Improvement details</h3>${IMPW_TEXT_FIELDS.filter((f) => f.field === 'description').map(textRow).join('')}
+      ${IMPW_OPTION_FIELDS.filter((f) => f.field === 'typeOfImprovement').map(optionRow).join('')}
+      <label class="kpi-impw-field"><span class="kpi-impw-label">Source <b class="kpi-impw-req">*</b></span><select data-impw="source"><option>Employee</option></select></label>
+      <label class="kpi-impw-field"><span class="kpi-impw-label">Type <b class="kpi-impw-req">*</b></span><select data-impw="type">${IMPW_TYPES.map((v) => `<option${v === draft.type ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('')}</select></label>
+      <div class="kpi-impw-field kpi-impw-when-field">
+        <span class="kpi-impw-label">Date of occurrence <b class="kpi-impw-req">*</b></span>
+        <output data-impw-when>${escapeHtml(
+          impwIsoToFormDate(draft.improvementDate),
+        )}</output>
+      </div>
+      ${IMPW_TEXT_FIELDS.filter((f) => f.area).map(textRow).join('')}<h3 class="kpi-impw-section">Assignment</h3>${IMPW_TEXT_FIELDS.filter((f) => f.field === 'originatorName').map(textRow).join('')}${IMPW_OPTION_FIELDS.filter((f) => f.field === 'coordinator').map(optionRow).join('')}<label class="kpi-impw-field"><span class="kpi-impw-label">Investigator</span><input type="text" data-impw="investigator" title="Who the plant is asking to investigate. Mango's v4 API has no investigator field, so this is written into the details — Mango assigns the real one, and pressing the ticket number reads it back." value="${escapeHtml(draft.investigator ?? '')}"></label><h3 class="kpi-impw-section">Location &amp; department</h3>${IMPW_TEXT_FIELDS.filter((f) => ['region', 'branch', 'department', 'other'].includes(f.field)).map(textRow).join('')}
+    </div>
+    <p class="kpi-impw-note">${submitNote}</p>
+    <div class="bd-actions kpi-impw-modal-actions">
+      <button type="button" class="btn-ghost-big" data-impw-copy>Copy details</button><button type="button" class="btn-ghost-big" data-impw-cancel>Cancel</button>
+      <button type="button" class="btn-primary-big" data-impw-submit>${submitLabel}</button>
+    </div>
+  </div>`);
+
+  const issuesHost = mc.querySelector<HTMLElement>('.kpi-impw-issues');
+  const submitBtn = mc.querySelector<HTMLButtonElement>('[data-impw-submit]');
+  const revalidate = (): void => {
+    draft = readImpwForm(mc, draft);
+    if (issuesHost) issuesHost.innerHTML = impwIssuesHtml(draft, target);
+    if (submitBtn) submitBtn.disabled = submitting || impwDraftIssues(draft, target).length > 0;
+  };
+  const wire = (): void => {
+    mc.querySelectorAll('[data-impw], [data-impw-opt], [data-impw-opt-name]').forEach((el) => {
+      el.addEventListener('change', revalidate);
+    });
+  };
+  revalidate();
+  wire();
+  if (direct) {
+    void fillImpwOptions(mc, () => draft, revalidate, () => {
+      handOffImpwByClipboard(finding, readImpwForm(mc, draft));
+    });
+  }
+
+  mc.querySelectorAll('[data-impw-cancel]').forEach((button) => button.addEventListener('click', closeModal));
+  mc.querySelector('[data-impw-copy]')?.addEventListener('click', () => {
+    draft = readImpwForm(mc, draft);
+    void copyImpwText(impwPlainText(draft)).then((ok) =>
+      toast(ok ? 'IMPW details copied' : 'Copy blocked — select the text manually', ok ? 'ok' : 'warn'),
+    );
+  });
+  mc.querySelector('[data-impw-submit]')?.addEventListener('click', () => {
+    if (submitting) return;
+    draft = readImpwForm(mc, draft);
+    const issues = impwDraftIssues(draft, target);
+    if (issues.length) {
+      if (issuesHost) issuesHost.innerHTML = impwIssuesHtml(draft, target);
+      toast('Fill the required fields first', 'warn');
+      return;
+    }
+    // Remember the plant's own answers for the next ticket. Department is
+    // not among them — it follows the breakdown, not the site.
+    S!.impwSite = {
+      region: draft.region,
+      branch: draft.branch,
+      other: draft.other,
+      typeOfImprovement: { ...draft.typeOfImprovement },
+      coordinator: { ...draft.coordinator },
+    };
+    saveImpwSite(S!.impwSite);
+    if (direct) {
+      submitting = true;
+      void fileImpwViaApi(finding, draft, mc).finally(() => { submitting = false; });
+    }
+    else handOffImpwByClipboard(finding, draft);
+  });
+}
+
+/**
+ * Fetch the tenant's Type of Improvement and Coordinator lists and put them
+ * in the dialog's two selects, pre-selecting whatever was picked last time.
+ *
+ * A failure here is not fatal: the selects say so, and the paste-in path is
+ * offered in their place — the same rule as everywhere else in this
+ * feature, that Mango being unreachable must never stop a ticket being
+ * written.
+ */
+async function fillImpwOptions(
+  mc: HTMLElement,
+  currentDraft: () => ImpwDraft,
+  revalidate: () => void,
+  onFallback: () => void,
+): Promise<void> {
+  let lists = S!.impwOptions;
+  if (!lists) {
+    const res = await fetchImpwOptions(S!.mango);
+    if (!res.ok) {
+      mc.querySelectorAll<HTMLSelectElement>('[data-impw-opt]').forEach((sel) => {
+        sel.innerHTML = `<option value="">Mango's list unavailable</option>`;
+      });
+      const issuesHost = mc.querySelector<HTMLElement>('.kpi-impw-issues');
+      if (issuesHost) {
+        issuesHost.innerHTML = `<p class="kpi-impw-bad" role="alert">${escapeHtml(res.message)}</p>
+          <p class="kpi-impw-fallback">Type of Improvement and Coordinator have to come from
+            Mango, so this ticket cannot be filed directly right now — but you can still
+            <button type="button" class="kpi-impw-linkbtn" data-impw-fallback>copy it and open IMPW</button>.</p>`;
+        issuesHost.querySelector('[data-impw-fallback]')?.addEventListener('click', onFallback);
+      }
+      return;
+    }
+    lists = { typeOfImprovement: res.typeOfImprovement, coordinator: res.coordinator };
+    S!.impwOptions = lists;
+  }
+  const draft = currentDraft();
+  mc.querySelectorAll<HTMLSelectElement>('[data-impw-opt]').forEach((sel) => {
+    const key = sel.dataset.impwOpt === 'coordinator' ? 'coordinator' : 'typeOfImprovement';
+    let list = lists![key];
+    if (key === 'typeOfImprovement') {
+      // The plant files every KPI improvement under one Type of Improvement,
+      // so offer only that — unless this tenant spells it differently, where
+      // narrowing to nothing would leave the ticket unfileable. Mango's own
+      // full list beats an empty select.
+      const narrowed = list.filter((o) => IMPW_IMPROVEMENT_TYPES.some((name) => !!matchImpwOption([o], name)));
+      if (narrowed.length) list = narrowed;
+    }
+    const chosen = (matchImpwOption(list, draft[key].name) ?? list.find((o) => o.id === draft[key].id))?.id;
+    sel.innerHTML = [
+      `<option value="">${list.length ? 'Choose…' : 'Mango returned no options'}</option>`,
+      ...list.map(
+        (o) =>
+          `<option value="${escapeHtml(o.id)}"${o.id === chosen ? ' selected' : ''}>${escapeHtml(
+            o.name,
+          )}</option>`,
+      ),
+    ].join('');
+    sel.disabled = false;
+  });
+  revalidate();
+}
+
+/**
+ * File the ticket through Mango's API. The dialog stays open until Mango
+ * answers, so a failure lands on the form the operator is still looking at
+ * rather than behind a closed modal — and a failure is not a dead end: the
+ * copy-and-paste path is still right there, and the same button offers it.
+ */
+async function fileImpwViaApi(
+  finding: ImpwFinding,
+  draft: ImpwDraft,
+  mc: HTMLElement,
+): Promise<void> {
+  const btn = mc.querySelector<HTMLButtonElement>('[data-impw-submit]');
+  const issuesHost = mc.querySelector<HTMLElement>('.kpi-impw-issues');
+  const label = btn?.innerHTML ?? '';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = 'Filing in Mango…';
+  }
+  const res = await submitImpwToMango(draft, S!.mango);
+  if (res.ok) {
+    recordImpwDecision(finding.key, 'yes', res.ticketRef, res.ticketId);
+    await saveImpwHandover(finding);
+    closeModal();
+    toast(res.message, 'ok');
+    render();
+    return;
+  }
+  if (btn) {
+    btn.disabled = !!res.uncertain;
+    btn.innerHTML = label;
+  }
+  if (issuesHost) {
+    issuesHost.innerHTML = `<p class="kpi-impw-bad" role="alert">${escapeHtml(res.message)}</p>
+      <p class="kpi-impw-fallback">Creation was not confirmed. Check Mango before submitting again. You can
+        <button type="button" class="kpi-impw-linkbtn" data-impw-fallback>copy the ticket and open IMPW</button>
+        instead, and the shift stays on the list either way.</p>`;
+    issuesHost.querySelector('[data-impw-fallback]')?.addEventListener('click', () => {
+      handOffImpwByClipboard(finding, draft);
+    });
+  }
+  toast('Mango did not accept it — see the message above', 'err');
+}
+
+async function saveImpwHandover(finding: ImpwFinding): Promise<void> {
+  const decision = S!.impwDecisions.get(finding.key);
+  if (!decision?.ticket || decision.handoverSaved) return;
+  try {
+    if (!dalRef.appendImpwHandover) throw new Error('Handover writeback is unavailable');
+    await dalRef.appendImpwHandover(finding.machineCode, finding.shiftId, decision.ticket);
+    decision.handoverSaved = true;
+    saveImpwDecisions(S!.impwDecisions);
+    await compute();
+  } catch (error) {
+    toast(`${decision.ticket} created; Handover not saved: ${(error as Error).message}. Use Save to Handover to retry.`, 'err');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reading a raised ticket back
+// ---------------------------------------------------------------------------
+
+const IMPW_GROUP_TITLE: Record<ImpwRecordGroup, string> = {
+  progress: 'Where it has got to',
+  ticket: 'The ticket',
+  outcome: 'What Mango holds',
+};
+
+/**
+ * One group of read-back fields, laid out as the new-improvement dialog lays
+ * out its own: the same section heading, the same labelled field, the same
+ * two-column grid. One dialog writes the ticket and the other reads it back,
+ * and they are the same ticket — a reader should not have to re-learn where
+ * to look. The only difference is that nothing here is an input, because
+ * nothing here is PMD's to change.
+ *
+ * Blank fields are dropped rather than shown as "—": a list of empty labels
+ * buries the two lines that matter.
+ */
+function impwRecordGroupHtml(rec: ImpwRecord, group: ImpwRecordGroup): string {
+  const rows = IMPW_RECORD_ROWS.filter((r) => r.group === group && rec[r.field]);
+  if (!rows.length) return '';
+  // The group rides on every element rather than being inferred from
+  // position: a ticket Mango has not started yet has no progress fields at
+  // all, and the next group must not inherit the green the stage earned.
+  const fields = rows
+    .map((r) => `<div class="kpi-impw-field is-${group}${r.block ? ' is-area' : ''}">
+      <span class="kpi-impw-label">${escapeHtml(r.label)}</span>
+      <output>${escapeHtml(r.date ? impwMangoDate(rec[r.field]) : rec[r.field])}</output>
+    </div>`)
+    .join('');
+  return `<h3 class="kpi-impw-section is-${group}">${escapeHtml(IMPW_GROUP_TITLE[group])}</h3>${fields}`;
+}
+
+/**
+ * What Mango holds for a ticket PMD raised.
+ *
+ * The three questions a review meeting actually asks — what stage is it at,
+ * who has it, when is it due — lead the dialog, because they are the reason
+ * anyone presses the ticket number. Everything else Mango returns follows.
+ *
+ * Nothing here is editable. PMD posts an improvement once and never again;
+ * the API has no PUT for an improvement, and even if it did, Mango is the
+ * register and a second place to edit a stage would be a second version of
+ * the truth.
+ */
+function openImpwStatus(key: string): void {
+  const finding = findingByKey(key);
+  // A ticket read off the shift's Handover has no local decision behind it —
+  // it was filed on another device — and must still be openable, or the
+  // lookup would only work for whoever happened to press Yes.
+  const ref = finding ? impwTicketFor(finding) : (S!.impwDecisions.get(key)?.ticket ?? '');
+  if (!ref) return;
+  const d = S!.impwDecisions.get(key);
+  const where = finding
+    ? `${finding.machineCode} · ${impwWhen(finding.shiftId)}`
+    : 'Raised from the KPI review';
+
+  // Deliberately carries kpi-impw-modal as well: every rule that shapes the
+  // new-improvement dialog then shapes this one, so the pair cannot drift
+  // apart the next time either is restyled.
+  const mc = openModal(`<div class="bd-modal kpi-impw-modal kpi-impw-status-modal" role="dialog" aria-modal="true" aria-labelledby="impw-status-title">
+    <div class="kpi-impw-modal-head">
+      <div>
+        <h2 class="bd-title" id="impw-status-title">${escapeHtml(ref)}</h2>
+        <p class="bd-sub">${escapeHtml(where)}${
+          d?.by ? ` · raised by ${escapeHtml(d.by)}` : ''
+        }${d?.at ? ` ${escapeHtml(impwSince(d.at))}` : ''}</p>
+      </div>
+      <button type="button" class="kpi-impw-close" data-status-close aria-label="Close dialog">&times;</button>
+    </div>
+    <div class="kpi-impw-form kpi-impw-status-body" data-status-body></div>
+    <p class="kpi-impw-note">Mango owns every value here — PMD reads it, and never writes it back.</p>
+    <div class="bd-actions kpi-impw-modal-actions">
+      <button type="button" class="btn-ghost-big" data-status-close>Close</button>
+      <button type="button" class="btn-primary-big" data-status-refresh>⟳ Ask Mango</button>
+    </div>
+  </div>`);
+
+  const body = mc.querySelector<HTMLElement>('[data-status-body]');
+  const refresh = mc.querySelector<HTMLButtonElement>('[data-status-refresh]');
+  mc.querySelectorAll('[data-status-close]').forEach((b) => b.addEventListener('click', closeModal));
+
+  // No sign-in on this device: the number was recorded when the ticket was
+  // filed, but reading it back is an API call and there is nothing to make
+  // it with. Say which, rather than showing a failure that looks like Mango.
+  if (!isMangoConfigured(S!.mango)) {
+    if (body) {
+      body.innerHTML = `<p class="kpi-impw-bad">PMD kept the ticket number, but looking it up needs
+        the Mango sign-in on this device — set it under <b>⚙ Mango connection</b>, or open Mango and
+        search for ${escapeHtml(ref)}.</p>`;
+    }
+    refresh?.remove();
+    return;
+  }
+
+  const load = (): void => {
+    if (body) body.innerHTML = `<p class="kpi-impw-ok">Asking Mango about ${escapeHtml(ref)}…</p>`;
+    if (refresh) refresh.disabled = true;
+    void fetchImpwRecord({ id: d?.ticketId, number: ref }, S!.mango).then((res) => {
+      if (refresh) refresh.disabled = false;
+      if (!body) return;
+      if (!res.ok || !res.record) {
+        body.innerHTML = `<p class="kpi-impw-bad" role="alert">${escapeHtml(res.message)}</p>
+          <p class="kpi-impw-fallback">The ticket is still in Mango either way — this only failed to
+            read it back.</p>`;
+        return;
+      }
+      const rec = res.record;
+      // Keep the three progress fields on the decision so the row can show
+      // them after the dialog closes. Stored with the time read, never as a
+      // fact about now.
+      const dec = rememberImpwTicket(key, ref);
+      dec.progress = {
+        stage: rec.currentStage,
+        investigator: rec.investigator,
+        dueDate: rec.dueDate,
+        closed: rec.dateClosed,
+        at: Date.now(),
+      };
+      // Mango's id is worth keeping once seen: a ticket raised before PMD
+      // stored ids can then be looked up directly instead of by number.
+      if (!dec.ticketId && rec.id) dec.ticketId = rec.id;
+      saveImpwDecisions(S!.impwDecisions);
+      const groups = (['progress', 'ticket', 'outcome'] as ImpwRecordGroup[])
+        .map((g) => impwRecordGroupHtml(rec, g))
+        .join('');
+      body.innerHTML =
+        groups ||
+        `<p class="kpi-impw-bad">Mango returned the ticket but every field was empty.</p>`;
+      // The card behind the dialog now knows the stage too.
+      render();
+    });
+  };
+  refresh?.addEventListener('click', load);
+  load();
+}
+
+/**
+ * The local entry for a ticket, creating one when the ticket was read off the
+ * shift's Handover instead of filed here. Such an entry is marked as already
+ * saved to the Handover, because that is literally where it was read from —
+ * offering to write it back would be an offer to duplicate a line.
+ */
+function rememberImpwTicket(key: string, ticket: string): ImpwDecision {
+  const existing = S!.impwDecisions.get(key);
+  if (existing) return existing;
+  const fresh: ImpwDecision = {
+    decision: 'yes',
+    at: 0,
+    by: '',
+    ticket,
+    handoverSaved: true,
+  };
+  S!.impwDecisions.set(key, fresh);
+  return fresh;
+}
+
+/** The no-API path, and the fallback when the API refuses: copy the filled
+ *  form and open IMPW for the person to paste into. */
+function handOffImpwByClipboard(_finding: ImpwFinding, draft: ImpwDraft): void {
+  // Open Mango synchronously — a pop-up opened after an awaited clipboard
+  // write has lost the click gesture and gets blocked.
+  window.open(MANGO_IMPW_URL, '_blank', 'noopener');
+  // Copying creates no Mango record and must not mark this finding as raised.
+  void copyImpwText(impwPlainText(draft)).then((ok) =>
+    toast(
+      ok ? 'IMPW copied — paste it into Mango' : 'Mango opened — copy the details manually',
+      ok ? 'ok' : 'warn',
+    ),
+  );
+  closeModal();
+  render();
 }
 
 function setKpiHash(view: KpiPageView): void {
@@ -1465,6 +2505,7 @@ function wireKpiNavigation(app: HTMLElement): void {
 }
 
 function render(): void {
+  if (!window.location.hash.startsWith('#/kpi') || window.location.hash.startsWith('#/kpi/assembly')) return;
   const app = document.getElementById('app')!;
   const dataErrors = [...S!.catalogErrors, ...S!.errors];
   const errorBanner = dataErrors.length
@@ -1472,7 +2513,9 @@ function render(): void {
         .map((e) => escapeHtml(e))
         .join(' · ')}</div>`
     : '';
-  const tabs = PERIODS.map(
+  // Department first: which half of the factory this is decides what every
+  // control after it means.
+  const tabs = departmentTabs('pmd') + PERIODS.map(
     (p) =>
       `<button class="shift-btn${S!.view === 'metrics' && p.key === S!.period ? ' a' : ''}" data-period="${p.key}">${escapeHtml(
         p.label,
@@ -1529,6 +2572,9 @@ function render(): void {
         a.attainedOutput = (a.attainedOutput ?? 0) + r.total.attainedOutput;
       }
       if (r.total.expOutput != null) a.expOutput = (a.expOutput ?? 0) + r.total.expOutput;
+      a.unratedRunHrs += r.total.unratedRunHrs;
+      a.stdHours += r.total.stdHours;
+      a.ratedJobs += r.total.ratedJobs;
       a.comparisonCovered += r.total.comparisonCovered;
       a.comparisonTotal += r.total.comparisonTotal;
       a.dieStdHrs = (a.dieStdHrs ?? 0) + (r.total.dieStdHrs ?? 0);
@@ -1547,6 +2593,8 @@ function render(): void {
       insertHrs: 0,
       startupHrs: 0,
       shifts: 0,
+      unratedRunHrs: 0, stdHours: 0,
+      ratedJobs: 0,
       attainedOutput: null as number | null,
       expOutput: null as number | null,
       comparisonCovered: 0,
@@ -1559,10 +2607,9 @@ function render(): void {
   const totPieces = tot.output + tot.reject;
   const totYield =
     totPieces > 0 ? ((tot.output / totPieces) * 100).toFixed(1) : null;
-  // Floor OEE for the headline tile — run share of all logged hours,
-  // same definition as the per-row OEE* and the hours chart overlay.
-  const totLogged = tot.runHrs + tot.downHrs + tot.setupHrs;
-  const totOee = totLogged > 0 ? Math.round((tot.runHrs / totLogged) * 100) : null;
+  // The headline Efficiency — the same ingredients as the per-row figure and
+  // the chart overlay, summed and divided once.
+  const totOee = efficiencyOf(tot);
 
   let body: string;
   if (S!.loading) {
@@ -1715,11 +2762,16 @@ function render(): void {
     const run = b.byShift.Day.runHrs + b.byShift.Afternoon.runHrs + b.byShift.Night.runHrs;
     const down = b.byShift.Day.downHrs + b.byShift.Afternoon.downHrs + b.byShift.Night.downHrs;
     const setup = b.byShift.Day.setupHrs + b.byShift.Afternoon.setupHrs + b.byShift.Night.setupHrs;
-    const logged = run + down + setup;
     // Ratio of the sums on a month bar too, so a month with one busy week
     // and three quiet ones reads as the month it was.
-    const oee = logged > 0 ? Math.round((run / logged) * 100) : null;
-    return { ...chartMeta[i], label: b.label, run, down, setup, oee };
+    const efficiency = efficiencyOf({
+      unratedRunHrs: b.byShift.Day.unratedRunHrs + b.byShift.Afternoon.unratedRunHrs + b.byShift.Night.unratedRunHrs,
+      stdHours: b.byShift.Day.stdHours + b.byShift.Afternoon.stdHours + b.byShift.Night.stdHours,
+      runHrs: run,
+      ratedJobs:
+        b.byShift.Day.ratedJobs + b.byShift.Afternoon.ratedJobs + b.byShift.Night.ratedJobs,
+    });
+    return { ...chartMeta[i], label: b.label, run, down, setup, oee: efficiency };
   });
   // Reject Pareto counts + shift/status splits come from PMD_Rejects; its
   // legend resolves RejectCode through PMD_RejectCategories and displays
@@ -1893,10 +2945,7 @@ function render(): void {
   const activeRange = periodRange(S!.period, new Date());
   const fromVal = S!.period === 'custom' ? S!.customFrom : dateKey(activeRange.from);
   const toVal = S!.period === 'custom' ? S!.customTo : dateKey(activeRange.to);
-  const comparisonHelp =
-    kpiComparisonMode(S!.period) === 'schedule'
-      ? `<div><b>Schedule Adherence 🟢🟡🔴</b> = Σ min(Good, scheduled expectation) per Job# ÷ total Planning.csv expectation. Each order is capped at 100%, so over-production cannot hide a missed scheduled order; unscheduled output is excluded.</div>`
-      : `<div><b>Vs Target 🟢🟡🔴</b> = Good ÷ persisted PMD_Production.ShiftTarget, paired once per Machine + Shift + Job. A job-shift without a valid target is excluded from both sides; hover a result to see target coverage.</div>`;
+  const comparisonHelp = '<div><b>Schedule Adherence / Vs Target</b> use the saved PMD_Production.ShiftTarget as Plan for every period. Schedule Adherence caps Good at each job-shift target; Vs Target allows over-production. Each Machine + Shift + Job target is counted once. Missing targets show “—”, including incomplete totals; hover for coverage. Current Planning.csv windows do not change historical targets.</div>';
   app.innerHTML = `
     <div class="kpi">
       <div class="kpi-head">
@@ -1909,6 +2958,7 @@ function render(): void {
       ${errorBanner}
       ${buildThresholdEditor()}
       ${stats}
+
       <div class="kpi-table-wrap">
         <table class="summary-table kpi-table">
           <colgroup>
@@ -1928,7 +2978,7 @@ function render(): void {
             <th title="D — Die change">Die h</th>
             <th title="C — Colour change">Colour h</th>
             <th title="I — Insert change">Insert h</th>
-            <th>Efficiency*</th><th title="${escapeHtml(comparisonTitle(tot))}">${comparisonLabel()}</th>
+            <th title="The output's standard hours at the planned rate ÷ every run hour — (Good ÷ JobOper_ProdStandard) ÷ R hours">Efficiency*</th><th title="${escapeHtml(comparisonTitle(tot))}">${comparisonLabel()}</th>
             <th class="kpi-ho-head">Handover</th>
           </tr></thead>
           <tbody>${body}</tbody>
@@ -1936,22 +2986,13 @@ function render(): void {
             S!.loading
               ? ''
               : (() => {
-                  const tn = (v: number): string => (v ? String(v) : '—');
                   const th = (v: number): string => (v ? v.toFixed(1) : '—');
                   const totPct = comparisonPct(tot);
                   const totCls = planColourClass(totPct, S!.thresholds);
                   return `<tfoot><tr class="kpi-total">
                     <th>TOTAL</th>
                     ${colorCell()}
-                    <td class="num ${totCls}"${
-                      totPct != null
-                        ? ` title="${escapeHtml(comparisonTitle(tot))}"`
-                        : ''
-                    }>${tn(tot.output)}${
-                      tot.expOutput != null && tot.expOutput > 0
-                        ? ` <span class="kpi-exp">/${tot.expOutput}</span>`
-                        : ''
-                    }</td>
+                    ${outputCell(tot)}
                     ${rejectCell(tot.reject, tot.shifts, 'FLOOR')}
                     <td class="num">${totYield != null ? totYield + '%' : '—'}</td>
                     <td class="num">${th(tot.runHrs)}</td>
@@ -1968,14 +3009,15 @@ function render(): void {
           }
         </table>
       </div>
+      ${buildImpwPanel()}
       ${charts}
       <div class="kpi-note">
         <div>Every metric uses one traffic-light language: <b>🟢 met · 🟡 close · 🔴 short</b>.</div>
-        <div><b>Output 🟢🟡🔴</b> shows Total Good; the small “/n” is the active Schedule or Target denominator. Its colour matches the comparison percentage beside it.</div>
+        <div><b>Output 🟢🟡🔴</b> shows Total Good; the small “/n” is the saved ShiftTarget total; “/—” means target data is missing. Its colour matches the comparison percentage beside it.</div>
         <div><b>Yield%</b> = Good ÷ (Good + Reject).</div>
         <div><b>Reject 🟢🔴</b> = judged per shift: 🟢 up to ${REJECT_PER_SHIFT_MAX} rejects a shift, 🔴 above. Rows covering several shifts (machine, order, TOTAL) scale the allowance by the shifts they roll up, so a machine isn't red for three green shifts.</div>
         <div><b>Startup h</b> = hours in S blocks (warm-up). Counted separately from the D / C / I changeover columns.</div>
-        <div><b>Efficiency*</b> = Run slots ÷ all filled slots.</div>
+        <div><b>Efficiency*</b> = Σ (Good × hours per piece) ÷ Σ R hours. The saved CycleTime is preferred; the matching machine/job planning standard is a fallback. A running job with no finite standard makes the result unavailable (“—”), rather than lowering it. Percentages are calculated from unrounded totals, not averaged. Co-running job rows retain their own output and run time.</div>
         ${comparisonHelp}
         <div><b>Die / Colour / Insert h 🟢🟡🔴</b> = hours in D / C / I blocks vs standard = changeovers × (die 4 h · colour 0.5 h · insert 0.5 h); 🟢 ≤ std, 🟡 ≤ std + 0.5 h, 🔴 above. <b>One changeover per order</b> — a die change the sheet logged in two pieces earns one 4 h allowance, not two.</div>
         <div>Colour thresholds for Output / Yield / Efficiency are editable in the panel above. Shift sub-rows show each shift's contribution to the period total.</div>
@@ -1983,6 +3025,40 @@ function render(): void {
     </div>`;
 
   wireKpiNavigation(app);
+  app.querySelectorAll<HTMLButtonElement>('[data-impw-yes]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const f = findingByKey(b.dataset.impwYes!);
+      if (f) openImpwTicket(f);
+    }),
+  );
+  app.querySelectorAll<HTMLButtonElement>('[data-impw-no]').forEach((b) =>
+    b.addEventListener('click', () => {
+      recordImpwDecision(b.dataset.impwNo!, 'no');
+      render();
+    }),
+  );
+  app.querySelectorAll<HTMLButtonElement>('[data-impw-open]').forEach((b) =>
+    b.addEventListener('click', () => openImpwStatus(b.dataset.impwOpen!)),
+  );
+  app.querySelectorAll<HTMLButtonElement>('[data-impw-undo]').forEach((b) =>
+    b.addEventListener('click', () => {
+      S!.impwDecisions.delete(b.dataset.impwUndo!);
+      saveImpwDecisions(S!.impwDecisions);
+      render();
+    }),
+  );
+  app.querySelector('[data-impw-toggle]')?.addEventListener('click', () => {
+    S!.impwShowDecided = !S!.impwShowDecided;
+    render();
+  });
+  app.querySelector('[data-impw-conn]')?.addEventListener('click', openMangoConnection);
+  app.querySelectorAll<HTMLButtonElement>('[data-impw-sync]').forEach((b) => b.addEventListener('click', async () => {
+    const finding = findingByKey(b.dataset.impwSync!);
+    if (!finding) return;
+    b.disabled = true;
+    await saveImpwHandover(finding);
+    render();
+  }));
   app.querySelectorAll<HTMLInputElement>('[data-range]').forEach((el) =>
     el.addEventListener('change', () => {
       const v = el.value;
@@ -2526,10 +3602,17 @@ function openDowntimeDrill(scopeKey: string): void {
   });
 }
 
-export async function renderKpi(dal: PmdDataLayer): Promise<void> {
+export async function renderKpi(dal: PmdDataLayer, assemblyDal?: AssemblyDataLayer): Promise<void> {
+  const mount = ++kpiMount;
+  if (window.location.hash.startsWith('#/kpi/assembly') && assemblyDal) {
+    document.body.className = 'shift-day';
+    await renderAssemblyKpi(assemblyDal);
+    return;
+  }
   dalRef = dal;
   document.body.className = 'shift-day';
   const machines = (await dal.listMachines()).sort((a, b) => a.sequence - b.sequence);
+  if (mount !== kpiMount) return;
   // Default custom range: last 7 calendar days, so switching to the
   // Custom tab and pressing nothing still shows a meaningful window.
   const today = new Date();
@@ -2561,13 +3644,32 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     hstampCodes: new Set(),
     hstampSetupEvents: [],
     dieByJob: new Map(),
+    impwSlices: [],
+    impwFindings: [],
+    impwDecisions: loadImpwDecisions(),
+    impwSite: loadImpwSite(),
+    impwOptions: null,
+    impwShowDecided: false,
+    mango: loadMangoConnection(),
+    who: { name: '' },
     errors: [],
     catalogErrors: [],
   };
+  // Coordinator / Email on a Mango improvement ticket come from the
+  // signed-in user, so resolve the identity once at mount. A backend
+  // without one leaves the fields blank and the ticket dialog asks.
+  try {
+    const me = await dal.whoAmI();
+    if (mount !== kpiMount) return;
+    S.who = { name: me.name, email: me.email };
+  } catch (e) {
+    console.warn('[pmd] whoAmI failed', e);
+  }
   // Reject code → description (D01 → "ShortShot"), for the Reject drill's
   // Description column. Cheap, changes rarely; load once at mount.
   try {
     const cats = await dal.listRejectCategories();
+    if (mount !== kpiMount) return;
     S.rejectDescByCode = new Map(
       cats.map((c) => [c.code.trim().toUpperCase(), c.label]),
     );
@@ -2575,6 +3677,7 @@ export async function renderKpi(dal: PmdDataLayer): Promise<void> {
     console.warn('[pmd] reject categories load failed', e);
     S.catalogErrors = [`Reject categories: ${(e as Error).message || 'read failed'}`];
   }
+  if (mount !== kpiMount) return;
   // No supervisor-change subscription needed here: main.ts already
   // re-routes (→ renderKpi) on every supervisor toggle, so the threshold
   // editor appears/disappears on unlock without a page reload.
