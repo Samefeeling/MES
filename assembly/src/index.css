@@ -79,11 +79,11 @@
 
   --lane-h: 64px;
   --label-w: 150px;
-  /* The load bar down a day column's left edge. Half what it was: a band this
-     wide still reads as a skyline across the week, and the 11 px it gives back
-     is the difference between a date that fits in the column and one that
-     does not. */
-  --day-bar-w: 11px;
+  /* The load bar down a day column's left edge. A quarter of what it started
+     at: floor to ceiling, the band no longer needs width to be read — the
+     height carries the figure, and 6 px of it beside a date is a gauge on the
+     column rather than a second column of its own. */
+  --day-bar-w: 6px;
   --radius: 8px;
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
     Arial, sans-serif;
