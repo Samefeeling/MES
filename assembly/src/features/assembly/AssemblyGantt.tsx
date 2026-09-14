@@ -588,6 +588,7 @@ function LineGroupView({
           itself has to span the whole grid to carry the background. */}
       <div className="agroup-head">
        <div className="agroup-head-in">
+        <div className="agroup-meta">
         {/* Its own control, in the Order column where the row starts. Folding
             used to be what clicking the line's name did, and the name is now
             the grip that arranges the lines — a press that might mean either
@@ -670,16 +671,7 @@ function LineGroupView({
           >
             {load.hours.toFixed(1)} h
           </span>
-          {group.line.schedulable && (
-            <span className="agroup-crew">
-              {load.crew === 0
-                ? 'nobody allocated'
-                : `${load.crew} on line · ${load.daysOfWork!.toFixed(1)} d at ${load.capacityPerDay.toFixed(1)} h/day`}
-            </span>
-          )}
-          {load.needsCrew > 0 && (
-            <span className="agroup-gap">{load.needsCrew} need crew</span>
-          )}
+
         </div>
 
         {/* Outside the label — it does something the label does not: it takes
@@ -714,6 +706,8 @@ function LineGroupView({
             Close line
           </button>
         )}
+
+        </div>
 
         {crew.length > 0 && (
           <span

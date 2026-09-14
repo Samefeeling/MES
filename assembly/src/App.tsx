@@ -309,8 +309,8 @@ export default function App() {
             )}
           </div>
           {/*
-            Orders on no line remain reachable in the bottom strip. Reserve the
-            empty target before dragging so the board viewport stays stable.
+            Orders on no line remain reachable in the bottom strip. When empty,
+            its drag target overlays the header without taking board height.
           */}
           {board && <AssemblyPool board={board} />}
           {board && (selectedJobId && manualOrders[selectedJobId] ? <ManualOrderInspector key={selectedJobId} board={board} id={selectedJobId} /> : <AssemblyInspector board={board} />)}
