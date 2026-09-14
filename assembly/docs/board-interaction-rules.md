@@ -434,9 +434,9 @@ landing function, including breaks, predecessor floors, the five-minute
 minimum movement, and the existing marked-group rules. It is a visual aid;
 it does not silently change another order's crew or end time.
 
-The empty unplaced-order strip reserves 48 px even before a drag begins.
-Only its visibility changes while dragging an order. This prevents the board
-viewport shrinking under the last row when the drop target appears. Workers
+The empty unplaced-order target is an overlay near the timeline header.
+Only its visibility changes while dragging an order; it takes no footer space
+and does not shrink the viewport or move the last row. Workers
 and line headers do not activate this order-only target. Automatic edge
 scrolling is disabled during bar drags so a move near the bottom cannot run
 away. Scroll
@@ -446,3 +446,8 @@ their existing automatic scrolling.
 The line label is Assembly Seats. Stored ASSY keys and legacy ASM values
 continue to resolve to the same line. The Refresh action carries its updated
 HH:mm time underneath; day load bars have no outline.
+
+Line headers omit crew-capacity and missing-crew text. Operator chips begin
+at the Hours column using the live Order and Qty widths. Order rows have a
+32 px minimum height (80% of the previous 40 px); wrapped teams may grow to
+keep every assigned operator readable.

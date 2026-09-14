@@ -2,9 +2,9 @@
  * Assembly orders not on a line yet. Drop an order here to take it off the
  * schedule, and drag one out of here onto a line to put it back.
  *
- * When every order is on a line, a reserved bottom strip stays invisible
- * until an order is dragged. Revealing the target does not resize the board
- * or move the last row away from the pointer.
+ * When every order is on a line, the target is a hidden overlay near the
+ * timeline header. Dragging reveals it without reserving an empty footer
+ * or moving the last row away from the pointer.
  *
  * Something ends up here for two reasons, and both need a way out of it. The
  * planner put it here; or the export named a line the board does not know, in
@@ -88,7 +88,7 @@ export function AssemblyPool({ board }: { board: AssemblyGanttView }) {
   const ignoredIds = useIgnoredOrders((s) => s.ids);
   const pool = board.pool.filter((job) => !ignoredIds.includes(String(job.id)));
   const empty = pool.length === 0;
-  // Reserve the empty strip before pointer-down so the last row never jumps.
+  // The empty target is outside layout flow, including during a drag.
 
   return (
     <div
