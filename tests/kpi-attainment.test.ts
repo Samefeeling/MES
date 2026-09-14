@@ -181,3 +181,33 @@ describe('KPI comparison modes', () => {
     });
   });
 });
+
+
+describe('ShiftTarget as the KPI plan', () => {
+  it('caps each saved job target for adherence without requiring a current planning row', () => {
+    const records = [
+      rec({ machineCode: '1600T', jobNumber: 'A', slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: 200, shiftTarget: 100 }),
+      rec({ machineCode: '1600T', jobNumber: 'B', slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: 50, shiftTarget: 100 }),
+    ];
+    expect(targetAttainmentForRecords(records, true)).toEqual({ actual: 150, expected: 200, pct: 75, covered: 2, total: 2 });
+    expect(targetAttainmentForRecords(records).pct).toBe(125);
+  });
+  it('adds each machine and shift snapshot once, including a planned zero-output shift', () => {
+    const records = [
+      rec({ machineCode: '1300T', jobNumber: 'A', slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: 134, shiftTarget: 256 }),
+      rec({ machineCode: '1300T', jobNumber: 'A', slotIndex: 1, statusCode: 'R', shiftTarget: 256 }),
+      rec({ machineCode: '1300T', jobNumber: 'A', shiftId: '2026-05-15-Afternoon', slotIndex: 0, statusCode: '', shiftTarget: 256 }),
+      rec({ machineCode: '1300T', jobNumber: 'A', shiftId: '2026-05-15-Night', slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: 119, shiftTarget: 259 }),
+      rec({ machineCode: '1600T', jobNumber: 'A', slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: 100, shiftTarget: 100 }),
+    ];
+    expect(targetAttainmentForRecords(records, true)).toEqual({ actual: 353, expected: 871, pct: 41, covered: 4, total: 4 });
+  });
+  it('does not turn an explicit zero target into a stale positive target from another slot', () => {
+    const records = [
+      rec({ jobNumber: 'A', slotIndex: 0, statusCode: 'D', shiftTarget: 0 }),
+      rec({ jobNumber: 'A', slotIndex: 1, statusCode: 'D', shiftTarget: 100 }),
+      rec({ jobNumber: 'DC_1', slotIndex: 0, statusCode: 'D' }),
+    ];
+    expect(targetAttainmentForRecords(records, true)).toEqual({ actual: 0, expected: 0, pct: null, covered: 1, total: 1 });
+  });
+});

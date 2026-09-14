@@ -23,6 +23,8 @@ export interface Kpi {
   /** Jobs in the slice that carried a standard. Zero means there is nothing
    *  to judge and Efficiency reads "—" rather than 0%. */
   ratedJobs: number;
+  /** Run hours missing a finite production standard. Suppresses incomplete Efficiency. */
+  unratedRunHrs: number;
   output: number; // good qty
   scrap: number; // total reject pieces
   scrapPct: number; // %
@@ -132,10 +134,10 @@ export function aggregate(
     }
   }
 
-  // Output / scrap grouped by (jobNumber, shiftId).
+  // Output / scrap grouped by machine, shift and job.
   const groups = new Map<string, ProductionRecord[]>();
   for (const r of records) {
-    const key = `${r.jobNumber}|${r.shiftId}`;
+    const key = `${r.machineCode.trim().toUpperCase()}|${r.shiftId}|${r.jobNumber.trim().toUpperCase()}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(r);
   }
@@ -145,6 +147,7 @@ export function aggregate(
   let output = 0;
   let stdHours = 0;
   let ratedJobs = 0;
+  let unratedRunHrs = 0;
   for (const grp of groups.values()) {
     const canonical = grp.find((r) => r.slotIndex === 0) ?? grp[0];
     const g = canonical
@@ -166,17 +169,21 @@ export function aggregate(
      * shift was signed against, and reading today's planning row instead would
      * move last month's KPI every time Epicor re-rates a part.
      *
-     * A job with no rate at all earns no standard hours — it cannot, nobody
-     * gave that order one — but its run hours stay in the denominator with
-     * every other R slot, because they are hours the press spent running.
+     * Missing standards are data gaps. Keep the run hours in the hours
+     * columns, but do not publish a partial numerator over a full denominator.
      */
-    const ct =
-      canonical?.cycleTime && canonical.cycleTime > 0
-        ? canonical.cycleTime
-        : (ctByJob?.get(canonical?.jobNumber ?? '') ?? 0);
-    if (ct > 0) {
+    const known = grp.find(r => Number.isFinite(r.cycleTime) && (r.cycleTime ?? 0) > 0);
+    const jobKey = canonical.jobNumber.trim().toUpperCase();
+    const machineKey = canonical.machineCode.trim().toUpperCase();
+    const ct = Number.isFinite(canonical.cycleTime) && (canonical.cycleTime ?? 0) > 0
+      ? canonical.cycleTime!
+      : known?.cycleTime ?? ctByJob?.get(machineKey + '|' + jobKey)
+        ?? ctByJob?.get(jobKey) ?? ctByJob?.get(canonical.jobNumber) ?? 0;
+    if (Number.isFinite(ct) && ct > 0) {
       stdHours += good * ct;
       ratedJobs++;
+    } else {
+      unratedRunHrs += grp.filter(r => r.statusCode === 'R').length * SLOT_HOURS;
     }
   }
   const runHrs = run * SLOT_HOURS;
@@ -189,12 +196,13 @@ export function aggregate(
      *
      * The denominator is ALL the R slots, not only the ones on jobs carrying a
      * standard: an hour the press spent running is an hour it used, and a
-     * shift's Efficiency has to be over its whole run. "—", not 0%, when no
-     * job in the slice has a standard — there is nothing to judge then.
+     * shift's Efficiency has to be over its whole run. "—" when any running
+     * job lacks a standard: missing data must not look like low efficiency.
      */
-    efficiency: ratedJobs > 0 && runHrs > 0 ? Math.round((stdHours / runHrs) * 100) : null,
-    stdHours: +stdHours.toFixed(2),
+    efficiency: ratedJobs > 0 && runHrs > 0 && unratedRunHrs === 0 ? Math.round((stdHours / runHrs) * 100) : null,
+    stdHours,
     ratedJobs,
+    unratedRunHrs,
     output,
     scrap,
     scrapPct: gross > 0 ? +((scrap / gross) * 100).toFixed(1) : 0,

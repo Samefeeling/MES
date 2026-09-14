@@ -10,6 +10,7 @@ import type {
   ShiftCode,
   StatusCode,
 } from '../types';
+import { planningOrderMatchesMachine } from '../core/schedule';
 import { aggregate, countSetupEvents, type Kpi } from '../core/metrics';
 import {
   COLOR_CHANGE_STD_HRS,
@@ -18,12 +19,9 @@ import {
   setupJudgement,
   setupStandardHours,
 } from '../core/standards';
-import { plannedOrdersForShift } from '../core/schedule';
 import {
-  combineAttainment,
   kpiComparisonLabel,
   kpiComparisonMode,
-  scheduleAdherenceForShift,
   targetAttainmentForRecords,
   type KpiAttainment,
 } from '../core/kpi-attainment';
@@ -187,13 +185,14 @@ interface ShiftAgg {
    *  the ratio of the sums — a month with one busy week and three quiet ones
    *  reads as the month it was, not as the mean of four percentages.
    *  Efficiency's denominator is `runHrs`, above. */
+  unratedRunHrs: number;
   stdHours: number;
   ratedJobs: number;
   /** Comparison numerator. For Schedule Adherence this is per-order Good
    *  capped at that order's expectation; for Vs Target it is Good only
    *  from tuples carrying a valid persisted ShiftTarget. */
   attainedOutput: number | null;
-  /** Comparison denominator: Planning expectation or persisted target. */
+  /** Comparison denominator: persisted ShiftTarget, summed once per tuple. */
   expOutput: number | null;
   comparisonCovered: number;
   comparisonTotal: number;
@@ -627,28 +626,6 @@ function periodRange(
   };
 }
 
-/** Every physical shift instance whose shift-date belongs to the selected
- * KPI window. An exact preset (Last 3) supplies its own IDs; calendar
- * presets expand each date to Day/Afternoon/Night. */
-function shiftInstancesInRange(
-  from: Date,
-  to: Date,
-  exact?: Set<string>,
-): string[] {
-  if (exact) return Array.from(exact);
-  const out: string[] = [];
-  const cursor = new Date(from);
-  cursor.setHours(0, 0, 0, 0);
-  const last = new Date(to);
-  last.setHours(0, 0, 0, 0);
-  while (cursor <= last) {
-    const day = dateKey(cursor);
-    for (const code of SHIFT_ORDER) out.push(`${day}-${code}`);
-    cursor.setDate(cursor.getDate() + 1);
-  }
-  return out;
-}
-
 function inRange(
   record: ProductionRecord,
   from: Date,
@@ -717,12 +694,11 @@ function toAgg(k: Kpi): ShiftAgg {
     insertHrs: k.insertHrs,
     startupHrs: k.startupHrs,
     shifts: k.shifts,
+    unratedRunHrs: k.unratedRunHrs,
     stdHours: k.stdHours,
     ratedJobs: k.ratedJobs,
-    // Expectation / standards are computed PER SHIFT BUCKET (the runs-of-D
-    // counting and the planned-start cut only make sense against one
-    // shift's clock window) and summed onto the agg by the caller — a
-    // bare toAgg slice (job rows, category rows) stays unjudged.
+    // Callers attach comparison targets and changeover standards for the
+    // same record slice; bare aggregates carry production measures only.
     attainedOutput: null,
     expOutput: null,
     comparisonCovered: 0,
@@ -746,7 +722,7 @@ function emptyAgg(): ShiftAgg {
     insertHrs: 0,
     startupHrs: 0,
     shifts: 0,
-    stdHours: 0,
+    unratedRunHrs: 0, stdHours: 0,
     ratedJobs: 0,
     attainedOutput: null,
     expOutput: null,
@@ -760,7 +736,7 @@ function emptyAgg(): ShiftAgg {
 
 function addComparison(a: ShiftAgg, comparison: KpiAttainment | null): void {
   if (comparison) {
-    if (comparison.expected > 0) {
+    if (comparison.covered > 0) {
       a.attainedOutput = (a.attainedOutput ?? 0) + comparison.actual;
       a.expOutput = (a.expOutput ?? 0) + comparison.expected;
     }
@@ -783,7 +759,7 @@ function addStd(
 }
 
 function emptyChartShift(): ChartBucket['byShift'][ShiftCode] {
-  return { good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, stdHours: 0, ratedJobs: 0 };
+  return { good: 0, reject: 0, runHrs: 0, downHrs: 0, setupHrs: 0, unratedRunHrs: 0, stdHours: 0, ratedJobs: 0 };
 }
 
 /**
@@ -796,11 +772,12 @@ function emptyChartShift(): ChartBucket['byShift'][ShiftCode] {
  * here carries a standard" ("—") from "ran the hours and made nothing" (0%).
  */
 function efficiencyOf(parts: {
+  unratedRunHrs: number;
   stdHours: number;
   runHrs: number;
   ratedJobs: number;
 }): number | null {
-  return parts.ratedJobs > 0 && parts.runHrs > 0
+  return parts.ratedJobs > 0 && parts.runHrs > 0 && parts.unratedRunHrs === 0
     ? Math.round((parts.stdHours / parts.runHrs) * 100)
     : null;
 }
@@ -1075,7 +1052,12 @@ async function compute(now = new Date()): Promise<void> {
    */
   const ctByJob = new Map<string, number>();
   for (const o of planning) {
-    if (o.qtyPerHr > 0) ctByJob.set(o.jobNumber, o.qtyPerHr);
+    if (Number.isFinite(o.qtyPerHr) && o.qtyPerHr > 0) {
+      for (const machine of S!.machines) {
+        if (planningOrderMatchesMachine(o, machine.machineCode, true))
+          ctByJob.set(machine.machineCode.trim().toUpperCase() + '|' + o.jobNumber.trim().toUpperCase(), o.qtyPerHr);
+      }
+    }
   }
 
   const charts = new Map<string, ChartBucket>();
@@ -1113,20 +1095,7 @@ async function compute(now = new Date()): Promise<void> {
       arr.push(r);
       m2.set(dateKey, arr);
     }
-    // Last 24h is the only mode backed by the current Planning.csv. A
-    // scheduled shift with zero production must still appear as 0%
-    // adherence. Wider/historical windows use persisted ShiftTarget and
-    // therefore only need the signed production buckets already present.
-    if (comparisonMode === 'schedule') {
-      for (const shiftId of shiftInstancesInRange(from, to, shiftIds)) {
-        if (!plannedOrdersForShift(planning, m.machineCode, shiftId).length) continue;
-        const parsed = parseShiftId(shiftId);
-        if (!parsed) continue;
-        const date = shiftId.slice(0, 10);
-        const shiftMap = buckets.get(parsed.code);
-        if (shiftMap && !shiftMap.has(date)) shiftMap.set(date, []);
-      }
-    }
+    // Signed ShiftTarget snapshots define the comparison buckets for every period.
 
     const byShift: Record<ShiftCode, ShiftAgg> = {
       Day: emptyAgg(),
@@ -1148,9 +1117,8 @@ async function compute(now = new Date()): Promise<void> {
       for (const [dateKey, recs] of shiftBuckets) {
         flat.push(...recs);
         const k = aggregate(recs, ctByJob);
-        // Standards are measured from signed status blocks. The comparison
-        // mode changes with the selected period: current schedule for Last
-        // 24h, frozen tuple targets for every wider/historical range.
+        // Standards use signed status blocks. Every comparison uses the
+        // saved tuple targets; Last 24h caps over-production per job.
         const bShiftId = `${dateKey}-${code}`;
         // foldBreakdowns keeps B slots only — k.downtimeHrs is the downtime
         // *kind* and also carries M (Smoko), which every shift books.
@@ -1178,10 +1146,7 @@ async function compute(now = new Date()): Promise<void> {
           raisedTicket: impwTicketFromHandovers(recs.map((r) => r.handoverNote)),
         });
         const std = setupStandardHours(countSetupEvents(recs));
-        const comparison =
-          comparisonMode === 'schedule'
-            ? scheduleAdherenceForShift(recs, planning, m.machineCode, bShiftId, now)
-            : targetAttainmentForRecords(recs);
+        const comparison = targetAttainmentForRecords(recs, comparisonMode === 'schedule');
         stdAcc.push({ comparison, std });
         const cb = charts.get(dateKey) ?? {
           key: dateKey, // full YYYY-MM-DD — the month rollup groups on it
@@ -1194,6 +1159,7 @@ async function compute(now = new Date()): Promise<void> {
         cell.runHrs += k.runHrs;
         cell.downHrs += k.downtimeHrs;
         cell.setupHrs += k.setupHrs;
+        cell.unratedRunHrs += k.unratedRunHrs;
         cell.stdHours += k.stdHours;
         cell.ratedJobs += k.ratedJobs;
         charts.set(dateKey, cb);
@@ -1216,7 +1182,7 @@ async function compute(now = new Date()): Promise<void> {
             jobNumber,
             partDescShort: firstTwoWords(desc),
             color: colorForJob(partNumByJob.get(jobNumber) ?? '', desc, dieColors),
-            agg: toAgg(aggregate(recs, ctByJob)),
+            agg: comparedAgg(recs, ctByJob, comparisonMode === 'schedule'),
             lastRunAt: lastRunAt(recs),
           };
         })
@@ -1258,7 +1224,7 @@ async function compute(now = new Date()): Promise<void> {
           jobNumber,
           partDescShort: firstTwoWords(desc),
           color: colorForJob(partNumByJob.get(jobNumber) ?? '', desc, dieColors),
-          agg: toAgg(aggregate(recs, ctByJob)),
+          agg: comparedAgg(recs, ctByJob, comparisonMode === 'schedule'),
           lastRunAt: lastRunAt(recs),
         };
       })
@@ -1343,46 +1309,10 @@ async function compute(now = new Date()): Promise<void> {
       byCategory.set(cat, arr);
     }
   }
-  const comparisonShiftIds = shiftInstancesInRange(from, to, shiftIds);
-  // A scheduled category with zero output still needs a 0% row in Last
-  // 24h, just as an empty scheduled machine-shift does.
-  if (comparisonMode === 'schedule') {
-    for (const machine of S!.machines) {
-      for (const shiftId of comparisonShiftIds) {
-        for (const order of plannedOrdersForShift(planning, machine.machineCode, shiftId)) {
-          const cat = categoryFor(machine, order.partNumber);
-          if (!byCategory.has(cat)) byCategory.set(cat, []);
-        }
-      }
-    }
-  }
   S!.catTotals = Array.from(byCategory.entries())
     .map(([category, recs]) => {
       const agg = toAgg(aggregate(recs, ctByJob));
-      const comparison =
-        comparisonMode === 'target'
-          ? targetAttainmentForRecords(recs)
-          : combineAttainment(
-              S!.machines.flatMap((machine) => {
-                const machineKey = machine.machineCode.trim().toUpperCase();
-                const categoryOrders = planning.filter(
-                  (order) => categoryFor(machine, order.partNumber) === category,
-                );
-                return comparisonShiftIds.map((shiftId) =>
-                  scheduleAdherenceForShift(
-                    recs.filter(
-                      (record) =>
-                        record.machineCode.trim().toUpperCase() === machineKey &&
-                        record.shiftId === shiftId,
-                    ),
-                    categoryOrders,
-                    machine.machineCode,
-                    shiftId,
-                    now,
-                  ),
-                );
-              }),
-            );
+      const comparison = targetAttainmentForRecords(recs, comparisonMode === 'schedule');
       addComparison(agg, comparison);
       return { category, agg };
     })
@@ -1439,33 +1369,38 @@ type ComparisonSlice = Pick<
 >;
 
 function comparisonPct(a: ComparisonSlice): number | null {
-  return a.attainedOutput != null && a.expOutput != null && a.expOutput > 0
+  return a.comparisonCovered === a.comparisonTotal && a.attainedOutput != null && a.expOutput != null && a.expOutput > 0
     ? Math.round((a.attainedOutput / a.expOutput) * 100)
     : null;
 }
 
 function comparisonTitle(a: ComparisonSlice): string {
-  if (kpiComparisonMode(S!.period) === 'schedule') {
-    return `Schedule Adherence = sum of Good capped at 100% for each scheduled Job# ÷ Planning.csv expectation for this machine and shift. Unscheduled output cannot offset a missed scheduled order — credited ${a.attainedOutput ?? 0} of ${a.expOutput ?? 0} pcs`;
-  }
-  const coverage = `${a.comparisonCovered}/${a.comparisonTotal} job-shifts covered`;
-  if (a.expOutput == null || a.expOutput <= 0) {
-    return `Vs Target unavailable — no valid persisted ShiftTarget (${coverage}). Tuples without a target are excluded from both Good and Target.`;
-  }
-  return `Vs Target = Good from job-shifts with a valid persisted PMD_Production.ShiftTarget ÷ those targets — ${a.attainedOutput ?? 0} of ${a.expOutput} pcs; ${coverage}. Each Machine + Shift + Job target is counted once.`;
+  const coverage = a.comparisonCovered + '/' + a.comparisonTotal + ' job-shifts have ShiftTarget';
+  const missing = a.comparisonCovered < a.comparisonTotal;
+  const rule = kpiComparisonMode(S!.period) === 'schedule'
+    ? 'Sum of min(Good, ShiftTarget) per job-shift / sum of ShiftTarget'
+    : 'Sum of Good / sum of ShiftTarget';
+  return rule + '. Each Machine + Shift + Job snapshot is counted once. ' + coverage
+    + (missing ? '. Incomplete plan: percentage and full plan total are unavailable.' : '')
+    + ' Known targets: ' + (a.expOutput ?? 0) + ' pcs; credited output: ' + (a.attainedOutput ?? 0) + ' pcs.';
 }
 
-/** Output cell judged against the active comparison mode. */
-function outputCell(a: ShiftAgg): string {
-  const n = a.output ? String(a.output) : '—';
-  if (a.expOutput == null || a.expOutput <= 0) {
-    const title = a.comparisonTotal ? ` title="${escapeHtml(comparisonTitle(a))}"` : '';
-    return `<td class="num"${title}>${n}</td>`;
-  }
-  const pct = comparisonPct(a)!;
-  const cls = planColourClass(pct, S!.thresholds);
-  const title = comparisonTitle(a);
-  return `<td class="num ${cls}" title="${escapeHtml(title)}">${n} <span class="kpi-exp">/${a.expOutput}</span></td>`;
+/** Output and plan come from the same signed machine-shift-job tuples. */
+function outputCell(a: ComparisonSlice & { output: number }): string {
+  const hasData = a.comparisonTotal > 0 || a.output > 0;
+  if (!hasData) return '<td class="num">—</td>';
+  const complete = a.comparisonCovered === a.comparisonTotal && a.expOutput != null;
+  const plan = complete ? String(a.expOutput) : '—';
+  const pct = comparisonPct(a);
+  const cls = pct == null ? '' : planColourClass(pct, S!.thresholds);
+  return '<td class="num ' + cls + '" title="' + escapeHtml(comparisonTitle(a)) + '">'
+    + a.output + ' <span class="kpi-exp">/' + plan + '</span></td>';
+}
+
+function comparedAgg(records: ProductionRecord[], rates: ReadonlyMap<string, number>, cap: boolean): ShiftAgg {
+  const agg = toAgg(aggregate(records, rates));
+  addComparison(agg, targetAttainmentForRecords(records, cap));
+  return agg;
 }
 
 /** Die / Colour / Insert hour cell judged against the standard allowance
@@ -1690,7 +1625,7 @@ function aggCells(
     ${setupCell(a.dieHrs, a.dieStdHrs, DIE_CHANGE_STD_HRS, 'Die change')}
     ${setupCell(a.colorHrs, a.colorStdHrs, COLOR_CHANGE_STD_HRS, 'Colour change')}
     ${setupCell(a.insertHrs, a.insertStdHrs, INSERT_CHANGE_STD_HRS, 'Insert change')}
-    <td class="num ${colourOee ? oc : ''}" title="${a.ratedJobs > 0 ? escapeHtml(`${a.stdHours.toFixed(1)} standard hours of output in ${a.runHrs.toFixed(1)} run hours`) : 'No job in this slice carries a production standard'}">${eff == null ? '—' : eff + '%'}</td>
+    <td class="num ${colourOee ? oc : ''}" title="${a.unratedRunHrs > 0 ? escapeHtml(`${a.unratedRunHrs.toFixed(1)} run hours have no production standard; Efficiency unavailable`) : a.ratedJobs > 0 ? escapeHtml(`${a.stdHours.toFixed(1)} standard hours of output in ${a.runHrs.toFixed(1)} run hours`) : 'No job in this slice carries a production standard'}">${eff == null ? '—' : eff + '%'}</td>
     <td class="num ${pc}"${a.comparisonTotal ? ` title="${escapeHtml(comparisonTitle(a))}"` : ''}>${planPct == null ? '—' : planPct + '%'}</td>`;
 }
 
@@ -2637,6 +2572,7 @@ function render(): void {
         a.attainedOutput = (a.attainedOutput ?? 0) + r.total.attainedOutput;
       }
       if (r.total.expOutput != null) a.expOutput = (a.expOutput ?? 0) + r.total.expOutput;
+      a.unratedRunHrs += r.total.unratedRunHrs;
       a.stdHours += r.total.stdHours;
       a.ratedJobs += r.total.ratedJobs;
       a.comparisonCovered += r.total.comparisonCovered;
@@ -2657,7 +2593,7 @@ function render(): void {
       insertHrs: 0,
       startupHrs: 0,
       shifts: 0,
-      stdHours: 0,
+      unratedRunHrs: 0, stdHours: 0,
       ratedJobs: 0,
       attainedOutput: null as number | null,
       expOutput: null as number | null,
@@ -2829,6 +2765,7 @@ function render(): void {
     // Ratio of the sums on a month bar too, so a month with one busy week
     // and three quiet ones reads as the month it was.
     const efficiency = efficiencyOf({
+      unratedRunHrs: b.byShift.Day.unratedRunHrs + b.byShift.Afternoon.unratedRunHrs + b.byShift.Night.unratedRunHrs,
       stdHours: b.byShift.Day.stdHours + b.byShift.Afternoon.stdHours + b.byShift.Night.stdHours,
       runHrs: run,
       ratedJobs:
@@ -3008,10 +2945,7 @@ function render(): void {
   const activeRange = periodRange(S!.period, new Date());
   const fromVal = S!.period === 'custom' ? S!.customFrom : dateKey(activeRange.from);
   const toVal = S!.period === 'custom' ? S!.customTo : dateKey(activeRange.to);
-  const comparisonHelp =
-    kpiComparisonMode(S!.period) === 'schedule'
-      ? `<div><b>Schedule Adherence 🟢🟡🔴</b> = Σ min(Good, planned) per Job# ÷ total planned. Planned is the floor's own formula — <b>Shift Planned Runtime × JobOper_ProdStandard</b>: the hours the shift is elapsed, less the standard changeover allowance (die 4 h · colour/insert 0.5 h) and smoko, at the order's planned rate. A press runs one order at a time, so where Epicor's Start–Due windows overlap, that runtime is shared between them rather than counted once each. Each order is capped at 100%, so over-production cannot hide a missed scheduled order; unscheduled output is excluded.</div>`
-      : `<div><b>Vs Target 🟢🟡🔴</b> = Good ÷ persisted PMD_Production.ShiftTarget, paired once per Machine + Shift + Job. A job-shift without a valid target is excluded from both sides; hover a result to see target coverage.</div>`;
+  const comparisonHelp = '<div><b>Schedule Adherence / Vs Target</b> use the saved PMD_Production.ShiftTarget as Plan for every period. Schedule Adherence caps Good at each job-shift target; Vs Target allows over-production. Each Machine + Shift + Job target is counted once. Missing targets show “—”, including incomplete totals; hover for coverage. Current Planning.csv windows do not change historical targets.</div>';
   app.innerHTML = `
     <div class="kpi">
       <div class="kpi-head">
@@ -3052,22 +2986,13 @@ function render(): void {
             S!.loading
               ? ''
               : (() => {
-                  const tn = (v: number): string => (v ? String(v) : '—');
                   const th = (v: number): string => (v ? v.toFixed(1) : '—');
                   const totPct = comparisonPct(tot);
                   const totCls = planColourClass(totPct, S!.thresholds);
                   return `<tfoot><tr class="kpi-total">
                     <th>TOTAL</th>
                     ${colorCell()}
-                    <td class="num ${totCls}"${
-                      totPct != null
-                        ? ` title="${escapeHtml(comparisonTitle(tot))}"`
-                        : ''
-                    }>${tn(tot.output)}${
-                      tot.expOutput != null && tot.expOutput > 0
-                        ? ` <span class="kpi-exp">/${tot.expOutput}</span>`
-                        : ''
-                    }</td>
+                    ${outputCell(tot)}
                     ${rejectCell(tot.reject, tot.shifts, 'FLOOR')}
                     <td class="num">${totYield != null ? totYield + '%' : '—'}</td>
                     <td class="num">${th(tot.runHrs)}</td>
@@ -3088,11 +3013,11 @@ function render(): void {
       ${charts}
       <div class="kpi-note">
         <div>Every metric uses one traffic-light language: <b>🟢 met · 🟡 close · 🔴 short</b>.</div>
-        <div><b>Output 🟢🟡🔴</b> shows Total Good; the small “/n” is the active Schedule or Target denominator. Its colour matches the comparison percentage beside it.</div>
+        <div><b>Output 🟢🟡🔴</b> shows Total Good; the small “/n” is the saved ShiftTarget total; “/—” means target data is missing. Its colour matches the comparison percentage beside it.</div>
         <div><b>Yield%</b> = Good ÷ (Good + Reject).</div>
         <div><b>Reject 🟢🔴</b> = judged per shift: 🟢 up to ${REJECT_PER_SHIFT_MAX} rejects a shift, 🔴 above. Rows covering several shifts (machine, order, TOTAL) scale the allowance by the shifts they roll up, so a machine isn't red for three green shifts.</div>
         <div><b>Startup h</b> = hours in S blocks (warm-up). Counted separately from the D / C / I changeover columns.</div>
-        <div><b>Efficiency*</b> = the output's standard hours at the planned rate ÷ every run hour — <b>(Good ÷ JobOper_ProdStandard) ÷ R hours</b>. It was Run slots ÷ all filled slots, which is <i>utilisation</i>: it said how much of the shift the press was running and nothing about how fast, so a press running flat out at half rate scored the same as one making its numbers. The denominator is <b>all</b> the R slots — an hour the press spent running is an hour it used, whether or not that order carries a standard. A slice where <i>no</i> job has one reads “—” rather than 0%.</div>
+        <div><b>Efficiency*</b> = Σ (Good × hours per piece) ÷ Σ R hours. The saved CycleTime is preferred; the matching machine/job planning standard is a fallback. A running job with no finite standard makes the result unavailable (“—”), rather than lowering it. Percentages are calculated from unrounded totals, not averaged. Co-running job rows retain their own output and run time.</div>
         ${comparisonHelp}
         <div><b>Die / Colour / Insert h 🟢🟡🔴</b> = hours in D / C / I blocks vs standard = changeovers × (die 4 h · colour 0.5 h · insert 0.5 h); 🟢 ≤ std, 🟡 ≤ std + 0.5 h, 🔴 above. <b>One changeover per order</b> — a die change the sheet logged in two pieces earns one 4 h allowance, not two.</div>
         <div>Colour thresholds for Output / Yield / Efficiency are editable in the panel above. Shift sub-rows show each shift's contribution to the period total.</div>

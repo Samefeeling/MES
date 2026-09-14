@@ -38,6 +38,8 @@ function result(actual: number, expected: number, covered: number, total: number
   };
 }
 
+
+// Legacy VSPLAN sign-off snapshot. KPI display uses persisted ShiftTarget instead.
 /**
  * Hours of one shift the plan was never going to be running in.
  *
@@ -134,22 +136,26 @@ export function scheduleAdherenceForShift(
   return result(actual, expected, covered, expectedByJob.size);
 }
 
+
 /**
- * Target attainment for historical/custom KPI windows.
+ * ShiftTarget is the plan for every KPI period, including Last 24h.
  *
  * ShiftTarget is a tuple-level snapshot but may be present on more than
  * one slot in legacy data. Group by Machine + Shift + Job, prefer slot 0,
  * and count both the target and Good exactly once. Tuples without a valid
- * positive target are excluded from both numerator and denominator.
+ * target are excluded from both sides and reported through coverage. Zero is
+ * an explicit target, not a missing value. Schedule Adherence caps each tuple
+ * at its target; Vs Target retains over-production.
  */
 export function targetAttainmentForRecords(
   records: ReadonlyArray<ProductionRecord>,
+  capPerJob = false,
 ): KpiAttainment {
   const groups = new Map<string, ProductionRecord[]>();
   for (const record of records) {
     const machine = record.machineCode.trim().toUpperCase();
     const job = record.jobNumber.trim().toUpperCase();
-    if (!machine || !record.shiftId || !job) continue;
+    if (!machine || !record.shiftId || !job || job.startsWith('DC_')) continue;
     const key = `${machine}|${record.shiftId}|${job}`;
     const group = groups.get(key) ?? [];
     group.push(record);
@@ -162,15 +168,16 @@ export function targetAttainmentForRecords(
   for (const group of groups.values()) {
     const canonical = group.find((record) => record.slotIndex === 0);
     const targetRecord =
-      canonical && Number.isFinite(canonical.shiftTarget) && (canonical.shiftTarget ?? 0) > 0
+      canonical && Number.isFinite(canonical.shiftTarget) && (canonical.shiftTarget ?? -1) >= 0
         ? canonical
         : group.find(
             (record) =>
-              Number.isFinite(record.shiftTarget) && (record.shiftTarget ?? 0) > 0,
+              Number.isFinite(record.shiftTarget) && (record.shiftTarget ?? -1) >= 0,
           );
     if (!targetRecord) continue;
     const target = targetRecord.shiftTarget!;
-    actual += aggregate(group).output;
+    const good = aggregate(group).output;
+    actual += capPerJob ? Math.min(good, target) : good;
     expected += target;
     covered++;
   }

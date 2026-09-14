@@ -47,11 +47,7 @@ describe('KPI aggregation (§4.1)', () => {
     expect(aggregate(recs, new Map([['J1', 0.01]])).efficiency).toBe(100);
   });
 
-  it('counts every R slot in the denominator, rated or not', () => {
-    // J2 has no standard, so it earns no standard hours — but the hour the
-    // press spent running it is still an hour it used. Four R slots = 2 h,
-    // against J1's one standard hour: 50%, not the 100% you get by judging
-    // the shift on only the half of it that carries a rate.
+  it('does not report a partial standard-hours numerator over all run hours', () => {
     const recs = [
       rec({
         jobNumber: 'J1', slotIndex: 0, statusCode: 'R',
@@ -64,7 +60,8 @@ describe('KPI aggregation (§4.1)', () => {
     const k = aggregate(recs);
     expect(k.stdHours).toBe(1);
     expect(k.runHrs).toBe(2);
-    expect(k.efficiency).toBe(50);
+    expect(k.efficiency).toBeNull();
+    expect(k.unratedRunHrs).toBe(1);
   });
 
   it('reads “—”, not 0%, when nothing in the slice carries a standard', () => {
@@ -247,5 +244,28 @@ describe('KPI thresholds (§4.2)', () => {
     expect(scrapColor(1)).toBe('green');
     expect(scrapColor(3)).toBe('amber');
     expect(scrapColor(7)).toBe('red');
+  });
+});
+
+
+describe('complete KPI tuples', () => {
+  it('counts the same job on two machines separately', () => {
+    const rows = [
+      rec({ machineCode: '1600T', jobNumber: 'J', slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: 50, cycleTime: 0.01 }),
+      rec({ machineCode: '1300T', jobNumber: 'J', slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: 50, cycleTime: 0.01 }),
+    ];
+    expect(aggregate(rows).output).toBe(100);
+    expect(aggregate(rows).efficiency).toBe(100);
+  });
+  it('uses each machine job standard and keeps fractional standard hours', () => {
+    const rows = [rec({ machineCode: '1600T', jobNumber: ' j ', slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: 1 })];
+    const result = aggregate(rows, new Map([['1600T|J', 0.004], ['1300T|J', 1]]));
+    expect(result.stdHours).toBe(0.004);
+    expect(result.efficiency).toBe(1);
+  });
+  it('prefers the saved rate and rejects infinite standards', () => {
+    const rows = [rec({ jobNumber: 'J', slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: 50, cycleTime: 0.01 })];
+    expect(aggregate(rows, new Map([['J', 0.02]])).efficiency).toBe(100);
+    expect(aggregate([{ ...rows[0], cycleTime: Infinity }]).efficiency).toBeNull();
   });
 });
