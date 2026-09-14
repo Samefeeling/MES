@@ -1,12 +1,4 @@
-/**
- * Re-read the export, and say when it was last read.
- *
- * Two lines and no more. A third used to sit under them — "3 new today" — and
- * it was in the worst place on the header for it: a figure about the plan,
- * stacked under the button everybody reaches for, in the smallest type on the
- * screen. It is a figure like the other four, so it is a figure like the other
- * four now; see `New jobs today` in `BoardTools`.
- */
+/** Re-read the export and show its read time below Refresh. */
 
 import { useDataStore } from '@/store/dataStore';
 import { Button, Spinner } from '@/ui';

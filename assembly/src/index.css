@@ -43,9 +43,9 @@
    * read down and the work is the brightest thing on the screen.
    */
   --chrome-rule: #075985; /* the top bar's blue, closing the block */
-  --head-bg: #bae6fd;
-  --head-tx: #0c4a6e; /* 7.2:1 on --head-bg */
-  --head-dim: #075985; /* 5.7:1 — the line-name blue, for a quieter line */
+  --head-bg: #83CCEB;
+  --head-tx: #0c4a6e;
+  --head-dim: #075985;
   --head-rule: rgb(7 89 133 / 28%);
   /* A control sitting on the block, and one under the pointer. White, because
      the ground is pale: on the old dark block these were translucent white,

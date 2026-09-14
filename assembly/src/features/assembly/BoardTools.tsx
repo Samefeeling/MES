@@ -18,7 +18,6 @@
 import { useMemo, useState } from 'react';
 import type { AssemblyGanttView, OrderRow } from '@/engine/assembly/board';
 import { LINES, virtualLineDef } from '@/domain/assembly';
-import { useDataStore } from '@/store/dataStore';
 import { usePlanStore } from '@/store/planStore';
 import { useSupervisorStore } from '@/store/supervisorStore';
 import { DATE_COLS, DATE_COL_LABEL, DUE_SOON_DAYS, useUiStore } from '@/store/uiStore';
@@ -232,7 +231,6 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
             be a line of small print under Refresh, which is the one place on
             this row it must not be: a count nobody is looking for, tucked under
             the button everyone presses. */}
-        <NewJobsToday board={board} open={openPanel} onOpen={setOpenPanel} />
         <ReviewOrders board={board} open={openPanel} onOpen={setOpenPanel} />
       </div>
     </div>
@@ -323,61 +321,6 @@ function CrewDetail({ board, rows }: { board: AssemblyGanttView; rows: OrderRow[
         </tbody>
       </table>
     </>
-  );
-}
-
-/**
- * Orders the export carried today that it did not carry when the day started.
- *
- * This is the one figure on the row that is about the data rather than the
- * work, and it is the reason to press Refresh at all — so it gets the same
- * treatment as the rest instead of a line of 9px grey under the button.
- */
-function NewJobsToday({
-  board,
-  open,
-  onOpen,
-}: {
-  board: AssemblyGanttView;
-  open: string | null;
-  onOpen: (name: string | null) => void;
-}) {
-  const newOrderIds = useDataStore((s) => s.newOrderIds);
-  // Nothing arrived today: a zero here says "the export is stale" as loudly as
-  // a three says "look at these", and only one of those is true.
-  if (newOrderIds.length === 0) return null;
-  return (
-    <Metric
-      name="new"
-      className="new-jobs"
-      label="New jobs today"
-      value={newOrderIds.length}
-      title="Assembly orders first seen in the export today"
-      open={open}
-      onOpen={onOpen}
-      detail={() => (
-        <>
-          <MetricNote>First seen in today’s export.</MetricNote>
-          <table className="metric-table">
-            <tbody>
-              {newOrderIds.map((id) => {
-                const row = board.rowsByJob.get(id);
-                const job = row?.job ?? board.jobsById.get(id);
-                return (
-                  <tr key={id}>
-                    <th>{id}</th>
-                    <td className="metric-names" title={job?.description}>
-                      {job?.description ?? 'Not on the board'}
-                    </td>
-                    <td>{row?.line.name ?? '—'}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </>
-      )}
-    />
   );
 }
 

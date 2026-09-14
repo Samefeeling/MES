@@ -689,3 +689,13 @@ Every step is reversible:
 - **SPFx**: in App Catalog, delete the `.sppkg` → web part disappears from pages.
 - **Epicor sync**: Task Scheduler → disable `PMD Planning Sync`. PMD_Planning will go stale but the app keeps working with the last-synced values.
 - **Lists**: data lives on. If you need to start clean: Site Contents → List Settings → Delete this list.
+
+
+### Assembly styles after a normal refresh
+
+The MES host now appends one fresh revision token to both Assembly asset URLs
+when it creates the iframe. This avoids reusing an old fixed-URL CSS response
+after a new deployment. Deploy the complete output of npm run build, including
+the MES assets and assembly/assets. The host index.js must be updated too; an
+old host still requests the unversioned URLs. A page already open keeps its
+iframe and pending edits until the page is reloaded.

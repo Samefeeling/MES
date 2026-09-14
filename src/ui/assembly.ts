@@ -15,8 +15,11 @@ export function showAssembly(active: boolean): void {
     frame.title = 'Assembly planning';
     if (import.meta.env.DEV) frame.src = entry.href;
     else {
-      const js = new URL('./assets/assembly.js', entry).href;
-      const css = new URL('./assets/assembly.css', entry).href;
+      // Fixed SharePoint filenames need fresh URLs on each page open. Use the
+      // same token for JS and CSS so a normal reload cannot reuse old styling.
+      const revision = Date.now().toString(36);
+      const js = new URL('./assets/assembly.js?v=' + revision, entry).href;
+      const css = new URL('./assets/assembly.css?v=' + revision, entry).href;
       // SharePoint may download HTML files. srcdoc loads the built module directly.
       frame.srcdoc = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="${css}"></head><body><div id="root"></div><script type="module" src="${js}"></script></body></html>`;
     }
