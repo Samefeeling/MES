@@ -478,6 +478,33 @@ try/catch, because a KPI figure must never cost somebody the shift they just
 signed. `normaliseMachineCode` now tolerates a missing value for the same
 reason — a planning row with a blank machine used to throw from inside sign-off.
 
+## The Die Change Log's one number
+
+`PMD_DieChangeLog.SignOffStatus` was a column nobody wrote. It holds the whole
+inspection as a single digit on the components' own **1 / 2 / 3** scale, and it
+is the **worst** rating anywhere on the event — OUT side and IN side together.
+Worst, not average or majority: an inspection exists to surface the one cracked
+core among twelve good bolts, and a rule that lets the twelve outvote the one
+hides precisely what the form is filled in for.
+
+It is **derived, and shown** (`core/die.dieSignOffStatus`). The setter has
+already answered the question 26 times; a 14th control that can disagree with
+those 26 is a column that can lie about the row it sits on. But "the state the
+worker confirmed" has to be a state the worker saw, so the modal carries a live
+band above Save — *Signing off as 2. Operational but worn*, in the same three
+colours as the buttons it summarises — that moves as they rate. Both DALs
+recompute it on write, so a caller that skipped the form cannot store one that
+contradicts the ratings, and `createDieChangeLog` does not accept it as an
+input at all.
+
+0 (an empty cell) means nothing was rated. That is not "all good" and must
+never read as a 1.
+
+The column was made by hand on the site, which means it is a Number on one
+tenant and a Choice of "1" / "2" / "3" on the next — and sending the wrong
+shape fails the whole save. The DAL reads the column's type off `/fields`
+during the schema probe it already runs and shapes the digit to match.
+
 ## Pending / blocked
 
 1. **SPFx deploy — BLOCKED on IT permissions.** `.sppkg` builds; user is
@@ -499,9 +526,10 @@ reason — a planning row with a blank machine used to throw from inside sign-of
    tabular numerals on `body`. The Timeline's named stops were **cancelled** —
    the board opens at maximum zoom, where a column is a shift and the drag's
    five-minute landing is visible; `−`/`+` remain.
-5. **`PMD_Production.VSPLAN` has to be added to the SharePoint list** for the
-   Schedule % snapshot to persist. Optional and fail-soft like `ShiftTarget` /
-   `CycleTime`: without it sign-off works and the figure is simply not stored.
+5. **Nothing outstanding on the SharePoint side.** `PMD_Production.VSPLAN`
+   was added (2026-09) and the Schedule % snapshot persists.
+   `PMD_DieChangeLog.SignOffStatus` is written by the app as of the same
+   round — it had been sitting empty because nothing had ever filled it.
 
 ## Environment config (build-time)
 

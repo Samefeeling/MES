@@ -55,7 +55,13 @@ import {
 import { openBreakdownCascade } from './breakdown';
 import { toast } from './toast';
 import { closeModal, escapeHtml, openModal } from './modal';
-import { DIE_COMPONENTS, DIE_CONDITION_META, dieChangeEventKey } from '../core/die';
+import {
+  DIE_COMPONENTS,
+  DIE_CONDITION_META,
+  DIE_CONDITION_OF_RANK,
+  dieChangeEventKey,
+  dieSignOffStatus,
+} from '../core/die';
 import { setDieNoteContext } from './nav-context';
 import { renderOutputRejectChart } from './charts';
 import { clearSupervisor, isSupervisor } from './supervisor-auth';
@@ -3916,6 +3922,7 @@ async function openDieChangeLogModal(
       <label class="dcl-prob">Die IN problem (needed when anything is 2 or 3)
         <textarea data-dcl="probIn" rows="2" placeholder="Any issue with the die going in…">${escapeHtml(saved?.problemDescriptionIn ?? '')}</textarea></label>
     </div>
+    <div class="dcl-signoff" data-dcl-signoff aria-live="polite"></div>
     <div class="bd-actions">
       <button class="btn-primary-big" data-dcl-save>${existing ? 'Update' : 'Save'} Die Change Log</button>
       <button class="btn-ghost-big" data-dcl-skip>Skip</button>
@@ -3940,12 +3947,42 @@ async function openDieChangeLogModal(
       finish();
     };
   }
+  /*
+   * The single number this inspection is signed off on — the worst rating
+   * anywhere on it, which is what goes into PMD_DieChangeLog.SignOffStatus.
+   *
+   * Shown, and kept current as the setter taps, because "the state the worker
+   * confirmed" has to be something the worker actually saw. It is derived
+   * rather than picked: the setter has already answered the question 26
+   * times, and a 14th control that can disagree with the 26 is a column that
+   * can lie about the row it sits on.
+   */
+  const readSide = (side: 'out' | 'in'): Record<string, DieComponentCondition> => {
+    const comps: Record<string, DieComponentCondition> = {};
+    mc.querySelectorAll<HTMLElement>(`[data-dcl-side="${side}"] [data-dcl-comp]`).forEach((row) => {
+      comps[row.dataset.dclComp!] = (row.querySelector<HTMLElement>('.dcl-opt.a')?.dataset.cond ??
+        '') as DieComponentCondition;
+    });
+    return comps;
+  };
+  const paintSignOff = (): void => {
+    const box = mc.querySelector<HTMLElement>('[data-dcl-signoff]');
+    if (!box) return;
+    const status = dieSignOffStatus(readSide('out'), readSide('in'));
+    const cond = DIE_CONDITION_OF_RANK[status];
+    box.className = `dcl-signoff${cond ? ` ${DIE_CONDITION_META[cond].cls}` : ''}`;
+    box.innerHTML = cond
+      ? `<span>Signing off as</span><b>${escapeHtml(DIE_CONDITION_META[cond].label)}</b>`
+      : '<span>Nothing rated yet — the die condition will be left blank</span>';
+  };
   mc.querySelectorAll<HTMLButtonElement>('.dcl-opt').forEach((b) =>
     b.addEventListener('click', () => {
       b.parentElement!.querySelectorAll('.dcl-opt').forEach((x) => x.classList.remove('a'));
       b.classList.add('a');
+      paintSignOff();
     }),
   );
+  paintSignOff();
   mc.querySelector('[data-dcl-skip]')?.addEventListener('click', () => {
     closeModal();
     finish();
@@ -3956,14 +3993,10 @@ async function openDieChangeLogModal(
         (mc.querySelector<HTMLSelectElement | HTMLTextAreaElement>(`[data-dcl="${k}"]`)?.value ?? '').trim();
       // Collect the 13 ratings for one side, counting worn/damaged flags.
       const collect = (side: 'out' | 'in'): { comps: Record<string, DieComponentCondition>; flagged: number } => {
-        const comps: Record<string, DieComponentCondition> = {};
-        let flagged = 0;
-        mc.querySelectorAll<HTMLElement>(`[data-dcl-side="${side}"] [data-dcl-comp]`).forEach((row) => {
-          const cond = (row.querySelector<HTMLElement>('.dcl-opt.a')?.dataset.cond ??
-            '') as DieComponentCondition;
-          comps[row.dataset.dclComp!] = cond;
-          if (cond === 'worn' || cond === 'damaged') flagged++;
-        });
+        const comps = readSide(side);
+        const flagged = Object.values(comps).filter(
+          (cond) => cond === 'worn' || cond === 'damaged',
+        ).length;
         return { comps, flagged };
       };
       const out = collect('out');

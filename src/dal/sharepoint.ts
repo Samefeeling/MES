@@ -43,7 +43,9 @@ import {
   DIE_COMPONENTS,
   DIE_CONDITION_META,
   dieChangeEventKey,
+  dieSignOffStatus,
   parseDieCondition,
+  parseDieSignOffStatus,
   parseToolStatus,
   TOOL_STATUS_META,
 } from '../core/die';
@@ -380,6 +382,11 @@ const DEFAULT_FIELDS = {
      *  the list brittle and hard to provision consistently. */
     componentsInJson: 'ComponentsInJson',
     problemDescriptionIn: 'ProblemDescriptionIn',
+    /** The 1 / 2 / 3 the setter signs the whole inspection off on — the
+     *  worst component rating on the event. Written as a bare digit; the
+     *  column may be Number or Choice depending on how the site made it,
+     *  so the type is read off the list and the value shaped to match. */
+    signOffStatus: 'SignOffStatus',
   },
   dieMaintenance: {
     // Title = DieNumber (natural key into PMD_ProductDieColor.DieNumber).
@@ -1434,6 +1441,16 @@ export class SharePointDataLayer implements PmdDataLayer {
   // ---- die change log (PMD_DieChangeLog) -------------------------------
 
   private dieChangeSchemaReady: Promise<void> | null = null;
+  /**
+   * How `SignOffStatus` wants its 1 / 2 / 3 written.
+   *
+   * The site made the column by hand and it is a plain Number on some
+   * tenants and a Choice of "1" / "2" / "3" on others. A Choice column
+   * rejects the number 3 and a Number column rejects the string — and the
+   * whole Die Change Log save fails with it — so the list's own field type
+   * decides, read once alongside the schema probe. `null` until probed.
+   */
+  private dieSignOffStatusText: boolean | null = null;
 
   /** Add the four event-level columns introduced by the one-row-per-D/I
    *  model. EventKey is indexed and unique: this is the server-side guard
@@ -1445,8 +1462,20 @@ export class SharePointDataLayer implements PmdDataLayer {
       const fieldsUrl = `${this.listUrl(LISTS.dieChangeLog)}/fields`;
       const readFields = async (): Promise<Set<string>> => {
         const env = await this.getJson<{
-          d: { results: Array<{ Title: string; InternalName: string }> };
-        }>(`${fieldsUrl}?$filter=Hidden eq false&$select=Title,InternalName`);
+          d: {
+            results: Array<{ Title: string; InternalName: string; TypeAsString?: string }>;
+          };
+        }>(`${fieldsUrl}?$filter=Hidden eq false&$select=Title,InternalName,TypeAsString`);
+        // Anything but a numeric column takes the digit as text. Choice is
+        // the common hand-made shape; Text / Note behave the same way.
+        const status = env.d.results.find(
+          (f) => f.InternalName === F.signOffStatus || f.Title === F.signOffStatus,
+        );
+        if (status) {
+          this.dieSignOffStatusText = !['Number', 'Counter', 'Currency'].includes(
+            status.TypeAsString ?? '',
+          );
+        }
         return new Set(env.d.results.flatMap((f) => [f.Title, f.InternalName]));
       };
       let present = await readFields();
@@ -1460,6 +1489,9 @@ export class SharePointDataLayer implements PmdDataLayer {
         { name: F.eventEndSlot, kind: 9 },
         { name: F.componentsInJson, kind: 3 },
         { name: F.problemDescriptionIn, kind: 3 },
+        // Made by hand on the site that asked for it; created here as a
+        // Number for anyone deploying fresh.
+        { name: F.signOffStatus, kind: 9 },
       ];
       for (const field of required) {
         if (present.has(field.name)) continue;
@@ -1525,6 +1557,7 @@ export class SharePointDataLayer implements PmdDataLayer {
             DIE_COMPONENTS.map((c) => [c.key, parseDieCondition(str(r[c.key]))]),
           ),
           componentsIn: parseDieComponentsJson(str(r[F.componentsInJson])),
+          signOffStatus: parseDieSignOffStatus(r[F.signOffStatus]),
           problemDescription: str(r[F.problemDescription]),
           problemDescriptionIn: str(r[F.problemDescriptionIn]),
           createdAt: str(r['Created']),
@@ -1539,7 +1572,9 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
   }
 
-  async createDieChangeLog(log: Omit<DieChangeLog, 'id' | 'createdAt'>): Promise<DieChangeLog> {
+  async createDieChangeLog(
+    log: Omit<DieChangeLog, 'id' | 'createdAt' | 'signOffStatus'>,
+  ): Promise<DieChangeLog> {
     await this.ensureDieChangeLogSchema();
     const F = this.F.dieChangeLog;
     const eventKey = dieChangeEventKey(
@@ -1549,11 +1584,16 @@ export class SharePointDataLayer implements PmdDataLayer {
       log.jobNumber,
       log.eventStartSlot,
     );
+    // The one number that summarises the inspection is derived here as well
+    // as offered in the form, so a caller that skipped the preview — or a
+    // row written by an older build — can never carry a status that
+    // disagrees with the 26 ratings sitting beside it on the same row.
     const clean = {
       ...log,
       eventKey,
       eventStartSlot: Math.max(0, Math.floor(log.eventStartSlot)),
       eventEndSlot: Math.max(log.eventStartSlot, Math.floor(log.eventEndSlot)),
+      signOffStatus: dieSignOffStatus(log.components, log.componentsIn),
     };
     const findExisting = async (): Promise<DieChangeLog | undefined> =>
       (await this.listDieChangeLog()).find((r) => r.eventKey === eventKey);
@@ -1581,6 +1621,15 @@ export class SharePointDataLayer implements PmdDataLayer {
       [F.problemDescription]: clean.problemDescription,
       [F.componentsInJson]: JSON.stringify(clean.componentsIn ?? {}),
       [F.problemDescriptionIn]: clean.problemDescriptionIn,
+      // A digit, as a number or as text depending on how the column was
+      // made (see dieSignOffStatusText). null when nothing was rated — an
+      // empty cell says "not inspected", where a 1 would claim "all good".
+      [F.signOffStatus]:
+        clean.signOffStatus === 0
+          ? null
+          : this.dieSignOffStatusText === true
+            ? String(clean.signOffStatus)
+            : clean.signOffStatus,
     };
     for (const c of DIE_COMPONENTS) {
       const cond = clean.components[c.key];

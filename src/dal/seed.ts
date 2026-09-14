@@ -15,7 +15,7 @@ import type {
   Supervisor,
 } from '../types';
 import { bdAsBdCodes } from '../core/breakdown';
-import { dieChangeEventKey } from '../core/die';
+import { dieChangeEventKey, dieSignOffStatus } from '../core/die';
 import { generateDieChanges } from '../core/planning';
 import {
   SLOTS_PER_SHIFT,
@@ -335,6 +335,7 @@ export function seedDieChangeLogs(now: Date): DieChangeLog[] {
       dieDescriptionIn: 'Battery Tray Lid 4-cav',
       components: { ...allGood(), MouldingSurfaces: 'damaged', GuidePins: 'worn' },
       componentsIn: {},
+      signOffStatus: dieSignOffStatus({ MouldingSurfaces: 'damaged', GuidePins: 'worn' }),
       problemDescription: 'Cavity 6 surface gouged near the gate; guide pins showing wear lines.',
       problemDescriptionIn: '',
       createdAt: new Date(new Date(now).setDate(now.getDate() - 2)).toISOString(),
@@ -356,6 +357,7 @@ export function seedDieChangeLogs(now: Date): DieChangeLog[] {
       dieDescriptionIn: 'Viva Backrest/Armrest 2-cav',
       components: { ...allGood(), Venting: 'worn' },
       componentsIn: {},
+      signOffStatus: dieSignOffStatus({ Venting: 'worn' }),
       problemDescription: 'Vents crusting up — clean at next service.',
       problemDescriptionIn: '',
       createdAt: new Date(new Date(now).setDate(now.getDate() - 4)).toISOString(),

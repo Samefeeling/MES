@@ -1133,6 +1133,19 @@ th.die-sort.a{color:#1d4ed8}
 .dcl-section .dcl-comps{margin-top:8px}
 .dcl-prob{display:block;margin-top:12px;font-size:13px;font-weight:700;color:var(--mu)}
 .dcl-prob textarea{width:100%;margin-top:4px;font-family:inherit;font-size:15px;padding:8px;border:2px solid var(--bd);border-radius:8px;resize:vertical}
+/* The one number the whole inspection is signed off on (SignOffStatus): the
+   worst rating on either side, over the Save button so it is read on the way
+   past it. Wears the same three colours as the buttons it summarises — a 3
+   here has to look like the 3 that caused it. */
+.dcl-signoff{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-top:14px;padding:9px 12px;border:2px solid var(--bd);border-radius:10px;background:#f8fafc;font-size:14px}
+.dcl-signoff span{font-weight:700;color:var(--mu)}
+.dcl-signoff b{font-size:15px;font-weight:800;color:var(--tx)}
+.dcl-signoff.green{background:#dcfce7;border-color:#16a34a}
+.dcl-signoff.green b{color:#14532d}
+.dcl-signoff.amber{background:#fef3c7;border-color:#FFA500}
+.dcl-signoff.amber b{color:#78350f}
+.dcl-signoff.red{background:#fee2e2;border-color:#dc2626}
+.dcl-signoff.red b{color:#7f1d1d}
 /* Manual order entry (supervisor only): ＋ next to Job#, small form modal. */
 .m-add-order{width:30px;height:30px;margin-left:4px;border:2px dashed var(--bd);border-radius:8px;background:#fff;font-size:16px;font-weight:800;color:#0369a1;cursor:pointer;line-height:1;vertical-align:middle}
 .m-add-order:hover{border-color:#0369a1;background:#f0f9ff}

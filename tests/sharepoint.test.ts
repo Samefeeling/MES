@@ -1826,6 +1826,132 @@ describe('PMD_Production denormalisation: jobRequired + partDescription survive 
     expect(prod.body.vsPlan).toBeNull(); // …just without the snapshot
   });
 
+  /*
+   * PMD_DieChangeLog.SignOffStatus — the one digit the setter signs the whole
+   * inspection off on. The site made the column by hand, so it is a Number on
+   * one tenant and a Choice of "1"/"2"/"3" on the next, and sending the wrong
+   * shape fails the entire Die Change Log save. The list's own field type
+   * decides, read off /fields alongside the schema probe.
+   */
+  describe('PMD_DieChangeLog.SignOffStatus', () => {
+    const stubDieChangeLog = (
+      dal: SharePointDataLayer,
+      columnType: string,
+    ): Array<Record<string, unknown>> => {
+      const bodies: Array<Record<string, unknown>> = [];
+      const o = dal as unknown as {
+        getJson: (url: string) => Promise<unknown>;
+        getAllItems: () => Promise<unknown[]>;
+        itemType: () => Promise<string>;
+        post: (url: string, body: unknown, ifMatch?: string) => Promise<unknown>;
+      };
+      o.getJson = async (): Promise<unknown> => ({
+        d: {
+          results: [
+            { Title: 'EventKey', InternalName: 'EventKey', TypeAsString: 'Text' },
+            { Title: 'EventStartSlot', InternalName: 'EventStartSlot', TypeAsString: 'Number' },
+            { Title: 'EventEndSlot', InternalName: 'EventEndSlot', TypeAsString: 'Number' },
+            { Title: 'ComponentsInJson', InternalName: 'ComponentsInJson', TypeAsString: 'Note' },
+            {
+              Title: 'ProblemDescriptionIn',
+              InternalName: 'ProblemDescriptionIn',
+              TypeAsString: 'Note',
+            },
+            { Title: 'SignOffStatus', InternalName: 'SignOffStatus', TypeAsString: columnType },
+          ],
+        },
+      });
+      // An existing row takes the MERGE path, which is all this needs to see.
+      o.getAllItems = async (): Promise<unknown[]> => [
+        {
+          Id: 7,
+          EventKey: '550T|2026-07-20|DAY|SFM507300|4',
+          EventStartSlot: 4,
+          EventEndSlot: 7,
+          Date: '2026-07-20T00:00:00Z',
+          Shift: 'Day',
+          Machine: '550T',
+          JobNumber: 'SFM507300',
+          Created: '2026-07-20T08:00:00Z',
+        },
+      ];
+      o.itemType = async (): Promise<string> => 'SP.Data.PMD_x005f_DieChangeLogListItem';
+      o.post = async (_url: string, body: unknown): Promise<unknown> => {
+        bodies.push(body as Record<string, unknown>);
+        return {};
+      };
+      return bodies;
+    };
+    const event = {
+      eventKey: '550T|2026-07-20|DAY|SFM507300|4',
+      eventStartSlot: 4,
+      eventEndSlot: 7,
+      date: '2026-07-20',
+      shift: 'Day',
+      dieSetter: 'Van Minh Ma',
+      machineCode: '550T',
+      changeOver: ['Die'],
+      jobNumber: 'SFM507300',
+      dieNumberOut: '117',
+      dieDescriptionOut: 'Proteus Seat',
+      dieNumberIn: '174',
+      dieDescriptionIn: 'Podium Seat',
+      problemDescription: 'Core chipped.',
+      problemDescriptionIn: '',
+    };
+
+    it('writes the worst rating as a number when the column is a Number', async () => {
+      const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+      const bodies = stubDieChangeLog(dal, 'Number');
+      const saved = await dal.createDieChangeLog!({
+        ...event,
+        components: { Cores: 'damaged', Bolts: 'good' },
+        componentsIn: { Bolts: 'good' },
+      });
+      expect(saved.signOffStatus).toBe(3);
+      expect(bodies.at(-1)!.SignOffStatus).toBe(3);
+    });
+
+    it('…and as text when it is a Choice of 1 / 2 / 3', async () => {
+      const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+      const bodies = stubDieChangeLog(dal, 'Choice');
+      await dal.createDieChangeLog!({
+        ...event,
+        components: { Venting: 'worn' },
+        componentsIn: {},
+      });
+      expect(bodies.at(-1)!.SignOffStatus).toBe('2');
+    });
+
+    it('leaves the cell empty when nothing was rated', async () => {
+      // Blank says "not inspected". A 1 there would claim the setter checked
+      // thirteen components and found them all good.
+      const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+      const bodies = stubDieChangeLog(dal, 'Number');
+      const saved = await dal.createDieChangeLog!({
+        ...event,
+        components: {},
+        componentsIn: {},
+        problemDescription: '',
+      });
+      expect(saved.signOffStatus).toBe(0);
+      expect(bodies.at(-1)!.SignOffStatus).toBeNull();
+    });
+
+    it('reads a stored status back off the row', async () => {
+      const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+      const o = dal as unknown as { getAllItems: () => Promise<unknown[]> };
+      o.getAllItems = async (): Promise<unknown[]> => [
+        { Id: 1, EventKey: 'A', SignOffStatus: 3, Created: '2026-07-20T08:00:00Z' },
+        { Id: 2, EventKey: 'B', SignOffStatus: '2', Created: '2026-07-19T08:00:00Z' },
+        // A row written before the column existed.
+        { Id: 3, EventKey: 'C', Created: '2026-07-18T08:00:00Z' },
+      ];
+      const rows = await dal.listDieChangeLog!();
+      expect(rows.map((r) => r.signOffStatus)).toEqual([3, 2, 0]);
+    });
+  });
+
   it('re-sign-off keeps CycleTime from the rehydrated row when planning has dropped it', async () => {
     store.clear();
     const dal = new SharePointDataLayer({

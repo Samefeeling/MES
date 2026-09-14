@@ -209,6 +209,17 @@ export interface DieMaintenanceRequest {
  *  but worn" / "3. Damaged or can't be used". '' = not assessed. */
 export type DieComponentCondition = '' | 'good' | 'worn' | 'damaged';
 
+/**
+ * `PMD_DieChangeLog.SignOffStatus` — the die's condition as the setter
+ * signed the inspection off, on the same 1 / 2 / 3 scale as the 13
+ * components, boiled down to one number. 0 = nothing was rated.
+ *
+ * The **worst** rating anywhere on the event, because that is what an
+ * inspection is for: a die with twelve good components and one cracked core
+ * is a 3, and any other rule lets the crack hide behind the twelve.
+ */
+export type DieSignOffStatus = 0 | 1 | 2 | 3;
+
 /** One row of PMD_DieChangeLog — exactly one continuous D/I block on a
  *  machine/job timeline. Component keys are the list's column names
  *  (Bolts, Cores, EjectorPins, …, WaterLeaks). */
@@ -236,6 +247,9 @@ export interface DieChangeLog {
   components: Record<string, DieComponentCondition>;
   /** Die IN component key → condition. Kept on the same event row. */
   componentsIn: Record<string, DieComponentCondition>;
+  /** What the setter signed off: the worst condition on the whole event,
+   *  OUT and IN. 0 on a legacy row that predates the column. */
+  signOffStatus: DieSignOffStatus;
   problemDescription: string;
   problemDescriptionIn: string;
   createdAt: string; // ISO

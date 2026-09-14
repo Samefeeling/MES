@@ -27,7 +27,7 @@ import {
   decodeBreakdownCauseMap,
   encodeBreakdownCauseMap,
 } from '../core/breakdown';
-import { dieChangeEventKey } from '../core/die';
+import { dieChangeEventKey, dieSignOffStatus } from '../core/die';
 import {
   seedBdCodes,
   seedDieChangeLogs,
@@ -174,7 +174,9 @@ export class MemoryDataLayer implements PmdDataLayer {
     );
   }
 
-  async createDieChangeLog(log: Omit<DieChangeLog, 'id' | 'createdAt'>): Promise<DieChangeLog> {
+  async createDieChangeLog(
+    log: Omit<DieChangeLog, 'id' | 'createdAt' | 'signOffStatus'>,
+  ): Promise<DieChangeLog> {
     const eventKey = dieChangeEventKey(
       log.machineCode,
       log.date,
@@ -187,6 +189,9 @@ export class MemoryDataLayer implements PmdDataLayer {
       eventKey,
       eventStartSlot: Math.max(0, Math.floor(log.eventStartSlot)),
       eventEndSlot: Math.max(log.eventStartSlot, Math.floor(log.eventEndSlot)),
+      // Derived here as well as in the form, for the same reason as the
+      // SharePoint DAL: the stored status can never contradict the ratings.
+      signOffStatus: dieSignOffStatus(log.components, log.componentsIn),
     };
     const existing = this.dieChangeLogs.find((r) => r.eventKey === eventKey);
     if (existing) {

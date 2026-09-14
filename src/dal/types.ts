@@ -97,7 +97,11 @@ export interface PmdDataLayer {
   /** All die-change reports, newest first. */
   listDieChangeLog?(): Promise<DieChangeLog[]>;
   /** Persist a new report (id/createdAt assigned by the backend). */
-  createDieChangeLog?(log: Omit<DieChangeLog, 'id' | 'createdAt'>): Promise<DieChangeLog>;
+  createDieChangeLog?(
+    /** `signOffStatus` is not an input: the DAL derives it from the ratings
+     *  so a stored status can never contradict the row it summarises. */
+    log: Omit<DieChangeLog, 'id' | 'createdAt' | 'signOffStatus'>,
+  ): Promise<DieChangeLog>;
 
   // Planning (read-only — the Epicor → Planning.csv pipeline owns writes)
   listPlanning(filter: PlanningFilter): Promise<PlanningOrder[]>;
