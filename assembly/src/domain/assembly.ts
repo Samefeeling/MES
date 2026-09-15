@@ -167,7 +167,7 @@ export const LINES: LineDef[] = [
   { key: 'UPL_CUT_SEW', id: WorkCenterId('UPL_CUT_SEW'), name: 'UPL-CUT', schedulable: true, types: ['cutting-sewing'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 2 },
   { key: 'UPL_GLUING', id: WorkCenterId('UPL_GLUING'), name: 'UPL-Gluing', schedulable: true, types: ['upholstery'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 3 },
   { key: 'UPL_SOFTIE', id: WorkCenterId('UPL_SOFTIE'), name: 'UPL-SSS', schedulable: true, types: ['upholstery'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 4 },
-  { key: 'ASSY', id: LINE_ASSY, name: 'Assembly Seats', schedulable: true, types: ['final-assembly'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 5 },
+  { key: 'ASSY', id: LINE_ASSY, name: 'Assembly', schedulable: true, types: ['final-assembly'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 5 },
   { key: 'TABLE', id: LINE_TABLE, name: 'Table', schedulable: true, types: ['final-assembly'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 6 },
   { key: 'FACTORY_GENERAL', id: WorkCenterId('FACTORY_GENERAL'), name: 'General', schedulable: true, types: ['final-assembly'], parallelOrders: 15, sortIndex: 7 },
 ];
@@ -177,11 +177,15 @@ export const LINES: LineDef[] = [
  *
  * `UPL` was one lane covering three benches; anything still filed against it
  * lands on Gluing, which is where the bulk of it was. `ASSY_STOOL` was a
- * split of ASM that the plant does not run separately any more. Applied when
+ * split of ASM that the plant does not run separately any more. `ASM` and
+ * `ASSEMBLY_SEATS` are the two names the assembly line has been written under
+ * before it was simply Assembly, and every saved plan, roster cell and
+ * production row carrying either has to keep landing on it. Applied when
  * reading saved plans, rosters and exports — never when writing.
  */
 const LEGACY_LINE_KEYS: Record<string, LineKey> = {
   ASM: 'ASSY',
+  ASSEMBLY_SEATS: 'ASSY',
   UPL: 'UPL_GLUING',
   UPL_ASSY: 'UPL_GLUING',
   ASSY_STOOL: 'ASSY',

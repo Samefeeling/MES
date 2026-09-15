@@ -40,7 +40,10 @@ describe('the drop and its time guide', () => {
   });
 });
 it('renames the line without losing existing ASM roster and plan values', () => {
-  expect(LINES.find(line => line.key === 'ASSY')?.name).toBe('Assembly Seats');
+  expect(LINES.find(line => line.key === 'ASSY')?.name).toBe('Assembly');
   expect(readLineKey('ASM')).toBe('ASSY');
+  // Both names the line has carried before still land on it — they are what
+  // saved plans, roster Skills cells and signed-off production rows say.
   expect(readLineKey('Assembly Seats')).toBe('ASSY');
+  expect(readLineKey('Assembly')).toBe('ASSY');
 });

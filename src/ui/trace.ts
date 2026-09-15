@@ -6,6 +6,7 @@ import {
   SLOTS_PER_SHIFT,
   currentShift,
   currentSlotIndex,
+  dateKey,
   shiftBounds,
   slotClock,
 } from '../core/shifts';
@@ -25,6 +26,18 @@ import {
 import { escapeHtml } from './modal';
 
 export type TracePanelView = 'live' | 'search';
+
+/**
+ * How far back Job Search looks when nobody has typed anything.
+ *
+ * The panel used to open on an empty page and a sentence telling you to fill
+ * the form in — which is a page that knows the answer to the question almost
+ * everyone opens it with ("what has just run?") and waits to be asked anyway.
+ * With the form blank it now shows the last day's signed-off work; the moment
+ * a job number or a date goes in, that query takes over.
+ */
+const RECENT_HOURS = 24;
+const HOUR_MS = 3600_000;
 
 interface TraceState {
   view: TracePanelView;
@@ -295,7 +308,9 @@ export async function mountTracePanel(
     results: [],
     liveRows: [],
     searched: false,
-    loading: view === 'live',
+    // Both panels open with a read already in flight: Live polls, and Search
+    // now opens on the last day rather than on an empty form.
+    loading: true,
     lastUpdated: null,
     errors,
   };
@@ -303,6 +318,8 @@ export async function mountTracePanel(
   if (view === 'live') {
     await loadLive();
     if (version === mountVersion && host.isConnected) startLivePoll();
+  } else {
+    await doSearch();
   }
 }
 
@@ -408,7 +425,26 @@ function renderLiveBody(): string {
   return `${head}<div class="trace-results">${S!.liveRows.map(renderCard).join('')}</div>`;
 }
 
+/**
+ * Whether the panel is on its default window rather than on a typed query.
+ *
+ * Derived from the form rather than held as a flag: an empty form *is* the
+ * default view, so clearing what you typed puts you back on the last 24 hours
+ * without anything having to remember to switch a mode off. Machine is not in
+ * it — narrowing the last day to one press is still the last day.
+ */
+function showingRecent(): boolean {
+  if (!S || S.view !== 'search') return false;
+  const q = S.query;
+  return !q.jobNumber && !q.dateFrom && !q.dateTo;
+}
+
 function renderSearchBody(): string {
+  // Above the results rather than inside the form: it says what is on screen,
+  // which is a fact about the results and not a fifth field.
+  const scope = showingRecent()
+    ? `<div class="trace-scope">Showing the last ${RECENT_HOURS} hours. Enter a job number or a date range to look further back.</div>`
+    : '';
   return `
     <div class="trace-search">
       <div class="trace-form">
@@ -429,15 +465,24 @@ function renderSearchBody(): string {
         <button class="btn-primary-big" data-search>${S!.loading ? 'Searching…' : 'Search'}</button>
       </div>
     </div>
+    ${scope}
     ${renderSearchResults()}`;
 }
 
 function renderSearchResults(): string {
   if (!S!.searched) {
-    return `<div class="trace-empty">Enter a job number, a date range, or both — then Search.</div>`;
+    return `<div class="trace-empty">${
+      S!.loading
+        ? 'Reading the last day’s signed-off production…'
+        : 'Enter a job number, a date range, or both — then Search.'
+    }</div>`;
   }
   if (S!.results.length === 0) {
-    return `<div class="trace-empty">No production records match this query.</div>`;
+    return `<div class="trace-empty">${
+      showingRecent()
+        ? `Nothing has been signed off in the last ${RECENT_HOURS} hours.`
+        : 'No production records match this query.'
+    }</div>`;
   }
   // Same day cards the KPI job popup draws — a search result and a
   // drill-down onto the same order used to be two different pictures of
@@ -1410,9 +1455,17 @@ async function doSearch(): Promise<void> {
   if (!S) return;
   const state = S;
   const q = { ...state.query };
-  if (!q.jobNumber && !q.dateFrom && !q.dateTo) {
-    return;
-  }
+  /*
+   * With nothing typed, the query is "the last 24 hours" rather than nothing
+   * at all. `since` is a real instant, not a date: it is what trims the result
+   * at the end, so a Night shift that began yesterday and ran into this
+   * morning is in the window and the one that ended before it is not.
+   */
+  const since =
+    !q.jobNumber && !q.dateFrom && !q.dateTo
+      ? new Date(Date.now() - RECENT_HOURS * HOUR_MS)
+      : null;
+  if (!since && !q.jobNumber && !q.dateFrom && !q.dateTo) return;
   const version = ++searchLoadVersion;
   state.loading = true;
   state.errors = [];
@@ -1429,6 +1482,10 @@ async function doSearch(): Promise<void> {
         machineCode?: string;
       } = {};
       if (q.dateFrom) filter.shiftIdFrom = `${q.dateFrom}-`;
+      // A shift is filed under the date it *began*, so the window's own first
+      // day is not far enough back: read from the day before it and let the
+      // post-filter below cut the result to the 24 hours themselves.
+      else if (since) filter.shiftIdFrom = `${dateKey(new Date(since.getTime() - 24 * HOUR_MS))}-`;
       if (q.dateTo) filter.shiftIdTo = `${q.dateTo}-￿`;
       if (q.machine) filter.machineCode = q.machine;
       all.push(...(await readSignedOff(filter)));
@@ -1443,6 +1500,12 @@ async function doSearch(): Promise<void> {
     const datePart = r.shiftId.slice(0, 10);
     if (dateFrom && datePart < dateFrom) return false;
     if (dateTo && datePart > dateTo) return false;
+    // Any shift overlapping the window counts; a malformed id is kept rather
+    // than silently dropped, the way the date comparisons above treat one.
+    if (since) {
+      const bounds = shiftBounds(r.shiftId);
+      if (bounds && bounds.end <= since) return false;
+    }
     return true;
   });
 

@@ -274,11 +274,22 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 
 /* Trace / search view */
 .trace{display:flex;flex-direction:column;gap:14px}
-.trace-search{background:#fff;border:1px solid var(--bd);border-radius:12px;padding:16px}
+/*
+ * The search form, at half the height it opened at.
+ *
+ * It is four fields and a button, read once on the way to the results and not
+ * looked at again — it was taking a hundred pixels off the top of the page to
+ * say so. The operator sheet's touch sizing does not apply here: this panel is
+ * on the management dashboard, worked with a mouse.
+ */
+.trace-search{background:#fff;border:1px solid var(--bd);border-radius:10px;padding:5px 12px}
 .trace-search h2{margin:0 0 6px;font-size:22px;font-weight:800;color:#0c4a6e}
-.trace-form{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;margin-top:0}
-.trace-form label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--mu);text-transform:uppercase;letter-spacing:.4px;font-weight:700}
-.trace-form input,.trace-form select{padding:10px 12px;border:2px solid var(--bd);border-radius:8px;font-size:16px;min-height:48px;min-width:180px;background:#fff;color:var(--tx)}
+.trace-form{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px 12px;margin-top:0}
+.trace-form label{display:flex;flex-direction:column;gap:2px;font-size:10px;line-height:1.1;color:var(--mu);text-transform:uppercase;letter-spacing:.3px;font-weight:700}
+.trace-form input,.trace-form select{padding:3px 8px;border:1px solid var(--bd);border-radius:6px;font-size:13px;min-height:28px;min-width:150px;background:#fff;color:var(--tx)}
+.trace-search .btn-primary-big{min-height:28px;padding:4px 18px;border-radius:6px;font-size:14px}
+/* What the results are of, when nobody has typed a query. */
+.trace-scope{font-size:11px;color:var(--mu);font-weight:600;padding:0 2px}
 .trace-empty{padding:30px;background:#fff;border:1px dashed var(--bd);border-radius:10px;text-align:center;color:var(--mu);font-weight:600}
 /* Live Status andon header: per-activity counts + shift + refresh heartbeat. */
 .live-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 16px}

@@ -212,7 +212,7 @@ describe('by line', () => {
     ];
     const lines = assemblyByLine(rows, ['UPL-CUT', 'ASM']);
     // Anything the board does not run still gets a row — after the ones it does.
-    expect(lines.map((l) => l.line)).toEqual(['UPL-CUT', 'Assembly Seats', 'Laser']);
+    expect(lines.map((l) => l.line)).toEqual(['UPL-CUT', 'Assembly', 'Laser']);
     expect(lines[0].agg.orders).toBe(1);
   });
 
@@ -262,12 +262,18 @@ describe('the traffic light', () => {
 });
 
 
-it('combines legacy ASM and Assembly Seats records without losing output', () => {
-  const rows = [day({ id: '1', job: 'A', line: 'ASM', complete: 10 }), day({ id: '2', job: 'B', line: 'Assembly Seats', complete: 20 })];
-  const lines = assemblyByLine(rows, ['Assembly Seats']);
+it('combines every name the assembly line has had without losing output', () => {
+  const rows = [
+    day({ id: '1', job: 'A', line: 'ASM', complete: 10 }),
+    day({ id: '2', job: 'B', line: 'Assembly Seats', complete: 20 }),
+    day({ id: '3', job: 'C', line: 'Assembly', complete: 5 }),
+  ];
+  const lines = assemblyByLine(rows, ['Assembly']);
   expect(lines).toHaveLength(1);
-  expect(lines[0].line).toBe('Assembly Seats');
-  expect(lines[0].agg.complete).toBe(30);
-  expect(lines[0].orders.map(order => order.line)).toEqual(['Assembly Seats', 'Assembly Seats']);
+  expect(lines[0].line).toBe('Assembly');
+  expect(lines[0].agg.complete).toBe(35);
+  expect(lines[0].orders.map(order => order.line)).toEqual(['Assembly', 'Assembly', 'Assembly']);
+  // The record itself is untouched: the roll-up renames the row it draws,
+  // never the row it read.
   expect(rows[0].line).toBe('ASM');
 });
