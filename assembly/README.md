@@ -183,7 +183,10 @@ plan goes back the other way, into the `ASSY_Production` list.
   are behind the supervisor gate.
 - **Production actuals** — Shift Output, Complete, Reject, Rework, Job Completed and Pause
   reasons are captured as daily records for the `ASSY_Production` SharePoint
-  list. Its columns intentionally mirror `PMD_Production`, allowing KPI.ts to
+  list, together with the labour hours the day took: the board times the work
+  from Start production to Save entry, steps over the breaks, and multiplies by
+  the crew. The panel says what it booked, and the KPI page divides the day's
+  standard hours by it to get Efficiency. Its columns intentionally mirror `PMD_Production`, allowing KPI.ts to
   aggregate the two departments without a second mapping layer.
 - **Drag** a bar — by the block or by its label — sideways to move its start
   day, or down onto another line to change lines. Every bar moves, in both
@@ -453,7 +456,7 @@ Each row carries two kinds of column, and the split is the whole design:
 
 | Column | Kind | Owner | Written when |
 | --- | --- | --- | --- |
-| `RecordKey` (`Job|YYYY-MM-DD`), `Title`, `Date` | key | — | the row is opened |
+| `RecordKey` (generated per booking), `Title`, `Date` | key | — | the row is opened |
 | `Line` | order-level | the planner | an order moves between lines |
 | `StartDate` | order-level | the planner | a bar is dragged |
 | `ActualStartAt`, `StartOverrideReason` | order-level | the supervisor | production is started |
@@ -462,6 +465,7 @@ Each row carries two kinds of column, and the split is the whole design:
 | `ExpectDate` | order-level | derived | the crew or the queue moves it |
 | `Operators`, `OperatorIds` | row-level snapshot | the supervisor | the entry is saved |
 | `ShiftOutput`, `Complete`, `Reject`, `Rework` | row-level | the shift | the entry is saved |
+| `BookedHour` | row-level | measured | the entry is saved |
 | `JobCompleted`, `CompletedAt`, `Paused`, `PauseReason`, `Notes` | row-level | the shift | the entry is saved |
 
 **Dragging a bar to level the load writes `StartDate` only** — Epicor owns the
@@ -480,12 +484,34 @@ so it cannot drift to a new day when the bar moves.
 separate immutable instant set by the Start production button, so a planned
 date can never be mistaken for proof that production began.
 
-**A row is matched to its shift on `RecordKey`**, the column the list is keyed
-on, with the `Date` column as a fallback for rows written before the key
-existed. The day a SharePoint date column gives back depends on how the column
-was created and on the timezones the site and the browser are each in, so a
-shift whose row was looked up by day alone could be judged missing and opened a
-second time.
+**`BookedHour` is what the day actually took**: from `ActualStartAt` — or 07:00
+on any day after the first, since there is no second Start production to press
+— to the moment the shift pressed Save entry, less the breaks, times the crew
+on it. It is capped at the shift's own 7.5 hours a head, so a form left open on
+a bench until the evening cannot book more than the shift held. Support work
+has no clock: its hours are the ones the supervisor entered. This is the
+denominator of Efficiency on the KPI page; `crewSize × 7.5` is what the crew
+could have given the order, and this is what it took. Every column the sync
+writes has to exist on the list — **add `BookedHour` before deploying**, or the
+write fails with `Missing SharePoint column: BookedHour` and nothing is
+recorded.
+
+**A row is matched to its shift on `RecordKey`**, which is the row's identity
+and nothing else: the board generates it when a shift first saves that day's
+entry, the plan carries it, and it is never rebuilt from anything. The key used
+to be `Job|YYYY-MM-DD`, which ties a row's identity to a date — the one field on
+the record that can be read two ways, because what a SharePoint date column
+gives back depends on how it was created and on the timezones the site and the
+browser are each in. A shift whose row was looked up by day could be judged
+missing and opened a second time.
+
+Two older questions are still asked, narrowest first, so that nothing already
+in the list is orphaned: the booking's own key, then `Job|YYYY-MM-DD`, then the
+`Date` column. A row recognised by one of the older two is rewritten under the
+booking's key, so each row is asked them once in its life. The blank row an
+order opens with has no booking behind it and keeps `Job|YYYY-MM-DD`, which
+both sides can work out; the day's first real entry claims it and writes its
+own key over it.
 
 **Opening a row asks the list for the key again, immediately before writing.**
 The snapshot a sync works from is as old as the sync, and it is not the only

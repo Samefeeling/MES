@@ -17,6 +17,16 @@ export interface AssemblyResult {
   plannedHours?: number;
   /** Ordered quantity, the denominator of the standard above. */
   orderQty?: number;
+  /**
+   * Labour hours this day's booking actually consumed, from `BookedHour`:
+   * how long the crew were on the order, times how many of them there were.
+   * The denominator of Efficiency.
+   *
+   * `null` on a row written before the board recorded it — that is a day
+   * nobody measured, not a day that took no time, so it is left out of
+   * Efficiency rather than scored as infinitely efficient.
+   */
+  bookedHours?: number | null;
   operators: string;
   output: number;
   complete: number;

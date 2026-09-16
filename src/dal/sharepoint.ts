@@ -5860,6 +5860,9 @@ export const DEFAULT_ASSEMBLY_FIELDS = {
   // they turn a day's finished units back into earned hours, which is what the
   // KPI page measures Efficiency on.
   plannedHours: "PlannedHours", orderQty: "OrderQty",
+  // Measured labour hours, written by the Assembly board when a shift saves
+  // its entry. Absent on rows written before it existed; see `bookedHours`.
+  bookedHours: "BookedHour",
   "job": "Title",
   "date": "Date",
   "line": "Line",
@@ -5922,6 +5925,10 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
           };
           output.push({ workType: String(row[fields.workType] ?? ""), laborHours: number(fields.laborHours), description: String(row[fields.description] ?? ""), supportDepartment: String(row[fields.supportDepartment] ?? ""), id: String(row.Id), job, day, line: String(row[fields.line] ?? ''), operators: String(row[fields.operators] ?? ''),
             plannedHours: number(fields.plannedHours), orderQty: number(fields.orderQty),
+            // Read apart from `number()`: a missing column and a booked zero
+            // must not read alike, or every unmeasured day would be counted as
+            // a day that took no labour at all.
+            bookedHours: row[fields.bookedHours] == null ? null : number(fields.bookedHours),
             output: number(fields.output), complete: number(fields.complete), reject: number(fields.reject), rework: number(fields.rework),
             completed: row[fields.completed] === true, due: row[fields.due] ? String(row[fields.due]) : null,
             completedAt: row[fields.completedAt] ? String(row[fields.completedAt]) : null });

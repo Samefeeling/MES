@@ -144,7 +144,11 @@ describe('syncProduction', () => {
       fields: {
         [C.jobNum]: 'ASM8001',
         [C.date]: '2026-09-14',
+        // No booking opened this row, so it takes the key both sides can
+        // work out for themselves; the first entry for the day writes its own.
         [C.recordKey]: 'ASM8001|2026-09-14',
+        // An order nobody has booked against has consumed no labour yet.
+        [C.bookedHour]: 0,
         [C.line]: 'UPL_GLUING',
         [C.operators]: 'Gate',
         [C.operatorIds]: 'W02',
@@ -369,6 +373,47 @@ describe('syncProduction', () => {
       [C.date]: '2026-09-14',
       [C.complete]: 12,
     });
+  });
+
+  it('recognises the row by the key the booking carries, whatever the day says', async () => {
+    // The row was opened by this booking and has held its key ever since. The
+    // Date column reads back on another day — a SharePoint date answers in the
+    // site's timezone, not the shift's — and it no longer matters.
+    const calls = stubGraph([
+      stored({
+        [C.recordKey]: 'b6f1-2f9c',
+        [C.date]: '2026-09-13T14:00:00Z',
+      }),
+    ]);
+    const out = await syncProduction(CFG, 'ASSY_Production', [
+      order({
+        shifts: [
+          shift({ date: '2026-09-14', recordKey: 'b6f1-2f9c', complete: 12, bookedHours: 9.5 }),
+        ],
+      }),
+    ]);
+
+    expect(out.created).toBe(0);
+    const [write] = writes(calls);
+    expect(write.url).toContain('/items/1/fields');
+    expect(write.body).toMatchObject({
+      [C.recordKey]: 'b6f1-2f9c',
+      [C.date]: '2026-09-14',
+      [C.bookedHour]: 9.5,
+    });
+  });
+
+  it('writes its own key over the one a row was opened with', async () => {
+    // Rows written before bookings carried keys are recognised by the old key
+    // and rewritten under the booking's, so each is asked that question once.
+    const calls = stubGraph([stored()]);
+    await syncProduction(CFG, 'ASSY_Production', [
+      order({ shifts: [shift({ recordKey: 'fresh-key', complete: 3 })] }),
+    ]);
+
+    const [write] = writes(calls);
+    expect(write.url).toContain('/items/1/fields');
+    expect(write.body).toMatchObject({ [C.recordKey]: 'fresh-key' });
   });
 
   it('opens one row for an order the board hands it twice', async () => {

@@ -194,6 +194,26 @@
   unique index** — `config/assembly-lists.json` asks for it, and
   provisioning cannot enable it while duplicates already exist, so clear
   them first.
+- **`RecordKey` is generated, not derived** (since 2026-09-16). The board
+  makes one when a shift first saves a day's entry and stores it on the
+  plan; both sides then carry it. Deriving it from `Job|YYYY-MM-DD` tied a
+  row's identity to the one field on the record that can be read two ways.
+  The old key and the `Date` column are still tried, in that order, so
+  nothing already in the list is orphaned — and a row recognised that way
+  is rewritten under the booking's key, so each is asked the old questions
+  once in its life. If the saved plan is ever lost the keys go with it; the
+  day fallback then matches those rows and re-keys them, so no duplicates
+  are written.
+- **`BookedHour` must exist on the list before this build is deployed.**
+  Every column the sync writes has to be there, so until it is the write
+  fails with `Missing SharePoint column: BookedHour` in the board's banner
+  and *no production is recorded at all*. It is in
+  `config/assembly-lists.json`; re-run `provision-assembly.ps1 -Apply` or
+  add a Number column named exactly `BookedHour`.
+- **Efficiency reads blank for everything booked before that.** It is now
+  Std h ÷ Booked h, and a row with no measured hours is excluded from both
+  sides rather than scored — a day nobody timed did not take no time. The
+  figure fills in from the first entry saved after the column exists.
 - **Duplicates already in the list are reported, not removed.** The sync
   names the extra row's item id in the banner and keeps the *oldest* row
   for that day current. Deleting somebody's production row is not a

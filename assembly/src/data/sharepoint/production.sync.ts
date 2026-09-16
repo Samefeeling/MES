@@ -55,6 +55,7 @@ export const PRODUCTION_COLUMNS = {
   jobNum: 'Title',
   date: 'Date',
   recordKey: 'RecordKey',
+  bookedHour: 'BookedHour',
   // order-level
   line: 'Line',
   operators: 'Operators',
@@ -213,7 +214,32 @@ function orderFields(facts: OrderFacts): ListItemFields {
   };
 }
 
-/** An empty shift — the row an order opens with before anything is booked. */
+/**
+ * The key a row carries when no booking gave it one: `Job|YYYY-MM-DD`.
+ *
+ * Every row used to be keyed this way, and the trouble with it is the date —
+ * the one part of the record that can be read two ways, because a SharePoint
+ * date column answers in the site's timezone rather than the shift's. A
+ * booking now brings its own key (`ProductionEntry.recordKey`), generated once
+ * and never derived from anything; this is what is left for the two kinds of
+ * row that have no booking behind them: the blank row an order opens with, and
+ * rows written before keys were part of the plan.
+ */
+const legacyKey = (jobNum: string, date: string): string =>
+  `${jobNum}|${date}`;
+
+/** The key this shift's row is written under, whichever kind it is. */
+const keyFor = (jobNum: string, shift: ProductionEntry): string =>
+  shift.recordKey ?? legacyKey(jobNum, shift.date);
+
+/**
+ * An empty shift — the row an order opens with before anything is booked.
+ *
+ * It carries no `recordKey`, because no booking made it: the sync opens it
+ * from the board, so `legacyKey` below gives it the one key both sides can
+ * work out for themselves. The first real entry for that day then claims the
+ * row and writes its own key over it.
+ */
 function blankShift(date: string): ProductionEntry {
   return {
     date,
@@ -235,7 +261,8 @@ function rowFields(facts: OrderFacts, shift: ProductionEntry): ListItemFields {
   return {
     [c.jobNum]: facts.jobNum,
     [c.date]: shift.date,
-    [c.recordKey]: `${facts.jobNum}|${shift.date}`,
+    [c.recordKey]: keyFor(facts.jobNum, shift),
+    [c.bookedHour]: shift.bookedHours ?? 0,
     ...orderFields(facts),
     [c.operators]: operatorNames.join(', '),
     [c.operatorIds]: operatorIds.join(','),
@@ -326,10 +353,6 @@ function drift(
 const rowDay = (fields: ListItemFields): string =>
   dayOf(fields[PRODUCTION_COLUMNS.date]);
 
-/** The list's own key for a row: `Job|YYYY-MM-DD`, exactly as it was written. */
-const recordKeyOf = (jobNum: string, date: string): string =>
-  `${jobNum}|${date}`;
-
 /**
  * An order's stored rows, indexed the two ways a shift's row is found.
  *
@@ -363,7 +386,7 @@ function indexRows(jobNum: string, rows: ListItem[]): StoredRows {
   for (const row of [...rows].sort(oldestFirst)) {
     const rawKey = String(row.fields[PRODUCTION_COLUMNS.recordKey] ?? '').trim();
     const day = rowDay(row.fields);
-    const key = rawKey || recordKeyOf(jobNum, day);
+    const key = rawKey || legacyKey(jobNum, day);
     if (byKey.has(key) || byDay.has(day)) {
       extras.push(row);
       continue;
@@ -377,18 +400,32 @@ function indexRows(jobNum: string, rows: ListItem[]): StoredRows {
 /**
  * The row this shift owns, claimed so nothing else can take it.
  *
+ * Three questions, narrowest first: the key the booking itself carries, then
+ * the key rows used to be given, then the day. The last two are what recognise
+ * a row written before bookings had keys — and the row so recognised is
+ * rewritten under the booking's own key, so each row is asked the older
+ * questions exactly once in its life.
+ *
  * Claiming matters: a row whose key and Date disagree would otherwise answer
  * two different shifts, and the pass would write one day into it and then the
  * other.
  */
-function claimRow(index: StoredRows, jobNum: string, date: string): ListItem | null {
-  const key = recordKeyOf(jobNum, date);
-  const found = index.byKey.get(key) ?? index.byDay.get(date) ?? null;
+function claimRow(
+  index: StoredRows,
+  jobNum: string,
+  shift: ProductionEntry,
+): ListItem | null {
+  const found =
+    (shift.recordKey ? index.byKey.get(shift.recordKey) : undefined) ??
+    index.byKey.get(legacyKey(jobNum, shift.date)) ??
+    index.byDay.get(shift.date) ??
+    null;
   if (!found) return null;
-  index.byKey.delete(key);
+  if (shift.recordKey) index.byKey.delete(shift.recordKey);
+  index.byKey.delete(legacyKey(jobNum, shift.date));
   const storedKey = String(found.fields[PRODUCTION_COLUMNS.recordKey] ?? '').trim();
   if (storedKey) index.byKey.delete(storedKey);
-  index.byDay.delete(date);
+  index.byDay.delete(shift.date);
   index.byDay.delete(rowDay(found.fields));
   return found;
 }
@@ -443,13 +480,11 @@ function oneFactsPerJob(orders: OrderFacts[]): OrderFacts[] {
 async function openRow(
   cfg: SharePointConfig,
   list: string,
-  jobNum: string,
-  shift: ProductionEntry,
+  key: string,
   wanted: ListItemFields,
   out: SyncOutcome,
   note: (e: WriteError) => void,
 ): Promise<string | null | 'abort'> {
-  const key = recordKeyOf(jobNum, shift.date);
 
   /** The row the list holds under this key right now, if it can be asked. */
   const lookup = async (): Promise<ListItem | null> => {
@@ -577,10 +612,10 @@ export async function syncProduction(
 
     for (const shift of shifts) {
       const wanted = rowFields(facts, shift);
-      const found = claimRow(index, facts.jobNum, shift.date);
+      const found = claimRow(index, facts.jobNum, shift);
 
       if (!found) {
-        const opened = await openRow(cfg, list, facts.jobNum, shift, wanted, out, note);
+        const opened = await openRow(cfg, list, keyFor(facts.jobNum, shift), wanted, out, note);
         if (opened === 'abort') return out;
         if (opened) written.add(opened);
         continue;

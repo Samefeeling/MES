@@ -340,9 +340,11 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
       setEntryMessage('Enter production, a pause, completion, or a note before saving.');
       return;
     }
-    const completedAt = jobCompleted ? new Date().toISOString() : null;
+    const savedAt = new Date().toISOString();
+    const completedAt = jobCompleted ? savedAt : null;
     saveProductionEntry(job.id, {
       date: today,
+      savedAt,
       complete: qty,
       reject: Number(reject),
       rework: Number(rework),
@@ -358,7 +360,21 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
       remainingQty: row.sourceRemainingQty ?? row.job.remainingQty,
       completedQty: row.sourceCompletedQty ?? row.job.completedQty,
     });
-    setEntryMessage(jobCompleted ? 'Entry saved. Crew released.' : 'Entry saved.');
+    /*
+     * Say how many labour hours went with it. The figure is read back rather
+     * than worked out again here: the store decides it — from when the order
+     * started, when this was saved and who was on it — and a second opinion
+     * computed in the panel is a second answer waiting to disagree with the
+     * one the KPI page will report.
+     */
+    const booked = usePlanStore
+      .getState()
+      .production[String(job.id)]?.find((saved) => saved.date === today)
+      ?.bookedHours;
+    const hours = booked ? ` ${booked} labour hours booked.` : '';
+    setEntryMessage(
+      (jobCompleted ? 'Entry saved. Crew released.' : 'Entry saved.') + hours,
+    );
   };
 
   return (
@@ -706,6 +722,20 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
             Production entry
             <span className="count">today</span>
           </h3>
+          {/*
+            What the last save booked, in labour hours — the figure Efficiency
+            is measured against, shown where it was earned rather than only on
+            the KPI page a week later. It is the crew's time on the order, not
+            an allowance: from Start production (07:00 on any day after) to the
+            moment the entry was saved, less breaks, times the crew.
+          */}
+          {existingToday?.bookedHours !== undefined && (
+            <p className="hint booked-hours">
+              {existingToday.bookedHours} labour hours booked
+              {existingToday.savedAt &&
+                ` · saved ${formatTime(new Date(existingToday.savedAt))}`}
+            </p>
+          )}
           <div className="production-grid">
             <label><span>Shift output</span><input type="number" min={0} value={shiftOutput} onChange={(event) => setShiftOutput(event.target.value)} /></label>
             <label><span>Reject</span><input type="number" min={0} value={reject} onChange={(event) => setReject(event.target.value)} /></label>

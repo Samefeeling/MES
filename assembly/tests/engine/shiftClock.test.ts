@@ -11,6 +11,7 @@ import {
   SHIFT_OPEN_MINUTE,
   SHIFT_SPAN_MINUTES,
   WORK_SEGMENTS,
+  bookedLabourHours,
   breakAt,
   clockAtWorkMinutes,
   nextWorkingMoment,
@@ -19,6 +20,7 @@ import {
   shiftStartAt,
   workFractionAt,
   workMinutesAtClock,
+  workedMinutesBetween,
 } from '@/engine/assembly/shift';
 import { PRODUCTIVE_HOURS_PER_PERSON } from '@/domain/assembly';
 import { formatTime } from '@/lib/time';
@@ -223,5 +225,58 @@ describe('when work can start again', () => {
     expect(formatTime(shiftStartAt(DAY, 120 / PRODUCTIVE_MINUTES))).toBe(formatTime(on(9, 15)));
     // Mid-stretch the two are the same moment, which is what a hand-over is.
     expect(shiftStartAt(DAY, 0.5)).toEqual(shiftClockAt(DAY, 0.5));
+  });
+});
+
+/**
+ * The hours a shift's entry books, which is what Efficiency is divided by.
+ *
+ * Not an allowance: `crewSize × 7.5` is what the crew could have given the
+ * order and this is what it took, so an order picked up for the last two hours
+ * of the day books two hours a head and not a full shift.
+ */
+describe('the labour hours a booking consumes', () => {
+  const NEXT_DAY = new Date(2026, 8, 11);
+
+  it('runs from Start production to Save entry, times the crew', () => {
+    // 07:30 to 11:30 is four hours on the clock, of which one quarter was
+    // morning tea: 3.75 hours each for two people.
+    expect(bookedLabourHours(DAY, on(7, 30), on(11, 30), 2)).toBe(7.5);
+  });
+
+  it('steps over the breaks inside it', () => {
+    expect(workedMinutesBetween(on(8, 30), on(9, 30))).toBe(45);
+    expect(workedMinutesBetween(on(11, 30), on(13, 0))).toBe(60);
+    // A span entirely inside a break bought no time at all.
+    expect(workedMinutesBetween(on(12, 5), on(12, 20))).toBe(0);
+  });
+
+  it('starts at 07:00 on every day after the order was confirmed', () => {
+    // The order started yesterday; today it was simply already running, and
+    // there is no second Start production to press.
+    const started = new Date(2026, 8, 9, 13, 0);
+    expect(bookedLabourHours(DAY, started, on(12, 0), 1)).toBe(4.75);
+    // Counting from the last entry instead would bill the order for the night.
+    expect(bookedLabourHours(DAY, started, on(12, 0), 1)).toBeLessThan(24);
+  });
+
+  it('can book no more than the shift held, however late the entry is saved', () => {
+    // A form left open on the bench until the evening — or overnight.
+    expect(bookedLabourHours(DAY, on(7), on(22), 1)).toBe(PRODUCTIVE_HOURS_PER_PERSON);
+    expect(bookedLabourHours(DAY, on(7), new Date(2026, 8, 11, 6), 1)).toBe(
+      PRODUCTIVE_HOURS_PER_PERSON,
+    );
+  });
+
+  it('books nothing for a day with nobody on it, or one saved before it began', () => {
+    expect(bookedLabourHours(DAY, on(7), on(15), 0)).toBe(0);
+    expect(bookedLabourHours(DAY, on(13), on(11), 2)).toBe(0);
+    // An order confirmed tomorrow has no hours on today's shift.
+    expect(bookedLabourHours(DAY, NEXT_DAY, on(15), 2)).toBe(0);
+  });
+
+  it('never exceeds the crew hours the same day would be allowed', () => {
+    const booked = bookedLabourHours(DAY, on(7), on(15, 30), 3);
+    expect(booked).toBe(3 * PRODUCTIVE_HOURS_PER_PERSON);
   });
 });

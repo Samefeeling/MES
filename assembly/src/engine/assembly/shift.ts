@@ -243,3 +243,55 @@ export function breakAt(instant: Date): ShiftBreak | null {
 /** `PRODUCTIVE_HOURS_PER_PERSON` in the same minutes this module counts. */
 export const PRODUCTIVE_HOURS_AS_MINUTES =
   PRODUCTIVE_HOURS_PER_PERSON * MINUTES_PER_HOUR;
+
+/**
+ * Minutes of *work* between two instants — the clock time between them, less
+ * whichever breaks fell inside it.
+ *
+ * Both are read on the shift they fall in, so a start before 07:00 counts from
+ * 07:00 and an end after 15:30 counts to 15:30: 7.5 hours is the most one
+ * person can be on the job in a day, and a form left open on a bench until the
+ * evening must not be able to book more than the shift held. An end on a later
+ * day than the start — the entry saved after midnight — is read as the close
+ * of the start's own shift for the same reason.
+ */
+export function workedMinutesBetween(from: Date, to: Date): number {
+  if (to <= from) return 0;
+  const sameDay = startOfDay(from).getTime() === startOfDay(to).getTime();
+  const end = sameDay ? workMinutesAtClock(minuteOfDay(to)) : PRODUCTIVE_MINUTES;
+  return Math.max(0, end - workMinutesAtClock(minuteOfDay(from)));
+}
+
+/**
+ * The labour hours one day's entry actually consumed: how long the crew were
+ * on the order, times how many of them there were.
+ *
+ * The clock starts where the work did. On the day production was confirmed
+ * that is the Start production instant itself; on every day after it, the
+ * order was already running when the shift opened, so it is 07:00 — there is
+ * no second Start production to press and the alternative, counting from the
+ * last entry, would bill the order for the night.
+ *
+ * It stops when the shift saves its entry. That is the honest end of the
+ * measurement rather than the end of the shift: an entry saved at half two
+ * books the hours up to half two, and a shift that books again later that day
+ * simply books more.
+ *
+ * This is the figure Efficiency is measured against, so it is deliberately
+ * elapsed *work* and not an allowance: `crewSize × 7.5` says what the crew
+ * could have given the order, and this says what it took.
+ */
+export function bookedLabourHours(
+  day: Date,
+  startedAt: Date | null,
+  savedAt: Date,
+  crew: number,
+): number {
+  if (crew <= 0) return 0;
+  const open = shiftOpensOn(day);
+  // A start on an earlier day is behind this shift's open, so the later of the
+  // two is 07:00 — which is the rule for every day after the first.
+  const from = startedAt && startedAt > open ? startedAt : open;
+  const hours = (workedMinutesBetween(from, savedAt) / MINUTES_PER_HOUR) * crew;
+  return Math.round(hours * 100) / 100;
+}
