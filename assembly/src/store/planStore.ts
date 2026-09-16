@@ -227,6 +227,22 @@ interface PlanState {
     entry: ProductionEntry,
     source: ProgressBaseline,
   ) => void;
+  /**
+   * Take the completion back off an order that was closed by mistake.
+   *
+   * Closing an order is the one booking that cannot be corrected by booking
+   * again: it greys the bar, locks the entry form and releases the crew, and
+   * the next calendar day takes the order off the board altogether. So the
+   * wrong job number, or a shift that ticked the box before the last pack was
+   * built, used to need somebody in the SharePoint list.
+   *
+   * This is the way back. The quantities stay exactly as they were booked —
+   * they are usually right, and the shift corrects them in the entry form
+   * afterwards — and the crew the closing shift recorded goes back on the
+   * order, because releasing them is what closing it did. What it does not do
+   * is invent a history: an order that was never closed is left alone.
+   */
+  reopenOrder: (jobId: JobId) => void;
   /** Replace the assembly plan wholesale (e.g. loaded from persistence). */
   setAssemblyPlan: (plan: {
     /** Only read, never written: the older shape, migrated on the way in. */
@@ -735,6 +751,38 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         orderCrewAssignments,
         orderDoubleBooked,
       };
+    });
+  },
+
+  reopenOrder(jobId) {
+    set((state) => {
+      const key = String(jobId);
+      const entries = state.production[key] ?? [];
+      const closed = entries.filter((entry) => entry.jobCompleted);
+      if (closed.length === 0) return state;
+      const production = {
+        ...state.production,
+        [key]: entries.map((entry) =>
+          entry.jobCompleted
+            ? { ...entry, jobCompleted: false, completedAt: null }
+            : entry,
+        ),
+      };
+      // Put the closing shift's people back on the order. Derived crew would
+      // draw the same names on the board, but only a written allocation can be
+      // added to or taken from — the first person the supervisor then dragged
+      // on would otherwise arrive as the *only* one on it.
+      const recorded =
+        [...closed].sort((a, b) => a.date.localeCompare(b.date)).at(-1)
+          ?.operatorIds ?? [];
+      const orderCrewAssignments =
+        state.orderCrewAssignments[key] || recorded.length === 0
+          ? state.orderCrewAssignments
+          : {
+              ...state.orderCrewAssignments,
+              [key]: fullAssignments(recorded.map(String)),
+            };
+      return { production, orderCrewAssignments };
     });
   },
 

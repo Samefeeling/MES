@@ -19,14 +19,17 @@
 import { useMemo, useState } from 'react';
 import type { AssemblyGanttView, OrderRow } from '@/engine/assembly/board';
 import { LINES, virtualLineDef } from '@/domain/assembly';
-import { usePlanStore } from '@/store/planStore';
+import { JobId } from '@/domain/ids';
+import { PLAN_RETENTION_DAYS, usePlanStore } from '@/store/planStore';
+import { useDataStore } from '@/store/dataStore';
 import { useSupervisorStore } from '@/store/supervisorStore';
+import { Button } from '@/ui';
 import { DATE_COLS, DATE_COL_LABEL, DUE_SOON_DAYS, useUiStore } from '@/store/uiStore';
 import { countRunningOrders, isDueSoon, lineOfWorkerToday, teamSummary } from './boardView';
 import { ManualOrderButton } from './ManualOrders';
 import { Metric, MetricNote } from './Metric';
 import { ReviewOrders } from './SuggestCrew';
-import { formatShortDay, fromDayKey } from '@/lib/time';
+import { formatShortDay, fromDayKey, toDayKey } from '@/lib/time';
 
 /** How much one press of − or + moves the day column, in pixels. */
 const ZOOM_STEP = 16;
@@ -137,6 +140,7 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
           </button>
         )}
         <AddLine />
+        <ReopenOrders board={board} />
         <MarkedSet />
         {/* The one control on this row that adds to the board instead of
             narrowing it, and the reason it is on this row at all: it is not
@@ -410,5 +414,117 @@ function MarkedSet() {
     >
       {marked.length} marked ×
     </button>
+  );
+}
+
+/**
+ * The way back from an order closed by mistake, after the day it was closed.
+ *
+ * The inspector already reopens the order whose bar is still on the board —
+ * that is the same-shift correction, made where the mistake is visible. This
+ * is the other half: an order closed yesterday has already left the lanes and
+ * the pool, so there is no bar left to click, and the morning after is exactly
+ * when the wrong job number is noticed. It lists what the plan still remembers
+ * being closed, and hands the order back to the board.
+ *
+ * Drawn only when there is something to undo, so an ordinary board does not
+ * carry a control for a mistake nobody made.
+ */
+function ReopenOrders({ board }: { board: AssemblyGanttView }) {
+  const unlocked = useSupervisorStore((s) => s.unlocked);
+  const production = usePlanStore((s) => s.production);
+  const reopenOrder = usePlanStore((s) => s.reopenOrder);
+  const dataset = useDataStore((s) => s.dataset);
+  const [open, setOpen] = useState(false);
+
+  // Only as far back as the plan itself goes: past that the order's crew,
+  // start and bookings have been let go of anyway (see PLAN_RETENTION_DAYS).
+  const since = useMemo(() => {
+    const day = new Date(board.today);
+    day.setDate(day.getDate() - PLAN_RETENTION_DAYS);
+    return toDayKey(day);
+  }, [board.today]);
+
+  const closed = useMemo(
+    () =>
+      Object.entries(production)
+        .flatMap(([jobId, entries]) =>
+          entries
+            .filter((entry) => entry.jobCompleted && entry.date >= since)
+            .map((entry) => ({ jobId, day: entry.date })),
+        )
+        .sort((a, b) => b.day.localeCompare(a.day) || a.jobId.localeCompare(b.jobId)),
+    [production, since],
+  );
+
+  if (!unlocked || closed.length === 0) return null;
+
+  // What the export still knows about. An order Epicor has stopped sending
+  // comes off its completion here, but no bar can be drawn for it and no row
+  // of the production list can be corrected from a board it is not on — so say
+  // so rather than letting the press look like it did nothing.
+  const inExport = new Set(
+    (dataset?.jobs ?? []).map((job) => String(job.id)),
+  );
+
+  return (
+    <>
+      <button
+        className="date-restore"
+        onClick={() => setOpen(true)}
+        title="Take the completion back off an order closed by mistake"
+      >
+        Reopen order
+      </button>
+      {open && (
+        <div
+          className="manual-backdrop"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.stopPropagation();
+              setOpen(false);
+            }
+          }}
+        >
+          <div
+            className="manual-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Reopen a completed order"
+          >
+            <h2>Reopen a completed order</h2>
+            <p>
+              Closed in the last {PLAN_RETENTION_DAYS} days. Reopening puts the
+              order and its crew back on the board with the booked quantities
+              untouched, so the shift can correct them and close it again.
+            </p>
+            <ul className="reopen-list">
+              {closed.map((row) => (
+                <li key={`${row.jobId}|${row.day}`}>
+                  <span className="reopen-job">{row.jobId}</span>
+                  <span className="reopen-day">
+                    closed {formatShortDay(fromDayKey(row.day))}
+                  </span>
+                  {!inExport.has(row.jobId) && (
+                    <em className="reopen-gone">not in the current export</em>
+                  )}
+                  <Button
+                    onClick={() => {
+                      reopenOrder(JobId(row.jobId));
+                      setOpen(false);
+                    }}
+                  >
+                    Reopen
+                  </Button>
+                </li>
+              ))}
+            </ul>
+            <div>
+              <Button onClick={() => setOpen(false)}>Close</Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

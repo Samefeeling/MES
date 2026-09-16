@@ -37,7 +37,7 @@ Thresholds are fixed and printed on the page, not editable: PMD's are argued ove
 | List | Purpose | Key |
 | --- | --- | --- |
 | ASSY_Operator | Real operator names (Title), Position, Skills, Supervisor, OnShift and PlannedAnnualLeave | SharePoint item ID |
-| ASSY_Plans | Shared working plan, crew windows, pinned starts, output history and ignored orders | Unique Title = current |
+| ASSY_Plans | Shared working plan, crew windows, pinned starts, output history and ignored orders, plus one read-only row per day of history | Unique Title = current, or day-YYYY-MM-DD |
 | ASSY_Production | Daily job quantities, crew snapshot, dates, completion and pause details | Unique RecordKey = Job + pipe + YYYY-MM-DD |
 
 Planning1.csv, JobMaterialReq.csv and OnHandInventory.csv remain upstream files in the document library. No additional material List duplicates them. On-hand inventory is availability evidence, not a stock reservation; picking must still be confirmed against warehouse stock.
@@ -77,6 +77,8 @@ Do not reuse PMD's VITE_PLANNING_CSV_PATH for Assembly. A production Assembly bu
 Refresh reconciles jobs by job number and retains existing crew and pinned dates. Orders absent from a partial export keep their plan for 14 days. Date sorting leaves PMD source order unchanged; daily Assembly filtering and counts exclude PMD. Crew orders fills unallocated eligible orders; it does not reset already allocated work. Which line an order goes to comes from ERP, then `product-lines.v3.json`, then its BOM — see [Operational lines and support work](OPERATIONAL-LINES.md); a supervisor's own move survives refresh. Real material links determine predecessors.
 
 ASSY_Plans stores a versioned JSON snapshot. An ETag mismatch stops autosave and production sync; reload the saved plan before editing again. Failed reads never save an empty replacement. The initial release limits the snapshot to 60,000 characters and reports an error without replacing the saved plan if exceeded. A partitioned plan repository is required for larger histories.
+
+On the first save of each new day the previous day's last saved plan is filed under `day-YYYY-MM-DD` beside `current`, giving one read-only row per day the board was used. That row holds what the day closed as, which is also the state the next day opened on — the board is not reset overnight. A day already filed is never rewritten, so a second screen or a tab open across midnight cannot overwrite it with a staler copy; a day that cannot be filed is reported and skipped rather than stopping the working plan from saving. Nothing deletes these rows: at roughly 250 rows a year they stay well inside a List, and they are the only history the board has. Read one back with `repo.load('day-YYYY-MM-DD')`.
 
 A legacy browser-local plan on a different origin is not automatically accessible to MES. Preserve that plan before first production rollout and migrate it to the shared working plan; do not assume another browser or website shares localStorage. New-order highlight history remains device-local; operational crew/date/output state is shared.
 

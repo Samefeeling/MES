@@ -2,7 +2,7 @@
 import type { SharePointConfig } from '@/data/excel/sharepoint.client';
 import type { ListItem, ListItemFields } from './lists.write';
 
-import { readableFields, writableFields, type ListField } from './fieldMap';
+import { readableFields, resolveField, writableFields, type ListField } from './fieldMap';
 
 const digests = new Map<string, { value: string; expires: number }>();
 export const literal = (value: string): string => encodeURIComponent(value.replace(/'/g, "''")).replace(/'/g, '%27');
@@ -66,6 +66,36 @@ async function listFields(cfg: SharePointConfig, list: string): Promise<ListFiel
   }).catch(error => { schemas.delete(url); throw error; });
   schemas.set(url, { expires: Date.now() + 60000, promise });
   return promise;
+}
+
+/**
+ * The rows whose `column` holds exactly `value`, asked of SharePoint itself.
+ *
+ * Used to confirm a row is really absent immediately before creating it. The
+ * whole-list snapshot a sync starts from is as old as the sync, and two boards
+ * open on the same plan — a second tab, a second supervisor, the KPI page and
+ * the board — both read "no row for today" and both created one. This is the
+ * last look, and the reason the key is asked for by name: it is the column the
+ * list is keyed on, and the only one no timezone can move.
+ */
+export async function sessionRowsWhere(
+  cfg: SharePointConfig,
+  list: string,
+  column: string,
+  value: string,
+): Promise<ListItem[]> {
+  const schema = await listFields(cfg, list);
+  const field = resolveField(schema, column);
+  if (!field) throw new SharePointHttpError(400, `Missing SharePoint column: ${column}.`);
+  const filter = `${field.InternalName} eq '${value.replace(/'/g, "''")}'`;
+  const url = `${restList(cfg, list)}/items?$top=50&$filter=${encodeURIComponent(filter)}`;
+  const res = await sessionRequest(cfg, url);
+  const body = await res.json();
+  return (body.value ?? []).map((row: Record<string, unknown>) => ({
+    id: String(row.Id),
+    fields: { ...readableFields(row, schema), id: String(row.Id) },
+    etag: (row['odata.etag'] ?? row['@odata.etag']) as string | undefined,
+  }));
 }
 
 export async function sessionRows(cfg: SharePointConfig, list: string): Promise<ListItem[]> {

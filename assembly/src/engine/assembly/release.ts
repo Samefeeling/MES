@@ -24,6 +24,16 @@ export interface ReleaseCheck {
   reason: string;
   /** True when only a supervisor override can start it. */
   needsOverride: boolean;
+  /**
+   * Nothing is wrong — nobody has said anything yet.
+   *
+   * The kit status is a column the export does not always carry, and a plant
+   * that does not record kit preparation at all leaves every order on
+   * `unknown` forever. That is an absence of evidence, not evidence the kit is
+   * missing, so the start gate steps over it (see `startEligibility`) while the
+   * card still shows the material picture as unconfirmed.
+   */
+  unconfirmed: boolean;
 }
 
 const PREP_LABEL: Record<MaterialPrepStatus, string> = {
@@ -44,6 +54,7 @@ export function releaseCheck(
       level: 'blocked',
       releasable: false,
       needsOverride: true,
+      unconfirmed: false,
       reason: 'Components short with no PO',
     };
   }
@@ -52,6 +63,7 @@ export function releaseCheck(
       level: 'blocked',
       releasable: false,
       needsOverride: true,
+      unconfirmed: false,
       reason: PREP_LABEL.shortage,
     };
   }
@@ -65,6 +77,7 @@ export function releaseCheck(
       level: 'caution',
       releasable: false,
       needsOverride: true,
+      unconfirmed: false,
       reason: `Waiting on material until ${when}`,
     };
   }
@@ -75,6 +88,7 @@ export function releaseCheck(
       level: 'caution',
       releasable: false,
       needsOverride: prep === 'unknown',
+      unconfirmed: prep === 'unknown',
       reason: PREP_LABEL[prep],
     };
   }
@@ -83,6 +97,7 @@ export function releaseCheck(
     level: 'ready',
     releasable: true,
     needsOverride: false,
+    unconfirmed: false,
     reason: 'Material ready',
   };
 }
@@ -93,7 +108,19 @@ export interface StartEligibility {
   reasons: string[];
 }
 
-/** Fail-safe gate for the irreversible transition from planned to started. */
+/**
+ * Fail-safe gate for the irreversible transition from planned to started.
+ *
+ * It gates on what the plant has *said*, never on what it has failed to say.
+ * `JobReleased` and `MaterialPrep` are optional export columns, and where they
+ * are not carried at all every order reads `null` / `unknown` — so the gate
+ * used to stop every start on this floor with "Release status is missing · kit
+ * status missing", ask for a supervisor override, and be clicked past every
+ * time. A gate nobody can satisfy teaches the floor to override the ones that
+ * matter too, so silence is now taken as no objection: only an explicit "not
+ * released", a real shortage or a kit somebody has said is not ready holds an
+ * order back. A missing crew still does, whatever the paperwork says.
+ */
 export function startEligibility(
   released: boolean | null,
   release: ReleaseCheck,
@@ -101,10 +128,8 @@ export function startEligibility(
 ): StartEligibility {
   const reasons: string[] = [];
   if (crewCount <= 0) reasons.push('Allocate at least one employee');
-  if (released !== true) {
-    reasons.push(released === false ? 'Order is not released' : 'Release status is missing');
-  }
-  if (!release.releasable) reasons.push(release.reason);
+  if (released === false) reasons.push('Order is not released');
+  if (!release.releasable && !release.unconfirmed) reasons.push(release.reason);
   return {
     allowed: reasons.length === 0,
     // A supervisor may accept release/material uncertainty, never a zero crew.

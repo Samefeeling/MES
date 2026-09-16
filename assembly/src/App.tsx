@@ -11,7 +11,12 @@ import { usePlanStore } from '@/store/planStore';
 import { useUiStore } from '@/store/uiStore';
 import { useSupervisorStore } from '@/store/supervisorStore';
 import { useAssemblyGantt } from '@/store/assemblySelectors';
-import { createPlanRepository, CURRENT_PLAN_ID } from '@/persistence';
+import {
+  createPlanRepository,
+  dailyPlanId,
+  CURRENT_PLAN_ID,
+  type PersistedPlan,
+} from '@/persistence';
 import { useDragDrop } from '@/features/assembly/useDragDrop';
 import { AssemblyGantt } from '@/features/assembly/AssemblyGantt';
 import { BoardTools } from '@/features/assembly/BoardTools';
@@ -26,9 +31,21 @@ import { useScheduledRefresh } from '@/features/refresh/useScheduledRefresh';
 import { RefreshControl } from '@/features/refresh/RefreshControl';
 import { usePlanSync } from '@/features/sync/usePlanSync';
 import { ORDER_TYPE_SHORT } from '@/domain/assembly';
+import { toDayKey } from '@/lib/time';
 import { Spinner } from '@/ui';
 
 const repo = createPlanRepository();
+
+/**
+ * The local day an ISO timestamp falls on, for deciding whether a stored plan
+ * was last written today or on an earlier day. A stored plan with no readable
+ * time is treated as today's, which files nothing: better one unrecorded day
+ * than a day of history filed under the wrong date.
+ */
+const dayOfIso = (at: string): string => {
+  const when = new Date(at);
+  return Number.isNaN(when.getTime()) ? toDayKey(new Date()) : toDayKey(when);
+};
 
 export default function App() {
   const status = useDataStore((s) => s.status);
@@ -69,6 +86,21 @@ export default function App() {
   const saveTimer = useRef<number | undefined>(undefined);
   const saveGeneration = useRef(0);
   /**
+   * The plan last written to `current`, and the local day it was written on.
+   *
+   * The working plan is one row that every save overwrites, so the state a day
+   * closed in used to be gone the moment the next save landed. This is what
+   * makes a day's history: on the first save of a new day the previous day's
+   * last saved plan is filed under its own id before it is overwritten, which
+   * is both the record of what that day ended as and — because the board is
+   * never reset overnight — the record of what this one started from.
+   *
+   * Seeded from the stored plan on the way in, so the first save after a board
+   * is opened in the morning files what was left last night, whether or not
+   * anybody had this tab open at midnight.
+   */
+  const savedPlan = useRef<{ day: string; plan: PersistedPlan } | null>(null);
+  /**
    * How the read of the stored plan went.
    *
    * `loaded` also covers a repository that has nothing stored yet — a new
@@ -83,6 +115,8 @@ export default function App() {
   const [planSaved, setPlanSaved] = useState(false);
   const sync = usePlanSync(stored === 'loaded' && planSaved ? board : null);
   const [storeError, setStoreError] = useState<string | null>(null);
+  /** Kept apart from `storeError`: the plan saving is not the history filing. */
+  const [archiveError, setArchiveError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const reason = (e: unknown): string =>
     e instanceof Error ? e.message : String(e);
@@ -121,6 +155,9 @@ export default function App() {
     repo
       .load()
       .then((persisted) => {
+        if (persisted) {
+          savedPlan.current = { day: dayOfIso(persisted.savedAt), plan: persisted };
+        }
         if (persisted?.containers) plan.setContainers(persisted.containers);
         if (persisted?.assembly) {
           plan.setAssemblyPlan(persisted.assembly);
@@ -153,31 +190,58 @@ export default function App() {
     const generation = ++saveGeneration.current;
     window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
-      repo
-        .save({
-          id: CURRENT_PLAN_ID,
-          name: 'Working plan',
-          savedAt: new Date().toISOString(),
-          containers,
-          assembly: {
-            manualOrders,
-            lineLayoutVersion,
-            ignoredOrderIds,
-            workerLines,
-            virtualLines,
-            lineOrder,
-            orderCrewAssignments,
-            orderStarts,
-            orderActualStarts,
-            orderOvertime,
-            orderDoubleBooked,
-            progress,
-            progressBaselines,
-            production,
-            lastSeen,
-          },
+      const now = new Date();
+      const today = toDayKey(now);
+      const plan: PersistedPlan = {
+        id: CURRENT_PLAN_ID,
+        name: 'Working plan',
+        savedAt: now.toISOString(),
+        containers,
+        assembly: {
+          manualOrders,
+          lineLayoutVersion,
+          ignoredOrderIds,
+          workerLines,
+          virtualLines,
+          lineOrder,
+          orderCrewAssignments,
+          orderStarts,
+          orderActualStarts,
+          orderOvertime,
+          orderDoubleBooked,
+          progress,
+          progressBaselines,
+          production,
+          lastSeen,
+        },
+      };
+      /*
+       * Yesterday's closing plan, filed before today's first save overwrites
+       * it. Failing to file it is not a reason to stop saving the plan itself:
+       * the archive is for looking back, and a board that refused to work
+       * because it could not write history would be the worse failure. It is
+       * said in its own banner — not in the one the save writes to, which the
+       * save that follows would clear a moment later — and the day is left
+       * unfiled.
+       */
+      const previous = savedPlan.current;
+      const filed =
+        previous && previous.day < today
+          ? repo
+              .saveSnapshot({
+                ...previous.plan,
+                id: dailyPlanId(previous.day),
+                name: `Plan on ${previous.day}`,
+              })
+              .then(() => setArchiveError(null))
+              .catch((e) => setArchiveError(reason(e)))
+          : Promise.resolve();
+      filed
+        .then(() => repo.save(plan))
+        .then(() => {
+          savedPlan.current = { day: today, plan };
+          if (generation === saveGeneration.current) { setStoreError(null); setPlanSaved(true); }
         })
-        .then(() => { if (generation === saveGeneration.current) { setStoreError(null); setPlanSaved(true); } })
         .catch((e) => { setStoreError(reason(e)); setStored('failed'); });
     }, 600);
     return () => window.clearTimeout(saveTimer.current);
@@ -269,6 +333,12 @@ export default function App() {
         storeError && (
           <div className="banner warn">Plan not saved: {storeError}</div>
         )
+      )}
+      {archiveError && (
+        <div className="banner warn">
+          Yesterday’s plan not filed ({archiveError}). The board is working
+          normally; that day is missing from the history.
+        </div>
       )}
       {sync.errors.length > 0 && (
         <div className="banner warn">

@@ -110,7 +110,7 @@ const row = (
     dailyTarget: 0,
     status: { color: 'green', dueSlackDays: null, reason: '' },
     material: { level: 'ok', earliestStart: null, shortages: [] },
-    release: { level: 'ready', releasable: true, needsOverride: false, reason: '' },
+    release: { level: 'ready', releasable: true, needsOverride: false, unconfirmed: false, reason: '' },
     predecessors: [],
     waitingOn: null,
     booked: [],

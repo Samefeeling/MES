@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { clearSessionSchemaCache } from '@/data/sharepoint/session';
 import {
   PRODUCTION_COLUMNS as C,
   orderFactsFromBoard,
@@ -56,12 +57,19 @@ const order = (over: Partial<OrderFacts> = {}): OrderFacts => ({
   ...over,
 });
 
-/** A stored row matching `order()` with an empty shift on the anchor day. */
+/**
+ * A stored row matching `order()` with an empty shift on the anchor day.
+ *
+ * `RecordKey` follows the day, the way the sync writes the two together: it is
+ * the column the list is keyed on, so a fixture that let them disagree would be
+ * a row SharePoint could never hold.
+ */
 const stored = (over: Record<string, unknown> = {}, id = '1') => ({
   id,
   fields: {
     [C.jobNum]: 'ASM8001',
     [C.date]: '2026-09-14',
+    [C.recordKey]: `ASM8001|${String(over[C.date] ?? '2026-09-14').slice(0, 10)}`,
     [C.line]: 'UPL_GLUING',
     [C.operators]: 'Gate',
     [C.operatorIds]: 'W02',
@@ -115,6 +123,9 @@ function stubGraph(
 }
 
 const writes = (calls: Call[]) => calls.filter((c) => c.method !== 'GET');
+
+const json = (body: unknown, status = 200): Response =>
+  new Response(JSON.stringify(body), { status });
 
 beforeEach(() => usePlanStore.setState({ initialized: false }));
 afterEach(() => vi.unstubAllGlobals());
@@ -315,12 +326,62 @@ describe('syncProduction', () => {
     });
   });
 
-  it('refuses ambiguous duplicate rows for the same order and day', async () => {
-    const calls = stubGraph([stored({}, '1'), stored({}, '2')]);
+  it('names a duplicate row and keeps the older one current anyway', async () => {
+    // Two rows for one job-day. Abandoning the job over it used to leave the
+    // shift's real bookings unwritten for as long as the extra row survived —
+    // the duplicate stopped the record instead of the record being repaired.
+    const calls = stubGraph([
+      stored({ [C.expectDate]: '2026-09-30T00:00:00Z' }, '1'),
+      stored({ [C.expectDate]: '2026-09-30T00:00:00Z' }, '2'),
+    ]);
     const out = await syncProduction(CFG, 'ASSY_Production', [order()]);
 
-    expect(out.errors[0]).toContain('duplicate SharePoint rows');
-    expect(writes(calls)).toEqual([]);
+    expect(out.errors[0]).toContain('item 2');
+    expect(out.created).toBe(0);
+    // The oldest row for the day is canonical and goes on being kept current;
+    // the extra is left exactly as it is for somebody to delete.
+    const written = writes(calls);
+    expect(written).toHaveLength(1);
+    expect(written[0].url).toContain('/items/1/fields');
+    expect(written[0].body).toMatchObject({
+      [C.expectDate]: '2026-09-16T00:00:00.000Z',
+    });
+  });
+
+  it('finds its own row by RecordKey when the Date column answers another day', async () => {
+    // A SharePoint date column gives back what the site's timezone makes of
+    // what was written, which is not always the day the shift was booked on.
+    // Matching on the day alone therefore decided the row was missing and
+    // opened a second one — two rows, one job, one day, identical content.
+    const calls = stubGraph([
+      stored({ [C.date]: '2026-09-13T14:00:00Z', [C.recordKey]: 'ASM8001|2026-09-14' }),
+    ]);
+    const out = await syncProduction(CFG, 'ASSY_Production', [
+      order({ shifts: [shift({ date: '2026-09-14', complete: 12 })] }),
+    ]);
+
+    expect(out.created).toBe(0);
+    const written = writes(calls);
+    expect(written).toHaveLength(1);
+    expect(written[0].url).toContain('/items/1/fields');
+    // …and the row's day is put back to the one its key has always named.
+    expect(written[0].body).toMatchObject({
+      [C.date]: '2026-09-14',
+      [C.complete]: 12,
+    });
+  });
+
+  it('opens one row for an order the board hands it twice', async () => {
+    const calls = stubGraph([]);
+    const out = await syncProduction(CFG, 'ASSY_Production', [
+      order({ shifts: [shift({ complete: 4 })] }),
+      order({ shifts: [shift({ complete: 4 })] }),
+    ]);
+
+    // The list is read once, so a second helping of the same order could not
+    // see the row the first had just opened.
+    expect(out.created).toBe(1);
+    expect(writes(calls)).toHaveLength(1);
   });
 
   it('never writes fallback demo employee ids', async () => {
@@ -535,5 +596,79 @@ it('writes support labour hours without manufactured quantities', async () => {
   expect(write.body?.fields).toMatchObject({
     WorkType: 'Support', WorkDescription: 'Warehouse assistance', SupportDepartment: 'Warehouse',
     LaborHours: 6, PlannedHours: 7.5, Complete: 0, ShiftOutput: 0, OrderQty: 0, RemainingQty: 0,
+  });
+});
+
+/**
+ * The duplicate this list was actually collecting.
+ *
+ * Two boards on the same plan — a second tab, a second supervisor's screen, the
+ * terminal left open on the line — both read the list, both found no row for
+ * today, and both opened one. Closing an order is when it showed, because that
+ * is when a day's first row is usually written; an update never duplicated
+ * anything. The key is now asked for again immediately before the write.
+ */
+describe('a row another board opened first', () => {
+  const session: SharePointConfig = {
+    siteUrl: 'https://tenant.sharepoint.com/sites/factory',
+    filePath: '',
+    token: '',
+    authMode: 'session',
+  };
+
+  const schema = Object.values(C).map((name) => ({
+    Title: name,
+    InternalName: name,
+  }));
+
+  afterEach(() => clearSessionSchemaCache());
+
+  it('writes into it instead of opening a second', async () => {
+    vi.stubGlobal('window', {
+      location: { origin: 'https://tenant.sharepoint.com' },
+    });
+    const seen: { url: string; method: string }[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      seen.push({ url, method });
+      if (url.includes('/fields?')) return json({ value: schema });
+      if (url.endsWith('/_api/contextinfo')) {
+        return json({ FormDigestValue: 'd', FormDigestTimeoutSeconds: 1800 });
+      }
+      // The snapshot this sync starts from: the order has no row yet.
+      if (url.includes('$top=200')) return json({ value: [] });
+      // The last look before writing — by which time the other board has
+      // opened the row.
+      if (url.includes('$filter=')) {
+        expect(decodeURIComponent(url)).toContain("RecordKey eq 'ASM8001|2026-09-14'");
+        return json({
+          value: [
+            {
+              Id: 5,
+              'odata.etag': '"3"',
+              [C.jobNum]: 'ASM8001',
+              [C.recordKey]: 'ASM8001|2026-09-14',
+              [C.date]: '2026-09-14',
+            },
+          ],
+        });
+      }
+      return json({ Id: 5 });
+    });
+
+    const out = await syncProduction(session, 'ASSY_Production', [
+      order({ shifts: [shift({ complete: 7 })] }),
+    ]);
+
+    expect(out.errors).toEqual([]);
+    expect(out.created).toBe(0);
+    expect(out.updated).toBe(1);
+    // One write, and it is a MERGE onto the row that already exists — not a
+    // POST to the item collection, which is what made the second row.
+    const written = seen.filter((call) => call.method === 'POST');
+    expect(written.map((call) => call.url)).toEqual([
+      'https://tenant.sharepoint.com/sites/factory/_api/contextinfo',
+      "https://tenant.sharepoint.com/sites/factory/_api/web/lists/getbytitle('ASSY_Production')/items(5)",
+    ]);
   });
 });

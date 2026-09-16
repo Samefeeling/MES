@@ -59,13 +59,33 @@ describe('release gate', () => {
     expect(r.reason).toMatch(/no PO/);
   });
 
-  it('treats missing kit and release fields as override-only, never ready', () => {
+  it('marks a kit nobody has reported on as unconfirmed, not as a problem', () => {
     const release = releaseCheck(ok, 'unknown');
-    const gate = startEligibility(null, release, 2);
-    expect(release.needsOverride).toBe(true);
-    expect(gate.allowed).toBe(false);
-    expect(gate.canOverride).toBe(true);
-    expect(gate.reasons.join(' ')).toMatch(/missing/);
+    expect(release.releasable).toBe(false);
+    expect(release.unconfirmed).toBe(true);
+    // The card still says the kit is unconfirmed; only the start gate ignores it.
+    expect(release.reason).toBe('kit status missing');
+  });
+
+  it('starts an order the export says nothing about', () => {
+    // JobReleased and MaterialPrep are optional columns. Where the export
+    // carries neither, every order reads null/unknown — and a gate that stops
+    // every start is a gate the floor overrides without reading.
+    const gate = startEligibility(null, releaseCheck(ok, 'unknown'), 2);
+    expect(gate.allowed).toBe(true);
+    expect(gate.reasons).toEqual([]);
+  });
+
+  it('still holds an order somebody has explicitly held', () => {
+    expect(startEligibility(false, releaseCheck(ok, 'ready'), 2).reasons).toEqual([
+      'Order is not released',
+    ]);
+    expect(startEligibility(null, releaseCheck(ok, 'not-prepared'), 2).reasons).toEqual([
+      'kit not prepared',
+    ]);
+    expect(startEligibility(null, releaseCheck(short, 'unknown'), 2).reasons).toEqual([
+      'Components short with no PO',
+    ]);
   });
 
   it('does not allow even a supervisor override without a crew', () => {

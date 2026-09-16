@@ -161,8 +161,26 @@ plan goes back the other way, into the `ASSY_Production` list.
   planning. See `docs/incremental-order-updates.md`.
 - **Start, then book the shift** — `Start production` records the exact start
   instant and locks the order against further dragging. Entering the completed
-  quantity moves Expect Date; saving `Job Completed` stores the exact completion
-  instant and releases the active crew in the same state update.
+  quantity moves Expect Date; ticking `Job completed` fills the Complete box
+  with everything still owed on the order — an editable figure, so a run closed
+  short is typed over — and saving it stores the exact completion instant and
+  releases the active crew in the same state update.
+- **The start gate asks what the plant has said, never what it has not** —
+  `JobReleased` and `MaterialPrep` are optional export columns, so a plant that
+  carries neither leaves every order on "release status missing · kit status
+  missing". Nothing is held back for silence: only an order explicitly not
+  released, a genuine component shortage or a kit somebody has reported as not
+  ready needs a supervisor override. An order with nobody on it still cannot
+  start, whatever the paperwork says.
+- **Reopen an order closed in error** — closing is the one booking that cannot
+  be corrected by booking again: the entry form locks, the crew is released and
+  the next calendar day takes the order off the board. `Reopen order` in the
+  detail panel takes the completion back off while the bar is still there, and
+  `Reopen order` on the controls row lists what was closed in the last
+  fortnight, for the mistake noticed the next morning. The booked quantities
+  are left exactly as they were — the shift corrects them in the entry form and
+  closes the order again — and the crew that was released goes back on it. Both
+  are behind the supervisor gate.
 - **Production actuals** — Shift Output, Complete, Reject, Rework, Job Completed and Pause
   reasons are captured as daily records for the `ASSY_Production` SharePoint
   list. Its columns intentionally mirror `PMD_Production`, allowing KPI.ts to
@@ -462,13 +480,56 @@ so it cannot drift to a new day when the bar moves.
 separate immutable instant set by the Start production button, so a planned
 date can never be mistaken for proof that production began.
 
+**A row is matched to its shift on `RecordKey`**, the column the list is keyed
+on, with the `Date` column as a fallback for rows written before the key
+existed. The day a SharePoint date column gives back depends on how the column
+was created and on the timezones the site and the browser are each in, so a
+shift whose row was looked up by day alone could be judged missing and opened a
+second time.
+
+**Opening a row asks the list for the key again, immediately before writing.**
+The snapshot a sync works from is as old as the sync, and it is not the only
+board writing: a second tab, another supervisor's screen and the terminal left
+open on the line all hold the same plan, so each could read "no row for today"
+and each open one. That is where identical duplicate rows came from, and it
+showed on closing an order because that is when a day's first row is usually
+written. Updates never duplicated anything. Keep the unique index on
+`RecordKey` (`config/assembly-lists.json` asks for it): it is what closes the
+window completely, and the sync recovers from the write it refuses by putting
+the shift into the row that won.
+
+Duplicate `Job + Date` rows that are already there are **named with their item
+id and left alone** — the oldest row for a day stays canonical and goes on being
+kept current, and the extras are for somebody to delete in SharePoint. Deleting
+a production row is not a decision a background sync should make. Until they are
+gone the Assembly KPI page refuses to report those days, because it cannot know
+which of two rows is the day's figure.
+
 Rows are diffed before writing, so a five-minute refresh with nothing changed
 costs one read and no writes. Orders that leave the export keep their rows —
 the list is the production record, not a copy of today's CSV. A read failure
-aborts before any write and transient failures retry with bounded backoff.
-Duplicate Job + Date rows are reported and left untouched. See
+aborts before any write and transient failures retry with bounded backoff. See
 [`docs/sharepoint-production-schema.md`](docs/sharepoint-production-schema.md)
 before enabling write-back.
+
+### A day of the plan, kept
+
+The working plan is a single row that every save overwrites, so the board used
+to hold no history at all: nothing to compare this morning's allocation
+against, and no way back from a mis-drag somebody noticed a day later.
+
+On the first save of a new day, the previous day's last saved plan is filed
+under `day-YYYY-MM-DD` before `current` is overwritten. One row per day the
+board was used, holding what that day closed as — which is also exactly what
+the next day opened on, because the board is never reset overnight. The state
+today starts from *is* yesterday's last save; this is the record of it.
+
+Filed once: a day already in the list keeps the copy it was filed with, so a
+second screen opening at noon, or a tab that was open across midnight, cannot
+overwrite the history with a staler copy. A day that cannot be filed is
+reported in the banner and skipped — a board that refused to work because it
+could not write history would be the worse failure. Read one back with
+`repo.load('day-2026-09-15')`; nothing on the board writes to them.
 
 ### The supervisor gate
 
@@ -531,8 +592,10 @@ domain  →  lib  →  engine  →  store  →  features (UI)
 - **`store/`** — Zustand. `dataStore` (loaded data + indexes), `planStore`
   (placement, crew, pinned starts, booked output — the only mutable plan
   state), `assemblySelectors` (derives the schedule), `uiStore` (selection).
-- **`persistence/`** — `PlanRepository` with a REST (`ApiPlanRepository`) and a
-  localStorage fallback; the working plan autosaves.
+- **`persistence/`** — `PlanRepository` with a SharePoint, a REST
+  (`ApiPlanRepository`) and a localStorage implementation; the working plan
+  autosaves to one row, `current`, and each day the board is used leaves a
+  `day-YYYY-MM-DD` row of its own beside it (see below).
 - **`features/`** — `assembly` (board, rows, bars, crew chips, inspector, the
   supervisor lock, dnd), `refresh`, `source` (the manual CSV loader) and `sync`
   (write-back).

@@ -34,8 +34,10 @@ import type { ListItemFields } from './lists.client';
 import {
   createListItem,
   fetchListItemsWithIds,
+  fetchRowsWhere,
   isTransient,
   updateListItem,
+  type ListItem,
   type WriteError,
 } from './lists.write';
 
@@ -324,6 +326,173 @@ function drift(
 const rowDay = (fields: ListItemFields): string =>
   dayOf(fields[PRODUCTION_COLUMNS.date]);
 
+/** The list's own key for a row: `Job|YYYY-MM-DD`, exactly as it was written. */
+const recordKeyOf = (jobNum: string, date: string): string =>
+  `${jobNum}|${date}`;
+
+/**
+ * An order's stored rows, indexed the two ways a shift's row is found.
+ *
+ * `RecordKey` first, because it is the column the list is keyed on and the only
+ * one that survives the round trip unaltered: the `Date` column is a SharePoint
+ * date, and what comes back out of one depends on how the column was created
+ * and on which timezone the site and the browser are each in. A shift whose row
+ * was not recognised got a *second* row, which is how a job ends up with two
+ * rows for one day — and, downstream, why the Assembly KPI page refuses to
+ * report a day it cannot read a single figure from.
+ *
+ * The day index stays as the fallback for rows written before RecordKey
+ * existed, and for any a backend opened without one.
+ */
+interface StoredRows {
+  byKey: Map<string, ListItem>;
+  byDay: Map<string, ListItem>;
+  /** Rows beyond the first for one key — the duplicates somebody has to clear. */
+  extras: ListItem[];
+  all: ListItem[];
+}
+
+/** Item ids are numeric strings; oldest first, so the first row written wins. */
+const oldestFirst = (a: ListItem, b: ListItem): number =>
+  (Number(a.id) || 0) - (Number(b.id) || 0);
+
+function indexRows(jobNum: string, rows: ListItem[]): StoredRows {
+  const byKey = new Map<string, ListItem>();
+  const byDay = new Map<string, ListItem>();
+  const extras: ListItem[] = [];
+  for (const row of [...rows].sort(oldestFirst)) {
+    const rawKey = String(row.fields[PRODUCTION_COLUMNS.recordKey] ?? '').trim();
+    const day = rowDay(row.fields);
+    const key = rawKey || recordKeyOf(jobNum, day);
+    if (byKey.has(key) || byDay.has(day)) {
+      extras.push(row);
+      continue;
+    }
+    byKey.set(key, row);
+    byDay.set(day, row);
+  }
+  return { byKey, byDay, extras, all: rows };
+}
+
+/**
+ * The row this shift owns, claimed so nothing else can take it.
+ *
+ * Claiming matters: a row whose key and Date disagree would otherwise answer
+ * two different shifts, and the pass would write one day into it and then the
+ * other.
+ */
+function claimRow(index: StoredRows, jobNum: string, date: string): ListItem | null {
+  const key = recordKeyOf(jobNum, date);
+  const found = index.byKey.get(key) ?? index.byDay.get(date) ?? null;
+  if (!found) return null;
+  index.byKey.delete(key);
+  const storedKey = String(found.fields[PRODUCTION_COLUMNS.recordKey] ?? '').trim();
+  if (storedKey) index.byKey.delete(storedKey);
+  index.byDay.delete(date);
+  index.byDay.delete(rowDay(found.fields));
+  return found;
+}
+
+/**
+ * Two orders' worth of facts for one job number, folded into one.
+ *
+ * Nothing on the board should produce them, and one that did would write the
+ * same row twice in a single pass — the snapshot this sync reads is taken once,
+ * so the second write would not see the first. Cheap to rule out here; the cost
+ * of not ruling it out is a duplicate nobody can explain.
+ */
+function oneFactsPerJob(orders: OrderFacts[]): OrderFacts[] {
+  const byJob = new Map<string, OrderFacts>();
+  for (const facts of orders) {
+    const held = byJob.get(facts.jobNum);
+    if (!held) {
+      byJob.set(facts.jobNum, facts);
+      continue;
+    }
+    const shifts = new Map(held.shifts.map((shift) => [shift.date, shift]));
+    for (const shift of facts.shifts) shifts.set(shift.date, shift);
+    byJob.set(facts.jobNum, { ...held, shifts: [...shifts.values()] });
+  }
+  return [...byJob.values()];
+}
+
+/**
+ * Open the row for one shift, having first made sure it is not already there.
+ *
+ * The snapshot a sync works from is as old as the sync, and it is not the only
+ * board writing. A second tab, a second supervisor's screen, the board left
+ * open on the line terminal — each holds the same plan and each reaches the
+ * same conclusion that today has no row yet, so each opens one. That is the
+ * duplicate: an order closed at the end of a shift appears twice in
+ * `ASSY_Production`, identical in every column, because two boards wrote the
+ * first row of that day within a second of each other. Updates never did this;
+ * only opening a row.
+ *
+ * So the key is asked for by name immediately before writing, and a row that
+ * has appeared since the snapshot is updated instead of duplicated. It narrows
+ * the window to the round trip rather than closing it — the list's own unique
+ * index on `RecordKey` is what closes it, and this recovers from that index
+ * refusing the write as well. Where the transport cannot ask (Graph needs the
+ * column indexed and an opt-in header), or the question itself fails, the row
+ * is opened anyway and the failure is reported: recording production matters
+ * more than a check that protects against a rarity.
+ *
+ * Returns the item id written, `null` when nothing was, or `'abort'` when the
+ * failure is one that will not answer differently on the next row.
+ */
+async function openRow(
+  cfg: SharePointConfig,
+  list: string,
+  jobNum: string,
+  shift: ProductionEntry,
+  wanted: ListItemFields,
+  out: SyncOutcome,
+  note: (e: WriteError) => void,
+): Promise<string | null | 'abort'> {
+  const key = recordKeyOf(jobNum, shift.date);
+
+  /** The row the list holds under this key right now, if it can be asked. */
+  const lookup = async (): Promise<ListItem | null> => {
+    const found = await fetchRowsWhere(cfg, list, PRODUCTION_COLUMNS.recordKey, key);
+    if (!found) return null;
+    if (!found.ok) {
+      note(found.error);
+      return null;
+    }
+    return found.value.sort(oldestFirst)[0] ?? null;
+  };
+
+  const write = async (row: ListItem): Promise<string | null | 'abort'> => {
+    if (same(row.fields, wanted)) {
+      out.unchanged++;
+      return row.id;
+    }
+    const res = await updateListItem(cfg, list, row.id, wanted, ...(cfg.authMode === 'session' ? [row.etag] : []));
+    if (res.ok) {
+      out.updated++;
+      return row.id;
+    }
+    note(res.error);
+    return isTransient(res.error) ? null : 'abort';
+  };
+
+  const already = await lookup();
+  if (already) return write(already);
+
+  const res = await createListItem(cfg, list, wanted);
+  if (res.ok) {
+    out.created++;
+    return res.value || null;
+  }
+  // A unique index on RecordKey answers the losing writer with a 400. That is
+  // the index doing its job, not a fault, so take the row that won and write
+  // this shift into it rather than reporting a failure nobody can act on.
+  const won = await lookup();
+  if (won) return write(won);
+  note(res.error);
+  return isTransient(res.error) ? null : 'abort';
+}
+
 /**
  * Push the board into the list: open a row for any order that has none, upsert
  * each booked shift, and refresh the order-level columns on every other row of
@@ -355,13 +524,13 @@ export async function syncProduction(
     return out;
   }
 
-  const byJob = new Map<string, { id: string; fields: ListItemFields; etag?: string }[]>();
+  const byJob = new Map<string, ListItem[]>();
   for (const item of existing.value) {
     const key = String(item.fields[PRODUCTION_COLUMNS.jobNum] ?? '').trim();
     if (!key) continue;
-    const list = byJob.get(key) ?? [];
-    list.push(item);
-    byJob.set(key, list);
+    const rows = byJob.get(key) ?? [];
+    rows.push(item);
+    byJob.set(key, rows);
   }
 
   // Said once at the end. While the roster is the built-in fallback this is
@@ -369,24 +538,28 @@ export async function syncProduction(
   // buried whatever else the sync had to say.
   const withDemoCrew: string[] = [];
 
-  for (const facts of orders) {
+  for (const facts of oneFactsPerJob(orders)) {
     if (facts.hasSyntheticCrew) {
       withDemoCrew.push(facts.jobNum);
       continue;
     }
-    const rows = byJob.get(facts.jobNum) ?? [];
-    const byDay = new Map<string, (typeof rows)[number]>();
-    const duplicateDays = new Set<string>();
-    for (const row of rows) {
-      const key = rowDay(row.fields);
-      if (byDay.has(key)) duplicateDays.add(key);
-      else byDay.set(key, row);
-    }
-    if (duplicateDays.size > 0) {
+    const index = indexRows(facts.jobNum, byJob.get(facts.jobNum) ?? []);
+    /*
+     * Duplicates are reported, not obeyed.
+     *
+     * This used to abandon the whole job on finding a second row for one day,
+     * which left the order's real bookings unwritten for as long as the extra
+     * row existed — the duplicate stopped the record rather than the record
+     * being repaired. The oldest row for each day stays canonical and goes on
+     * being kept current; the extras are named here, item id and all, so they
+     * can be deleted. Nothing is deleted from here: removing somebody's
+     * production row is not a thing a background sync should decide.
+     */
+    for (const extra of index.extras) {
       out.errors.push(
-        `${facts.jobNum}: duplicate SharePoint rows for ${[...duplicateDays].join(', ')}`,
+        `${facts.jobNum} ${rowDay(extra.fields)}: duplicate row (item ${extra.id}) — ` +
+          'delete it in SharePoint; the older row is the one being kept current.',
       );
-      continue;
     }
 
     // Every order holds at least one row: open one when the list has none and
@@ -395,23 +568,24 @@ export async function syncProduction(
     const shifts =
       facts.shifts.length > 0
         ? facts.shifts
-        : rows.length === 0
+        : index.all.length === 0
           ? [blankShift(facts.anchorDay)]
           : [];
 
-    const touched = new Set<string>();
+    /** Rows this pass has written in full — their day belongs to a shift. */
+    const written = new Set<string>();
 
     for (const shift of shifts) {
       const wanted = rowFields(facts, shift);
-      const found = byDay.get(shift.date);
-      touched.add(shift.date);
+      const found = claimRow(index, facts.jobNum, shift.date);
 
       if (!found) {
-        const res = await createListItem(cfg, list, wanted);
-        if (res.ok) out.created++;
-        else { note(res.error); if (!isTransient(res.error)) return out; }
+        const opened = await openRow(cfg, list, facts.jobNum, shift, wanted, out, note);
+        if (opened === 'abort') return out;
+        if (opened) written.add(opened);
         continue;
       }
+      written.add(found.id);
       if (same(found.fields, wanted)) {
         out.unchanged++;
         continue;
@@ -425,8 +599,8 @@ export async function syncProduction(
     // backend added. Their production figures are theirs to keep; only the
     // order-level columns follow the plan.
     const orderWide = orderFields(facts);
-    for (const row of rows) {
-      if (touched.has(rowDay(row.fields))) continue;
+    for (const row of index.all) {
+      if (written.has(row.id) || index.extras.includes(row)) continue;
       const isOpenPlaceholder =
         facts.shifts.length === 0 && rowDay(row.fields) === facts.anchorDay;
       const wanted = isOpenPlaceholder

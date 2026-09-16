@@ -35,6 +35,12 @@ export class ApiPlanRepository implements PlanRepository {
     }
   }
 
+  /** Written once: a day already filed keeps the copy it was filed with. */
+  async saveSnapshot(plan: PersistedPlan): Promise<void> {
+    if (await this.load(plan.id)) return;
+    await this.save(plan);
+  }
+
   async load(id: string = CURRENT_PLAN_ID): Promise<PersistedPlan | null> {
     const res = await fetch(`${this.baseUrl}/plans/${id}`);
     if (res.status === 404) return null;

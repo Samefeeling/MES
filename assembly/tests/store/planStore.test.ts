@@ -83,6 +83,55 @@ describe('ASSY_Production bookings', () => {
     expect(state.production[String(job)][0].operatorIds).toEqual(['W01', 'W02']);
   });
 
+  it('takes a completion back off an order closed in error', () => {
+    const job = JobId('ASSY-104');
+    usePlanStore.setState({ orderCrewAssignments: crewOf({ [String(job)]: ['W01', 'W04'] }) });
+    usePlanStore.getState().startOrder(job, {
+      startedAt: '2026-08-31T00:00:00.000Z',
+      overrideReason: null,
+      operatorIds: ['W01', 'W04'],
+      operatorNames: ['Lee', 'Sam'],
+    });
+    usePlanStore.getState().saveProductionEntry(
+      job,
+      {
+        ...entry(7),
+        paused: false,
+        pauseReason: null,
+        jobCompleted: true,
+        operatorIds: ['W01', 'W04'],
+        operatorNames: ['Lee', 'Sam'],
+        completedAt: '2026-08-31T05:30:00.000Z',
+      },
+      { remainingQty: 7, completedQty: 93 },
+    );
+    expect(usePlanStore.getState().orderCrewAssignments[String(job)]).toBeUndefined();
+
+    usePlanStore.getState().reopenOrder(job);
+
+    const state = usePlanStore.getState();
+    const booking = state.production[String(job)][0];
+    expect(booking.jobCompleted).toBe(false);
+    expect(booking.completedAt).toBeNull();
+    // What the shift booked is left exactly as it was — the correction is made
+    // in the entry form afterwards, and the usual figure is right.
+    expect(booking.complete).toBe(7);
+    expect(state.progress[String(job)]).toEqual([{ date: '2026-08-31', qty: 7 }]);
+    // Closing the order released the crew, so reopening it puts them back —
+    // as a written allocation, which is the only kind that can be added to.
+    expect(
+      state.orderCrewAssignments[String(job)].map((a) => a.workerId),
+    ).toEqual(['W01', 'W04']);
+  });
+
+  it('invents no history for an order that was never closed', () => {
+    const job = JobId('ASSY-105');
+    usePlanStore.setState({ production: { [String(job)]: [entry(4)] } });
+    const before = usePlanStore.getState().production;
+    usePlanStore.getState().reopenOrder(job);
+    expect(usePlanStore.getState().production).toBe(before);
+  });
+
   it('keeps each person\u2019s own days on the one record of the crew', () => {
     // This used to prove that a bounded allocation stayed out of the
     // window-less mirror the store kept alongside it. There is no mirror now,

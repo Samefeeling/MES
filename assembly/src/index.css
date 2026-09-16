@@ -2947,6 +2947,14 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .manual-dialog input:not([type=checkbox]), .manual-dialog textarea { width: 100%; padding: 7px; color: inherit; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; }
 .manual-dialog fieldset { display: flex; flex-wrap: wrap; gap: 12px; }
 
+/* The list of orders closed in the last fortnight, in the reopen dialog. */
+.reopen-list { display: grid; gap: 6px; max-height: 50vh; overflow: auto; margin: 0; padding: 0; list-style: none; }
+.reopen-list li { display: flex; align-items: center; gap: 10px; padding: 6px 8px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; }
+.reopen-job { font-weight: 600; font-variant-numeric: tabular-nums; }
+.reopen-day { color: var(--muted); font-size: 12px; }
+.reopen-gone { color: #b45309; font-size: 12px; font-style: normal; }
+.reopen-list li .btn { margin-left: auto; }
+
 .worker-name:not(.drag-locked) { touch-action: none; }
 .wl-move { display: grid; gap: 6px; padding: 10px 14px; }
 .wl-move select { font: inherit; padding: 6px; }
