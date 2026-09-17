@@ -1,4 +1,4 @@
-import { bdLabelFor, bdOwnerFor } from './breakdown';
+import { BD_FREE_TEXT_CODE, bdLabelFor, bdOwnerFor } from './breakdown';
 import { parseHandover } from './handover';
 import { shiftBounds, SLOTS_PER_SHIFT, SLOT_MINUTES } from './shifts';
 
@@ -56,14 +56,24 @@ export interface ImpwBreakdown {
   owner: string;
   hours: number;
   /**
-   * What the operator wrote about this stoppage, when it says more than the
-   * code does — PMD_Production.BDCause, or the OTH-99 free text on rows
-   * written before that column existed (it went into MangoTicket, which
-   * despite the name has never carried a Mango work-order number). Empty
-   * when the operator only picked a code, so the ticket doesn't repeat the
-   * taxonomy back at itself.
+   * Everything the operator wrote about this stoppage, in the order of the
+   * shift — PMD_Production.BDCause, or the OTH-99 free text on rows written
+   * before that column existed (it went into MangoTicket, which despite the
+   * name has never carried a Mango work-order number).
+   *
+   * A list, not one line, and that is the point on OTH-99. The floor reaches
+   * for the taxonomy's free-text code constantly and types the real reason
+   * next to it, so one shift's OTH-99 hours are often two or three different
+   * events — "robot stalled on the sprue" at 09:00 and "smell off the cooling
+   * unit" at 14:00 fold to one code and are not one problem. Keeping only the
+   * first threw the rest away, and with it the only record of what happened.
+   *
+   * Empty when the operator picked a code and wrote nothing, so a ticket
+   * never repeats the taxonomy back at itself. Repeats within a code are
+   * dropped: the same sentence carried on six consecutive slots is one thing
+   * said once.
    */
-  note: string;
+  notes: string[];
 }
 
 /**
@@ -601,7 +611,10 @@ export function buildImpwDraft(
   const where = `${s.machineCode}${shift ? ` ${shift} shift` : ''}${date ? ` ${date}` : ''}`;
   const headline = f.reasons.join('; ') || 'KPI target missed';
   const classification = suggestImpwClassification(f);
-  const notes = s.breakdowns.filter((b) => b.note).map((b) => b.note).join('; ');
+  // Everything the shift wrote about its stoppages, worst cause first. The
+  // register lists tickets by this line alone, and on an OTH-99 the
+  // operator's own sentence is the only thing in it that names the fault.
+  const notes = s.breakdowns.flatMap((b) => b.notes).join('; ');
 
   // The material belongs in the one line Mango's register lists: a reader
   // scanning it needs the press AND the part to know whether this is their
@@ -674,10 +687,18 @@ function impwDetailsBody(f: ImpwFinding, raiser: ImpwRaiser): string {
     lines.push('', 'Breakdown causes:');
     for (const b of [...s.breakdowns].sort((a, b2) => b2.hours - a.hours)) {
       lines.push(
-        `  ${b.code} ${b.label} — ${fmtHrs(b.hours)} h${b.owner ? ` (${b.owner})` : ''}${
-          b.note ? `\n      Operator: ${b.note}` : ''
-        }`,
+        `  ${b.code} ${b.label} — ${fmtHrs(b.hours)} h${b.owner ? ` (${b.owner})` : ''}`,
       );
+      // Every line the operator typed, each on its own — see the note on
+      // ImpwBreakdown.notes. On OTH-99 these ARE the cause: the taxonomy
+      // label says only "Other", so a ticket without them tells the
+      // investigator that something unnamed took three hours.
+      for (const note of b.notes) lines.push(`      Operator wrote: ${note}`);
+      if (b.notes.length === 0 && b.code === BD_FREE_TEXT_CODE) {
+        lines.push(
+          '      Nothing written against it — ask the shift what stopped the press.',
+        );
+      }
     }
   }
   lines.push(
@@ -1143,15 +1164,22 @@ export function foldBreakdowns(
     bdIssue: string;
     bdCause?: string;
     mangoTicket: string;
+    /** Where in the shift, when the caller's rows carry it — the notes are
+     *  read back in the order they were written, not the order the rows
+     *  happened to arrive in. */
+    slotIndex?: number;
   }>,
   slotHours: number,
 ): ImpwBreakdown[] {
   const by = new Map<string, ImpwBreakdown>();
-  for (const s of slots) {
+  const inShiftOrder = [...slots].sort(
+    (a, b) => (a.slotIndex ?? 0) - (b.slotIndex ?? 0),
+  );
+  for (const s of inShiftOrder) {
     if (s.statusCode !== 'B') continue;
     // A breakdown the operator never coded is still a breakdown; park it on
     // the taxonomy's own "other" rather than dropping the hours.
-    const code = (s.bdIssue || '').trim() || 'OTH-99';
+    const code = (s.bdIssue || '').trim() || BD_FREE_TEXT_CODE;
     const label = bdLabelFor(code);
     // BDCause is pre-filled with the taxonomy text unless the operator
     // typed their own, so only keep it when it actually adds something.
@@ -1160,9 +1188,16 @@ export function foldBreakdowns(
     const hit = by.get(code);
     if (hit) {
       hit.hours = +(hit.hours + slotHours).toFixed(2);
-      if (!hit.note && note) hit.note = note;
+      // Every distinct thing said about this code, not just the first.
+      if (note && !hit.notes.includes(note)) hit.notes.push(note);
     } else {
-      by.set(code, { code, label, owner: bdOwnerFor(code), hours: slotHours, note });
+      by.set(code, {
+        code,
+        label,
+        owner: bdOwnerFor(code),
+        hours: slotHours,
+        notes: note ? [note] : [],
+      });
     }
   }
   return [...by.values()].sort((a, b) => b.hours - a.hours || a.code.localeCompare(b.code));

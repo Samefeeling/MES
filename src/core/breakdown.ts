@@ -136,6 +136,18 @@ export const BD_TAXONOMY: BdCause[] = [
   { code: 'OTH-99', cause: 'Other (enter free-text note)', owner: '—' },
 ];
 
+/**
+ * The taxonomy's own way of saying "none of the above".
+ *
+ * Named because three different places have to agree about it: it is what an
+ * uncoded stoppage is parked on, it is the one code whose cause is whatever
+ * the operator typed rather than a row in the table above, and it is the code
+ * the floor reaches for most — a shift that hits something the eleven
+ * categories do not cover picks OTH-99 and writes the reason by hand. Losing
+ * that hand-written line loses the only record of what actually happened.
+ */
+export const BD_FREE_TEXT_CODE = 'OTH-99';
+
 export function bdCategoryOf(code: string): BdCategory | undefined {
   const m = /^([A-Z]+)-/.exec(code);
   if (!m) return undefined;
@@ -161,7 +173,7 @@ export function encodeBreakdownCauseMap(records: ReadonlyArray<ProductionRecord>
     if (!code) continue;
     const cause =
       record.bdCause?.trim() ||
-      (code === 'OTH-99' ? record.mangoTicket.trim() : '') ||
+      (code === BD_FREE_TEXT_CODE ? record.mangoTicket.trim() : '') ||
       bdLabelFor(code);
     bySlot[String(record.slotIndex)] = `${code}${cause ? ` — ${cause}` : ''}`;
   }

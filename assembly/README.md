@@ -532,7 +532,9 @@ domain  →  lib  →  engine  →  store  →  features (UI)
   (placement, crew, pinned starts, booked output — the only mutable plan
   state), `assemblySelectors` (derives the schedule), `uiStore` (selection).
 - **`persistence/`** — `PlanRepository` with a REST (`ApiPlanRepository`) and a
-  localStorage fallback; the working plan autosaves.
+  localStorage fallback, plus `planParts` — the split between the planning a
+  supervisor publishes with **Save** and the shift records written as they
+  happen. `features/sync/usePlanPersistence` owns both triggers.
 - **`features/`** — `assembly` (board, rows, bars, crew chips, inspector, the
   supervisor lock, dnd), `refresh`, `source` (the manual CSV loader) and `sync`
   (write-back).

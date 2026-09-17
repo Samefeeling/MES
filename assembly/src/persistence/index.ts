@@ -19,3 +19,4 @@ export function createPlanRepository(): PlanRepository {
 }
 
 export * from './PlanRepository';
+export * from './planParts';

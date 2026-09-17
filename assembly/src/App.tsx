@@ -3,15 +3,13 @@
  * drag-and-drop context, and lays out the assembly board and inspector.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect } from 'react';
 import { DndContext, DragOverlay } from '@dnd-kit/core';
 import { useDataStore } from '@/store/dataStore';
-import { useIgnoredOrders } from '@/store/ignoredOrders';
 import { usePlanStore } from '@/store/planStore';
 import { useUiStore } from '@/store/uiStore';
 import { useSupervisorStore } from '@/store/supervisorStore';
 import { useAssemblyGantt } from '@/store/assemblySelectors';
-import { createPlanRepository, CURRENT_PLAN_ID } from '@/persistence';
 import { useDragDrop } from '@/features/assembly/useDragDrop';
 import { AssemblyGantt } from '@/features/assembly/AssemblyGantt';
 import { BoardTools } from '@/features/assembly/BoardTools';
@@ -25,68 +23,59 @@ import { SupervisorLock } from '@/features/assembly/SupervisorLock';
 import { useScheduledRefresh } from '@/features/refresh/useScheduledRefresh';
 import { RefreshControl } from '@/features/refresh/RefreshControl';
 import { usePlanSync } from '@/features/sync/usePlanSync';
+import { usePlanPersistence } from '@/features/sync/usePlanPersistence';
 import { ORDER_TYPE_SHORT } from '@/domain/assembly';
 import { Spinner } from '@/ui';
 
-const repo = createPlanRepository();
-
 export default function App() {
-  const status = useDataStore((s) => s.status);
   const error = useDataStore((s) => s.error);
-  const dataset = useDataStore((s) => s.dataset);
   const load = useDataStore((s) => s.load);
   const warnings = useDataStore((s) => s.warnings);
   const sourceName = useDataStore((s) => s.source.name);
   const hosted = useSupervisorStore((s) => s.hosted);
 
-  const ignoredOrderIds = useIgnoredOrders(s => s.ids);
-  const containers = usePlanStore((s) => s.containers);
   const manualOrders = usePlanStore(s => s.manualOrders);
   const selectedJobId = useUiStore(s => s.selectedJobId);
-  const lineLayoutVersion = usePlanStore(s => s.lineLayoutVersion);
-  const workerLines = usePlanStore((s) => s.workerLines);
-  const virtualLines = usePlanStore((s) => s.virtualLines);
-  const lineOrder = usePlanStore((s) => s.lineOrder);
-  const orderCrewAssignments = usePlanStore((s) => s.orderCrewAssignments);
-  const orderStarts = usePlanStore((s) => s.orderStarts);
-  const orderActualStarts = usePlanStore((s) => s.orderActualStarts);
-  const orderOvertime = usePlanStore((s) => s.orderOvertime);
-  const orderDoubleBooked = usePlanStore((s) => s.orderDoubleBooked);
-  const progress = usePlanStore((s) => s.progress);
-  const progressBaselines = usePlanStore((s) => s.progressBaselines);
-  const production = usePlanStore((s) => s.production);
-  const lastSeen = usePlanStore((s) => s.lastSeen);
-
 
   const board = useAssemblyGantt();
   const dnd = useDragDrop();
-  const refresh = useScheduledRefresh();
   const resetOrderSort = useUiStore((s) => s.resetOrderSort);
-  // Crew and dragged starts go back to SharePoint; a refreshed CSV carries
-  // DueDate and RemainingQty in the other direction.
 
-
-  const bootstrapped = useRef(false);
-  const saveTimer = useRef<number | undefined>(undefined);
-  const saveGeneration = useRef(0);
-  /**
-   * How the read of the stored plan went.
+  /*
+   * Reading and writing the one stored plan.
    *
-   * `loaded` also covers a repository that has nothing stored yet — a new
-   * board is not a failure. `failed` is the state autosave must sit out: the
-   * board has been laid out from the export alone, with nobody allocated and
-   * no pins, and writing that back would put it over the plan the repository
-   * is still holding.
+   * Planning is published by the Save button and by nothing else, so this
+   * board is a draft until somebody presses it — see `usePlanPersistence`.
+   * The shift's own records are written as they are made, whoever's planning
+   * is current underneath them.
    */
-  const [stored, setStored] = useState<'reading' | 'loaded' | 'failed'>(
-    'reading',
+  const plan = usePlanPersistence();
+  // Every refresh — the button and the five-minute timer alike — takes the
+  // saved plan back, dropping whatever planning this browser was holding
+  // unpublished. Re-sorting the rows is the button's alone: an automatic
+  // refresh preserves the row order somebody chose (board-interaction-rules).
+  const pull = plan.pull;
+  const refresh = useScheduledRefresh(pull);
+  const refreshAndSort = useCallback(async () => {
+    await refresh();
+    resetOrderSort();
+  }, [refresh, resetOrderSort]);
+  /*
+   * Crew and dragged starts go back to SharePoint; a refreshed CSV carries
+   * DueDate and RemainingQty in the other direction.
+   *
+   * Only from a board that is the published plan. The rows this writes carry
+   * the line, the crew and the planned start as well as the shift's own
+   * figures, so syncing a draft would put planning nobody has published into
+   * the list PMD reads — and the Save gate would hold on this screen while
+   * leaking straight past it downstream. A booking made while a draft is open
+   * is not lost: it is in the stored plan within the second, and reaches the
+   * list on the next Save or refresh. `settled` is the same rule for a board
+   * that has not reached the repository at all yet.
+   */
+  const sync = usePlanSync(
+    plan.stored === 'loaded' && plan.settled && !plan.dirty ? board : null,
   );
-  const [planSaved, setPlanSaved] = useState(false);
-  const sync = usePlanSync(stored === 'loaded' && planSaved ? board : null);
-  const [storeError, setStoreError] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
-  const reason = (e: unknown): string =>
-    e instanceof Error ? e.message : String(e);
 
   // Initial data load.
   useEffect(() => {
@@ -109,98 +98,6 @@ export default function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
-
-  // Bootstrap the plan from persistence on first ready; reconcile thereafter.
-  useEffect(() => {
-    if (status !== 'ready' || !dataset) return;
-    const plan = usePlanStore.getState();
-    if (bootstrapped.current) {
-      plan.reconcile(dataset.workCenters, dataset.jobs);
-      return;
-    }
-    bootstrapped.current = true;
-    repo
-      .load()
-      .then((persisted) => {
-        if (persisted?.containers) plan.setContainers(persisted.containers);
-        if (persisted?.assembly) {
-          plan.setAssemblyPlan(persisted.assembly);
-          if (persisted.assembly.ignoredOrderIds) useIgnoredOrders.setState({ ids: persisted.assembly.ignoredOrderIds });
-        }
-        plan.reconcile(dataset.workCenters, dataset.jobs);
-        setStored('loaded');
-        setStoreError(null);
-      })
-      .catch((e) => {
-        // Still lay the board out, so the export is readable while the
-        // repository is unreachable — but say so, and save nothing.
-        plan.reconcile(dataset.workCenters, dataset.jobs);
-        setStored('failed');
-        setStoreError(reason(e));
-      });
-  }, [status, dataset, attempt]);
-
-  const retryStoredPlan = () => {
-    bootstrapped.current = false;
-    setStored('reading');
-    setStoreError(null);
-    setAttempt((n) => n + 1);
-  };
-
-  // Debounced autosave of the planner's layout.
-  useEffect(() => {
-    if (stored !== 'loaded') return;
-    setPlanSaved(false);
-    const generation = ++saveGeneration.current;
-    window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(() => {
-      repo
-        .save({
-          id: CURRENT_PLAN_ID,
-          name: 'Working plan',
-          savedAt: new Date().toISOString(),
-          containers,
-          assembly: {
-            manualOrders,
-            lineLayoutVersion,
-            ignoredOrderIds,
-            workerLines,
-            virtualLines,
-            lineOrder,
-            orderCrewAssignments,
-            orderStarts,
-            orderActualStarts,
-            orderOvertime,
-            orderDoubleBooked,
-            progress,
-            progressBaselines,
-            production,
-            lastSeen,
-          },
-        })
-        .then(() => { if (generation === saveGeneration.current) { setStoreError(null); setPlanSaved(true); } })
-        .catch((e) => { setStoreError(reason(e)); setStored('failed'); });
-    }, 600);
-    return () => window.clearTimeout(saveTimer.current);
-  }, [
-    ignoredOrderIds,
-    lineLayoutVersion,
-    manualOrders,
-    stored,
-    containers,
-    workerLines,
-    virtualLines,
-    lineOrder,
-    orderCrewAssignments,
-    orderStarts,
-    orderActualStarts,
-    orderOvertime,
-    orderDoubleBooked,
-    progress,
-    progressBaselines,
-    production,
-    lastSeen,
-  ]);
 
   const activeJob =
     dnd.activeJobId && board ? board.jobsById.get(dnd.activeJobId) : null;
@@ -240,14 +137,19 @@ export default function App() {
         <div className="head-side end">
           <SupervisorLock />
           <BarcodeOrderLookup board={board} />
-          {/* Which export this is stays on the hover of the time it was read,
-              rather than as a chip: the source has not changed since the board
-              was built and never changes while anybody is looking at it, so it
-              was a word in the header that answered a question nobody had. */}
-          <RefreshControl source={sourceName} onRefresh={async () => {
-            await refresh();
-            resetOrderSort();
-          }} />
+          {/* Which export this is stays on the hover of the button that
+              re-reads it, rather than as a chip: the source has not changed
+              since the board was built and never changes while anybody is
+              looking at it, so it was a word in the header that answered a
+              question nobody had. */}
+          <RefreshControl
+            source={sourceName}
+            onRefresh={() => void refreshAndSort()}
+            onSave={plan.save}
+            dirty={plan.dirty}
+            saving={plan.saving}
+            canSave={plan.stored === 'loaded'}
+          />
         </div>
       </header>
 
@@ -257,19 +159,30 @@ export default function App() {
         two has happened, because the board looks identical either way, and
         make it plain that nothing is being written until it is read.
       */}
-      {stored === 'failed' ? (
+      {plan.stored === 'failed' ? (
         <div className="banner">
-          Saved plan not loaded ({storeError}). The board is showing the export
+          Saved plan not loaded ({plan.error}). The board is showing the export
           on its own — crew, dragged starts and shift entries are still in the
           store and nothing is being saved over them.{' '}
-          <button className="banner-action" onClick={retryStoredPlan}>
+          <button className="banner-action" onClick={plan.retry}>
             Try again
           </button>
         </div>
       ) : (
-        storeError && (
-          <div className="banner warn">Plan not saved: {storeError}</div>
-        )
+        plan.error && <div className="banner warn">Plan not saved: {plan.error}</div>
+      )}
+      {/*
+        The one thing a planner cannot see by looking at the board: whether
+        what is on it has been published. Unsaved planning lives in this
+        browser only and goes at the next refresh, so say so where the banners
+        are rather than leaving it to the state of a button.
+      */}
+      {plan.dirty && (
+        <div className="banner warn">
+          Unsaved planning — this board is a draft held on this screen. Press
+          Save to make it the current plan; a refresh takes the saved plan back
+          and drops it.
+        </div>
       )}
       {sync.errors.length > 0 && (
         <div className="banner warn">

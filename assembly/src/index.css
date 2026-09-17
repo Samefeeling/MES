@@ -1007,6 +1007,13 @@ button {
   color: var(--faint);
   font-weight: 400;
 }
+/* Fewer on hand than the order needs — the one figure on the sheet the
+   warehouse has to act on before the pick can be made. Same red the Expect
+   Date uses, so one colour means one thing across the panel. */
+.pick-list-row .qty.short {
+  color: #b91c1c;
+  font-weight: 750;
+}
 
 .arow,
 .assy-head {
@@ -2915,9 +2922,10 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .wl-move select { font: inherit; padding: 6px; }
 
 /* Keep the read time immediately below its refresh action. */
-.refresh-control { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 0 0 auto; }
-.refresh-control .sub { font-size: 10px; line-height: 12px; white-space: nowrap; }
-.refresh-control .spinner { position: absolute; margin-left: -92px; margin-top: 5px; }
+/* Read it again, then publish it — the two ends of the board's day, side by
+   side. It used to be one button over a line of small type giving the time of
+   the last read; the type is gone and the space it held is the Save button. */
+.refresh-control { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .bar { touch-action: none; }
 /* Overlay only: the alignment aid never moves rows or catches the pointer. */
 .drag-time-guide { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed #0869ad; z-index: 12; pointer-events: none; }

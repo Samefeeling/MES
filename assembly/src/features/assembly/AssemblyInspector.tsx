@@ -62,6 +62,24 @@ const isoDay = (d: Date): string =>
 export const popupDate = (date: Date | null): string =>
   date ? formatDay(date) : '—';
 
+/**
+ * How many short the pick is — 0 when it is covered, and 0 when nobody can
+ * say.
+ *
+ * Red on the sheet is a claim that this order cannot be picked, so it is only
+ * made when both halves of the comparison are known. A component the loaded
+ * OnHandInventory.csv has never heard of has no on-hand figure to be below
+ * anything, and a line the order export gave no required quantity has nothing
+ * to be below: both read as unknown, not as none in stock.
+ */
+export const pickShortfall = (
+  requiredQty: number | null,
+  onHand: number | undefined,
+): number =>
+  requiredQty === null || onHand === undefined
+    ? 0
+    : Math.max(0, requiredQty - onHand);
+
 export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
   const selectedJobId = useUiStore((s) => s.selectedJobId);
   const selectedAt = useUiStore((s) => s.selectedAt);
@@ -570,35 +588,51 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
                 <span>On hand</span>
                 <span title="Calculated_Demand">Demand</span>
               </div>
-              {picks.map((material, index) => (
-                <div className="pick-list-row" key={`${String(material.childPart)}-${index}`}>
-                  <span className="part" title={inventoryByPart?.get(material.childPart)?.description || String(material.childPart)}>
-                    {String(material.childPart)}
-                  </span>
-                  <span
-                    className={
-                      material.requiredQty === null ? 'qty none' : 'qty'
-                    }
+              {picks.map((material, index) => {
+                const stock = inventoryByPart?.get(material.childPart);
+                const shortBy = pickShortfall(material.requiredQty, stock?.onHand);
+                const onHandTitle = !stock
+                  ? 'Part not found in the loaded OnHandInventory.csv'
+                  : shortBy > 0
+                    ? `Short ${shortBy} — ${stock.onHand} on hand against the ${material.requiredQty} this order needs`
+                    : 'Calculated_OnHand from OnHandInventory.csv';
+                return (
+                  <div
+                    className="pick-list-row"
+                    key={`${String(material.childPart)}-${index}`}
                   >
-                    {material.requiredQty === null ? '—' : material.requiredQty}
-                  </span>
-                  <span
-                    className={
-                      inventoryByPart?.has(material.childPart) ? 'qty on-hand' : 'qty none'
-                    }
-                    title={
-                      inventoryByPart?.has(material.childPart)
-                        ? 'Calculated_OnHand from OnHandInventory.csv'
-                        : 'Part not found in the loaded OnHandInventory.csv'
-                    }
-                  >
-                    {inventoryByPart?.get(material.childPart)?.onHand ?? '—'}
-                  </span>
-                  <span className="qty" title="Calculated_Demand from OnHandInventory.csv">
-                    {inventoryByPart?.get(material.childPart)?.calculatedDemand ?? '—'}
-                  </span>
-                </div>
-              ))}
+                    <span
+                      className="part"
+                      title={stock?.description || String(material.childPart)}
+                    >
+                      {String(material.childPart)}
+                    </span>
+                    <span
+                      className={material.requiredQty === null ? 'qty none' : 'qty'}
+                    >
+                      {material.requiredQty === null ? '—' : material.requiredQty}
+                    </span>
+                    <span
+                      className={
+                        !stock
+                          ? 'qty none'
+                          : shortBy > 0
+                            ? 'qty on-hand short'
+                            : 'qty on-hand'
+                      }
+                      title={onHandTitle}
+                    >
+                      {stock?.onHand ?? '—'}
+                    </span>
+                    <span
+                      className="qty"
+                      title="Calculated_Demand from OnHandInventory.csv"
+                    >
+                      {stock?.calculatedDemand ?? '—'}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           )}
           <div className="production-start">

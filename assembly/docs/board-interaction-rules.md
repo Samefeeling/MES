@@ -444,5 +444,13 @@ the board to the desired area before dragging; worker and line drags retain
 their existing automatic scrolling.
 
 The line label is Assembly Seats. Stored ASSY keys and legacy ASM values
-continue to resolve to the same line. The Refresh action carries its updated
-HH:mm time underneath; day load bars have no outline.
+continue to resolve to the same line. Refresh sits beside Save rather than
+above a line giving the time of the last read; day load bars have no outline.
+
+Save is the only way planning leaves a browser. It publishes this board as the
+one current plan; a refresh, on the button or on the timer, takes the saved
+plan back and drops whatever planning had not been saved, and so does leaving
+the page. The button reads `Save` while a draft is held and `Saved` when the
+board is the current plan, and a banner says so while it is a draft. Shift
+records are not gated behind it — production start and the shift's own
+bookings are written as they are made.

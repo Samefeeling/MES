@@ -92,7 +92,7 @@ describe('detectImpwFindings', () => {
         slice({
           breakdownHrs: 2,
           breakdowns: [
-            { code: 'MEC-02', label: 'Ejector jam', owner: 'Maintenance', hours: 2, note: '' },
+            { code: 'MEC-02', label: 'Ejector jam', owner: 'Maintenance', hours: 2, notes: [] },
           ],
         }),
       ],
@@ -266,7 +266,7 @@ describe('foldBreakdowns', () => {
       [slot('B', 'ELE-02'), slot('B', 'ELE-02', { bdCause: 'Drive tripped on start, 3rd time' })],
       0.5,
     );
-    expect(folded[0].note).toBe('Drive tripped on start, 3rd time');
+    expect(folded[0].notes).toEqual(['Drive tripped on start, 3rd time']);
   });
 
   it('drops a cause that only repeats the taxonomy text', () => {
@@ -276,7 +276,7 @@ describe('foldBreakdowns', () => {
       [slot('B', 'ELE-02', { bdCause: 'Motor fault (drive / pump motor)' })],
       0.5,
     );
-    expect(folded[0].note).toBe('');
+    expect(folded[0].notes).toEqual([]);
   });
 
   it('still reads the OTH-99 free text off legacy rows', () => {
@@ -286,7 +286,49 @@ describe('foldBreakdowns', () => {
       [slot('B', 'OTH-99', { mangoTicket: 'Smell from the cooling unit' })],
       0.5,
     );
-    expect(folded[0].note).toBe('Smell from the cooling unit');
+    expect(folded[0].notes).toEqual(['Smell from the cooling unit']);
+  });
+
+  it('keeps every OTH-99 free text, not just the first', () => {
+    // The floor's favourite code. One shift's OTH-99 hours are routinely two
+    // or three unrelated events, each with the reason typed next to it, and
+    // the ticket is the only place they are ever read again.
+    const folded = foldBreakdowns(
+      [
+        rec({ jobNumber: 'J1', slotIndex: 4, statusCode: 'B', bdIssue: 'OTH-99', bdCause: 'Robot stalled on the sprue' }),
+        rec({ jobNumber: 'J1', slotIndex: 9, statusCode: 'B', bdIssue: 'OTH-99', bdCause: 'Smell off the cooling unit' }),
+      ],
+      0.5,
+    );
+    expect(folded).toHaveLength(1);
+    expect(folded[0].hours).toBe(1);
+    expect(folded[0].notes).toEqual([
+      'Robot stalled on the sprue',
+      'Smell off the cooling unit',
+    ]);
+  });
+
+  it('reads the notes in the order of the shift, whatever order the rows arrive in', () => {
+    const folded = foldBreakdowns(
+      [
+        rec({ jobNumber: 'J1', slotIndex: 12, statusCode: 'B', bdIssue: 'OTH-99', bdCause: 'Second thing' }),
+        rec({ jobNumber: 'J1', slotIndex: 2, statusCode: 'B', bdIssue: 'OTH-99', bdCause: 'First thing' }),
+      ],
+      0.5,
+    );
+    expect(folded[0].notes).toEqual(['First thing', 'Second thing']);
+  });
+
+  it('says one thing once when it is carried across consecutive slots', () => {
+    const folded = foldBreakdowns(
+      [
+        rec({ jobNumber: 'J1', slotIndex: 3, statusCode: 'B', bdIssue: 'OTH-99', bdCause: 'Cooling unit smells unusual' }),
+        rec({ jobNumber: 'J1', slotIndex: 4, statusCode: 'B', bdIssue: 'OTH-99', bdCause: 'Cooling unit smells unusual' }),
+      ],
+      0.5,
+    );
+    expect(folded[0].notes).toEqual(['Cooling unit smells unusual']);
+    expect(folded[0].hours).toBe(1);
   });
 
   it('sorts the causes by hours lost', () => {
@@ -402,7 +444,7 @@ describe('buildImpwDraft', () => {
         label: 'A very long breakdown cause description that runs on and on',
         owner: 'Maintenance',
         hours: 0.5,
-        note: '',
+        notes: [],
       })),
     });
     const d = buildImpwDraft(wordy, raiser, SITE);
@@ -419,7 +461,7 @@ describe('buildImpwDraft', () => {
         label: 'A very long breakdown cause description that runs on and on and on',
         owner: 'Maintenance',
         hours: 0.1,
-        note: 'The operator wrote a great deal about this one, at some length',
+        notes: ['The operator wrote a great deal about this one, at some length'],
       })),
     });
     const d = buildImpwDraft(wordy, raiser, SITE);
@@ -441,8 +483,8 @@ describe('buildImpwDraft', () => {
     const f = finding({
       breakdownHrs: 2.5,
       breakdowns: [
-        { code: 'ELE-02', label: 'Motor fault', owner: 'Maintenance', hours: 0.5, note: '' },
-        { code: 'TOOL-02', label: 'Mould damage', owner: 'Toolroom', hours: 2, note: '' },
+        { code: 'ELE-02', label: 'Motor fault', owner: 'Maintenance', hours: 0.5, notes: [] },
+        { code: 'TOOL-02', label: 'Mould damage', owner: 'Toolroom', hours: 2, notes: [] },
       ],
     });
     expect(suggestImpwDepartment(f)).toBe('Toolroom');
@@ -470,14 +512,52 @@ describe('buildImpwDraft', () => {
             label: 'Motor fault',
             owner: 'Maintenance',
             hours: 1,
-            note: 'Drive tripped on start, 3rd time this week',
+            notes: ['Drive tripped on start, 3rd time this week'],
           },
         ],
       }),
       raiser,
       SITE,
     );
-    expect(d.improvementDetails).toContain('Operator: Drive tripped on start, 3rd time this week');
+    expect(d.improvementDetails).toContain('Operator wrote: Drive tripped on start, 3rd time this week');
+  });
+
+  it('writes every OTH-99 note into the ticket, because the code itself names nothing', () => {
+    const d = buildImpwDraft(
+      finding({
+        breakdownHrs: 1.5,
+        breakdowns: [
+          {
+            code: 'OTH-99',
+            label: 'Other (enter free-text note)',
+            owner: '',
+            hours: 1.5,
+            notes: ['Robot stalled on the sprue', 'Smell off the cooling unit'],
+          },
+        ],
+      }),
+      raiser,
+      SITE,
+    );
+    expect(d.improvementDetails).toContain('Operator wrote: Robot stalled on the sprue');
+    expect(d.improvementDetails).toContain('Operator wrote: Smell off the cooling unit');
+    // And in the one line Mango's register lists, where "Other" alone would
+    // tell a reader scanning it nothing at all.
+    expect(d.description).toContain('Robot stalled on the sprue');
+  });
+
+  it('says so when OTH-99 was picked and nothing was written', () => {
+    const d = buildImpwDraft(
+      finding({
+        breakdownHrs: 3,
+        breakdowns: [
+          { code: 'OTH-99', label: 'Other (enter free-text note)', owner: '', hours: 3, notes: [] },
+        ],
+      }),
+      raiser,
+      SITE,
+    );
+    expect(d.improvementDetails).toContain('Nothing written against it');
   });
 
   it('writes a body that stands on its own away from the dashboard', () => {
@@ -517,7 +597,7 @@ describe('IMPW validation', () => {
   it('classifies the kind of gap, but files every KPI ticket under one Type of Improvement', () => {
     const quality = detectImpwFindings([slice({ output: 900, reject: 100, yieldPct: 90 })], RULES)[0];
     expect(suggestImpwClassification(quality)).toEqual({ type: 'Quality', improvement: 'Process Gap', other: 'PMD - AU' });
-    const process = detectImpwFindings([slice({ breakdownHrs: 1, breakdowns: [{ code: 'MAT-01', label: 'Material shortage', owner: 'Operator', hours: 1, note: '' }] })], RULES)[0];
+    const process = detectImpwFindings([slice({ breakdownHrs: 1, breakdowns: [{ code: 'MAT-01', label: 'Material shortage', owner: 'Operator', hours: 1, notes: [] }] })], RULES)[0];
     expect(suggestImpwClassification(process)).toEqual({ type: 'Process Improvement', improvement: 'Process Gap', other: 'PMD - AU' });
     expect(IMPW_IMPROVEMENT_TYPES).toEqual(['Process Gap']);
   });
@@ -527,7 +607,7 @@ describe('IMPW validation', () => {
     const findings = [
       slice({ breakdownHrs: 2 }),
       slice({ output: 900, reject: 100, yieldPct: 90 }),
-      slice({ breakdownHrs: 1, breakdowns: [{ code: 'MAT-01', label: 'Material shortage', owner: 'Operator', hours: 1, note: '' }] }),
+      slice({ breakdownHrs: 1, breakdowns: [{ code: 'MAT-01', label: 'Material shortage', owner: 'Operator', hours: 1, notes: [] }] }),
     ].flatMap((s) => detectImpwFindings([s], RULES));
     expect(findings).toHaveLength(3);
     for (const f of findings) {
