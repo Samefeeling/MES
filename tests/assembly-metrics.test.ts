@@ -13,7 +13,10 @@ import {
 } from '../src/core/assembly-metrics';
 import type { AssemblyResult } from '../src/types/assembly';
 
-/** One booked day. Two people, an order worth half an hour a unit. */
+/**
+ * One booked day. Two people on it the whole shift — 15 labour hours booked —
+ * and an order worth half an hour a unit.
+ */
 const day = (over: Partial<AssemblyResult> = {}): AssemblyResult => ({
   id: '1',
   job: 'ASM8001',
@@ -22,6 +25,7 @@ const day = (over: Partial<AssemblyResult> = {}): AssemblyResult => ({
   operators: 'Tom, Bo',
   plannedHours: 30,
   orderQty: 60,
+  bookedHours: 15,
   output: 10,
   complete: 10,
   reject: 0,
@@ -93,14 +97,56 @@ describe('yield', () => {
 
 describe('efficiency', () => {
   it('is the standard the units earned against the hours that earned them', () => {
-    // Two people for a day is 15 crew hours; 30 units at half an hour each is
-    // 15 standard hours earned. Exactly on plan.
+    // 15 labour hours booked; 30 units at half an hour each is 15 standard
+    // hours earned. Exactly on plan.
     expect(efficiencyPct(assemblyMetrics([day({ complete: 30 })]))).toBe(100);
     expect(efficiencyPct(assemblyMetrics([day({ complete: 15 })]))).toBe(50);
   });
 
-  it('counts nobody on the order as no crew hours, not as a division by zero', () => {
-    const agg = assemblyMetrics([day({ operators: '', complete: 30 })]);
+  /*
+   * The change of denominator, and why it matters on the floor. Crew hours are
+   * the crew's whole day whether or not they spent it here; booked hours are
+   * what this order actually took. An order two people picked up for the last
+   * two hours of the day and finished used to read as 27% efficient.
+   */
+  it('divides by the time the order took, not by the crew\u2019s whole day', () => {
+    const agg = assemblyMetrics([day({ complete: 8, bookedHours: 4 })]);
+    expect(agg.crewHours).toBe(15);
+    expect(agg.bookedHours).toBe(4);
+    // 8 units at half an hour = 4 standard hours, in 4 booked hours.
+    expect(efficiencyPct(agg)).toBe(100);
+  });
+
+  /*
+   * A row written before the board measured labour hours. It is a day nobody
+   * timed, not a day that took no time — scoring it would report a floor
+   * working at infinite efficiency on every historical record.
+   */
+  it('leaves an unmeasured day out of both sides', () => {
+    const measured = day({ complete: 30 });
+    const unmeasured = day({
+      id: '2',
+      day: '2026-09-09',
+      complete: 20,
+      bookedHours: null,
+    });
+    const agg = assemblyMetrics([measured, unmeasured]);
+    expect(agg.judgedHours).toBe(15);
+    // Only the measured day's 15 standard hours are judged, against its 15.
+    expect(efficiencyPct(agg)).toBe(100);
+    // Both days' output and standard hours are still reported in full.
+    expect(agg.complete).toBe(50);
+    expect(agg.earnedHours).toBe(25);
+  });
+
+  it('says nothing at all when no day in the window was measured', () => {
+    const agg = assemblyMetrics([day({ complete: 30, bookedHours: null })]);
+    expect(agg.bookedHours).toBe(0);
+    expect(efficiencyPct(agg)).toBeNull();
+  });
+
+  it('counts nobody on the order as no hours, not as a division by zero', () => {
+    const agg = assemblyMetrics([day({ operators: '', bookedHours: 0, complete: 30 })]);
     expect(agg.crewHours).toBe(0);
     expect(efficiencyPct(agg)).toBeNull();
   });
@@ -147,18 +193,30 @@ describe('output against plan', () => {
   });
 });
 
-describe('booked hours', () => {
+describe('made hours', () => {
   it('value everything that came off the line, good or not', () => {
     // 30 output at half an hour each, of which 28 were good.
     const agg = assemblyMetrics([day({ output: 30, complete: 28, reject: 2 })]);
-    expect(agg.bookedHours).toBe(15);
+    expect(agg.madeHours).toBe(15);
     expect(agg.earnedHours).toBe(14);
     // The gap between the two is what the rejects cost in time.
-    expect(agg.bookedHours - agg.earnedHours).toBe(1);
+    expect(agg.madeHours - agg.earnedHours).toBe(1);
   });
 
   it('are left out with the rest when there is no standard', () => {
-    expect(assemblyMetrics([day({ orderQty: 0, output: 30 })]).bookedHours).toBe(0);
+    expect(assemblyMetrics([day({ orderQty: 0, output: 30 })]).madeHours).toBe(0);
+  });
+
+  /*
+   * Booked hours are measured, not valued: they are the time the crew spent,
+   * so an order nobody costed still reports the hours it took. Only the
+   * comparison between the two is withheld.
+   */
+  it('are not what booked hours are — those stand on their own', () => {
+    const agg = assemblyMetrics([day({ orderQty: 0, output: 30 })]);
+    expect(agg.bookedHours).toBe(15);
+    expect(agg.madeHours).toBe(0);
+    expect(efficiencyPct(agg)).toBeNull();
   });
 });
 
@@ -212,7 +270,7 @@ describe('by line', () => {
     ];
     const lines = assemblyByLine(rows, ['UPL-CUT', 'ASM']);
     // Anything the board does not run still gets a row — after the ones it does.
-    expect(lines.map((l) => l.line)).toEqual(['UPL-CUT', 'Assembly Seats', 'Laser']);
+    expect(lines.map((l) => l.line)).toEqual(['UPL-CUT', 'Assembly', 'Laser']);
     expect(lines[0].agg.orders).toBe(1);
   });
 
@@ -262,12 +320,18 @@ describe('the traffic light', () => {
 });
 
 
-it('combines legacy ASM and Assembly Seats records without losing output', () => {
-  const rows = [day({ id: '1', job: 'A', line: 'ASM', complete: 10 }), day({ id: '2', job: 'B', line: 'Assembly Seats', complete: 20 })];
-  const lines = assemblyByLine(rows, ['Assembly Seats']);
+it('combines every name the assembly line has had without losing output', () => {
+  const rows = [
+    day({ id: '1', job: 'A', line: 'ASM', complete: 10 }),
+    day({ id: '2', job: 'B', line: 'Assembly Seats', complete: 20 }),
+    day({ id: '3', job: 'C', line: 'Assembly', complete: 5 }),
+  ];
+  const lines = assemblyByLine(rows, ['Assembly']);
   expect(lines).toHaveLength(1);
-  expect(lines[0].line).toBe('Assembly Seats');
-  expect(lines[0].agg.complete).toBe(30);
-  expect(lines[0].orders.map(order => order.line)).toEqual(['Assembly Seats', 'Assembly Seats']);
+  expect(lines[0].line).toBe('Assembly');
+  expect(lines[0].agg.complete).toBe(35);
+  expect(lines[0].orders.map(order => order.line)).toEqual(['Assembly', 'Assembly', 'Assembly']);
+  // The record itself is untouched: the roll-up renames the row it draws,
+  // never the row it read.
   expect(rows[0].line).toBe('ASM');
 });

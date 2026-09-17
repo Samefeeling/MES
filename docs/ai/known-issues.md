@@ -173,6 +173,61 @@
   See `sanitizeBodyStrings` + `findInvalidTextField` in
   `src/dal/sharepoint.ts`.
 
+## Assembly board
+
+- **Two identical `ASSY_Production` rows for one job-day** (fixed
+  2026-09-16). The sync reads the whole list once, decides which days have
+  no row yet, and opens them. Two boards on the same plan — a second tab,
+  another supervisor's screen, the terminal left open on the line — both
+  read "no row for today" and both opened one, so the day's *first* row
+  could be written twice. It showed on closing an order because that is
+  when a day's first row is usually written; updates are idempotent and
+  never duplicated anything. Downstream, `createAssemblyDataLayer` throws
+  `Duplicate Assembly result: job|day` and the Assembly KPI page refuses
+  the range, which is correct — it cannot know which row is the figure.
+  Three things close it: rows are matched on `RecordKey` rather than on a
+  parsed `Date` (a SharePoint date column answers in the site's timezone,
+  not necessarily the shift's day); the key is asked for again immediately
+  before a row is opened, so a row another board has just written is
+  updated instead; and a create refused by the list's unique index on
+  `RecordKey` is recovered by writing into the row that won. **Keep that
+  unique index** — `config/assembly-lists.json` asks for it, and
+  provisioning cannot enable it while duplicates already exist, so clear
+  them first.
+- **`RecordKey` is generated, not derived** (since 2026-09-16). The board
+  makes one when a shift first saves a day's entry and stores it on the
+  plan; both sides then carry it. Deriving it from `Job|YYYY-MM-DD` tied a
+  row's identity to the one field on the record that can be read two ways.
+  The old key and the `Date` column are still tried, in that order, so
+  nothing already in the list is orphaned — and a row recognised that way
+  is rewritten under the booking's key, so each is asked the old questions
+  once in its life. If the saved plan is ever lost the keys go with it; the
+  day fallback then matches those rows and re-keys them, so no duplicates
+  are written.
+- **`BookedHour` must exist on the list before this build is deployed.**
+  Every column the sync writes has to be there, so until it is the write
+  fails with `Missing SharePoint column: BookedHour` in the board's banner
+  and *no production is recorded at all*. It is in
+  `config/assembly-lists.json`; re-run `provision-assembly.ps1 -Apply` or
+  add a Number column named exactly `BookedHour`.
+- **Efficiency reads blank for everything booked before that.** It is now
+  Std h ÷ Booked h, and a row with no measured hours is excluded from both
+  sides rather than scored — a day nobody timed did not take no time. The
+  figure fills in from the first entry saved after the column exists.
+- **Duplicates already in the list are reported, not removed.** The sync
+  names the extra row's item id in the banner and keeps the *oldest* row
+  for that day current. Deleting somebody's production row is not a
+  decision a background sync makes; delete the named extras in SharePoint
+  and the KPI page reads the range again.
+- **A missing column is not a red light.** `JobReleased` and
+  `MaterialPrep` are optional in `Planning1.csv`. Where the export carries
+  neither, every order reads `released: null` / `materialPrep: 'unknown'`,
+  and the start gate used to stop every start with "Release status is
+  missing · kit status missing" and ask for an override — which the floor
+  then clicked through on the orders that mattered too. `startEligibility`
+  now gates on what the plant has said (not released, a real shortage, a
+  kit reported not ready, nobody allocated) and steps over what it has not.
+
 ## Build / toolchain
 
 - **Deployed app shows mock data / old P-codes = built without

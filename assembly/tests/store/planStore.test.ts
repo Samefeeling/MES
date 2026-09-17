@@ -83,6 +83,125 @@ describe('ASSY_Production bookings', () => {
     expect(state.production[String(job)][0].operatorIds).toEqual(['W01', 'W02']);
   });
 
+  /*
+   * What the booking cost, and the row it owns.
+   *
+   * Both are the store's to decide — the panel only says when Save entry was
+   * pressed — so that the figure the KPI page divides by and the key the
+   * SharePoint row is written under can never be worked out two different ways
+   * in two different places.
+   */
+  it('times what a booking cost and gives it a row of its own', () => {
+    const job = JobId('ASSY-106');
+    const at = (hour: number, minute = 0): string =>
+      new Date(2026, 7, 31, hour, minute).toISOString();
+    usePlanStore.setState({
+      orderCrewAssignments: crewOf({ [String(job)]: ['W01', 'W02'] }),
+    });
+    usePlanStore.getState().startOrder(job, {
+      startedAt: at(9, 30),
+      overrideReason: null,
+      operatorIds: ['W01', 'W02'],
+      operatorNames: ['Lee', 'Gate'],
+    });
+
+    usePlanStore.getState().saveProductionEntry(
+      job,
+      { ...entry(5), savedAt: at(15), operatorIds: ['W01', 'W02'] },
+      { remainingQty: 20, completedQty: 0 },
+    );
+
+    const first = usePlanStore.getState().production[String(job)][0];
+    // 09:30 to 15:00 is five and a half hours, less the half hour at lunch:
+    // five hours each for the two of them.
+    expect(first.bookedHours).toBe(10);
+    expect(first.savedAt).toBe(at(15));
+    expect(first.recordKey).toBeTruthy();
+
+    // Booking again the same day runs the clock on and keeps the same row: a
+    // new key each save would leave the first row behind and open another.
+    usePlanStore.getState().saveProductionEntry(
+      job,
+      { ...entry(9), savedAt: at(15, 15), operatorIds: ['W01', 'W02'] },
+      { remainingQty: 20, completedQty: 0 },
+    );
+    const second = usePlanStore.getState().production[String(job)][0];
+    expect(second.bookedHours).toBe(10.5);
+    expect(second.recordKey).toBe(first.recordKey);
+  });
+
+  it('takes support work at the hours somebody entered, not off a clock', () => {
+    const job = JobId('FG-20260831-abc');
+    usePlanStore.getState().startOrder(job, {
+      startedAt: new Date(2026, 7, 31, 15, 0).toISOString(),
+      overrideReason: null,
+      operatorIds: ['W07'],
+      operatorNames: ['Alex'],
+    });
+    usePlanStore.getState().saveProductionEntry(
+      job,
+      {
+        ...entry(6),
+        laborHours: 6,
+        savedAt: new Date(2026, 7, 31, 15, 1).toISOString(),
+        operatorIds: ['W07'],
+      },
+      { remainingQty: 6, completedQty: 0 },
+    );
+    // A support order is confirmed and booked in the same press, so its clock
+    // would read a minute. The hours are the ones the supervisor typed.
+    expect(usePlanStore.getState().production[String(job)][0].bookedHours).toBe(6);
+  });
+
+  it('takes a completion back off an order closed in error', () => {
+    const job = JobId('ASSY-104');
+    usePlanStore.setState({ orderCrewAssignments: crewOf({ [String(job)]: ['W01', 'W04'] }) });
+    usePlanStore.getState().startOrder(job, {
+      startedAt: '2026-08-31T00:00:00.000Z',
+      overrideReason: null,
+      operatorIds: ['W01', 'W04'],
+      operatorNames: ['Lee', 'Sam'],
+    });
+    usePlanStore.getState().saveProductionEntry(
+      job,
+      {
+        ...entry(7),
+        paused: false,
+        pauseReason: null,
+        jobCompleted: true,
+        operatorIds: ['W01', 'W04'],
+        operatorNames: ['Lee', 'Sam'],
+        completedAt: '2026-08-31T05:30:00.000Z',
+      },
+      { remainingQty: 7, completedQty: 93 },
+    );
+    expect(usePlanStore.getState().orderCrewAssignments[String(job)]).toBeUndefined();
+
+    usePlanStore.getState().reopenOrder(job);
+
+    const state = usePlanStore.getState();
+    const booking = state.production[String(job)][0];
+    expect(booking.jobCompleted).toBe(false);
+    expect(booking.completedAt).toBeNull();
+    // What the shift booked is left exactly as it was — the correction is made
+    // in the entry form afterwards, and the usual figure is right.
+    expect(booking.complete).toBe(7);
+    expect(state.progress[String(job)]).toEqual([{ date: '2026-08-31', qty: 7 }]);
+    // Closing the order released the crew, so reopening it puts them back —
+    // as a written allocation, which is the only kind that can be added to.
+    expect(
+      state.orderCrewAssignments[String(job)].map((a) => a.workerId),
+    ).toEqual(['W01', 'W04']);
+  });
+
+  it('invents no history for an order that was never closed', () => {
+    const job = JobId('ASSY-105');
+    usePlanStore.setState({ production: { [String(job)]: [entry(4)] } });
+    const before = usePlanStore.getState().production;
+    usePlanStore.getState().reopenOrder(job);
+    expect(usePlanStore.getState().production).toBe(before);
+  });
+
   it('keeps each person\u2019s own days on the one record of the crew', () => {
     // This used to prove that a bounded allocation stayed out of the
     // window-less mirror the store kept alongside it. There is no mirror now,

@@ -14,10 +14,11 @@
  *   the hours it took — so counting its rows as production would report a line
  *   that made nothing all week.
  *
- *   A row that carries no standard is excluded from **both** sides of
- *   Efficiency rather than counted as zero. An order nobody gave a labour
- *   standard is not an order that was worked badly, and PMD's comparison
- *   metric drops an unjudgeable job-shift for the same reason.
+ *   A row that carries no standard, or no measured labour hours, is excluded
+ *   from **both** sides of Efficiency rather than counted as zero. An order
+ *   nobody gave a labour standard is not an order that was worked badly, a day
+ *   nobody timed is not a day that took no time, and PMD's comparison metric
+ *   drops an unjudgeable job-shift for the same reason.
  */
 
 import type { AssemblyResult } from '../types/assembly';
@@ -69,18 +70,35 @@ export interface AssemblyAgg {
   /** Support orders and the hours they took, kept out of everything above. */
   supportOrders: number;
   supportHours: number;
-  /** Crew hours the production rows consumed, at 7.5 h a head a day. */
+  /** Crew hours the production rows had available, at 7.5 h a head a day. */
   crewHours: number;
   /**
-   * Hours the shift booked: everything that came off the line, at the order's
-   * own standard. `earnedHours` is the same sum over the *good* pieces only,
-   * so the gap between the two is what the rejects cost in time.
+   * Labour hours those rows actually took, from `BookedHour` — the board times
+   * each day's work from Start production to Save Entry and multiplies by the
+   * crew. This is the denominator of Efficiency: `crewHours` is what the crew
+   * could have given the order, this is what it took.
    */
   bookedHours: number;
+  /**
+   * Standard hours everything made was worth, rejects included.
+   * `earnedHours` is the same sum over the *good* pieces only, so the gap
+   * between the two is what the rejects cost in time.
+   */
+  madeHours: number;
   /** Standard hours those rows earned: units finished x the order's standard. */
   earnedHours: number;
-  /** Crew hours on rows that carried a standard, so Efficiency has a base. */
+  /**
+   * The two sides of Efficiency, over the rows that can answer both.
+   *
+   * A row is in this pair only when it carries a standard *and* a measured
+   * `BookedHour`. Rows missing either are out of both sides rather than scored
+   * zero — an order nobody costed was not worked badly, and a day nobody timed
+   * did not take no time. Summing `earnedHours` over every row and dividing by
+   * these hours would compare work from one set of days against time from
+   * another.
+   */
   judgedHours: number;
+  judgedEarnedHours: number;
   /**
    * What the crew on those rows was expected to produce: their hours divided
    * by the order's standard. The denominator of Output/Plan, and PMD's
@@ -104,8 +122,10 @@ export function emptyAssemblyAgg(): AssemblyAgg {
     supportHours: 0,
     crewHours: 0,
     bookedHours: 0,
+    madeHours: 0,
     earnedHours: 0,
     judgedHours: 0,
+    judgedEarnedHours: 0,
     plannedOutput: 0,
   };
 }
@@ -150,12 +170,18 @@ function addRow(agg: AssemblyAgg, row: AssemblyResult): void {
 
   const hours = crewSize(row.operators) * PRODUCTIVE_HOURS_PER_PERSON;
   agg.crewHours += hours;
+  const booked = row.bookedHours ?? null;
+  if (booked !== null) agg.bookedHours += booked;
   const perUnit = hoursPerUnit(row);
   if (perUnit !== null) {
-    agg.bookedHours += row.output * perUnit;
+    agg.madeHours += row.output * perUnit;
     agg.earnedHours += row.complete * perUnit;
-    agg.judgedHours += hours;
     agg.plannedOutput += hours / perUnit;
+    // Both sides of Efficiency, or neither — see `judgedHours`.
+    if (booked !== null) {
+      agg.judgedHours += booked;
+      agg.judgedEarnedHours += row.complete * perUnit;
+    }
   }
 }
 
@@ -217,8 +243,10 @@ export interface AssemblyLineRoll {
   orders: AssemblyOrderRoll[];
 }
 
-/** Older production rows retain ASM; group them with the renamed line. */
-const lineLabel = (name: string): string => /^(ASM|Assembly Seats)$/i.test(name.trim()) ? 'Assembly Seats' : name.trim() || NO_LINE;
+/** The assembly line has been written down as ASM and as Assembly Seats before
+ *  it was simply Assembly. Older production rows keep whichever name the board
+ *  showed when they were signed off, so all three roll up as one line. */
+const lineLabel = (name: string): string => /^(ASM|Assembly Seats|Assembly)$/i.test(name.trim()) ? 'Assembly' : name.trim() || NO_LINE;
 
 /**
  * The window split by line, and each line by order.
@@ -287,10 +315,18 @@ export function yieldPct(agg: AssemblyAgg): number | null {
   return judged > 0 ? +((agg.complete / judged) * 100).toFixed(1) : null;
 }
 
-/** Standard hours earned against the crew hours that earned them. */
+/**
+ * Standard hours earned against the labour hours that earned them.
+ *
+ * Std h ÷ Booked h: what the finished units were worth at the order's own
+ * standard, over the time the crew actually spent on them. 100% is a day that
+ * went exactly to standard. It used to be measured against `crewHours` — the
+ * crew's whole 7.5-hour day, whether or not they spent it on this order — so
+ * an order picked up for two hours read as a day of poor efficiency.
+ */
 export function efficiencyPct(agg: AssemblyAgg): number | null {
   return agg.judgedHours > 0
-    ? +((agg.earnedHours / agg.judgedHours) * 100).toFixed(1)
+    ? +((agg.judgedEarnedHours / agg.judgedHours) * 100).toFixed(1)
     : null;
 }
 

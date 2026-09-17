@@ -20,7 +20,6 @@ import { JobId } from '@/domain/ids';
 import { POOL_ID, usePlanStore } from '@/store/planStore';
 import { useSupervisorStore } from '@/store/supervisorStore';
 import { useUiStore } from '@/store/uiStore';
-import { DEFAULT_DAY_WIDTH } from '@/store/uiStore';
 import { DRAG_TYPE_BAR } from '@/features/assembly/OrderBar';
 import { DRAG_TYPE_LINE } from '@/features/assembly/lineDrag';
 import type { LineKey } from '@/domain/assembly';
@@ -28,6 +27,7 @@ import { isWeekend } from '@/engine/assembly/dates';
 import { shiftOpensOn } from '@/engine/assembly/shift';
 import { shiftTimelineKeepingClock } from './boardView';
 import { barDragLanding } from './barDrag';
+import { dragColumns, type DayAxis } from './dayAxis';
 import { planGroupMove, type MarkedMove } from './groupMove';
 
 /** Prefer whatever the pointer is actually inside, then the nearest. */
@@ -128,7 +128,8 @@ export function useDragDrop() {
     // because a bar was pushed out; the board is the planner's own layout.
     if (active.data.current?.type === DRAG_TYPE_BAR) {
       const jobId = JobId(String(active.data.current.jobId));
-      const dayWidth = Number(active.data.current.dayWidth) || DEFAULT_DAY_WIDTH;
+      const axis = active.data.current.axis as DayAxis | undefined;
+      const fromDay = Number(active.data.current.fromDay) || 0;
       const showWeekends = active.data.current.showWeekends === true;
       /*
        * How far the pointer went, in columns — and a column is a shift, so two
@@ -137,7 +138,7 @@ export function useDragDrop() {
        * where it came from: every drag landed on a whole day and every pinned
        * order therefore began at 07:00.
        */
-      const columns = (delta?.x ?? 0) / dayWidth;
+      const columns = axis ? dragColumns(axis, fromDay, delta?.x ?? 0) : 0;
       const dayShift = Math.round(columns);
 
       const { orderStarts, setOrderStart, setOvertime, containerOf, moveJob } =
@@ -161,7 +162,10 @@ export function useDragDrop() {
       if (droppedOn && droppedOn !== containerOf(jobId)) {
         moveJob(jobId, droppedOn);
       }
-      if (columns === 0) return;
+      // Nothing to move, and without a grid there is nothing to measure it
+      // against either — the same answer, and the one the compiler needs to
+      // let the landing below take the axis.
+      if (columns === 0 || !axis) return;
 
       /*
        * A set marked with Ctrl moves as one.
@@ -195,7 +199,7 @@ export function useDragDrop() {
           ? new Date(orderStarts[key])
           : shiftOpensOn(new Date());
       const moved = barDragLanding({
-        jobId: key, startISO: from.toISOString(), dayWidth, showWeekends,
+        jobId: key, startISO: from.toISOString(), axis, fromDay, showWeekends,
         floorISO: active.data.current.floorISO as string | null | undefined,
       }, delta?.x ?? 0);
 

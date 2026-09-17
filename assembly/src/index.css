@@ -67,6 +67,11 @@
   --head-ok-bar: #16a34a;
   --head-warn-bar: #d97706;
   --head-error-bar: #dc2626;
+  /* The unfilled part of a load bar. A white track cut a white stripe down
+     every column of the block; this is the block's own blue a few steps
+     lighter, so an empty day reads as empty rather than as a gap in the
+     heading. The fills above still clear 3:1 on it. */
+  --day-bar-track: #CAEDFB;
 
   --tool: #c084fc; /* die / tool change */
   --color: #fb923c; /* colour change */
@@ -74,6 +79,11 @@
 
   --lane-h: 64px;
   --label-w: 150px;
+  /* The load bar down a day column's left edge. A quarter of what it started
+     at: floor to ceiling, the band no longer needs width to be read — the
+     height carries the figure, and 6 px of it beside a date is a gauge on the
+     column rather than a second column of its own. */
+  --day-bar-w: 6px;
   --radius: 8px;
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
     Arial, sans-serif;
@@ -310,7 +320,7 @@ button {
 .app-body {
   position: relative;
   flex: 1;
-  /* The schedule fills the height above the reserved pool strip. */
+  /* Only a populated pool takes height from the schedule. */
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -481,12 +491,21 @@ button {
   border-radius: 8px;
 }
 /*
- * With nothing unassigned the strip keeps its height but stays invisible.
- * Revealing the drop target must not resize the board during a drag.
+ * An empty pool is an overlay, not a blank footer. It appears over the
+ * timeline header during order drags without moving the last row.
  */
 .pool.target-only {
+  position: absolute;
+  top: 6px;
+  right: 12px;
+  z-index: 20;
+  width: 300px;
+  max-width: calc(100% - 24px);
   height: 48px;
   padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px #0002;
 }
 .pool.target-only.inactive { visibility: hidden; pointer-events: none; }
 .pool-target {
@@ -1022,6 +1041,9 @@ button {
   border-bottom: 1px solid var(--border);
   min-height: 40px;
 }
+.arow { min-height: 32px; }
+.arow .acell { padding-top: 2px; padding-bottom: 2px; }
+
 /*
  * The head block: the roster's load squares and the day columns. It stays put
  * while the lines scroll under it — "who has room?" is a question asked all
@@ -1066,10 +1088,8 @@ button {
   color: var(--head-dim);
 }
 .assy-head .day-bar {
-  background: var(--surface);
-  border-color: var(--head-rule);
+  background: var(--day-bar-track);
 }
-.assy-head .daycol { padding: 5px 5px; }
 .assy-head .day-order-filter {
   border-color: transparent;
   background: transparent;
@@ -1163,6 +1183,11 @@ button {
 .col-resize:focus-visible {
   border-right-color: var(--accent);
   outline: none;
+}
+/* A day column's grip is over the heading's own contents rather than in a flex
+   row beside them, so it has to be the thing the pointer finds on that edge. */
+.day-resize {
+  z-index: 2;
 }
 /* Keeps the pointer from selecting half the board mid-drag. */
 body.col-resizing {
@@ -1360,37 +1385,46 @@ body.col-resizing {
   top: 0;
   bottom: 0;
   border-left: 1px solid var(--border);
-  display: flex;
-  align-items: stretch;
-  gap: 6px;
-  padding: 5px 5px;
+  padding: 0;
   font-size: 12px;
   color: var(--muted);
+  overflow: hidden;
 }
+/* Three things in one cell, none of them in a row with the others: the load
+   down the left-hand edge, the date in the middle, the count in the corner.
+   Stacked in a column they pushed the date off centre and left the load bar
+   standing in a box it could not fill. */
 .daycol-main {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
+  position: absolute;
+  inset: 0;
 }
 .daycol-sub {
+  position: absolute;
+  right: 4px;
+  bottom: 1px;
   display: flex;
   align-items: center;
   gap: 3px;
-  min-width: 0;
+  max-width: 100%;
 }
 /*
  * Load histogram. One bar per day filled to its percentage, so the week reads
  * as a shape before anyone reads a number. Bands: green under 80%, orange to
  * 90%, red beyond.
  */
-/* The figure on the column, so a date is legible from the floor. */
+/* The figure on the column, so a date is legible from the floor — and in the
+   middle of the cell, which is where the eye goes looking for it. It is
+   centred in what the load bar leaves rather than in the whole cell, so the
+   two never sit on top of each other on a column dragged narrow. */
 .daycol-date {
+  position: absolute;
+  left: var(--day-bar-w);
+  right: 0;
+  top: 0;
+  bottom: 0;
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  justify-content: center;
   gap: 3px;
   font-size: 15px;
   font-weight: 650;
@@ -1428,14 +1462,16 @@ body.col-resizing {
  * short horizontal ones is read one at a time.
  */
 .day-bar {
-  position: relative;
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
   display: flex;
   align-items: flex-end;
-  flex: 0 0 auto;
-  width: 22px;
+  width: var(--day-bar-w);
   border: 0;
-  border-radius: 2px;
-  background: var(--surface-3);
+  border-radius: 0;
+  background: var(--day-bar-track);
   overflow: hidden;
 }
 .day-bar i {
@@ -1443,14 +1479,13 @@ body.col-resizing {
   width: 100%;
   min-height: 2px;
 }
-/* Inside the track, above the fill: the number confirms the shape and must not
-   cost the heading a line of its own to do it. */
-.day-bar .day-load {
+/* Beside the track rather than inside it. Half the width ago the number fitted
+   over the fill; it no longer does, and a clipped "6" is worse than no
+   percentage at all. */
+.day-load {
   position: absolute;
+  left: calc(var(--day-bar-w) + 2px);
   top: 1px;
-  left: 0;
-  right: 0;
-  text-align: center;
   font-style: normal;
   font-size: 9px;
   letter-spacing: -0.3px;
@@ -1459,10 +1494,7 @@ body.col-resizing {
 .day-bar.green i { background: var(--ok); }
 .day-bar.orange i { background: var(--warn); }
 .day-bar.red i { background: var(--error); }
-.day-load {
-  font-size: 9.5px;
-  font-weight: 700;
-}
+.day-load { font-weight: 700; }
 .day-load.green { color: var(--ok); }
 .day-load.orange { color: var(--warn); }
 .day-load.red { color: var(--error); }
@@ -1587,10 +1619,9 @@ body.col-resizing {
   font-size: 8.5px;
   font-weight: 800;
 }
-/* Recorded output is muted; planned work uses the full fill. */
-.day-bar.actual {
-  background: transparent;
-}
+/* Recorded output is muted; planned work uses the full fill. The track stays:
+   the band is the full height of the heading now, and an actual day with no
+   track behind it would be a column-wide hole in the block. */
 .day-bar.actual i {
   opacity: 0.55;
 }
@@ -1750,11 +1781,20 @@ body.col-resizing {
   z-index: 7;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 0;
   width: max-content;
   max-width: 100%;
-  padding: 4px 10px;
+  padding: 3px 0;
   background: var(--line-band);
+}
+.agroup-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 calc(var(--order-w) + var(--qty-w));
+  width: calc(var(--order-w) + var(--qty-w));
+  min-width: 0;
+  padding: 0 8px;
 }
 /*
  * Folding the line's orders away, in the Order column where its row starts.
@@ -1792,13 +1832,14 @@ body.col-resizing {
 .agroup-label {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   padding: 1px 0;
   background: transparent;
   border: 0;
   color: var(--line-name);
   text-align: left;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .agroup-label.arrangeable { cursor: grab; touch-action: none; }
 .agroup-label.arranging { opacity: 0.45; cursor: grabbing; }
@@ -1849,15 +1890,17 @@ body.col-resizing {
   gap: 3px 4px;
   align-items: center;
   min-width: 0;
-  padding-left: 8px;
-  border-left: 1px solid var(--border);
+  padding: 0 8px;
 }
 .agroup-name {
   color: var(--line-name);
   font-weight: 800;
-  font-size: 13px;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .agroup-note {
   font-size: 10px;
@@ -1868,6 +1911,7 @@ body.col-resizing {
 /* Both pills sit on the tinted line band, so they carry the page's white
    rather than its greys — a grey pill on this band disappears. */
 .agroup-count {
+  flex-shrink: 0;
   background: var(--surface);
   color: var(--muted);
   border-radius: 999px;
@@ -1877,6 +1921,7 @@ body.col-resizing {
 }
 /* The line's work load — remaining standard hours and who is on it. */
 .agroup-load {
+  flex-shrink: 0;
   background: var(--surface);
   color: var(--line-name);
   border-radius: 999px;
@@ -1885,20 +1930,6 @@ body.col-resizing {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
-.agroup-crew {
-  font-size: 10px;
-  color: #0c4a6e;
-  font-variant-numeric: tabular-nums;
-}
-.agroup-gap {
-  font-size: 10px;
-  font-weight: 650;
-  color: var(--warn);
-  background: var(--warn-dim);
-  border-radius: 999px;
-  padding: 0 7px;
-}
-
 /* bars */
 /*
  * The bar spans start → Expect Date; the blocks inside it are the stretches
@@ -1908,8 +1939,8 @@ body.col-resizing {
  */
 .bar {
   position: absolute;
-  top: 6px;
-  bottom: 6px;
+  top: 4px;
+  bottom: 4px;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -2200,7 +2231,7 @@ body.col-resizing {
  */
 .head-metrics {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   gap: 6px 16px;
   margin-left: auto;
   flex-wrap: wrap;
@@ -2209,10 +2240,16 @@ body.col-resizing {
    aligning, so a figure with a panel and one without sit identically. */
 .head-metrics > .metric-slot { display: flex; }
 .head-metrics > .metric-slot > .metric { flex: 1; }
+/* Label over figure, both centred on the same axis. Left-aligned, a two-word
+   label and a three-character figure left the row reading as a ragged stack of
+   different-width blocks; centred, the four of them read as one row of four
+   figures, which is what they are. */
 .metric {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
   gap: 0;
   line-height: 1.15;
   white-space: nowrap;
@@ -2916,6 +2953,17 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .manual-dialog label:has(input[type=checkbox]) { display: flex; align-items: center; gap: 8px; }
 .manual-dialog input:not([type=checkbox]), .manual-dialog textarea { width: 100%; padding: 7px; color: inherit; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; }
 .manual-dialog fieldset { display: flex; flex-wrap: wrap; gap: 12px; }
+
+/* The list of orders closed in the last fortnight, in the reopen dialog. */
+/* What the day's last save booked, above the figures it was booked from. */
+.booked-hours { margin: 0 0 6px; font-variant-numeric: tabular-nums; }
+
+.reopen-list { display: grid; gap: 6px; max-height: 50vh; overflow: auto; margin: 0; padding: 0; list-style: none; }
+.reopen-list li { display: flex; align-items: center; gap: 10px; padding: 6px 8px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; }
+.reopen-job { font-weight: 600; font-variant-numeric: tabular-nums; }
+.reopen-day { color: var(--muted); font-size: 12px; }
+.reopen-gone { color: #b45309; font-size: 12px; font-style: normal; }
+.reopen-list li .btn { margin-left: auto; }
 
 .worker-name:not(.drag-locked) { touch-action: none; }
 .wl-move { display: grid; gap: 6px; padding: 10px 14px; }

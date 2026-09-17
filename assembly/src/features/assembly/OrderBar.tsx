@@ -25,6 +25,7 @@ import { MS_PER_DAY } from '@/lib/time';
 import { endOfCrewDay, startOfCrewDay } from '@/engine/assembly/crewSchedule';
 import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { barTag, timelineDayOffset } from './boardView';
+import type { DayAxis } from './dayAxis';
 import type { MarkedMove } from './groupMove';
 
 export const DRAG_TYPE_BAR = 'order-bar';
@@ -38,7 +39,7 @@ const MIN_PIECE_PX = 10;
 export function OrderBar({
   row,
   horizonStart,
-  dayWidth,
+  axis,
   gridWidth,
   showWeekends,
   readOnly = false,
@@ -53,7 +54,8 @@ export function OrderBar({
 }: {
   row: OrderRow;
   horizonStart: Date;
-  dayWidth: number;
+  /** Where each day sits along the grid, and how wide it is. */
+  axis: DayAxis;
   /** Full width of the day grid, so a tag near the end flips to the left. */
   gridWidth: number;
   showWeekends: boolean;
@@ -90,6 +92,13 @@ export function OrderBar({
    */
   const unlocked = useSupervisorStore((s) => s.unlocked);
   const gate = signInAt(useSupervisorStore((s) => s.hosted));
+  /* Which day the bar is drawn on, worked out before the hook rather than
+     after the early return below it: a drag reads pixels off the axis from
+     *here*, and with columns of different widths there is no single number of
+     pixels that a day is worth. */
+  const fromDay = row.start
+    ? timelineDayOffset(row.start, horizonStart, showWeekends)
+    : 0;
   const dragLocked =
     readOnly || !unlocked || Boolean(row.actualStart) || row.completedToday;
   const { attributes, listeners, setNodeRef, transform, isDragging } =
@@ -104,9 +113,11 @@ export function OrderBar({
         type: DRAG_TYPE_BAR,
         jobId: id,
         startISO: row.start ? row.start.toISOString() : null,
-        // The zoom is live, so the pixels-to-days conversion has to travel with
-        // the drag rather than assume the default column width.
-        dayWidth,
+        // The columns are live — zoomed together, dragged one at a time — so
+        // the pixels-to-days conversion travels with the drag rather than
+        // assuming any one column width.
+        axis,
+        fromDay,
         showWeekends,
         floorISO,
         // Only meaningful when this bar is one of the marked ones; the drop
@@ -152,12 +163,17 @@ export function OrderBar({
   const axisOffset = (date: Date) =>
     timelineDayOffset(date, horizonStart, showWeekends);
   const offsetDays = axisOffset(row.start);
-  const left = offsetDays * dayWidth;
+  const left = axis.x(offsetDays);
   const end = row.expectDate ?? row.planThrough ?? row.start;
   // When weekends are hidden, their zero-width dates are removed from the
   // coordinate system rather than leaving blank columns behind.
   const span = Math.max(0, axisOffset(end) - offsetDays);
-  const width = Math.max(span * dayWidth, MIN_PIECE_PX * 2);
+  // Measured on the axis rather than multiplied by a column width: the days a
+  // bar covers need not be the same width as each other.
+  const width = Math.max(
+    axis.x(offsetDays + span) - left,
+    MIN_PIECE_PX * 2,
+  );
 
   // Two kinds of order run straight through: one the supervisor has approved
   // for the weekend, and a moulding row — the presses keep their own calendar,
@@ -214,9 +230,9 @@ export function OrderBar({
           key: piece.from.getTime(),
           from: piece.from,
           to: piece.to,
-          left: (axisOffset(piece.from) - offsetDays) * dayWidth,
+          left: axis.x(axisOffset(piece.from)) - left,
           width: Math.max(
-            (axisOffset(piece.to) - axisOffset(piece.from)) * dayWidth,
+            axis.x(axisOffset(piece.to)) - axis.x(axisOffset(piece.from)),
             0,
           ),
           // How much of this stretch is already finished.

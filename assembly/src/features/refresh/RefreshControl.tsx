@@ -1,18 +1,24 @@
-/** Re-read the export, and publish this board as the one current plan. */
+/**
+ * Re-read the export, and publish this board as the one current plan.
+ *
+ * Two buttons and nothing else. The read time used to sit under Refresh, and
+ * the source it came from on its hover; both answered questions nobody has —
+ * the source is fixed when the board is built and cannot change while anyone
+ * is looking at it, and the export's clock is not the question a planner has
+ * about this row. The one they do have is whether what is on the board has
+ * been published, and that is what Save answers.
+ */
 
 import { useDataStore } from '@/store/dataStore';
 import { Button, Spinner } from '@/ui';
 
 export function RefreshControl({
-  source,
   onRefresh,
   onSave,
   dirty,
   saving,
   canSave,
 }: {
-  /** Which export the board was built from — on the hover, not in the row. */
-  source?: string;
   onRefresh: () => void;
   onSave: () => void;
   /** Planning edits are being held in this browser and published nowhere. */
@@ -31,11 +37,8 @@ export function RefreshControl({
         onClick={onRefresh}
         disabled={loading}
         title={
-          // The read time used to sit under this button as its own line. It
-          // answered a question nobody had, and the row it was in is now the
-          // one that says whether this board has been published.
-          `${source ? `Read from ${source}. ` : ''}Re-reads the export and takes the saved plan — ` +
-          'anything on this board that has not been saved is dropped.'
+          'Re-reads the export and takes the saved plan — anything on this ' +
+          'board that has not been saved is dropped.'
         }
       >
         Refresh

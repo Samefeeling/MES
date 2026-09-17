@@ -49,7 +49,8 @@ export const SHIFT_RECORD_KEYS = [
 /** Container placement lives at the top level, and is planning. */
 export interface PlanningPart {
   containers: PersistedPlan['containers'];
-  assembly: Pick<Assembly, (typeof PLANNING_KEYS)[number]>;
+  assembly: Pick<Assembly, (typeof PLANNING_KEYS)[number]> &
+    Pick<Assembly, 'orderWorkers'>;
 }
 
 export interface ShiftRecordPart {
@@ -70,12 +71,26 @@ const pick = <K extends keyof Assembly>(
   return out;
 };
 
-/** The planner's opinion, out of a stored plan. */
+/**
+ * The planner's opinion, out of a stored plan.
+ *
+ * `orderWorkers` is carried through when a plan predating day-windowed crew
+ * has it and nothing has replaced it yet — `planStore.setAssemblyPlan` reads
+ * it on the way in and migrates it, and dropping it here would take that
+ * plan's crew with it. It is never built into a part on the way out: the
+ * store has no such field, so the first write from this board is already in
+ * the current shape.
+ */
 export function planningOf(plan: PersistedPlan): PlanningPart {
-  return {
+  const assembly = plan.assembly ?? {};
+  const part: PlanningPart = {
     containers: plan.containers ?? {},
-    assembly: pick(plan.assembly ?? {}, PLANNING_KEYS),
+    assembly: pick(assembly, PLANNING_KEYS),
   };
+  if (assembly.orderWorkers && !assembly.orderCrewAssignments) {
+    part.assembly.orderWorkers = assembly.orderWorkers;
+  }
+  return part;
 }
 
 /** What the floor recorded, out of a stored plan. */

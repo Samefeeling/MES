@@ -73,8 +73,36 @@ export interface PlanSummary {
 /** The id used for the planner's live working plan. */
 export const CURRENT_PLAN_ID = 'current';
 
+/**
+ * The id a day's closing plan is filed under.
+ *
+ * One row per day the board was used, holding that day's last saved state.
+ * The working plan is a single row that every save overwrites, so until these
+ * existed the board had no history at all: a crew allocation lost to a
+ * mis-drag, an order somebody moved off a line, a shift entry saved against
+ * the wrong job — there was nothing to compare with and nothing to go back to.
+ *
+ * Each day's row is also, exactly, the state the next day starts from: the
+ * plan is not reset overnight, so the last save of Thursday *is* Friday's
+ * opening position, and this is the record of what that was.
+ */
+export const dailyPlanId = (day: string): string => `day-${day}`;
+
+/** True for the ids `dailyPlanId` makes, so a listing can tell them apart. */
+export const isDailyPlanId = (id: string): boolean =>
+  /^day-\d{4}-\d{2}-\d{2}$/.test(id);
+
 export interface PlanRepository {
   save(plan: PersistedPlan): Promise<void>;
   load(id?: string): Promise<PersistedPlan | null>;
   list(): Promise<PlanSummary[]>;
+  /**
+   * File a read-only copy of a plan under its own id, leaving the working plan
+   * alone. Used for the daily archive above.
+   *
+   * Written once per id: a day that has already been filed is never rewritten,
+   * so a second board coming along later — or a tab that was open across
+   * midnight and is behind — cannot overwrite the history with a staler copy.
+   */
+  saveSnapshot(plan: PersistedPlan): Promise<void>;
 }

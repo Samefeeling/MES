@@ -22,6 +22,12 @@ export class LocalStoragePlanRepository implements PlanRepository {
     localStorage.setItem(this.key(plan.id), JSON.stringify(plan));
   }
 
+  /** Written once: a day already filed keeps the copy it was filed with. */
+  async saveSnapshot(plan: PersistedPlan): Promise<void> {
+    if (localStorage.getItem(this.key(plan.id)) !== null) return;
+    await this.save(plan);
+  }
+
   async load(id: string = CURRENT_PLAN_ID): Promise<PersistedPlan | null> {
     const raw = localStorage.getItem(this.key(id));
     if (!raw) return null;

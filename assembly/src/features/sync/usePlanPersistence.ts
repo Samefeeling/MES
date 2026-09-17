@@ -26,13 +26,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDataStore } from '@/store/dataStore';
 import { useIgnoredOrders } from '@/store/ignoredOrders';
 import { usePlanStore } from '@/store/planStore';
+import { toDayKey } from '@/lib/time';
 import {
   CURRENT_PLAN_ID,
   createPlanRepository,
+  dailyPlanId,
   joinPlan,
   planningFingerprint,
   planningOf,
   shiftRecordsOf,
+  type PersistedPlan,
   type PlanningPart,
   type ShiftRecordPart,
 } from '@/persistence';
@@ -86,6 +89,17 @@ const recordsNow = (): ShiftRecordPart => {
 const RECORD_DEBOUNCE_MS = 600;
 
 /**
+ * The local day an ISO timestamp falls on, for deciding whether a stored plan
+ * was last written today or on an earlier day. A stored plan with no readable
+ * time is treated as today's, which files nothing: better one unrecorded day
+ * than a day of history filed under the wrong date.
+ */
+const dayOfIso = (at: string): string => {
+  const when = new Date(at);
+  return Number.isNaN(when.getTime()) ? toDayKey(new Date()) : toDayKey(when);
+};
+
+/**
  * How the read of the stored plan went.
  *
  * `loaded` also covers a repository that has nothing stored yet — a new board
@@ -100,6 +114,8 @@ export interface PlanPersistence {
   stored: StoredState;
   /** Why the last read or write failed, for the banner. */
   error: string | null;
+  /** Kept apart from `error`: the plan saving is not the history filing. */
+  archiveError: string | null;
   /** Planning edits are being held here and have not been published. */
   dirty: boolean;
   saving: boolean;
@@ -170,6 +186,7 @@ export function usePlanPersistence(): PlanPersistence {
 
   const [stored, setStored] = useState<StoredState>('reading');
   const [error, setError] = useState<string | null>(null);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [settled, setSettled] = useState(false);
   /** Fingerprint of the planning that is on the repository, or null while
@@ -177,12 +194,56 @@ export function usePlanPersistence(): PlanPersistence {
   const [clean, setClean] = useState<string | null>(null);
 
   const bootstrapped = useRef(false);
+  /**
+   * The plan last written to `current`, and the local day it was written on.
+   *
+   * The working plan is one row that every write overwrites, so the state a
+   * day closed in would be gone the moment the next one landed. This is what
+   * makes a day's history: on the first write of a new day the previous day's
+   * last stored plan is filed under its own id before it is overwritten, which
+   * is both the record of what that day ended as and — because the board is
+   * never reset overnight — the record of what this one started from.
+   *
+   * Seeded from the stored plan on the way in, so the first write after a
+   * board is opened in the morning files what was left last night, whether or
+   * not anybody had this tab open at midnight. Both writers go through
+   * `store` below, so a day is filed whether it was a Save or a shift entry
+   * that first touched the plan today.
+   */
+  const storedPlan = useRef<{ day: string; plan: PersistedPlan } | null>(null);
   /** A Save is in the air. The record write reads-then-writes, so letting the
    *  two overlap would put the planning read before the Save back over it. */
   const savingNow = useRef(false);
   const writeTimer = useRef<number | undefined>(undefined);
   const writeGeneration = useRef(0);
   const [attempt, setAttempt] = useState(0);
+
+  /**
+   * Write the working plan, filing yesterday's closing state first.
+   *
+   * Failing to file is not a reason to stop saving the plan itself: the
+   * archive is for looking back, and a board that refused to work because it
+   * could not write history would be the worse failure. It is said in its own
+   * banner and the day is left unfiled.
+   */
+  const store = useCallback(async (plan: PersistedPlan): Promise<void> => {
+    const today = toDayKey(new Date());
+    const previous = storedPlan.current;
+    if (previous && previous.day < today) {
+      try {
+        await repo.saveSnapshot({
+          ...previous.plan,
+          id: dailyPlanId(previous.day),
+          name: `Plan on ${previous.day}`,
+        });
+        setArchiveError(null);
+      } catch (e) {
+        setArchiveError(reason(e));
+      }
+    }
+    await repo.save(plan);
+    storedPlan.current = { day: today, plan };
+  }, []);
 
   /** Put a stored plan's planning half on the board. */
   const adopt = useCallback((part: PlanningPart) => {
@@ -221,6 +282,7 @@ export function usePlanPersistence(): PlanPersistence {
       .load()
       .then((persisted) => {
         if (persisted) {
+          storedPlan.current = { day: dayOfIso(persisted.savedAt), plan: persisted };
           adopt(planningOf(persisted));
           plan.setAssemblyPlan(shiftRecordsOf(persisted).assembly);
         }
@@ -270,7 +332,7 @@ export function usePlanPersistence(): PlanPersistence {
       }
       if (!base) return;
       try {
-        await repo.save(joinPlan(CURRENT_PLAN_ID, PLAN_NAME, base, records));
+        await store(joinPlan(CURRENT_PLAN_ID, PLAN_NAME, base, records));
         if (generation === writeGeneration.current) {
           setError(null);
           setSettled(true);
@@ -284,15 +346,14 @@ export function usePlanPersistence(): PlanPersistence {
     window.clearTimeout(writeTimer.current);
     writeTimer.current = window.setTimeout(() => void write(), RECORD_DEBOUNCE_MS);
     return () => window.clearTimeout(writeTimer.current);
-  }, [records, stored]);
+  }, [records, stored, store]);
 
   const save = useCallback(() => {
     if (stored !== 'loaded' || saving) return;
     const part = planningNow();
     savingNow.current = true;
     setSaving(true);
-    void repo
-      .save(joinPlan(CURRENT_PLAN_ID, PLAN_NAME, part, recordsNow()))
+    void store(joinPlan(CURRENT_PLAN_ID, PLAN_NAME, part, recordsNow()))
       .then(() => {
         published.current = part;
         setClean(planningFingerprint(part));
@@ -303,7 +364,7 @@ export function usePlanPersistence(): PlanPersistence {
         savingNow.current = false;
         setSaving(false);
       });
-  }, [stored, saving]);
+  }, [stored, saving, store]);
 
   const pull = useCallback(async () => {
     // Only from a board that read the stored plan in the first place. A failed
@@ -340,5 +401,5 @@ export function usePlanPersistence(): PlanPersistence {
   const dirty =
     stored === 'loaded' && clean !== null && planningFingerprint(planning) !== clean;
 
-  return { stored, error, dirty, saving, settled, save, pull, retry };
+  return { stored, error, archiveError, dirty, saving, settled, save, pull, retry };
 }

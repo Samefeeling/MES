@@ -80,6 +80,36 @@ export const pickShortfall = (
     ? 0
     : Math.max(0, requiredQty - onHand);
 
+/**
+ * What the Complete box should hold when the completion tick changes.
+ *
+ * "Job completed" with a Complete box left on nothing is the same claim made
+ * twice and contradicted once: the order is finished, and none of it was
+ * finished today. The shift meant the remainder, so ticking the box fills it
+ * with exactly that — every unit still owed on the order plus anything already
+ * booked today, which is what `maxComplete` is. It stays an ordinary editable
+ * figure; a run closed short is typed over.
+ *
+ * Only an empty box is filled, so a figure somebody entered is never
+ * overwritten, and taking the tick off again only takes back the panel's own
+ * number — `filled` is how it tells the two apart.
+ */
+export function completeOnTick(
+  checked: boolean,
+  form: { draft: string; maxComplete: number; booked: string; filled: boolean },
+): { draft: string; filled: boolean } {
+  const { draft, maxComplete, booked, filled } = form;
+  if (checked) {
+    return Number(draft || 0) === 0 && maxComplete > 0
+      ? { draft: String(maxComplete), filled: true }
+      : { draft, filled };
+  }
+  return {
+    draft: filled && draft === String(maxComplete) ? booked : draft,
+    filled: false,
+  };
+}
+
 export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
   const selectedJobId = useUiStore((s) => s.selectedJobId);
   const selectedAt = useUiStore((s) => s.selectedAt);
@@ -150,6 +180,7 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
   );
   const startOrder = usePlanStore((s) => s.startOrder);
   const saveProductionEntry = usePlanStore((s) => s.saveProductionEntry);
+  const reopenOrder = usePlanStore((s) => s.reopenOrder);
   const setOrderStart = usePlanStore((s) => s.setOrderStart);
   const orderStarts = usePlanStore((s) => s.orderStarts);
   const unlocked = useSupervisorStore((s) => s.unlocked);
@@ -166,6 +197,12 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
   const [jobCompleted, setJobCompleted] = useState(false);
   const [pauseReason, setPauseReason] = useState<PauseReason>('material-shortage');
   const [notes, setNotes] = useState('');
+  /**
+   * True while the Complete box is holding a figure this panel put there
+   * rather than one somebody typed. Only that figure is taken back when the
+   * completion tick comes off again — a number the shift entered is theirs.
+   */
+  const filledComplete = useRef(false);
   const [overrideReason, setOverrideReason] = useState('');
   const [startMessage, setStartMessage] = useState('');
   const [entryMessage, setEntryMessage] = useState('');
@@ -181,6 +218,7 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
     setJobCompleted(Boolean(existing?.jobCompleted));
     setPauseReason(existing?.pauseReason ?? 'material-shortage');
     setNotes(existing?.notes ?? '');
+    filledComplete.current = false;
     setOverrideReason('');
     setStartMessage('');
     setEntryMessage('');
@@ -271,6 +309,28 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
     setStartMessage('Production start confirmed.');
   };
 
+  const completeJob = (checked: boolean) => {
+    setJobCompleted(checked);
+    const next = completeOnTick(checked, {
+      draft,
+      maxComplete,
+      booked: existingToday ? String(existingToday.complete) : '',
+      filled: filledComplete.current,
+    });
+    setDraft(next.draft);
+    filledComplete.current = next.filled;
+  };
+
+  /** Undo a completion booked in error — the way back from a closed order. */
+  const reopen = () => {
+    if (!unlocked) {
+      setEntryMessage(`Sign in as ${gate} to reopen a completed order.`);
+      return;
+    }
+    reopenOrder(job.id);
+    setEntryMessage('Order reopened. Correct the entry and save it again.');
+  };
+
   const book = () => {
     if (closed) {
       setEntryMessage('Completed entries are locked.');
@@ -298,9 +358,11 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
       setEntryMessage('Enter production, a pause, completion, or a note before saving.');
       return;
     }
-    const completedAt = jobCompleted ? new Date().toISOString() : null;
+    const savedAt = new Date().toISOString();
+    const completedAt = jobCompleted ? savedAt : null;
     saveProductionEntry(job.id, {
       date: today,
+      savedAt,
       complete: qty,
       reject: Number(reject),
       rework: Number(rework),
@@ -316,7 +378,21 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
       remainingQty: row.sourceRemainingQty ?? row.job.remainingQty,
       completedQty: row.sourceCompletedQty ?? row.job.completedQty,
     });
-    setEntryMessage(jobCompleted ? 'Entry saved. Crew released.' : 'Entry saved.');
+    /*
+     * Say how many labour hours went with it. The figure is read back rather
+     * than worked out again here: the store decides it — from when the order
+     * started, when this was saved and who was on it — and a second opinion
+     * computed in the panel is a second answer waiting to disagree with the
+     * one the KPI page will report.
+     */
+    const booked = usePlanStore
+      .getState()
+      .production[String(job.id)]?.find((saved) => saved.date === today)
+      ?.bookedHours;
+    const hours = booked ? ` ${booked} labour hours booked.` : '';
+    setEntryMessage(
+      (jobCompleted ? 'Entry saved. Crew released.' : 'Entry saved.') + hours,
+    );
   };
 
   return (
@@ -680,6 +756,20 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
             Production entry
             <span className="count">today</span>
           </h3>
+          {/*
+            What the last save booked, in labour hours — the figure Efficiency
+            is measured against, shown where it was earned rather than only on
+            the KPI page a week later. It is the crew's time on the order, not
+            an allowance: from Start production (07:00 on any day after) to the
+            moment the entry was saved, less breaks, times the crew.
+          */}
+          {existingToday?.bookedHours !== undefined && (
+            <p className="hint booked-hours">
+              {existingToday.bookedHours} labour hours booked
+              {existingToday.savedAt &&
+                ` · saved ${formatTime(new Date(existingToday.savedAt))}`}
+            </p>
+          )}
           <div className="production-grid">
             <label><span>Shift output</span><input type="number" min={0} value={shiftOutput} onChange={(event) => setShiftOutput(event.target.value)} /></label>
             <label><span>Reject</span><input type="number" min={0} value={reject} onChange={(event) => setReject(event.target.value)} /></label>
@@ -691,7 +781,7 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
               <input type="checkbox" checked={paused} onChange={(event) => setPaused(event.target.checked)} /> Pause
             </label>
             <label className="pause-toggle">
-              <input type="checkbox" checked={jobCompleted} onChange={(event) => setJobCompleted(event.target.checked)} /> Job completed
+              <input type="checkbox" checked={jobCompleted} onChange={(event) => completeJob(event.target.checked)} /> Job completed
             </label>
           </div>
           {paused && (
@@ -701,15 +791,32 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
           )}
           <textarea className="production-input" value={notes} placeholder="Notes (optional)" onChange={(event) => setNotes(event.target.value)} />
           {entryMessage && <p className="hint action-message" role="status">{entryMessage}</p>}
-          {/* The note that explains the form sits with the button that submits
-              it, so the section ends on its action rather than trailing off. */}
+          {/*
+            The note that explains the form sits with the button that submits
+            it, so the section ends on its action rather than trailing off.
+
+            On a closed order that action is the way back out, not a button that
+            does nothing. Closing is the one booking that cannot be corrected by
+            booking again — the entry form locks, the crew is released and
+            tomorrow the order is off the board — so the wrong job number closed
+            at the end of a shift used to be a job for whoever could edit the
+            SharePoint list. Reopening is the supervisor's, like the override on
+            the start gate: the shift reports what it built, a supervisor
+            decides that a finished order was not finished.
+          */}
           <div className="section-foot book">
             <p className="hint">
-              Entered at shift end. The Expect Date adjusts automatically.
+              {closed
+                ? 'This order is closed. Reopen it to correct what was booked.'
+                : 'Entered at shift end. The Expect Date adjusts automatically.'}
             </p>
-            <Button variant="primary" disabled={closed} onClick={book}>
-              Save entry
-            </Button>
+            {closed ? (
+              <Button onClick={reopen}>Reopen order</Button>
+            ) : (
+              <Button variant="primary" onClick={book}>
+                Save entry
+              </Button>
+            )}
           </div>
         </section>
       </div>

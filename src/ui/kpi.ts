@@ -2504,9 +2504,83 @@ function wireKpiNavigation(app: HTMLElement): void {
   );
 }
 
+/**
+ * The attributes that identify a control well enough to find it again.
+ *
+ * Every re-render throws the DOM away, so "the button that was pressed" has to
+ * be named rather than held: these are the data attributes the KPI page's own
+ * toggles carry, and each of them is unique on the page.
+ */
+const FOCUS_KEYS = [
+  'data-toggle',
+  'data-orders',
+  'data-jobs',
+  'data-toggle-all-shifts',
+  'data-toggle-all-orders',
+  'data-collapse-month',
+  'data-period',
+  'data-kpi-view',
+] as const;
+
+interface ViewAnchor {
+  /** Selector for the control that had focus, when it was one of ours. */
+  focus: string | null;
+  page: number;
+  table: { top: number; left: number } | null;
+}
+
+/**
+ * Where the reader is looking, so a re-render can put them back.
+ *
+ * The table lives in its own scroll box (`.kpi-table-wrap`, 70vh tall) and the
+ * whole page scrolls behind it, and `app.innerHTML = …` resets both to zero
+ * and drops focus on the floor. Pressing − on the ninth machine therefore
+ * expanded that machine and threw the page back to the top, so the thing you
+ * had just opened was off screen and you had to find it again — every time.
+ *
+ * Nothing here re-lays out the page: the row expands where it is, under the
+ * pointer, because the two scrollers and the pressed button go back exactly
+ * as they were.
+ */
+function anchorView(app: HTMLElement): ViewAnchor {
+  const active = document.activeElement as HTMLElement | null;
+  const wrap = app.querySelector<HTMLElement>('.kpi-table-wrap');
+  return {
+    focus: active && app.contains(active) ? focusSelector(active) : null,
+    page: window.scrollY,
+    table: wrap ? { top: wrap.scrollTop, left: wrap.scrollLeft } : null,
+  };
+}
+
+function focusSelector(el: HTMLElement): string | null {
+  for (const attr of FOCUS_KEYS) {
+    const value = el.getAttribute(attr);
+    if (value === null) continue;
+    // A valueless attribute (`data-toggle-all-shifts`) identifies itself.
+    return value === '' ? `[${attr}]` : `[${attr}="${value.replace(/["\\]/g, '\\$&')}"]`;
+  }
+  return null;
+}
+
+function restoreView(app: HTMLElement, anchor: ViewAnchor): void {
+  const wrap = app.querySelector<HTMLElement>('.kpi-table-wrap');
+  if (wrap && anchor.table) {
+    wrap.scrollTop = anchor.table.top;
+    wrap.scrollLeft = anchor.table.left;
+  }
+  if (anchor.page) window.scrollTo(0, anchor.page);
+  // `preventScroll` is the point of this: focusing a control the browser
+  // thinks is off screen would scroll the page to it and undo the two lines
+  // above.
+  if (anchor.focus) {
+    app.querySelector<HTMLElement>(anchor.focus)?.focus({ preventScroll: true });
+  }
+}
+
 function render(): void {
   if (!window.location.hash.startsWith('#/kpi') || window.location.hash.startsWith('#/kpi/assembly')) return;
   const app = document.getElementById('app')!;
+  const anchor = anchorView(app);
   const dataErrors = [...S!.catalogErrors, ...S!.errors];
   const errorBanner = dataErrors.length
     ? `<div class="data-error-banner" role="alert"><b>⚠ Partial data only.</b> ${dataErrors
@@ -2535,6 +2609,9 @@ function render(): void {
     wireKpiNavigation(app);
     const host = app.querySelector<HTMLElement>('.kpi-trace-host');
     if (host) void mountTracePanel(dalRef, host, panelView);
+    // Only the pressed tab is put back, not the scroll: this is a different
+    // panel, and it opens at its own top.
+    if (anchor.focus) app.querySelector<HTMLElement>(anchor.focus)?.focus({ preventScroll: true });
     return;
   }
   // Global toggles live in the Machine column header — one click flips
@@ -3187,6 +3264,8 @@ function render(): void {
   app
     .querySelectorAll<HTMLButtonElement>('[data-collapse-month]')
     .forEach((b) => b.addEventListener('click', () => toggleMonth(b.dataset.collapseMonth!)));
+
+  restoreView(app, anchor);
 }
 
 /**

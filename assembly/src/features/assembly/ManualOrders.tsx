@@ -93,10 +93,11 @@ export function ManualOrderInspector({ board, id }: { board: AssemblyGanttView; 
         }
         for (const workerId of workerIds) plan.assignWorker(key, workerId);
         plan.startOrder(key, { startedAt: new Date().toISOString(), overrideReason: null, operatorIds: workerIds, operatorNames: names });
+        const savedAt = new Date().toISOString();
         plan.saveProductionEntry(key, {
-          date: today, laborHours, complete: laborHours, reject: 0, rework: 0, shiftOutput: 0,
+          date: today, savedAt, laborHours, complete: laborHours, reject: 0, rework: 0, shiftOutput: 0,
           paused: false, pauseReason: null, jobCompleted: closed,
-          completedAt: closed ? new Date().toISOString() : null,
+          completedAt: closed ? savedAt : null,
           operatorIds: workerIds, operatorNames: names, notes: String(data.get('notes') ?? '').trim(),
         }, { remainingQty: order.plannedHours, completedQty: 0 });
         useUiStore.getState().select(null);

@@ -42,6 +42,7 @@ import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { useDataStore } from '@/store/dataStore';
 import {
   COLUMN_LIMITS,
+  DAY_COLUMN_LIMITS,
   DATE_COLS,
   DATE_COL_LABEL,
   DUE_SOON_DAYS,
@@ -52,6 +53,7 @@ import {
   type DateCol,
   type DateCols,
 } from '@/store/uiStore';
+import { dayAxis, type DayAxis } from './dayAxis';
 import { DragTimeGuide } from './DragTimeGuide';
 import { OrderBar } from './OrderBar';
 import { DRAG_TYPE_LINE, lineDragId } from './lineDrag';
@@ -171,6 +173,60 @@ function ColumnGrip({ column, label }: { column: ColumnKey; label: string }) {
   );
 }
 
+/**
+ * The same grip, on a day column.
+ *
+ * A day is not a frozen column — there is no `colWidths` slot for it and there
+ * never can be, because which days are on the board changes every morning — so
+ * it is dragged by its own day key and falls back to the zoom until somebody
+ * touches it. Double-click puts it back under the zoom, which is the only way
+ * out of a column dragged somewhere silly that does not cost the whole board
+ * its layout.
+ */
+function DayGrip({ day, width }: { day: string; width: number }) {
+  const setDayColumnWidth = useUiStore((s) => s.setDayColumnWidth);
+  const clearDay = useUiStore((s) => s.clearDayColumnWidth);
+
+  const startResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const from = e.clientX;
+    const base = width;
+    const move = (ev: PointerEvent) =>
+      setDayColumnWidth(day, base + ev.clientX - from);
+    const stop = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+      document.body.classList.remove('col-resizing');
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop);
+    document.body.classList.add('col-resizing');
+  };
+
+  return (
+    <span
+      className="col-resize day-resize"
+      role="separator"
+      tabIndex={0}
+      aria-label={`Resize the ${day} column`}
+      aria-valuenow={width}
+      aria-valuemin={DAY_COLUMN_LIMITS.min}
+      aria-valuemax={DAY_COLUMN_LIMITS.max}
+      title="Drag to resize this day · double-click for the zoom's width"
+      onPointerDown={startResize}
+      onDoubleClick={(e) => { e.stopPropagation(); clearDay(day); }}
+      onKeyDown={(e) => {
+        const step =
+          e.key === 'ArrowLeft' ? -16 : e.key === 'ArrowRight' ? 16 : 0;
+        if (!step) return;
+        e.preventDefault();
+        setDayColumnWidth(day, width + step);
+      }}
+    />
+  );
+}
+
 /** A clock hour as text — 15.5 reads as 15:30. */
 const hourLabel = (h: number): string =>
   TIME_FMT.format(
@@ -233,7 +289,7 @@ function OrderRowView({
   gridWidth,
   selected,
   onSelect,
-  dayWidth,
+  axis,
   colWidths,
   visibleDates,
   showWeekends,
@@ -252,7 +308,8 @@ function OrderRowView({
   gridWidth: number;
   selected: boolean;
   onSelect: (id: string, at?: ClickPoint) => void;
-  dayWidth: number;
+  /** Where each day sits along the grid, and how wide it is. */
+  axis: DayAxis;
   colWidths: ColumnWidths;
   visibleDates: DateCols;
   showWeekends: boolean;
@@ -382,7 +439,7 @@ function OrderRowView({
         <OrderBar
           row={row}
           horizonStart={board.horizonStart}
-          dayWidth={dayWidth}
+          axis={axis}
           gridWidth={gridWidth}
           showWeekends={showWeekends}
           readOnly={isContext}
@@ -422,7 +479,7 @@ function LineGroupView({
   todayLine,
   selectedJobId,
   onSelect,
-  dayWidth,
+  axis,
   colWidths,
   visibleDates,
   showWeekends,
@@ -454,7 +511,8 @@ function LineGroupView({
   /** People whose work has started, and so cannot be moved to another line. */
   selectedJobId: string | null;
   onSelect: (id: string, at?: ClickPoint) => void;
-  dayWidth: number;
+  /** Where each day sits along the grid, and how wide it is. */
+  axis: DayAxis;
   colWidths: ColumnWidths;
   visibleDates: DateCols;
   showWeekends: boolean;
@@ -530,6 +588,7 @@ function LineGroupView({
           itself has to span the whole grid to carry the background. */}
       <div className="agroup-head">
        <div className="agroup-head-in">
+        <div className="agroup-meta">
         {/* Its own control, in the Order column where the row starts. Folding
             used to be what clicking the line's name did, and the name is now
             the grip that arranges the lines — a press that might mean either
@@ -612,16 +671,7 @@ function LineGroupView({
           >
             {load.hours.toFixed(1)} h
           </span>
-          {group.line.schedulable && (
-            <span className="agroup-crew">
-              {load.crew === 0
-                ? 'nobody allocated'
-                : `${load.crew} on line · ${load.daysOfWork!.toFixed(1)} d at ${load.capacityPerDay.toFixed(1)} h/day`}
-            </span>
-          )}
-          {load.needsCrew > 0 && (
-            <span className="agroup-gap">{load.needsCrew} need crew</span>
-          )}
+
         </div>
 
         {/* Outside the label — it does something the label does not: it takes
@@ -656,6 +706,8 @@ function LineGroupView({
             Close line
           </button>
         )}
+
+        </div>
 
         {crew.length > 0 && (
           <span
@@ -701,7 +753,7 @@ function LineGroupView({
             gridWidth={gridWidth}
             selected={selectedJobId === String(row.job.id)}
             onSelect={onSelect}
-            dayWidth={dayWidth}
+            axis={axis}
             colWidths={colWidths}
             visibleDates={visibleDates}
             showWeekends={showWeekends}
@@ -724,6 +776,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
   const select = useUiStore((s) => s.select);
   const selectedJobId = useUiStore((s) => s.selectedJobId);
   const dayWidth = useUiStore((s) => s.dayWidth);
+  const dayWidths = useUiStore((s) => s.dayWidths);
   const colWidths = useUiStore((s) => s.colWidths);
   const visibleDates = useUiStore((s) => s.dateCols);
   const toggleDate = useUiStore((s) => s.toggleDateCol);
@@ -759,7 +812,23 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
     );
     return showWeekends ? calendar : calendar.filter((day) => !isWeekend(day));
   }, [board.horizonDays, board.horizonStart, showWeekends]);
-  const gridWidth = days.length * dayWidth;
+  /*
+   * The week's widths, and everything read off them.
+   *
+   * A day the reader has dragged keeps the width they gave it; every other one
+   * answers to the zoom. The axis is what turns that run of widths into the
+   * positions the stripes, the headings, the bars and the drop all work in —
+   * see `dayAxis`.
+   */
+  const axis = useMemo(
+    () =>
+      dayAxis({
+        widths: days.map((day) => dayWidths[toDayKey(day)] ?? dayWidth),
+        fallback: dayWidth,
+      }),
+    [days, dayWidths, dayWidth],
+  );
+  const gridWidth = axis.total;
   const headLefts = frozenLefts(visibleDates, colWidths);
   const labelWidth = headLefts.total;
   const allRows = useMemo(
@@ -928,8 +997,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
   const nowOffset =
     todayIndex < 0
       ? null
-      : (todayIndex + shiftColumnFraction(now)) *
-        dayWidth;
+      : axis.x(todayIndex + shiftColumnFraction(now));
 
   const dateHead = (
     key: DateCol,
@@ -990,7 +1058,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
           <div
             key={load.key}
             className={`stripe ${load.working ? '' : 'closed'} ${load.isToday ? 'today' : ''} ${load.past ? 'past' : ''}`}
-            style={{ left: i * dayWidth, width: dayWidth }}
+            style={{ left: axis.offsets[i], width: axis.widths[i] }}
           />
         ))}
       </div>
@@ -1102,7 +1170,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
                 <div
                   key={i}
                   className={`daycol ${load.working ? '' : 'weekend'} ${load.isToday ? 'today' : ''} ${load.past ? 'past' : ''}`}
-                  style={{ left: i * dayWidth, width: dayWidth }}
+                  style={{ left: axis.offsets[i], width: axis.widths[i] }}
                   title={
                     (load.actual
                       ? `Booked as output: ${load.hours.toFixed(1)} h of ${load.capacity.toFixed(1)} h `
@@ -1111,20 +1179,22 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
                     (load.working ? '' : ' · factory closed, needs overtime')
                   }
                 >
-                  {/* The load stands the height of the cell on the left and the
-                      date takes the rest, rather than the two stacking with the
-                      count under them: four things in a column is four lines
-                      tall, and this heading has to sit level with the seven
-                      column titles beside it. */}
+                  {/* The load is the column's left-hand edge, floor to
+                      ceiling: a narrow band the full height of the heading
+                      reads as a skyline down the week, and the day it belongs
+                      to then has the whole cell to put its date in the middle
+                      of. The percentage stands beside the band rather than
+                      inside it — there is no longer the width for it there. */}
                   <span className={`day-bar ${band} ${load.actual ? 'actual' : ''}`}>
                     <i style={{ height: `${Math.min(100, pct)}%` }} />
-                    <b className={`day-load ${band}`}>{pct}%</b>
                   </span>
+                  <b className={`day-load ${band}`}>{pct}%</b>
                   <span className="daycol-main">
                     <span className="daycol-date">{formatShortDay(d)}</span>
-                    {/* The count and whichever tag the day carries share the
-                        second line. On the date's own line the tag left a
-                        column too narrow to print a date in. */}
+                    {/* The count and whichever tag the day carries sit in the
+                        bottom corner, out of the date's way: the date is what
+                        the column is found by and it now has the middle of the
+                        cell to itself. */}
                     <span className="daycol-sub">
                       <button
                         className="day-order-filter"
@@ -1141,6 +1211,9 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
                       {load.past && <b className="past-tag">done</b>}
                     </span>
                   </span>
+                  {/* Every day is dragged by its own edge, the way the seven
+                      columns to the left of it are. */}
+                  <DayGrip day={toDayKey(d)} width={axis.widths[i]} />
                 </div>
               );
             })}
@@ -1160,7 +1233,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
           todayLine={todayLine}
           selectedJobId={selectedJobId}
           onSelect={select}
-          dayWidth={dayWidth}
+          axis={axis}
           colWidths={colWidths}
           visibleDates={visibleDates}
           showWeekends={showWeekends}

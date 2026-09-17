@@ -39,7 +39,7 @@ const LINE_ORDER = [
   'UPL-CUT',
   'UPL-Gluing',
   'UPL-SSS',
-  'Assembly Seats',
+  'Assembly',
   'Table',
   'General',
   'Factory General',
@@ -119,7 +119,7 @@ function outputCell(agg: AssemblyAgg): string {
   }>${n(agg.output)}${expected > 0 ? ` <span class="kpi-exp">/${n(expected)}</span>` : ''}</td>`;
 }
 
-/** The twelve metric cells of one row — a line, an order, or the floor. */
+/** The thirteen metric cells of one row — a line, an order, or the floor. */
 function metricCells(agg: AssemblyAgg): string {
   const y = yieldPct(agg);
   const eff = efficiencyPct(agg);
@@ -133,7 +133,8 @@ function metricCells(agg: AssemblyAgg): string {
     cell(n(agg.rework), agg.rework ? 'amber' : 'gray') +
     cell(pct(y), colourClass(y, t.yieldGreen, t.yieldAmber)) +
     cell(h(agg.crewHours)) +
-    cell(h(agg.bookedHours)) +
+    cell(h(agg.bookedHours), agg.bookedHours ? '' : 'gray') +
+    cell(h(agg.madeHours)) +
     cell(h(agg.earnedHours)) +
     cell(pct(eff), colourClass(eff, t.effGreen, t.effAmber)) +
     cell(h(agg.supportHours), agg.supportHours ? '' : 'gray') +
@@ -165,7 +166,7 @@ function statTiles(agg: AssemblyAgg): string {
     ${tile('Orders', n(agg.orders))}
     ${tile('Reject', n(agg.reject), agg.reject ? 'is-red' : '')}
     ${tile('Yield', pct(y), band(y, t.yieldGreen, t.yieldAmber))}
-    ${tile('Crew hours', h(agg.crewHours), 'is-green')}
+    ${tile('Booked hours', h(agg.bookedHours), 'is-green')}
     ${tile('Efficiency*', pct(eff), band(eff, t.effGreen, t.effAmber))}
     ${tile('On time', pct(on), band(on, t.onTimeGreen, t.onTimeAmber))}
   </div>`;
@@ -182,6 +183,7 @@ function bookingRow(row: AssemblyResult): string {
     <td class="kpi-work">${escapeHtml(row.description ?? '')}</td>
     <td>${escapeHtml(row.operators)}</td>
     <td class="num">${row.workType === 'Support' ? h(row.laborHours ?? 0) : h(crew * PRODUCTIVE_HOURS_PER_PERSON)}</td>
+    <td class="num${row.bookedHours == null ? ' gray' : ''}">${row.bookedHours == null ? '—' : h(row.bookedHours)}</td>
     <td class="num">${n(row.output)}</td>
     <td class="num">${n(row.complete)}</td>
     <td class="num${row.reject ? ' red' : ''}">${n(row.reject)}</td>
@@ -272,7 +274,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
           <table class="summary-table kpi-table assembly-kpi-table">
             <colgroup>
               <col class="kpi-col-machine">
-              <col span="12" class="kpi-col-metric">
+              <col span="13" class="kpi-col-metric">
             </colgroup>
             <thead><tr>
               <th class="kpi-machine-head">Line</th>
@@ -280,8 +282,9 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
               <th title="What came off the line, over what the crew on it were planned to make">Output / Plan</th>
               <th>Complete</th><th>Reject</th><th>Rework</th>
               <th>Yield%</th>
-              <th title="People on the order that day, at ${PRODUCTIVE_HOURS_PER_PERSON} h a head">Crew h</th>
-              <th title="Output valued at the order's standard hours per piece">Booked h</th>
+              <th title="People on the order that day, at ${PRODUCTIVE_HOURS_PER_PERSON} h a head — what they could have given it">Crew h</th>
+              <th title="Labour hours the order actually took: time on the job that day × the crew on it">Booked h</th>
+              <th title="Everything made, valued at the order's standard hours per piece">Made h</th>
               <th title="Standard hours the finished units were worth">Std h</th>
               <th>Efficiency*</th>
               <th title="Factory General work, measured in the hours it took">Support h</th>
@@ -303,7 +306,8 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
                 <table class="summary-table kpi-table">
                   <thead><tr>
                     <th>Date</th><th>Order</th><th>Line</th><th>Support department</th><th>Work</th>
-                    <th>Crew</th><th>Crew h</th><th>Output</th><th>Complete</th><th>Reject</th>
+                    <th>Crew</th><th>Crew h</th><th title="Labour hours this day's entry booked">Booked h</th>
+                    <th>Output</th><th>Complete</th><th>Reject</th>
                     <th>Rework</th><th>Due</th><th>Completed</th>
                   </tr></thead>
                   <tbody>${S.rows.map(bookingRow).join('')}</tbody>
@@ -315,9 +319,10 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
           <div>Every metric uses one traffic-light language: <b>🟢 met · 🟡 close · 🔴 short</b>.</div>
           <div><b>Yield%</b> = Complete ÷ (Complete + Reject) — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.yieldGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.yieldAmber}%.</div>
           <div><b>Output / Plan 🟢🟡🔴</b> = what came off the line, over Crew h ÷ the order's standard — what the people who were actually on it were planned to make. 🟢 ≥ ${ASSEMBLY_THRESHOLDS.planGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.planAmber}%. Assembly keeps no separate daily schedule, so the plan is the crew's own hours at the standard rather than a figure from elsewhere.</div>
-          <div><b>Crew h</b> = people booked on the order that day × ${PRODUCTIVE_HOURS_PER_PERSON} h — the 07:00–15:30 shift less morning tea and lunch, which is exactly what the board schedules with.</div>
-          <div><b>Booked h</b> = Output × the order's standard hours per piece (<code>JobOper_ProdStandard</code>, carried on the record as PlannedHours ÷ OrderQty). <b>Std h</b> is the same sum over the <b>good</b> pieces only, so <b>Booked h − Std h is what the rejects cost in time</b>.</div>
-          <div><b>Efficiency* 🟢🟡🔴</b> = Std h ÷ Crew h — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.effGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.effAmber}%. A day on an order carrying no standard is left out of <b>both</b> sides rather than counted as zero: an order nobody gave a labour standard is not an order that was worked badly.</div>
+          <div><b>Crew h</b> = people booked on the order that day × ${PRODUCTIVE_HOURS_PER_PERSON} h — the 07:00–15:30 shift less morning tea and lunch, which is exactly what the board schedules with. It is what the crew <b>could</b> have given the order, not what it took.</div>
+          <div><b>Booked h</b> = what it took: the board times each day's work from <b>Start production</b> (07:00 on any day after the first) to the moment the shift pressed <b>Save entry</b>, less breaks, and multiplies by the crew on it. Support work has no clock — its hours are the ones somebody entered.</div>
+          <div><b>Made h</b> = Output × the order's standard hours per piece (<code>JobOper_ProdStandard</code>, carried on the record as PlannedHours ÷ OrderQty). <b>Std h</b> is the same sum over the <b>good</b> pieces only, so <b>Made h − Std h is what the rejects cost in time</b>.</div>
+          <div><b>Efficiency* 🟢🟡🔴</b> = Std h ÷ Booked h — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.effGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.effAmber}%. 100% is a day that went exactly to standard. A day on an order carrying no standard, or one booked before the board measured labour hours, is left out of <b>both</b> sides rather than counted as zero: an order nobody costed was not worked badly, and a day nobody timed did not take no time.</div>
           <div><b>On time% 🟢🟡🔴</b> = orders finished on or before their Due Date ÷ orders finished with a Due Date to judge — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.onTimeGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.onTimeAmber}%.</div>
           <div><b>Support h</b> is Factory General work. It has no output at all, so it is never folded into Output, Yield or Efficiency — a line's support hours would otherwise read as a week spent making nothing.</div>
           <div>An order booked on five days is <b>one</b> order in every count. Press "+" on a line to see the orders behind its figures.</div>

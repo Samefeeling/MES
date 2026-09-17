@@ -10,7 +10,7 @@
  */
 
 import { ok, err, type Result } from '@/lib/result';
-import { sessionRows, sessionCreate, sessionUpdate, SharePointHttpError } from './session';
+import { sessionRows, sessionRowsWhere, sessionCreate, sessionUpdate, SharePointHttpError } from './session';
 
 async function sessionResult<T>(run: () => Promise<T>): Promise<Result<T, WriteError>> {
   try { return ok(await run()); } catch (e) { return err({ status: e instanceof SharePointHttpError ? e.status : 0, message: e instanceof Error ? e.message : String(e) }); }
@@ -136,6 +136,24 @@ export async function fetchListItemsWithIds(
 ): Promise<Result<ListItem[], WriteError>> {
   const res = await fetchListRows(cfg, list);
   return res.ok ? ok(res.value.filter((item) => item.id)) : res;
+}
+
+/**
+ * The rows holding `value` in `column`, asked of the list at this moment.
+ *
+ * `null` means this transport cannot ask — Graph's `$filter` over list-item
+ * fields needs the column indexed and an opt-in header, and answering "no
+ * rows" when the truth is "did not look" is how a duplicate gets written. A
+ * caller that gets `null` falls back to whatever snapshot it already has.
+ */
+export async function fetchRowsWhere(
+  cfg: SharePointConfig,
+  list: string,
+  column: string,
+  value: string,
+): Promise<Result<ListItem[], WriteError> | null> {
+  if (cfg.authMode !== 'session') return null;
+  return sessionResult(() => sessionRowsWhere(cfg, list, column, value));
 }
 
 /** Add a row. Resolves to the new item's id. */

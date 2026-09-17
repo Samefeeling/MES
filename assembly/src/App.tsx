@@ -31,7 +31,6 @@ export default function App() {
   const error = useDataStore((s) => s.error);
   const load = useDataStore((s) => s.load);
   const warnings = useDataStore((s) => s.warnings);
-  const sourceName = useDataStore((s) => s.source.name);
   const hosted = useSupervisorStore((s) => s.hosted);
 
   const manualOrders = usePlanStore(s => s.manualOrders);
@@ -137,13 +136,11 @@ export default function App() {
         <div className="head-side end">
           <SupervisorLock />
           <BarcodeOrderLookup board={board} />
-          {/* Which export this is stays on the hover of the button that
-              re-reads it, rather than as a chip: the source has not changed
-              since the board was built and never changes while anybody is
-              looking at it, so it was a word in the header that answered a
-              question nobody had. */}
+          {/* Which export this is has left the row entirely — chip and hover
+              both. The source has not changed since the board was built and
+              never changes while anybody is looking at it, so it was a word in
+              the header that answered a question nobody had. */}
           <RefreshControl
-            source={sourceName}
             onRefresh={() => void refreshAndSort()}
             onSave={plan.save}
             dirty={plan.dirty}
@@ -170,6 +167,12 @@ export default function App() {
         </div>
       ) : (
         plan.error && <div className="banner warn">Plan not saved: {plan.error}</div>
+      )}
+      {plan.archiveError && (
+        <div className="banner warn">
+          Yesterday’s plan not filed ({plan.archiveError}). The board is working
+          normally; that day is missing from the history.
+        </div>
       )}
       {/*
         The one thing a planner cannot see by looking at the board: whether
@@ -223,8 +226,8 @@ export default function App() {
             )}
           </div>
           {/*
-            Orders on no line remain reachable in the bottom strip. Reserve the
-            empty target before dragging so the board viewport stays stable.
+            Orders on no line remain reachable in the bottom strip. When empty,
+            its drag target overlays the header without taking board height.
           */}
           {board && <AssemblyPool board={board} />}
           {board && (selectedJobId && manualOrders[selectedJobId] ? <ManualOrderInspector key={selectedJobId} board={board} id={selectedJobId} /> : <AssemblyInspector board={board} />)}

@@ -377,6 +377,7 @@ function mouldingRow(job: Job, line: LineDef, today: Date): OrderRow {
       level: 'ready' as const,
       releasable: true,
       needsOverride: false,
+      unconfirmed: false,
       reason: 'Moulding plan',
     },
     predecessors: [],

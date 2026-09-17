@@ -41,6 +41,18 @@ export const MAX_DAY_WIDTH = 160;
 export const DEFAULT_DAY_WIDTH = MAX_DAY_WIDTH;
 
 /**
+ * How far one day column may be dragged on its own.
+ *
+ * The zoom above sets every column at once and stops at 160 because that is as
+ * wide as a whole horizon can afford to be. A single column is a different
+ * question: the day being planned this morning is worth three of the ones six
+ * weeks out, and giving it the room to be worked in costs the board nothing
+ * anywhere else. So its ceiling is well past the zoom's, and its floor is the
+ * same one — a column narrower than this is a column nothing can be dropped on.
+ */
+export const DAY_COLUMN_LIMITS = { min: MIN_DAY_WIDTH, max: 480 } as const;
+
+/**
  * The frozen columns down the left of the board, in the order it draws them,
  * and how wide each opens.
  *
@@ -189,6 +201,16 @@ interface UiState {
    * buttons sit in the app header, above the board that answers to them.
    */
   dayWidth: number;
+  /**
+   * Day columns dragged off the zoom, keyed by local day (`YYYY-MM-DD`).
+   *
+   * A day with no entry is whatever the zoom says, which is how every one of
+   * them starts. Keyed by the day rather than by its position because the
+   * board re-derives its horizon — it rolls forward overnight, and weekends
+   * come and go from the axis — and a column widened for Thursday has to still
+   * be Thursday's afterwards.
+   */
+  dayWidths: Record<string, number>;
   /** Width of each frozen column, dragged by its right-hand edge. */
   colWidths: ColumnWidths;
   /** Which date columns are showing; hidden ones come back from the header. */
@@ -236,6 +258,10 @@ interface UiState {
    */
   dismissTop: () => boolean;
   setDayWidth: (px: number) => void;
+  /** Drag one day column off the zoom. */
+  setDayColumnWidth: (day: string, px: number) => void;
+  /** One day column back under the zoom. */
+  clearDayColumnWidth: (day: string) => void;
   setColumnWidth: (key: ColumnKey, px: number) => void;
   toggleDateCol: (key: DateCol) => void;
   toggleLine: (key: LineKey) => void;
@@ -276,6 +302,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   workerLoadId: null,
   lastRefresh: null,
   dayWidth: DEFAULT_DAY_WIDTH,
+  dayWidths: {},
   colWidths: { ...DEFAULT_COLUMN_WIDTHS },
   dateCols: { start: true, due: true, expect: true },
   hiddenLines: [...LINES_HIDDEN_BY_DEFAULT],
@@ -322,8 +349,26 @@ export const useUiStore = create<UiState>((set, get) => ({
     set(top);
     return true;
   },
+  /*
+   * Zooming is about the whole timeline, so it takes the whole timeline back:
+   * a press that left the columns somebody had dragged where they were would
+   * be a zoom that visibly does nothing to half the board.
+   */
   setDayWidth: (px) =>
-    set({ dayWidth: clamp(px, MIN_DAY_WIDTH, MAX_DAY_WIDTH) }),
+    set({ dayWidth: clamp(px, MIN_DAY_WIDTH, MAX_DAY_WIDTH), dayWidths: {} }),
+  setDayColumnWidth: (day, px) =>
+    set((state) => ({
+      dayWidths: {
+        ...state.dayWidths,
+        [day]: clamp(px, DAY_COLUMN_LIMITS.min, DAY_COLUMN_LIMITS.max),
+      },
+    })),
+  clearDayColumnWidth: (day) =>
+    set((state) => {
+      if (state.dayWidths[day] === undefined) return {};
+      const { [day]: _dropped, ...rest } = state.dayWidths;
+      return { dayWidths: rest };
+    }),
   setColumnWidth: (key, px) =>
     set((state) => ({
       colWidths: {

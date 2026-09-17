@@ -19,14 +19,17 @@ The page is laid out the way the PMD KPI page is, so the two can be read one aft
 | Orders / Complete / Reject / Rework | Summed over the window; an order booked on five days is **one** order in every count. |
 | Output / Plan | What came off the line, over Crew h ÷ the order's standard — what the people actually on it were planned to make. PMD's Output cell reads `Good /expected` and colours itself by that ratio; this is the same reading, with the expectation worked out from the hours the shift had, because Assembly keeps no separate daily schedule. 🟢 ≥ 95% · 🟡 ≥ 80%. |
 | Yield% | Complete ÷ (Complete + Reject) — PMD's own definition. 🟢 ≥ 98% · 🟡 ≥ 95%. |
-| Crew h | People booked on the order that day × 7.5 h — the 07:00–15:30 shift less morning tea and lunch, which is exactly what the board schedules with, so the KPI is measured against the plan the floor was given. |
-| Booked h | Output × the order's standard hours per piece — `JobOper_ProdStandard`, which the record carries as `PlannedHours ÷ OrderQty`. |
-| Std h | The same sum over the **good** pieces only, so **Booked h − Std h is what the rejects cost in time**. |
-| Efficiency* | Std h ÷ Crew h. 🟢 ≥ 90% · 🟡 ≥ 75%. A day on an order carrying no standard is left out of **both** sides rather than scored zero — an order nobody gave a labour standard is not an order that was worked badly, and PMD drops an unjudgeable job-shift for the same reason. |
+| Crew h | People booked on the order that day × 7.5 h — the 07:00–15:30 shift less morning tea and lunch, which is exactly what the board schedules with. It is what the crew **could** have given the order, not what it took. |
+| Booked h | What it took, from `ASSY_Production.BookedHour`. The board times each day's work from **Start production** — 07:00 on any day after the first, since there is no second Start production to press — to the moment the shift pressed **Save entry**, steps over the breaks, and multiplies by the crew on it. A day can never book more than the shift held. Support work has no clock: its hours are the ones somebody entered. |
+| Made h | Output × the order's standard hours per piece — `JobOper_ProdStandard`, which the record carries as `PlannedHours ÷ OrderQty`. |
+| Std h | The same sum over the **good** pieces only, so **Made h − Std h is what the rejects cost in time**. |
+| Efficiency* | Std h ÷ Booked h. 🟢 ≥ 90% · 🟡 ≥ 75%. 100% is a day that went exactly to standard. A day on an order carrying no standard, or one booked before the board measured labour hours, is left out of **both** sides rather than scored zero — an order nobody costed was not worked badly, a day nobody timed did not take no time, and PMD drops an unjudgeable job-shift for the same reason. |
 | Support h | Factory General work, measured in the hours it took. It has no output at all, so it is never folded into Output, Yield or Efficiency. |
 | On time% | Orders finished on or before their Due Date ÷ orders finished with a Due Date to judge. 🟢 ≥ 95% · 🟡 ≥ 85%. |
 
 Thresholds are fixed and printed on the page, not editable: PMD's are argued over in the meeting because its presses are compared with one another, and there is no equivalent argument here yet.
+
+**Efficiency is measured against time, not against an allowance.** It used to divide by Crew h — the crew's whole 7.5-hour day, whether or not they spent it on this order — so an order two people picked up for the last two hours of a shift and finished read as 27% efficient. `BookedHour` is what that day actually took. Rows written before the column existed carry no measurement and are excluded from the figure; Efficiency populates from the first entry saved after this change.
 
 **`PlannedHours` now rides on every row**, not just support ones (`assembly/src/data/sharepoint/production.sync.ts`). It is an order-level column, so the next sync backfills it on rows written weeks ago. Without it the record says what came off the line but not what the work was supposed to take, and no honest efficiency can be read back out of it — which is why a row that still lacks one is excluded rather than counted.
 
@@ -37,8 +40,12 @@ Thresholds are fixed and printed on the page, not editable: PMD's are argued ove
 | List | Purpose | Key |
 | --- | --- | --- |
 | ASSY_Operator | Real operator names (Title), Position, Skills, Supervisor, OnShift and PlannedAnnualLeave | SharePoint item ID |
-| ASSY_Plans | Shared working plan, crew windows, pinned starts, output history and ignored orders | Unique Title = current |
-| ASSY_Production | Daily job quantities, crew snapshot, dates, completion and pause details | Unique RecordKey = Job + pipe + YYYY-MM-DD |
+| ASSY_Plans | Shared working plan, crew windows, pinned starts, output history and ignored orders, plus one read-only row per day of history | Unique Title = current, or day-YYYY-MM-DD |
+| ASSY_Production | Daily job quantities, booked labour hours, crew snapshot, dates, completion and pause details | Unique RecordKey, generated per booking |
+
+`ASSY_Production.RecordKey` is the row's identity and nothing else: the board generates it when a shift first saves that day's entry, both sides carry it, and it is never rebuilt from anything. It used to be `Job|YYYY-MM-DD`, which tied a row's identity to a date — the one field on the record that can be read two ways, because a SharePoint date column answers in the site's timezone rather than the shift's. Keep the unique index on it. Rows opened by the sync before any booking (the blank row an order starts with) still take `Job|YYYY-MM-DD`, which both sides can work out; the first real entry for that day claims the row and writes its own key over it.
+
+**Add the `BookedHour` column before deploying this build.** Every column the sync writes must exist, so until it does the write fails with `Missing SharePoint column: BookedHour` in the board's banner and no production is recorded. `config/assembly-lists.json` carries it; re-run `provision-assembly.ps1 -Apply`, or add a Number column named exactly `BookedHour`.
 
 Planning1.csv, JobMaterialReq.csv and OnHandInventory.csv remain upstream files in the document library. No additional material List duplicates them. On-hand inventory is availability evidence, not a stock reservation; picking must still be confirmed against warehouse stock.
 
@@ -79,6 +86,8 @@ Refresh reconciles jobs by job number and retains existing crew and pinned dates
 Planning is published, not autosaved. Line placement, crew, pinned starts, weekend and double-booking approvals, added lines and the line order leave a browser only when **Save** is pressed; until then they are a draft held on that screen. A refresh — the Refresh button or the five-minute timer — takes the saved plan back and drops that draft, as does leaving the page. Whoever saves last is the current plan. Shift records are not gated behind Save: production start, the shift's own bookings (Shift output, Reject, Rework, Complete, Job completed, pause and notes) and the last-seen days are written as they are made, onto whatever planning is current at that moment, so an entry is never lost because nobody pressed a button.
 
 ASSY_Plans stores a versioned JSON snapshot. An ETag mismatch stops the shift-record write and production sync; reload the saved plan before editing again. Failed reads never save an empty replacement. The initial release limits the snapshot to 60,000 characters and reports an error without replacing the saved plan if exceeded. A partitioned plan repository is required for larger histories.
+
+On the first write of each new day — a Save or a shift entry, whichever touches the plan first — the previous day's last stored plan is filed under `day-YYYY-MM-DD` beside `current`, giving one read-only row per day the board was used. That row holds what the day closed as, which is also the state the next day opened on — the board is not reset overnight. A day already filed is never rewritten, so a second screen or a tab open across midnight cannot overwrite it with a staler copy; a day that cannot be filed is reported and skipped rather than stopping the working plan from saving. Nothing deletes these rows: at roughly 250 rows a year they stay well inside a List, and they are the only history the board has. Read one back with `repo.load('day-YYYY-MM-DD')`.
 
 A legacy browser-local plan on a different origin is not automatically accessible to MES. Preserve that plan before first production rollout and migrate it to the shared working plan; do not assume another browser or website shares localStorage. New-order highlight history remains device-local; operational crew/date/output state is shared.
 

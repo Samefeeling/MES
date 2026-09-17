@@ -9,6 +9,8 @@
  */
 
 import { create } from 'zustand';
+import { bookedLabourHours } from '@/engine/assembly/shift';
+import { fromDayKey } from '@/lib/time';
 import { manualJob, type ManualOrder } from '@/domain/manualOrder';
 import type { JobId } from '@/domain/ids';
 import type { Job, WorkCenter } from '@/domain/types';
@@ -74,6 +76,34 @@ export type PauseReason =
 export interface ProductionEntry {
   laborHours?: number;
   date: string;
+  /**
+   * This booking's own key in `ASSY_Production`, written once and never again.
+   *
+   * The list used to be keyed on `Job|YYYY-MM-DD`, which ties a row's identity
+   * to a date — and a date is the one thing on the record that can be read two
+   * ways. A SharePoint date column answers in the site's timezone, not the
+   * shift's, so a row could stop matching the day it was written for and be
+   * opened a second time. The key is now the row's identity and nothing else:
+   * the plan generates it when the entry is first saved and both sides carry
+   * it, so the day is free to be an ordinary column.
+   */
+  recordKey?: string;
+  /**
+   * When Save Entry was pressed. The end of the measurement below, and the
+   * audit trail for a figure the KPI page reports as hours worked.
+   */
+  savedAt?: string;
+  /**
+   * Labour hours this booking consumed: how long the crew were on the order
+   * that day, times how many of them there were.
+   *
+   * Measured rather than allowed — `crewSize × 7.5` is what the crew *could*
+   * have given the order, and this is what it took, which is what Efficiency
+   * has to be divided by. See `bookedLabourHours` for where the clock starts
+   * on a day that is not the order's first. Support work has no clock: the
+   * hours are typed in, and they are this figure.
+   */
+  bookedHours?: number;
   /** Quantity confirmed complete during the shift. */
   complete: number;
   reject: number;
@@ -227,6 +257,22 @@ interface PlanState {
     entry: ProductionEntry,
     source: ProgressBaseline,
   ) => void;
+  /**
+   * Take the completion back off an order that was closed by mistake.
+   *
+   * Closing an order is the one booking that cannot be corrected by booking
+   * again: it greys the bar, locks the entry form and releases the crew, and
+   * the next calendar day takes the order off the board altogether. So the
+   * wrong job number, or a shift that ticked the box before the last pack was
+   * built, used to need somebody in the SharePoint list.
+   *
+   * This is the way back. The quantities stay exactly as they were booked —
+   * they are usually right, and the shift corrects them in the entry form
+   * afterwards — and the crew the closing shift recorded goes back on the
+   * order, because releasing them is what closing it did. What it does not do
+   * is invent a history: an order that was never closed is left alone.
+   */
+  reopenOrder: (jobId: JobId) => void;
   /** Replace the assembly plan wholesale (e.g. loaded from persistence). */
   setAssemblyPlan: (plan: {
     /** Only read, never written: the older shape, migrated on the way in. */
@@ -331,6 +377,17 @@ const plannedJobIds = (state: PlanState): Set<string> => {
 };
 
 const MIN_DAY = '0000-00-00';
+
+/**
+ * A key for one booking's row, unique and meaningless — which is the point.
+ * `crypto.randomUUID` where the browser has it, and a timestamp with enough
+ * randomness after it where it does not; the board only ever compares these,
+ * never reads them.
+ */
+const newRecordKey = (): string =>
+  typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 
 const fullAssignments = (workers: string[]): CrewAssignment[] =>
   workers.slice(0, MAX_WORKERS_PER_ORDER).map((workerId) => ({
@@ -699,10 +756,36 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         !quantities.every((value) => Number.isFinite(value) && value >= 0) ||
         (entry.jobCompleted && !entry.completedAt)
       ) return state;
+      const held = (state.production[key] ?? []).find(
+        (existing) => existing.date === entry.date,
+      );
+      const operatorIds = entry.operatorIds ?? actualStart.operatorIds;
+      const savedAt = entry.savedAt ?? new Date().toISOString();
       const savedEntry: ProductionEntry = {
         ...entry,
-        operatorIds: entry.operatorIds ?? actualStart.operatorIds,
+        operatorIds,
         operatorNames: entry.operatorNames ?? actualStart.operatorNames,
+        savedAt,
+        /*
+         * The row's key: the one this day already has, else a new one. Kept
+         * across a re-save so the booking goes on owning the row it opened —
+         * a new key every save would leave the old row behind and open
+         * another, which is the duplicate this key exists to prevent.
+         */
+        recordKey: held?.recordKey ?? entry.recordKey ?? newRecordKey(),
+        /*
+         * Support work is measured in the hours somebody enters, not on a
+         * clock: its crew are on and off it through the day and the figure
+         * they type is the answer. Everything else is timed.
+         */
+        bookedHours:
+          entry.laborHours ??
+          bookedLabourHours(
+            fromDayKey(entry.date),
+            new Date(actualStart.startedAt),
+            new Date(savedAt),
+            operatorIds.length,
+          ),
       };
       const productionEntries = (state.production[key] ?? []).filter(
         (existing) => existing.date !== savedEntry.date,
@@ -735,6 +818,38 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         orderCrewAssignments,
         orderDoubleBooked,
       };
+    });
+  },
+
+  reopenOrder(jobId) {
+    set((state) => {
+      const key = String(jobId);
+      const entries = state.production[key] ?? [];
+      const closed = entries.filter((entry) => entry.jobCompleted);
+      if (closed.length === 0) return state;
+      const production = {
+        ...state.production,
+        [key]: entries.map((entry) =>
+          entry.jobCompleted
+            ? { ...entry, jobCompleted: false, completedAt: null }
+            : entry,
+        ),
+      };
+      // Put the closing shift's people back on the order. Derived crew would
+      // draw the same names on the board, but only a written allocation can be
+      // added to or taken from — the first person the supervisor then dragged
+      // on would otherwise arrive as the *only* one on it.
+      const recorded =
+        [...closed].sort((a, b) => a.date.localeCompare(b.date)).at(-1)
+          ?.operatorIds ?? [];
+      const orderCrewAssignments =
+        state.orderCrewAssignments[key] || recorded.length === 0
+          ? state.orderCrewAssignments
+          : {
+              ...state.orderCrewAssignments,
+              [key]: fullAssignments(recorded.map(String)),
+            };
+      return { production, orderCrewAssignments };
     });
   },
 

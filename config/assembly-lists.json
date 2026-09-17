@@ -73,6 +73,10 @@
           "unique": true
         },
         {
+          "name": "BookedHour",
+          "type": "Number"
+        },
+        {
           "name": "Date",
           "type": "DateTime",
           "format": "DateOnly",
