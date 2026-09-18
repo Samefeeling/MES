@@ -28,7 +28,7 @@ import { addDays, addWorkingDays } from './dates';
 import { planVariableCrew, type CrewDayPlan } from './crewSchedule';
 import type { AssemblyGanttView, OrderRow } from './board';
 import { toDayKey } from '@/lib/time';
-import { isAwayOn } from './attendance';
+import { isOnLeave } from './attendance';
 
 export interface CrewSuggestion {
   /** Job id → worker ids, for the orders that had nobody on them. */
@@ -333,10 +333,10 @@ function staffOneWave(
     // order that is not going to be worked.
     const onLine: Worker[] = board.workers.filter(
       (w) =>
-        !isAwayOn(
+        !isOnLeave(
           w,
           toDayKey(board.today),
-          board.workerAbsence,
+          board.workerOnLeave,
           toDayKey(board.today),
         ) && workerLines.get(String(w.id)) === group.line.key,
     );

@@ -39,7 +39,7 @@ export const PLANNING_KEYS = [
 
 /** Assembly keys that record what the floor did; written as they happen. */
 export const SHIFT_RECORD_KEYS = [
-  'workerAbsence',
+  'workerOnLeave',
   'orderActualStarts',
   'progress',
   'progressBaselines',

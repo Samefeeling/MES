@@ -10,10 +10,10 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  awayOnDay,
-  awayWorkers,
-  isAwayOn,
-  withAbsence,
+  onLeaveOnDay,
+  workersOnLeave,
+  isOnLeave,
+  withLeave,
 } from '@/engine/assembly/attendance';
 import { computeAssemblyGantt } from '@/engine/assembly/board';
 import { buildIndexes } from '@/engine/indexes';
@@ -48,10 +48,10 @@ describe('who is not in', () => {
     const off = worker('W2', { onShift: false });
     const absence = { W0: [THU_KEY] };
 
-    expect(isAwayOn(marked, THU_KEY, absence, THU_KEY)).toBe(true);
-    expect(isAwayOn(marked, FRI_KEY, absence, THU_KEY)).toBe(false);
-    expect(isAwayOn(leave, FRI_KEY, absence, THU_KEY)).toBe(true);
-    expect(isAwayOn(off, THU_KEY, absence, THU_KEY)).toBe(true);
+    expect(isOnLeave(marked, THU_KEY, absence, THU_KEY)).toBe(true);
+    expect(isOnLeave(marked, FRI_KEY, absence, THU_KEY)).toBe(false);
+    expect(isOnLeave(leave, FRI_KEY, absence, THU_KEY)).toBe(true);
+    expect(isOnLeave(off, THU_KEY, absence, THU_KEY)).toBe(true);
   });
 
   it('never reads the roster flag as an answer about another day', () => {
@@ -59,13 +59,13 @@ describe('who is not in', () => {
     // Striking somebody off next Friday for it would take a week of capacity
     // off the board on the strength of one day's attendance.
     const off = worker('W2', { onShift: false });
-    expect(isAwayOn(off, FRI_KEY, {}, THU_KEY)).toBe(false);
+    expect(isOnLeave(off, FRI_KEY, {}, THU_KEY)).toBe(false);
   });
 
   it('does not decide for somebody the roster has never heard of', () => {
     // A crew can carry an id the current export no longer lists. Guessing that
     // they are absent would stop an order for a reason nobody can see.
-    const away = awayOnDay([worker('W0')], { GHOST: [THU_KEY] }, THU);
+    const away = onLeaveOnDay([worker('W0')], { GHOST: [THU_KEY] }, THU);
     expect(away('GHOST', THU_KEY)).toBe(false);
     expect(away('W0', THU_KEY)).toBe(false);
   });
@@ -73,32 +73,32 @@ describe('who is not in', () => {
   it('lists the day\'s absentees in roster order', () => {
     const roster = [worker('W0'), worker('W1'), worker('W2', { onShift: false })];
     expect(
-      awayWorkers(roster, { W1: [THU_KEY] }, THU).map((w) => w.name),
+      workersOnLeave(roster, { W1: [THU_KEY] }, THU).map((w) => w.name),
     ).toEqual(['W1', 'W2']);
   });
 });
 
 describe('marking somebody off', () => {
   it('adds and removes one day without touching the others', () => {
-    const one = withAbsence({}, 'W0', THU_KEY, true, '2026-09-01');
+    const one = withLeave({}, 'W0', THU_KEY, true, '2026-09-01');
     expect(one).toEqual({ W0: [THU_KEY] });
-    const two = withAbsence(one, 'W0', FRI_KEY, true, '2026-09-01');
+    const two = withLeave(one, 'W0', FRI_KEY, true, '2026-09-01');
     expect(two.W0).toEqual([THU_KEY, FRI_KEY]);
-    expect(withAbsence(two, 'W0', THU_KEY, false, '2026-09-01').W0).toEqual([
+    expect(withLeave(two, 'W0', THU_KEY, false, '2026-09-01').W0).toEqual([
       FRI_KEY,
     ]);
   });
 
   it('marking the same day twice does not record it twice', () => {
-    const once = withAbsence({}, 'W0', THU_KEY, true, '2026-09-01');
-    expect(withAbsence(once, 'W0', THU_KEY, true, '2026-09-01').W0).toEqual([
+    const once = withLeave({}, 'W0', THU_KEY, true, '2026-09-01');
+    expect(withLeave(once, 'W0', THU_KEY, true, '2026-09-01').W0).toEqual([
       THU_KEY,
     ]);
   });
 
   it('forgets days older than the plan keeps, and empty people with them', () => {
     const old = { W0: ['2026-08-01'], W1: ['2026-08-01', THU_KEY] };
-    const kept = withAbsence(old, 'W2', FRI_KEY, true, '2026-09-01');
+    const kept = withLeave(old, 'W2', FRI_KEY, true, '2026-09-01');
     expect(kept.W0).toBeUndefined();
     expect(kept.W1).toEqual([THU_KEY]);
     expect(kept.W2).toEqual([FRI_KEY]);
@@ -146,7 +146,7 @@ const crewOf = (
 function board(
   jobs: Job[],
   crew: Record<string, string[]>,
-  workerAbsence: Record<string, string[]> = {},
+  workerOnLeave: Record<string, string[]> = {},
   orderStarts: Record<string, string> = {},
   roster: Worker[] = [...new Set(Object.values(crew).flat())].map((id) =>
     worker(id),
@@ -184,7 +184,7 @@ function board(
     progress: {},
     production: {},
     workers: roster,
-    workerAbsence,
+    workerOnLeave,
     today: THU,
   });
 }
@@ -213,7 +213,7 @@ describe('an order somebody is away from', () => {
     expect(row.workers.map((w) => w.name)).toEqual(['W0', 'W1']);
     expect(row.crewAssignments?.map((a) => a.workerId)).toEqual(['W0', 'W1']);
     // And the row says which of the names is not behind the work today.
-    expect(row.crewAwayToday?.map((w) => w.name)).toEqual(['W1']);
+    expect(row.crewOnLeaveToday?.map((w) => w.name)).toEqual(['W1']);
   });
 
   it('leaves the day empty when the only person on it is away', () => {
@@ -224,7 +224,7 @@ describe('an order somebody is away from', () => {
     expect(row.crewDays[0].day).toBe(FRI_KEY);
     // Not "unstaffed": the order still has its crew, they are simply not in.
     expect(row.workers).toHaveLength(1);
-    expect(row.crewAwayToday).toHaveLength(1);
+    expect(row.crewOnLeaveToday).toHaveLength(1);
   });
 
   it('applies to a bar the planner pinned, which consults no diary', () => {
@@ -268,6 +268,6 @@ describe('an order somebody is away from', () => {
 
   it('carries the absence it was built with on the view', () => {
     const b = board([job('J1', 1)], { J1: ['W0'] }, { W0: [THU_KEY] });
-    expect(b.workerAbsence).toEqual({ W0: [THU_KEY] });
+    expect(b.workerOnLeave).toEqual({ W0: [THU_KEY] });
   });
 });

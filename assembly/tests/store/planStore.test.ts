@@ -323,22 +323,22 @@ describe('operator production-line placement', () => {
 describe('marking somebody off for the day', () => {
   beforeEach(() => {
     usePlanStore.setState({
-      workerAbsence: {},
+      workerOnLeave: {},
       orderCrewAssignments: crewOf({ 'ASSY-1': ['Bill', 'Ann'] }),
     });
   });
 
   it('records the day, and takes it back off again', () => {
-    usePlanStore.getState().setWorkerAway('Bill', '2026-09-18', true);
-    expect(usePlanStore.getState().workerAbsence).toEqual({
+    usePlanStore.getState().setWorkerOnLeave('Bill', '2026-09-18', true);
+    expect(usePlanStore.getState().workerOnLeave).toEqual({
       Bill: ['2026-09-18'],
     });
-    usePlanStore.getState().setWorkerAway('Bill', '2026-09-18', false);
-    expect(usePlanStore.getState().workerAbsence).toEqual({});
+    usePlanStore.getState().setWorkerOnLeave('Bill', '2026-09-18', false);
+    expect(usePlanStore.getState().workerOnLeave).toEqual({});
   });
 
   it('never takes them off the order they were building', () => {
-    usePlanStore.getState().setWorkerAway('Bill', '2026-09-18', true);
+    usePlanStore.getState().setWorkerOnLeave('Bill', '2026-09-18', true);
     expect(
       usePlanStore.getState().orderCrewAssignments['ASSY-1'].map(
         (assignment) => assignment.workerId,
@@ -347,11 +347,11 @@ describe('marking somebody off for the day', () => {
   });
 
   it('holds several days, and several people, at once', () => {
-    const { setWorkerAway } = usePlanStore.getState();
-    setWorkerAway('Bill', '2026-09-18', true);
-    setWorkerAway('Bill', '2026-09-19', true);
-    setWorkerAway('Ann', '2026-09-18', true);
-    expect(usePlanStore.getState().workerAbsence).toEqual({
+    const { setWorkerOnLeave } = usePlanStore.getState();
+    setWorkerOnLeave('Bill', '2026-09-18', true);
+    setWorkerOnLeave('Bill', '2026-09-19', true);
+    setWorkerOnLeave('Ann', '2026-09-18', true);
+    expect(usePlanStore.getState().workerOnLeave).toEqual({
       Bill: ['2026-09-18', '2026-09-19'],
       Ann: ['2026-09-18'],
     });

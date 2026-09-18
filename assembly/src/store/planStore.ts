@@ -11,7 +11,7 @@
 import { create } from 'zustand';
 import { bookedLabourHours } from '@/engine/assembly/shift';
 import { fromDayKey, toDayKey } from '@/lib/time';
-import { withAbsence } from '@/engine/assembly/attendance';
+import { withLeave } from '@/engine/assembly/attendance';
 import { manualJob, type ManualOrder } from '@/domain/manualOrder';
 import type { JobId } from '@/domain/ids';
 import type { Job, WorkCenter } from '@/domain/types';
@@ -161,7 +161,7 @@ interface PlanState {
    * same thing from the other side; `engine/assembly/attendance` is where the
    * three are read as one answer.
    */
-  workerAbsence: Record<string, string[]>;
+  workerOnLeave: Record<string, string[]>;
   /**
    * Lines the supervisor set up on the floor, beyond the eight the plant is
    * built as. Part of the plan, not of this browser: a second bench opened for
@@ -269,7 +269,7 @@ interface PlanState {
    * counting hours nobody is going to work, and the board says on the row who
    * is missing from it.
    */
-  setWorkerAway: (workerId: string, day: string, away: boolean) => void;
+  setWorkerOnLeave: (workerId: string, day: string, away: boolean) => void;
   /** Pin an order's bar to a start day (null clears the pin). */
   setOrderStart: (jobId: JobId, isoDay: string | null) => void;
   startOrder: (jobId: JobId, record: ActualStartRecord) => void;
@@ -305,6 +305,13 @@ interface PlanState {
     manualOrders?: Record<string, ManualOrder>;
     orderWorkers?: Record<string, string[]>;
     workerLines?: Record<string, LineKey>;
+    workerOnLeave?: Record<string, string[]>;
+    /**
+     * Only read, never written: what `workerOnLeave` was called for the first
+     * day it existed. A plan saved in that window still carries it, and a
+     * supervisor's morning of phone calls is not worth dropping over a name.
+     * Safe to delete once no stored plan is older than `PLAN_RETENTION_DAYS`.
+     */
     workerAbsence?: Record<string, string[]>;
     virtualLines?: VirtualLine[];
     lineOrder?: LineKey[];
@@ -449,7 +456,7 @@ const withinCrewLimit = (assignments: CrewAssignment[]): boolean => {
 export const usePlanStore = create<PlanState>((set, get) => ({
   containers: { [POOL_ID]: [] },
   workerLines: {},
-  workerAbsence: {},
+  workerOnLeave: {},
   virtualLines: [],
   lineOrder: [],
   orderCrewAssignments: {},
@@ -720,10 +727,10 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     });
   },
 
-  setWorkerAway(workerId, day, away) {
+  setWorkerOnLeave(workerId, day, away) {
     set((state) => ({
-      workerAbsence: withAbsence(
-        state.workerAbsence,
+      workerOnLeave: withLeave(
+        state.workerOnLeave,
         workerId,
         day,
         away,
@@ -982,7 +989,8 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         lineLayoutVersion: plan.lineLayoutVersion ?? 0,
         manualOrders: plan.manualOrders ?? state.manualOrders,
         workerLines: plan.workerLines ?? state.workerLines,
-        workerAbsence: plan.workerAbsence ?? state.workerAbsence,
+        workerOnLeave:
+          plan.workerOnLeave ?? plan.workerAbsence ?? state.workerOnLeave,
         virtualLines: plan.virtualLines ?? state.virtualLines,
         // A plan saved before the lines could be arranged carries none, which
         // reads as the built-in order rather than as an empty board.

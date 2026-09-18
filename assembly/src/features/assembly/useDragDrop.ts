@@ -30,7 +30,7 @@ import { shiftTimelineKeepingClock } from './boardView';
 import { barDragLanding } from './barDrag';
 import { dragColumns, type DayAxis } from './dayAxis';
 import { planGroupMove, type MarkedMove } from './groupMove';
-import { CREW_ROLL_TYPE, crewRollDrop } from './crewRoll';
+import { CREW_ROLL_TYPE, crewRollDrop } from './CrewRolls';
 
 /** Prefer whatever the pointer is actually inside, then the nearest. */
 const collisionDetection: CollisionDetection = (args) => {
@@ -120,7 +120,7 @@ export function useDragDrop() {
       if (roll) {
         usePlanStore
           .getState()
-          .setWorkerAway(roll.workerId, toDayKey(new Date()), roll.away);
+          .setWorkerOnLeave(roll.workerId, toDayKey(new Date()), roll.onLeave);
         return;
       }
       if (over?.data.current?.type !== 'line') return;

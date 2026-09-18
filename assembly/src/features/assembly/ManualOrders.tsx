@@ -4,7 +4,7 @@ import { usePlanStore } from '@/store/planStore';
 import { useUiStore } from '@/store/uiStore';
 import { useSupervisorStore } from '@/store/supervisorStore';
 import { clashesFor } from '@/engine/assembly/crew';
-import { isAwayOn } from '@/engine/assembly/attendance';
+import { isOnLeave } from '@/engine/assembly/attendance';
 import { JobId } from '@/domain/ids';
 import { toDayKey, formatDay } from '@/lib/time';
 import { Button } from '@/ui';
@@ -106,7 +106,7 @@ export function ManualOrderInspector({ board, id }: { board: AssemblyGanttView; 
     }}>
       <h2>Factory General</h2><p>{order.description}</p><p>{order.supportDepartment} · {formatDay(new Date(order.day + 'T12:00:00'))} · {order.plannedHours} planned labour hours</p>
       <p>Drag operators to Factory General before selecting the crew. Hours are the total across the selected crew.</p>
-      <fieldset disabled={!unlocked}><legend>Crew</legend>{board.workers.filter(w => selected.includes(String(w.id)) || (!isAwayOn(w, today, board.workerAbsence, today) && workerLines[String(w.id)] === 'FACTORY_GENERAL')).map(w =>
+      <fieldset disabled={!unlocked}><legend>Crew</legend>{board.workers.filter(w => selected.includes(String(w.id)) || (!isOnLeave(w, today, board.workerOnLeave, today) && workerLines[String(w.id)] === 'FACTORY_GENERAL')).map(w =>
         <label key={String(w.id)}><input name="worker" type="checkbox" value={String(w.id)} defaultChecked={selected.includes(String(w.id))} />{w.name}</label>)}</fieldset>
       <label>Total labour hours on {formatDay(board.today)}<input disabled={!unlocked} name="hours" type="number" min="0" step="0.25" defaultValue={existing?.laborHours ?? ''} required /></label>
       <label>Notes<textarea disabled={!unlocked} name="notes" defaultValue={existing?.notes ?? ''} maxLength={2000} /></label>

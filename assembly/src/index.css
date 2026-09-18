@@ -2177,7 +2177,7 @@ body.col-resizing {
  * a day off is not a hand-over — so the chip has to carry the difference
  * between "on this" and "on this but not here".
  */
-.chip.away {
+.chip.on-leave {
   background: repeating-linear-gradient(
     -45deg,
     #fee2e2,
@@ -2188,7 +2188,7 @@ body.col-resizing {
   border-color: #b91c1c;
   color: #7f1d1d;
 }
-.chip-away {
+.chip-on-leave {
   margin-left: 3px;
   font-weight: 800;
 }
@@ -2455,8 +2455,8 @@ body.col-resizing {
 }
 .metric-free { margin: 0 0 8px; font-size: 11.5px; line-height: 1.4; }
 .metric-free b { margin-right: 5px; color: var(--muted); font-size: 9.5px; letter-spacing: 0.3px; text-transform: uppercase; }
-.metric-free.away { color: #b91c1c; }
-.metric-free.away b { color: #b91c1c; }
+.metric-free.on-leave { color: #b91c1c; }
+.metric-free.on-leave b { color: #b91c1c; }
 .metric-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
 .metric-table th {
   text-align: left;
@@ -2544,7 +2544,7 @@ body.col-resizing {
 .worker-name.dragging { opacity: 0.45; cursor: grabbing; }
 /* Still standing on the line, and not at work. The name stays put so the
    supervisor can find them and mark them back in. */
-.worker-name.away {
+.worker-name.on-leave {
   color: #b91c1c;
   text-decoration: line-through;
   text-decoration-thickness: 1px;
@@ -2922,7 +2922,7 @@ body.col-resizing {
  * for, so the colour only has to be legible. Red type on the heading's own
  * ground is, at this size, where pink on blue was not.
  */
-.team-name.away {
+.team-name.on-leave {
   padding: 0 1px;
   border-color: transparent;
   background: transparent;
@@ -2932,7 +2932,7 @@ body.col-resizing {
 /* And of those, the ones whose orders nobody else is on. That name is a
    button — it selects the first order waiting to be handed over — so it is
    underlined, which is what the pointer is looking for. */
-.team-name.away.stranded {
+.team-name.on-leave.stranded {
   appearance: none;
   font: inherit;
   font-weight: 800;
@@ -3111,23 +3111,23 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .worker-name:not(.drag-locked) { touch-action: none; }
 /* Not in today, above the line move: it is the more urgent of the two, and
    the only one with an Expect Date going wrong behind it. */
-.wl-away {
+.wl-on-leave {
   display: grid;
   gap: 4px;
   padding: 10px 14px 0;
 }
-.wl-away label {
+.wl-on-leave label {
   display: flex;
   align-items: center;
   gap: 6px;
   font-weight: 700;
 }
-.wl-away span {
+.wl-on-leave span {
   color: var(--faint);
   font-size: 10px;
   line-height: 1.4;
 }
-.wl-away.is-away label { color: #b91c1c; }
+.wl-on-leave.is-on-leave label { color: #b91c1c; }
 .wl-move { display: grid; gap: 6px; padding: 10px 14px; }
 .wl-move select { font: inherit; padding: 6px; }
 

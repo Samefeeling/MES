@@ -21,7 +21,7 @@ import {
   shiftTimelineDays,
   sortLineRows,
   teamSummary,
-  absentWorkerOrders,
+  onLeaveWorkerOrders,
   strandedOrders,
   timelineDayOffset,
   withPredecessors,
@@ -240,7 +240,7 @@ describe('assembly board view controls', () => {
       running.crewDays = [onToday(['Ann'])];
 
       const team = teamSummary(people, [running], TODAY, { Bob: [KEY] });
-      expect(team.absent.map((w) => w.name)).toEqual(['Bob']);
+      expect(team.onLeave.map((w) => w.name)).toEqual(['Bob']);
       // Bob is not "free": he is not here to be reached for.
       expect(team.free.map((w) => w.name)).toEqual(['Cal']);
       expect(team.label).toBe('1/2 Free 1: Cal');
@@ -253,7 +253,7 @@ describe('assembly board view controls', () => {
         person('Cal'),
       ];
       expect(
-        teamSummary(people, [], TODAY, {}).absent.map((w) => w.name),
+        teamSummary(people, [], TODAY, {}).onLeave.map((w) => w.name),
       ).toEqual(['Ann', 'Bob']);
     });
 
@@ -263,7 +263,7 @@ describe('assembly board view controls', () => {
       // supervisor has to hand to somebody.
       const stalled = row('J1');
       stalled.workers = [away];
-      stalled.crewAwayToday = [away];
+      stalled.crewOnLeaveToday = [away];
       stalled.actualStart = {
         startedAt: '2026-09-03T07:10:00',
         overrideReason: null,
@@ -273,13 +273,13 @@ describe('assembly board view controls', () => {
       // Same absence, but a second person is on it, so it is still running.
       const covered = row('J2');
       covered.workers = [away, person('Ann')];
-      covered.crewAwayToday = [away];
+      covered.crewOnLeaveToday = [away];
       covered.actualStart = stalled.actualStart;
       covered.crewDays = [onToday(['Ann'])];
       // Not started yet: it is waiting its turn, not stranded.
       const waiting = row('J3');
       waiting.workers = [away];
-      waiting.crewAwayToday = [away];
+      waiting.crewOnLeaveToday = [away];
 
       expect(
         strandedOrders([stalled, covered, waiting], TODAY).map((r) =>
@@ -292,14 +292,14 @@ describe('assembly board view controls', () => {
       const away = person('Bob');
       const covered = row('J2');
       covered.workers = [away];
-      covered.crewAwayToday = [away];
+      covered.crewOnLeaveToday = [away];
       covered.crewDays = [onToday(['Ann'])];
       const stalled = row('J1');
       stalled.workers = [away];
-      stalled.crewAwayToday = [away];
+      stalled.crewOnLeaveToday = [away];
       stalled.booked = [{ day: '2026-09-03', qty: 4, hours: 8 }] as OrderRow['booked'];
 
-      const left = absentWorkerOrders([covered, stalled], TODAY);
+      const left = onLeaveWorkerOrders([covered, stalled], TODAY);
       expect(left.get('Bob')?.map((r) => String(r.job.id))).toEqual([
         'J1',
         'J2',

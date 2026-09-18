@@ -9,7 +9,7 @@
  * but them on it was neither running nor anywhere on the list of orders
  * waiting for a crew. It simply sat there.
  *
- * So absence belongs here, on the supply side of the schedule, in the one
+ * So leave belongs here, on the supply side of the schedule, in the one
  * shape the day planner already understands: a day this person gives the
  * order nothing. Everything downstream then tells the truth by itself — three
  * hands become two and the bar lengthens, the last hand goes and the bar shows
@@ -20,14 +20,14 @@
  * picks it up is the supervisor's call — the board's job is only to make the
  * hole impossible to miss.
  *
- * Three things can say someone is away, and they mean slightly different
+ * Three things can say someone is on leave, and they mean slightly different
  * things:
  *
  *  - `plannedLeave` on the roster — booked annual leave, known in advance and
  *    dated, so it applies on whichever day it names.
  *  - `onShift: false` — the roster's own attendance flag, which is only ever
  *    about today: the list is read fresh each morning and carries no history.
- *  - `absence` here — somebody marked off on the board, which is what the
+ *  - `leave` here — somebody marked off on the board, which is what the
  *    phone call at ten past seven produces. Dated, because a supervisor who
  *    knows on Monday that Tuesday is a hospital appointment should be able to
  *    say so on Monday.
@@ -38,23 +38,23 @@
 import type { Worker } from '@/domain/assembly';
 import { toDayKey } from '@/lib/time';
 
-/** Worker id → the local days they are away, as marked on the board. */
-export type AbsenceDays = Readonly<Record<string, readonly string[]>>;
+/** Worker id → the local days they are on leave, as marked on the board. */
+export type LeaveDays = Readonly<Record<string, readonly string[]>>;
 
 /**
- * Is this person away on `day`?
+ * Is this person on leave on `day`?
  *
  * `todayKey` is needed because `onShift` is undated — it is the roster's
  * answer for the shift being worked now, and reading it as an answer about
  * next Thursday would strike somebody off a week they will be at work for.
  */
-export function isAwayOn(
+export function isOnLeave(
   worker: Worker,
   day: string,
-  absence: AbsenceDays,
+  leave: LeaveDays,
   todayKey: string,
 ): boolean {
-  if (absence[String(worker.id)]?.includes(day)) return true;
+  if (leave[String(worker.id)]?.includes(day)) return true;
   if (worker.plannedLeave?.includes(day)) return true;
   return !worker.onShift && day === todayKey;
 }
@@ -68,53 +68,53 @@ export function isAwayOn(
  * export no longer lists, and guessing that they are absent would quietly
  * stop an order the board has no business stopping.
  */
-export function awayOnDay(
+export function onLeaveOnDay(
   workers: readonly Worker[],
-  absence: AbsenceDays,
+  leave: LeaveDays,
   today: Date,
 ): (workerId: string, day: string) => boolean {
   const todayKey = toDayKey(today);
   const byId = new Map(workers.map((worker) => [String(worker.id), worker]));
   return (workerId, day) => {
     const worker = byId.get(workerId);
-    return worker ? isAwayOn(worker, day, absence, todayKey) : false;
+    return worker ? isOnLeave(worker, day, leave, todayKey) : false;
   };
 }
 
-/** Everyone on the roster who is away on `day`, in roster order. */
-export function awayWorkers(
+/** Everyone on the roster who is on leave on `day`, in roster order. */
+export function workersOnLeave(
   workers: readonly Worker[],
-  absence: AbsenceDays,
+  leave: LeaveDays,
   today: Date,
   day: string = toDayKey(today),
 ): Worker[] {
   const todayKey = toDayKey(today);
   return workers.filter((worker) =>
-    isAwayOn(worker, day, absence, todayKey),
+    isOnLeave(worker, day, leave, todayKey),
   );
 }
 
 /**
- * Mark somebody away, or take the mark off — returning the whole map.
+ * Mark somebody off, or take the mark away — returning the whole map.
  *
  * Days older than `keepFrom` go with it. The board keeps a fortnight of plan
  * behind it and this is the same kind of record; a year of "Tom was off on the
  * 3rd" is nothing anyone will ever ask the board again.
  */
-export function withAbsence(
-  absence: AbsenceDays,
+export function withLeave(
+  leave: LeaveDays,
   workerId: string,
   day: string,
-  away: boolean,
+  onLeave: boolean,
   keepFrom: string,
 ): Record<string, string[]> {
   const next: Record<string, string[]> = {};
-  for (const [id, days] of Object.entries(absence)) {
+  for (const [id, days] of Object.entries(leave)) {
     const kept = days.filter(
       (each) => each >= keepFrom && !(id === workerId && each === day),
     );
     if (kept.length > 0) next[id] = kept;
   }
-  if (away) next[workerId] = [...(next[workerId] ?? []), day].sort();
+  if (onLeave) next[workerId] = [...(next[workerId] ?? []), day].sort();
   return next;
 }

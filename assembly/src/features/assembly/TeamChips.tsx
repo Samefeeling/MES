@@ -24,7 +24,7 @@ import {
   freeCrewWindow,
   type FreeCrewWindow,
 } from '@/engine/assembly/crew';
-import { isAwayOn } from '@/engine/assembly/attendance';
+import { isOnLeave } from '@/engine/assembly/attendance';
 import { usePlanStore } from '@/store/planStore';
 import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { useUiStore } from '@/store/uiStore';
@@ -134,7 +134,7 @@ export function TeamChips({
   const assignWindow = usePlanStore((s) => s.assignWorkerWindow);
   const unassign = usePlanStore((s) => s.unassignWorker);
   const approved = usePlanStore((s) => s.orderDoubleBooked);
-  const absence = usePlanStore((s) => s.workerAbsence);
+  const leave = usePlanStore((s) => s.workerOnLeave);
   const todayKey = toDayKey(new Date());
   /**
    * Who on this crew is not in today. The engine has already stopped planning
@@ -142,7 +142,7 @@ export function TeamChips({
    * say on the row why it has fewer hands than names.
    */
   const awayIds = new Set(
-    (row.crewAwayToday ?? []).map((worker) => String(worker.id)),
+    (row.crewOnLeaveToday ?? []).map((worker) => String(worker.id)),
   );
   const askClash = useUiStore((s) => s.askClash);
   const unlocked = useSupervisorStore((s) => s.unlocked);
@@ -202,7 +202,7 @@ export function TeamChips({
     return roster
       .filter(
         (w) =>
-          !isAwayOn(w, todayKey, absence, todayKey) &&
+          !isOnLeave(w, todayKey, leave, todayKey) &&
           workerLines.get(String(w.id)) === row.line.key &&
           !onIt.has(String(w.id)),
       )
@@ -217,7 +217,7 @@ export function TeamChips({
           (rosterIndex.get(String(a.worker.id)) ?? 0) -
             (rosterIndex.get(String(b.worker.id)) ?? 0),
       );
-  }, [picking, roster, rows, row, workerLines, absence, todayKey]);
+  }, [picking, roster, rows, row, workerLines, leave, todayKey]);
 
   const add = (
     worker: Worker,
@@ -315,7 +315,7 @@ export function TeamChips({
         return (
           <button
             key={String(w.id)}
-            className={`chip ${unlocked ? '' : 'locked'} ${off ? 'away' : ''} ${
+            className={`chip ${unlocked ? '' : 'locked'} ${off ? 'on-leave' : ''} ${
               busy.length === 0 ? '' : ok ? 'shared' : 'clash'
             }`}
             disabled={!unlocked || disabled}
@@ -343,7 +343,7 @@ export function TeamChips({
           >
             {w.name}
             {off && (
-              <span className="chip-away" aria-hidden="true">
+              <span className="chip-on-leave" aria-hidden="true">
                 ✕
               </span>
             )}

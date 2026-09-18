@@ -58,13 +58,13 @@ import { DragTimeGuide } from './DragTimeGuide';
 import { OrderBar } from './OrderBar';
 import { DRAG_TYPE_LINE, lineDragId } from './lineDrag';
 import { TeamChips } from './TeamChips';
-import { CrewName, CrewRoll } from './CrewRoll';
+import { CrewName, CrewRoll } from './CrewRolls';
 import { WorkerLoadChip } from './WorkerLoadChip';
 import { DependencyArrows } from './DependencyArrows';
 import { dependencyFocus } from './dependencyRouter';
 import {
   teamSummary,
-  absentWorkerOrders,
+  onLeaveWorkerOrders,
   strandedOrders,
   isDueSoon,
   isRunningOnDay,
@@ -959,7 +959,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
         allRows,
         board.today,
         undefined,
-        board.workerAbsence,
+        board.workerOnLeave,
       ),
     [board, allRows],
   );
@@ -967,12 +967,12 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
   // halves of the morning question, read while deciding who goes on the order
   // in front of you and who is going to pick up what somebody put down.
   const team = useMemo(
-    () => teamSummary(board.workers, allRows, board.today, board.workerAbsence),
-    [board.workers, allRows, board.today, board.workerAbsence],
+    () => teamSummary(board.workers, allRows, board.today, board.workerOnLeave),
+    [board.workers, allRows, board.today, board.workerOnLeave],
   );
   /** What each absent person has left behind today, worst first. */
-  const absentOrders = useMemo(
-    () => absentWorkerOrders(allRows, board.today),
+  const onLeaveOrders = useMemo(
+    () => onLeaveWorkerOrders(allRows, board.today),
     [allRows, board.today],
   );
   /** The begun orders that today has nobody at all on — the hand-over queue. */
@@ -1013,7 +1013,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
       board.horizonStart,
       board.horizonDays,
       board.today,
-      board.workerAbsence,
+      board.workerOnLeave,
     );
     return showWeekends ? calendar : calendar.filter((load) => load.working);
   }, [allRows, board, showWeekends]);
@@ -1199,19 +1199,19 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
               ))}
             </CrewRoll>
             <CrewRoll
-              roll="absent"
+              roll="onLeave"
               label="On Leave"
-              count={team.absent.length}
+              count={team.onLeave.length}
               empty="full shift in"
               listTitle={
-                (team.absent.length === 0
+                (team.onLeave.length === 0
                   ? 'Everybody on the roster is in today'
-                  : `Not in today: ${team.absent.map((w) => w.name).join(', ')}`) +
+                  : `Not in today: ${team.onLeave.map((w) => w.name).join(', ')}`) +
                 (unlocked ? '\nDrag a name into Free to put them back in' : '')
               }
             >
-              {team.absent.map((worker) => {
-                const left = absentOrders.get(String(worker.id)) ?? [];
+              {team.onLeave.map((worker) => {
+                const left = onLeaveOrders.get(String(worker.id)) ?? [];
                 const held = left.filter((row) =>
                   stranded.has(String(row.job.id)),
                 );
@@ -1222,8 +1222,8 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
                   <CrewName
                     key={String(worker.id)}
                     worker={worker}
-                    roll="absent"
-                    className={`team-name away ${held.length > 0 ? 'stranded' : ''}`}
+                    roll="onLeave"
+                    className={`team-name on-leave ${held.length > 0 ? 'stranded' : ''}`}
                     draggable={unlocked}
                     onClick={
                       held.length > 0

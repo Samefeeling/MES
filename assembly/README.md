@@ -616,10 +616,10 @@ domain  →  lib  →  engine  →  store  →  features (UI)
   `assembly/{duration,dates,release,board,workload,dependencies,attendance}`.
   `attendance` is the one answer to "is this person in today?", read from the
   roster's leave and OnShift plus whoever the supervisor marked off; the day
-  planner takes an absence as a day that person gives their orders nothing. No
-  React, no I/O.
+  planner takes a day on leave as a day that person gives their orders nothing.
+  No React, no I/O.
 - **`store/`** — Zustand. `dataStore` (loaded data + indexes), `planStore`
-  (placement, crew, pinned starts, booked output, who is away — the only
+  (placement, crew, pinned starts, booked output, who is on leave — the only
   mutable plan state), `assemblySelectors` (derives the schedule), `uiStore` (selection).
 - **`persistence/`** — `PlanRepository` with a SharePoint, a REST
   (`ApiPlanRepository`) and a localStorage implementation, plus `planParts` —

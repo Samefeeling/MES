@@ -8,7 +8,7 @@ import {
   wholeDaysBetween,
 } from '@/engine/assembly/dates';
 import type { LineKey, Worker } from '@/domain/assembly';
-import { awayWorkers, type AbsenceDays } from '@/engine/assembly/attendance';
+import { workersOnLeave, type LeaveDays } from '@/engine/assembly/attendance';
 import { toDayKey } from '@/lib/time';
 import {
   DRAG_STEP_MINUTES,
@@ -342,11 +342,13 @@ export function teamSummary(
   workers: Worker[],
   rows: OrderRow[],
   today: Date,
-  absence: AbsenceDays = {},
+  leave: LeaveDays = {},
 ) {
-  const away = awayWorkers(workers, absence, today);
-  const out = new Set(away.map((worker) => String(worker.id)));
-  const attendance = workers.filter((worker) => !out.has(String(worker.id)));
+  const out = workersOnLeave(workers, leave, today);
+  const outIds = new Set(out.map((worker) => String(worker.id)));
+  const attendance = workers.filter(
+    (worker) => !outIds.has(String(worker.id)),
+  );
   const active = activeWorkerIdsOnDay(rows, today);
   const free = attendance.filter((worker) => !active.has(String(worker.id)));
   const allocated = attendance.length - free.length;
@@ -360,7 +362,7 @@ export function teamSummary(
     total: attendance.length,
     attendance,
     free,
-    absent: away,
+    onLeave: out,
     label,
   };
 }
@@ -394,14 +396,14 @@ export function strandedOrders(rows: OrderRow[], today: Date): OrderRow[] {
     (row) =>
       row.line.schedulable &&
       !row.completedToday &&
-      (row.crewAwayToday?.length ?? 0) > 0 &&
+      (row.crewOnLeaveToday?.length ?? 0) > 0 &&
       hasBegun(row) &&
       !crewedOnDay(row, today),
   );
 }
 
 /** Orders each absent person has left behind today, by worker id. */
-export function absentWorkerOrders(
+export function onLeaveWorkerOrders(
   rows: OrderRow[],
   today: Date,
 ): Map<string, OrderRow[]> {
@@ -410,7 +412,7 @@ export function absentWorkerOrders(
   );
   const by = new Map<string, OrderRow[]>();
   for (const row of rows) {
-    for (const worker of row.crewAwayToday ?? []) {
+    for (const worker of row.crewOnLeaveToday ?? []) {
       const id = String(worker.id);
       by.set(id, [...(by.get(id) ?? []), row]);
     }

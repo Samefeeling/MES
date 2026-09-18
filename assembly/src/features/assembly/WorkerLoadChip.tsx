@@ -42,8 +42,8 @@ export function WorkerLoadChip({
   const openWorkerId = useUiStore((s) => s.workerLoadId);
   const setWorkerLoad = useUiStore((s) => s.setWorkerLoad);
   const virtualLines = usePlanStore((s) => s.virtualLines);
-  const absence = usePlanStore((s) => s.workerAbsence);
-  const setWorkerAway = usePlanStore((s) => s.setWorkerAway);
+  const leave = usePlanStore((s) => s.workerOnLeave);
+  const setWorkerOnLeave = usePlanStore((s) => s.setWorkerOnLeave);
   /*
    * Whether this person is in today, and — separately — whether the board is
    * what says so.
@@ -54,10 +54,10 @@ export function WorkerLoadChip({
    * that silently fails to would be worse than not offering one.
    */
   const dayKey = toDayKey(new Date());
-  const markedAway = (absence[String(worker.id)] ?? []).includes(dayKey);
-  const rosterAway =
+  const markedOff = (leave[String(worker.id)] ?? []).includes(dayKey);
+  const rosterLeave =
     !worker.onShift || Boolean(worker.plannedLeave?.includes(dayKey));
-  const away = markedAway || rosterAway;
+  const onLeave = markedOff || rosterLeave;
   const gate = signInAt(useSupervisorStore((s) => s.hosted));
   const open = openWorkerId === String(worker.id);
   const [position, setPosition] = useState({ left: 0, top: 0 });
@@ -163,11 +163,11 @@ export function WorkerLoadChip({
           setNodeRef(node);
         }}
         type="button"
-        className={`worker-name ${open ? 'open' : ''} ${away ? 'away' : ''} ${isDragging ? 'dragging' : ''} ${dragDisabled ? 'drag-locked' : ''}`}
+        className={`worker-name ${open ? 'open' : ''} ${onLeave ? 'on-leave' : ''} ${isDragging ? 'dragging' : ''} ${dragDisabled ? 'drag-locked' : ''}`}
         aria-expanded={open}
         aria-label={`${worker.name} — ${pct}% booked over ${preview.length} working days`}
         title={
-          (away ? `${worker.name} is not in today — ` : '') +
+          (onLeave ? `${worker.name} is not in today — ` : '') +
           (dragDisabled
             ? `${worker.name} — load details; sign in as ${gate} to move between lines`
             : `${worker.name} — click for load, drag to another production line`)
@@ -223,24 +223,24 @@ export function WorkerLoadChip({
             this person's hours until somebody says otherwise, and every hour
             it plans that they are not going to work is an Expect Date that is
             wrong. Their orders are left exactly as they are — see
-            `planStore.setWorkerAway`.
+            `planStore.setWorkerOnLeave`.
           */}
-          <div className={`wl-away ${away ? 'is-away' : ''}`}>
+          <div className={`wl-on-leave ${onLeave ? 'is-on-leave' : ''}`}>
             <label>
               <input
                 type="checkbox"
-                checked={away}
-                disabled={dragDisabled || rosterAway}
+                checked={onLeave}
+                disabled={dragDisabled || rosterLeave}
                 onChange={(event) =>
-                  setWorkerAway(String(worker.id), dayKey, event.target.checked)
+                  setWorkerOnLeave(String(worker.id), dayKey, event.target.checked)
                 }
               />
               Not in today
             </label>
             <span>
-              {rosterAway
+              {rosterLeave
                 ? 'From the roster — annual leave or off shift.'
-                : away
+                : onLeave
                   ? 'The schedule has stopped planning their hours. They keep' +
                     ' their orders until somebody takes them over.'
                   : dragDisabled

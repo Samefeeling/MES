@@ -23,7 +23,7 @@ const plan = (over: Partial<PersistedPlan> = {}): PersistedPlan => ({
     production: { J1: [] },
     progress: { J1: [{ date: '2026-09-17', qty: 4 }] },
     lastSeen: { J1: '2026-09-17' },
-    workerAbsence: { W1: ['2026-09-17'] },
+    workerOnLeave: { W1: ['2026-09-17'] },
     ...over.assembly,
   },
 });
@@ -56,10 +56,10 @@ describe('the two halves of a stored plan', () => {
    * would leave the schedule planning hours nobody is going to work.
    */
   it('writes an absence straight through, without waiting for Save', () => {
-    expect(shiftRecordsOf(plan()).assembly.workerAbsence).toEqual({
+    expect(shiftRecordsOf(plan()).assembly.workerOnLeave).toEqual({
       W1: ['2026-09-17'],
     });
-    expect(planningOf(plan()).assembly).not.toHaveProperty('workerAbsence');
+    expect(planningOf(plan()).assembly).not.toHaveProperty('workerOnLeave');
   });
 
   it('does not make the board dirty when somebody is marked off', () => {
@@ -67,7 +67,7 @@ describe('the two halves of a stored plan', () => {
     // one, so it must not put the Save button up or arm the unsaved banner.
     const before = planningFingerprint(planningOf(plan()));
     const after = planningFingerprint(
-      planningOf(plan({ assembly: { workerAbsence: { W2: ['2026-09-18'] } } })),
+      planningOf(plan({ assembly: { workerOnLeave: { W2: ['2026-09-18'] } } })),
     );
     expect(after).toBe(before);
   });

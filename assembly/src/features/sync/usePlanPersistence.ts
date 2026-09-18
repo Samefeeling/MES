@@ -76,7 +76,7 @@ const recordsNow = (): ShiftRecordPart => {
   const p = usePlanStore.getState();
   return {
     assembly: {
-      workerAbsence: p.workerAbsence,
+      workerOnLeave: p.workerOnLeave,
       orderActualStarts: p.orderActualStarts,
       progress: p.progress,
       progressBaselines: p.progressBaselines,
@@ -149,7 +149,7 @@ export function usePlanPersistence(): PlanPersistence {
   const orderOvertime = usePlanStore((s) => s.orderOvertime);
   const orderDoubleBooked = usePlanStore((s) => s.orderDoubleBooked);
 
-  const workerAbsence = usePlanStore((s) => s.workerAbsence);
+  const workerOnLeave = usePlanStore((s) => s.workerOnLeave);
   const orderActualStarts = usePlanStore((s) => s.orderActualStarts);
   const progress = usePlanStore((s) => s.progress);
   const progressBaselines = usePlanStore((s) => s.progressBaselines);
@@ -178,7 +178,7 @@ export function usePlanPersistence(): PlanPersistence {
   const records: ShiftRecordPart = useMemo(
     recordsNow,
     [
-      workerAbsence,
+      workerOnLeave,
       orderActualStarts,
       progress,
       progressBaselines,

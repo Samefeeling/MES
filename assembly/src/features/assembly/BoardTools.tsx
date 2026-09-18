@@ -70,7 +70,7 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
   const team = useMemo(
     () =>
       board
-        ? teamSummary(board.workers, allRows, board.today, board.workerAbsence)
+        ? teamSummary(board.workers, allRows, board.today, board.workerOnLeave)
         : null,
     [board, allRows],
   );
@@ -295,7 +295,7 @@ function BoardLoadDetail({ board }: { board: AssemblyGanttView }) {
  */
 function CrewDetail({ board, rows }: { board: AssemblyGanttView; rows: OrderRow[] }) {
   const overrides = usePlanStore((s) => s.workerLines);
-  const team = teamSummary(board.workers, rows, board.today, board.workerAbsence);
+  const team = teamSummary(board.workers, rows, board.today, board.workerOnLeave);
   const stranded = strandedOrders(rows, board.today);
   const byLine = lineOfWorkerToday(board.workers, rows, board.today, overrides);
   // The line's own name, not its key: "UPL-Gluing" is what is written on the
@@ -327,9 +327,9 @@ function CrewDetail({ board, rows }: { board: AssemblyGanttView; rows: OrderRow[
       {/* The other half of the roll. Out of the ratio entirely — they are not
           on site — but the board used to let them leave it without saying so,
           and whatever they were part-way through is still on the line. */}
-      {team.absent.length > 0 && (
-        <p className="metric-free away">
-          <b>On leave</b> {team.absent.map((worker) => worker.name).join(', ')}
+      {team.onLeave.length > 0 && (
+        <p className="metric-free on-leave">
+          <b>On leave</b> {team.onLeave.map((worker) => worker.name).join(', ')}
           {stranded.length > 0 && (
             <span>
               {' '}— nobody on {stranded.map((row) => String(row.job.id)).join(', ')}

@@ -16,7 +16,7 @@ import { remainingHours } from './duration';
 import { addCalendarDays, isWeekend, startOfDay } from './dates';
 import type { OrderRow } from './board';
 import { toDayKey } from '@/lib/time';
-import { awayOnDay, type AbsenceDays } from './attendance';
+import { onLeaveOnDay, type LeaveDays } from './attendance';
 
 /** Days a person's popup covers — "one week". */
 export const LOAD_WINDOW_DAYS = 7;
@@ -139,11 +139,11 @@ export function boardDayLoads(
   /** Which column is today; the board opens a working day earlier. */
   today: Date = from,
   /** Who was marked off on the board — see `attendance`. */
-  absence: AbsenceDays = {},
+  leave: LeaveDays = {},
 ): DayBoardLoad[] {
   const start = startOfDay(from);
   const todayKey = toDayKey(startOfDay(today));
-  const away = awayOnDay(workers, absence, startOfDay(today));
+  const onLeave = onLeaveOnDay(workers, leave, startOfDay(today));
   const scheduled = rows.filter((r) => r.line.schedulable);
   const out: DayBoardLoad[] = [];
 
@@ -153,7 +153,7 @@ export function boardDayLoads(
     // A shift nobody is going to work is not capacity. Counting it made the
     // day read *emptier* the more people were off, which is backwards.
     const available = workers.filter(
-      (w) => !away(String(w.id), key),
+      (w) => !onLeave(String(w.id), key),
     ).length;
     const capacity = available * PRODUCTIVE_HOURS_PER_PERSON;
     const past = key < todayKey;
@@ -237,11 +237,11 @@ export function workerLoad(
   from: Date,
   dayCount: number = LOAD_WINDOW_DAYS,
   /** Days this person is not in beyond their own planned leave. */
-  away?: (day: string) => boolean,
+  markedOff?: (day: string) => boolean,
 ): WorkerLoad {
   const start = startOfDay(from);
   const id = String(worker.id);
-  const leave = new Set(worker.plannedLeave ?? []);
+  const planned = new Set(worker.plannedLeave ?? []);
   const mine = rows.filter(
     (r) => !r.completedToday && r.workers.some((w) => String(w.id) === id),
   );
@@ -252,7 +252,7 @@ export function workerLoad(
   for (let i = 0; i < dayCount; i++) {
     const date = addCalendarDays(start, i);
     const key = toDayKey(date);
-    const onLeave = leave.has(key) || Boolean(away?.(key));
+    const onLeave = planned.has(key) || Boolean(markedOff?.(key));
     const entries: LoadEntry[] = [];
 
     for (const row of mine) {
@@ -309,14 +309,14 @@ export function rosterLoad(
   rows: OrderRow[],
   from: Date,
   dayCount: number = LOAD_WINDOW_DAYS,
-  absence: AbsenceDays = {},
+  leave: LeaveDays = {},
   today: Date = from,
 ): Map<string, WorkerLoad> {
-  const away = awayOnDay(workers, absence, today);
+  const onLeave = onLeaveOnDay(workers, leave, today);
   return new Map(
     workers.map((w) => [
       String(w.id),
-      workerLoad(w, rows, from, dayCount, (day) => away(String(w.id), day)),
+      workerLoad(w, rows, from, dayCount, (day) => onLeave(String(w.id), day)),
     ]),
   );
 }
