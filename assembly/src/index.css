@@ -137,7 +137,12 @@ button {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 8px 16px;
+  padding: 4px 16px;
+  /* The same 40px as the column heading under it: two rows of one block, and
+     a block whose halves are different heights reads as two. It is a minimum
+     rather than a height — the row wraps when the window is narrow, and a
+     fixed one would cut the second line off. */
+  min-height: 40px;
   /* The top half of the chrome block: the same ground as the column heading
      below it, parted by a hairline rather than by a rule. Two rows of one
      block — what the board is being asked to show, and what it is showing —
@@ -1317,18 +1322,15 @@ body.col-resizing {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 28px;
+  width: 22px;
+  height: 18px;
   margin-left: 2px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
   color: var(--head-tx);
-  /* Twice the triangle it was. It folds the whole board away and brings it
-     back, which is a bigger act than any of the per-line triangles under it,
-     and it was drawn smaller than the word beside it. */
-  font-size: 26px;
+  font-size: 13px;
   line-height: 1;
   cursor: pointer;
 }
@@ -1812,6 +1814,9 @@ body.col-resizing {
  */
 .agroup-fold {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 18px;
   height: 18px;
   padding: 0;
@@ -1819,6 +1824,11 @@ body.col-resizing {
   border-radius: 5px;
   background: transparent;
   color: var(--line-name);
+  /* About 8px of drawn triangle. The size here was never the problem — it was
+     the character: U+25B8 is the *small* triangle, which sets at roughly four
+     tenths of its type size, so 11px of it drew four. It is the same ▶/▼ the
+     board's own control uses now, two points smaller, which keeps the one
+     that folds every line plainly the larger of the two. */
   font-size: 11px;
   line-height: 1;
   cursor: pointer;
@@ -2855,6 +2865,20 @@ body.col-resizing {
   gap: 4px;
   min-width: 0;
   width: 100%;
+  /* Room for the outline it wears as a drop target, without the two rolls
+     moving apart the moment a name is picked up. */
+  border: 1px dashed transparent;
+  border-radius: 4px;
+  padding: 0 2px;
+}
+/* A person is in the air: both rolls say they will take them. Lit only for a
+   worker — outlined during a bar drag they would be offering something they
+   cannot do. */
+.team-roll.offered { border-color: rgb(7 89 133 / 40%); }
+.team-roll.taking {
+  border-style: solid;
+  border-color: var(--head-tx);
+  background: var(--chrome-tint-hi);
 }
 .team-roll-label {
   flex: 0 0 auto;
@@ -2926,6 +2950,13 @@ body.col-resizing {
   font-weight: 800;
   text-decoration: none;
 }
+/* The name is the grip: drag it into the other roll to say somebody rang in,
+   or onto a line to move them to that bench. */
+.team-name.grippable {
+  cursor: grab;
+  touch-action: none;
+}
+.team-name.lifted { opacity: 0.4; }
 .team-names.none {
   color: var(--head-dim);
   font-weight: 600;

@@ -117,11 +117,25 @@ blue heading. A name is underlined when orders they had begun have nobody else
 on them, with the count beside it — the hand-over queue, named, and pressing it
 selects the first one.
 
+**A name is dragged between the two rolls.** Marking somebody off meant
+finding their chip on a line, opening it and ticking a box — three steps for
+the thing a supervisor does first, at ten past seven, with the phone still in
+their hand. The names are already on the board and the two answers are already
+lettered above them, so dragging Billy into Absent says it in one gesture, and
+dragging them back into Free says they turned up after all. A chip on a line
+drops into either roll too, and a name in a roll still drops onto a line, which
+is how somebody is moved to another bench. The drop writes exactly what the
+tick box writes, dated to today, and moves nobody off an order. Both rolls are
+lit while a person is in the air and only then; both are locked with the rest
+of the board, as writes to a plan the whole floor is reading.
+
 Both rolls are names rather than counts, because a count tells you there is a
 problem and a name tells you whose; each is **one line** and then scrolls, with
 the whole list in its hover. The heading is two lines of text tall, and these
 are the two: at two lines each it was tall enough to list a whole idle shift,
 which cost every other shift a band of empty blue across the top of the board.
+The controls band above it is the same 40px — two rows of one block, and a
+block whose halves are different heights reads as two bands.
 
 Each day cell is the **load standing on the left** — a bar filled to the day's
 percentage, with the figure inside the top of its own track — and the **date
@@ -134,13 +148,15 @@ counting.
 ## Folding and arranging the lines
 
 **The triangle in the Order column folds a line's orders away.** It used to be
-what clicking the line's *name* did, with the triangle along as decoration.
+what clicking the line's *name* did, with the triangle along as decoration. It
+is drawn with the same ▶/▼ the board's own control uses, two points smaller:
+it was set in U+25B8, the *small* triangle, which letters at about four tenths
+of its type size — eleven points of it drew four, on the control every line
+carries.
 
 **The triangle in the Order heading folds every line at once**, and opens them
 all again. Each line keeps its own; this is the one to reach for on the way to
-"which line is this job on", where eight presses is seven too many — and it is
-drawn at twice their size, because it does eight times as much and was smaller
-than the word beside it.
+"which line is this job on", where eight presses is seven too many.
 
 **The line's name is now the grip that arranges the lines.** Drag one onto
 another and it takes that line's place: dropped on a line below it comes to rest

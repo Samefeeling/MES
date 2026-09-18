@@ -58,6 +58,7 @@ import { DragTimeGuide } from './DragTimeGuide';
 import { OrderBar } from './OrderBar';
 import { DRAG_TYPE_LINE, lineDragId } from './lineDrag';
 import { TeamChips } from './TeamChips';
+import { CrewName, CrewRoll } from './CrewRoll';
 import { WorkerLoadChip } from './WorkerLoadChip';
 import { DependencyArrows } from './DependencyArrows';
 import { dependencyFocus } from './dependencyRouter';
@@ -611,7 +612,7 @@ function LineGroupView({
               : `Fold the ${group.line.name} orders away`
           }
         >
-          <span aria-hidden="true">{collapsed ? '▸' : '▾'}</span>
+          <span aria-hidden="true">{collapsed ? '▶' : '▼'}</span>
         </button>
         <div
           ref={arrange.setNodeRef}
@@ -1167,81 +1168,91 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
             className="acell team team-head frozen"
             style={{ left: headLefts.team }}
           >
-            <div className="team-roll">
-              <b className="team-roll-label">Free</b>
-              <span
-                className={`team-names ${team.free.length === 0 ? 'none' : ''}`}
-                title={
-                  team.free.length === 0
-                    ? 'Everybody on site today is on an order'
-                    : `Not allocated today: ${team.free.map((w) => w.name).join(', ')}`
-                }
-                aria-live="polite"
-              >
-                {team.free.length === 0
-                  ? 'all allocated'
-                  : team.free.map((worker) => (
-                      <span className="team-name" key={String(worker.id)}>
-                        {worker.name}
-                      </span>
-                    ))}
-              </span>
-            </div>
-            <div className="team-roll">
-              <b className="team-roll-label">Absent</b>
-              <span
-                className={`team-names ${team.absent.length === 0 ? 'none' : ''}`}
-                title={
-                  team.absent.length === 0
-                    ? 'Everybody on the roster is in today'
-                    : `Not in today: ${team.absent.map((w) => w.name).join(', ')}`
-                }
-                aria-live="polite"
-              >
-                {team.absent.length === 0
-                  ? 'full shift in'
-                  : team.absent.map((worker) => {
-                      const left = absentOrders.get(String(worker.id)) ?? [];
-                      const held = left.filter((row) =>
-                        stranded.has(String(row.job.id)),
-                      );
-                      // A name with orders behind it is the shortest route to
-                      // them: press it and the board selects the first one
-                      // nobody is covering, which is the one to hand over.
-                      const Tag = held.length > 0 ? 'button' : 'span';
-                      return (
-                        <Tag
-                          className={`team-name away ${held.length > 0 ? 'stranded' : ''}`}
-                          key={String(worker.id)}
-                          {...(held.length > 0
-                            ? {
-                                type: 'button' as const,
-                                onClick: () => select(String(held[0].job.id)),
-                              }
-                            : {})}
-                          title={
-                            left.length === 0
-                              ? `${worker.name} is not in today — nothing was on them`
-                              : `${worker.name} is not in today\n` +
-                                `Was on: ${left.map((row) => String(row.job.id)).join(', ')}` +
-                                (held.length > 0
-                                  ? `\nNobody else on: ${held
-                                      .map((row) => String(row.job.id))
-                                      .join(', ')} — needs a hand-over`
-                                  : '\nCovered by the rest of the crew')
-                          }
-                        >
-                          {worker.name}
-                          {held.length > 0 && (
-                            <i className="team-name-held" aria-hidden="true">
-                              {held.length}
-                            </i>
-                          )}
-                        </Tag>
-                      );
-                    })}
-              </span>
-            </div>
+            <CrewRoll
+              roll="free"
+              label="Free"
+              count={team.free.length}
+              empty="all allocated"
+              listTitle={
+                (team.free.length === 0
+                  ? 'Everybody on site today is on an order'
+                  : `Not allocated today: ${team.free.map((w) => w.name).join(', ')}`) +
+                (unlocked ? '\nDrag a name into Absent to mark them off' : '')
+              }
+            >
+              {team.free.map((worker) => (
+                <CrewName
+                  key={String(worker.id)}
+                  worker={worker}
+                  roll="free"
+                  className="team-name"
+                  draggable={unlocked}
+                  title={
+                    `${worker.name} — in today, nothing allocated` +
+                    (unlocked
+                      ? '\nDrag onto a line to move them, or into Absent'
+                      : '')
+                  }
+                >
+                  {worker.name}
+                </CrewName>
+              ))}
+            </CrewRoll>
+            <CrewRoll
+              roll="absent"
+              label="Absent"
+              count={team.absent.length}
+              empty="full shift in"
+              listTitle={
+                (team.absent.length === 0
+                  ? 'Everybody on the roster is in today'
+                  : `Not in today: ${team.absent.map((w) => w.name).join(', ')}`) +
+                (unlocked ? '\nDrag a name into Free to put them back in' : '')
+              }
+            >
+              {team.absent.map((worker) => {
+                const left = absentOrders.get(String(worker.id)) ?? [];
+                const held = left.filter((row) =>
+                  stranded.has(String(row.job.id)),
+                );
+                // A name with orders behind it is the shortest route to them:
+                // press it and the board selects the first one nobody is
+                // covering, which is the one to hand over.
+                return (
+                  <CrewName
+                    key={String(worker.id)}
+                    worker={worker}
+                    roll="absent"
+                    className={`team-name away ${held.length > 0 ? 'stranded' : ''}`}
+                    draggable={unlocked}
+                    onClick={
+                      held.length > 0
+                        ? () => select(String(held[0].job.id))
+                        : undefined
+                    }
+                    title={
+                      (left.length === 0
+                        ? `${worker.name} is not in today — nothing was on them`
+                        : `${worker.name} is not in today\n` +
+                          `Was on: ${left.map((row) => String(row.job.id)).join(', ')}` +
+                          (held.length > 0
+                            ? `\nNobody else on: ${held
+                                .map((row) => String(row.job.id))
+                                .join(', ')} — needs a hand-over`
+                            : '\nCovered by the rest of the crew')) +
+                      (unlocked ? '\nDrag into Free to put them back in' : '')
+                    }
+                  >
+                    {worker.name}
+                    {held.length > 0 && (
+                      <i className="team-name-held" aria-hidden="true">
+                        {held.length}
+                      </i>
+                    )}
+                  </CrewName>
+                );
+              })}
+            </CrewRoll>
             <ColumnGrip column="team" label="Crew" />
           </div>
           {/* Load histogram: one column per day, coloured by band. */}

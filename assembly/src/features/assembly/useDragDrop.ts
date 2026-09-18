@@ -17,6 +17,7 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core';
 import { JobId } from '@/domain/ids';
+import { toDayKey } from '@/lib/time';
 import { POOL_ID, usePlanStore } from '@/store/planStore';
 import { useSupervisorStore } from '@/store/supervisorStore';
 import { useUiStore } from '@/store/uiStore';
@@ -29,18 +30,30 @@ import { shiftTimelineKeepingClock } from './boardView';
 import { barDragLanding } from './barDrag';
 import { dragColumns, type DayAxis } from './dayAxis';
 import { planGroupMove, type MarkedMove } from './groupMove';
+import { CREW_ROLL_TYPE, crewRollDrop } from './crewRoll';
 
 /** Prefer whatever the pointer is actually inside, then the nearest. */
 const collisionDetection: CollisionDetection = (args) => {
-  // A worker must land inside a line, not snap to a distant row or the pool —
-  // and a line being arranged can only land on another line.
+  // A worker must land inside a line or one of the crew column's two rolls,
+  // not snap to a distant row or the pool — and a line being arranged can only
+  // land on another line.
   const type = args.active.data.current?.type;
-  const linesOnly = type === 'worker' || type === DRAG_TYPE_LINE;
-  const targets = linesOnly
-    ? { ...args, droppableContainers: args.droppableContainers.filter(target => target.data.current?.type === 'line') }
+  const worker = type === 'worker';
+  const narrowed = worker || type === DRAG_TYPE_LINE;
+  const targets = narrowed
+    ? {
+        ...args,
+        droppableContainers: args.droppableContainers.filter((target) => {
+          const kind = target.data.current?.type;
+          return kind === 'line' || (worker && kind === CREW_ROLL_TYPE);
+        }),
+      }
     : args;
   const hits = pointerWithin(targets);
-  return hits.length ? hits : linesOnly ? [] : closestCenter(targets);
+  // Inside one of them or nowhere: a person is put somewhere, never dropped
+  // near something. `closestCenter` would land the last name on the board on
+  // whichever line the pointer happened to end up nearest.
+  return hits.length ? hits : narrowed ? [] : closestCenter(targets);
 };
 
 export function useDragDrop() {
@@ -97,6 +110,19 @@ export function useDragDrop() {
     if (!useSupervisorStore.getState().unlocked) return;
 
     if (active.data.current?.type === 'worker') {
+      /*
+       * Dropped on Free or Absent in the crew column: in today, or not in.
+       * It writes what the chip's own tick box writes and nothing else — the
+       * orders they are on are left exactly where they are, because a day off
+       * is not a hand-over.
+       */
+      const roll = crewRollDrop(active.data.current, over?.data.current);
+      if (roll) {
+        usePlanStore
+          .getState()
+          .setWorkerAway(roll.workerId, toDayKey(new Date()), roll.away);
+        return;
+      }
       if (over?.data.current?.type !== 'line') return;
       const line = over.data.current.lineKey as LineKey | undefined;
       if (!line) return;
