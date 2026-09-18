@@ -12,7 +12,10 @@ neither is planned here — PMD mirrors moulding's own schedule and TBP is
 scheduled elsewhere —
 so they used to lead a board whose subject is the assembly floor. Each folded
 line leaves a **+ TBP** / **+ PMD** chip in the header, which is where it
-comes back from, and every line carries a **×** on its own row to fold it.
+comes back from, and every line carries a **×** on its own row to fold it —
+sized to the Qty column and standing under that heading, so the board has one
+straight edge of them rather than a mark that lands wherever each line's name
+and totals happen to end.
 
 **Whatever column widths the reader last dragged.** All seven frozen columns
 — Order, Qty, Hours, the three dates and Team — are dragged by
@@ -106,13 +109,19 @@ The seventh has no title. Over the crew chips are **two rolls, Free and
 Absent**, because the word "Team" only repeated what the chips under it already
 said. Free is who is on site with nothing allocated — the people to reach for
 while deciding who goes on the order in front of you. Absent is who is not in:
-marked off on the board, on annual leave, or off shift on the roster. An
-absentee's name is struck through, and filled red with a count beside it when
-orders they had begun have nobody else on them — the hand-over queue, named.
+marked off on the board, on annual leave, or off shift on the roster. Its
+label is lettered like Free's and the names under it are **red**, and that is
+the whole of the marking: the name carries a red-bordered box, pale lettering
+and a strike through it at once, none of which had the contrast for a pale
+blue heading. A name is underlined when orders they had begun have nobody else
+on them, with the count beside it — the hand-over queue, named, and pressing it
+selects the first one.
+
 Both rolls are names rather than counts, because a count tells you there is a
-problem and a name tells you whose; each is capped at two lines and then
-scrolls, so a shift with nobody on anything cannot push the day columns down
-the page.
+problem and a name tells you whose; each is **one line** and then scrolls, with
+the whole list in its hover. The heading is two lines of text tall, and these
+are the two: at two lines each it was tall enough to list a whole idle shift,
+which cost every other shift a band of empty blue across the top of the board.
 
 Each day cell is the **load standing on the left** — a bar filled to the day's
 percentage, with the figure inside the top of its own track — and the **date
@@ -129,7 +138,9 @@ what clicking the line's *name* did, with the triangle along as decoration.
 
 **The triangle in the Order heading folds every line at once**, and opens them
 all again. Each line keeps its own; this is the one to reach for on the way to
-"which line is this job on", where eight presses is seven too many.
+"which line is this job on", where eight presses is seven too many — and it is
+drawn at twice their size, because it does eight times as much and was smaller
+than the word beside it.
 
 **The line's name is now the grip that arranges the lines.** Drag one onto
 another and it takes that line's place: dropped on a line below it comes to rest
@@ -337,7 +348,7 @@ nothing about a day they are at home.
 **Nobody is taken off an order for being away.** A half-built order belongs to
 whoever was building it; a day off is not a hand-over, and who picks it up is
 the supervisor's call. What changes is that the row says so: the chip is
-hatched and struck through, the schedule stops counting hours that will not be
+hatched and carries a ✕, the schedule stops counting hours that will not be
 worked, and the order appears in the Absent roll's hand-over count if nobody
 else is on it.
 

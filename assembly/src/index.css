@@ -1066,11 +1066,12 @@ button {
   background: var(--head-bg);
   color: var(--head-tx);
   border-bottom: 2px solid var(--chrome-rule);
-  /* Two lines: the column titles on the left, the date over its count on the
-     right, with the load bar standing beside them. It grows rather than
-     clipping when a whole shift is free and the Team column has that many
-     names to list. */
-  min-height: 56px;
+  /* Two lines of text and the space to set them in: the column titles over
+     the crew rolls on the left, the date over its count on the right. It was
+     tall enough for four lines so the Team column could list a whole idle
+     shift without scrolling — which cost every other shift a band of empty
+     blue across the top of the board. The rolls scroll instead. */
+  min-height: 40px;
   font-size: 11px;
   font-weight: 700;
 }
@@ -1316,15 +1317,18 @@ body.col-resizing {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 18px;
+  width: 30px;
+  height: 28px;
   margin-left: 2px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
   color: var(--head-tx);
-  font-size: 13px;
+  /* Twice the triangle it was. It folds the whole board away and brings it
+     back, which is a bigger act than any of the per-line triangles under it,
+     and it was drawn smaller than the word beside it. */
+  font-size: 26px;
   line-height: 1;
   cursor: pointer;
 }
@@ -1794,7 +1798,9 @@ body.col-resizing {
   flex: 0 0 calc(var(--order-w) + var(--qty-w));
   width: calc(var(--order-w) + var(--qty-w));
   min-width: 0;
-  padding: 0 8px;
+  /* No padding on the right: the last thing in here is the hide button, and
+     it is sized to stand in the Qty column rather than just short of it. */
+  padding: 0 0 0 8px;
 }
 /*
  * Folding the line's orders away, in the Order column where its row starts.
@@ -1843,10 +1849,20 @@ body.col-resizing {
 }
 .agroup-label.arrangeable { cursor: grab; touch-action: none; }
 .agroup-label.arranging { opacity: 0.45; cursor: grabbing; }
-/* Takes the whole line off the board; the header offers it back. */
+/*
+ * Takes the whole line off the board; the header offers it back.
+ *
+ * It is as wide as the Qty column and sits at the end of the meta block, so
+ * every line's × stands in that column, under its heading — a straight edge
+ * down the board instead of a mark that landed wherever the line's name and
+ * totals happened to end.
+ */
 .agroup-hide {
-  flex: 0 0 auto;
-  width: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 var(--qty-w);
+  width: var(--qty-w);
   height: 18px;
   padding: 0;
   border: 1px solid transparent;
@@ -2827,8 +2843,11 @@ body.col-resizing {
  * than counts for the same reason: a count tells you there is a problem, a
  * name tells you whose.
  *
- * Each roll is capped at two lines and then scrolls. Unbounded, a shift with
- * nobody allocated pushed the day columns down the page as the list grew.
+ * One line each, and then they scroll — the heading is two lines of text
+ * tall and these are the two. Unbounded, a shift with nobody allocated pushed
+ * the day columns down the page as the list grew; at two lines each it left
+ * the usual morning looking at an empty band. Both rolls name everybody in
+ * their hover, so what scrolls out of the strip is still one pointer away.
  */
 .team-roll {
   display: flex;
@@ -2846,21 +2865,21 @@ body.col-resizing {
   text-transform: uppercase;
   color: var(--head-dim);
 }
-.team-roll-label.away {
-  color: #fca5a5;
-}
 .team-names {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 2px 3px;
   min-width: 0;
-  max-height: 28px;
+  max-height: 15px;
   overflow-y: auto;
   font-size: 9.5px;
   font-weight: 650;
   line-height: 1.35;
+  /* A scrollbar inside a 15px strip is taller than the text it scrolls. */
+  scrollbar-width: none;
 }
+.team-names::-webkit-scrollbar { display: none; }
 .team-name {
   padding: 0 4px;
   border: 1px solid var(--head-rule);
@@ -2869,39 +2888,50 @@ body.col-resizing {
   color: var(--head-tx);
   white-space: nowrap;
 }
-/* Not in today. Struck through rather than merely faded: faded reads as "less
-   important", and this is the opposite of that. */
+/*
+ * Not in today: the name in red, and nothing else.
+ *
+ * It was a red-bordered box with pale pink lettering struck through — three
+ * marks for one fact, on a pale blue heading that none of them had the
+ * contrast for. The word Absent beside it already says what the colour is
+ * for, so the colour only has to be legible. Red type on the heading's own
+ * ground is, at this size, where pink on blue was not.
+ */
 .team-name.away {
-  border-color: #b91c1c;
-  color: #fecaca;
-  text-decoration: line-through;
-  text-decoration-thickness: 1px;
+  padding: 0 1px;
+  border-color: transparent;
+  background: transparent;
+  color: #b91c1c;
+  font-weight: 750;
 }
 /* And of those, the ones whose orders nobody else is on. That name is a
-   button: it selects the first order waiting to be handed over. */
+   button — it selects the first order waiting to be handed over — so it is
+   underlined, which is what the pointer is looking for. */
 .team-name.away.stranded {
   appearance: none;
   font: inherit;
+  font-weight: 800;
   cursor: pointer;
-  background: #7f1d1d;
-  color: #fff;
-  text-decoration: none;
+  color: #991b1b;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .team-name-held {
-  margin-left: 3px;
+  margin-left: 2px;
   padding: 0 3px;
   border-radius: 6px;
-  background: #fecaca;
-  color: #7f1d1d;
+  background: #fee2e2;
+  color: #991b1b;
   font-style: normal;
   font-weight: 800;
+  text-decoration: none;
 }
 .team-names.none {
   color: var(--head-dim);
   font-weight: 600;
   font-style: italic;
 }
-.assy-head .team-head { gap: 6px; }
+.assy-head .team-head { gap: 2px; }
 .production-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 8px; margin-bottom: 8px; }
 .production-grid label { display: block; }
 .production-grid label > span {

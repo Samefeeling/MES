@@ -676,17 +676,6 @@ function LineGroupView({
 
         </div>
 
-        {/* Outside the label — it does something the label does not: it takes
-            the line off the board altogether. */}
-        <button
-          type="button"
-          className="agroup-hide"
-          onClick={onHide}
-          title={`Hide the ${group.line.name} line — bring it back from the header`}
-          aria-label={`Hide the ${group.line.name} line`}
-        >
-          ×
-        </button>
         {/* Closing a line the supervisor opened is a different act from
             folding it away, and it is theirs alone: the orders on it go back
             to the unplaced pool for somebody to file again. */}
@@ -708,6 +697,18 @@ function LineGroupView({
             Close line
           </button>
         )}
+        {/* Outside the label — it does something the label does not: it takes
+            the line off the board altogether. Last in the block, and as wide
+            as the Qty column, so it stands under that heading on every line. */}
+        <button
+          type="button"
+          className="agroup-hide"
+          onClick={onHide}
+          title={`Hide the ${group.line.name} line — bring it back from the header`}
+          aria-label={`Hide the ${group.line.name} line`}
+        >
+          ×
+        </button>
 
         </div>
 
@@ -1187,9 +1188,14 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
               </span>
             </div>
             <div className="team-roll">
-              <b className="team-roll-label away">Absent</b>
+              <b className="team-roll-label">Absent</b>
               <span
                 className={`team-names ${team.absent.length === 0 ? 'none' : ''}`}
+                title={
+                  team.absent.length === 0
+                    ? 'Everybody on the roster is in today'
+                    : `Not in today: ${team.absent.map((w) => w.name).join(', ')}`
+                }
                 aria-live="polite"
               >
                 {team.absent.length === 0
