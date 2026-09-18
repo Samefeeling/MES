@@ -92,6 +92,7 @@ import {
   type ScheduleStatus,
 } from './dates';
 import { endOfCrewDay, idleRuns, planVariableCrew, type CrewDayPlan, type TakenOnDay, type VariableCrewPlan } from './crewSchedule';
+import { awayOnDay, type AbsenceDays } from './attendance';
 import { lineLoad, type LineLoad } from './workload';
 import { nextWorkingMoment, workFractionAt } from './shift';
 import { fromDayKey, toDayKey } from '@/lib/time';
@@ -178,6 +179,14 @@ export interface OrderRow {
    * a smaller crew than the row shows.
    */
   crewWithoutRoom?: Worker[];
+  /**
+   * Crew who are not in today — off sick, on leave, or marked away on the
+   * board. They keep their chip and their allocation: a half-built order
+   * belongs to whoever was building it, and a day off is not a hand-over.
+   * What it is, is the reason this order has fewer hands today than the row
+   * appears to show, so the row says so.
+   */
+  crewAwayToday?: Worker[];
   /** Confirmed production start, separate from the planned bar date. */
   actualStart?: ActualStartRecord | null;
   completedAt?: string | null;
@@ -250,6 +259,13 @@ export interface AssemblyGanttView {
   /** Assembly orders not on any line yet. */
   pool: Job[];
   workers: Worker[];
+  /**
+   * Who is away and when, as the board was built with it. Carried on the view
+   * so every reader of the board — the roll in the column heading, the crew
+   * suggestion, the pickers — answers "is this person in?" from the same place
+   * the schedule did.
+   */
+  workerAbsence: AbsenceDays;
   rowsByJob: Map<string, OrderRow>;
   jobsById: Map<string, Job>;
   /** Material links that could not be used, e.g. a circular one. */
@@ -294,6 +310,12 @@ export interface AssemblyInputs {
    */
   virtualLines?: readonly VirtualLine[];
   workers: Worker[];
+  /**
+   * Worker id → the local days they are away, marked on the board. Read
+   * together with the roster's own `onShift` and `plannedLeave` — see
+   * `engine/assembly/attendance`.
+   */
+  workerAbsence?: AbsenceDays;
   today: Date;
 }
 
@@ -551,6 +573,11 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
   );
   const jobsById = new Map(assemblyJobs.map((j) => [String(j.id), j]));
   const workersById = new Map(input.workers.map((w) => [String(w.id), w]));
+  /**
+   * Who is not in, on any given day. Built once for the whole board: the day
+   * planner asks it per person per day across every order there is.
+   */
+  const away = awayOnDay(input.workers, input.workerAbsence ?? {}, today);
   // Two different "starts". Work is planned from today — there is no working
   // yesterday — but the board opens one working day earlier, so the shift that
   // has just finished is still on screen to be compared against the plan.
@@ -936,7 +963,18 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
     // day, and only a full one costs it the day. The bounds the planner set by
     // hand are untouched — those are a decision, not an inference — and a bar
     // the planner pinned consults no diary at all: it was put there on purpose.
-    const taken = sequenced ? takenOnDay(approved) : undefined;
+    // A day somebody is not in is a day they give this order nothing, which is
+    // exactly what a full diary means to the planner — so absence is folded in
+    // here rather than modelled a second way.
+    //
+    // It applies to a pinned bar too, where the diary deliberately does not: a
+    // start somebody dragged is a decision about *when* the order runs, not a
+    // claim that the people on it are at work. And it outranks a double-booking
+    // approval — the supervisor agreeing that Mary may split her day between
+    // two orders says nothing about a Mary who is at home with flu.
+    const booked = sequenced ? takenOnDay(approved) : undefined;
+    const taken: TakenOnDay = (workerId, day) =>
+      away(workerId, day) ? 1 : (booked?.(workerId, day) ?? 0);
 
     const crewPlan: VariableCrewPlan = predecessorBlocked
       ? {
@@ -984,6 +1022,9 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
               ),
           ),
       crewDays: completedToday ? [] : crewPlan.crewDays,
+      crewAwayToday: completedToday
+        ? []
+        : workers.filter((worker) => away(String(worker.id), todayKey)),
       // Filled once every row has a plan — see `markDoubleBookings` below.
       doubleBooked: [],
       pauses: completedToday
@@ -1145,6 +1186,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
     groups,
     pool,
     workers: input.workers,
+    workerAbsence: input.workerAbsence ?? {},
     rowsByJob,
     jobsById,
     dependencyWarnings,

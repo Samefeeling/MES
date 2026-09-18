@@ -23,6 +23,7 @@ const plan = (over: Partial<PersistedPlan> = {}): PersistedPlan => ({
     production: { J1: [] },
     progress: { J1: [{ date: '2026-09-17', qty: 4 }] },
     lastSeen: { J1: '2026-09-17' },
+    workerAbsence: { W1: ['2026-09-17'] },
     ...over.assembly,
   },
 });
@@ -47,6 +48,28 @@ describe('the two halves of a stored plan', () => {
     expect(part.assembly.lastSeen).toEqual({ J1: '2026-09-17' });
     expect(part.assembly).not.toHaveProperty('orderStarts');
     expect(part.assembly).not.toHaveProperty('orderCrewAssignments');
+  });
+
+  /*
+   * Who rang in sick is not an opinion two supervisors can differ on, and
+   * losing it because whoever took the call walked away without pressing Save
+   * would leave the schedule planning hours nobody is going to work.
+   */
+  it('writes an absence straight through, without waiting for Save', () => {
+    expect(shiftRecordsOf(plan()).assembly.workerAbsence).toEqual({
+      W1: ['2026-09-17'],
+    });
+    expect(planningOf(plan()).assembly).not.toHaveProperty('workerAbsence');
+  });
+
+  it('does not make the board dirty when somebody is marked off', () => {
+    // A draft is the planner's unpublished opinion. Marking Bob off is not
+    // one, so it must not put the Save button up or arm the unsaved banner.
+    const before = planningFingerprint(planningOf(plan()));
+    const after = planningFingerprint(
+      planningOf(plan({ assembly: { workerAbsence: { W2: ['2026-09-18'] } } })),
+    );
+    expect(after).toBe(before);
   });
 
   it('leaves a key the stored plan never had absent, so it is not blanked', () => {

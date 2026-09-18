@@ -2144,6 +2144,28 @@ body.col-resizing {
 .chip:hover {
   border-color: var(--error);
 }
+/*
+ * On the order, not at work.
+ *
+ * The name stays — a half-built order belongs to whoever was building it, and
+ * a day off is not a hand-over — so the chip has to carry the difference
+ * between "on this" and "on this but not here".
+ */
+.chip.away {
+  background: repeating-linear-gradient(
+    -45deg,
+    #fee2e2,
+    #fee2e2 4px,
+    #fecaca 4px,
+    #fecaca 8px
+  );
+  border-color: #b91c1c;
+  color: #7f1d1d;
+}
+.chip-away {
+  margin-left: 3px;
+  font-weight: 800;
+}
 .chip.empty {
   background: transparent;
   border-style: dashed;
@@ -2407,6 +2429,8 @@ body.col-resizing {
 }
 .metric-free { margin: 0 0 8px; font-size: 11.5px; line-height: 1.4; }
 .metric-free b { margin-right: 5px; color: var(--muted); font-size: 9.5px; letter-spacing: 0.3px; text-transform: uppercase; }
+.metric-free.away { color: #b91c1c; }
+.metric-free.away b { color: #b91c1c; }
 .metric-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
 .metric-table th {
   text-align: left;
@@ -2492,6 +2516,13 @@ body.col-resizing {
 }
 .worker-name:not(.drag-locked) { cursor: grab; }
 .worker-name.dragging { opacity: 0.45; cursor: grabbing; }
+/* Still standing on the line, and not at work. The name stays put so the
+   supervisor can find them and mark them back in. */
+.worker-name.away {
+  color: #b91c1c;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
 .worker-name.drag-locked { cursor: pointer; }
 .worker-drag-overlay,
 .line-drag-overlay {
@@ -2787,27 +2818,50 @@ body.col-resizing {
   gap: 3px;
 }
 /*
- * Who is on site today and on nothing — the people still to reach for, read
- * while deciding who goes on the order in front of you.
+ * Two rolls where the word "Team" used to be: who is here with nothing on, and
+ * who is not here at all.
  *
- * The ratio this used to carry as well is one of the four header figures now:
+ * The ratio this column once carried is one of the four header figures now —
  * that was a number about the whole board sitting inside one column's title.
- * And it is capped at two lines, then scrolls — unbounded, a shift with nobody
- * allocated pushed the day columns down the page as the list grew.
+ * What is left is the two lists a morning turns on, and they are names rather
+ * than counts for the same reason: a count tells you there is a problem, a
+ * name tells you whose.
+ *
+ * Each roll is capped at two lines and then scrolls. Unbounded, a shift with
+ * nobody allocated pushed the day columns down the page as the list grew.
  */
-.team-free {
+.team-roll {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+}
+.team-roll-label {
+  flex: 0 0 auto;
+  padding-top: 1px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--head-dim);
+}
+.team-roll-label.away {
+  color: #fca5a5;
+}
+.team-names {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 2px 3px;
   min-width: 0;
-  max-height: 32px;
+  max-height: 28px;
   overflow-y: auto;
   font-size: 9.5px;
   font-weight: 650;
   line-height: 1.35;
 }
-.team-free-name {
+.team-name {
   padding: 0 4px;
   border: 1px solid var(--head-rule);
   border-radius: 3px;
@@ -2815,7 +2869,34 @@ body.col-resizing {
   color: var(--head-tx);
   white-space: nowrap;
 }
-.team-free.none {
+/* Not in today. Struck through rather than merely faded: faded reads as "less
+   important", and this is the opposite of that. */
+.team-name.away {
+  border-color: #b91c1c;
+  color: #fecaca;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+/* And of those, the ones whose orders nobody else is on. That name is a
+   button: it selects the first order waiting to be handed over. */
+.team-name.away.stranded {
+  appearance: none;
+  font: inherit;
+  cursor: pointer;
+  background: #7f1d1d;
+  color: #fff;
+  text-decoration: none;
+}
+.team-name-held {
+  margin-left: 3px;
+  padding: 0 3px;
+  border-radius: 6px;
+  background: #fecaca;
+  color: #7f1d1d;
+  font-style: normal;
+  font-weight: 800;
+}
+.team-names.none {
   color: var(--head-dim);
   font-weight: 600;
   font-style: italic;
@@ -2966,6 +3047,25 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .reopen-list li .btn { margin-left: auto; }
 
 .worker-name:not(.drag-locked) { touch-action: none; }
+/* Not in today, above the line move: it is the more urgent of the two, and
+   the only one with an Expect Date going wrong behind it. */
+.wl-away {
+  display: grid;
+  gap: 4px;
+  padding: 10px 14px 0;
+}
+.wl-away label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+}
+.wl-away span {
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.wl-away.is-away label { color: #b91c1c; }
 .wl-move { display: grid; gap: 6px; padding: 10px 14px; }
 .wl-move select { font: inherit; padding: 6px; }
 

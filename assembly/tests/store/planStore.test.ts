@@ -315,6 +315,49 @@ describe('operator production-line placement', () => {
   });
 });
 
+/*
+ * The seven-ten phone call. Two things have to be true of it: the schedule
+ * stops planning hours that will not be worked, and the order the person was
+ * half-way through is left exactly where it is.
+ */
+describe('marking somebody off for the day', () => {
+  beforeEach(() => {
+    usePlanStore.setState({
+      workerAbsence: {},
+      orderCrewAssignments: crewOf({ 'ASSY-1': ['Bill', 'Ann'] }),
+    });
+  });
+
+  it('records the day, and takes it back off again', () => {
+    usePlanStore.getState().setWorkerAway('Bill', '2026-09-18', true);
+    expect(usePlanStore.getState().workerAbsence).toEqual({
+      Bill: ['2026-09-18'],
+    });
+    usePlanStore.getState().setWorkerAway('Bill', '2026-09-18', false);
+    expect(usePlanStore.getState().workerAbsence).toEqual({});
+  });
+
+  it('never takes them off the order they were building', () => {
+    usePlanStore.getState().setWorkerAway('Bill', '2026-09-18', true);
+    expect(
+      usePlanStore.getState().orderCrewAssignments['ASSY-1'].map(
+        (assignment) => assignment.workerId,
+      ),
+    ).toEqual(['Bill', 'Ann']);
+  });
+
+  it('holds several days, and several people, at once', () => {
+    const { setWorkerAway } = usePlanStore.getState();
+    setWorkerAway('Bill', '2026-09-18', true);
+    setWorkerAway('Bill', '2026-09-19', true);
+    setWorkerAway('Ann', '2026-09-18', true);
+    expect(usePlanStore.getState().workerAbsence).toEqual({
+      Bill: ['2026-09-18', '2026-09-19'],
+      Ann: ['2026-09-18'],
+    });
+  });
+});
+
 describe('weekend overtime approvals', () => {
   const job = JobId('ASSY-202');
 

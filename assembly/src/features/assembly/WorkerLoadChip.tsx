@@ -1,4 +1,4 @@
-import { formatDay } from '@/lib/time';
+import { formatDay, toDayKey } from '@/lib/time';
 /**
  * A person's name in the board header, with their week of work behind it.
  *
@@ -42,6 +42,22 @@ export function WorkerLoadChip({
   const openWorkerId = useUiStore((s) => s.workerLoadId);
   const setWorkerLoad = useUiStore((s) => s.setWorkerLoad);
   const virtualLines = usePlanStore((s) => s.virtualLines);
+  const absence = usePlanStore((s) => s.workerAbsence);
+  const setWorkerAway = usePlanStore((s) => s.setWorkerAway);
+  /*
+   * Whether this person is in today, and — separately — whether the board is
+   * what says so.
+   *
+   * Planned leave and the roster's own OnShift column come from `ASSY_Operator`
+   * and are read only here: the board can record that somebody rang in this
+   * morning, but it cannot cancel their annual leave, and offering a toggle
+   * that silently fails to would be worse than not offering one.
+   */
+  const dayKey = toDayKey(new Date());
+  const markedAway = (absence[String(worker.id)] ?? []).includes(dayKey);
+  const rosterAway =
+    !worker.onShift || Boolean(worker.plannedLeave?.includes(dayKey));
+  const away = markedAway || rosterAway;
   const gate = signInAt(useSupervisorStore((s) => s.hosted));
   const open = openWorkerId === String(worker.id);
   const [position, setPosition] = useState({ left: 0, top: 0 });
@@ -122,7 +138,7 @@ export function WorkerLoadChip({
     if (day.capacity <= 0) {
       return day.hours > 0
         ? `${when} — ${hrs(day.hours)} booked on a day off`
-        : `${when} — planned leave`;
+        : `${when} — not in`;
     }
     if (day.hours <= 0) return `${when} — free`;
     // Spell out what the colour means: full is not the same as over, and the
@@ -147,13 +163,14 @@ export function WorkerLoadChip({
           setNodeRef(node);
         }}
         type="button"
-        className={`worker-name ${open ? 'open' : ''} ${isDragging ? 'dragging' : ''} ${dragDisabled ? 'drag-locked' : ''}`}
+        className={`worker-name ${open ? 'open' : ''} ${away ? 'away' : ''} ${isDragging ? 'dragging' : ''} ${dragDisabled ? 'drag-locked' : ''}`}
         aria-expanded={open}
         aria-label={`${worker.name} — ${pct}% booked over ${preview.length} working days`}
         title={
-          dragDisabled
+          (away ? `${worker.name} is not in today — ` : '') +
+          (dragDisabled
             ? `${worker.name} — load details; sign in as ${gate} to move between lines`
-            : `${worker.name} — click for load, drag to another production line`
+            : `${worker.name} — click for load, drag to another production line`)
         }
         onClick={() => setWorkerLoad(open ? null : String(worker.id))}
         {...listeners}
@@ -197,6 +214,40 @@ export function WorkerLoadChip({
               ×
             </button>
           </header>
+
+          {/*
+            Not in today.
+            
+            It sits above the line move because it is the more urgent of the
+            two and the one with a deadline on it: the schedule is planning
+            this person's hours until somebody says otherwise, and every hour
+            it plans that they are not going to work is an Expect Date that is
+            wrong. Their orders are left exactly as they are — see
+            `planStore.setWorkerAway`.
+          */}
+          <div className={`wl-away ${away ? 'is-away' : ''}`}>
+            <label>
+              <input
+                type="checkbox"
+                checked={away}
+                disabled={dragDisabled || rosterAway}
+                onChange={(event) =>
+                  setWorkerAway(String(worker.id), dayKey, event.target.checked)
+                }
+              />
+              Not in today
+            </label>
+            <span>
+              {rosterAway
+                ? 'From the roster — annual leave or off shift.'
+                : away
+                  ? 'The schedule has stopped planning their hours. They keep' +
+                    ' their orders until somebody takes them over.'
+                  : dragDisabled
+                    ? `Sign in as ${gate} to mark somebody off.`
+                    : 'Stops the schedule planning hours they will not work.'}
+            </span>
+          </div>
 
           <label className="wl-move">
             Move to line
@@ -282,7 +333,7 @@ export function WorkerLoadChip({
                           </span>
                         ))
                       : day.onLeave
-                        ? 'planned leave'
+                        ? 'not in'
                         : day.working
                           ? 'free'
                           : 'factory closed'}

@@ -21,6 +21,8 @@ import {
   shiftTimelineDays,
   sortLineRows,
   teamSummary,
+  absentWorkerOrders,
+  strandedOrders,
   timelineDayOffset,
   withPredecessors,
 } from '@/features/assembly/boardView';
@@ -204,6 +206,105 @@ describe('assembly board view controls', () => {
     people[13].plannedLeave = ['2026-09-04'];
     expect(teamSummary(people, [active], today).label).toBe('13/13 All allocated');
     expect(teamSummary([], [active], today).label).toBe('0/0 No staff on site');
+  });
+
+  /*
+   * The morning the board used to stay quiet about: somebody rings in, and
+   * whatever they were half-way through is neither running nor on any list of
+   * work waiting for a crew — it still has a full set of names on it.
+   */
+  describe('the two rolls in the crew column', () => {
+    const TODAY = new Date('2026-09-04T00:00:00');
+    const KEY = '2026-09-04';
+    const person = (id: string, over: Partial<Worker> = {}): Worker => ({
+      id: WorkerId(id),
+      name: id,
+      skills: ['ASSY'],
+      onShift: true,
+      ...over,
+    });
+    const onToday = (ids: string[]) => ({
+      day: KEY,
+      date: new Date(`${KEY}T00:00:00`),
+      from: 0,
+      used: 1,
+      workerIds: ids,
+      hours: PRODUCTIVE_HOURS_PER_PERSON * ids.length,
+      perWorkerHours: PRODUCTIVE_HOURS_PER_PERSON,
+    });
+
+    it('takes somebody marked off out of the ratio and names them', () => {
+      const people = [person('Ann'), person('Bob'), person('Cal')];
+      const running = row('J1');
+      running.workers = [people[0]];
+      running.crewDays = [onToday(['Ann'])];
+
+      const team = teamSummary(people, [running], TODAY, { Bob: [KEY] });
+      expect(team.absent.map((w) => w.name)).toEqual(['Bob']);
+      // Bob is not "free": he is not here to be reached for.
+      expect(team.free.map((w) => w.name)).toEqual(['Cal']);
+      expect(team.label).toBe('1/2 Free 1: Cal');
+    });
+
+    it('counts annual leave and the roster\'s own flag as absent too', () => {
+      const people = [
+        person('Ann', { plannedLeave: [KEY] }),
+        person('Bob', { onShift: false }),
+        person('Cal'),
+      ];
+      expect(
+        teamSummary(people, [], TODAY, {}).absent.map((w) => w.name),
+      ).toEqual(['Ann', 'Bob']);
+    });
+
+    it('finds the begun orders nobody is left on', () => {
+      const away = person('Bob');
+      // Begun on the floor, and today has no crew day at all: the one the
+      // supervisor has to hand to somebody.
+      const stalled = row('J1');
+      stalled.workers = [away];
+      stalled.crewAwayToday = [away];
+      stalled.actualStart = {
+        startedAt: '2026-09-03T07:10:00',
+        overrideReason: null,
+        operatorIds: ['Bob'],
+        operatorNames: ['Bob'],
+      };
+      // Same absence, but a second person is on it, so it is still running.
+      const covered = row('J2');
+      covered.workers = [away, person('Ann')];
+      covered.crewAwayToday = [away];
+      covered.actualStart = stalled.actualStart;
+      covered.crewDays = [onToday(['Ann'])];
+      // Not started yet: it is waiting its turn, not stranded.
+      const waiting = row('J3');
+      waiting.workers = [away];
+      waiting.crewAwayToday = [away];
+
+      expect(
+        strandedOrders([stalled, covered, waiting], TODAY).map((r) =>
+          String(r.job.id),
+        ),
+      ).toEqual(['J1']);
+    });
+
+    it('lists what each absentee left, the uncovered orders first', () => {
+      const away = person('Bob');
+      const covered = row('J2');
+      covered.workers = [away];
+      covered.crewAwayToday = [away];
+      covered.crewDays = [onToday(['Ann'])];
+      const stalled = row('J1');
+      stalled.workers = [away];
+      stalled.crewAwayToday = [away];
+      stalled.booked = [{ day: '2026-09-03', qty: 4, hours: 8 }] as OrderRow['booked'];
+
+      const left = absentWorkerOrders([covered, stalled], TODAY);
+      expect(left.get('Bob')?.map((r) => String(r.job.id))).toEqual([
+        'J1',
+        'J2',
+      ]);
+    });
   });
 
   it('removes weekend width and drags by visible working-day columns', () => {

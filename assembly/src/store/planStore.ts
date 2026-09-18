@@ -10,7 +10,8 @@
 
 import { create } from 'zustand';
 import { bookedLabourHours } from '@/engine/assembly/shift';
-import { fromDayKey } from '@/lib/time';
+import { fromDayKey, toDayKey } from '@/lib/time';
+import { withAbsence } from '@/engine/assembly/attendance';
 import { manualJob, type ManualOrder } from '@/domain/manualOrder';
 import type { JobId } from '@/domain/ids';
 import type { Job, WorkCenter } from '@/domain/types';
@@ -147,6 +148,21 @@ interface PlanState {
   /** Supervisor-owned current production line for each operator. */
   workerLines: Record<string, LineKey>;
   /**
+   * Worker id → the local days they are away, marked on the board.
+   *
+   * A *record*, not a plan: the seven-ten phone call saying Tom has flu is not
+   * an opinion two supervisors can hold different versions of, and it is not
+   * something to lose because whoever took the call walked away from the
+   * screen without pressing Save. So it is written the moment it is made, the
+   * same as a booked shift — see `persistence/planParts`.
+   *
+   * Dated rather than a flag, so a hospital appointment known on Monday can be
+   * put in on Monday. The roster's own `onShift` and `plannedLeave` say the
+   * same thing from the other side; `engine/assembly/attendance` is where the
+   * three are read as one answer.
+   */
+  workerAbsence: Record<string, string[]>;
+  /**
    * Lines the supervisor set up on the floor, beyond the eight the plant is
    * built as. Part of the plan, not of this browser: a second bench opened for
    * a rush is a fact about the week, and everyone reading the board has to see
@@ -245,6 +261,15 @@ interface PlanState {
   assignCrews: (allocations: Record<string, string[]>) => void;
   /** Move an operator's current roster position without rewriting recorded work. */
   moveWorkerToLine: (workerId: string, line: LineKey) => void;
+  /**
+   * Mark somebody away for a day, or take the mark off.
+   *
+   * Deliberately does not touch a single crew allocation. The order they were
+   * half-way through is still theirs; what changes is that the schedule stops
+   * counting hours nobody is going to work, and the board says on the row who
+   * is missing from it.
+   */
+  setWorkerAway: (workerId: string, day: string, away: boolean) => void;
   /** Pin an order's bar to a start day (null clears the pin). */
   setOrderStart: (jobId: JobId, isoDay: string | null) => void;
   startOrder: (jobId: JobId, record: ActualStartRecord) => void;
@@ -280,6 +305,7 @@ interface PlanState {
     manualOrders?: Record<string, ManualOrder>;
     orderWorkers?: Record<string, string[]>;
     workerLines?: Record<string, LineKey>;
+    workerAbsence?: Record<string, string[]>;
     virtualLines?: VirtualLine[];
     lineOrder?: LineKey[];
     orderCrewAssignments?: Record<string, CrewAssignment[]>;
@@ -423,6 +449,7 @@ const withinCrewLimit = (assignments: CrewAssignment[]): boolean => {
 export const usePlanStore = create<PlanState>((set, get) => ({
   containers: { [POOL_ID]: [] },
   workerLines: {},
+  workerAbsence: {},
   virtualLines: [],
   lineOrder: [],
   orderCrewAssignments: {},
@@ -693,6 +720,22 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     });
   },
 
+  setWorkerAway(workerId, day, away) {
+    set((state) => ({
+      workerAbsence: withAbsence(
+        state.workerAbsence,
+        workerId,
+        day,
+        away,
+        // The same fortnight the rest of the plan keeps. Who was off three
+        // weeks ago is a question for the attendance system, not the board.
+        toDayKey(
+          new Date(Date.now() - PLAN_RETENTION_DAYS * 24 * 60 * 60 * 1000),
+        ),
+      ),
+    }));
+  },
+
   setOrderStart(jobId, isoDay) {
     set((state) => {
       const orderStarts = { ...state.orderStarts };
@@ -939,6 +982,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         lineLayoutVersion: plan.lineLayoutVersion ?? 0,
         manualOrders: plan.manualOrders ?? state.manualOrders,
         workerLines: plan.workerLines ?? state.workerLines,
+        workerAbsence: plan.workerAbsence ?? state.workerAbsence,
         virtualLines: plan.virtualLines ?? state.virtualLines,
         // A plan saved before the lines could be arranged carries none, which
         // reads as the built-in order rather than as an empty board.

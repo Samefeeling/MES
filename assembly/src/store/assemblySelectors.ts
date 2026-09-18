@@ -18,6 +18,7 @@ export function useAssemblyGantt(): AssemblyGanttView | null {
   const indexes = useDataStore((s) => s.indexes);
   const manualOrders = usePlanStore(s => s.manualOrders);
   const containers = usePlanStore((s) => s.containers);
+  const workerAbsence = usePlanStore((s) => s.workerAbsence);
   const orderCrewAssignments = usePlanStore((s) => s.orderCrewAssignments);
   const orderDoubleBooked = usePlanStore((s) => s.orderDoubleBooked);
   const orderStarts = usePlanStore((s) => s.orderStarts);
@@ -45,6 +46,7 @@ export function useAssemblyGantt(): AssemblyGanttView | null {
             production,
             virtualLines,
             workers: dataset.workers,
+            workerAbsence,
             today: new Date(),
           })
         : null,
@@ -53,6 +55,7 @@ export function useAssemblyGantt(): AssemblyGanttView | null {
       manualOrders,
       indexes,
       containers,
+      workerAbsence,
       orderCrewAssignments,
       orderDoubleBooked,
       orderStarts,
@@ -109,6 +112,7 @@ export function recomputeAssemblyGantt(
     progressBaselines: plan.progressBaselines,
     production: plan.production,
     workers: dataset.workers,
+    workerAbsence: plan.workerAbsence,
     today: new Date(),
   });
 }

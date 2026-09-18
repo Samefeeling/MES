@@ -25,7 +25,13 @@ import { useDataStore } from '@/store/dataStore';
 import { useSupervisorStore } from '@/store/supervisorStore';
 import { Button } from '@/ui';
 import { DATE_COLS, DATE_COL_LABEL, DUE_SOON_DAYS, useUiStore } from '@/store/uiStore';
-import { countRunningOrders, isDueSoon, lineOfWorkerToday, teamSummary } from './boardView';
+import {
+  countRunningOrders,
+  isDueSoon,
+  lineOfWorkerToday,
+  strandedOrders,
+  teamSummary,
+} from './boardView';
 import { ManualOrderButton } from './ManualOrders';
 import { Metric, MetricNote } from './Metric';
 import { ReviewOrders } from './SuggestCrew';
@@ -62,7 +68,10 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
   // way. It is about the whole roster on the whole board, so it belongs with
   // the other three totals rather than over one column of one table.
   const team = useMemo(
-    () => (board ? teamSummary(board.workers, allRows, board.today) : null),
+    () =>
+      board
+        ? teamSummary(board.workers, allRows, board.today, board.workerAbsence)
+        : null,
     [board, allRows],
   );
 
@@ -286,7 +295,8 @@ function BoardLoadDetail({ board }: { board: AssemblyGanttView }) {
  */
 function CrewDetail({ board, rows }: { board: AssemblyGanttView; rows: OrderRow[] }) {
   const overrides = usePlanStore((s) => s.workerLines);
-  const team = teamSummary(board.workers, rows, board.today);
+  const team = teamSummary(board.workers, rows, board.today, board.workerAbsence);
+  const stranded = strandedOrders(rows, board.today);
   const byLine = lineOfWorkerToday(board.workers, rows, board.today, overrides);
   // The line's own name, not its key: "UPL-Gluing" is what is written on the
   // row this panel hangs over, and UPL_GLUING is not.
@@ -312,6 +322,19 @@ function CrewDetail({ board, rows }: { board: AssemblyGanttView; rows: OrderRow[
       {team.free.length > 0 && (
         <p className="metric-free">
           <b>Free</b> {team.free.map((worker) => worker.name).join(', ')}
+        </p>
+      )}
+      {/* The other half of the roll. Out of the ratio entirely — they are not
+          on site — but the board used to let them leave it without saying so,
+          and whatever they were part-way through is still on the line. */}
+      {team.absent.length > 0 && (
+        <p className="metric-free away">
+          <b>Absent</b> {team.absent.map((worker) => worker.name).join(', ')}
+          {stranded.length > 0 && (
+            <span>
+              {' '}— nobody on {stranded.map((row) => String(row.job.id)).join(', ')}
+            </span>
+          )}
         </p>
       )}
       <table className="metric-table">

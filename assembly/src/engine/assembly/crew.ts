@@ -28,6 +28,7 @@ import { addDays, addWorkingDays } from './dates';
 import { planVariableCrew, type CrewDayPlan } from './crewSchedule';
 import type { AssemblyGanttView, OrderRow } from './board';
 import { toDayKey } from '@/lib/time';
+import { isAwayOn } from './attendance';
 
 export interface CrewSuggestion {
   /** Job id → worker ids, for the orders that had nobody on them. */
@@ -327,10 +328,17 @@ function staffOneWave(
 
     // Current line allocation takes priority over legacy Skills. Do not move
     // someone to another line implicitly; rank skills within this roster.
+    // Nobody who is not in. Somebody marked off this morning is as unavailable
+    // as somebody on annual leave, and suggesting them would put a crew on an
+    // order that is not going to be worked.
     const onLine: Worker[] = board.workers.filter(
       (w) =>
-        w.onShift && !w.plannedLeave?.includes(toDayKey(board.today)) &&
-        workerLines.get(String(w.id)) === group.line.key,
+        !isAwayOn(
+          w,
+          toDayKey(board.today),
+          board.workerAbsence,
+          toDayKey(board.today),
+        ) && workerLines.get(String(w.id)) === group.line.key,
     );
     if (onLine.length === 0) continue;
     const rosterIndex = new Map(

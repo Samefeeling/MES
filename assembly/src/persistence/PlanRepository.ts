@@ -31,6 +31,14 @@ export interface PersistedPlan {
     /** Supervisor-owned roster placement, independent of legacy Skills data. */
     workerLines?: Record<string, LineKey>;
     /**
+     * Worker id → the local days they were marked away on the board.
+     *
+     * A shift record rather than planning: it is what happened, not what
+     * somebody decided, so it is written as soon as it is marked and is not
+     * dropped when a draft plan is. See `planParts`.
+     */
+    workerAbsence?: Record<string, string[]>;
+    /**
      * Lines the supervisor opened on the floor. Part of the plan rather than
      * of one browser: a bench opened for a rush is a fact about the week, and
      * every screen reading the board has to see the same one.

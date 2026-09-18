@@ -74,10 +74,9 @@ waiting to be looked at. **Due within 2 days** is also a narrowing, and it is
 the only pressable thing among them; it used to go amber when it was on, which
 is a filter wearing a schedule's colour on a board whose whole point is spotting
 the amber bars. **Crew allocated** came up from the Team column heading, where a
-figure about the whole board sat inside one column's title. Who is *not*
-allocated stayed there, as names: that is the list you read while deciding who
-to put on the order in front of you, and it is capped at two lines so a shift
-with nobody on anything cannot push the day columns down the page.
+figure about the whole board sat inside one column's title. Its panel names the
+two lists the ratio is silent about — who is free, and who is not in — and, for
+the absentees, the begun orders nobody else is on.
 
 **Review orders** is the fourth. Two counts used to sit side by side up here —
 *Crew N orders*, the orders with nobody on them, and *Review orders*, the ones
@@ -98,10 +97,22 @@ top bar already carrying the name.
 Seven column titles on the left and one cell per day on the right, and they have
 to be the same height, because they are the same row.
 
-The titles are **one word each**: Order, Qty, Hours, Start, Due, Expect, Team.
+The titles are **one word each**: Order, Qty, Hours, Start, Due and Expect.
 "Required Hours" and "Start Date" wrapped to two lines in columns narrow enough
 to hold what they label, and "Date" appeared three times in a row of columns
 that are all dates.
+
+The seventh has no title. Over the crew chips are **two rolls, Free and
+Absent**, because the word "Team" only repeated what the chips under it already
+said. Free is who is on site with nothing allocated — the people to reach for
+while deciding who goes on the order in front of you. Absent is who is not in:
+marked off on the board, on annual leave, or off shift on the roster. An
+absentee's name is struck through, and filled red with a count beside it when
+orders they had begun have nobody else on them — the hand-over queue, named.
+Both rolls are names rather than counts, because a count tells you there is a
+problem and a name tells you whose; each is capped at two lines and then
+scrolls, so a shift with nobody on anything cannot push the day columns down
+the page.
 
 Each day cell is the **load standing on the left** — a bar filled to the day's
 percentage, with the figure inside the top of its own track — and the **date
@@ -301,7 +312,44 @@ crew. A line with no available roster remains unstaffed.
 
 Skills are categorical because the current operator data does not contain a
 numeric skill level. These preferences do not claim to optimize efficiency or
-certification. Future dated attendance remains a separate integration need.
+certification.
+
+## Somebody not at work
+
+Three things can say a person is away, and the board reads them as one answer
+(`engine/assembly/attendance`): **planned leave** and the **OnShift** flag,
+both from `ASSY_Operator`, and **Not in today**, which a supervisor ticks on the
+person's own popup in the line strip. The roster's two are read-only here — the
+board can record this morning's phone call, but it cannot cancel somebody's
+annual leave — and `OnShift` is only ever about today, because the list is read
+fresh each morning and carries no history. The board's own mark is dated, so a
+Tuesday hospital appointment can be put in on the Monday.
+
+A day somebody is away is **a day they give their orders nothing** — exactly
+what a full diary already means to the day planner, so it is not modelled a
+second way. Three hands become two and the bar lengthens; the last hand goes
+and the bar shows the gap. It applies to a pinned bar too, where the diary
+deliberately does not: a dragged start is a decision about *when* an order runs,
+not a claim that its crew are at work. And it outranks a double-booking
+approval — agreeing that somebody may split their day between two orders says
+nothing about a day they are at home.
+
+**Nobody is taken off an order for being away.** A half-built order belongs to
+whoever was building it; a day off is not a hand-over, and who picks it up is
+the supervisor's call. What changes is that the row says so: the chip is
+hatched and struck through, the schedule stops counting hours that will not be
+worked, and the order appears in the Absent roll's hand-over count if nobody
+else is on it.
+
+Absence is a **shift record**, not planning: it is written the moment it is
+marked, it survives a refresh, and it never puts the board into the unsaved
+state — see `persistence/planParts`. Marking somebody off is supervisor-only,
+like the crew changes it affects.
+
+A live attendance feed remains a separate integration. When it arrives it
+should supply dated per-person records rather than one flag — half a day is the
+common case, and a fraction of a shift is already the unit the day planner
+takes.
 
 
 ## Operational groups

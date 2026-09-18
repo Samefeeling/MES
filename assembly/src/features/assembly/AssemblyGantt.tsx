@@ -63,6 +63,8 @@ import { DependencyArrows } from './DependencyArrows';
 import { dependencyFocus } from './dependencyRouter';
 import {
   teamSummary,
+  absentWorkerOrders,
+  strandedOrders,
   isDueSoon,
   isRunningOnDay,
   runningOrdersByDay,
@@ -949,14 +951,35 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
   // week is worked out once here rather than once per chip on every render.
   // From today: the week to come is what a supervisor allocates against.
   const rosterLoads = useMemo(
-    () => rosterLoad(board.workers, allRows, board.today),
+    () =>
+      rosterLoad(
+        board.workers,
+        allRows,
+        board.today,
+        undefined,
+        board.workerAbsence,
+      ),
     [board, allRows],
   );
-  // Who is on site today with nothing allocated — the people still to reach
-  // for, read while deciding who goes on the order in front of you.
+  // Who is on site with nothing allocated, and who is not in at all — the two
+  // halves of the morning question, read while deciding who goes on the order
+  // in front of you and who is going to pick up what somebody put down.
   const team = useMemo(
-    () => teamSummary(board.workers, allRows, board.today),
-    [board.workers, allRows, board.today],
+    () => teamSummary(board.workers, allRows, board.today, board.workerAbsence),
+    [board.workers, allRows, board.today, board.workerAbsence],
+  );
+  /** What each absent person has left behind today, worst first. */
+  const absentOrders = useMemo(
+    () => absentWorkerOrders(allRows, board.today),
+    [allRows, board.today],
+  );
+  /** The begun orders that today has nobody at all on — the hand-over queue. */
+  const stranded = useMemo(
+    () =>
+      new Set(
+        strandedOrders(allRows, board.today).map((row) => String(row.job.id)),
+      ),
+    [allRows, board.today],
   );
   const runningByDay = useMemo(
     () => runningOrdersByDay(allRows, days),
@@ -988,6 +1011,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
       board.horizonStart,
       board.horizonDays,
       board.today,
+      board.workerAbsence,
     );
     return showWeekends ? calendar : calendar.filter((load) => load.working);
   }, [allRows, board, showWeekends]);
@@ -1128,34 +1152,91 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
           {dateHead('start', DATE_COL_LABEL.start, true)}
           {dateHead('due', DATE_COL_LABEL.due, true)}
           {dateHead('expect', DATE_COL_LABEL.expect, false)}
-          {/* How many of the roster are allocated today is a figure about the
-              whole board and stands with the other three in the header. Who is
-              *not* allocated belongs here: it is the list you read while
-              deciding who to put on the order you are looking at, and it is
-              names rather than a number for the same reason. */}
+          {/* The word "Team" said what the column under it holds, which the
+              chips in it already say. What the heading is worth is the two
+              lists the morning actually turns on: who is here with nothing on
+              — the people to reach for — and who is not here at all, which
+              until now the board simply swallowed. Somebody marked off left
+              the ratio and nothing else changed: the orders they were half-way
+              through kept a full crew of names, one of whom was at home.
+
+              How many of the roster are allocated is a figure about the whole
+              board and stands with the other three in the header above. */}
           <div
             className="acell team team-head frozen"
             style={{ left: headLefts.team }}
           >
-            <span>Team</span>
-            <span
-              className={`team-free ${team.free.length === 0 ? 'none' : ''}`}
-              title={
-                team.free.length === 0
-                  ? 'Everybody on site today is on an order'
-                  : `Not allocated today: ${team.free.map((w) => w.name).join(', ')}`
-              }
-              aria-live="polite"
-            >
-              {team.free.length === 0
-                ? 'all allocated'
-                : team.free.map((worker) => (
-                    <span className="team-free-name" key={String(worker.id)}>
-                      {worker.name}
-                    </span>
-                  ))}
-            </span>
-            <ColumnGrip column="team" label="Team" />
+            <div className="team-roll">
+              <b className="team-roll-label">Free</b>
+              <span
+                className={`team-names ${team.free.length === 0 ? 'none' : ''}`}
+                title={
+                  team.free.length === 0
+                    ? 'Everybody on site today is on an order'
+                    : `Not allocated today: ${team.free.map((w) => w.name).join(', ')}`
+                }
+                aria-live="polite"
+              >
+                {team.free.length === 0
+                  ? 'all allocated'
+                  : team.free.map((worker) => (
+                      <span className="team-name" key={String(worker.id)}>
+                        {worker.name}
+                      </span>
+                    ))}
+              </span>
+            </div>
+            <div className="team-roll">
+              <b className="team-roll-label away">Absent</b>
+              <span
+                className={`team-names ${team.absent.length === 0 ? 'none' : ''}`}
+                aria-live="polite"
+              >
+                {team.absent.length === 0
+                  ? 'full shift in'
+                  : team.absent.map((worker) => {
+                      const left = absentOrders.get(String(worker.id)) ?? [];
+                      const held = left.filter((row) =>
+                        stranded.has(String(row.job.id)),
+                      );
+                      // A name with orders behind it is the shortest route to
+                      // them: press it and the board selects the first one
+                      // nobody is covering, which is the one to hand over.
+                      const Tag = held.length > 0 ? 'button' : 'span';
+                      return (
+                        <Tag
+                          className={`team-name away ${held.length > 0 ? 'stranded' : ''}`}
+                          key={String(worker.id)}
+                          {...(held.length > 0
+                            ? {
+                                type: 'button' as const,
+                                onClick: () => select(String(held[0].job.id)),
+                              }
+                            : {})}
+                          title={
+                            left.length === 0
+                              ? `${worker.name} is not in today — nothing was on them`
+                              : `${worker.name} is not in today\n` +
+                                `Was on: ${left.map((row) => String(row.job.id)).join(', ')}` +
+                                (held.length > 0
+                                  ? `\nNobody else on: ${held
+                                      .map((row) => String(row.job.id))
+                                      .join(', ')} — needs a hand-over`
+                                  : '\nCovered by the rest of the crew')
+                          }
+                        >
+                          {worker.name}
+                          {held.length > 0 && (
+                            <i className="team-name-held" aria-hidden="true">
+                              {held.length}
+                            </i>
+                          )}
+                        </Tag>
+                      );
+                    })}
+              </span>
+            </div>
+            <ColumnGrip column="team" label="Crew" />
           </div>
           {/* Load histogram: one column per day, coloured by band. */}
           <div className="acell track" style={{ width: gridWidth }}>

@@ -8,6 +8,7 @@ import {
   wholeDaysBetween,
 } from '@/engine/assembly/dates';
 import type { LineKey, Worker } from '@/domain/assembly';
+import { awayWorkers, type AbsenceDays } from '@/engine/assembly/attendance';
 import { toDayKey } from '@/lib/time';
 import {
   DRAG_STEP_MINUTES,
@@ -326,12 +327,26 @@ export function isDueSoon(row: OrderRow, today: Date, count = 2): boolean {
   return row.job.dueDate < dueWithin(today, count);
 }
 
-/** Today's available roster and unique allocations, across the whole board. */
-export function teamSummary(workers: Worker[], rows: OrderRow[], today: Date) {
-  const key = toDayKey(today);
-  const attendance = workers.filter(
-    (worker) => worker.onShift && !worker.plannedLeave?.includes(key),
-  );
+/**
+ * Today's roster, split three ways: on an order, on site with nothing on, and
+ * not in at all.
+ *
+ * The third list is the one the board used to have nowhere to put. Somebody
+ * marked off simply left the ratio — "11 of 14" quietly became "10 of 13" —
+ * and the two orders they were half-way through said nothing about it. Free
+ * and Absent are the two halves of the same morning question, which is why
+ * they are worked out together and shown side by side: one is who can pick
+ * something up, the other is what has been put down.
+ */
+export function teamSummary(
+  workers: Worker[],
+  rows: OrderRow[],
+  today: Date,
+  absence: AbsenceDays = {},
+) {
+  const away = awayWorkers(workers, absence, today);
+  const out = new Set(away.map((worker) => String(worker.id)));
+  const attendance = workers.filter((worker) => !out.has(String(worker.id)));
   const active = activeWorkerIdsOnDay(rows, today);
   const free = attendance.filter((worker) => !active.has(String(worker.id)));
   const allocated = attendance.length - free.length;
@@ -340,7 +355,79 @@ export function teamSummary(workers: Worker[], rows: OrderRow[], today: Date) {
     : `${allocated}/${attendance.length} ${free.length === 0
       ? 'All allocated'
       : `Free ${free.length}: ${free.map((worker) => worker.name).join(', ')}`}`;
-  return { allocated, total: attendance.length, attendance, free, label };
+  return {
+    allocated,
+    total: attendance.length,
+    attendance,
+    free,
+    absent: away,
+    label,
+  };
+}
+
+/** Is anyone actually planned to work this order on `day`? */
+export function crewedOnDay(row: OrderRow, day: Date): boolean {
+  const key = toDayKey(day);
+  return row.crewDays.some(
+    (crewDay) => crewDay.day === key && crewDay.workerIds.length > 0,
+  );
+}
+
+/** Has this order been picked up on the floor — started, or booked against? */
+export function hasBegun(row: OrderRow): boolean {
+  return Boolean(row.actualStart) || row.booked.some((day) => day.qty > 0);
+}
+
+/**
+ * Orders somebody's absence has left standing: begun on the floor, not
+ * finished, and with nobody on them today because the people who were are not
+ * in.
+ *
+ * Not the same list as "needs a crew", and much more urgent than it. An order
+ * with nobody on it has not started and is waiting its turn; one of these is
+ * half built, holding a build position, and will hold it until somebody is
+ * told to pick it up. The board had no way of saying so: the row still showed
+ * a full crew, because the crew is still on it — they are simply not here.
+ */
+export function strandedOrders(rows: OrderRow[], today: Date): OrderRow[] {
+  return rows.filter(
+    (row) =>
+      row.line.schedulable &&
+      !row.completedToday &&
+      (row.crewAwayToday?.length ?? 0) > 0 &&
+      hasBegun(row) &&
+      !crewedOnDay(row, today),
+  );
+}
+
+/** Orders each absent person has left behind today, by worker id. */
+export function absentWorkerOrders(
+  rows: OrderRow[],
+  today: Date,
+): Map<string, OrderRow[]> {
+  const stranded = new Set(
+    strandedOrders(rows, today).map((row) => String(row.job.id)),
+  );
+  const by = new Map<string, OrderRow[]>();
+  for (const row of rows) {
+    for (const worker of row.crewAwayToday ?? []) {
+      const id = String(worker.id);
+      by.set(id, [...(by.get(id) ?? []), row]);
+    }
+  }
+  // Whatever nobody else is covering first: that is what the supervisor has to
+  // do something about, and a list is read from the top.
+  for (const [id, mine] of by) {
+    by.set(
+      id,
+      [...mine].sort(
+        (a, b) =>
+          Number(stranded.has(String(b.job.id))) -
+          Number(stranded.has(String(a.job.id))),
+      ),
+    );
+  }
+  return by;
 }
 
 /** Workers actually allocated on one day; future allocations do not count. */

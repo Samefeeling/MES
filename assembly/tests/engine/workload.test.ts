@@ -369,6 +369,34 @@ describe('boardDayLoads', () => {
     expect(loads[1].available).toBe(2); // tomorrow: assume everyone in
   });
 
+  it('drops a day’s capacity for somebody marked off on the board', () => {
+    // Counting a shift nobody is going to work made the day read *emptier*
+    // the more people were off, which is backwards.
+    const loads = boardDayLoads(
+      [row(job('A', DAY), [crew[0]], 0, 1)],
+      crew,
+      MON,
+      1,
+      MON,
+      { W2: ['2026-09-14'] },
+    );
+    expect(loads[0].available).toBe(1);
+    expect(loads[0].pct).toBeCloseTo(100, 6);
+  });
+
+  it('gives an absent person no shift of their own to fill', () => {
+    const loads = rosterLoad(
+      crew,
+      [row(job('A', DAY), [crew[0]], 0, 1)],
+      MON,
+      5,
+      { W1: ['2026-09-14'] },
+    );
+    const day = loads.get('W1')!.days[0];
+    expect(day.onLeave).toBe(true);
+    expect(day.capacity).toBe(0);
+  });
+
   it('ignores the PMD context lane, which is not scheduled here', () => {
     const pmd = row(job('A', 4 * DAY), [], 0, 2, { line: PMD });
     expect(boardDayLoads([pmd], crew, MON, 1)[0].hours).toBe(0);

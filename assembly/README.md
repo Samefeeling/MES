@@ -613,11 +613,14 @@ domain  →  lib  →  engine  →  store  →  features (UI)
   could not read as a warning rather than failing the load.
 - **`engine/`** — pure, unit-tested functions. Shared: `materialAvailability`,
   `materialExplosion`, `netRequirements`, `indexes`. Assembly:
-  `assembly/{duration,dates,release,board,workload,dependencies}`. No React,
-  no I/O.
+  `assembly/{duration,dates,release,board,workload,dependencies,attendance}`.
+  `attendance` is the one answer to "is this person in today?", read from the
+  roster's leave and OnShift plus whoever the supervisor marked off; the day
+  planner takes an absence as a day that person gives their orders nothing. No
+  React, no I/O.
 - **`store/`** — Zustand. `dataStore` (loaded data + indexes), `planStore`
-  (placement, crew, pinned starts, booked output — the only mutable plan
-  state), `assemblySelectors` (derives the schedule), `uiStore` (selection).
+  (placement, crew, pinned starts, booked output, who is away — the only
+  mutable plan state), `assemblySelectors` (derives the schedule), `uiStore` (selection).
 - **`persistence/`** — `PlanRepository` with a SharePoint, a REST
   (`ApiPlanRepository`) and a localStorage implementation, plus `planParts` —
   the split between the planning a supervisor publishes with **Save** and the
