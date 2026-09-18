@@ -111,7 +111,7 @@ export function useDragDrop() {
 
     if (active.data.current?.type === 'worker') {
       /*
-       * Dropped on Free or Absent in the crew column: in today, or not in.
+       * Dropped on Free or On Leave in the crew column: in today, or not in.
        * It writes what the chip's own tick box writes and nothing else — the
        * orders they are on are left exactly where they are, because a day off
        * is not a hand-over.

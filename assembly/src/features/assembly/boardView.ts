@@ -334,7 +334,7 @@ export function isDueSoon(row: OrderRow, today: Date, count = 2): boolean {
  * The third list is the one the board used to have nowhere to put. Somebody
  * marked off simply left the ratio — "11 of 14" quietly became "10 of 13" —
  * and the two orders they were half-way through said nothing about it. Free
- * and Absent are the two halves of the same morning question, which is why
+ * and On Leave are the two halves of the same morning question, which is why
  * they are worked out together and shown side by side: one is who can pick
  * something up, the other is what has been put down.
  */

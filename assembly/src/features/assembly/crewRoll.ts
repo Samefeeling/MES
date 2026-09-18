@@ -5,7 +5,7 @@
  * and ticking a box — three steps for the thing a supervisor does first, at
  * ten past seven, with the phone still in their hand. The names are already
  * on the board and the two answers are already lettered above them, so the
- * shortest way to say "Billy is not in" is to drag Billy into Absent.
+ * shortest way to say "Billy is not in" is to drag Billy into On Leave.
  *
  * It is the same fact either way: the drop writes exactly what the tick box
  * writes, dated to today, and nothing else moves. Nobody is taken off an

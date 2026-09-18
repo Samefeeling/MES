@@ -2887,6 +2887,7 @@ body.col-resizing {
   font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  white-space: nowrap;
   color: var(--head-dim);
 }
 .team-names {
@@ -2917,7 +2918,7 @@ body.col-resizing {
  *
  * It was a red-bordered box with pale pink lettering struck through — three
  * marks for one fact, on a pale blue heading that none of them had the
- * contrast for. The word Absent beside it already says what the colour is
+ * contrast for. The words On Leave beside it already say what the colour is
  * for, so the colour only has to be legible. Red type on the heading's own
  * ground is, at this size, where pink on blue was not.
  */

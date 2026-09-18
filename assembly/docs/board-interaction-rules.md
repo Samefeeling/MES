@@ -105,24 +105,24 @@ The titles are **one word each**: Order, Qty, Hours, Start, Due and Expect.
 to hold what they label, and "Date" appeared three times in a row of columns
 that are all dates.
 
-The seventh has no title. Over the crew chips are **two rolls, Free and
-Absent**, because the word "Team" only repeated what the chips under it already
+The seventh has no title. Over the crew chips are **two rolls, Free and On
+Leave**, because the word "Team" only repeated what the chips under it already
 said. Free is who is on site with nothing allocated — the people to reach for
-while deciding who goes on the order in front of you. Absent is who is not in:
-marked off on the board, on annual leave, or off shift on the roster. Its
+while deciding who goes on the order in front of you. On Leave is who is not
+in: marked off on the board, on annual leave, or off shift on the roster. Its
 label is lettered like Free's and the names under it are **red**, and that is
-the whole of the marking: the name carries a red-bordered box, pale lettering
-and a strike through it at once, none of which had the contrast for a pale
-blue heading. A name is underlined when orders they had begun have nobody else
-on them, with the count beside it — the hand-over queue, named, and pressing it
-selects the first one.
+the whole of the marking. It used to carry a red-bordered box, pale lettering
+and a strike through the name at once — one fact marked three times, in
+colours none of which had the contrast for a pale blue heading. A name is
+underlined when orders they had begun have nobody else on them, with the count
+beside it: the hand-over queue, named, and pressing it selects the first one.
 
 **A name is dragged between the two rolls.** Marking somebody off meant
 finding their chip on a line, opening it and ticking a box — three steps for
 the thing a supervisor does first, at ten past seven, with the phone still in
 their hand. The names are already on the board and the two answers are already
-lettered above them, so dragging Billy into Absent says it in one gesture, and
-dragging them back into Free says they turned up after all. A chip on a line
+lettered above them, so dragging Billy into On Leave says it in one gesture,
+and dragging them back into Free says they turned up after all. A chip on a line
 drops into either roll too, and a name in a roll still drops onto a line, which
 is how somebody is moved to another bench. The drop writes exactly what the
 tick box writes, dated to today, and moves nobody off an order. Both rolls are
@@ -365,7 +365,7 @@ nothing about a day they are at home.
 whoever was building it; a day off is not a hand-over, and who picks it up is
 the supervisor's call. What changes is that the row says so: the chip is
 hatched and carries a ✕, the schedule stops counting hours that will not be
-worked, and the order appears in the Absent roll's hand-over count if nobody
+worked, and the order appears in the On Leave roll's hand-over count if nobody
 else is on it.
 
 Absence is a **shift record**, not planning: it is written the moment it is

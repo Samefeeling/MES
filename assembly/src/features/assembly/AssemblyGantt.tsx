@@ -1177,7 +1177,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
                 (team.free.length === 0
                   ? 'Everybody on site today is on an order'
                   : `Not allocated today: ${team.free.map((w) => w.name).join(', ')}`) +
-                (unlocked ? '\nDrag a name into Absent to mark them off' : '')
+                (unlocked ? '\nDrag a name into On Leave to mark them off' : '')
               }
             >
               {team.free.map((worker) => (
@@ -1190,7 +1190,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
                   title={
                     `${worker.name} — in today, nothing allocated` +
                     (unlocked
-                      ? '\nDrag onto a line to move them, or into Absent'
+                      ? '\nDrag onto a line to move them, or into On Leave'
                       : '')
                   }
                 >
@@ -1200,7 +1200,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
             </CrewRoll>
             <CrewRoll
               roll="absent"
-              label="Absent"
+              label="On Leave"
               count={team.absent.length}
               empty="full shift in"
               listTitle={

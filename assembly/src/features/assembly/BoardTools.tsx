@@ -329,7 +329,7 @@ function CrewDetail({ board, rows }: { board: AssemblyGanttView; rows: OrderRow[
           and whatever they were part-way through is still on the line. */}
       {team.absent.length > 0 && (
         <p className="metric-free away">
-          <b>Absent</b> {team.absent.map((worker) => worker.name).join(', ')}
+          <b>On leave</b> {team.absent.map((worker) => worker.name).join(', ')}
           {stranded.length > 0 && (
             <span>
               {' '}— nobody on {stranded.map((row) => String(row.job.id)).join(', ')}

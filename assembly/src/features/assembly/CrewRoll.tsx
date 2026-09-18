@@ -1,8 +1,8 @@
 /**
- * The Free and Absent rolls in the crew column, and the names in them.
+ * The Free and On Leave rolls in the crew column, and the names in them.
  *
  * Each roll is a drop target and each name is a grip, so a person can be moved
- * between the two by dragging: out of Free into Absent when they ring in, back
+ * between the two by dragging: out of Free into On Leave when they ring in, back
  * the other way when they turn up after all. The same drag also still lands on
  * a line, which is how somebody is moved between benches — one gesture, three
  * places worth dropping it.
