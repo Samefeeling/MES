@@ -4,7 +4,7 @@
  * Expect Date in, and predecessors push successors out.
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, afterAll, beforeAll, vi } from 'vitest';
 import { MockSource } from '@/data/mock/MockSource';
 import { buildIndexes } from '@/engine/indexes';
 import { computeAssemblyGantt, type OrderRow } from '@/engine/assembly/board';
@@ -15,8 +15,11 @@ import {
   DEFAULT_HORIZON_DAYS,
   LINES,
   canWorkKind,
+  rootLineKey,
+  stepLinesOf,
   type CrewAssignment,
 } from '@/domain/assembly';
+import { jobNumOf } from '@/domain/routing';
 import { overlapsOnBoard, suggestCrew } from '@/engine/assembly/crew';
 import { addDays } from '@/engine/assembly/dates';
 import { shiftOpensOn } from '@/engine/assembly/shift';
@@ -28,15 +31,27 @@ import type {
   ProgressBaseline,
 } from '@/store/planStore';
 
+const TODAY = new Date('2026-09-11T00:00:00');
+
 let dataset: PlanningDataset;
 
+/*
+ * The demo data is shifted onto the current week, so a board built from it can
+ * only be checked against a day this file decides. The clock is pinned before
+ * the data is asked for — Date only, so the source's simulated latency still
+ * resolves — and every date below is then a fixed distance from it.
+ */
 beforeAll(async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(TODAY);
   const result = await new MockSource().loadAll();
   if (!result.ok) throw new Error(result.error);
   dataset = result.value;
 });
 
-const TODAY = new Date('2026-09-11T00:00:00');
+afterAll(() => {
+  vi.useRealTimers();
+});
 
 /** Whole-order allocations, the shape most of these cases want. */
 const crewOf = (
@@ -58,7 +73,7 @@ function build(over: {
   production?: Record<string, ProductionEntry[]>;
 } = {}) {
   const indexes = buildIndexes(dataset);
-  usePlanStore.getState().reconcile(dataset.workCenters, dataset.jobs);
+  usePlanStore.getState().reconcile(dataset.workCenters, dataset.jobs, undefined, dataset.jobLinks);
   const state = usePlanStore.getState();
   return computeAssemblyGantt({
     dataset,
@@ -94,7 +109,14 @@ describe('assembly Gantt (mock data)', () => {
       .flatMap((g) => g.rows);
     const assemblyJobs = dataset.jobs.filter((j) => j.department === 'assembly');
     expect(assemblyJobs.length).toBeGreaterThan(10);
-    expect(scheduled.length + b.pool.length).toBe(assemblyJobs.length);
+    // Counted as orders rather than rows: a routed order is one order however
+    // many of its operations are being worked at this moment, and Gluing works
+    // two of them side by side.
+    const orders = new Set([
+      ...scheduled.map((r) => jobNumOf(String(r.job.id))),
+      ...b.pool.map((j) => jobNumOf(String(j.id))),
+    ]);
+    expect(orders.size).toBe(assemblyJobs.length);
     for (const g of b.groups) {
       if (!g.line.schedulable) continue;
       for (const r of g.rows) {
@@ -267,7 +289,7 @@ describe('assembly Gantt (mock data)', () => {
     // The same board with the material links taken away: no assembly order
     // waits for a press job, so the lane has nothing to say and is not drawn.
     const indexes = buildIndexes(dataset);
-    usePlanStore.getState().reconcile(dataset.workCenters, dataset.jobs);
+    usePlanStore.getState().reconcile(dataset.workCenters, dataset.jobs, undefined, dataset.jobLinks);
     const state = usePlanStore.getState();
     const bare = computeAssemblyGantt({
       dataset: { ...dataset, jobLinks: [], jobs: dataset.jobs.map((j) => ({ ...j, predecessors: [] })) },
@@ -313,11 +335,14 @@ describe('assembly Gantt (mock data)', () => {
     const missed: string[] = [];
     for (const row of rows) {
       if (!row.line.schedulable || row.completedToday) continue;
+      // The bar, not the order: a row whose own work is done may still have
+      // benches in front of it, and its crew are not on it for those.
+      const through = row.planThrough ?? row.expectDate;
       const runsToday =
         row.start !== null &&
-        row.expectDate !== null &&
+        through !== null &&
         row.start <= addDays(TODAY, 1) &&
-        row.expectDate >= TODAY;
+        through >= TODAY;
       if (!runsToday) continue;
       for (const worker of row.workers) {
         if (!busy.has(String(worker.id))) {
@@ -476,7 +501,7 @@ describe('assembly Gantt (mock data)', () => {
      * from. The successor is really waiting for somebody to place it.
      */
     const indexes = buildIndexes(dataset);
-    usePlanStore.getState().reconcile(dataset.workCenters, dataset.jobs);
+    usePlanStore.getState().reconcile(dataset.workCenters, dataset.jobs, undefined, dataset.jobLinks);
     const state = usePlanStore.getState();
 
     const settled = build();
@@ -527,9 +552,17 @@ describe('assembly Gantt (mock data)', () => {
 
   it('carries a work load on every line group and on the board total', () => {
     const b = build();
+    /*
+     * Two adjustments, both because a lane made of benches says the same work
+     * twice. Its header carries its benches added up, so it is left out of the
+     * sum entirely; and a bench's queue includes work routed to it that has
+     * not arrived, which the board's total — what has a bar on it — does not.
+     */
     const summed = b.groups
-      .filter((g) => g.line.schedulable)
-      .reduce((s, g) => s + g.load.hours, 0);
+      .filter(
+        (g) => g.line.schedulable && stepLinesOf(g.line.key).length === 0,
+      )
+      .reduce((s, g) => s + g.load.hours - g.load.incomingHours, 0);
 
     expect(summed).toBeGreaterThan(0);
     expect(summed).toBeCloseTo(b.totals.remainingHours, 6);
@@ -547,7 +580,9 @@ describe('assembly Gantt (mock data)', () => {
 
   it('books a person’s week against the orders they are actually on', () => {
     const b = build();
-    const row = [...b.rowsByJob.values()].find((r) => r.workers.length > 0)!;
+    const row = b.groups
+      .flatMap((g) => g.rows)
+      .find((r) => r.workers.length > 0 && r.crewDays.length > 0)!;
     const person = row.workers[0];
     const load = workerLoad(
       person,
@@ -710,8 +745,17 @@ describe('the UPL benches and the chain through them', () => {
 
   it('runs the three UPL steps one after another, then final assembly', () => {
     const b = build();
+    // One row per order: the operation being worked first, where two of them
+    // are running side by side.
+    const byOrder = new Map<string, OrderRow>();
+    for (const row of b.rowsByJob.values()) {
+      const key = jobNumOf(String(row.job.id));
+      const held = byOrder.get(key);
+      const seq = row.job.operation?.seq ?? 0;
+      if (!held || seq < (held.job.operation?.seq ?? 0)) byOrder.set(key, row);
+    }
     const chain = ['ASM8018', 'ASM8019', 'ASM8020', 'ASM8021'].map(
-      (id) => b.rowsByJob.get(id)!,
+      (id) => byOrder.get(id)!,
     );
     for (const row of chain) expect(row).toBeDefined();
     expect(chain.map((row) => row.kind)).toEqual([
@@ -722,9 +766,11 @@ describe('the UPL benches and the chain through them', () => {
     ]);
     // Each waits on the one before it, and none of them starts early.
     for (let i = 1; i < chain.length; i++) {
+      // A dependency names the row that answers for the order; both sides are
+      // read back as the order, which is what the chain is about.
       expect(
-        chain[i].predecessors.map((dep) => String(dep.onJobId)),
-      ).toContain(String(chain[i - 1].job.id));
+        chain[i].predecessors.map((dep) => jobNumOf(String(dep.onJobId))),
+      ).toContain(jobNumOf(String(chain[i - 1].job.id)));
       expect(chain[i].start!.getTime()).toBeGreaterThanOrEqual(
         chain[i - 1].expectDate!.getTime(),
       );
@@ -742,8 +788,9 @@ describe('the UPL benches and the chain through them', () => {
     for (const [jobId, crew] of Object.entries(allocations)) {
       const row = bare.rowsByJob.get(jobId)!;
       for (const id of crew) {
+        // The roster names the lane; a bench of it is the same place to stand.
         expect(byId.get(id)!.skills[0], `${byId.get(id)!.name} on ${jobId}`)
-          .toBe(row.line.key);
+          .toBe(rootLineKey(row.line.key));
         checked++;
       }
     }

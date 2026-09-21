@@ -52,7 +52,18 @@ function seedOffsetDays(): number {
   return Math.round((today.getTime() - SEED_EPOCH.getTime()) / MS_PER_DAY);
 }
 
-const OFFSET_MS = seedOffsetDays() * MS_PER_DAY;
+/**
+ * Worked out on first use rather than when the module loads.
+ *
+ * The demo data is shifted onto the current week, and reading the clock at
+ * import time made that shift a property of *when the file was loaded* —
+ * which a test cannot get in front of, however carefully it pins its own
+ * today. Asked for on the first date conversion instead, and then held, so
+ * the whole load still shares one offset.
+ */
+let offsetMs: number | null = null;
+const seedOffsetMs = (): number =>
+  (offsetMs ??= seedOffsetDays() * MS_PER_DAY);
 
 /**
  * Shift a seed date onto the current week. Returns null for blanks and for the
@@ -62,7 +73,7 @@ const OFFSET_MS = seedOffsetDays() * MS_PER_DAY;
 const toDate = (s: string | null | undefined): Date | null => {
   if (!s) return null;
   const t = new Date(s).getTime();
-  return Number.isFinite(t) ? new Date(t + OFFSET_MS) : null;
+  return Number.isFinite(t) ? new Date(t + seedOffsetMs()) : null;
 };
 
 // Simulate a touch of network latency so loading states are exercised.

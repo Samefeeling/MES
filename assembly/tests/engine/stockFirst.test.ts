@@ -25,7 +25,7 @@ import type {
   PlanningDataset,
 } from '@/domain/types';
 
-const UPL = LINES.find((l) => l.key === 'UPL_GLUING')!;
+const LANE = LINES.find((l) => l.key === 'ASSY')!;
 
 /** Thursday 10 Sep 2026 — two working days before the weekend. */
 const THU = new Date(2026, 8, 10);
@@ -35,7 +35,7 @@ const opens = (n: number) => new Date(2026, 8, n, 7);
 const worker = (id: string): Worker => ({
   id: WorkerId(id),
   name: id,
-  skills: ['UPL_GLUING'],
+  skills: ['ASSY'],
   onShift: true,
 });
 
@@ -62,7 +62,7 @@ const job = (
   tool: null,
   preferredMachine: null,
   orderType: 'upholstery',
-  line: UPL.id,
+  line: LANE.id,
   completedQty: 0,
   predecessors: [],
   assignedWorkers: [],
@@ -117,9 +117,9 @@ function board(
   const dataset: PlanningDataset = {
     workCenters: [
       {
-        id: WorkCenterId(String(UPL.id)),
+        id: WorkCenterId(String(LANE.id)),
         kind: 'area',
-        name: 'UPL_GLUING',
+        name: 'ASSY',
         department: 'assembly',
         sortIndex: 1,
       },
@@ -140,7 +140,7 @@ function board(
     dataset,
     indexes: buildIndexes(dataset),
     containers: {
-      [String(UPL.id)]: jobs
+      [String(LANE.id)]: jobs
         .filter((j) => onLine.includes(String(j.id)))
         .map((j) => j.id),
     },

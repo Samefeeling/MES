@@ -18,6 +18,7 @@ import {
   nextWorkingMoment,
   shiftColumnFraction,
 } from '@/engine/assembly/shift';
+import { rowIndex } from './rowIndex';
 
 export type OrderSortKey = 'start' | 'due';
 export type SortDirection = 'asc' | 'desc';
@@ -273,7 +274,7 @@ export function withPredecessors(
   rows: OrderRow[],
   chosen: (row: OrderRow) => boolean,
 ): Set<string> {
-  const byId = new Map(rows.map((row) => [String(row.job.id), row]));
+  const byId = rowIndex(rows);
   const keep = new Set<string>();
   const queue: string[] = [];
   for (const row of rows) {

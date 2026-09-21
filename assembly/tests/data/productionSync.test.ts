@@ -14,9 +14,9 @@ import {
   orderFactsFromBoard,
   syncProduction,
   type OrderFacts,
+  type ShiftFacts,
 } from '@/data/sharepoint/production.sync';
 import type { SharePointConfig } from '@/data/excel/sharepoint.client';
-import type { ProductionEntry } from '@/store/planStore';
 import { MockSource } from '@/data/mock/MockSource';
 import { buildIndexes } from '@/engine/indexes';
 import { computeAssemblyGantt } from '@/engine/assembly/board';
@@ -28,7 +28,7 @@ const CFG: SharePointConfig = {
   token: 'test-token',
 };
 
-const shift = (over: Partial<ProductionEntry> = {}): ProductionEntry => ({
+const shift = (over: Partial<ShiftFacts> = {}): ShiftFacts => ({
   date: '2026-09-14',
   complete: 0,
   reject: 0,
@@ -38,6 +38,9 @@ const shift = (over: Partial<ProductionEntry> = {}): ProductionEntry => ({
   pauseReason: null,
   jobCompleted: false,
   notes: '',
+  // Most orders are worked at one place and received there; a booking that
+  // does not receive says so.
+  receives: true,
   ...over,
 });
 
@@ -473,7 +476,7 @@ describe('orderFactsFromBoard', () => {
     if (!loaded.ok) throw new Error(loaded.error);
     const dataset = loaded.value;
 
-    usePlanStore.getState().reconcile(dataset.workCenters, dataset.jobs);
+    usePlanStore.getState().reconcile(dataset.workCenters, dataset.jobs, undefined, dataset.jobLinks);
     const state = usePlanStore.getState();
     const board = computeAssemblyGantt({
       dataset,
@@ -495,7 +498,12 @@ describe('orderFactsFromBoard', () => {
     expect(facts.length).toBeGreaterThan(0);
     expect(facts.some((f) => mouldingIds.has(f.jobNum))).toBe(false);
     for (const f of facts) {
-      expect(['TBP', 'UPL-CUT', 'UPL-Gluing', 'UPL-SSS', 'Assembly', 'Table', 'General']).toContain(f.line);
+      // The benches of the two routed lines are lines in their own right, and
+      // the record says which bench the order is standing at.
+      expect([
+        'TBP', 'UPL-CUT', 'UPL-Gluing', 'UPL-SSS', 'Assembly', 'Table',
+        'General', 'Foaming', 'Sewing', 'Stapling',
+      ]).toContain(f.line);
       expect(f.orderQty).toBeGreaterThanOrEqual(f.remainingQty);
       // Every order can open a row, even one with nobody on it yet.
       expect(f.anchorDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
@@ -518,7 +526,7 @@ describe('orderFactsFromBoard', () => {
     const job = dataset.jobs.find(
       (j) => j.department !== 'moulding' && j.laborHrs > 0,
     )!;
-    usePlanStore.getState().reconcile(dataset.workCenters, dataset.jobs);
+    usePlanStore.getState().reconcile(dataset.workCenters, dataset.jobs, undefined, dataset.jobLinks);
     const state = usePlanStore.getState();
     const board = computeAssemblyGantt({
       dataset,
@@ -725,15 +733,25 @@ describe('a row another board opened first', () => {
  * chairs twice — once on the sewing bench and again on the stapling bench —
  * so a derived row writes its hours and writes zero for every quantity on it.
  */
-describe('a derived bench row', () => {
+describe('a booking at an operation that does not receive', () => {
   const bench = (over: Partial<OrderFacts> = {}) =>
     order({
-      jobNum: 'ASM8001#SEW',
+      // The order's own number, on every operation of it.
+      jobNum: 'ASM8001',
       line: 'UPL_GLUING_SEW',
-      stdHours: 10,
-      step: { sourceJobId: 'ASM8001', step: 'sewing', derived: true },
+      stdHours: 30,
+      operation: { seq: 20, step: 'sewing', index: 2, of: 3, last: false },
       shifts: [
-        shift({ shiftOutput: 9, complete: 9, reject: 1, rework: 2, laborHours: 7.5 }),
+        shift({
+          shiftOutput: 9,
+          complete: 9,
+          reject: 1,
+          rework: 2,
+          laborHours: 7.5,
+          opSeq: 20,
+          step: 'sewing',
+          receives: false,
+        }),
       ],
       ...over,
     });
@@ -745,27 +763,57 @@ describe('a derived bench row', () => {
     return body.fields;
   };
 
-  it('writes no quantity of any kind', async () => {
+  it('reports no quantity of any kind', async () => {
     const fields = await fieldsWritten();
-    expect(fields[C.orderQty]).toBe(0);
-    expect(fields[C.remainingQty]).toBe(0);
+    // The covers sewn are the covers the stapling bench will finish. Counting
+    // them here and again there is the one mistake a route can introduce.
     expect(fields[C.shiftOutput]).toBe(0);
     expect(fields[C.complete]).toBe(0);
     expect(fields[C.reject]).toBe(0);
     expect(fields[C.rework]).toBe(0);
   });
 
+  it('still carries the order it belongs to, quantities and all', async () => {
+    const fields = await fieldsWritten();
+    // One order, one number, one set of figures — the operation is where the
+    // order is, not a second order.
+    expect(fields[C.jobNum]).toBe('ASM8001');
+    expect(fields[C.orderQty]).toBe(60);
+    expect(fields[C.remainingQty]).toBe(60);
+  });
+
   it('writes the hours, which are the whole point of the row', async () => {
     const fields = await fieldsWritten();
     expect(fields[C.laborHours]).toBe(7.5);
-    expect(fields[C.plannedHours]).toBe(10);
+    // The order's standard content, not the bench's share of it.
+    expect(fields[C.plannedHours]).toBe(30);
   });
 
-  it('says which bench it is, and of which order', async () => {
+  it('marks itself as work in progress, and says which operation', async () => {
     const fields = await fieldsWritten();
-    expect(fields[C.workType]).toBe('Step');
-    expect(fields[C.description]).toBe('sewing — ASM8001');
-    expect(fields[C.jobNum]).toBe('ASM8001#SEW');
+    expect(fields[C.workType]).toBe('WIP');
+    expect(fields[C.description]).toBe('Op 20 sewing');
+  });
+
+  it('is an ordinary production row once the last operation reports', async () => {
+    const calls = stubGraph([]);
+    await syncProduction(CFG, 'ASSY_Production', [
+      bench({
+        operation: { seq: 30, step: 'stapling', index: 3, of: 3, last: true },
+        shifts: [
+          shift({
+            shiftOutput: 9,
+            complete: 9,
+            opSeq: 30,
+            step: 'stapling',
+            receives: true,
+          }),
+        ],
+      }),
+    ]);
+    const body = writes(calls)[0].body as { fields: Record<string, unknown> };
+    expect(body.fields[C.complete]).toBe(9);
+    expect(body.fields[C.workType]).toBeUndefined();
   });
 
   it('leaves the row carrying the job number counting its units', async () => {

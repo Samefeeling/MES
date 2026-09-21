@@ -20,6 +20,8 @@ import { Badge, Button } from '@/ui';
 import type { PauseReason, ProductionEntry } from '@/store/planStore';
 import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { useDataStore } from '@/store/dataStore';
+import { jobNumOf } from '@/domain/routing';
+import { STEP_NAME } from '@/domain/assembly';
 
 const NO_PRODUCTION: ProductionEntry[] = [];
 
@@ -433,7 +435,13 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
        */}
       <header className="inspector-title">
         <div className="inspector-ident">
-          <span className="inspector-job">{String(job.id)}</span>
+          <span className="inspector-job">{jobNumOf(String(job.id))}</span>
+          {job.operation && (
+            <span className="inspector-op">
+              Op {job.operation.seq} · {STEP_NAME[job.operation.step]} (
+              {job.operation.index} of {job.operation.of})
+            </span>
+          )}
           <span className="inspector-part">{String(job.partNum)}</span>
           {job.description && (
             <span className="inspector-desc" title={job.description}>
@@ -457,7 +465,7 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
           </Badge>
           {row.waitingOn && (
             <Badge variant="neutral">
-              Waits on {String(row.waitingOn.onJobId)}
+              Waits on {jobNumOf(String(row.waitingOn.onJobId))}
             </Badge>
           )}
           {/*
@@ -606,12 +614,12 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
                       key={String(dep.onJobId)}
                       className={holding ? 'holding' : ''}
                     >
-                      <span className="dep-job">{String(dep.onJobId)}</span>
+                      <span className="dep-job">{jobNumOf(String(dep.onJobId))}</span>
                       <span
                         className="dep-part"
                         title={
                           dep.part
-                            ? `${String(dep.onJobId)} supplies ${String(dep.part)}`
+                            ? `${jobNumOf(String(dep.onJobId))} supplies ${String(dep.part)}`
                             : 'Named as this order’s part in the order export'
                         }
                       >

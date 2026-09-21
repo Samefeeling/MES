@@ -22,7 +22,7 @@ import {
 import { isWeekend } from '@/engine/assembly/dates';
 import type { Job, JobMaterialLink, PlanningDataset } from '@/domain/types';
 
-const UPL = LINES.find((l) => l.key === 'UPL_GLUING')!;
+const LANE = LINES.find((l) => l.key === 'ASSY')!;
 
 /** Thursday 10 Sep 2026 — two working days before the weekend. */
 const THU = new Date(2026, 8, 10);
@@ -35,7 +35,7 @@ const closes = (n: number) => new Date(2026, 8, n, 15, 15);
 const worker = (id: string): Worker => ({
   id: WorkerId(id),
   name: id,
-  skills: ['UPL_GLUING'],
+  skills: ['ASSY'],
   onShift: true,
 });
 
@@ -57,7 +57,7 @@ const job = (id: string, days: number, over: Partial<Job> = {}): Job => ({
   tool: null,
   preferredMachine: null,
   orderType: 'upholstery',
-  line: UPL.id,
+  line: LANE.id,
   completedQty: 0,
   predecessors: [],
   assignedWorkers: [],
@@ -90,9 +90,9 @@ function board(
   const dataset: PlanningDataset = {
     workCenters: [
       {
-        id: WorkCenterId(String(UPL.id)),
+        id: WorkCenterId(String(LANE.id)),
         kind: 'area',
-        name: 'UPL_GLUING',
+        name: 'ASSY',
         department: 'assembly',
         sortIndex: 1,
       },
@@ -113,7 +113,7 @@ function board(
     indexes: buildIndexes(dataset),
     // Moulding orders belong to the press, not to an assembly line.
     containers: {
-      [String(UPL.id)]: jobs
+      [String(LANE.id)]: jobs
         .filter((j) => j.department === 'assembly')
         .map((j) => j.id),
     },

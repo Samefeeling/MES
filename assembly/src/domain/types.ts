@@ -159,11 +159,11 @@ export interface JobMaterialLink {
 export interface Job {
   manual?: import('./manualOrder').ManualOrder;
   /**
-   * The bench this row is, when its line is one of the two made of benches.
-   * A row with `step.derived` is one the board split out rather than one the
-   * export named — see `domain/stepOrder`.
+   * Where this order is on its route, when its line is one of the two made of
+   * benches. One order, one number; the operation says which bench is working
+   * it now and which one receives the units — see `domain/routing`.
    */
-  step?: import('./stepOrder').StepOrder;
+  operation?: import('./routing').JobOperation;
   id: JobId;
   /** Which department runs it — decides which board it appears on. */
   department: Department;

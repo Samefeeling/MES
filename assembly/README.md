@@ -614,9 +614,11 @@ domain  →  lib  →  engine  →  store  →  features (UI)
 - **`engine/`** — pure, unit-tested functions. Shared: `materialAvailability`,
   `materialExplosion`, `netRequirements`, `indexes`. Assembly:
   `assembly/{duration,dates,release,board,workload,dependencies}`, plus
-  `assembly/{attendance,stockAllocation,steps}`. `steps` splits a UPL-SSS or
-  UPL-Gluing order across the three benches the lane is really made of, and
-  derives the rows the export has no order number for. `stockAllocation` gives out the free
+  `assembly/{attendance,stockAllocation,routing}`. `routing` works out the
+  operations a UPL-SSS or UPL-Gluing order passes through — foaming, sewing,
+  stapling — and stands the order at the one it has reached; there is one
+  order with one number throughout, and only the last operation receives.
+  `stockAllocation` gives out the free
   on-hand before the wait-for graph is read, so an order whose components are
   in the racks does not queue behind the job making more of them, and one
   that has some of them starts on what that stock supports.

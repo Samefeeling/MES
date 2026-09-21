@@ -98,14 +98,20 @@ export interface OrderFacts {
   /**
    * The bench this row is, when the board split an order across three.
    *
-   * A derived bench is a real row — it has people, hours and a day — and it is
-   * emphatically not a second receipt. The units exist once and are received
-   * once, on the row carrying the job number, so a derived row writes its
-   * hours and writes zero for every quantity on it. Booking the same nine
-   * chairs on the sewing bench and again on the stapling bench is the one
-   * mistake this whole split could introduce.
+   * A bench is a step of the order, not an order: one number, one set of
+   * quantities, received once at the last operation. What a booking on an
+   * earlier bench reports is hours — sewing nine covers is nine covers ready
+   * to be stapled, not nine chairs made — and writing a quantity there would
+   * count the same nine twice. That is the one mistake the route could
+   * introduce, and `ShiftFacts.receives` is what prevents it.
    */
-  step?: { sourceJobId: string; step: string; derived: boolean };
+  operation?: {
+    seq: number;
+    step: string;
+    index: number;
+    of: number;
+    last: boolean;
+  };
   jobNum: string;
   line: string | null;
   /** Stable worker keys — the SharePoint item ids from `ASSY_Operator`. */
@@ -135,8 +141,28 @@ export interface OrderFacts {
   remainingQty: number;
   /** `YYYY-MM-DD` for the row to open the order with when it has none yet. */
   anchorDay: string;
+  /**
+   * Two of the order's operations were live on the same day — Gluing foaming
+   * and sewing. Set while the facts are merged, because it is a fact about the
+   * order's rows rather than about any one of them.
+   */
+  parallelOperations?: boolean;
   /** One entry per booked shift. */
-  shifts: ProductionEntry[];
+  shifts: ShiftFacts[];
+}
+
+/**
+ * A booked shift, and which operation booked it.
+ *
+ * `receives` is the whole of what the record needs to know: the last operation
+ * puts units into stock, every earlier one puts hours against the order and
+ * nothing else.
+ */
+export interface ShiftFacts extends ProductionEntry {
+  opSeq?: number;
+  /** The bench, for the record to be readable without a join. */
+  step?: string;
+  receives: boolean;
 }
 
 export interface SyncOutcome {
@@ -183,46 +209,62 @@ export function orderFactsFromBoard(
         const anchorCrew = row.workers.filter((worker) =>
           anchorIds.includes(String(worker.id)),
         );
+        const op = row.job.operation;
         return {
           manual: row.job.manual,
-          step: row.job.step
+          operation: op
             ? {
-                sourceJobId: String(row.job.step.sourceJobId),
-                step: row.job.step.step,
-                derived: row.job.step.derived,
+                seq: op.seq,
+                step: op.step,
+                index: op.index,
+                of: op.of,
+                last: op.last,
               }
             : undefined,
-          jobNum: String(row.job.id),
+          // The order's own number, always. `ASM8001#20` is how the board
+          // files the row; it is not a job number and never leaves the board.
+          jobNum: String(op?.jobNum ?? row.job.id),
           line: group.line.name,
           operatorIds: anchorCrew.map((worker) => String(worker.id)),
           operatorNames: anchorCrew.map((worker) => worker.name),
           hasSyntheticCrew: anchorCrew.some((worker) => worker.synthetic),
+          // The order's standard content, not this bench's share of it: the
+          // record is of the order, and the KPI divides output by it.
           stdHours: row.job.manual
             ? row.job.manual.plannedHours
-            : Math.max(0, row.job.laborHrs),
+            : Math.max(0, op?.orderHours ?? row.job.laborHrs),
           startDate: iso(row.plannedStart),
           actualStartAt: row.actualStart?.startedAt ?? null,
           startOverrideReason: row.actualStart?.overrideReason ?? null,
           dueDate: iso(row.job.dueDate),
           expectDate: iso(row.expectDate),
           orderQty: row.job.remainingQty + row.job.completedQty,
-          remainingQty: row.job.remainingQty,
+          /*
+           * Only the last operation receives, so only there has the order's
+           * remaining quantity moved. A row sewing its way through the order
+           * has made nothing yet as far as stock is concerned.
+           */
+          remainingQty:
+            op && !op.last
+              ? row.job.remainingQty + row.job.completedQty
+              : row.job.remainingQty,
           // The day the order opens its record on. Falls back to the horizon so
           // an order with no crew — and so no start — still gets its one row.
           anchorDay,
-          shifts: production[String(row.job.id)] ?? [],
+          shifts: (production[String(row.job.id)] ?? []).map((shift) => ({
+            ...shift,
+            opSeq: op?.seq,
+            step: op?.step,
+            receives: !op || op.last,
+          })),
         };
       }),
     );
 }
 
-/** A row the board made up for a bench: hours yes, quantities never. */
-const isDerived = (facts: OrderFacts): boolean =>
-  Boolean(facts.step?.derived);
-
 function orderFields(facts: OrderFacts): ListItemFields {
   const c = PRODUCTION_COLUMNS;
-  const noQty = Boolean(facts.manual) || isDerived(facts);
+  const noQty = Boolean(facts.manual);
   return {
     [c.line]: facts.line ?? '',
     [c.plannedHours]: facts.stdHours,
@@ -234,9 +276,6 @@ function orderFields(facts: OrderFacts): ListItemFields {
     [c.orderQty]: noQty ? 0 : facts.orderQty,
     [c.remainingQty]: noQty ? 0 : facts.remainingQty,
     ...(facts.manual ? { [c.workType]: 'Support', [c.description]: facts.manual.description, [c.supportDepartment]: facts.manual.supportDepartment } : {}),
-    ...(isDerived(facts)
-      ? { [c.workType]: 'Step', [c.description]: `${facts.step!.step} — ${facts.step!.sourceJobId}` }
-      : {}),
   };
 }
 
@@ -251,12 +290,12 @@ function orderFields(facts: OrderFacts): ListItemFields {
  * row that have no booking behind them: the blank row an order opens with, and
  * rows written before keys were part of the plan.
  */
-const legacyKey = (jobNum: string, date: string): string =>
-  `${jobNum}|${date}`;
+const legacyKey = (jobNum: string, date: string, opSeq?: number): string =>
+  opSeq === undefined ? `${jobNum}|${date}` : `${jobNum}#${opSeq}|${date}`;
 
 /** The key this shift's row is written under, whichever kind it is. */
-const keyFor = (jobNum: string, shift: ProductionEntry): string =>
-  shift.recordKey ?? legacyKey(jobNum, shift.date);
+const keyFor = (jobNum: string, shift: ShiftFacts): string =>
+  shift.recordKey ?? legacyKey(jobNum, shift.date, shift.opSeq);
 
 /**
  * An empty shift — the row an order opens with before anything is booked.
@@ -266,9 +305,12 @@ const keyFor = (jobNum: string, shift: ProductionEntry): string =>
  * work out for themselves. The first real entry for that day then claims the
  * row and writes its own key over it.
  */
-function blankShift(date: string): ProductionEntry {
+function blankShift(date: string, facts: OrderFacts): ShiftFacts {
   return {
     date,
+    opSeq: facts.operation?.seq,
+    step: facts.operation?.step,
+    receives: !facts.operation || facts.operation.last,
     complete: 0,
     reject: 0,
     rework: 0,
@@ -280,25 +322,39 @@ function blankShift(date: string): ProductionEntry {
   };
 }
 
-function rowFields(facts: OrderFacts, shift: ProductionEntry): ListItemFields {
+function rowFields(facts: OrderFacts, shift: ShiftFacts): ListItemFields {
   const c = PRODUCTION_COLUMNS;
   const operatorIds = shift.operatorIds ?? facts.operatorIds;
   const operatorNames = shift.operatorNames ?? facts.operatorNames;
-  // The bench's own output is the order's output counted a second time.
-  const derived = isDerived(facts);
+  /*
+   * A bench that does not receive reports hours and nothing else. The units it
+   * handed on are the same units the last bench will finish, and counting them
+   * at both is how one order becomes two in every figure that matters.
+   */
+  const inTransit = !shift.receives;
   return {
     [c.jobNum]: facts.jobNum,
     [c.date]: shift.date,
     [c.recordKey]: keyFor(facts.jobNum, shift),
     [c.bookedHour]: shift.bookedHours ?? 0,
     ...orderFields(facts),
+    /*
+     * An operation that does not receive is marked as such, because the KPI
+     * has to be able to tell a bench that made nothing from a bench that made
+     * nothing *yet*. The hours are held as work in progress and charged
+     * against the order when the last operation reports it finished.
+     */
+    ...(shift.step
+      ? { [c.description]: `Op ${shift.opSeq} ${shift.step}` }
+      : {}),
+    ...(inTransit ? { [c.workType]: 'WIP' } : {}),
     [c.operators]: operatorNames.join(', '),
     [c.operatorIds]: operatorIds.join(','),
-    [c.shiftOutput]: derived ? 0 : shift.shiftOutput,
-    [c.complete]: facts.manual || derived ? 0 : shift.complete,
-    ...(facts.manual || derived ? { [c.laborHours]: shift.laborHours ?? 0 } : {}),
-    [c.reject]: derived ? 0 : shift.reject,
-    [c.rework]: derived ? 0 : shift.rework,
+    [c.shiftOutput]: inTransit ? 0 : shift.shiftOutput,
+    [c.complete]: facts.manual || inTransit ? 0 : shift.complete,
+    ...(facts.manual || inTransit ? { [c.laborHours]: shift.laborHours ?? 0 } : {}),
+    [c.reject]: inTransit ? 0 : shift.reject,
+    [c.rework]: inTransit ? 0 : shift.rework,
     [c.jobCompleted]: shift.jobCompleted,
     [c.completedAt]: shift.completedAt ?? null,
     [c.paused]: shift.paused,
@@ -407,7 +463,19 @@ interface StoredRows {
 const oldestFirst = (a: ListItem, b: ListItem): number =>
   (Number(a.id) || 0) - (Number(b.id) || 0);
 
-function indexRows(jobNum: string, rows: ListItem[]): StoredRows {
+function indexRows(
+  jobNum: string,
+  rows: ListItem[],
+  /**
+   * Whether one row per day is the rule for this order.
+   *
+   * It is, for every order worked at one place at a time. Where a route puts
+   * two benches on the same order on the same day — Gluing foams and sews side
+   * by side — two rows for that day are two records, not a duplicate, and each
+   * is told apart by the key its booking carries.
+   */
+  oneRowPerDay = true,
+): StoredRows {
   const byKey = new Map<string, ListItem>();
   const byDay = new Map<string, ListItem>();
   const extras: ListItem[] = [];
@@ -415,7 +483,7 @@ function indexRows(jobNum: string, rows: ListItem[]): StoredRows {
     const rawKey = String(row.fields[PRODUCTION_COLUMNS.recordKey] ?? '').trim();
     const day = rowDay(row.fields);
     const key = rawKey || legacyKey(jobNum, day);
-    if (byKey.has(key) || byDay.has(day)) {
+    if (byKey.has(key) || (oneRowPerDay && byDay.has(day))) {
       extras.push(row);
       continue;
     }
@@ -441,16 +509,16 @@ function indexRows(jobNum: string, rows: ListItem[]): StoredRows {
 function claimRow(
   index: StoredRows,
   jobNum: string,
-  shift: ProductionEntry,
+  shift: ShiftFacts,
 ): ListItem | null {
   const found =
     (shift.recordKey ? index.byKey.get(shift.recordKey) : undefined) ??
-    index.byKey.get(legacyKey(jobNum, shift.date)) ??
+    index.byKey.get(legacyKey(jobNum, shift.date, shift.opSeq)) ??
     index.byDay.get(shift.date) ??
     null;
   if (!found) return null;
   if (shift.recordKey) index.byKey.delete(shift.recordKey);
-  index.byKey.delete(legacyKey(jobNum, shift.date));
+  index.byKey.delete(legacyKey(jobNum, shift.date, shift.opSeq));
   const storedKey = String(found.fields[PRODUCTION_COLUMNS.recordKey] ?? '').trim();
   if (storedKey) index.byKey.delete(storedKey);
   index.byDay.delete(shift.date);
@@ -474,9 +542,35 @@ function oneFactsPerJob(orders: OrderFacts[]): OrderFacts[] {
       byJob.set(facts.jobNum, facts);
       continue;
     }
-    const shifts = new Map(held.shifts.map((shift) => [shift.date, shift]));
-    for (const shift of facts.shifts) shifts.set(shift.date, shift);
-    byJob.set(facts.jobNum, { ...held, shifts: [...shifts.values()] });
+    /*
+     * A shift is keyed by its own record key, and only falls back to the day
+     * when it has none. Two benches of one order book the same day whenever
+     * they run side by side, and keying on the day alone quietly threw one of
+     * the two bookings away.
+     */
+    const keyOf = (shift: ShiftFacts): string =>
+      shift.recordKey ?? `${shift.date}#${shift.opSeq ?? ''}`;
+    const shifts = new Map(held.shifts.map((shift) => [keyOf(shift), shift]));
+    for (const shift of facts.shifts) shifts.set(keyOf(shift), shift);
+    /*
+     * The order's own figures come from the operation nearest the receipt —
+     * it is the one whose quantities are the order's — while the hours and
+     * everything else agree on every row.
+     */
+    const base =
+      (facts.operation?.index ?? 0) > (held.operation?.index ?? 0)
+        ? facts
+        : held;
+    byJob.set(facts.jobNum, {
+      ...base,
+      parallelOperations:
+        held.parallelOperations ||
+        facts.parallelOperations ||
+        (held.operation !== undefined &&
+          facts.operation !== undefined &&
+          held.operation.seq !== facts.operation.seq),
+      shifts: [...shifts.values()],
+    });
   }
   return [...byJob.values()];
 }
@@ -606,7 +700,11 @@ export async function syncProduction(
       withDemoCrew.push(facts.jobNum);
       continue;
     }
-    const index = indexRows(facts.jobNum, byJob.get(facts.jobNum) ?? []);
+    const index = indexRows(
+      facts.jobNum,
+      byJob.get(facts.jobNum) ?? [],
+      !facts.parallelOperations,
+    );
     /*
      * Duplicates are reported, not obeyed.
      *
@@ -632,7 +730,7 @@ export async function syncProduction(
       facts.shifts.length > 0
         ? facts.shifts
         : index.all.length === 0
-          ? [blankShift(facts.anchorDay)]
+          ? [blankShift(facts.anchorDay, facts)]
           : [];
 
     /** Rows this pass has written in full — their day belongs to a shift. */

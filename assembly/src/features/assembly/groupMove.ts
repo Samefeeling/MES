@@ -28,6 +28,7 @@ import {
   nextWorkingMoment,
 } from '@/engine/assembly/shift';
 import { shiftTimelineDays, shiftTimelineKeepingClock } from './boardView';
+import { rowIndex } from './rowIndex';
 
 /** One order in the marked set, and what it may not begin before. */
 export interface MarkedMove {
@@ -103,7 +104,7 @@ export function markedSet(
   markedIds: ReadonlySet<string>,
   today: Date,
 ): MarkedMove[] {
-  const everyRow = new Map(rows.map((row) => [String(row.job.id), row] as const));
+  const everyRow = rowIndex(rows);
   const movable = [...everyRow.values()].filter(
     (row) => markedIds.has(String(row.job.id)) && row.start && !row.actualStart,
   );

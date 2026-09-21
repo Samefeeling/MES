@@ -25,6 +25,7 @@ import {
   isVirtualLine,
   SHIFT_END_HOUR,
   SHIFT_START_HOUR,
+  STEP_NAME,
   WORK_KIND_SHORT,
   type LineKey,
   type VirtualLineKey,
@@ -76,6 +77,8 @@ import {
 import { useStableBoardOrder } from './useStableBoardOrder';
 import { earliestStart, markedSet, type MarkedMove } from './groupMove';
 import { fromDayKey, toDayKey } from '@/lib/time';
+import { rowIndex } from './rowIndex';
+import { jobNumOf } from '@/domain/routing';
 
 /** How often the "now" line catches up with the clock. */
 const CLOCK_TICK_MS = 5 * 60 * 1000;
@@ -326,7 +329,9 @@ function OrderRowView({
   onDependencyHover: (id: string | null) => void;
 }) {
   const isNew = useDataStore((state) =>
-    state.newOrderIds.includes(String(row.job.id)),
+    // Flagged by order number: a routed order arriving today is new once,
+    // whichever of its operations is being worked.
+    state.newOrderIds.includes(jobNumOf(String(row.job.id))),
   );
   const isContext = !row.line.schedulable;
   const lefts = frozenLefts(visibleDates, colWidths);
@@ -355,6 +360,21 @@ function OrderRowView({
             {row.job.manual ? 'SUPPORT' : row.kind === 'general'
               ? ORDER_TYPE_SHORT[row.job.orderType!]
               : WORK_KIND_SHORT[row.kind]}
+          </span>
+        )}
+        {/* Where the order is on its route. One order, one number; this is
+            the bench working it now, and how far through the three it is. */}
+        {row.job.operation && (
+          <span
+            className="order-op"
+            title={`Operation ${row.job.operation.seq} of ${String(row.job.operation.jobNum)} — ${
+              row.job.operation.last
+                ? 'the last, so the units are received here'
+                : `${row.job.operation.tailHours.toFixed(1)} h still to come after it`
+            }`}
+          >
+            {row.job.operation.index}/{row.job.operation.of}{' '}
+            {STEP_NAME[row.job.operation.step]}
           </span>
         )}
         <span className="order-desc">{row.job.description}</span>
@@ -988,7 +1008,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
    * asks it too, and a drag that cannot move writes nothing.
    */
   const rowFloors = useMemo(() => {
-    const byId = new Map(allRows.map((row) => [String(row.job.id), row]));
+    const byId = rowIndex(allRows);
     return new Map(
       allRows.map((row) => [
         String(row.job.id),
@@ -1293,10 +1313,10 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
                       (left.length === 0
                         ? `${worker.name} is not in today — nothing was on them`
                         : `${worker.name} is not in today\n` +
-                          `Was on: ${left.map((row) => String(row.job.id)).join(', ')}` +
+                          `Was on: ${left.map((row) => jobNumOf(String(row.job.id))).join(', ')}` +
                           (held.length > 0
                             ? `\nNobody else on: ${held
-                                .map((row) => String(row.job.id))
+                                .map((row) => jobNumOf(String(row.job.id)))
                                 .join(', ')} — needs a hand-over`
                             : '\nCovered by the rest of the crew')) +
                       (unlocked ? '\nDrag into Free to put them back in' : '')

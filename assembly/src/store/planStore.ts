@@ -14,7 +14,8 @@ import { fromDayKey, toDayKey } from '@/lib/time';
 import { withLeave } from '@/engine/assembly/attendance';
 import { manualJob, type ManualOrder } from '@/domain/manualOrder';
 import type { JobId } from '@/domain/ids';
-import type { Job, WorkCenter } from '@/domain/types';
+import type { Job, JobMaterialLink, WorkCenter } from '@/domain/types';
+import { expandRouting } from '@/engine/assembly/routing';
 import {
   LINES,
   MAX_WORKERS_PER_ORDER,
@@ -247,7 +248,21 @@ interface PlanState {
    * in case it comes back, and file genuinely new jobs onto their workbook line
    * (or the pool). Idempotent — safe to call on every load.
    */
-  reconcile: (workCenters: WorkCenter[], jobs: Job[], now?: Date) => void;
+  /**
+   * Take in a fresh export: file its orders, retire the ones that have gone,
+   * and seed anything new with whatever the source already knows about it.
+   *
+   * `jobLinks` is read only to work out the routes — which bench each order on
+   * a benched line has reached — so that the plan is keyed the same way the
+   * board is. Leave it out and those orders are filed against their lane, as
+   * they were before the lanes had benches.
+   */
+  reconcile: (
+    workCenters: WorkCenter[],
+    jobs: Job[],
+    now?: Date,
+    jobLinks?: JobMaterialLink[],
+  ) => void;
   /** Replace the whole layout (e.g. loaded from persistence). */
   setContainers: (containers: Containers) => void;
   /** Put a worker on an order (no-op when full or already on it). */
@@ -494,8 +509,21 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   },
 
 
-  reconcile(workCenters, jobs, now = new Date()) {
+  reconcile(workCenters, jobs, now = new Date(), jobLinks = []) {
     set((state) => {
+      /*
+       * An order on a benched line is filed at the operation it has reached,
+       * not at its lane: the board draws it there, its crew is allocated
+       * there, and a plan keyed any other way would be a plan about rows that
+       * do not exist. Which operation that is comes from what has been booked,
+       * which this store is holding.
+       */
+      jobs = expandRouting(jobs, jobLinks, {
+        done: (rowId) =>
+          (state.progress[rowId] ?? []).reduce((sum, e) => sum + e.qty, 0),
+        closed: (rowId) =>
+          (state.production[rowId] ?? []).some((e) => e.jobCompleted),
+      });
       jobs = [...jobs, ...Object.values(state.manualOrders).map(manualJob)];
       // The lines the supervisor added are the plan's own, so it supplies them
       // rather than waiting for an export that will never carry them.

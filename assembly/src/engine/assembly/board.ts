@@ -78,6 +78,7 @@ import { materialAvailability } from '@/engine/materialAvailability';
 import { releaseCheck, type ReleaseCheck } from './release';
 import { buildDependencies, type Dependency } from './dependencies';
 import {
+  crewHoursPerDay,
   dailyTargetQty,
   durationDays,
   hoursPerUnit,
@@ -86,6 +87,7 @@ import {
 } from './duration';
 import {
   addDays,
+  addWorkingDays,
   nextWorkingDay,
   prevWorkingDay,
   scheduleStatus,
@@ -98,6 +100,9 @@ import { allocateStock, partKey } from './stockAllocation';
 import { endOfCrewDay, idleRuns, planVariableCrew, type CrewDayPlan, type TakenOnDay, type VariableCrewPlan } from './crewSchedule';
 import { onLeaveOnDay, type LeaveDays } from './attendance';
 import { lineLoad, type LineLoad } from './workload';
+import { expandRouting } from './routing';
+import { jobNumOf } from '@/domain/routing';
+import { JobId } from '@/domain/ids';
 import { nextWorkingMoment, workFractionAt } from './shift';
 import { fromDayKey, toDayKey } from '@/lib/time';
 import type {
@@ -592,8 +597,27 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
     }));
   };
 
-  const assemblyJobs = dataset.jobs
-    .filter((j) => j.department === 'assembly')
+  /**
+   * What has been confirmed at one operation of one order.
+   *
+   * An order on a benched line is not at its bench because somebody put it
+   * there; it is there because the operation before it is finished. That is a
+   * question about what has been booked, which is why the route is walked here
+   * — with the shift records in hand — rather than when the export lands.
+   */
+  const operationProgress = {
+    done: (rowId: string): number =>
+      (progress[rowId] ?? []).reduce((sum, entry) => sum + entry.qty, 0),
+    closed: (rowId: string): boolean =>
+      (production[rowId] ?? []).some((entry) => entry.jobCompleted),
+  };
+
+  const sourceAssembly = dataset.jobs.filter((j) => j.department === 'assembly');
+  const assemblyJobs = expandRouting(
+    sourceAssembly,
+    dataset.jobLinks ?? [],
+    operationProgress,
+  )
     // A completed order remains grey for the confirmation day, then leaves
     // both the lanes and the unassigned pool on the next calendar day.
     .filter((j) => !completionDate(j) || completionDate(j)! >= todayKey)
@@ -601,6 +625,32 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
   const sourceJobsById = new Map(
     dataset.jobs.map((job) => [String(job.id), job]),
   );
+  /**
+   * The row that stands for an order when something else waits for it.
+   *
+   * An order is finished when its *last* operation is, so a successor waits on
+   * whichever row is furthest along — and that row's expected finish already
+   * carries the rest of the route behind it (`tailHours` below). Orders with
+   * no route are their own row, so this map is empty for most of the board.
+   */
+  const rowIdByOrder = new Map<string, { id: string; seq: number }>();
+  for (const job of assemblyJobs) {
+    const op = job.operation;
+    if (!op) continue;
+    const key = String(op.jobNum);
+    const held = rowIdByOrder.get(key);
+    if (!held || op.seq > held.seq) {
+      rowIdByOrder.set(key, { id: String(job.id), seq: op.seq });
+    }
+  }
+  /** An order number as the board files it: the row that answers for it. */
+  const rowIdOf = (jobNum: string): string =>
+    rowIdByOrder.get(jobNum)?.id ?? jobNum;
+  /** The same, applied to a dependency edge on its way onto a row. */
+  const asRow = (dep: Dependency): Dependency => {
+    const id = rowIdOf(String(dep.onJobId));
+    return id === String(dep.onJobId) ? dep : { ...dep, onJobId: JobId(id) };
+  };
   const jobsById = new Map(assemblyJobs.map((j) => [String(j.id), j]));
   const workersById = new Map(input.workers.map((w) => [String(w.id), w]));
   /**
@@ -628,8 +678,36 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
       .map((j) => [String(j.id), mouldingRow(j, pmdLine, today)]),
   );
 
+  /*
+   * Stock and dependencies are asked about *orders*, not about benches.
+   *
+   * An order's components are needed once, whichever bench it has reached, and
+   * another order waiting for it is waiting for all of it. So the graph is
+   * built over one entry per order number — the row furthest along its route,
+   * put back under the order's own number and its own quantities — and the
+   * answers are read back through `rowIdOf`.
+   */
+  const orderJobs: Job[] = [];
+  for (const job of assemblyJobs) {
+    const op = job.operation;
+    if (!op) {
+      orderJobs.push(job);
+      continue;
+    }
+    if (rowIdOf(String(op.jobNum)) !== String(job.id)) continue;
+    const source = sourceJobsById.get(String(op.jobNum));
+    orderJobs.push({
+      ...job,
+      id: op.jobNum,
+      laborHrs: source?.laborHrs ?? job.laborHrs,
+      // Only the last operation receives, so only there do the row's
+      // quantities and the order's mean the same thing.
+      remainingQty: op.last ? job.remainingQty : source?.remainingQty ?? job.remainingQty,
+      completedQty: op.last ? job.completedQty : source?.completedQty ?? job.completedQty,
+    });
+  }
   const everyJob = [
-    ...assemblyJobs,
+    ...orderJobs,
     ...[...mouldingRows.values()].map((r) => r.job),
   ];
   /*
@@ -730,12 +808,36 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
   // is by wanted start, and only decides which order gets first refusal on a
   // build position, so dragging a bar earlier still moves it ahead in the
   // queue rather than being ignored.
+  /*
+   * A routed order stands where its route says, not where anyone put it.
+   *
+   * You cannot staple a cover nobody has sewn, so the bench an operation is
+   * worked at is not a planning decision and there is nothing to drag. It also
+   * has to be immediate: the shift closes the sewing and the order is at the
+   * stapling bench, without waiting for the next export to file it there.
+   */
+  const placedByHand = new Set(
+    Object.values(containers).flatMap((ids) => ids.map(String)),
+  );
+  const routedTo = new Map<string, string[]>();
+  for (const job of assemblyJobs) {
+    // Somewhere a person put it wins: a rush bench opened this morning is a
+    // decision, and the route is only the default.
+    if (!job.operation || placedByHand.has(String(job.id))) continue;
+    const key = String(job.line);
+    routedTo.set(key, [...(routedTo.get(key) ?? []), String(job.id)]);
+  }
+
   const pending: { line: LineDef; ids: string[]; claiming: string[] }[] = [];
   for (const line of boardLines) {
     if (!line.schedulable) continue;
-    const ids = (containers[String(line.id)] ?? [])
-      .map(String)
-      .filter((id) => jobsById.has(id) && !placed.has(id));
+    const ids = [
+      ...(containers[String(line.id)] ?? []).map(String),
+      ...(routedTo.get(String(line.id)) ?? []),
+    ].filter(
+      (id, i, all) =>
+        all.indexOf(id) === i && jobsById.has(id) && !placed.has(id),
+    );
     ids.forEach((id) => placed.add(id));
     const claiming = [...ids].sort((a, b) => urgency(a) - urgency(b));
     pending.push({ line, ids, claiming });
@@ -962,7 +1064,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
      * part, which is the opposite of what the floor does. Different components
      * are all needed, so across parts it is still the latest that governs.
      */
-    const predecessors = dependsOn.get(id) ?? [];
+    const predecessors = dependsOn.get(jobNumOf(id)) ?? [];
     let waitingOn: Dependency | null = null;
     let predecessorBlocked = false;
     if (!actualStart) {
@@ -985,7 +1087,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
         let blocked: Dependency | null = null;
         let supplied = false;
         for (const dep of group) {
-          const predId = String(dep.onJobId);
+          const predId = rowIdOf(String(dep.onJobId));
           const pred = resolve(predId, seen) ?? mouldingRows.get(predId) ?? null;
           if (pred?.expectDate) {
             if (!ready || pred.expectDate < ready.when) {
@@ -1100,13 +1202,33 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
         );
     const expectDate = completedToday ? planStart : crewPlan.expectDate;
     const days = completedToday ? 0 : crewPlan.days;
+    /*
+     * The order finishes when its *route* does, not when this bench does.
+     *
+     * A row sewing the last of an order still has it stapled in front of it,
+     * and an order whose sewing lands on Friday is not an order ready on
+     * Friday. So the benches still to come are added to the expected finish,
+     * estimated at the crew this bench is running — which is the best guess
+     * available before anyone has been allocated to a bench the work has not
+     * reached. The bar itself is unchanged: it draws the operation, because
+     * the operation is what the people on this row are doing.
+     */
+    const tailHours = job.operation?.tailHours ?? 0;
+    const tailCrew = Math.max(
+      1,
+      crewPlan.crewDays.at(-1)?.workerIds.length ?? workers.length,
+    );
+    const orderExpect =
+      expectDate && tailHours > 0 && !completedToday
+        ? addWorkingDays(expectDate, tailHours / crewHoursPerDay(tailCrew))
+        : expectDate;
     const status = completedToday
       ? {
           color: 'grey' as const,
           dueSlackDays: null,
           reason: 'Job completed today',
         }
-      : scheduleStatus(expectDate, job.dueDate);
+      : scheduleStatus(orderExpect, job.dueDate);
 
     const row: OrderRow = {
       job,
@@ -1157,7 +1279,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
           ? start
           : crewPlan.start,
       plannedStart: start,
-      expectDate,
+      expectDate: orderExpect,
       days,
       slot: claim.slot,
       overtime,
@@ -1169,8 +1291,18 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
       material,
       pickList: pickListByJob.get(id) ?? [],
       release: releaseCheck(material, job.materialPrep),
-      predecessors,
-      waitingOn,
+      /*
+       * Named by the row that answers for the order, not by the order number.
+       *
+       * A dependency is a fact about orders — this one needs that one's part —
+       * and everything drawing it needs a row: the arrows, the marked-run
+       * move, the focus walk. The row furthest along the predecessor's route
+       * is the one that finishes it, and its expected date already carries the
+       * rest of that route. What the supervisor reads is still the order
+       * number: `jobNumOf` puts it back.
+       */
+      predecessors: predecessors.map(asRow),
+      waitingOn: waitingOn ? asRow(waitingOn) : null,
       booked: bookedDays(job),
       mustStartBy: job.dueDate
         ? latestStart(job, countBackCrew(id), job.dueDate)
@@ -1214,10 +1346,35 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
     return row;
   };
 
+  /**
+   * Hours routed to a bench the order has not reached yet.
+   *
+   * Counted once per order per bench, not once per row: Gluing's foaming and
+   * sewing are both in front of the same stapling, and adding each of their
+   * tails would put that stapling on the bench twice. An order is one order
+   * however many benches are working it at the moment.
+   */
+  const incomingHours = new Map<string, number>();
+  const countIncoming = (): void => {
+    incomingHours.clear();
+    const counted = new Set<string>();
+    for (const row of rowsByJob.values()) {
+      const op = row.job.operation;
+      if (!op) continue;
+      for (const step of op.tail) {
+        const key = String(step.line);
+        const mark = `${String(op.jobNum)} ${key}`;
+        if (counted.has(mark)) continue;
+        counted.add(mark);
+        incomingHours.set(key, (incomingHours.get(key) ?? 0) + step.hours);
+      }
+    }
+  };
+
   const withLoad = (line: LineDef, rows: OrderRow[]): LineGroup => ({
     line,
     rows,
-    load: lineLoad(rows),
+    load: lineLoad(rows, incomingHours.get(String(line.key)) ?? 0),
   });
 
   /**
@@ -1235,7 +1392,15 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
         .filter((held): held is LineGroup => Boolean(held));
       if (benches.length === 0) return group;
       const rows = [...group.rows, ...benches.flatMap((held) => held.rows)];
-      return { ...group, load: lineLoad(rows), benchOrders: rows.length };
+      const incoming = benches.reduce(
+        (sum, held) => sum + held.load.incomingHours,
+        incomingHours.get(String(group.line.key)) ?? 0,
+      );
+      return {
+        ...group,
+        load: lineLoad(rows, incoming),
+        benchOrders: rows.length,
+      };
     });
   };
 
@@ -1265,6 +1430,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
     .sort((a, b) => claimRank(a) - claimRank(b) || urgency(a) - urgency(b));
   for (const id of claimOrder) resolve(id, new Set());
   markDoubleBookings(rowsByJob, orderDoubleBooked);
+  countIncoming();
   for (const { line, ids } of pending) {
     const rows = ids
       .map((id) => rowsByJob.get(id))

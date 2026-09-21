@@ -286,7 +286,7 @@ export function usePlanPersistence(): PlanPersistence {
     if (status !== 'ready' || !dataset) return;
     const plan = usePlanStore.getState();
     if (bootstrapped.current) {
-      plan.reconcile(dataset.workCenters, dataset.jobs);
+      plan.reconcile(dataset.workCenters, dataset.jobs, undefined, dataset.jobLinks);
       return;
     }
     bootstrapped.current = true;
@@ -298,7 +298,7 @@ export function usePlanPersistence(): PlanPersistence {
           adopt(planningOf(persisted));
           plan.setAssemblyPlan(shiftRecordsOf(persisted).assembly);
         }
-        plan.reconcile(dataset.workCenters, dataset.jobs);
+        plan.reconcile(dataset.workCenters, dataset.jobs, undefined, dataset.jobLinks);
         markClean();
         setStored('loaded');
         setError(null);
@@ -306,7 +306,7 @@ export function usePlanPersistence(): PlanPersistence {
       .catch((e) => {
         // Still lay the board out, so the export is readable while the
         // repository is unreachable — but say so, and write nothing.
-        plan.reconcile(dataset.workCenters, dataset.jobs);
+        plan.reconcile(dataset.workCenters, dataset.jobs, undefined, dataset.jobLinks);
         setStored('failed');
         setError(reason(e));
       });
@@ -392,7 +392,7 @@ export function usePlanPersistence(): PlanPersistence {
         // The export has moved on while that plan was stored, so file this
         // one's orders against it before anybody reads the board.
         const data = useDataStore.getState().dataset;
-        if (data) usePlanStore.getState().reconcile(data.workCenters, data.jobs);
+        if (data) usePlanStore.getState().reconcile(data.workCenters, data.jobs, undefined, data.jobLinks);
       }
       // Clean either way: with a stored plan the board is now it, and with
       // none there is nothing for a draft to be a draft against.

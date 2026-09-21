@@ -1368,6 +1368,29 @@ body.col-resizing {
   background: #ede9fe;
   color: #6d28d9;
 }
+/*
+ * Where the order is on its route — "2/3 Sewing".
+ *
+ * Deliberately quieter than the trade badge beside it: the trade says who may
+ * work the order, which is a fact about the order, and this says where it has
+ * got to, which changes under you as the shift books.
+ */
+.order-op {
+  border: 1px solid var(--line-name);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 9.5px;
+  font-weight: 650;
+  color: var(--head-tx);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.inspector-op {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
 .order-desc {
   color: var(--faint);
   font-size: 10.5px;

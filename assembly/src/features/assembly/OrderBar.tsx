@@ -27,6 +27,7 @@ import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { barTag, timelineDayOffset } from './boardView';
 import type { DayAxis } from './dayAxis';
 import type { MarkedMove } from './groupMove';
+import { jobNumOf } from '@/domain/routing';
 
 export const DRAG_TYPE_BAR = 'order-bar';
 
@@ -134,7 +135,7 @@ export function OrderBar({
      * to say "no crew" to all three, which sent them looking for the one
      * problem that was not there.
      */
-    const held = row.waitingOn ? String(row.waitingOn.onJobId) : null;
+    const held = row.waitingOn ? jobNumOf(String(row.waitingOn.onJobId)) : null;
     const unstaffed = row.workers.length === 0;
     return (
       <button
@@ -329,7 +330,7 @@ export function OrderBar({
    * which one it is waiting for; the bar now says so, and carries a stop
    * against the edge that will not move.
    */
-  const heldBy = row.waitingOn ? String(row.waitingOn.onJobId) : null;
+  const heldBy = row.waitingOn ? jobNumOf(String(row.waitingOn.onJobId)) : null;
 
   // A couple of hours of work is a few pixels of bar; where the label cannot
   // fit inside it, the tag goes in the empty grid beside the block.
@@ -379,7 +380,7 @@ export function OrderBar({
       onMouseEnter={() => onDependencyHover(id)}
       onMouseLeave={() => onDependencyHover(null)}
       title={
-        `${row.job.id} · ${row.days.toFixed(1)} d worked with ${row.workers.length}` +
+        `${jobNumOf(String(row.job.id))} · ${row.days.toFixed(1)} d worked with ${row.workers.length}` +
         (readOnly ? '' : ` · position ${row.slot + 1} of ${row.line.parallelOrders}`) +
         (idleDays > 0
           ? ` · put down for ${idleDays} working day${idleDays === 1 ? '' : 's'}` +

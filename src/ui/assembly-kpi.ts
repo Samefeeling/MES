@@ -119,7 +119,7 @@ function outputCell(agg: AssemblyAgg): string {
   }>${n(agg.output)}${expected > 0 ? ` <span class="kpi-exp">/${n(expected)}</span>` : ''}</td>`;
 }
 
-/** The thirteen metric cells of one row — a line, an order, or the floor. */
+/** The fourteen metric cells of one row — a line, an order, or the floor. */
 function metricCells(agg: AssemblyAgg): string {
   const y = yieldPct(agg);
   const eff = efficiencyPct(agg);
@@ -138,6 +138,7 @@ function metricCells(agg: AssemblyAgg): string {
     cell(h(agg.earnedHours)) +
     cell(pct(eff), colourClass(eff, t.effGreen, t.effAmber)) +
     cell(h(agg.supportHours), agg.supportHours ? '' : 'gray') +
+    cell(h(agg.wipHours), agg.wipHours ? '' : 'gray') +
     cell(pct(on), colourClass(on, t.onTimeGreen, t.onTimeAmber))
   );
 }
@@ -220,9 +221,9 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
     const total = assemblyMetrics(S.rows);
     const lines = assemblyByLine(S.rows, LINE_ORDER);
     const body = S.loading
-      ? `<tr><td colspan="13" class="kpi-empty">Loading Assembly results…</td></tr>`
+      ? `<tr><td colspan="15" class="kpi-empty">Loading Assembly results…</td></tr>`
       : lines.length === 0
-        ? `<tr><td colspan="13" class="kpi-empty">No Assembly results in this period.</td></tr>`
+        ? `<tr><td colspan="15" class="kpi-empty">No Assembly results in this period.</td></tr>`
         : lines
             .map((line) => {
               const open = S.expanded.has(line.line);
@@ -274,7 +275,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
           <table class="summary-table kpi-table assembly-kpi-table">
             <colgroup>
               <col class="kpi-col-machine">
-              <col span="13" class="kpi-col-metric">
+              <col span="14" class="kpi-col-metric">
             </colgroup>
             <thead><tr>
               <th class="kpi-machine-head">Line</th>
@@ -288,6 +289,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
               <th title="Standard hours the finished units were worth">Std h</th>
               <th>Efficiency*</th>
               <th title="Factory General work, measured in the hours it took">Support h</th>
+              <th title="Hours booked at an operation that does not receive — work sitting in a half-built order">WIP h</th>
               <th>On time%</th>
             </tr></thead>
             <tbody>${body}</tbody>
@@ -325,6 +327,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
           <div><b>Efficiency* 🟢🟡🔴</b> = Std h ÷ Booked h — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.effGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.effAmber}%. 100% is a day that went exactly to standard. A day on an order carrying no standard, or one booked before the board measured labour hours, is left out of <b>both</b> sides rather than counted as zero: an order nobody costed was not worked badly, and a day nobody timed did not take no time.</div>
           <div><b>On time% 🟢🟡🔴</b> = orders finished on or before their Due Date ÷ orders finished with a Due Date to judge — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.onTimeGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.onTimeAmber}%.</div>
           <div><b>Support h</b> is Factory General work. It has no output at all, so it is never folded into Output, Yield or Efficiency — a line's support hours would otherwise read as a week spent making nothing.</div>
+          <div><b>WIP h</b> is work booked at an operation that does not receive: the sewing bench of an order the stapling bench will finish. The covers exist once and are counted once, where they enter stock, so these hours are held here rather than being charged against an output of zero.</div>
           <div>An order booked on five days is <b>one</b> order in every count. Press "+" on a line to see the orders behind its figures.</div>
         </div>
       </div>`;

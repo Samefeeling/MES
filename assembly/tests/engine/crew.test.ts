@@ -26,6 +26,7 @@ import { usePlanStore } from '@/store/planStore';
 import {
   MAX_WORKERS_PER_ORDER,
   canWorkKind,
+  rootLineKey,
   type LineKey,
   type Worker,
   type CrewAssignment,
@@ -61,7 +62,7 @@ function board(
   orderStarts: Record<string, string> = {},
 ) {
   const indexes = buildIndexes(dataset);
-  usePlanStore.getState().reconcile(dataset.workCenters, dataset.jobs);
+  usePlanStore.getState().reconcile(dataset.workCenters, dataset.jobs, undefined, dataset.jobLinks);
   return computeAssemblyGantt({
     dataset,
     indexes,
@@ -104,7 +105,11 @@ describe('suggestCrew', () => {
         for (const id of crew) {
           const w = byId.get(id)!;
           expect(w.onShift).toBe(true);
-          expect(w.skills).toContain(group.line.key);
+          // The roster names the lane; standing at one of its benches is the
+          // same qualification.
+          expect(w.skills.map(rootLineKey)).toContain(
+            rootLineKey(group.line.key),
+          );
         }
       }
     }
@@ -317,7 +322,7 @@ describe('nobody does two jobs at once', () => {
       String(r.job.id) === first ? { ...r, completedToday: true } : r,
     );
     const other = closed.find(
-      (r) => r.line.key === 'UPL_GLUING' && String(r.job.id) !== first,
+      (r) => r.line.key === 'UPL_CUT_SEW' && String(r.job.id) !== first,
     )!;
     expect(clashesFor(closed, other, 'W01')).toEqual([]);
   });
@@ -402,9 +407,9 @@ describe('crew size and selection policy', () => {
   });
 
   it('prefers the matching trade within a production line', () => {
-    const cutter = { ...person('Cutter', ['UPL_GLUING']), trades: ['cut-sew' as const] };
-    const upholsterer = { ...person('Upholsterer', ['UPL_GLUING']), trades: ['upholstery' as const] };
-    const b = fixture('UPL_GLUING', 4, [cutter, upholsterer]);
+    const cutter = { ...person('Cutter', ['UPL_CUT_SEW']), trades: ['cut-sew' as const] };
+    const upholsterer = { ...person('Upholsterer', ['UPL_CUT_SEW']), trades: ['upholstery' as const] };
+    const b = fixture('UPL_CUT_SEW', 4, [cutter, upholsterer]);
     b.groups[0].rows[0].kind = 'upholstery';
     expect(Object.values(suggestCrew(b).allocations)).toEqual([['Upholsterer']]);
   });

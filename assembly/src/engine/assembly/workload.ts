@@ -192,6 +192,17 @@ export function boardDayLoads(
 export interface LineLoad {
   /** Standard hours still to run across the line's orders. */
   hours: number;
+  /**
+   * The part of `hours` that is not on the line yet.
+   *
+   * A bench on a routed line has work coming that it cannot be allocated
+   * people for — you cannot staple a cover nobody has sewn — and leaving it
+   * out made the last bench of a busy line read as the emptiest place in the
+   * factory. It is counted in the queue and named separately, so the figure
+   * the supervisor plans against and the figure they can put names on are
+   * both there.
+   */
+  incomingHours: number;
   /** Most people planned simultaneously on the line on any covered day. */
   crew: number;
   /** Average daily capacity across the shifts currently covered. */
@@ -388,8 +399,9 @@ export function loadPreview(
 }
 
 /** Work still queued on a line, and how long its crew needs to clear it. */
-export function lineLoad(rows: OrderRow[]): LineLoad {
-  const hours = rows.reduce((s, r) => s + remainingHours(r.job), 0);
+export function lineLoad(rows: OrderRow[], incomingHours = 0): LineLoad {
+  const incoming = Math.max(0, incomingHours);
+  const hours = rows.reduce((s, r) => s + remainingHours(r.job), 0) + incoming;
   const byDay = new Map<string, Set<string>>();
   for (const row of rows) {
     for (const day of row.crewDays) {
@@ -410,6 +422,7 @@ export function lineLoad(rows: OrderRow[]): LineLoad {
 
   return {
     hours,
+    incomingHours: incoming,
     crew,
     capacityPerDay,
     daysOfWork: capacityPerDay > 0 ? hours / capacityPerDay : null,

@@ -70,6 +70,12 @@ export interface AssemblyAgg {
   /** Support orders and the hours they took, kept out of everything above. */
   supportOrders: number;
   supportHours: number;
+  /**
+   * Hours booked at an operation that does not receive — work that is in the
+   * order rather than in the warehouse. Counted here rather than beside
+   * support, which is work that produced nothing at all.
+   */
+  wipHours: number;
   /** Crew hours the production rows had available, at 7.5 h a head a day. */
   crewHours: number;
   /**
@@ -120,6 +126,7 @@ export function emptyAssemblyAgg(): AssemblyAgg {
     datedCompletions: 0,
     supportOrders: 0,
     supportHours: 0,
+    wipHours: 0,
     crewHours: 0,
     bookedHours: 0,
     madeHours: 0,
@@ -142,16 +149,22 @@ export function crewSize(operators: string | undefined): number {
  * A row that took hours and produced nothing of its own.
  *
  * Two kinds, and they are the same kind as far as every figure here goes.
- * Support work (Factory General) has no output by nature. A `Step` row is one
- * bench of an order the board split across three — the sewing bench of
- * ASM8001, say — and its units are the *order's* units: they are received once,
- * on the row carrying the job number, so a bench books hours and zero
- * quantity. Counting either as output would invent product; counting their
- * crew hours against it would report an efficiency near zero for work that was
- * done properly.
+ * Support work (Factory General) has no output by nature. A `WIP` row is a
+ * booking at an operation that does not receive — the sewing bench of ASM8001,
+ * say, whose covers are finished at the stapling bench and received there. Its
+ * hours are real and its output is genuinely nil, because the units it handed
+ * on are the same units the last operation will report. Counting either as
+ * output would invent product; charging their crew hours against an output of
+ * zero would report an efficiency near zero for work done properly.
+ *
+ * The two are kept apart in the totals: support hours bought the factory
+ * nothing to sell, work in progress bought it a half-built order.
  */
 const isHoursOnly = (row: AssemblyResult): boolean =>
-  row.workType === 'Support' || row.workType === 'Step';
+  row.workType === 'Support' || row.workType === 'WIP';
+
+/** A booking at an operation that does not put units into stock. */
+const isWip = (row: AssemblyResult): boolean => row.workType === 'WIP';
 
 /** The day an order was finished — the stamp if there is one, else the row. */
 const finishedOn = (row: AssemblyResult): string =>
@@ -172,7 +185,8 @@ export function hoursPerUnit(row: AssemblyResult): number | null {
 /** Fold one row into a running total. */
 function addRow(agg: AssemblyAgg, row: AssemblyResult): void {
   if (isHoursOnly(row)) {
-    agg.supportHours += row.laborHours ?? 0;
+    if (isWip(row)) agg.wipHours += row.laborHours ?? 0;
+    else agg.supportHours += row.laborHours ?? 0;
     return;
   }
   agg.bookings++;
@@ -209,7 +223,9 @@ function countOrders(agg: AssemblyAgg, rows: readonly AssemblyResult[]): void {
   const finished = new Map<string, AssemblyResult>();
   for (const row of rows) {
     if (isHoursOnly(row)) {
-      support.add(row.job);
+      // An order part-way through its route is not a support job, and it is
+      // already counted as an order by the rows that do receive.
+      if (!isWip(row)) support.add(row.job);
       continue;
     }
     made.add(row.job);
