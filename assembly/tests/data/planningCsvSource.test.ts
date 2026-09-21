@@ -118,7 +118,16 @@ describe('PlanningCsvSource', () => {
       'PMD',
       'UPL_CUT_SEW',
       'UPL_GLUING',
+      // The two lanes made of benches: each bench holds orders and so needs a
+      // work centre of its own, or every order on one would be tipped into
+      // the pool on the next refresh.
+      'UPL_GLUING_FOAM',
+      'UPL_GLUING_SEW',
+      'UPL_GLUING_STAPLE',
       'UPL_SOFTIE',
+      'UPL_SOFTIE_FOAM',
+      'UPL_SOFTIE_SEW',
+      'UPL_SOFTIE_STAPLE',
       'ASSY',
       'TABLE',
       'FACTORY_GENERAL',

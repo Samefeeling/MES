@@ -158,6 +158,12 @@ export interface JobMaterialLink {
  */
 export interface Job {
   manual?: import('./manualOrder').ManualOrder;
+  /**
+   * The bench this row is, when its line is one of the two made of benches.
+   * A row with `step.derived` is one the board split out rather than one the
+   * export named — see `domain/stepOrder`.
+   */
+  step?: import('./stepOrder').StepOrder;
   id: JobId;
   /** Which department runs it — decides which board it appears on. */
   department: Department;

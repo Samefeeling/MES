@@ -19,6 +19,8 @@ import {
   MAX_WORKERS_PER_ORDER,
   PRODUCTIVE_HOURS_PER_PERSON,
   canWorkKind,
+  onSameLane,
+  worksLine,
   type CrewAssignment,
   type LineKey,
   type Worker,
@@ -54,7 +56,7 @@ export function preferredCrewSize(row: OrderRow): number {
 
 /** Skills rank within the supervisor's current line allocation. */
 function skillRank(worker: Worker, row: OrderRow): number {
-  if (!worker.skills.includes(row.line.key)) return 2;
+  if (!worksLine(worker, row.line.key)) return 2;
   return canWorkKind(worker, row.kind) ? 0 : 1;
 }
 
@@ -338,7 +340,7 @@ function staffOneWave(
           toDayKey(board.today),
           board.workerOnLeave,
           toDayKey(board.today),
-        ) && workerLines.get(String(w.id)) === group.line.key,
+        ) && onSameLane(workerLines.get(String(w.id)), group.line.key),
     );
     if (onLine.length === 0) continue;
     const rosterIndex = new Map(

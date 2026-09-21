@@ -95,6 +95,17 @@ const ORDER_LEVEL = [
 /** What the plan says about an order, regardless of which day's row holds it. */
 export interface OrderFacts {
   manual?: { description: string; supportDepartment: string; plannedHours: number };
+  /**
+   * The bench this row is, when the board split an order across three.
+   *
+   * A derived bench is a real row — it has people, hours and a day — and it is
+   * emphatically not a second receipt. The units exist once and are received
+   * once, on the row carrying the job number, so a derived row writes its
+   * hours and writes zero for every quantity on it. Booking the same nine
+   * chairs on the sewing bench and again on the stapling bench is the one
+   * mistake this whole split could introduce.
+   */
+  step?: { sourceJobId: string; step: string; derived: boolean };
   jobNum: string;
   line: string | null;
   /** Stable worker keys — the SharePoint item ids from `ASSY_Operator`. */
@@ -174,6 +185,13 @@ export function orderFactsFromBoard(
         );
         return {
           manual: row.job.manual,
+          step: row.job.step
+            ? {
+                sourceJobId: String(row.job.step.sourceJobId),
+                step: row.job.step.step,
+                derived: row.job.step.derived,
+              }
+            : undefined,
           jobNum: String(row.job.id),
           line: group.line.name,
           operatorIds: anchorCrew.map((worker) => String(worker.id)),
@@ -198,8 +216,13 @@ export function orderFactsFromBoard(
     );
 }
 
+/** A row the board made up for a bench: hours yes, quantities never. */
+const isDerived = (facts: OrderFacts): boolean =>
+  Boolean(facts.step?.derived);
+
 function orderFields(facts: OrderFacts): ListItemFields {
   const c = PRODUCTION_COLUMNS;
+  const noQty = Boolean(facts.manual) || isDerived(facts);
   return {
     [c.line]: facts.line ?? '',
     [c.plannedHours]: facts.stdHours,
@@ -208,9 +231,12 @@ function orderFields(facts: OrderFacts): ListItemFields {
     [c.startOverrideReason]: facts.startOverrideReason ?? '',
     [c.dueDate]: facts.dueDate,
     [c.expectDate]: facts.expectDate,
-    [c.orderQty]: facts.manual ? 0 : facts.orderQty,
-    [c.remainingQty]: facts.manual ? 0 : facts.remainingQty,
+    [c.orderQty]: noQty ? 0 : facts.orderQty,
+    [c.remainingQty]: noQty ? 0 : facts.remainingQty,
     ...(facts.manual ? { [c.workType]: 'Support', [c.description]: facts.manual.description, [c.supportDepartment]: facts.manual.supportDepartment } : {}),
+    ...(isDerived(facts)
+      ? { [c.workType]: 'Step', [c.description]: `${facts.step!.step} — ${facts.step!.sourceJobId}` }
+      : {}),
   };
 }
 
@@ -258,6 +284,8 @@ function rowFields(facts: OrderFacts, shift: ProductionEntry): ListItemFields {
   const c = PRODUCTION_COLUMNS;
   const operatorIds = shift.operatorIds ?? facts.operatorIds;
   const operatorNames = shift.operatorNames ?? facts.operatorNames;
+  // The bench's own output is the order's output counted a second time.
+  const derived = isDerived(facts);
   return {
     [c.jobNum]: facts.jobNum,
     [c.date]: shift.date,
@@ -266,11 +294,11 @@ function rowFields(facts: OrderFacts, shift: ProductionEntry): ListItemFields {
     ...orderFields(facts),
     [c.operators]: operatorNames.join(', '),
     [c.operatorIds]: operatorIds.join(','),
-    [c.shiftOutput]: shift.shiftOutput,
-    [c.complete]: facts.manual ? 0 : shift.complete,
-    ...(facts.manual ? { [c.laborHours]: shift.laborHours ?? 0 } : {}),
-    [c.reject]: shift.reject,
-    [c.rework]: shift.rework,
+    [c.shiftOutput]: derived ? 0 : shift.shiftOutput,
+    [c.complete]: facts.manual || derived ? 0 : shift.complete,
+    ...(facts.manual || derived ? { [c.laborHours]: shift.laborHours ?? 0 } : {}),
+    [c.reject]: derived ? 0 : shift.reject,
+    [c.rework]: derived ? 0 : shift.rework,
     [c.jobCompleted]: shift.jobCompleted,
     [c.completedAt]: shift.completedAt ?? null,
     [c.paused]: shift.paused,

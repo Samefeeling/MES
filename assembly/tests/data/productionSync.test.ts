@@ -717,3 +717,64 @@ describe('a row another board opened first', () => {
     ]);
   });
 });
+
+/**
+ * A bench the board made up out of an order it split across three.
+ *
+ * The one mistake this whole split could introduce is receiving the same nine
+ * chairs twice — once on the sewing bench and again on the stapling bench —
+ * so a derived row writes its hours and writes zero for every quantity on it.
+ */
+describe('a derived bench row', () => {
+  const bench = (over: Partial<OrderFacts> = {}) =>
+    order({
+      jobNum: 'ASM8001#SEW',
+      line: 'UPL_GLUING_SEW',
+      stdHours: 10,
+      step: { sourceJobId: 'ASM8001', step: 'sewing', derived: true },
+      shifts: [
+        shift({ shiftOutput: 9, complete: 9, reject: 1, rework: 2, laborHours: 7.5 }),
+      ],
+      ...over,
+    });
+
+  const fieldsWritten = async () => {
+    const calls = stubGraph([]);
+    await syncProduction(CFG, 'ASSY_Production', [bench()]);
+    const body = writes(calls)[0].body as { fields: Record<string, unknown> };
+    return body.fields;
+  };
+
+  it('writes no quantity of any kind', async () => {
+    const fields = await fieldsWritten();
+    expect(fields[C.orderQty]).toBe(0);
+    expect(fields[C.remainingQty]).toBe(0);
+    expect(fields[C.shiftOutput]).toBe(0);
+    expect(fields[C.complete]).toBe(0);
+    expect(fields[C.reject]).toBe(0);
+    expect(fields[C.rework]).toBe(0);
+  });
+
+  it('writes the hours, which are the whole point of the row', async () => {
+    const fields = await fieldsWritten();
+    expect(fields[C.laborHours]).toBe(7.5);
+    expect(fields[C.plannedHours]).toBe(10);
+  });
+
+  it('says which bench it is, and of which order', async () => {
+    const fields = await fieldsWritten();
+    expect(fields[C.workType]).toBe('Step');
+    expect(fields[C.description]).toBe('sewing — ASM8001');
+    expect(fields[C.jobNum]).toBe('ASM8001#SEW');
+  });
+
+  it('leaves the row carrying the job number counting its units', async () => {
+    const calls = stubGraph([]);
+    await syncProduction(CFG, 'ASSY_Production', [
+      order({ shifts: [shift({ shiftOutput: 9, complete: 9 })] }),
+    ]);
+    const body = writes(calls)[0].body as { fields: Record<string, unknown> };
+    expect(body.fields[C.complete]).toBe(9);
+    expect(body.fields[C.orderQty]).toBe(60);
+  });
+});

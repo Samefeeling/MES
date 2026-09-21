@@ -1918,6 +1918,36 @@ body.col-resizing {
   min-width: 0;
   padding: 0 8px;
 }
+/*
+ * A bench of a lane, drawn indented under it.
+ *
+ * The indent is on the sticky inner block rather than on the row: the row has
+ * to span the whole grid to carry its band, and a margin on it would pull the
+ * day columns out of line with every other row on the board.
+ */
+.agroup.bench .agroup-head-in { padding-left: 14px; }
+.agroup.bench .agroup-name {
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.85;
+}
+/* The lane above them keeps the full weight: it is the thing being read. */
+.agroup.bench .agroup-head {
+  background: var(--surface);
+  border-top-color: transparent;
+}
+.agroup-name.renameable { cursor: text; }
+.agroup-rename {
+  width: 11ch;
+  padding: 0 3px;
+  border: 1px solid var(--line-name);
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--line-name);
+  font: inherit;
+  font-weight: 800;
+  font-size: 12px;
+}
 .agroup-name {
   color: var(--line-name);
   font-weight: 800;

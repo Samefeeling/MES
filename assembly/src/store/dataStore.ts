@@ -8,6 +8,7 @@ import type { PlanningDataset } from '@/domain/types';
 import { createDataSource, type DataSource } from '@/data';
 import { buildIndexes, type DataIndexes } from '@/engine/indexes';
 import { trackNewOrders } from '@/features/refresh/newOrders';
+import { withStepOrders } from '@/engine/assembly/steps';
 
 export type LoadStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -44,17 +45,26 @@ export const useDataStore = create<DataState>((set, get) => ({
     // Collected during the load, so read them after it settles.
     const warnings = [...(source.warnings ?? [])];
     if (result.ok) {
+      /*
+       * UPL-SSS and UPL-Gluing are three benches each, and the export gives
+       * one order for all three. Splitting it here rather than inside the
+       * board is what lets the plan store, the pool, the crew picker and the
+       * SharePoint mirror all see the same orders the board does.
+       */
+      const dataset = withStepOrders(result.value);
       const newOrderIds = trackNewOrders(
-        result.value.jobs
+        dataset.jobs
           .filter((job) => job.department === 'assembly')
+          // A bench the board made up is not an order that arrived today.
+          .filter((job) => !job.step?.derived)
           .map((job) => String(job.id)),
         new Date(),
         source.name,
       );
       set({
         status: 'ready',
-        dataset: result.value,
-        indexes: buildIndexes(result.value),
+        dataset,
+        indexes: buildIndexes(dataset),
         error: null,
         warnings,
         newOrderIds,

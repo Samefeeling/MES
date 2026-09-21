@@ -16,6 +16,7 @@ import type { OrderRow } from '@/engine/assembly/board';
 import type { LineKey, Worker } from '@/domain/assembly';
 import {
   MAX_WORKERS_PER_ORDER,
+  onSameLane,
   SHIFT_END_HOUR,
 } from '@/domain/assembly';
 import {
@@ -203,7 +204,7 @@ export function TeamChips({
       .filter(
         (w) =>
           !isOnLeave(w, todayKey, leave, todayKey) &&
-          workerLines.get(String(w.id)) === row.line.key &&
+          onSameLane(workerLines.get(String(w.id)), row.line.key) &&
           !onIt.has(String(w.id)),
       )
       .map((w) => ({

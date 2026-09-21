@@ -558,9 +558,29 @@ function LineGroupView({
    * is why the fold is now its own triangle: holding the name used to mean
    * "collapse this", and one gesture cannot mean two things.
    */
+  /*
+   * A bench is not a line anybody arranges: it is one of the three its lane is
+   * made of, and it moves when the lane does. Everything else on the row — the
+   * fold, the people, the orders — works exactly as it does on a lane.
+   */
+  const arrangeable = unlocked && !group.line.parent;
+  /*
+   * What this floor calls the line.
+   *
+   * The plant named the eight and the process named the six benches under two
+   * of them, and neither is necessarily what the shift says out loud. Renaming
+   * is a double-click on the name — the same gesture that renames a file — and
+   * it is the supervisor's, because the name travels with the plan and every
+   * screen on the floor reads it.
+   */
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const commitName = (value: string) => {
+    usePlanStore.getState().renameLine(group.line.key, value);
+    setRenaming(null);
+  };
   const arrange = useDraggable({
     id: lineDragId(group.line.key),
-    disabled: !unlocked,
+    disabled: !arrangeable,
     data: {
       type: DRAG_TYPE_LINE,
       lineKey: group.line.key,
@@ -582,7 +602,7 @@ function LineGroupView({
   return (
     <section
       ref={setNodeRef}
-      className={`agroup ${isOver ? 'drop-active' : ''}`}
+      className={`agroup ${group.line.parent ? 'bench' : ''} ${isOver ? 'drop-active' : ''}`}
     >
       {/* A row, not one big button: the load chips inside it open their own
           popup, and a button cannot hold another button. The inner block is
@@ -616,9 +636,9 @@ function LineGroupView({
         </button>
         <div
           ref={arrange.setNodeRef}
-          className={`agroup-label ${unlocked ? 'arrangeable' : ''} ${arrange.isDragging ? 'arranging' : ''}`}
+          className={`agroup-label ${arrangeable ? 'arrangeable' : ''} ${arrange.isDragging ? 'arranging' : ''}`}
           title={
-            unlocked
+            arrangeable
               ? `${group.line.name} — drag onto another line to put it there` +
                 '\nAlt + ↑ / ↓ moves it one place'
               : group.line.name
@@ -634,14 +654,43 @@ function LineGroupView({
                 : e.key === 'ArrowDown'
                   ? neighbours.after
                   : null;
-            if (!onto || !unlocked) return;
+            if (!onto || !arrangeable) return;
             e.preventDefault();
             onArrange(onto);
           }}
-          {...(unlocked ? arrange.listeners : {})}
-          {...(unlocked ? arrange.attributes : {})}
+          {...(arrangeable ? arrange.listeners : {})}
+          {...(arrangeable ? arrange.attributes : {})}
         >
-          <span className="agroup-name">{group.line.name}</span>
+          {renaming === null ? (
+            <span
+              className={`agroup-name ${unlocked ? 'renameable' : ''}`}
+              onDoubleClick={
+                unlocked ? () => setRenaming(group.line.name) : undefined
+              }
+              title={unlocked ? 'Double-click to rename this line' : undefined}
+            >
+              {group.line.name}
+            </span>
+          ) : (
+            <input
+              className="agroup-rename"
+              value={renaming}
+              autoFocus
+              maxLength={32}
+              aria-label={`Rename ${group.line.name}`}
+              onChange={(e) => setRenaming(e.target.value)}
+              onBlur={() => commitName(renaming)}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                // Enter takes it, Escape leaves the name as it was, and an
+                // empty name puts the built-in one back rather than leaving a
+                // line with no name at all.
+                if (e.key === 'Enter') commitName(renaming);
+                if (e.key === 'Escape') setRenaming(null);
+              }}
+            />
+          )}
           {/* Spelled out where the floor's shorthand is not obvious — this
               board is read across a workshop by people who did not choose
               the abbreviation. */}
@@ -656,14 +705,21 @@ function LineGroupView({
           <span
             className="agroup-count"
             title={
-              group.rows.length === total
-                ? `${total} orders on this line`
-                : `${group.rows.length} of ${total} orders shown — the rest are outside the date window`
+              // A lane holds none of its own once its work is on its benches,
+              // so it counts theirs: a header reading "0 orders, 0 h" over
+              // three rows of work is the one thing it must not say.
+              group.benchOrders !== undefined
+                ? `${group.benchOrders} orders across this line's benches`
+                : group.rows.length === total
+                  ? `${total} orders on this line`
+                  : `${group.rows.length} of ${total} orders shown — the rest are outside the date window`
             }
           >
-            {group.rows.length === total
-              ? total
-              : `${group.rows.length} of ${total}`}
+            {group.benchOrders !== undefined
+              ? group.benchOrders
+              : group.rows.length === total
+                ? total
+                : `${group.rows.length} of ${total}`}
           </span>
 
           {/* The line's own work load: remaining standard hours, and how long
@@ -876,6 +932,9 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
         lineOrder,
       ).filter(group =>
         !hiddenLines.includes(group.line.key) &&
+        // A lane taken off the board takes its benches with it: three orphan
+        // benches indented under nothing is not a board anybody can read.
+        !(group.line.parent && hiddenLines.includes(group.line.parent)) &&
         (!orderDay || group.line.schedulable),
       ).map((group) => ({
         ...group,

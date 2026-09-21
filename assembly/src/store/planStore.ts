@@ -169,6 +169,21 @@ interface PlanState {
    * the same one.
    */
   virtualLines: VirtualLine[];
+  /**
+   * What this floor calls each line, where it calls it something else.
+   *
+   * The eight were named by the plant and the benches under two of them by
+   * the process, and neither is what every shift says out loud. A name is a
+   * fact about the board rather than about this browser — the whole floor
+   * reads the same one — so it travels with the plan and is published by
+   * Save like the rest of the planning.
+   *
+   * Keyed by line key, and only lines that were actually renamed are in here:
+   * the built-in name is the default, so clearing a rename restores it.
+   */
+  lineNames: Record<string, string>;
+  /** Rename a line. An empty name puts the built-in one back. */
+  renameLine: (key: LineKey, name: string) => void;
   /** Open a new line. Returns its key, or null when the name is taken/blank. */
   addVirtualLine: (name: string) => VirtualLineKey | null;
   /** Close one, tipping whatever is on it back into the unplaced pool. */
@@ -314,6 +329,7 @@ interface PlanState {
      */
     workerAbsence?: Record<string, string[]>;
     virtualLines?: VirtualLine[];
+    lineNames?: Record<string, string>;
     lineOrder?: LineKey[];
     orderCrewAssignments?: Record<string, CrewAssignment[]>;
     orderStarts?: Record<string, string>;
@@ -458,6 +474,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   workerLines: {},
   workerOnLeave: {},
   virtualLines: [],
+  lineNames: {},
   lineOrder: [],
   orderCrewAssignments: {},
   orderStarts: {},
@@ -903,6 +920,16 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     });
   },
 
+  renameLine(key, name) {
+    const clean = name.trim().replace(/\s+/g, ' ').slice(0, 32);
+    set((state) => {
+      const { [String(key)]: _dropped, ...rest } = state.lineNames;
+      return {
+        lineNames: clean ? { ...rest, [String(key)]: clean } : rest,
+      };
+    });
+  },
+
   addVirtualLine(name) {
     const clean = name.trim().replace(/\s+/g, ' ').slice(0, 32);
     if (!clean) return null;
@@ -992,6 +1019,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         workerOnLeave:
           plan.workerOnLeave ?? plan.workerAbsence ?? state.workerOnLeave,
         virtualLines: plan.virtualLines ?? state.virtualLines,
+        lineNames: plan.lineNames ?? state.lineNames,
         // A plan saved before the lines could be arranged carries none, which
         // reads as the built-in order rather than as an empty board.
         lineOrder: plan.lineOrder ?? state.lineOrder,

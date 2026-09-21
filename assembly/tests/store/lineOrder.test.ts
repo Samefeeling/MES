@@ -11,6 +11,8 @@ import { LINES, arrangeLines, type LineKey } from '@/domain/assembly';
 import { usePlanStore } from '@/store/planStore';
 
 const BUILT_IN = LINES.map((line) => line.key);
+/** The lanes alone — a bench is not a line anybody arranges. */
+const LANES = LINES.filter((line) => !line.step).map((line) => line.key);
 
 const reset = () =>
   usePlanStore.setState({ lineOrder: [], virtualLines: [], containers: {} });
@@ -20,6 +22,9 @@ beforeEach(reset);
 const order = () => usePlanStore.getState().lineOrder;
 const arranged = () =>
   arrangeLines(LINES, usePlanStore.getState().lineOrder).map((l) => l.key);
+/** The same, with the benches taken out: what the arrangement is *about*. */
+const lanes = () =>
+  arranged().filter((key) => LANES.includes(key as LineKey));
 
 describe('putting one line where another is', () => {
   it('opens in the order the plant lists them', () => {
@@ -33,7 +38,7 @@ describe('putting one line where another is', () => {
    */
   it('drops UPL-CUT under UPL-Gluing when it lands on it', () => {
     usePlanStore.getState().moveLine('UPL_CUT_SEW', 'UPL_GLUING');
-    expect(arranged().slice(0, 4)).toEqual([
+    expect(lanes().slice(0, 4)).toEqual([
       'TBP',
       'PMD',
       'UPL_GLUING',
@@ -43,7 +48,7 @@ describe('putting one line where another is', () => {
 
   it('and above it when it lands going the other way', () => {
     usePlanStore.getState().moveLine('UPL_GLUING', 'UPL_CUT_SEW');
-    expect(arranged().slice(0, 4)).toEqual([
+    expect(lanes().slice(0, 4)).toEqual([
       'TBP',
       'PMD',
       'UPL_GLUING',
@@ -53,7 +58,7 @@ describe('putting one line where another is', () => {
 
   it('moves one line and leaves the rest where they were', () => {
     usePlanStore.getState().moveLine('TABLE', 'TBP');
-    expect(arranged()).toEqual([
+    expect(lanes()).toEqual([
       'TABLE',
       'TBP',
       'PMD',
@@ -91,7 +96,9 @@ describe('a stored arrangement that no longer fits the board', () => {
    */
   it('keeps every line it has, whatever the arrangement names', () => {
     expect(
-      arrangeLines(LINES, ['ASSY', 'VL_CLOSED_LAST_WEEK', 'TABLE']).map((l) => l.key),
+      arrangeLines(LINES, ['ASSY', 'VL_CLOSED_LAST_WEEK', 'TABLE'])
+        .map((l) => l.key)
+        .filter((key) => LANES.includes(key as LineKey)),
     ).toEqual([
       'ASSY',
       'TABLE',
@@ -159,5 +166,41 @@ describe('reading and writing it with the plan', () => {
     const before = usePlanStore.getState().lineOrder;
     usePlanStore.getState().setAssemblyPlan({ manualOrders: {} });
     expect(usePlanStore.getState().lineOrder).toEqual(before);
+  });
+});
+
+/**
+ * A bench is one of the three a lane is made of, not a line in the sequence.
+ * Wherever the lane goes, its benches go with it — including under an
+ * arrangement saved before the lanes had any, which names none of them.
+ */
+describe('benches follow their lane', () => {
+  it('keeps the three under UPL-SSS wherever it is put', () => {
+    usePlanStore.getState().moveLine('UPL_SOFTIE', 'TBP');
+    const order = arranged();
+    expect(order.slice(0, 4)).toEqual([
+      'UPL_SOFTIE',
+      'UPL_SOFTIE_FOAM',
+      'UPL_SOFTIE_SEW',
+      'UPL_SOFTIE_STAPLE',
+    ]);
+  });
+
+  it('draws them in work order, whatever order they arrive in', () => {
+    const shuffled = [...LINES].reverse();
+    const order = arrangeLines(shuffled, []).map((l) => l.key);
+    const softie = order.indexOf('UPL_SOFTIE');
+    expect(order.slice(softie, softie + 4)).toEqual([
+      'UPL_SOFTIE',
+      'UPL_SOFTIE_FOAM',
+      'UPL_SOFTIE_SEW',
+      'UPL_SOFTIE_STAPLE',
+    ]);
+  });
+
+  it('never loses one, and never draws one twice', () => {
+    const keys = arrangeLines(LINES, ['ASSY', 'TABLE']).map((l) => l.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect([...keys].sort()).toEqual([...BUILT_IN].sort());
   });
 });

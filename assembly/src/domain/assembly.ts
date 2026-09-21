@@ -25,7 +25,38 @@ import { WorkCenterId, type WorkerId } from './ids';
  * ordinary ASM work. `LEGACY_LINE_KEYS` maps both onto their successors so a
  * plan saved before this change still opens.
  */
-export type BuiltInLineKey = 'TBP' | 'PMD' | 'UPL_CUT_SEW' | 'UPL_GLUING' | 'UPL_SOFTIE' | 'ASSY' | 'TABLE' | 'FACTORY_GENERAL';
+export type BuiltInLineKey =
+  | 'TBP'
+  | 'PMD'
+  | 'UPL_CUT_SEW'
+  | 'UPL_GLUING'
+  | 'UPL_GLUING_FOAM'
+  | 'UPL_GLUING_SEW'
+  | 'UPL_GLUING_STAPLE'
+  | 'UPL_SOFTIE'
+  | 'UPL_SOFTIE_FOAM'
+  | 'UPL_SOFTIE_SEW'
+  | 'UPL_SOFTIE_STAPLE'
+  | 'ASSY'
+  | 'TABLE'
+  | 'FACTORY_GENERAL';
+
+/**
+ * The three benches a UPL line is actually made of.
+ *
+ * UPL-SSS and UPL-Gluing were each one lane on the board and three benches on
+ * the floor, so a supervisor allocating four people to "UPL-SSS" was saying
+ * nothing about which of the three they were standing at. The steps run in
+ * order — foam, then sew, then staple — except on Gluing, where the first two
+ * are worked side by side.
+ */
+export type ProductionStep = 'foaming' | 'sewing' | 'stapling';
+
+export const STEP_NAME: Record<ProductionStep, string> = {
+  foaming: 'Foaming',
+  sewing: 'Sewing',
+  stapling: 'Stapling',
+};
 
 /**
  * A line the supervisor added on the floor.
@@ -80,7 +111,10 @@ const RESTRICTED_KINDS: WorkKind[] = ['smart-softie'];
  * already *is* the answer, and guessing from a description that happens to
  * contain "cut" can only disagree with it.
  */
-export function workKind(line: LineKey): WorkKind {
+export function workKind(key: LineKey): WorkKind {
+  // A bench is the same trade as the lane it is on: splitting UPL-SSS into
+  // three benches did not make its stapler any less of a softie hand.
+  const line = rootLineKey(key);
   if (line === 'UPL_CUT_SEW') return 'cut-sew';
   if (line === 'UPL_SOFTIE') return 'smart-softie';
   // Gluing is upholstery, and now says so. It read as `general` only because
@@ -120,6 +154,18 @@ export interface LineDef {
   key: LineKey;
   id: WorkCenterId;
   name: string;
+  /**
+   * The line this one is a bench of, for the two that have benches.
+   *
+   * A step line is a line in every way that matters — it holds orders, takes
+   * people, has build positions — and is drawn indented under its parent,
+   * whose header carries the three of them added up. The parent stays
+   * schedulable: a plan saved before the split, or an order nobody has routed
+   * to a bench, still has somewhere to sit.
+   */
+  parent?: LineKey;
+  /** Which bench, for a step line. */
+  step?: ProductionStep;
   /**
    * PMD is shown for context only — it mirrors the moulding plan so the
    * supervisor can see what is feeding assembly. It is not scheduled here.
@@ -161,16 +207,96 @@ export const LINE_TABLE = WorkCenterId('TABLE');
  * plan so the supervisor can see what is feeding assembly, and is scheduled
  * on the PMD dashboard, not here.
  */
+const bench = (
+  parent: BuiltInLineKey,
+  key: BuiltInLineKey,
+  runs: ProductionStep,
+  sortIndex: number,
+): LineDef => ({
+  key,
+  id: WorkCenterId(key),
+  name: STEP_NAME[runs],
+  schedulable: true,
+  types: ['upholstery'],
+  parallelOrders: PARALLEL_ORDERS_PER_LINE,
+  sortIndex,
+  parent,
+  step: runs,
+});
+
 export const LINES: LineDef[] = [
   { key: 'TBP', id: LINE_TBP, name: 'TBP', schedulable: true, types: ['final-assembly'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 0 },
   { key: 'PMD', id: LINE_PMD, name: 'PMD', schedulable: false, types: [], parallelOrders: 0, sortIndex: 1 },
   { key: 'UPL_CUT_SEW', id: WorkCenterId('UPL_CUT_SEW'), name: 'UPL-CUT', schedulable: true, types: ['cutting-sewing'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 2 },
   { key: 'UPL_GLUING', id: WorkCenterId('UPL_GLUING'), name: 'UPL-Gluing', schedulable: true, types: ['upholstery'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 3 },
-  { key: 'UPL_SOFTIE', id: WorkCenterId('UPL_SOFTIE'), name: 'UPL-SSS', schedulable: true, types: ['upholstery'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 4 },
-  { key: 'ASSY', id: LINE_ASSY, name: 'Assembly', schedulable: true, types: ['final-assembly'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 5 },
-  { key: 'TABLE', id: LINE_TABLE, name: 'Table', schedulable: true, types: ['final-assembly'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 6 },
-  { key: 'FACTORY_GENERAL', id: WorkCenterId('FACTORY_GENERAL'), name: 'General', schedulable: true, types: ['final-assembly'], parallelOrders: 15, sortIndex: 7 },
+  bench('UPL_GLUING', 'UPL_GLUING_FOAM', 'foaming', 4),
+  bench('UPL_GLUING', 'UPL_GLUING_SEW', 'sewing', 5),
+  bench('UPL_GLUING', 'UPL_GLUING_STAPLE', 'stapling', 6),
+  { key: 'UPL_SOFTIE', id: WorkCenterId('UPL_SOFTIE'), name: 'UPL-SSS', schedulable: true, types: ['upholstery'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 7 },
+  bench('UPL_SOFTIE', 'UPL_SOFTIE_FOAM', 'foaming', 8),
+  bench('UPL_SOFTIE', 'UPL_SOFTIE_SEW', 'sewing', 9),
+  bench('UPL_SOFTIE', 'UPL_SOFTIE_STAPLE', 'stapling', 10),
+  { key: 'ASSY', id: LINE_ASSY, name: 'Assembly', schedulable: true, types: ['final-assembly'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 11 },
+  { key: 'TABLE', id: LINE_TABLE, name: 'Table', schedulable: true, types: ['final-assembly'], parallelOrders: PARALLEL_ORDERS_PER_LINE, sortIndex: 12 },
+  { key: 'FACTORY_GENERAL', id: WorkCenterId('FACTORY_GENERAL'), name: 'General', schedulable: true, types: ['final-assembly'], parallelOrders: 15, sortIndex: 13 },
 ];
+
+/** Parent line key → its benches, in the order they are worked. */
+export const STEP_LINES: ReadonlyMap<LineKey, LineDef[]> = LINES.reduce(
+  (out, line) => {
+    if (!line.parent) return out;
+    const held = out.get(line.parent);
+    if (held) held.push(line);
+    else out.set(line.parent, [line]);
+    return out;
+  },
+  new Map<LineKey, LineDef[]>(),
+);
+
+/** The benches of `key`, or nothing for a line that has none. */
+export const stepLinesOf = (key: LineKey): LineDef[] =>
+  STEP_LINES.get(key) ?? [];
+
+/** One bench of one line, by the step it runs. */
+export function stepLine(
+  parent: LineKey,
+  runs: ProductionStep,
+): LineDef | null {
+  return stepLinesOf(parent).find((line) => line.step === runs) ?? null;
+}
+
+/**
+ * The line a key belongs to — itself, or the parent when it names a bench.
+ *
+ * Everything written against the lane before it had benches — a roster's
+ * Skills cell, a routing rule, `workKind` — is still answered by the lane, so
+ * those readings come through here rather than each one learning the benches.
+ */
+export function rootLineKey(key: LineKey): LineKey {
+  return LINES.find((line) => line.key === key)?.parent ?? key;
+}
+
+/**
+ * Do these two keys name the same place to stand?
+ *
+ * Somebody the roster puts on UPL-SSS is standing at its benches as far as
+ * being offered for an order goes — the supervisor moves them to one of the
+ * three, they do not have to be moved before they can be picked.
+ */
+export const onSameLane = (
+  a: LineKey | undefined | null,
+  b: LineKey | undefined | null,
+): boolean => Boolean(a && b && rootLineKey(a) === rootLineKey(b));
+
+/** Is this person qualified for the line — or for the lane its bench is on? */
+export function worksLine(
+  worker: { skills: LineKey[] },
+  key: LineKey,
+): boolean {
+  if (worker.skills.includes(key)) return true;
+  const root = rootLineKey(key);
+  return root !== key && worker.skills.includes(root);
+}
 
 /**
  * Lines that no longer exist, and where their work goes.
@@ -197,7 +323,12 @@ const LINE_KEYS = new Set<string>(LINES.map((l) => l.key));
  *  a roster's Skills cell and in `product-lines.v3.json`, and it has to mean
  *  the same line as the stored key `UPL_CUT_SEW`. */
 const LINE_NAMES = new Map<string, LineKey>(
-  LINES.map((l) => [l.name.toUpperCase().replace(/[\s/-]+/g, '_'), l.key]),
+  // Benches are left out on purpose: "Foaming" names one on UPL-SSS and one on
+  // UPL-Gluing, and a roster cell saying only that has not said which.
+  LINES.filter((l) => !l.step).map((l) => [
+    l.name.toUpperCase().replace(/[\s/-]+/g, '_'),
+    l.key,
+  ]),
 );
 
 /** A line key out of anything stored, exported or typed — null if it is none. */
@@ -261,7 +392,52 @@ export function arrangeLines<T extends { key: string }>(
     placed.add(key);
     named.push(line);
   }
-  return [...named, ...lines.filter((line) => !placed.has(line.key))];
+  const order = [...named, ...lines.filter((line) => !placed.has(line.key))];
+  return keepBenchesWithLanes(order);
+}
+
+/**
+ * Put every bench back under its lane, wherever the lane ended up.
+ *
+ * A bench is not a line the supervisor arranges: it is one of the three the
+ * lane is made of, and a board with Sewing between Table and General would be
+ * saying something about the floor that is not true. So the arrangement is
+ * over lanes, and the benches follow — including an arrangement saved before
+ * the lanes had benches at all, which names none of them.
+ */
+function keepBenchesWithLanes<T extends { key: string }>(lines: readonly T[]): T[] {
+  const benches = new Map<string, T[]>();
+  for (const line of lines) {
+    const parent = LINES.find((def) => def.key === line.key)?.parent;
+    if (!parent) continue;
+    const held = benches.get(parent);
+    if (held) held.push(line);
+    else benches.set(parent, [line]);
+  }
+  if (benches.size === 0) return [...lines];
+
+  const moved = new Set(
+    [...benches.values()].flat().map((line) => line.key),
+  );
+  const out: T[] = [];
+  for (const line of lines) {
+    if (moved.has(line.key)) continue;
+    out.push(line);
+    // In the order the plant lists them, not the order they were found in:
+    // foam, then sew, then staple is how the work runs.
+    const held = benches.get(line.key);
+    if (held) {
+      out.push(
+        ...stepLinesOf(line.key as LineKey)
+          .map((def) => held.find((line) => line.key === def.key))
+          .filter((line): line is T => Boolean(line)),
+      );
+    }
+  }
+  // A bench whose lane is not on this board keeps its place rather than
+  // vanishing — the board draws what it was given.
+  const drawn = new Set(out.map((line) => line.key));
+  return [...out, ...lines.filter((line) => !drawn.has(line.key))];
 }
 
 /**

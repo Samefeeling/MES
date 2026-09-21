@@ -138,7 +138,20 @@ export function crewSize(operators: string | undefined): number {
     .filter(Boolean).length;
 }
 
-const isSupport = (row: AssemblyResult): boolean => row.workType === 'Support';
+/**
+ * A row that took hours and produced nothing of its own.
+ *
+ * Two kinds, and they are the same kind as far as every figure here goes.
+ * Support work (Factory General) has no output by nature. A `Step` row is one
+ * bench of an order the board split across three — the sewing bench of
+ * ASM8001, say — and its units are the *order's* units: they are received once,
+ * on the row carrying the job number, so a bench books hours and zero
+ * quantity. Counting either as output would invent product; counting their
+ * crew hours against it would report an efficiency near zero for work that was
+ * done properly.
+ */
+const isHoursOnly = (row: AssemblyResult): boolean =>
+  row.workType === 'Support' || row.workType === 'Step';
 
 /** The day an order was finished — the stamp if there is one, else the row. */
 const finishedOn = (row: AssemblyResult): string =>
@@ -158,7 +171,7 @@ export function hoursPerUnit(row: AssemblyResult): number | null {
 
 /** Fold one row into a running total. */
 function addRow(agg: AssemblyAgg, row: AssemblyResult): void {
-  if (isSupport(row)) {
+  if (isHoursOnly(row)) {
     agg.supportHours += row.laborHours ?? 0;
     return;
   }
@@ -195,7 +208,7 @@ function countOrders(agg: AssemblyAgg, rows: readonly AssemblyResult[]): void {
   const made = new Set<string>();
   const finished = new Map<string, AssemblyResult>();
   for (const row of rows) {
-    if (isSupport(row)) {
+    if (isHoursOnly(row)) {
       support.add(row.job);
       continue;
     }

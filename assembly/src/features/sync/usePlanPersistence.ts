@@ -63,6 +63,7 @@ const planningNow = (): PlanningPart => {
       manualOrders: p.manualOrders,
       workerLines: p.workerLines,
       virtualLines: p.virtualLines,
+      lineNames: p.lineNames,
       lineOrder: p.lineOrder,
       orderCrewAssignments: p.orderCrewAssignments,
       orderStarts: p.orderStarts,
@@ -143,6 +144,7 @@ export function usePlanPersistence(): PlanPersistence {
   const lineLayoutVersion = usePlanStore((s) => s.lineLayoutVersion);
   const workerLines = usePlanStore((s) => s.workerLines);
   const virtualLines = usePlanStore((s) => s.virtualLines);
+  const lineNames = usePlanStore((s) => s.lineNames);
   const lineOrder = usePlanStore((s) => s.lineOrder);
   const orderCrewAssignments = usePlanStore((s) => s.orderCrewAssignments);
   const orderStarts = usePlanStore((s) => s.orderStarts);
@@ -167,6 +169,7 @@ export function usePlanPersistence(): PlanPersistence {
       manualOrders,
       workerLines,
       virtualLines,
+      lineNames,
       lineOrder,
       orderCrewAssignments,
       orderStarts,

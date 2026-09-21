@@ -63,6 +63,7 @@ import type {
 import {
   DEFAULT_HORIZON_DAYS,
   LINES,
+  stepLinesOf,
   virtualLineDef,
   workKind,
   type CrewAssignment,
@@ -243,6 +244,15 @@ export interface LineGroup {
   rows: OrderRow[];
   /** Work still queued on the line, and how long its crew needs to clear it. */
   load: LineLoad;
+  /**
+   * How many orders the lane holds once its benches are counted.
+   *
+   * A lane made of benches normally holds none of its own — every order is on
+   * one of the three — so its header would otherwise read "0 orders, 0 h" over
+   * three rows of work. `load` is rolled up the same way, which is what makes
+   * UPL-SSS read 33.1 h over 6.8 + 4.5 + 21.8.
+   */
+  benchOrders?: number;
 }
 
 export interface AssemblyGanttView {
@@ -312,6 +322,11 @@ export interface AssemblyInputs {
    * built as. They schedule exactly like a built-in line and sit after them.
    */
   virtualLines?: readonly VirtualLine[];
+  /**
+   * What this floor calls each line, keyed by line key. Only the lines that
+   * were renamed are in here; everything else keeps its built-in name.
+   */
+  lineNames?: Record<string, string>;
   workers: Worker[];
   /**
    * Worker id → the local days they are on leave, marked on the board. Read
@@ -501,10 +516,22 @@ function markDoubleBookings(
 export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
   const { dataset, indexes, containers, orderStarts, today } = input;
   // The eight the plant is built as, then whatever the supervisor opened.
+  /*
+   * The lines, under whatever this floor calls them.
+   *
+   * The rename is applied once, here, so nothing downstream has to know there
+   * is such a thing: the header, the hover, the roster strip and the row
+   * written to `ASSY_Production` all read `line.name` as they always did.
+   */
+  const lineNames = input.lineNames ?? {};
+  const named = (line: LineDef): LineDef => {
+    const own = lineNames[String(line.key)]?.trim();
+    return own ? { ...line, name: own } : line;
+  };
   const boardLines: LineDef[] = [
     ...LINES,
     ...(input.virtualLines ?? []).map(virtualLineDef),
-  ];
+  ].map(named);
   const orderOvertime = input.orderOvertime ?? {};
   const progress = input.progress ?? {};
   const progressBaselines = input.progressBaselines ?? {};
@@ -594,7 +621,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
   // The moulding plan, as rows. Built for every press job rather than the few
   // that fit on screen, because any of them may be the one an assembly order
   // is waiting for.
-  const pmdLine = LINES.find((l) => !l.schedulable)!;
+  const pmdLine = named(LINES.find((l) => !l.schedulable)!);
   const mouldingRows = new Map<string, OrderRow>(
     dataset.jobs
       .filter((j) => j.department === 'moulding')
@@ -1193,6 +1220,25 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
     load: lineLoad(rows),
   });
 
+  /**
+   * A lane's header, carrying its benches' work as well as its own.
+   *
+   * The benches are separate lines and keep their own rows, their own people
+   * and their own bars; what the lane adds is the one figure a supervisor
+   * reads first — how much work is standing on UPL-SSS altogether.
+   */
+  const rollUpBenches = (groups: LineGroup[]): LineGroup[] => {
+    const byLine = new Map(groups.map((group) => [group.line.key, group]));
+    return groups.map((group) => {
+      const benches = stepLinesOf(group.line.key)
+        .map((line) => byLine.get(line.key))
+        .filter((held): held is LineGroup => Boolean(held));
+      if (benches.length === 0) return group;
+      const rows = [...group.rows, ...benches.flatMap((held) => held.rows)];
+      return { ...group, load: lineLoad(rows), benchOrders: rows.length };
+    });
+  };
+
   // Schedule in claim order, draw in the planner's order. `resolve` memoises
   // into `rowsByJob`, so the second loop only reads back what the first built.
   //
@@ -1238,6 +1284,9 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
   const pmdRows = mouldingContextRows(mouldingRows, neededMoulding);
   if (pmdRows.length > 0) groups.unshift(withLoad(pmdLine, pmdRows));
   groups.sort((a, b) => a.line.sortIndex - b.line.sortIndex);
+  const rolled = rollUpBenches(groups);
+  groups.length = 0;
+  groups.push(...rolled);
 
   const pool = assemblyJobs.filter((j) => !placed.has(String(j.id)));
 

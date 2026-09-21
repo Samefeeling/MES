@@ -8,13 +8,37 @@ import { JobId, WorkCenterId } from '@/domain/ids';
 
 describe('operational lines', () => {
   it('is the eight lines the floor names, in the floor’s own order', () => {
-    expect(LINES.map((l) => l.name)).toEqual([
+    // Two of them are three benches each, drawn indented under the lane.
+    expect(LINES.filter((l) => !l.step).map((l) => l.name)).toEqual([
       'TBP', 'PMD', 'UPL-CUT', 'UPL-Gluing', 'UPL-SSS', 'Assembly', 'Table', 'General',
     ]);
     // PMD mirrors moulding's plan for context; it is scheduled on the PMD
     // dashboard, not here.
-    expect(LINES.filter((l) => l.schedulable).map((l) => l.name)).toEqual([
+    expect(
+      LINES.filter((l) => l.schedulable && !l.step).map((l) => l.name),
+    ).toEqual([
       'TBP', 'UPL-CUT', 'UPL-Gluing', 'UPL-SSS', 'Assembly', 'Table', 'General',
+    ]);
+  });
+
+  it('gives UPL-SSS and UPL-Gluing their three benches, in work order', () => {
+    // Each bench sits directly under its lane, so the board reads down the
+    // process rather than jumping between lanes.
+    expect(LINES.map((l) => `${l.parent ?? '-'}/${l.name}`)).toEqual([
+      '-/TBP',
+      '-/PMD',
+      '-/UPL-CUT',
+      '-/UPL-Gluing',
+      'UPL_GLUING/Foaming',
+      'UPL_GLUING/Sewing',
+      'UPL_GLUING/Stapling',
+      '-/UPL-SSS',
+      'UPL_SOFTIE/Foaming',
+      'UPL_SOFTIE/Sewing',
+      'UPL_SOFTIE/Stapling',
+      '-/Assembly',
+      '-/Table',
+      '-/General',
     ]);
   });
 
@@ -39,9 +63,15 @@ describe('operational lines', () => {
   });
 
   it('accepts every displayed line name as a roster skill', () => {
-    const labels = LINES.filter((l) => l.schedulable).map((l) => l.name);
-    const parsed = parseOperators([{ id: '1', Title: 'Alex', Skills: labels.join(';') }]);
-    expect(parsed.values[0].skills).toEqual(LINES.filter((l) => l.schedulable).map((l) => l.key));
+    // Benches are not among them on purpose: "Foaming" names one on UPL-SSS
+    // and one on UPL-Gluing, and a roster cell saying only that has not said
+    // which. Somebody named for the lane works either of its benches — see
+    // `worksLine`.
+    const lanes = LINES.filter((l) => l.schedulable && !l.step);
+    const parsed = parseOperators([
+      { id: '1', Title: 'Alex', Skills: lanes.map((l) => l.name).join(';') },
+    ]);
+    expect(parsed.values[0].skills).toEqual(lanes.map((l) => l.key));
   });
 
   it('reads "Upholstery" as the Gluing bench, never as the restricted SSS one', () => {

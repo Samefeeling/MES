@@ -79,6 +79,18 @@ VITE_ASSEMBLY_PLAN_LIST=ASSY_Plans
 
 Do not reuse PMD's VITE_PLANNING_CSV_PATH for Assembly. A production Assembly build selects planning-csv and cookie-authenticated SharePoint REST when VITE_BACKEND=sharepoint. No Graph bearer token is bundled for this path. Keep the existing VITE_SUPERVISOR_PASSWORD configuration for the host operational gate.
 
+## Benches: UPL-SSS and UPL-Gluing are three lines each
+
+Both lanes are three benches on the floor — **Foaming, Sewing, Stapling** — and the export gives one order for all three, so four people allocated to "UPL-SSS" said nothing about which bench any of them was standing at. Each lane now draws its three benches indented under it, and the lane's header carries the three added up: UPL-SSS at 33.1 h over 6.8 + 4.5 + 21.8. Each bench holds its own orders, takes its own people and draws its own bars; the lane itself normally holds none, and still accepts orders so a plan saved before the split has somewhere to put them.
+
+The two lanes are organised differently, and that is the whole of the difference. **UPL-SSS** has order numbers for two of the three: an order consuming foam (`FOAM`, by `domain/lineRules`) *is* the foaming order, and every other order on the lane is a stapling order. Sewing has none, so one is derived from the stapling order at **half an hour a unit**, and those hours come **out** of the stapling order rather than being added to the lane — 26.3 h becomes 21.8 + 4.5, because the sewing was always inside that figure. Sewing is worked before stapling, and the board sequences them. **UPL-Gluing** has one order for all three benches: it is split into even thirds, foaming and sewing are worked side by side and wait for nobody, and stapling waits for both.
+
+On both lanes the **order number stays on the stapling row** — the last bench, where the units are finished — and the derived rows carry ids like `ASM8001#SEW`. A derived row books **hours and never quantity**: it writes `WorkType=Step`, its LaborHours, and zero for OrderQty, RemainingQty, ShiftOutput, Complete, Reject and Rework. The units exist once and are received once, on the row carrying the job number. The KPI page treats a `Step` row the way it treats support work — its hours count as hours worked, and it is neither output nor a separate order.
+
+The split is applied where the data lands, not inside the board, so the plan store, the unplaced pool, the crew picker and the SharePoint mirror all see the same orders the board does. It is re-derived on every load, so a derived id is the same from one refresh to the next and yesterday's allocation still finds it. A roster naming the **lane** qualifies somebody for any of its benches, and the crew picker on a bench offers everyone standing on the lane; the supervisor moves them to a bench, which is what the split is for.
+
+**Every line can be renamed.** Double-click the name on its row (supervisor). The name is part of the planning — the whole floor reads the same one — so it is published by Save with the rest, and an empty name puts the built-in one back. Renaming does not change the key anything is stored under.
+
 ## Incremental planning and conflicts
 
 Refresh reconciles jobs by job number and retains existing crew and pinned dates. Orders absent from a partial export keep their plan for 14 days. Date sorting leaves PMD source order unchanged; daily Assembly filtering and counts exclude PMD. Crew orders fills unallocated eligible orders; it does not reset already allocated work. Which line an order goes to comes from ERP, then `product-lines.v3.json`, then its BOM — see [Operational lines and support work](OPERATIONAL-LINES.md); a supervisor's own move survives refresh. Real material links determine predecessors.

@@ -44,6 +44,8 @@ export interface PersistedPlan {
      * every screen reading the board has to see the same one.
      */
     virtualLines?: import('@/domain/assembly').VirtualLine[];
+    /** What this floor calls each line, where the built-in name is not it. */
+    lineNames?: Record<string, string>;
     /**
      * The sequence the lines are drawn in, arranged by dragging one onto
      * another. Absent on a plan nobody has arranged, which reads as the order
