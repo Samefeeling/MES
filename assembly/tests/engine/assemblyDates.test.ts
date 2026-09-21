@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   addWorkingDays,
+  subWorkingDays,
   isWeekend,
   nextMidnight,
   nextWorkingDay,
@@ -303,5 +304,53 @@ describe('open days lost in the middle of a run', () => {
       '2026-09-12',
       '2026-09-13',
     ]);
+  });
+});
+
+/**
+ * Stepping back through the working days — how far before a component lands
+ * an order may start on the stock it already has.
+ */
+describe('subWorkingDays', () => {
+  const MON = d('2026-09-14');
+  const TUE = d('2026-09-15');
+  const WED = d('2026-09-16');
+  const FRI = d('2026-09-11');
+
+  it('steps back over the weekend the same way adding steps over it', () => {
+    // One working day before the start of Monday is the start of Friday.
+    expect(subWorkingDays(MON, 1)).toEqual(FRI);
+    // And a whole week back from Wednesday is the Wednesday before.
+    expect(subWorkingDays(WED, 5)).toEqual(d('2026-09-09'));
+  });
+
+  it('honours the part of the day already behind it', () => {
+    // Half a day back from Wednesday noon is Wednesday morning.
+    expect(subWorkingDays(new Date('2026-09-16T12:00:00'), 0.25)).toEqual(
+      new Date('2026-09-16T06:00:00'),
+    );
+    // A day and a half back from Wednesday noon: half of Wednesday, then all
+    // of Tuesday.
+    expect(subWorkingDays(new Date('2026-09-16T12:00:00'), 1.5)).toEqual(TUE);
+    // Two days: half of Wednesday, all of Tuesday, half of Monday.
+    expect(subWorkingDays(new Date('2026-09-16T12:00:00'), 2)).toEqual(
+      new Date('2026-09-14T12:00:00'),
+    );
+  });
+
+  it('takes nothing off a closed day on the way past', () => {
+    // Sunday holds no work, so a day back from it is the Friday.
+    expect(subWorkingDays(d('2026-09-13'), 1)).toEqual(FRI);
+  });
+
+  it('is the identity for nothing at all', () => {
+    expect(subWorkingDays(WED, 0)).toEqual(WED);
+    expect(subWorkingDays(WED, -3)).toEqual(WED);
+  });
+
+  it('undoes what addWorkingDays did', () => {
+    for (const days of [0.3, 1, 2.5, 7]) {
+      expect(subWorkingDays(addWorkingDays(TUE, days), days)).toEqual(TUE);
+    }
   });
 });

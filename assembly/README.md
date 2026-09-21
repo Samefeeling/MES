@@ -613,7 +613,11 @@ domain  →  lib  →  engine  →  store  →  features (UI)
   could not read as a warning rather than failing the load.
 - **`engine/`** — pure, unit-tested functions. Shared: `materialAvailability`,
   `materialExplosion`, `netRequirements`, `indexes`. Assembly:
-  `assembly/{duration,dates,release,board,workload,dependencies,attendance}`.
+  `assembly/{duration,dates,release,board,workload,dependencies}`, plus
+  `assembly/{attendance,stockAllocation}`. `stockAllocation` gives out the free
+  on-hand before the wait-for graph is read, so an order whose components are
+  in the racks does not queue behind the job making more of them, and one
+  that has some of them starts on what that stock supports.
   `attendance` is the one answer to "is this person in today?", read from the
   roster's leave and OnShift plus whoever the supervisor marked off; the day
   planner takes a day on leave as a day that person gives their orders nothing.

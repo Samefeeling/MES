@@ -16,6 +16,7 @@
 
 import type { JobId, PartId } from '@/domain/ids';
 import type { Job, JobMaterialLink } from '@/domain/types';
+import { coverageOf, partKey, type StockCoverage } from './stockAllocation';
 
 /** One order waiting on another, and why. */
 export interface Dependency {
@@ -25,6 +26,21 @@ export interface Dependency {
   onJobId: JobId;
   /** Component the wait is for; null when the export named the order itself. */
   part: PartId | null;
+  /**
+   * How much of that component the consumer already has on the shelf, 0…1 —
+   * see `stockAllocation`.
+   *
+   * A link is not the same thing as a wait. The order that builds a component
+   * is only the *second* place to get it; the first is the rack it is already
+   * sitting in. At 1 this edge constrains nothing, at 0 it is the wait the
+   * board has always drawn, and in between the consumer can run on what it has
+   * while the rest is still being made.
+   *
+   * Always 0 for an explicitly named predecessor: that is a decision somebody
+   * made about the order, not a claim about a part, so no amount of stock
+   * answers it.
+   */
+  coveredFraction: number;
 }
 
 export interface DependencyGraph {
@@ -41,9 +57,6 @@ export interface DependencyGraph {
  */
 const scheduledAt = (job: Job): number =>
   (job.startDate ?? job.dueDate)?.getTime() ?? Number.POSITIVE_INFINITY;
-
-/** Epicor part numbers are case-insensitive; preserve the source for display. */
-const partKey = (part: PartId): string => String(part).trim().toUpperCase();
 
 /**
  * Which open order supplies a part.
@@ -145,6 +158,8 @@ function breakCycles(byJob: Map<string, Dependency[]>, warnings: string[]): void
 export function buildDependencies(
   jobs: Job[],
   links: readonly JobMaterialLink[],
+  /** What the warehouse already covers — see `stockAllocation`. */
+  coverage?: StockCoverage,
 ): DependencyGraph {
   const byId = new Map(jobs.map((j) => [String(j.id), j]));
   const supplier = suppliersByPart(byId, links);
@@ -155,17 +170,23 @@ export function buildDependencies(
   const add = (jobId: JobId, onJobId: JobId, part: PartId | null): void => {
     const key = `${String(jobId)} ${String(onJobId)}`;
     const list = byJob.get(String(jobId));
+    const coveredFraction = coverageOf(coverage, String(jobId), part);
     if (seen.has(key)) {
       // Both exports describe this pair. One edge is right, but take the part
       // from whichever source knows it: "waits on ASM8001 for PDSC00747" tells
-      // the supervisor more than "waits on ASM8001".
+      // the supervisor more than "waits on ASM8001" — and with the part comes
+      // the stock that covers it, which the part-less edge could not look up.
       const held = list?.find((d) => String(d.onJobId) === String(onJobId));
-      if (held && !held.part && part) held.part = part;
+      if (held && !held.part && part) {
+        held.part = part;
+        held.coveredFraction = coveredFraction;
+      }
       return;
     }
     seen.add(key);
-    if (list) list.push({ jobId, onJobId, part });
-    else byJob.set(String(jobId), [{ jobId, onJobId, part }]);
+    const edge: Dependency = { jobId, onJobId, part, coveredFraction };
+    if (list) list.push(edge);
+    else byJob.set(String(jobId), [edge]);
   };
 
   // The order export's own column first, so an explicitly named predecessor

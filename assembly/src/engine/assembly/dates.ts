@@ -264,6 +264,42 @@ export function workingSpans(
  * half a day's work starting at noon on Friday finishes on Monday morning
  * rather than on the Saturday.
  */
+/**
+ * `from` less `days` of work, stepping back over the days the factory is shut.
+ *
+ * The mirror of `addWorkingDays`, and it exists for one question: an order
+ * that has part of its material already in stock can start before the rest
+ * arrives, and the amount it can start early by is the work that part of the
+ * material supports. Three quarters of the covers on the shelf buys three
+ * quarters of the run, so the bar is pulled back three quarters of its length
+ * from the day the cover order lands — and runs out of stock exactly as that
+ * order finishes.
+ *
+ * Fractional days are honoured against the part of the day already behind the
+ * cursor, the same way `addWorkingDays` honours the part still ahead.
+ */
+export function subWorkingDays(from: Date, days: number): Date {
+  if (!(days > 0)) return new Date(from);
+  let left = days;
+
+  // The part of `from`'s own day that lies behind it. None of a weekend does:
+  // nothing was worked there to step back through.
+  const behind = isWeekend(from) ? 0 : 1 - openFraction(from);
+  if (left < behind) return addDays(from, -left);
+  left -= behind;
+
+  // Then whole days, each one either a full day's work or none at all.
+  let day = prevMidnight(from);
+  for (let guard = 0; guard < MAX_SPAN_DAYS; guard++) {
+    const open = isWeekend(day) ? 0 : 1;
+    if (left < open) return addDays(nextMidnight(day), -left);
+    left -= open;
+    if (left <= 0) return new Date(day);
+    day = prevMidnight(day);
+  }
+  return new Date(day);
+}
+
 export function addWorkingDays(from: Date, days: number): Date {
   if (days <= 0) return new Date(from);
   let cursor = new Date(from);

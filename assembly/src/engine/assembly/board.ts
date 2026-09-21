@@ -78,6 +78,7 @@ import { releaseCheck, type ReleaseCheck } from './release';
 import { buildDependencies, type Dependency } from './dependencies';
 import {
   dailyTargetQty,
+  durationDays,
   hoursPerUnit,
   latestStart,
   remainingHours,
@@ -88,9 +89,11 @@ import {
   prevWorkingDay,
   scheduleStatus,
   startOfDay,
+  subWorkingDays,
   wholeDaysBetween,
   type ScheduleStatus,
 } from './dates';
+import { allocateStock, partKey } from './stockAllocation';
 import { endOfCrewDay, idleRuns, planVariableCrew, type CrewDayPlan, type TakenOnDay, type VariableCrewPlan } from './crewSchedule';
 import { onLeaveOnDay, type LeaveDays } from './attendance';
 import { lineLoad, type LineLoad } from './workload';
@@ -598,10 +601,29 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
       .map((j) => [String(j.id), mouldingRow(j, pmdLine, today)]),
   );
 
+  const everyJob = [
+    ...assemblyJobs,
+    ...[...mouldingRows.values()].map((r) => r.job),
+  ];
+  /*
+   * The warehouse answers first.
+   *
+   * An order that already has its components does not wait for the order
+   * building more of them, and the free stock is given out here — earliest
+   * need date first — so that two orders cannot both be told the same forty
+   * covers are theirs. What each link is left holding is the part of its
+   * component the shelf could not supply.
+   */
+  const stock = allocateStock(
+    everyJob,
+    dataset.jobLinks ?? [],
+    indexes.inventoryByPart,
+  );
   // What waits for what, over both departments — a chair waits for its shell.
   const { byJob: dependsOn, warnings: dependencyWarnings } = buildDependencies(
-    [...assemblyJobs, ...[...mouldingRows.values()].map((r) => r.job)],
+    everyJob,
     dataset.jobLinks ?? [],
+    stock,
   );
   const pickListByJob = new Map<string, JobMaterialLink[]>();
   for (const material of dataset.jobLinks ?? []) {
@@ -895,39 +917,92 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
       : null;
     if (freed) want = freed > planStart ? freed : planStart;
 
-    // Nothing can start before the last of its components is finished. A
-    // predecessor on another assembly line is scheduled the same way as this
-    // one, so it is resolved first; a moulding predecessor keeps its own dates.
+    /*
+     * Nothing can start before its components exist — but "exist" has two
+     * answers, and the board only ever read the second.
+     *
+     * The first is the shelf. What free stock already covers was allocated
+     * before this loop (see `stockAllocation`), so a component the warehouse
+     * can supply in full imposes no wait at all, however many orders are open
+     * for it; part of one buys part of the run, and the bar is pulled back
+     * from the component's date by the work that part supports.
+     *
+     * The second is the order building it, and there the edges are grouped by
+     * the component they supply. Several open batches of one part are
+     * alternatives, not a queue: the consumer needs one of them, so it waits
+     * for the first to be ready. Taking each edge on its own — which is what
+     * this did — quietly made every order wait for the *latest* batch of every
+     * part, which is the opposite of what the floor does. Different components
+     * are all needed, so across parts it is still the latest that governs.
+     */
     const predecessors = dependsOn.get(id) ?? [];
     let waitingOn: Dependency | null = null;
     let predecessorBlocked = false;
-    for (const dep of predecessors) {
-      const predId = String(dep.onJobId);
-      const pred = resolve(predId, seen) ?? mouldingRows.get(predId) ?? null;
-      if (!actualStart && pred?.expectDate && pred.expectDate > want) {
-        want = pred.expectDate;
-        waitingOn = dep;
-      } else if (
-        !actualStart &&
-        pred &&
-        !pred.expectDate &&
-        remainingHours(pred.job) > 0
-      ) {
-        // A component with uncovered work has no honest finish date. Do not
-        // let its successor slip through merely because that date is null.
-        predecessorBlocked = true;
-        waitingOn = dep;
-      } else if (
-        !actualStart &&
-        !pred &&
-        jobsById.has(predId) &&
-        !lineOf.has(predId)
-      ) {
-        // The component is a live order that is on no line yet. Nothing has
-        // been planned for it, so there is no date to wait for — and coming
-        // free because the date is missing is the one answer that is wrong.
-        predecessorBlocked = true;
-        waitingOn = dep;
+    if (!actualStart) {
+      const alternatives = new Map<string, Dependency[]>();
+      for (const dep of predecessors) {
+        // An explicitly named predecessor stands alone: it is a decision about
+        // this order rather than one of several sources of a part.
+        const key = dep.part ? partKey(dep.part) : `job\u0000${String(dep.onJobId)}`;
+        const group = alternatives.get(key);
+        if (group) group.push(dep);
+        else alternatives.set(key, [dep]);
+      }
+
+      for (const group of alternatives.values()) {
+        const covered = Math.min(1, Math.max(0, group[0].coveredFraction));
+        // The whole requirement is in the racks: this component is not a wait.
+        if (covered >= 1) continue;
+
+        let ready: { when: Date; dep: Dependency } | null = null;
+        let blocked: Dependency | null = null;
+        let supplied = false;
+        for (const dep of group) {
+          const predId = String(dep.onJobId);
+          const pred = resolve(predId, seen) ?? mouldingRows.get(predId) ?? null;
+          if (pred?.expectDate) {
+            if (!ready || pred.expectDate < ready.when) {
+              ready = { when: pred.expectDate, dep };
+            }
+          } else if (pred && remainingHours(pred.job) > 0) {
+            // A component with uncovered work has no honest finish date. Do
+            // not let its successor slip through merely because that date is
+            // null — but another batch of the same part still can.
+            blocked ??= dep;
+          } else if (!pred && jobsById.has(predId) && !lineOf.has(predId)) {
+            // A live order that is on no line yet. Nothing has been planned
+            // for it, so there is no date to wait for — and coming free
+            // because the date is missing is the one answer that is wrong.
+            blocked ??= dep;
+          } else {
+            // Finished, or gone from the plan: this source owes nothing, so
+            // the component is there and no other batch of it matters.
+            supplied = true;
+          }
+        }
+        if (supplied) continue;
+
+        if (ready) {
+          /*
+           * Stock buys a head start. What is on the shelf covers `covered` of
+           * the run, so the order may begin that much work before the rest
+           * lands and runs out exactly as it arrives. With nothing in stock
+           * this is the component's own date, which is what the board has
+           * always used.
+           */
+          const run = durationDays(job, workers.length) ?? 0;
+          const floor =
+            covered > 0 && run > 0
+              ? subWorkingDays(ready.when, covered * run)
+              : ready.when;
+          if (floor > want) {
+            want = floor;
+            waitingOn = ready.dep;
+          }
+        } else if (blocked) {
+          predecessorBlocked = true;
+          waitingOn ??= blocked;
+        }
       }
     }
 

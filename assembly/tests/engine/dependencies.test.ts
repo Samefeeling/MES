@@ -261,3 +261,56 @@ describe('buildDependencies', () => {
     expect(edges(g)).toEqual(['ASSY1→UPL1']);
   });
 });
+
+/**
+ * What the warehouse already covers rides on the edge rather than removing
+ * it: the link is still a fact about the two orders, and the board decides
+ * what it costs — see `board.ts` and `stockAllocation`.
+ */
+describe('stock coverage on the edge', () => {
+  const coverage = (fraction: number) =>
+    new Map([
+      [
+        'ASSY1',
+        new Map([
+          ['COVER', { requiredQty: 10, allocatedQty: fraction * 10, fraction }],
+        ]),
+      ],
+    ]);
+
+  const built = (fraction: number) =>
+    buildDependencies(
+      [job('ASSY1', 'CHAIR'), job('UPL1', 'COVER')],
+      [link('ASSY1', 'CHAIR', 'COVER')],
+      coverage(fraction),
+    ).byJob.get('ASSY1')![0];
+
+  it('carries what the shelf covers of the component', () => {
+    expect(built(1).coveredFraction).toBe(1);
+    expect(built(0.4).coveredFraction).toBe(0.4);
+  });
+
+  it('reads no coverage at all as nothing covered', () => {
+    const edge = buildDependencies(
+      [job('ASSY1', 'CHAIR'), job('UPL1', 'COVER')],
+      [link('ASSY1', 'CHAIR', 'COVER')],
+    ).byJob.get('ASSY1')![0];
+    expect(edge.coveredFraction).toBe(0);
+  });
+
+  it('never lets stock answer an explicitly named predecessor', () => {
+    // A planner naming UPL1 on the order is a decision about this order, not
+    // a claim about a part, so no amount of anything on the shelf clears it.
+    const edge = buildDependencies(
+      [
+        job('ASSY1', 'CHAIR', { predecessors: [JobId('UPL1')] }),
+        job('UPL1', 'SOMETHING_ELSE'),
+      ],
+      [],
+      coverage(1),
+    ).byJob.get('ASSY1')![0];
+
+    expect(edge.part).toBeNull();
+    expect(edge.coveredFraction).toBe(0);
+  });
+});
