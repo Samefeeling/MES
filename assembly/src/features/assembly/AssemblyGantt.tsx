@@ -260,7 +260,19 @@ const startTime = (d: Date | null): string | null =>
  * Same id and same drag type as an unplaced card, so the two are one gesture:
  * an order is on a line or in the pool, never both, so the ids cannot collide.
  */
-function OrderGrip({ id, movable }: { id: string; movable: boolean }) {
+function OrderGrip({
+  id,
+  movable,
+  label,
+}: {
+  id: string;
+  movable: boolean;
+  /** What the floor reads. The drag still carries the full row id (`id`),
+   *  but a routed order shows only its order number — the `#seq` on the end
+   *  is the board's row key, and its bench and step are already spelled out
+   *  beside it, so the plant never needs to see it. Defaults to `id`. */
+  label?: string;
+}) {
   const unlocked = useSupervisorStore((s) => s.unlocked);
   const gate = signInAt(useSupervisorStore((s) => s.hosted));
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -269,6 +281,7 @@ function OrderGrip({ id, movable }: { id: string; movable: boolean }) {
     data: { type: 'job', jobId: id },
   });
   const draggable = movable && unlocked;
+  const shown = label ?? id;
   return (
     <span
       ref={setNodeRef}
@@ -276,14 +289,14 @@ function OrderGrip({ id, movable }: { id: string; movable: boolean }) {
       title={
         movable
           ? unlocked
-            ? `${id} — drag onto another line to move it there`
-            : `${id} — sign in as ${gate} to move it to another line`
-          : id
+            ? `${shown} — drag onto another line to move it there`
+            : `${shown} — sign in as ${gate} to move it to another line`
+          : shown
       }
       {...(draggable ? listeners : {})}
       {...(draggable ? attributes : {})}
     >
-      {id}
+      {shown}
     </span>
   );
 }
@@ -345,17 +358,23 @@ function OrderRowView({
   const orderQty = row.job.remainingQty + row.job.completedQty;
   return (
     <div
-      className={`arow ${selected ? 'selected' : ''} ${isContext ? 'context' : ''} ${row.completedToday ? 'completed-today' : ''} ${isNew ? 'new-order' : ''}`}
+      className={`arow ${row.line.parent ? 'bench' : ''} ${selected ? 'selected' : ''} ${isContext ? 'context' : ''} ${row.completedToday ? 'completed-today' : ''} ${isNew ? 'new-order' : ''}`}
     >
       <div className="acell order">
         {/* A manual support order belongs to Factory General and the plan
             refuses to file it anywhere else, so it carries no grip. */}
-        <OrderGrip id={String(row.job.id)} movable={!isContext && !row.job.manual} />
+        <OrderGrip
+          id={String(row.job.id)}
+          movable={!isContext && !row.job.manual}
+          label={jobNumOf(String(row.job.id))}
+        />
         {isNew && <span className="new-order-tag">NEW</span>}
-        {/* On UPL the badge names the bench: Epicor calls both the softies and
-            the upholstering "upholstery", and which of the three steps this is
-            is the thing worth reading. */}
-        {(row.kind !== 'general' || row.job.orderType) && (
+        {/* The trade badge — but not on a routed order. There the bench it
+            sits under (Foaming / Sewing / Stapling) and the "1/3 Foaming"
+            step beside it already say both which trade and which step, so
+            SOFTIE / UPH here only repeats the lane. Kept on every other
+            line, where it is the one thing that names the work. */}
+        {!row.job.operation && (row.kind !== 'general' || row.job.orderType) && (
           <span className={`order-type ${row.kind}`}>
             {row.job.manual ? 'SUPPORT' : row.kind === 'general'
               ? ORDER_TYPE_SHORT[row.job.orderType!]
@@ -814,15 +833,21 @@ function LineGroupView({
       </div>
 
       {!collapsed && (group.rows.length === 0 ? (
-        <div className="arow empty">
-          <div className="acell order">
-            {group.line.schedulable
-              ? filtered
-                ? 'No orders match the date filter'
-                : 'Drop an order here'
-              : 'No orders on this line'}
+        // A lane whose work lives on its benches (benchOrders is set) holds
+        // none of its own — every order is added straight to a bench now, so
+        // a "Drop an order here" row on the lane would invite a drop the plan
+        // has nowhere to put. Its benches carry their own empty prompt.
+        group.benchOrders !== undefined ? null : (
+          <div className={`arow empty ${group.line.parent ? 'bench' : ''}`}>
+            <div className="acell order">
+              {group.line.schedulable
+                ? filtered
+                  ? 'No orders match the date filter'
+                  : 'Drop an order here'
+                : 'No orders on this line'}
+            </div>
           </div>
-        </div>
+        )
       ) : (
         group.rows.map((row) => (
           <OrderRowView

@@ -22,8 +22,12 @@
   --error-dim: #fee2e2;
   --info: #60a5fa;
 
-  /* A line's row, kept clear of every colour an order row can take. */
+  /* A line's row, kept clear of every colour an order row can take.
+     Two bands, a shade apart, so the eye sorts the board's two levels at a
+     glance: a top line carries the stronger --line-band-main, and a bench
+     indented under it keeps the paler --line-band. */
   --line-name: #075985;
+  --line-band-main: #c0e6f5;
   --line-band: #e0f2fe;
   --line-band-bd: #bae6fd;
 
@@ -1304,6 +1308,12 @@ body.col-resizing {
   color: var(--faint);
   font-style: italic;
 }
+/* A bench's orders line up under the bench's own triangle, not under the lane
+   above it. The number sits at the same 22px the indented ▼ does — 14px of
+   bench indent on the header's inner block plus the 8px the meta column pads —
+   so the board reads down as the tree it is: lane, then its benches, then each
+   bench's orders stepped in one more. */
+.arow.bench .acell.order { padding-left: 22px; }
 /*
  * The order number, and — while somebody is signed in — the grip that files the
  * order onto another line. Dragging the *bar* sideways does that too, but a bar
@@ -1343,8 +1353,17 @@ body.col-resizing {
 .assy-head .acell.order { gap: 6px; }
 .head-name { white-space: nowrap; }
 
+/*
+ * The order number and the material description swap emphasis: the floor
+ * does not read the number, it reads what the order IS. So the description
+ * carries the weight and the dark ink, and the number steps back to the
+ * quiet, smaller treatment the description used to have — still there to
+ * scan for and to drag by, just no longer the loudest thing in the cell.
+ */
 .order-id {
-  font-weight: 650;
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 400;
   white-space: nowrap;
 }
 .order-id.movable { cursor: grab; touch-action: none; }
@@ -1392,8 +1411,9 @@ body.col-resizing {
   color: var(--muted);
 }
 .order-desc {
-  color: var(--faint);
-  font-size: 10.5px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1790,7 +1810,7 @@ body.col-resizing {
  * catches on the way past.
  */
 .agroup-head {
-  background: var(--line-band);
+  background: var(--line-band-main);
   border-top: 1px solid var(--line-band-bd);
   border-bottom: 1px solid var(--line-band-bd);
   width: max-content;
@@ -1814,7 +1834,7 @@ body.col-resizing {
   width: max-content;
   max-width: 100%;
   padding: 3px 0;
-  background: var(--line-band);
+  background: var(--line-band-main);
 }
 .agroup-meta {
   display: flex;
@@ -1948,7 +1968,12 @@ body.col-resizing {
  * to span the whole grid to carry its band, and a margin on it would pull the
  * day columns out of line with every other row on the board.
  */
-.agroup.bench .agroup-head-in { padding-left: 14px; }
+.agroup.bench .agroup-head-in {
+  padding-left: 14px;
+  /* A bench stays on the paler band; the base rule above paints its sticky
+     inner block the stronger main colour, so put the bench's back. */
+  background: var(--line-band);
+}
 .agroup.bench .agroup-name {
   font-size: 11px;
   font-weight: 700;
