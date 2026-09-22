@@ -384,7 +384,33 @@ function OrderRowView({
           movable={!isContext && !row.job.manual}
           label={jobNumOf(String(row.job.id))}
         />
-        {isNew && <span className="new-order-tag">NEW</span>}
+        {/*
+          * Running on the floor, beside the order number rather than on the
+          * bar. The triangle that used to mark it sat at the bar's left edge,
+          * which is where a dependency arrow lands: an order waiting for its
+          * covers and an order being built read as the same mark. A word does
+          * not, and the frozen column carries it whatever the timeline is
+          * scrolled to.
+          *
+          * Not the progress fill either: that says how much is finished, and
+          * an order started an hour ago with nothing booked yet has none of
+          * it — which is exactly the pair this has to tell apart.
+          */}
+        {row.actualStart && (
+          <span
+            className="order-tag run"
+            title={
+              `Started on the floor ${formatDay(new Date(row.actualStart.startedAt))} ` +
+              formatTime(new Date(row.actualStart.startedAt)) +
+              (row.actualStart.overrideReason
+                ? ` · Override: ${row.actualStart.overrideReason}`
+                : '')
+            }
+          >
+            RUN
+          </span>
+        )}
+        {isNew && <span className="order-tag new">NEW</span>}
         {/* The trade badge — but not on a routed order. There the bench it
             sits under (Foaming / Sewing / Stapling) and the "1/3 Foaming"
             step beside it already say both which trade and which step, so

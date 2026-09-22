@@ -439,25 +439,8 @@ export function OrderBar({
           )}
         </div>
       ))}
-      {/* One tag, so that outside the bar the parts stay together. */}
+      {/* One tag, so that outside the bar the three parts stay together. */}
       <span className="bar-tag" data-job-label={id}>
-        {/*
-          * Running on the floor, not merely planned to.
-          *
-          * Drawn rather than written, because it has to hold at the size a
-          * stub bar's tag is, and it goes in the tag rather than on the block
-          * so that a ten-pixel order carries it too. Not the progress fill:
-          * that says how much is finished, and an order started an hour ago
-          * with nothing booked yet has none of it — which is exactly the pair
-          * the supervisor could not tell apart.
-          */}
-        {row.actualStart && (
-          <span
-            className="bar-run"
-            aria-hidden="true"
-            title={`Started ${formatDay(new Date(row.actualStart.startedAt))} ${formatTime(new Date(row.actualStart.startedAt))}`}
-          />
-        )}
         <span className="bar-label">{tag.text}</span>
         {row.overtime && (
           <span className="bar-ot" title="Weekend overtime approved">

@@ -372,16 +372,33 @@ button {
   background: #dbeafe;
   color: #1d4ed8;
 }
-.new-order-tag {
+/*
+ * A word beside the order number, for the two things about a row that are
+ * neither a date nor a quantity: it is running on the floor, and it arrived
+ * today. One shape, two colours, so which is which is never in doubt —
+ * green for the order being built, blue for the order that has just turned
+ * up. They were both green while RUN was a triangle on the bar, and a green
+ * pill next to a green row stripe said nothing at all.
+ */
+.order-tag {
   border-radius: 999px;
-  background: #dcfce7;
-  color: #047857;
+  margin-left: 5px;
+  padding: 1px 5px;
+  vertical-align: 1px;
   font-size: 9.5px;
   font-weight: 750;
   white-space: nowrap;
 }
-.new-order-tag { margin-left: 5px; padding: 1px 5px; vertical-align: 1px; }
-.arow.new-order { box-shadow: inset 3px 0 #10b981; }
+.order-tag.run {
+  background: #dcfce7;
+  color: #047857;
+}
+.order-tag.new {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+/* The row's own edge, in the same blue as the word it belongs to. */
+.arow.new-order { box-shadow: inset 3px 0 #2563eb; }
 .badge.tool {
   background: #2c1f44;
   color: var(--tool);
@@ -2261,20 +2278,12 @@ body.col-resizing {
 /*
  * Started on the floor.
  *
- * Two orders on the same day, one of them actually under way, used to be the
- * same drawing — the only record of the start was inside the panel, an order
- * at a time. So a started order carries a solid triangle in its label and a
- * heavier outline on its blocks: the mark reads at a glance, and neither
- * depends on the due-date colour, which the block is already spending.
+ * The word is beside the order number — see `.order-tag.run`, and the note
+ * there about the triangle that used to be here. What the bar keeps is a
+ * heavier outline: it costs the drawing nothing, it does not depend on the
+ * due-date colour the block is already spending, and it is what picks the
+ * running orders out of a line of bars from across the room.
  */
-.bar-run {
-  flex: 0 0 auto;
-  width: 0;
-  height: 0;
-  border-left: 6px solid currentColor;
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
-}
 .bar.started .bar-piece {
   border-width: 2px;
 }
