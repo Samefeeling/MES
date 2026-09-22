@@ -24,7 +24,14 @@ import { PLAN_RETENTION_DAYS, usePlanStore } from '@/store/planStore';
 import { useDataStore } from '@/store/dataStore';
 import { useSupervisorStore } from '@/store/supervisorStore';
 import { Button } from '@/ui';
-import { DATE_COLS, DATE_COL_LABEL, DUE_SOON_DAYS, useUiStore } from '@/store/uiStore';
+import {
+  DATE_COLS,
+  DATE_COL_LABEL,
+  DUE_SOON_DAYS,
+  HIDEABLE_COLS,
+  HIDEABLE_COL_LABEL,
+  useUiStore,
+} from '@/store/uiStore';
 import {
   countRunningOrders,
   isDueSoon,
@@ -45,6 +52,8 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
   const setDayWidth = useUiStore((s) => s.setDayWidth);
   const dateCols = useUiStore((s) => s.dateCols);
   const toggleDateCol = useUiStore((s) => s.toggleDateCol);
+  const cols = useUiStore((s) => s.cols);
+  const toggleCol = useUiStore((s) => s.toggleCol);
   const hiddenLines = useUiStore((s) => s.hiddenLines);
   const toggleLine = useUiStore((s) => s.toggleLine);
   const showEverything = useUiStore((s) => s.showEverything);
@@ -77,6 +86,7 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
 
   if (!board || !team) return null;
   const hidden = DATE_COLS.filter((key) => !dateCols[key]);
+  const hiddenCols = HIDEABLE_COLS.filter((key) => !cols[key]);
   const allLines = [...LINES, ...virtualLines.map(virtualLineDef)];
   const foldedLines = allLines.filter((line) => hiddenLines.includes(line.key));
   const running = orderDay
@@ -95,7 +105,11 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
    * whole life of every board — which is the same as not having it.
    */
   const narrowed =
-    hidden.length > 0 || foldedLines.length > 0 || orderDay !== null || dueSoon;
+    hidden.length > 0 ||
+    hiddenCols.length > 0 ||
+    foldedLines.length > 0 ||
+    orderDay !== null ||
+    dueSoon;
 
   return (
     <div className="board-tools">
@@ -121,6 +135,17 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
             title={`Show the ${DATE_COL_LABEL[key]} column again`}
           >
             + {DATE_COL_LABEL[key]}
+          </button>
+        ))}
+        {/* The same, for a hidden Qty / Hours / Team column. */}
+        {hiddenCols.map((key) => (
+          <button
+            className="date-restore"
+            key={key}
+            onClick={() => toggleCol(key)}
+            title={`Show the ${HIDEABLE_COL_LABEL[key]} column again`}
+          >
+            + {HIDEABLE_COL_LABEL[key]}
           </button>
         ))}
         {/* The same, for a folded-away line. TBP and PMD start here, so this

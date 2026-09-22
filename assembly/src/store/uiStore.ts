@@ -119,6 +119,16 @@ export type DateCol = (typeof DATE_COLS)[number];
 export type DateCols = Record<DateCol, boolean>;
 
 /**
+ * The fixed frozen columns a reader can hide, the same way the date columns
+ * hide. Order is not among them — it is the board — and the date columns keep
+ * their own switch (`dateCols`). A hidden one reclaims its width: the grid
+ * slides left over it, and it comes back from a chip in the header.
+ */
+export const HIDEABLE_COLS = ['qty', 'hours', 'team'] as const;
+export type HideableCol = (typeof HIDEABLE_COLS)[number];
+export type ColVis = Record<HideableCol, boolean>;
+
+/**
  * Lines the board opens folded away.
  *
  * TBP and PMD are both context: neither is planned here — PMD mirrors
@@ -147,6 +157,14 @@ export const DATE_COL_LABEL: Record<DateCol, string> = {
   start: 'Start',
   due: 'Due',
   expect: 'Expect',
+};
+
+/** Headings for the hideable fixed columns, shared by the board and the chip
+ *  that brings one back. */
+export const HIDEABLE_COL_LABEL: Record<HideableCol, string> = {
+  qty: 'Qty',
+  hours: 'Hours',
+  team: 'Team',
 };
 
 /** Where on screen an order was clicked, so its detail opens beside it. */
@@ -215,6 +233,9 @@ interface UiState {
   colWidths: ColumnWidths;
   /** Which date columns are showing; hidden ones come back from the header. */
   dateCols: DateCols;
+  /** Which of the fixed Qty / Hours / Team columns are showing; a hidden one
+   *  reclaims its width and comes back from a chip in the header. */
+  cols: ColVis;
   /** Lines folded away; they come back from a chip in the header. */
   hiddenLines: LineKey[];
   /**
@@ -264,6 +285,8 @@ interface UiState {
   clearDayColumnWidth: (day: string) => void;
   setColumnWidth: (key: ColumnKey, px: number) => void;
   toggleDateCol: (key: DateCol) => void;
+  /** Hide or show one of the fixed Qty / Hours / Team columns. */
+  toggleCol: (key: HideableCol) => void;
   toggleLine: (key: LineKey) => void;
   /**
    * Every line, every column and every order back on screen.
@@ -305,6 +328,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   dayWidths: {},
   colWidths: { ...DEFAULT_COLUMN_WIDTHS },
   dateCols: { start: true, due: true, expect: true },
+  cols: { qty: true, hours: true, team: true },
   hiddenLines: [...LINES_HIDDEN_BY_DEFAULT],
   orderDay: null,
   dueSoon: false,
@@ -380,6 +404,10 @@ export const useUiStore = create<UiState>((set, get) => ({
     set((state) => ({
       dateCols: { ...state.dateCols, [key]: !state.dateCols[key] },
     })),
+  toggleCol: (key) =>
+    set((state) => ({
+      cols: { ...state.cols, [key]: !state.cols[key] },
+    })),
   toggleLine: (key) =>
     set((state) => ({
       hiddenLines: state.hiddenLines.includes(key)
@@ -389,6 +417,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   showEverything: () =>
     set({
       dateCols: { start: true, due: true, expect: true },
+      cols: { qty: true, hours: true, team: true },
       hiddenLines: [],
       orderDay: null,
       dueSoon: false,

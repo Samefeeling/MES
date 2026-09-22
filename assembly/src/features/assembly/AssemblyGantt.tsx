@@ -51,6 +51,7 @@ import {
   type ClickPoint,
   type ColumnKey,
   type ColumnWidths,
+  type ColVis,
   type DateCol,
   type DateCols,
 } from '@/store/uiStore';
@@ -101,6 +102,20 @@ const fmt = (d: Date | null): string => (d ? formatShortDay(d) : '—');
  * their headings. Now that every column is dragged, the same is true of the
  * total: the grid starts where the frozen block ends.
  */
+/**
+ * The widths the board actually lays out with: a hidden Qty / Hours / Team
+ * column counts as zero, so every position downstream of it — and the CSS
+ * width vars — collapse over it and the grid slides left to reclaim the room.
+ */
+function shownWidths(w: ColumnWidths, cols: ColVis): ColumnWidths {
+  return {
+    ...w,
+    qty: cols.qty ? w.qty : 0,
+    hours: cols.hours ? w.hours : 0,
+    team: cols.team ? w.team : 0,
+  };
+}
+
 function frozenLefts(
   visible: DateCols,
   w: ColumnWidths,
@@ -341,13 +356,14 @@ function OrderRowView({
   onMark: (id: string) => void;
   onDependencyHover: (id: string | null) => void;
 }) {
+  const cols = useUiStore((state) => state.cols);
   const isNew = useDataStore((state) =>
     // Flagged by order number: a routed order arriving today is new once,
     // whichever of its operations is being worked.
     state.newOrderIds.includes(jobNumOf(String(row.job.id))),
   );
   const isContext = !row.line.schedulable;
-  const lefts = frozenLefts(visibleDates, colWidths);
+  const lefts = frozenLefts(visibleDates, shownWidths(colWidths, cols));
   const at = (key: DateCol): React.CSSProperties | undefined =>
     lefts.date[key] === undefined ? undefined : { left: lefts.date[key] };
   const startStyle = at('start');
@@ -399,23 +415,27 @@ function OrderRowView({
         <span className="order-desc">{row.job.description}</span>
       </div>
       {/* Ordered quantity, with what is still to make under it. */}
-      <div
-        className="acell qty frozen"
-        style={{ left: lefts.qty }}
-        title={row.job.manual ? 'Support work is measured in labour hours' : `${orderQty} ordered · ${row.job.remainingQty} still to make`}
-      >
-        <span>{row.job.manual ? '—' : orderQty}</span>
-        {!row.job.manual && row.job.completedQty > 0 && (
-          <span className="qty-left">{row.job.remainingQty} left</span>
-        )}
-      </div>
-      <div
-        className="acell hours frozen"
-        style={{ left: lefts.hours }}
-        title="Remaining standard labour hours used by the schedule"
-      >
-        {remainingHours(row.job).toFixed(1)} h
-      </div>
+      {cols.qty && (
+        <div
+          className="acell qty frozen"
+          style={{ left: lefts.qty }}
+          title={row.job.manual ? 'Support work is measured in labour hours' : `${orderQty} ordered · ${row.job.remainingQty} still to make`}
+        >
+          <span>{row.job.manual ? '—' : orderQty}</span>
+          {!row.job.manual && row.job.completedQty > 0 && (
+            <span className="qty-left">{row.job.remainingQty} left</span>
+          )}
+        </div>
+      )}
+      {cols.hours && (
+        <div
+          className="acell hours frozen"
+          style={{ left: lefts.hours }}
+          title="Remaining standard labour hours used by the schedule"
+        >
+          {remainingHours(row.job).toFixed(1)} h
+        </div>
+      )}
       {/* Worked out here, not taken from the export. Epicor back-schedules on
           its own calendar and returns hours like 18:23, when the floor is
           empty; this counts the same work back over 07:00–15:30 shifts at 7.5
@@ -464,19 +484,21 @@ function OrderRowView({
       >
         {fmt(row.expectDate)}
       </div>}
-      <div className="acell team frozen" style={{ left: lefts.team }}>
-        {isContext ? (
-          <span className="chip empty">moulding</span>
-        ) : (
-          <TeamChips
-            row={row}
-            roster={board.workers}
-            rows={allRows}
-            workerLines={workerLines}
-            disabled={row.completedToday}
-          />
-        )}
-      </div>
+      {cols.team && (
+        <div className="acell team frozen" style={{ left: lefts.team }}>
+          {isContext ? (
+            <span className="chip empty">moulding</span>
+          ) : (
+            <TeamChips
+              row={row}
+              roster={board.workers}
+              rows={allRows}
+              workerLines={workerLines}
+              disabled={row.completedToday}
+            />
+          )}
+        </div>
+      )}
       <div className="acell track" style={{ width: gridWidth }}>
         <OrderBar
           row={row}
@@ -883,6 +905,8 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
   const dayWidth = useUiStore((s) => s.dayWidth);
   const dayWidths = useUiStore((s) => s.dayWidths);
   const colWidths = useUiStore((s) => s.colWidths);
+  const cols = useUiStore((s) => s.cols);
+  const toggleCol = useUiStore((s) => s.toggleCol);
   const visibleDates = useUiStore((s) => s.dateCols);
   const toggleDate = useUiStore((s) => s.toggleDateCol);
   const hiddenLines = useUiStore((s) => s.hiddenLines);
@@ -934,7 +958,10 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
     [days, dayWidths, dayWidth],
   );
   const gridWidth = axis.total;
-  const headLefts = frozenLefts(visibleDates, colWidths);
+  // A hidden Qty / Hours / Team column is laid out as zero width, so the grid
+  // reclaims its room; the same widths drive the CSS vars below and every row.
+  const laidOut = shownWidths(colWidths, cols);
+  const headLefts = frozenLefts(visibleDates, laidOut);
   const labelWidth = headLefts.total;
   const allRows = useMemo(
     () => board.groups.flatMap((group) => group.rows),
@@ -1091,6 +1118,97 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
     () => runningOrdersByDay(allRows, days),
     [allRows, days],
   );
+
+  // The Free / On Leave rolls. They read the whole roster, not one column, so
+  // they live in the Order heading — which has room to spare beside its one
+  // short word — rather than over the Team column, which is now hideable and
+  // would take the two lists off the board with it. Still drop targets: a name
+  // dragged between them marks somebody off or back on.
+  const crewRolls = (
+    <div className="order-crew team-head">
+      <CrewRoll
+        roll="free"
+        label="Free"
+        count={team.free.length}
+        empty="all allocated"
+        listTitle={
+          (team.free.length === 0
+            ? 'Everybody on site today is on an order'
+            : `Not allocated today: ${team.free.map((w) => w.name).join(', ')}`) +
+          (unlocked ? '\nDrag a name into On Leave to mark them off' : '')
+        }
+      >
+        {team.free.map((worker) => (
+          <CrewName
+            key={String(worker.id)}
+            worker={worker}
+            roll="free"
+            className="team-name"
+            draggable={unlocked}
+            title={
+              `${worker.name} — in today, nothing allocated` +
+              (unlocked
+                ? '\nDrag onto a line to move them, or into On Leave'
+                : '')
+            }
+          >
+            {worker.name}
+          </CrewName>
+        ))}
+      </CrewRoll>
+      <CrewRoll
+        roll="onLeave"
+        label="On Leave"
+        count={team.onLeave.length}
+        empty="full shift in"
+        listTitle={
+          (team.onLeave.length === 0
+            ? 'Everybody on the roster is in today'
+            : `Not in today: ${team.onLeave.map((w) => w.name).join(', ')}`) +
+          (unlocked ? '\nDrag a name into Free to put them back in' : '')
+        }
+      >
+        {team.onLeave.map((worker) => {
+          const left = onLeaveOrders.get(String(worker.id)) ?? [];
+          const held = left.filter((row) => stranded.has(String(row.job.id)));
+          // A name with orders behind it is the shortest route to them: press
+          // it and the board selects the first one nobody is covering, which
+          // is the one to hand over.
+          return (
+            <CrewName
+              key={String(worker.id)}
+              worker={worker}
+              roll="onLeave"
+              className={`team-name on-leave ${held.length > 0 ? 'stranded' : ''}`}
+              draggable={unlocked}
+              onClick={
+                held.length > 0 ? () => select(String(held[0].job.id)) : undefined
+              }
+              title={
+                (left.length === 0
+                  ? `${worker.name} is not in today — nothing was on them`
+                  : `${worker.name} is not in today\n` +
+                    `Was on: ${left.map((row) => jobNumOf(String(row.job.id))).join(', ')}` +
+                    (held.length > 0
+                      ? `\nNobody else on: ${held
+                          .map((row) => jobNumOf(String(row.job.id)))
+                          .join(', ')} — needs a hand-over`
+                      : '\nCovered by the rest of the crew')) +
+                (unlocked ? '\nDrag into Free to put them back in' : '')
+              }
+            >
+              {worker.name}
+              {held.length > 0 && (
+                <i className="team-name-held" aria-hidden="true">
+                  {held.length}
+                </i>
+              )}
+            </CrewName>
+          );
+        })}
+      </CrewRoll>
+    </div>
+  );
   // One row per person: an explicit drag wins; source data supplies only the
   // initial line for plans that have never placed that person.
   const todayLine = useMemo(
@@ -1168,13 +1286,13 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
       style={
         {
           minWidth: labelWidth + gridWidth,
-          '--order-w': `${colWidths.order}px`,
-          '--qty-w': `${colWidths.qty}px`,
-          '--hours-w': `${colWidths.hours}px`,
-          '--start-w': `${colWidths.start}px`,
-          '--due-w': `${colWidths.due}px`,
-          '--expect-w': `${colWidths.expect}px`,
-          '--team-w': `${colWidths.team}px`,
+          '--order-w': `${laidOut.order}px`,
+          '--qty-w': `${laidOut.qty}px`,
+          '--hours-w': `${laidOut.hours}px`,
+          '--start-w': `${laidOut.start}px`,
+          '--due-w': `${laidOut.due}px`,
+          '--expect-w': `${laidOut.expect}px`,
+          '--team-w': `${laidOut.team}px`,
         } as React.CSSProperties
       }
     >
@@ -1216,149 +1334,91 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
 
       <div className="assy-sticky">
         <div className="assy-head">
-          <div className="acell order">
-            <span className="head-name">Order</span>
-            {/* One press for the whole board. Each line has its own triangle on
-                its own row, which is the right size of control for one line and
-                eight presses for the question a supervisor actually asks —
-                "show me the lines, not the orders" — on the way to finding
-                which line a job is on. */}
-            <button
-              type="button"
-              className="fold-all"
-              onClick={() =>
-                setCollapsed(
-                  allFolded
-                    ? {}
-                    : Object.fromEntries(
-                        visibleGroups.map((group) => [group.line.key, true]),
-                      ),
-                )
-              }
-              aria-expanded={!allFolded}
-              aria-label={allFolded ? 'Show every line’s orders' : 'Fold every line’s orders away'}
-              title={allFolded ? 'Show every line’s orders' : 'Fold every line’s orders away'}
-            >
-              <span aria-hidden="true">{allFolded ? '▶' : '▼'}</span>
-            </button>
+          <div className="acell order order-head">
+            <div className="order-head-line">
+              <span className="head-name">Order</span>
+              {/* One press for the whole board. Each line has its own triangle
+                  on its own row, which is the right size of control for one
+                  line and eight presses for the question a supervisor actually
+                  asks — "show me the lines, not the orders" — on the way to
+                  finding which line a job is on. */}
+              <button
+                type="button"
+                className="fold-all"
+                onClick={() =>
+                  setCollapsed(
+                    allFolded
+                      ? {}
+                      : Object.fromEntries(
+                          visibleGroups.map((group) => [group.line.key, true]),
+                        ),
+                  )
+                }
+                aria-expanded={!allFolded}
+                aria-label={allFolded ? 'Show every line’s orders' : 'Fold every line’s orders away'}
+                title={allFolded ? 'Show every line’s orders' : 'Fold every line’s orders away'}
+              >
+                <span aria-hidden="true">{allFolded ? '▶' : '▼'}</span>
+              </button>
+            </div>
+            {/* The roster's two rolls, moved here off the Team column. */}
+            {crewRolls}
             {/* Grab the edge to give the description more room. */}
             <ColumnGrip column="order" label="Order" />
           </div>
-          <div className="acell qty frozen" style={{ left: headLefts.qty }}>
-            Qty
-            <ColumnGrip column="qty" label="Qty" />
-          </div>
-          <div
-            className="acell hours frozen"
-            style={{ left: headLefts.hours }}
-          >
-            Hours
-            <ColumnGrip column="hours" label="Hours" />
-          </div>
+          {cols.qty && (
+            <div className="acell qty frozen" style={{ left: headLefts.qty }}>
+              Qty
+              <button
+                className="date-hide"
+                onClick={() => toggleCol('qty')}
+                title="Hide Qty"
+              >
+                −
+              </button>
+              <ColumnGrip column="qty" label="Qty" />
+            </div>
+          )}
+          {cols.hours && (
+            <div
+              className="acell hours frozen"
+              style={{ left: headLefts.hours }}
+            >
+              Hours
+              <button
+                className="date-hide"
+                onClick={() => toggleCol('hours')}
+                title="Hide Hours"
+              >
+                −
+              </button>
+              <ColumnGrip column="hours" label="Hours" />
+            </div>
+          )}
           {dateHead('start', DATE_COL_LABEL.start, true)}
           {dateHead('due', DATE_COL_LABEL.due, true)}
           {dateHead('expect', DATE_COL_LABEL.expect, false)}
-          {/* The word "Team" said what the column under it holds, which the
-              chips in it already say. What the heading is worth is the two
-              lists the morning actually turns on: who is here with nothing on
-              — the people to reach for — and who is not here at all, which
-              until now the board simply swallowed. Somebody marked off left
-              the ratio and nothing else changed: the orders they were half-way
-              through kept a full crew of names, one of whom was at home.
-
-              How many of the roster are allocated is a figure about the whole
-              board and stands with the other three in the header above. */}
-          <div
-            className="acell team team-head frozen"
-            style={{ left: headLefts.team }}
-          >
-            <CrewRoll
-              roll="free"
-              label="Free"
-              count={team.free.length}
-              empty="all allocated"
-              listTitle={
-                (team.free.length === 0
-                  ? 'Everybody on site today is on an order'
-                  : `Not allocated today: ${team.free.map((w) => w.name).join(', ')}`) +
-                (unlocked ? '\nDrag a name into On Leave to mark them off' : '')
-              }
+          {/* The per-order crew chips. The Free / On Leave rolls that used to
+              head this column now sit in the Order heading, so this is a plain
+              titled column again — and one the reader can hide, since with the
+              rolls gone it carries only the names already on each order's bar
+              menu. */}
+          {cols.team && (
+            <div
+              className="acell team frozen"
+              style={{ left: headLefts.team }}
             >
-              {team.free.map((worker) => (
-                <CrewName
-                  key={String(worker.id)}
-                  worker={worker}
-                  roll="free"
-                  className="team-name"
-                  draggable={unlocked}
-                  title={
-                    `${worker.name} — in today, nothing allocated` +
-                    (unlocked
-                      ? '\nDrag onto a line to move them, or into On Leave'
-                      : '')
-                  }
-                >
-                  {worker.name}
-                </CrewName>
-              ))}
-            </CrewRoll>
-            <CrewRoll
-              roll="onLeave"
-              label="On Leave"
-              count={team.onLeave.length}
-              empty="full shift in"
-              listTitle={
-                (team.onLeave.length === 0
-                  ? 'Everybody on the roster is in today'
-                  : `Not in today: ${team.onLeave.map((w) => w.name).join(', ')}`) +
-                (unlocked ? '\nDrag a name into Free to put them back in' : '')
-              }
-            >
-              {team.onLeave.map((worker) => {
-                const left = onLeaveOrders.get(String(worker.id)) ?? [];
-                const held = left.filter((row) =>
-                  stranded.has(String(row.job.id)),
-                );
-                // A name with orders behind it is the shortest route to them:
-                // press it and the board selects the first one nobody is
-                // covering, which is the one to hand over.
-                return (
-                  <CrewName
-                    key={String(worker.id)}
-                    worker={worker}
-                    roll="onLeave"
-                    className={`team-name on-leave ${held.length > 0 ? 'stranded' : ''}`}
-                    draggable={unlocked}
-                    onClick={
-                      held.length > 0
-                        ? () => select(String(held[0].job.id))
-                        : undefined
-                    }
-                    title={
-                      (left.length === 0
-                        ? `${worker.name} is not in today — nothing was on them`
-                        : `${worker.name} is not in today\n` +
-                          `Was on: ${left.map((row) => jobNumOf(String(row.job.id))).join(', ')}` +
-                          (held.length > 0
-                            ? `\nNobody else on: ${held
-                                .map((row) => jobNumOf(String(row.job.id)))
-                                .join(', ')} — needs a hand-over`
-                            : '\nCovered by the rest of the crew')) +
-                      (unlocked ? '\nDrag into Free to put them back in' : '')
-                    }
-                  >
-                    {worker.name}
-                    {held.length > 0 && (
-                      <i className="team-name-held" aria-hidden="true">
-                        {held.length}
-                      </i>
-                    )}
-                  </CrewName>
-                );
-              })}
-            </CrewRoll>
-            <ColumnGrip column="team" label="Crew" />
-          </div>
+              <span className="head-name">Team</span>
+              <button
+                className="date-hide"
+                onClick={() => toggleCol('team')}
+                title="Hide Team"
+              >
+                −
+              </button>
+              <ColumnGrip column="team" label="Team" />
+            </div>
+          )}
           {/* Load histogram: one column per day, coloured by band. */}
           <div className="acell track" style={{ width: gridWidth }}>
             {days.map((d, i) => {

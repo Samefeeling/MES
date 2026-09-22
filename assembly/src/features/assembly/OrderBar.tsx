@@ -335,7 +335,11 @@ export function OrderBar({
   // A couple of hours of work is a few pixels of bar; where the label cannot
   // fit inside it, the tag goes in the empty grid beside the block.
   const tag = barTag({
-    jobId: id,
+    // The label the floor reads — the order number, without the `#seq` row
+    // key a routed order carries. The bar keeps the full id for its drag and
+    // its data attributes; only what it prints is trimmed, the same as the
+    // order number in the row.
+    jobId: jobNumOf(id),
     hours: remainingHours(row.job),
     spanDays: span,
     width,

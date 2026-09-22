@@ -1351,6 +1351,28 @@ body.col-resizing {
   outline: none;
 }
 .assy-head .acell.order { gap: 6px; }
+/*
+ * The Order heading now carries the roster's two rolls beside its title, in
+ * the room the one short word "Order" always left spare. Title and fold on the
+ * left at their own width; the two rolls take the rest and stack; the resize
+ * grip stays pinned to the cell's right edge.
+ */
+.assy-head .acell.order.order-head {
+  align-items: center;
+  gap: 8px;
+}
+.order-head-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.order-crew {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Clear of the resize grip on the cell's right edge. */
+  padding-right: 8px;
+}
 .head-name { white-space: nowrap; }
 
 /*
@@ -1916,6 +1938,9 @@ body.col-resizing {
   justify-content: center;
   flex: 0 0 var(--qty-w);
   width: var(--qty-w);
+  /* When Qty is hidden its width var is 0; keep the line's × a target the
+     pointer can still find, at the right edge of the Order column. */
+  min-width: 18px;
   height: 18px;
   padding: 0;
   border: 1px solid transparent;
@@ -2892,6 +2917,23 @@ body.col-resizing {
 
 .date-head { flex-direction: column; gap: 3px; text-align: center; line-height: 1.15; }
 .date-head .date-hide { width: 22px; height: 18px; line-height: 12px; }
+/*
+ * The same − on the Qty / Hours / Team headings, which are plain cells rather
+ * than date-head wrappers, so they miss the shared styling above. Match it: the
+ * chrome-tint chip the date columns' hide button wears.
+ */
+.assy-head .acell.qty > .date-hide,
+.assy-head .acell.hours > .date-hide,
+.assy-head .acell.team > .date-hide {
+  width: 22px;
+  height: 18px;
+  line-height: 12px;
+  border: 1px solid var(--head-rule);
+  border-radius: 5px;
+  background: var(--chrome-tint);
+  color: var(--head-tx);
+  cursor: pointer;
+}
 .date-head .date-sort {
   display: inline-flex;
   align-items: center;
