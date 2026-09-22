@@ -5914,16 +5914,33 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
         for (const row of body.value ?? []) {
           const job = String(row[fields.job] ?? '').trim();
           const day = String(row[fields.date] ?? '').slice(0, 10);
-          const key = `${job}|${day}`;
+          /*
+           * One row per order per day — per *operation*, where a route puts
+           * two benches on one order on the same day.
+           *
+           * Gluing foams and sews side by side, and the board writes each
+           * bench its own row: one carries the hours as work in progress, the
+           * other receives the units. Two records, not a duplicate. Keyed on
+           * the day alone this reader refused the whole range the moment a
+           * routed order was worked at two benches in a day, so a record
+           * written exactly as designed reported nothing at all.
+           *
+           * `WorkDescription` is what tells them apart — the writer puts
+           * `Op 20 sewing` there. A list without the column answers blank for
+           * every row, which is the day-only rule again, so an older record
+           * still guards itself exactly as it used to.
+           */
+          const operation = String(row[fields.description] ?? '').trim();
+          const key = `${job}|${day}|${operation}`;
           if (!job || !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('Assembly results contain an invalid job/date.');
-          if (keys.has(key)) throw new Error(`Duplicate Assembly result: ${key}. Correct the source before reporting totals.`);
+          if (keys.has(key)) throw new Error(`Duplicate Assembly result: ${job} ${day}${operation ? ` (${operation})` : ''}. Correct the source before reporting totals.`);
           keys.add(key);
           const number = (field: string): number => {
             const n = Number(row[field] ?? 0);
             if (!Number.isFinite(n) || n < 0) throw new Error(`Invalid ${field} for ${key}.`);
             return n;
           };
-          output.push({ workType: String(row[fields.workType] ?? ""), laborHours: number(fields.laborHours), description: String(row[fields.description] ?? ""), supportDepartment: String(row[fields.supportDepartment] ?? ""), id: String(row.Id), job, day, line: String(row[fields.line] ?? ''), operators: String(row[fields.operators] ?? ''),
+          output.push({ workType: String(row[fields.workType] ?? ""), laborHours: number(fields.laborHours), description: operation, supportDepartment: String(row[fields.supportDepartment] ?? ""), id: String(row.Id), job, day, line: String(row[fields.line] ?? ''), operators: String(row[fields.operators] ?? ''),
             plannedHours: number(fields.plannedHours), orderQty: number(fields.orderQty),
             // Read apart from `number()`: a missing column and a booked zero
             // must not read alike, or every unmeasured day would be counted as
