@@ -419,6 +419,29 @@ function same(existing: ListItemFields, next: ListItemFields): boolean {
   });
 }
 
+/**
+ * The columns that are this shift's own, out of a whole row's worth.
+ *
+ * Order-level columns follow the plan and are rewritten on every row of a job
+ * all the time, so a difference in one of them says nothing about whose
+ * booking a row holds. These are the figures somebody entered.
+ */
+const ROW_LEVEL = [
+  PRODUCTION_COLUMNS.shiftOutput,
+  PRODUCTION_COLUMNS.complete,
+  PRODUCTION_COLUMNS.reject,
+  PRODUCTION_COLUMNS.rework,
+  PRODUCTION_COLUMNS.jobCompleted,
+  PRODUCTION_COLUMNS.paused,
+  PRODUCTION_COLUMNS.pauseReason,
+  PRODUCTION_COLUMNS.notes,
+] as const;
+
+const rowLevel = (fields: ListItemFields): ListItemFields =>
+  Object.fromEntries(
+    ROW_LEVEL.filter((key) => key in fields).map((key) => [key, fields[key]]),
+  );
+
 /** The subset of `next` that `existing` disagrees with. */
 function drift(
   existing: ListItemFields,
@@ -596,6 +619,21 @@ function oneFactsPerJob(orders: OrderFacts[]): OrderFacts[] {
  * is opened anyway and the failure is reported: recording production matters
  * more than a check that protects against a rarity.
  *
+ * ## Two boards, two keys, one day
+ *
+ * The key check only catches two boards holding the *same* key. Two boards
+ * that each booked the day themselves hold different ones — a key is minted
+ * per booking — so each asked for its own key, each was told nothing was
+ * there, and each opened a row. That is the duplicate the floor actually
+ * meets: two rows for one order and one day, different figures in each,
+ * neither of them wrong. It cannot be left to be cleared by hand, because the
+ * KPI page refuses to report any range holding one.
+ *
+ * So the day is asked for as well, and a booking whose day is already on the
+ * list is written into the row that is there. Last save wins, which is what
+ * saving twice on one board has always done; it is said out loud when the two
+ * disagree, because the figures being replaced are somebody's.
+ *
  * Returns the item id written, `null` when nothing was, or `'abort'` when the
  * failure is one that will not answer differently on the next row.
  */
@@ -606,17 +644,51 @@ async function openRow(
   wanted: ListItemFields,
   out: SyncOutcome,
   note: (e: WriteError) => void,
+  /** One row per day for this order — see `indexRows`. */
+  oneRowPerDay = true,
 ): Promise<string | null | 'abort'> {
 
-  /** The row the list holds under this key right now, if it can be asked. */
-  const lookup = async (): Promise<ListItem | null> => {
-    const found = await fetchRowsWhere(cfg, list, PRODUCTION_COLUMNS.recordKey, key);
+  /** The rows this job holds under one column's value, if it can be asked. */
+  const ask = async (column: string, value: string): Promise<ListItem[] | null> => {
+    const found = await fetchRowsWhere(cfg, list, column, value);
     if (!found) return null;
     if (!found.ok) {
       note(found.error);
       return null;
     }
-    return found.value.sort(oldestFirst)[0] ?? null;
+    return found.value;
+  };
+
+  /** The row the list holds under this key right now, if it can be asked. */
+  const lookup = async (): Promise<ListItem | null> => {
+    const rows = await ask(PRODUCTION_COLUMNS.recordKey, key);
+    return rows?.sort(oldestFirst)[0] ?? null;
+  };
+
+  /*
+   * The row this job already has for this day, under whatever key.
+   *
+   * Where a route puts two benches on one order on one day, the two are two
+   * records rather than a duplicate, and the operation tells them apart — the
+   * same rule `indexRows` applies to the snapshot.
+   */
+  const lookupDay = async (): Promise<ListItem | null> => {
+    const wantedDay = String(wanted[PRODUCTION_COLUMNS.date] ?? '');
+    const job = String(wanted[PRODUCTION_COLUMNS.jobNum] ?? '');
+    if (!wantedDay || !job) return null;
+    const rows = await ask(PRODUCTION_COLUMNS.jobNum, job);
+    if (!rows) return null;
+    const wantedOp = String(wanted[PRODUCTION_COLUMNS.description] ?? '');
+    return (
+      rows
+        .filter((row) => rowDay(row.fields) === wantedDay)
+        .filter(
+          (row) =>
+            oneRowPerDay ||
+            String(row.fields[PRODUCTION_COLUMNS.description] ?? '') === wantedOp,
+        )
+        .sort(oldestFirst)[0] ?? null
+    );
   };
 
   const write = async (row: ListItem): Promise<string | null | 'abort'> => {
@@ -636,6 +708,25 @@ async function openRow(
   const already = await lookup();
   if (already) return write(already);
 
+  const sameDay = await lookupDay();
+  if (sameDay) {
+    /*
+     * Somebody else's booking for this day. Say so where the figures differ:
+     * one row per order per day is the record's shape, so this is the right
+     * place for the booking to go, but what it replaces was a real shift
+     * entry and the supervisor is the one who has to know it changed.
+     */
+    if (!same(sameDay.fields, rowLevel(wanted))) {
+      out.errors.push(
+        `${String(wanted[PRODUCTION_COLUMNS.jobNum] ?? '')} ` +
+          `${String(wanted[PRODUCTION_COLUMNS.date] ?? '')}: this day was already ` +
+          `booked on another board (item ${sameDay.id}) — this entry has replaced ` +
+          'it rather than opening a second row.',
+      );
+    }
+    return write(sameDay);
+  }
+
   const res = await createListItem(cfg, list, wanted);
   if (res.ok) {
     out.created++;
@@ -644,7 +735,7 @@ async function openRow(
   // A unique index on RecordKey answers the losing writer with a 400. That is
   // the index doing its job, not a fault, so take the row that won and write
   // this shift into it rather than reporting a failure nobody can act on.
-  const won = await lookup();
+  const won = (await lookup()) ?? (await lookupDay());
   if (won) return write(won);
   note(res.error);
   return isTransient(res.error) ? null : 'abort';
@@ -741,7 +832,15 @@ export async function syncProduction(
       const found = claimRow(index, facts.jobNum, shift);
 
       if (!found) {
-        const opened = await openRow(cfg, list, keyFor(facts.jobNum, shift), wanted, out, note);
+        const opened = await openRow(
+          cfg,
+          list,
+          keyFor(facts.jobNum, shift),
+          wanted,
+          out,
+          note,
+          !facts.parallelOperations,
+        );
         if (opened === 'abort') return out;
         if (opened) written.add(opened);
         continue;

@@ -724,6 +724,136 @@ describe('a row another board opened first', () => {
       "https://tenant.sharepoint.com/sites/factory/_api/web/lists/getbytitle('ASSY_Production')/items(5)",
     ]);
   });
+
+  /*
+   * The duplicate the floor actually met.
+   *
+   * Two boards each booked the same order on the same day. A key is minted per
+   * booking, so the two held different ones, each asked the list for its own,
+   * each was told nothing was there — and each opened a row. Asking for the
+   * key was never going to catch this; the day has to be asked for too.
+   */
+  const dayCollision = async (
+    stored: Record<string, unknown>,
+    facts = order({
+      shifts: [shift({ recordKey: 'b0b0b0b0-mine', shiftOutput: 2 })],
+    }),
+  ) => {
+    vi.stubGlobal('window', {
+      location: { origin: 'https://tenant.sharepoint.com' },
+    });
+    const seen: { url: string; method: string }[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      seen.push({ url, method });
+      if (url.includes('/fields?')) return json({ value: schema });
+      if (url.endsWith('/_api/contextinfo')) {
+        return json({ FormDigestValue: 'd', FormDigestTimeoutSeconds: 1800 });
+      }
+      if (url.includes('$top=200')) return json({ value: [] });
+      const asked = decodeURIComponent(url);
+      // Nobody else holds this booking's key — the other board minted its own.
+      if (asked.includes('RecordKey eq')) return json({ value: [] });
+      if (asked.includes(`${C.jobNum} eq 'ASM8001'`)) {
+        return json({ value: [{ Id: 5, 'odata.etag': '"3"', ...stored }] });
+      }
+      return json({ Id: 9 });
+    });
+    const out = await syncProduction(session, 'ASSY_Production', [facts]);
+    return { out, seen };
+  };
+
+  it('writes into the row the other board opened for that day', async () => {
+    const { out, seen } = await dayCollision({
+      [C.jobNum]: 'ASM8001',
+      [C.recordKey]: 'a1a1a1a1-theirs',
+      [C.date]: '2026-09-14',
+      [C.shiftOutput]: 7,
+    });
+
+    expect(out.created).toBe(0);
+    expect(out.updated).toBe(1);
+    // A MERGE onto the row that is there, and no POST to the item collection —
+    // which is the call that made the second row.
+    const written = seen.filter((call) => call.method === 'POST');
+    expect(
+      written.filter((call) => call.url.endsWith("('ASSY_Production')/items(5)")),
+    ).toHaveLength(1);
+    expect(written.filter((call) => call.url.endsWith('/items'))).toEqual([]);
+    // Replacing somebody's figures is said out loud; it is not an error the
+    // sync can fix, it is a fact the supervisor has to have.
+    expect(out.errors).toEqual([
+      'ASM8001 2026-09-14: this day was already booked on another board ' +
+        '(item 5) — this entry has replaced it rather than opening a second row.',
+    ]);
+  });
+
+  it('says nothing when the two bookings agree', async () => {
+    const { out } = await dayCollision({
+      [C.jobNum]: 'ASM8001',
+      [C.recordKey]: 'a1a1a1a1-theirs',
+      [C.date]: '2026-09-14',
+      [C.shiftOutput]: 2,
+      [C.complete]: 0,
+      [C.reject]: 0,
+      [C.rework]: 0,
+      [C.jobCompleted]: false,
+      [C.paused]: false,
+      [C.pauseReason]: '',
+      [C.notes]: '',
+    });
+    // The same shift, written twice — an order-level column may still differ,
+    // and nobody's figures are being replaced.
+    expect(out.errors).toEqual([]);
+  });
+
+  it('leaves another day of the same order alone', async () => {
+    const { out, seen } = await dayCollision({
+      [C.jobNum]: 'ASM8001',
+      [C.recordKey]: 'a1a1a1a1-theirs',
+      [C.date]: '2026-09-11',
+      [C.shiftOutput]: 7,
+    });
+
+    expect(out.created).toBe(1);
+    expect(out.errors).toEqual([]);
+    const posted = seen.filter(
+      (call) => call.method === 'POST' && call.url.endsWith('/items'),
+    );
+    expect(posted).toHaveLength(1);
+  });
+
+  it('keeps two benches of one order on their own rows', async () => {
+    /*
+     * Gluing foams and sews side by side, so one order has two live
+     * operations and two rows for the day. That is two records, not a
+     * duplicate — the operation is what tells them apart.
+     */
+    const { out } = await dayCollision(
+      {
+        [C.jobNum]: 'ASM8001',
+        [C.recordKey]: 'a1a1a1a1-theirs',
+        [C.date]: '2026-09-14',
+        [C.description]: 'Op 10 foaming',
+        [C.shiftOutput]: 7,
+      },
+      order({
+        parallelOperations: true,
+        operation: { seq: 20, step: 'sewing', index: 2, of: 3, last: true },
+        shifts: [
+          shift({
+            recordKey: 'b0b0b0b0-mine',
+            shiftOutput: 2,
+            opSeq: 20,
+            step: 'sewing',
+          }),
+        ],
+      }),
+    );
+
+    expect(out.created).toBe(1);
+    expect(out.errors).toEqual([]);
+  });
 });
 
 /**

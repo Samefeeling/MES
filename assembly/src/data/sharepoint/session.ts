@@ -88,7 +88,18 @@ export async function sessionRowsWhere(
   const field = resolveField(schema, column);
   if (!field) throw new SharePointHttpError(400, `Missing SharePoint column: ${column}.`);
   const filter = `${field.InternalName} eq '${value.replace(/'/g, "''")}'`;
-  const url = `${restList(cfg, list)}/items?$top=50&$filter=${encodeURIComponent(filter)}`;
+  /*
+   * Newest first, because the page is capped.
+   *
+   * A key matches one row and the cap never bites. A job number matches every
+   * row that job has ever had — one a day, so a long order outgrows the page
+   * inside two months — and the row being asked about was written minutes ago
+   * by another board. In list order the page would hold the job's first fifty
+   * days and never the day in question.
+   */
+  const url =
+    `${restList(cfg, list)}/items?$top=50&$orderby=Id%20desc` +
+    `&$filter=${encodeURIComponent(filter)}`;
   const res = await sessionRequest(cfg, url);
   const body = await res.json();
   return (body.value ?? []).map((row: Record<string, unknown>) => ({

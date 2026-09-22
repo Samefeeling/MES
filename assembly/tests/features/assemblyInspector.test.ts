@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { completeOnTick, popupDate } from '@/features/assembly/AssemblyInspector';
+import {
+  completeOnTick,
+  popupDate,
+  rebookWarning,
+} from '@/features/assembly/AssemblyInspector';
+import type { ProductionEntry } from '@/store/planStore';
 
 describe('order popup date format', () => {
   it('uses fixed dd/mm/yyyy formatting', () => {
@@ -50,5 +55,52 @@ describe('ticking Job completed', () => {
       draft: '',
       filled: false,
     });
+  });
+});
+
+describe('booking a day that is already booked', () => {
+  const entry = (over: Partial<ProductionEntry> = {}): ProductionEntry => ({
+    date: '2026-09-21',
+    complete: 0,
+    reject: 0,
+    rework: 0,
+    shiftOutput: 0,
+    paused: false,
+    pauseReason: null,
+    jobCompleted: false,
+    notes: '',
+    ...over,
+  });
+  const at = (iso: string) => `at ${iso.slice(11, 16)}`;
+
+  it('reads back what the day already holds, and what saving will do to it', () => {
+    expect(
+      rebookWarning(
+        entry({ shiftOutput: 2, complete: 5, savedAt: '2026-09-21T11:52:00Z' }),
+        at,
+      ),
+    ).toBe(
+      'Today is already booked on this order — 2 output, 5 complete, saved ' +
+        'at 11:52. Saving replaces that entry rather than adding a second one. ' +
+        'Press Save again to replace it.',
+    );
+  });
+
+  it('names the things that are not figures', () => {
+    const said = rebookWarning(
+      entry({ shiftOutput: 9, rework: 1, jobCompleted: true }),
+      at,
+    );
+    expect(said).toContain('9 output, 0 complete, 1 rework, job completed');
+    // Nothing rejected and nothing reworked is not worth saying twice.
+    expect(said).not.toContain('reject');
+    expect(said).not.toContain('paused');
+  });
+
+  it('says nothing about a time it does not have', () => {
+    // Entries written before savedAt existed, and ones a backend supplied.
+    expect(rebookWarning(entry({ shiftOutput: 4 }), at)).toContain(
+      '4 output, 0 complete. Saving replaces',
+    );
   });
 });

@@ -3272,6 +3272,16 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 /* The list of orders closed in the last fortnight, in the reopen dialog. */
 /* What the day's last save booked, above the figures it was booked from. */
 .booked-hours { margin: 0 0 6px; font-variant-numeric: tabular-nums; }
+/* A day that has already been booked. The boxes below open holding what was
+   saved, so the shift has to know it is correcting that entry and not adding
+   to it — see `rebookWarning`. */
+.booked-already {
+  padding: 3px 6px;
+  border-left: 3px solid var(--warn);
+  border-radius: 0 4px 4px 0;
+  background: var(--warn-dim);
+  color: #92400e;
+}
 
 .reopen-list { display: grid; gap: 6px; max-height: 50vh; overflow: auto; margin: 0; padding: 0; list-style: none; }
 .reopen-list li { display: flex; align-items: center; gap: 10px; padding: 6px 8px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; }

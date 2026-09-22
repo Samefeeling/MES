@@ -66,6 +66,40 @@ export const popupDate = (date: Date | null): string =>
   date ? formatDay(date) : '—';
 
 /**
+ * What today's shift already booked on this order, for the warning that has to
+ * be read before it is replaced.
+ *
+ * One row per order per day is the shape of the record, so a second entry for
+ * a day is not a second entry: it is this one, written again. That is the
+ * right behaviour — a figure typed wrong at three o'clock is corrected at four
+ * — but it was silent, and a shift that thought it was adding to the day was
+ * quietly overwriting it. Two boards doing it at once is how the list ends up
+ * with two rows for one day, which the KPI page will not report at all.
+ *
+ * So the booking is read back and said out loud, in the figures somebody
+ * entered rather than as a caution about duplicates.
+ */
+export function rebookWarning(
+  entry: ProductionEntry,
+  at: (iso: string) => string,
+): string {
+  const said = [
+    `${entry.shiftOutput} output`,
+    `${entry.complete} complete`,
+    entry.reject > 0 ? `${entry.reject} reject` : '',
+    entry.rework > 0 ? `${entry.rework} rework` : '',
+    entry.paused ? 'paused' : '',
+    entry.jobCompleted ? 'job completed' : '',
+  ].filter(Boolean);
+  return (
+    `Today is already booked on this order — ${said.join(', ')}` +
+    (entry.savedAt ? `, saved ${at(entry.savedAt)}` : '') +
+    '. Saving replaces that entry rather than adding a second one. ' +
+    'Press Save again to replace it.'
+  );
+}
+
+/**
  * What the Complete box should hold when the completion tick changes.
  *
  * "Job completed" with a Complete box left on nothing is the same claim made
@@ -191,8 +225,15 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
   const [overrideReason, setOverrideReason] = useState('');
   const [startMessage, setStartMessage] = useState('');
   const [entryMessage, setEntryMessage] = useState('');
+  /**
+   * Set by the first press of Save on a day that is already booked, so the
+   * second press goes through. Cleared with the rest of the form.
+   */
+  const [replacing, setReplacing] = useState(false);
   const today = isoDay(new Date());
 
+  // The boxes hold what the day holds — including after a save, and after
+  // another board's entry arrives on a refresh.
   useEffect(() => {
     const existing = productionEntries.find((entry) => entry.date === today);
     setDraft(existing ? String(existing.complete) : '');
@@ -204,10 +245,23 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
     setPauseReason(existing?.pauseReason ?? 'material-shortage');
     setNotes(existing?.notes ?? '');
     filledComplete.current = false;
+  }, [productionEntries, today]);
+
+  /*
+   * What the panel last said, cleared when it stops being about this order.
+   *
+   * Not on the effect above, which runs again the moment a save lands: it wiped
+   * "Entry saved. 3.2 labour hours booked." in the same tick it was set, so the
+   * shift pressed Save and was told nothing at all. Pressing it again is the
+   * obvious thing to do then, and a second press on a second board is how this
+   * list came by two rows for one day.
+   */
+  useEffect(() => {
     setOverrideReason('');
     setStartMessage('');
     setEntryMessage('');
-  }, [selectedJobId, productionEntries, today]);
+    setReplacing(false);
+  }, [selectedJobId, today]);
 
   // Nothing picked: the panel is simply not there. It opens on a click and
   // closes again, rather than sitting in a column asking to be filled.
@@ -343,6 +397,13 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
       setEntryMessage('Enter production, a pause, completion, or a note before saving.');
       return;
     }
+    // Asked last, so an entry that was going to be refused anyway never asks
+    // to replace anything.
+    if (existingToday && !replacing) {
+      setReplacing(true);
+      setEntryMessage(rebookWarning(existingToday, (iso) => formatTime(new Date(iso))));
+      return;
+    }
     const savedAt = new Date().toISOString();
     const completedAt = jobCompleted ? savedAt : null;
     saveProductionEntry(job.id, {
@@ -378,6 +439,8 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
     setEntryMessage(
       (jobCompleted ? 'Entry saved. Crew released.' : 'Entry saved.') + hours,
     );
+    // Asked again next time: one acknowledgement covers one save, not the day.
+    setReplacing(false);
   };
 
   return (
@@ -754,11 +817,21 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
             an allowance: from Start production (07:00 on any day after) to the
             moment the entry was saved, less breaks, times the crew.
           */}
-          {existingToday?.bookedHours !== undefined && (
-            <p className="hint booked-hours">
-              {existingToday.bookedHours} labour hours booked
+          {/*
+            Said before the button is pressed, not only after. An entry that
+            has been booked once is corrected far more often than it is
+            duplicated, and the shift should know which of the two it is doing
+            while it is filling the boxes — they open already holding what was
+            saved.
+          */}
+          {existingToday && (
+            <p className="hint booked-hours booked-already">
+              Today is already booked
               {existingToday.savedAt &&
                 ` · saved ${formatTime(new Date(existingToday.savedAt))}`}
+              {existingToday.bookedHours !== undefined &&
+                ` · ${existingToday.bookedHours} labour hours`}
+              {' '}· saving replaces it
             </p>
           )}
           <div className="production-grid">
@@ -805,7 +878,7 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
               <Button onClick={reopen}>Reopen order</Button>
             ) : (
               <Button variant="primary" onClick={book}>
-                Save entry
+                {replacing ? 'Replace entry' : 'Save entry'}
               </Button>
             )}
           </div>
