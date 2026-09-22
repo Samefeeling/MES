@@ -794,6 +794,35 @@ function LineGroupView({
 
         </div>
 
+        {/* The line's roster, right-aligned into the Order column so it ends at
+            the Qty column rather than spilling over the schedule — the board's
+            right-hand side is where the work is read, and a week of load chips
+            drawn across the first days of it hid exactly that. Always rendered,
+            empty or not: it is also the spacer that holds the × out in the Qty
+            column on a line nobody is on yet. */}
+        <span
+          className="agroup-roster"
+          title={
+            crew.length > 0
+              ? `On ${group.line.name}: ${crew.map((w) => w.name).join(', ')}` +
+                '\nScrolls sideways when there are more than fit'
+              : undefined
+          }
+        >
+          {crew.map((worker) => {
+            const week = rosterLoads.get(String(worker.id));
+            return week ? (
+              <WorkerLoadChip
+                key={String(worker.id)}
+                worker={worker}
+                load={week}
+                line={group.line.key}
+                dragDisabled={!unlocked}
+              />
+            ) : null;
+          })}
+        </span>
+
         {/* Closing a line the supervisor opened is a different act from
             folding it away, and it is theirs alone: the orders on it go back
             to the unplaced pool for somebody to file again. */}
@@ -829,28 +858,6 @@ function LineGroupView({
         </button>
 
         </div>
-
-        {crew.length > 0 && (
-          <span
-            className="agroup-roster"
-            title={`Operators currently assigned to ${group.line.name}`}
-          >
-            {crew.map((worker) => {
-              const week = rosterLoads.get(String(worker.id));
-              return week ? (
-                <WorkerLoadChip
-                  key={String(worker.id)}
-                  worker={worker}
-                  load={week}
-                  line={group.line.key}
-                  dragDisabled={
-                    !unlocked
-                  }
-                />
-              ) : null;
-            })}
-          </span>
-        )}
        </div>
       </div>
 

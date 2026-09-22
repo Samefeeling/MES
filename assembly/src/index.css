@@ -1919,7 +1919,10 @@ body.col-resizing {
   border: 0;
   color: var(--line-name);
   text-align: left;
-  flex: 1 1 auto;
+  /* Its own width, and it neither grows nor shrinks: the name is read first
+     and must never be the thing that clips. The roster beside it takes all the
+     room that is left and scrolls when a busy line overflows it. */
+  flex: 0 0 auto;
   min-width: 0;
 }
 .agroup-label.arrangeable { cursor: grab; touch-action: none; }
@@ -1980,12 +1983,24 @@ body.col-resizing {
  */
 .agroup-roster {
   display: flex;
-  flex-wrap: wrap;
+  /* One row, always — the roster stays on the line's own row and never stacks
+     its people down the board. It takes the room the name leaves and sits at
+     the right of it, ending at the Qty column (where the × stands), so it grows
+     back towards the name rather than out over the schedule. A line with more
+     people than fit scrolls sideways rather than growing taller. */
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
   gap: 3px 4px;
   align-items: center;
   min-width: 0;
-  padding: 0 8px;
+  padding: 0 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+/* Right-aligns the run and still lets it scroll when it overflows — a plain
+   justify-content: flex-end would put the first names out of reach. */
+.agroup-roster > :first-child { margin-left: auto; }
+.agroup-roster::-webkit-scrollbar { display: none; }
 /*
  * A bench of a lane, drawn indented under it.
  *

@@ -75,7 +75,10 @@ export type ColumnKey = (typeof COLUMN_KEYS)[number];
 export type ColumnWidths = Record<ColumnKey, number>;
 
 export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
-  order: 200,
+  // Wide enough to hold the description that now carries the emphasis, and the
+  // line's roster which right-aligns into it rather than spilling over the
+  // schedule.
+  order: 300,
   qty: 58,
   hours: 82,
   start: 62,
