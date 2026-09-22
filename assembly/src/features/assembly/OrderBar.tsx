@@ -21,7 +21,7 @@ import { CSS } from '@dnd-kit/utilities';
 import type { OrderRow } from '@/engine/assembly/board';
 import { openDaysBetween, workingSpans } from '@/engine/assembly/dates';
 import { completedFraction, remainingHours } from '@/engine/assembly/duration';
-import { MS_PER_DAY } from '@/lib/time';
+import { MS_PER_DAY, formatDay, formatTime } from '@/lib/time';
 import { endOfCrewDay, startOfCrewDay } from '@/engine/assembly/crewSchedule';
 import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { barTag, missingBarReason, timelineDayOffset } from './boardView';
@@ -351,7 +351,9 @@ export function OrderBar({
         heldBy ? 'held' : ''
       } ${tag.stub ? 'stub' : ''} ${
         tag.outside ? 'tagged' : ''
-      } ${tag.flip ? 'tag-left' : ''} ${marked ? 'marked' : ''}`}
+      } ${tag.flip ? 'tag-left' : ''} ${marked ? 'marked' : ''} ${
+        row.actualStart ? 'started' : ''
+      }`}
       style={{
         left,
         width,
@@ -399,6 +401,13 @@ export function OrderBar({
             } on ${clashedWith.join(', ')} the same day — only one of the two ` +
             'can have them'
           : '') +
+        (row.actualStart
+          ? ` · started on the floor ${formatDay(new Date(row.actualStart.startedAt))} ` +
+            formatTime(new Date(row.actualStart.startedAt)) +
+            (row.actualStart.overrideReason
+              ? ` (override: ${row.actualStart.overrideReason})`
+              : '')
+          : '') +
         ` · ${Math.round(completion * 100)}% complete` +
         ` · ${row.status.reason}` +
         (!unlocked && !readOnly
@@ -430,8 +439,25 @@ export function OrderBar({
           )}
         </div>
       ))}
-      {/* One tag, so that outside the bar the three parts stay together. */}
+      {/* One tag, so that outside the bar the parts stay together. */}
       <span className="bar-tag" data-job-label={id}>
+        {/*
+          * Running on the floor, not merely planned to.
+          *
+          * Drawn rather than written, because it has to hold at the size a
+          * stub bar's tag is, and it goes in the tag rather than on the block
+          * so that a ten-pixel order carries it too. Not the progress fill:
+          * that says how much is finished, and an order started an hour ago
+          * with nothing booked yet has none of it — which is exactly the pair
+          * the supervisor could not tell apart.
+          */}
+        {row.actualStart && (
+          <span
+            className="bar-run"
+            aria-hidden="true"
+            title={`Started ${formatDay(new Date(row.actualStart.startedAt))} ${formatTime(new Date(row.actualStart.startedAt))}`}
+          />
+        )}
         <span className="bar-label">{tag.text}</span>
         {row.overtime && (
           <span className="bar-ot" title="Weekend overtime approved">

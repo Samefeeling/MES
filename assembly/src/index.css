@@ -23,11 +23,13 @@
   --info: #60a5fa;
 
   /* A line's row, kept clear of every colour an order row can take.
-     Two bands, a shade apart, so the eye sorts the board's two levels at a
-     glance: a top line carries the stronger --line-band-main, and a bench
-     indented under it keeps the paler --line-band. */
+     Two bands, well apart, so the eye sorts the board's two levels at a
+     glance: a top line carries the strong --line-band-main, and a bench
+     indented under it is barely tinted. --line-band is the generic line
+     colour, worn by a line being dragged rather than by any row. */
   --line-name: #075985;
   --line-band-main: #c0e6f5;
+  --line-band-bench: #f3faff;
   --line-band: #e0f2fe;
   --line-band-bd: #bae6fd;
 
@@ -2015,9 +2017,9 @@ body.col-resizing {
  */
 .agroup.bench .agroup-head-in {
   padding-left: 14px;
-  /* A bench stays on the paler band; the base rule above paints its sticky
+  /* A bench stays on the palest band; the base rule above paints its sticky
      inner block the stronger main colour, so put the bench's back. */
-  background: var(--line-band);
+  background: var(--line-band-bench);
 }
 .agroup.bench .agroup-name {
   font-size: 11px;
@@ -2255,6 +2257,26 @@ body.col-resizing {
     var(--warn) 0 4px,
     transparent 4px 7px
   );
+}
+/*
+ * Started on the floor.
+ *
+ * Two orders on the same day, one of them actually under way, used to be the
+ * same drawing — the only record of the start was inside the panel, an order
+ * at a time. So a started order carries a solid triangle in its label and a
+ * heavier outline on its blocks: the mark reads at a glance, and neither
+ * depends on the due-date colour, which the block is already spending.
+ */
+.bar-run {
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-left: 6px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+}
+.bar.started .bar-piece {
+  border-width: 2px;
 }
 /* Down to its minimum width, so the block is a marker rather than a length. */
 .bar.stub .bar-piece {
