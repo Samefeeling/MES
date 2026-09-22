@@ -1598,8 +1598,13 @@ body.col-resizing {
  * edge reads as a line *in* the column, which is what the shift clock is, and
  * the two must not be confused.
  */
+/*
+ * Today is bracketed by its two edges and the shift clock that runs down it,
+ * not filled: a wash across the whole column — widest of all at a high zoom —
+ * sat over the short bars that live around today and made them hard to pick
+ * out. The edges and the now-line mark the day without touching the work in it.
+ */
 .stripe.today {
-  background: rgba(37, 99, 235, 0.07);
   box-shadow:
     inset 1px 0 0 rgba(37, 99, 235, 0.35),
     inset -1px 0 0 rgba(37, 99, 235, 0.35);

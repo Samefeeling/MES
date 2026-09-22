@@ -93,7 +93,10 @@ export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
  * has to find again — and the ceiling keeps one column from taking the grid.
  */
 export const COLUMN_LIMITS: Record<ColumnKey, { min: number; max: number }> = {
-  order: { min: 120, max: 520 },
+  // The Order column carries the description and the line rosters, so it is
+  // the one a plant genuinely wants to pull out wide. Its ceiling is high
+  // enough to read as "drag it as far as you like".
+  order: { min: 120, max: 1000 },
   qty: { min: 46, max: 200 },
   hours: { min: 58, max: 220 },
   start: { min: 48, max: 220 },

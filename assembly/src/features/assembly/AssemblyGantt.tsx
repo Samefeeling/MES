@@ -1014,6 +1014,12 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
         // A lane taken off the board takes its benches with it: three orphan
         // benches indented under nothing is not a board anybody can read.
         !(group.line.parent && hiddenLines.includes(group.line.parent)) &&
+        // Folding a lane folds its benches away too. A lane made of benches
+        // holds no rows of its own, so folding it had nothing to hide and the
+        // triangle did nothing — the benches are separate groups. Fold them
+        // with their parent so the ▶/▼ on Smart Soft Seating or UPHOLSTRY
+        // opens and shuts the whole section.
+        !(group.line.parent && collapsed[group.line.parent]) &&
         (!orderDay || group.line.schedulable),
       ).map((group) => ({
         ...group,
@@ -1030,7 +1036,7 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
         // of them — this used to throw that away and count the filtered rows.
         total: group.rows.length,
       })),
-    [orderedGroups, visibleIds, hiddenLines, orderDay, lineOrder],
+    [orderedGroups, visibleIds, hiddenLines, orderDay, lineOrder, collapsed],
   );
   const visibleRows = useMemo(
     () => visibleGroups.flatMap((group) => group.rows),
