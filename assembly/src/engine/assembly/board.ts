@@ -97,6 +97,7 @@ import {
   type ScheduleStatus,
 } from './dates';
 import { allocateStock, partKey } from './stockAllocation';
+import { pickShortages, type PickShortage } from './pickShortage';
 import { endOfCrewDay, idleRuns, planVariableCrew, type CrewDayPlan, type TakenOnDay, type VariableCrewPlan } from './crewSchedule';
 import { onLeaveOnDay, type LeaveDays } from './attendance';
 import { lineLoad, type LineLoad } from './workload';
@@ -222,6 +223,14 @@ export interface OrderRow {
   material: MaterialStatus;
   /** Material rows to pick for this job, straight from JobMaterialReq.csv. */
   pickList?: JobMaterialLink[];
+  /**
+   * The pick-list lines the warehouse cannot cover, worst first.
+   *
+   * Separate from `material`, and on the live board the only one of the two
+   * that ever says anything: `material` comes off the `part req` explosion,
+   * which the CSV source does not carry. See `engine/assembly/pickShortage`.
+   */
+  shortPicks?: PickShortage[];
   release: ReleaseCheck;
   /** Orders this one waits on, with the component each supplies. */
   predecessors: Dependency[];
@@ -418,6 +427,7 @@ function mouldingRow(job: Job, line: LineDef, today: Date): OrderRow {
     },
     material: MOULDING_MATERIAL,
     pickList: [],
+    shortPicks: [],
     release: {
       level: 'ready' as const,
       releasable: true,
@@ -1230,6 +1240,15 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
         }
       : scheduleStatus(orderExpect, job.dueDate);
 
+    /*
+     * Keyed by the order number, not the row key. JobMaterialReq.csv
+     * knows ASM8002; a routed row is ASM8002#20, so looking the list up
+     * by the row key found nothing and every bench row came back with an
+     * empty pick list. The material to pick belongs to the order, and
+     * each of its operations is working towards the same one.
+     */
+    const picks = pickListByJob.get(jobNumOf(id)) ?? [];
+
     const row: OrderRow = {
       job,
       sourceRemainingQty: sourceJobsById.get(id)?.remainingQty ?? job.remainingQty,
@@ -1289,14 +1308,8 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
       ),
       status,
       material,
-      /*
-       * Keyed by the order number, not the row key. JobMaterialReq.csv
-       * knows ASM8002; a routed row is ASM8002#20, so looking the list up
-       * by the row key found nothing and every bench row came back with an
-       * empty pick list. The material to pick belongs to the order, and
-       * each of its operations is working towards the same one.
-       */
-      pickList: pickListByJob.get(jobNumOf(id)) ?? [],
+      pickList: picks,
+      shortPicks: pickShortages(picks, indexes.inventoryByPart),
       release: releaseCheck(material, job.materialPrep),
       /*
        * Named by the row that answers for the order, not by the order number.

@@ -18,7 +18,12 @@ import {
   type LineKey,
   type Worker,
 } from '@/domain/assembly';
-import type { Job, JobMaterialLink, PlanningDataset } from '@/domain/types';
+import type {
+  InventoryItem,
+  Job,
+  JobMaterialLink,
+  PlanningDataset,
+} from '@/domain/types';
 import type { ProductionEntry } from '@/store/planStore';
 
 /** Thursday 10 Sep 2026. */
@@ -89,6 +94,7 @@ function board(
   jobs: Job[],
   links: JobMaterialLink[] = [],
   production: Record<string, ProductionEntry[]> = {},
+  inventory: InventoryItem[] = [],
 ) {
   const workers = jobs.flatMap((_job, i) =>
     [0, 1, 2].map((n) => worker(`W${i}${n}`, ['UPL_SOFTIE', 'UPL_GLUING'])),
@@ -103,7 +109,7 @@ function board(
     })),
     jobs,
     routing: [],
-    inventory: [],
+    inventory,
     bom: [],
     po: [],
     demand: [],
@@ -264,6 +270,35 @@ describe('UPL-Gluing on the board', () => {
     for (const id of ['GLU1#10', 'GLU1#20']) {
       const picks = b.rowsByJob.get(id)!.pickList ?? [];
       expect(picks.map((p) => String(p.childPart))).toEqual(['FM0012']);
+    }
+  });
+
+  it('tells every bench row the foam is short', () => {
+    // Order-level material, so it stops every operation of the order — and
+    // the bench standing idle for want of it is the one the supervisor is
+    // looking at.
+    const b = board(
+      [job('GLU1', 'UPL_GLUING', 37.9)],
+      [foamLink('GLU1')],
+      {},
+      [
+        {
+          partNum: PartId('FM0012'),
+          description: 'Foam: seat',
+          typeCode: null,
+          onHand: 0,
+          cmplWip: 0,
+          supply: 0,
+          demand: 0,
+          calculatedDemand: null,
+          freeOnHand: 0,
+        },
+      ],
+    );
+    for (const id of ['GLU1#10', 'GLU1#20']) {
+      expect(
+        b.rowsByJob.get(id)!.shortPicks?.map((s) => String(s.part)),
+      ).toEqual(['FM0012']);
     }
   });
 

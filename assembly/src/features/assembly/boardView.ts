@@ -19,6 +19,7 @@ import {
   shiftColumnFraction,
 } from '@/engine/assembly/shift';
 import { rowIndex } from './rowIndex';
+import { jobNumOf } from '@/domain/routing';
 
 export type OrderSortKey = 'start' | 'due';
 export type SortDirection = 'asc' | 'desc';
@@ -511,6 +512,74 @@ export function barTag(bar: {
     stub,
     flip: outside && bar.left + bar.width + needed > bar.gridWidth,
   };
+}
+
+export interface MissingBar {
+  /** What the placeholder reads, in the grid, where the bar would have been. */
+  label: string;
+  /** The whole story on hover — every reason, not only the one named. */
+  title: string;
+  /** Material is the named reason, so the placeholder is marked as such. */
+  material: boolean;
+}
+
+/**
+ * Why an order has no bar, and what the planner should do about it.
+ *
+ * Four different jobs: place the order it is waiting for, chase the material,
+ * put people on it, or widen a crew window that runs out before the work does.
+ * It used to say "no crew" to all of them, which sent the supervisor looking
+ * for the one problem that was not there — orders were standing still for want
+ * of foam with a label asking for people.
+ *
+ * Material is named ahead of crew because no crew can build what is not on the
+ * shelf: putting three people on it changes nothing until the part arrives. It
+ * is named behind a predecessor, though, because "waits on ASM8001" already
+ * names the shortage *and* who is clearing it. Whatever the label says, the
+ * hover carries every reason that applies, so naming one never hides another.
+ */
+export function missingBarReason(row: OrderRow): MissingBar {
+  const held = row.waitingOn ? jobNumOf(String(row.waitingOn.onJobId)) : null;
+  const short = row.shortPicks ?? [];
+  const unstaffed = row.workers.length === 0;
+
+  if (held) {
+    return {
+      label: `waits on ${held}`,
+      title:
+        `Waiting on ${held}, which has no finish date of its own — it is ` +
+        'either unstaffed or on no line yet',
+      material: false,
+    };
+  }
+
+  if (short.length > 0) {
+    const worst = short[0];
+    const rest = short.length - 1;
+    return {
+      label: 'short material',
+      title:
+        `${short.length} line${short.length === 1 ? '' : 's'} of the pick ` +
+        'list cannot be covered by what is on hand — ' +
+        `${String(worst.part)} short ${worst.shortQty} (needs ` +
+        `${worst.requiredQty}, ${worst.onHand} on hand)` +
+        (rest > 0 ? ` and ${rest} more` : '') +
+        (unstaffed ? '\nNo crew allocated either' : ''),
+      material: true,
+    };
+  }
+
+  return unstaffed
+    ? {
+        label: 'no crew',
+        title: 'No crew allocated — cannot schedule',
+        material: false,
+      }
+    : {
+        label: 'not covered',
+        title: 'The crew allocated to this order leaves before the work is done',
+        material: false,
+      };
 }
 
 /**

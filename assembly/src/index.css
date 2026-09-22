@@ -2270,6 +2270,16 @@ body.col-resizing {
   border-radius: 4px;
   padding: 1px 6px;
 }
+/* The racks, not the roster. A stopped order is a stopped order, but the two
+   want different people doing different things about them, so the one waiting
+   on material is amber and filled rather than another dashed red outline —
+   which line is short can then be read off the board without opening any of
+   them. */
+.bar-missing.short-material {
+  color: #92400e;
+  border: 1px solid #d97706;
+  background: var(--warn-dim);
+}
 
 /* team chips */
 .team {

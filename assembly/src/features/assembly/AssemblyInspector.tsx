@@ -14,6 +14,7 @@ import { usePlanStore } from '@/store/planStore';
 import { useUiStore } from '@/store/uiStore';
 import { remainingQty } from '@/engine/assembly/duration';
 import { startEligibility } from '@/engine/assembly/release';
+import { pickShortfall } from '@/engine/assembly/pickShortage';
 import { nextWorkingMoment } from '@/engine/assembly/shift';
 import { formatDay, formatTime } from '@/lib/time';
 import { Badge, Button } from '@/ui';
@@ -63,24 +64,6 @@ const isoDay = (d: Date): string =>
 /** Fixed numeric date for the production popup, independent of browser locale. */
 export const popupDate = (date: Date | null): string =>
   date ? formatDay(date) : '—';
-
-/**
- * How many short the pick is — 0 when it is covered, and 0 when nobody can
- * say.
- *
- * Red on the sheet is a claim that this order cannot be picked, so it is only
- * made when both halves of the comparison are known. A component the loaded
- * OnHandInventory.csv has never heard of has no on-hand figure to be below
- * anything, and a line the order export gave no required quantity has nothing
- * to be below: both read as unknown, not as none in stock.
- */
-export const pickShortfall = (
-  requiredQty: number | null,
-  onHand: number | undefined,
-): number =>
-  requiredQty === null || onHand === undefined
-    ? 0
-    : Math.max(0, requiredQty - onHand);
 
 /**
  * What the Complete box should hold when the completion tick changes.

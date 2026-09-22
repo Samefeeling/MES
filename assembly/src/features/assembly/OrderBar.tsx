@@ -24,7 +24,7 @@ import { completedFraction, remainingHours } from '@/engine/assembly/duration';
 import { MS_PER_DAY } from '@/lib/time';
 import { endOfCrewDay, startOfCrewDay } from '@/engine/assembly/crewSchedule';
 import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
-import { barTag, timelineDayOffset } from './boardView';
+import { barTag, missingBarReason, timelineDayOffset } from './boardView';
 import type { DayAxis } from './dayAxis';
 import type { MarkedMove } from './groupMove';
 import { jobNumOf } from '@/domain/routing';
@@ -128,27 +128,14 @@ export function OrderBar({
     });
 
   if (!row.start || row.days === null) {
-    /*
-     * Three reasons an order has no bar, and the planner does something
-     * different about each: put people on it, place the order it is waiting
-     * for, or widen a crew window that runs out before the work does. It used
-     * to say "no crew" to all three, which sent them looking for the one
-     * problem that was not there.
-     */
-    const held = row.waitingOn ? jobNumOf(String(row.waitingOn.onJobId)) : null;
-    const unstaffed = row.workers.length === 0;
+    // Which of the four reasons to name, and the rest of them on hover — see
+    // `missingBarReason`.
+    const missing = missingBarReason(row);
     return (
       <button
         type="button"
-        className="bar-missing"
-        title={
-          held
-            ? `Waiting on ${held}, which has no finish date of its own — it is ` +
-              'either unstaffed or on no line yet'
-            : unstaffed
-              ? 'No crew allocated — cannot schedule'
-              : 'The crew allocated to this order leaves before the work is done'
-        }
+        className={`bar-missing${missing.material ? ' short-material' : ''}`}
+        title={missing.title}
         onClick={(event) => {
           event.stopPropagation();
           onSelect(id, { x: event.clientX, y: event.clientY });
@@ -156,7 +143,7 @@ export function OrderBar({
         onMouseEnter={() => onDependencyHover(id)}
         onMouseLeave={() => onDependencyHover(null)}
       >
-        {held ? `waits on ${held}` : unstaffed ? 'no crew' : 'not covered'}
+        {missing.label}
       </button>
     );
   }

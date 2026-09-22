@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { OrderRow } from '@/engine/assembly/board';
-import { WorkerId } from '@/domain/ids';
+import type { PickShortage } from '@/engine/assembly/pickShortage';
+import { PartId, WorkerId } from '@/domain/ids';
 import { toDayKey } from '@/lib/time';
 import {
   PRODUCTIVE_HOURS_PER_PERSON,
@@ -18,6 +19,7 @@ import {
   retainLineRows,
   barTag,
   lineOfWorkerToday,
+  missingBarReason,
   shiftTimelineDays,
   sortLineRows,
   teamSummary,
@@ -602,5 +604,72 @@ describe('due soon', () => {
     expect(isDueSoon(row('undated'), today, 2)).toBe(false);
     const done = { ...due('done', '2026-09-01T00:00:00'), completedToday: true } as OrderRow;
     expect(isDueSoon(done, today, 2)).toBe(false);
+  });
+});
+
+describe('why an order has no bar', () => {
+  const stopped = (over: Partial<OrderRow>): OrderRow =>
+    ({ ...row('ASM1'), ...over }) as OrderRow;
+  const short = (part: string, shortQty: number): PickShortage => ({
+    part: PartId(part),
+    description: part,
+    requiredQty: shortQty + 10,
+    onHand: 10,
+    shortQty,
+  });
+
+  it('asks for people when people are all that is missing', () => {
+    const missing = missingBarReason(stopped({ workers: [] }));
+    expect(missing.label).toBe('no crew');
+    expect(missing.material).toBe(false);
+  });
+
+  it('asks for material instead, when the pick list cannot be covered', () => {
+    /*
+     * The one this was written for: nobody on the order *and* no foam in the
+     * racks. It used to read "no crew", so a crew is what it got — and the
+     * order still could not start.
+     */
+    const missing = missingBarReason(
+      stopped({ workers: [], shortPicks: [short('FOAM', 28)] }),
+    );
+    expect(missing.label).toBe('short material');
+    expect(missing.material).toBe(true);
+    // Naming one reason must not hide the other.
+    expect(missing.title).toContain('FOAM short 28');
+    expect(missing.title).toContain('No crew allocated either');
+  });
+
+  it('counts the rest of the short lines without listing them', () => {
+    const missing = missingBarReason(
+      stopped({
+        workers: [{ id: WorkerId('W1') } as Worker],
+        shortPicks: [short('CLOTH', 100), short('FOAM', 28)],
+      }),
+    );
+    expect(missing.title).toContain('2 lines of the pick list');
+    expect(missing.title).toContain('CLOTH short 100');
+    expect(missing.title).toContain('and 1 more');
+    expect(missing.title).not.toContain('No crew');
+  });
+
+  it('names the predecessor ahead of the shortage it is already clearing', () => {
+    const missing = missingBarReason(
+      stopped({
+        workers: [],
+        shortPicks: [short('COVER', 30)],
+        waitingOn: { onJobId: 'UPL1#20', part: 'COVER' },
+      } as unknown as Partial<OrderRow>),
+    );
+    // The row key is the board's; the supervisor reads the order number.
+    expect(missing.label).toBe('waits on UPL1');
+    expect(missing.material).toBe(false);
+  });
+
+  it('says so when the crew simply runs out before the work does', () => {
+    const missing = missingBarReason(
+      stopped({ workers: [{ id: WorkerId('W1') } as Worker], shortPicks: [] }),
+    );
+    expect(missing.label).toBe('not covered');
   });
 });
