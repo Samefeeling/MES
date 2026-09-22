@@ -1289,7 +1289,14 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
       ),
       status,
       material,
-      pickList: pickListByJob.get(id) ?? [],
+      /*
+       * Keyed by the order number, not the row key. JobMaterialReq.csv
+       * knows ASM8002; a routed row is ASM8002#20, so looking the list up
+       * by the row key found nothing and every bench row came back with an
+       * empty pick list. The material to pick belongs to the order, and
+       * each of its operations is working towards the same one.
+       */
+      pickList: pickListByJob.get(jobNumOf(id)) ?? [],
       release: releaseCheck(material, job.materialPrep),
       /*
        * Named by the row that answers for the order, not by the order number.
@@ -1363,7 +1370,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
       if (!op) continue;
       for (const step of op.tail) {
         const key = String(step.line);
-        const mark = `${String(op.jobNum)} ${key}`;
+        const mark = `${String(op.jobNum)}\u0000${key}`;
         if (counted.has(mark)) continue;
         counted.add(mark);
         incomingHours.set(key, (incomingHours.get(key) ?? 0) + step.hours);

@@ -253,6 +253,20 @@ describe('UPL-Gluing on the board', () => {
     expect(rowsOn(both, 'UPL_GLUING_STAPLE')).toEqual(['GLU1#30']);
   });
 
+  it('gives every bench row the order’s pick list', () => {
+    /*
+     * JobMaterialReq.csv knows GLU1; the board's rows are GLU1#10 / #20 / #30.
+     * Looked up by the row key the list came back empty, so tapping a bench
+     * order showed nothing to pick. The material belongs to the order, and
+     * every operation of it is working towards the same one.
+     */
+    const b = board([job('GLU1', 'UPL_GLUING', 37.9)], [foamLink('GLU1')]);
+    for (const id of ['GLU1#10', 'GLU1#20']) {
+      const picks = b.rowsByJob.get(id)!.pickList ?? [];
+      expect(picks.map((p) => String(p.childPart))).toEqual(['FM0012']);
+    }
+  });
+
   it('splits the hours three ways and counts each third once', () => {
     const b = built();
     const third = 37.9 / 3;
