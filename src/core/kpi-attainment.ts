@@ -1,7 +1,7 @@
 import type { PlanningOrder, ProductionRecord } from '../types';
 import { aggregate, countSetupEvents } from './metrics';
-import { plannedRuntimeForShift } from './schedule';
-import { SLOT_MINUTES } from './shifts';
+import { crewedWindowHoursBefore, plannedOrdersForShift, plannedRuntimeForShift } from './schedule';
+import { SLOT_MINUTES, shiftBounds } from './shifts';
 import { setupStandardHours } from './standards';
 
 const SLOT_HOURS = SLOT_MINUTES / 60;
@@ -39,7 +39,7 @@ function result(actual: number, expected: number, covered: number, total: number
 }
 
 
-// Legacy VSPLAN sign-off snapshot. KPI display uses persisted ShiftTarget instead.
+// Legacy VSPLAN sign-off snapshot. The KPI page plans through scheduleTuplesForShift.
 /**
  * Hours of one shift the plan was never going to be running in.
  *
@@ -138,23 +138,78 @@ export function scheduleAdherenceForShift(
 
 
 /**
- * ShiftTarget is the plan for every KPI period, including Last 24h.
+ * One Machine + Shift + Job line of a KPI comparison. Every figure the page
+ * shows for a plan — the "/plan" beside Output and the percentage — is a sum
+ * of these, so a machine, a shift, an order and a category can never be
+ * judged by different rules.
+ *
+ *   - `schedule`     planned in Planning.csv for this press and shift.
+ *   - `shiftTarget`  run, but its order has left Planning.csv (Epicor drops a
+ *                    finished job), so the ShiftTarget saved when it ran is
+ *                    the only record of what it was asked for.
+ *   - `unscheduled`  run, while Planning.csv has the order somewhere else —
+ *                    another press or another shift. Not part of the plan,
+ *                    so it is neither credited nor asked for.
+ *   - `pending`      planned, but the shift has not been signed off yet. Kept
+ *                    out of both sides until it is, so a shift still waiting
+ *                    for its supervisor is not scored as a shift that never ran.
+ */
+export type AttainmentSource = 'schedule' | 'shiftTarget' | 'unscheduled' | 'pending';
+
+export interface AttainmentTuple {
+  machineCode: string;
+  shiftId: string;
+  jobNumber: string;
+  /** Pieces asked for. null = this line should carry a plan and none is known
+   *  (no ShiftTarget saved, no rate in Planning.csv). */
+  planned: number | null;
+  /** Good made (signed-off records only — the caller's filter). */
+  good: number;
+  /** Good allowed into the numerator: capped at the plan when adherence is
+   *  capped, 0 when there is no plan to credit it against. */
+  credited: number;
+  source: AttainmentSource;
+}
+
+/** The comparison over a set of lines. Unscheduled and pending lines are
+ *  outside it on both sides; a line with no known plan counts against
+ *  coverage, not against the percentage. */
+export function attainmentOfTuples(tuples: ReadonlyArray<AttainmentTuple>): KpiAttainment {
+  let actual = 0;
+  let expected = 0;
+  let covered = 0;
+  let total = 0;
+  for (const tuple of tuples) {
+    if (tuple.source === 'unscheduled' || tuple.source === 'pending') continue;
+    total++;
+    if (tuple.planned == null) continue;
+    covered++;
+    actual += tuple.credited;
+    expected += tuple.planned;
+  }
+  return result(actual, expected, covered, total);
+}
+
+const jobKey = (job: string): string => job.trim().toUpperCase();
+
+/**
+ * ShiftTarget lines: one per Machine + Shift + Job in the records.
  *
  * ShiftTarget is a tuple-level snapshot but may be present on more than
  * one slot in legacy data. Group by Machine + Shift + Job, prefer slot 0,
- * and count both the target and Good exactly once. Tuples without a valid
- * target are excluded from both sides and reported through coverage. Zero is
- * an explicit target, not a missing value. Schedule Adherence caps each tuple
- * at its target; Vs Target retains over-production.
+ * and count both the target and Good exactly once. A line without a valid
+ * target carries planned: null and is reported through coverage. Zero is
+ * an explicit target, not a missing value. `capPerJob` caps each line at its
+ * target; without it over-production is kept.
  */
-export function targetAttainmentForRecords(
+export function targetTuplesForRecords(
   records: ReadonlyArray<ProductionRecord>,
   capPerJob = false,
-): KpiAttainment {
+): AttainmentTuple[] {
   const groups = new Map<string, ProductionRecord[]>();
   for (const record of records) {
     const machine = record.machineCode.trim().toUpperCase();
-    const job = record.jobNumber.trim().toUpperCase();
+    const job = jobKey(record.jobNumber);
     if (!machine || !record.shiftId || !job || job.startsWith('DC_')) continue;
     const key = `${machine}|${record.shiftId}|${job}`;
     const group = groups.get(key) ?? [];
@@ -162,9 +217,7 @@ export function targetAttainmentForRecords(
     groups.set(key, group);
   }
 
-  let actual = 0;
-  let expected = 0;
-  let covered = 0;
+  const out: AttainmentTuple[] = [];
   for (const group of groups.values()) {
     const canonical = group.find((record) => record.slotIndex === 0);
     const targetRecord =
@@ -174,14 +227,155 @@ export function targetAttainmentForRecords(
             (record) =>
               Number.isFinite(record.shiftTarget) && (record.shiftTarget ?? -1) >= 0,
           );
-    if (!targetRecord) continue;
-    const target = targetRecord.shiftTarget!;
     const good = aggregate(group).output;
-    actual += capPerJob ? Math.min(good, target) : good;
-    expected += target;
-    covered++;
+    const target = targetRecord ? targetRecord.shiftTarget! : null;
+    out.push({
+      machineCode: group[0].machineCode.trim(),
+      shiftId: group[0].shiftId,
+      jobNumber: group[0].jobNumber.trim(),
+      planned: target,
+      good,
+      credited: target == null ? 0 : capPerJob ? Math.min(good, target) : good,
+      source: 'shiftTarget',
+    });
   }
-  return result(actual, expected, covered, groups.size);
+  return out;
+}
+
+/** Vs Target over a set of records: Σ Good ÷ Σ ShiftTarget, capped per line
+ *  when `capPerJob`. */
+export function targetAttainmentForRecords(
+  records: ReadonlyArray<ProductionRecord>,
+  capPerJob = false,
+): KpiAttainment {
+  return attainmentOfTuples(targetTuplesForRecords(records, capPerJob));
+}
+
+/**
+ * Schedule Adherence lines for one machine-shift, planned from Planning.csv.
+ *
+ * The plan is what Planning.csv put on this press in this shift — whether or
+ * not anybody came to run it. That is the whole point: a press planned for
+ * the afternoon that stood idle for want of a crew has no production records
+ * and so no ShiftTarget, and a plan read off the records left it out of the
+ * denominator altogether. The floor read 96% on a day an entire press's
+ * schedule was missed.
+ *
+ *   planned  = the order's share of the shift's planned runtime ×
+ *              JobOper_ProdStandard (`plannedRuntimeForShift`), only in the
+ *              shifts its "no of shift" says the press is crewed for, and never
+ *              more than is left of the order's quantity after the shifts
+ *              before this one were asked for theirs — Epicor's Start–Due
+ *              window carries the setup time as well, so hours × rate alone
+ *              asks for more pieces than the order holds.
+ *   credited = min(Good, planned) per order, so over-producing one order
+ *              cannot hide missing another.
+ *
+ * Output of an order Planning.csv still holds but not here is `unscheduled`;
+ * output of an order it no longer holds at all falls back to that line's saved
+ * ShiftTarget (see AttainmentSource). `pending` answers every planned line as
+ * pending — the caller knows the shift has unsigned records and no signed ones.
+ *
+ * Records are this machine's signed-off records; lines for other shifts are
+ * ignored.
+ */
+export function scheduleTuplesForShift(
+  records: ReadonlyArray<ProductionRecord>,
+  orders: ReadonlyArray<PlanningOrder>,
+  machineCode: string,
+  shiftId: string,
+  asOf: Date = new Date(),
+  pending = false,
+): AttainmentTuple[] {
+  const bounds = shiftBounds(shiftId);
+  if (!bounds || asOf <= bounds.start) return [];
+  const onShift = records.filter((record) => record.shiftId === shiftId);
+  const planned = plannedRuntimeForShift(
+    shiftId,
+    orders,
+    machineCode,
+    asOf,
+    unavailableHoursForShift(onShift),
+  );
+
+  const plan = new Map<string, { jobNumber: string; pieces: number | null }>();
+  for (const run of planned.runs) {
+    const key = jobKey(run.order.jobNumber);
+    if (!key) continue;
+    // What is left of the order once the shifts before this one have had
+    // their share at the same rate: an order is never asked for more pieces
+    // than it holds, however its window is spread across shifts.
+    const quantity = run.order.orderQty > 0
+      ? run.order.orderQty
+      : run.order.jobRequired > 0 ? run.order.jobRequired : Infinity;
+    const askedBefore = Math.floor(crewedWindowHoursBefore(run.order, bounds.start) / run.order.qtyPerHr);
+    const pieces = Math.min(run.pieces, Math.max(0, quantity - askedBefore));
+    const prior = plan.get(key);
+    plan.set(key, {
+      jobNumber: prior?.jobNumber ?? run.order.jobNumber.trim(),
+      pieces: (prior?.pieces ?? 0) + pieces,
+    });
+  }
+  // Planned here with no rate: still planned, but nobody can say for how
+  // many pieces — a gap in coverage, not a zero.
+  for (const order of plannedOrdersForShift(orders, machineCode, shiftId)) {
+    const key = jobKey(order.jobNumber);
+    if (key && !(order.qtyPerHr > 0) && !plan.has(key)) {
+      plan.set(key, { jobNumber: order.jobNumber.trim(), pieces: null });
+    }
+  }
+
+  const machine = machineCode.trim();
+  if (pending) {
+    return [...plan.values()].map(({ jobNumber, pieces }) => ({
+      machineCode: machine, shiftId, jobNumber, planned: pieces, good: 0, credited: 0, source: 'pending',
+    }));
+  }
+
+  const ran = new Map<string, ProductionRecord[]>();
+  for (const record of onShift) {
+    const key = jobKey(record.jobNumber);
+    if (!key || key.startsWith('DC_')) continue;
+    const group = ran.get(key) ?? [];
+    group.push(record);
+    ran.set(key, group);
+  }
+  const known = new Set(orders.filter((order) => !order.isDieChange).map((order) => jobKey(order.jobNumber)));
+
+  const out: AttainmentTuple[] = [];
+  for (const [key, { jobNumber, pieces }] of plan) {
+    const good = aggregate(ran.get(key) ?? []).output;
+    // A planned line nobody got to is a planned line with nothing made — the
+    // miss this comparison exists to show. Only a line that asked for nothing
+    // and made nothing says nothing, and is left out.
+    if (pieces === 0 && good === 0) continue;
+    out.push({
+      machineCode: machine,
+      shiftId,
+      jobNumber,
+      planned: pieces,
+      good,
+      credited: pieces == null ? 0 : Math.min(good, pieces),
+      source: 'schedule',
+    });
+  }
+  for (const [key, group] of ran) {
+    if (plan.has(key)) continue;
+    if (known.has(key)) {
+      out.push({
+        machineCode: machine,
+        shiftId,
+        jobNumber: group[0].jobNumber.trim(),
+        planned: 0,
+        good: aggregate(group).output,
+        credited: 0,
+        source: 'unscheduled',
+      });
+    } else {
+      out.push(...targetTuplesForRecords(group, true));
+    }
+  }
+  return out;
 }
 
 export function combineAttainment(values: ReadonlyArray<KpiAttainment>): KpiAttainment {

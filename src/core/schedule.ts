@@ -1,5 +1,5 @@
 import type { PlanningOrder } from '../types';
-import { shiftBounds } from './shifts';
+import { buildShiftId, parseShiftId, shiftBounds } from './shifts';
 
 const HOUR_MS = 3_600_000;
 
@@ -40,8 +40,17 @@ function orderWindow(order: PlanningOrder): { start: Date; end: Date } | null {
   return { start, end };
 }
 
+/** True unless the order's Planning.csv "no of shift" leaves this shift out.
+ * An order with no pattern is crewed for every shift its window covers. */
+export function orderCrewedForShift(order: PlanningOrder, shiftId: string): boolean {
+  if (!order.shifts?.length) return true;
+  const parsed = parseShiftId(shiftId);
+  return !!parsed && order.shifts.includes(parsed.code);
+}
+
 /** Planning rows assigned to a press whose Start–Due interval overlaps the
- * selected eight-hour shift. Touching an edge is not an overlap. */
+ * selected eight-hour shift, in a shift the order is crewed for. Touching an
+ * edge is not an overlap. */
 export function plannedOrdersForShift(
   orders: ReadonlyArray<PlanningOrder>,
   machineCode: string,
@@ -52,6 +61,7 @@ export function plannedOrdersForShift(
   return orders
     .filter((order) => {
       if (order.isDieChange || !planningOrderMatchesMachine(order, machineCode)) return false;
+      if (!orderCrewedForShift(order, shiftId)) return false;
       const window = orderWindow(order);
       return !!window && window.start < bounds.end && window.end > bounds.start;
     })
@@ -97,6 +107,35 @@ export function scheduleSegmentsForShift(
   return { segments, laneCount: laneEnds.length };
 }
 
+/**
+ * Hours of an order's Start–Due window before `until`, counting only the
+ * shifts its "no of shift" crews (every hour, when it has no pattern). What
+ * the plan had already asked the order for before a given shift began.
+ */
+export function crewedWindowHoursBefore(order: PlanningOrder, until: Date): number {
+  const window = orderWindow(order);
+  if (!window) return 0;
+  const start = window.start.getTime();
+  const end = Math.min(window.end.getTime(), until.getTime());
+  if (end <= start) return 0;
+  if (!order.shifts?.length) return (end - start) / HOUR_MS;
+  let hours = 0;
+  // From the day before the window opens: that day's Night runs into it.
+  const day = new Date(window.start);
+  day.setHours(0, 0, 0, 0);
+  day.setDate(day.getDate() - 1);
+  for (; day.getTime() < end; day.setDate(day.getDate() + 1)) {
+    for (const code of order.shifts) {
+      const bounds = shiftBounds(buildShiftId(day, code));
+      if (!bounds) continue;
+      const from = Math.max(bounds.start.getTime(), start);
+      const to = Math.min(bounds.end.getTime(), end);
+      if (to > from) hours += (to - from) / HOUR_MS;
+    }
+  }
+  return hours;
+}
+
 export interface ScheduledOutput {
   /** null means there is no elapsed Planning.csv schedule to judge. */
   pieces: number | null;
@@ -116,6 +155,7 @@ function overlapHoursInShift(
   const bounds = shiftBounds(shiftId);
   if (!bounds || asOf <= bounds.start) return 0;
   if (!planningOrderMatchesMachine(order, machineCode) || order.isDieChange) return 0;
+  if (!orderCrewedForShift(order, shiftId)) return 0;
   if (!(order.qtyPerHr > 0)) return 0;
   const window = orderWindow(order);
   if (!window || window.start >= bounds.end || window.end <= bounds.start) return 0;

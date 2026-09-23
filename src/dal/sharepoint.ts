@@ -35,7 +35,7 @@ import {
   decodeBreakdownCauseMap,
   encodeBreakdownCauseMap,
 } from '../core/breakdown';
-import { shiftBounds, slotClock } from '../core/shifts';
+import { parseShiftPattern, shiftBounds, slotClock } from '../core/shifts';
 import { hoursUnavailableFor, shiftTargetFor } from '../core/targets';
 import { scheduleAdherenceForShift } from '../core/kpi-attainment';
 import { retroJobLeftFixes, sumGoodStartedBefore } from '../core/jobgood';
@@ -5411,6 +5411,12 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
     'StartTime',
     'Start Time',
   );
+  // Optional column: the shifts the press is crewed for ("MAN"). Matched
+  // loosely — case, spaces and a plural "s" — because it is a hand-named
+  // column in the export, not an Epicor field.
+  const iShifts = header.findIndex((h) =>
+    ['noofshift', 'noofshifts', 'shiftpattern'].includes(h.toLowerCase().replace(/[^a-z]/g, '')),
+  );
   const out: PlanningOrder[] = [];
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
@@ -5452,6 +5458,7 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
     // established internal field is hours/piece, so invert once at the
     // boundary and keep every downstream calculation unit-safe.
     const piecesPerHour = parseFloat(row[iQty] ?? '0') || 0;
+    const shifts = iShifts >= 0 ? parseShiftPattern(row[iShifts]) : undefined;
     out.push({
       id: 0,
       jobNumber: job,
@@ -5477,6 +5484,7 @@ export function parsePlanningCsv(text: string): PlanningOrder[] {
       isDieChange: false,
       manuallyAdded: false,
       source: 'ERP',
+      ...(shifts ? { shifts } : {}),
     });
   }
   return out;

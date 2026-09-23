@@ -22,6 +22,29 @@ export const SHIFT_MAP: Record<ShiftCode, ShiftDef> = Object.fromEntries(
   SHIFTS.map((s) => [s.code, s]),
 ) as Record<ShiftCode, ShiftDef>;
 
+/**
+ * Planning.csv "no of shift" → the shifts a press is crewed for: one letter
+ * per shift, M (Morning = Day, D also accepted) / A (Afternoon) / N (Night),
+ * so "MAN" is all three and "MA" leaves the night out. Separators are
+ * ignored ("M/A", "M, A").
+ *
+ * Blank, or anything with a letter outside M/D/A/N, answers undefined — no
+ * restriction — rather than a guess: reading a stray value as "no shifts"
+ * would silently take the order off the plan.
+ */
+export function parseShiftPattern(raw: string | null | undefined): ShiftCode[] | undefined {
+  const letters = (raw ?? '').toUpperCase().replace(/[^A-Z]/g, '');
+  if (!letters) return undefined;
+  const byLetter: Record<string, ShiftCode> = { M: 'Day', D: 'Day', A: 'Afternoon', N: 'Night' };
+  const found = new Set<ShiftCode>();
+  for (const letter of letters) {
+    const code = byLetter[letter];
+    if (!code) return undefined;
+    found.add(code);
+  }
+  return SHIFTS.map((s) => s.code).filter((code) => found.has(code));
+}
+
 function pad(n: number): string {
   return String(n).padStart(2, '0');
 }

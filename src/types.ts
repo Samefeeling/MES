@@ -290,6 +290,12 @@ export interface PlanningOrder {
   isDieChange: boolean;
   manuallyAdded: boolean;
   source: 'ERP' | 'Auto-DC' | 'Manual';
+  /** Planning.csv "no of shift": the shifts the press is crewed for while
+   *  this order runs — "MAN" is Morning (Day) / Afternoon / Night. A shift
+   *  outside the list is not planned to run it, however far the Start–Due
+   *  window stretches across it. Absent = the export gave no pattern, so
+   *  every shift the window covers counts. */
+  shifts?: ShiftCode[];
   /** SharePoint PMD_ManualOrders.Created. Used only to age a manual row
    *  out of the Operator dropdown after 48 hours; absent on ERP/history. */
   createdAt?: string;
