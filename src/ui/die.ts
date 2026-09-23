@@ -381,7 +381,6 @@ function openWorkOrders(dieNumber: string): void {
     <div class="kpi-trace-head die-detail-head">
       <h3>🛠 Open Work Orders <span class="die-detail-sub">${escapeHtml(title)}</span></h3>
       <div class="die-detail-head-actions">
-        ${mangoLink('Request in Mango', 'hd')}
         <button class="die-detail-close" data-mod="close" title="Close">✕ Close</button>
       </div>
     </div>
@@ -450,7 +449,6 @@ function openMachineWorkOrders(machineCode: string): void {
     <div class="kpi-trace-head die-detail-head">
       <h3>🏭 Machine Work Orders <span class="die-detail-sub">${escapeHtml(title)}</span></h3>
       <div class="die-detail-head-actions">
-        ${mangoLink('Request in Mango', 'hd')}
         <button class="die-detail-close" data-mod="close" title="Close">✕ Close</button>
       </div>
     </div>
@@ -779,7 +777,6 @@ function renderHead(): string {
       <label>To <input type="date" data-die-to value="${escapeHtml(S!.to)}"></label>
     </div>
     <input type="text" class="die-filter" data-die-filter placeholder="Filter die / part…" value="${escapeHtml(S!.filter)}">
-    ${mangoLink('Raise Request in Mango', 'lg')}
   </div>`;
 }
 
@@ -1952,7 +1949,6 @@ function openDieDetail(dieNumber: string): void {
             : ''
         }
         <button class="die-detail-print" data-die-print title="Print this die's page">🖨 Print</button>
-        ${mangoLink('Request in Mango', 'hd')}
         <button class="die-detail-close" data-mod="close" title="Close">✕ Close</button>
       </div>
     </div>
