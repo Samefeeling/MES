@@ -931,8 +931,17 @@ function LineGroupView({
   );
 }
 
-export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
+export function AssemblyGantt({
+  board,
+  unreleasedHidden = 0,
+}: {
+  board: AssemblyGanttView;
+  /** Orders Released Only is keeping off this board, for the switch's title. */
+  unreleasedHidden?: number;
+}) {
   const root = useRef<HTMLDivElement>(null);
+  const releasedOnly = useUiStore((s) => s.releasedOnly);
+  const setReleasedOnly = useUiStore((s) => s.setReleasedOnly);
   const select = useUiStore((s) => s.select);
   const selectedJobId = useUiStore((s) => s.selectedJobId);
   const dayWidth = useUiStore((s) => s.dayWidth);
@@ -1399,6 +1408,35 @@ export function AssemblyGantt({ board }: { board: AssemblyGanttView }) {
               >
                 <span aria-hidden="true">{allFolded ? '▶' : '▼'}</span>
               </button>
+              {/* Which orders the board plans with. Not a view filter: the
+                  board is planned again from the orders it keeps, so line and
+                  day loads are the capacity that work needs. */}
+              <div className="release-scope" role="group" aria-label="Orders to plan with">
+                <button
+                  type="button"
+                  className={releasedOnly ? '' : 'on'}
+                  aria-pressed={!releasedOnly}
+                  onClick={() => setReleasedOnly(false)}
+                  title="Plan with every order in the export, released or not — what the lines would carry once the rest is released"
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  className={releasedOnly ? 'on' : ''}
+                  aria-pressed={releasedOnly}
+                  onClick={() => setReleasedOnly(true)}
+                  title={
+                    'Plan with released orders only (JobHead_JobReleased). An unreleased order stays if it has ' +
+                    'begun on the floor or a released order waits for it.' +
+                    (releasedOnly && unreleasedHidden > 0
+                      ? ` ${unreleasedHidden} unreleased order${unreleasedHidden === 1 ? ' is' : 's are'} off the board.`
+                      : '')
+                  }
+                >
+                  Released Only
+                </button>
+              </div>
             </div>
             {/* The roster's two rolls, moved here off the Team column. */}
             {crewRolls}

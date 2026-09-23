@@ -383,6 +383,25 @@ export function hasBegun(row: OrderRow): boolean {
 }
 
 /**
+ * The orders a Released Only board plans with: every order Epicor has
+ * released (JobHead_JobReleased), plus the few an unreleased flag must not
+ * take off the board —
+ *
+ *   - one already begun on the floor: it is at the line whatever the flag
+ *     says, and hiding it would hide work in progress and its crew;
+ *   - one a kept order waits for, all the way up the chain: a released order
+ *     drawn without the work it waits on would plan as if it could start now.
+ *
+ * A blank flag (`released: null` — the column missing or empty) is not
+ * "unreleased" and stays. Returns the job ids to keep, as order numbers, so
+ * every operation row of a routed order goes with it.
+ */
+export function releasedOrderNumbers(rows: readonly OrderRow[]): Set<string> {
+  const kept = withPredecessors([...rows], (row) => row.job.released !== false || hasBegun(row));
+  return new Set([...kept].map(jobNumOf));
+}
+
+/**
  * Orders somebody's absence has left standing: begun on the floor, not
  * finished, and with nobody on them today because the people who were are not
  * in.

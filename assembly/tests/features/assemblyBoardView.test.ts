@@ -27,6 +27,7 @@ import {
   strandedOrders,
   timelineDayOffset,
   withPredecessors,
+  releasedOrderNumbers,
 } from '@/features/assembly/boardView';
 
 const row = (
@@ -671,5 +672,32 @@ describe('why an order has no bar', () => {
       stopped({ workers: [{ id: WorkerId('W1') } as Worker], shortPicks: [] }),
     );
     expect(missing.label).toBe('not covered');
+  });
+});
+
+describe('Released Only', () => {
+  const order = (id: string, released: boolean | null, over: Partial<OrderRow> = {}): OrderRow => {
+    const r = row(id);
+    (r.job as { released: boolean | null }).released = released;
+    r.predecessors = [];
+    return Object.assign(r, over);
+  };
+
+  it('plans with released orders, and treats a blank flag as released', () => {
+    const keep = releasedOrderNumbers([order('A', true), order('B', false), order('C', null)]);
+    expect([...keep].sort()).toEqual(['A', 'C']);
+  });
+
+  it('keeps an unreleased order a released one waits for, and one already begun', () => {
+    const chair = order('CHAIR', true);
+    chair.predecessors = [{ jobId: chair.job.id, onJobId: 'FOAM', part: null }] as OrderRow['predecessors'];
+    const foam = order('FOAM', false);
+    const started = order('RUN', false, { actualStart: { startedAt: '2026-09-22T07:00:00' } } as Partial<OrderRow>);
+    const idle = order('IDLE', false);
+    expect([...releasedOrderNumbers([chair, foam, started, idle])].sort()).toEqual(['CHAIR', 'FOAM', 'RUN']);
+  });
+
+  it('answers in order numbers, so every operation of a routed order goes together', () => {
+    expect([...releasedOrderNumbers([order('SFM1#10', true), order('SFM1#20', true)])]).toEqual(['SFM1']);
   });
 });

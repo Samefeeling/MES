@@ -9,7 +9,7 @@ import { useDataStore } from '@/store/dataStore';
 import { usePlanStore } from '@/store/planStore';
 import { useUiStore } from '@/store/uiStore';
 import { useSupervisorStore } from '@/store/supervisorStore';
-import { useAssemblyGantt } from '@/store/assemblySelectors';
+import { useAssemblyBoards } from '@/store/assemblySelectors';
 import { useDragDrop } from '@/features/assembly/useDragDrop';
 import { AssemblyGantt } from '@/features/assembly/AssemblyGantt';
 import { BoardTools } from '@/features/assembly/BoardTools';
@@ -36,7 +36,11 @@ export default function App() {
   const manualOrders = usePlanStore(s => s.manualOrders);
   const selectedJobId = useUiStore(s => s.selectedJobId);
 
-  const board = useAssemblyGantt();
+  // `plan` is every order — what is saved and synced. `board` is what is
+  // drawn, planned from released orders alone unless the Order header's
+  // switch says All (see useAssemblyBoards).
+  const releasedOnly = useUiStore((s) => s.releasedOnly);
+  const { board: planBoard, shown: board, unreleasedHidden } = useAssemblyBoards(releasedOnly);
   const dnd = useDragDrop();
   const resetOrderSort = useUiStore((s) => s.resetOrderSort);
 
@@ -73,7 +77,7 @@ export default function App() {
    * that has not reached the repository at all yet.
    */
   const sync = usePlanSync(
-    plan.stored === 'loaded' && plan.settled && !plan.dirty ? board : null,
+    plan.stored === 'loaded' && plan.settled && !plan.dirty ? planBoard : null,
   );
 
   // Initial data load.
@@ -217,7 +221,7 @@ export default function App() {
         <div className="app-body">
           <div className="board-pane assembly-pane">
             {board ? (
-              <AssemblyGantt board={board} />
+              <AssemblyGantt board={board} unreleasedHidden={unreleasedHidden} />
             ) : (
               <div className="center-fill">
                 <Spinner />

@@ -262,6 +262,13 @@ interface UiState {
    * that it is on.
    */
   dueSoon: boolean;
+  /**
+   * Plan with released orders only (JobHead_JobReleased), or with every order
+   * in the export. Released Only by default and on every load: it is the work
+   * that can actually be built. All is for looking ahead — what the lines
+   * would carry once the rest is released.
+   */
+  releasedOnly: boolean;
   /** Weekend timeline columns; hidden by default to keep the working week compact. */
   showWeekends: boolean;
   /** Sort the displayed rows without changing the scheduler's line sequence. */
@@ -310,6 +317,7 @@ interface UiState {
    */
   showEverything: () => void;
   toggleDueSoon: () => void;
+  setReleasedOnly: (releasedOnly: boolean) => void;
   setOrderDay: (day: string | null) => void;
   toggleWeekends: () => void;
   changeOrderSort: (key: OrderSortKey) => void;
@@ -338,6 +346,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   hiddenLines: [...LINES_HIDDEN_BY_DEFAULT],
   orderDay: null,
   dueSoon: false,
+  releasedOnly: true,
   showWeekends: false,
   orderSort: { key: 'start', direction: 'asc' },
 
@@ -429,6 +438,7 @@ export const useUiStore = create<UiState>((set, get) => ({
       dueSoon: false,
     }),
   toggleDueSoon: () => set((state) => ({ dueSoon: !state.dueSoon })),
+  setReleasedOnly: (releasedOnly) => set({ releasedOnly }),
   setOrderDay: (orderDay) => set({ orderDay }),
   toggleWeekends: () => set((state) => ({ showWeekends: !state.showWeekends })),
   changeOrderSort: (key) => set((state) => ({

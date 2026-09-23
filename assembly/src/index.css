@@ -1393,6 +1393,36 @@ body.col-resizing {
   padding-right: 8px;
 }
 .head-name { white-space: nowrap; }
+/* All | Released Only — which orders the board plans with. */
+.release-scope {
+  display: inline-flex;
+  flex: 0 0 auto;
+  border: 1px solid var(--head-tx);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.release-scope button {
+  padding: 1px 7px;
+  border: 0;
+  background: transparent;
+  color: var(--head-tx);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1.5;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.release-scope button + button { border-left: 1px solid var(--head-tx); }
+.release-scope button.on {
+  background: var(--head-tx);
+  color: var(--head-bg, #fff);
+}
+.release-scope button:not(.on):hover,
+.release-scope button:focus-visible {
+  background: var(--chrome-tint-hi);
+  outline: none;
+}
 
 /*
  * The order number and the material description swap emphasis: the floor

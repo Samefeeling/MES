@@ -10,10 +10,15 @@ import {
   type AssemblyGanttView,
   type OrderRow,
 } from '@/engine/assembly/board';
+import { releasedOrderNumbers } from '@/features/assembly/boardView';
+import { jobNumOf } from '@/domain/routing';
 import { useDataStore } from './dataStore';
+import { useUiStore } from './uiStore';
 import { usePlanStore } from './planStore';
 
-export function useAssemblyGantt(): AssemblyGanttView | null {
+type GanttInputs = Parameters<typeof computeAssemblyGantt>[0];
+
+function useGanttInputs(): GanttInputs | null {
   const dataset = useDataStore((s) => s.dataset);
   const indexes = useDataStore((s) => s.indexes);
   const manualOrders = usePlanStore(s => s.manualOrders);
@@ -33,7 +38,7 @@ export function useAssemblyGantt(): AssemblyGanttView | null {
   return useMemo(
     () =>
       dataset && indexes
-        ? computeAssemblyGantt({
+        ? {
             dataset: { ...dataset, jobs: [...dataset.jobs, ...Object.values(manualOrders).map(manualJob)] },
             indexes,
             containers,
@@ -50,7 +55,7 @@ export function useAssemblyGantt(): AssemblyGanttView | null {
             workers: dataset.workers,
             workerOnLeave,
             today: new Date(),
-          })
+          }
         : null,
     [
       dataset,
@@ -73,6 +78,67 @@ export function useAssemblyGantt(): AssemblyGanttView | null {
 }
 
 /**
+ * The board, twice over.
+ *
+ * `board` is every order in the export. It is the plan: what is saved and
+ * synced back to SharePoint, and what an order is looked up in. A view
+ * setting must never change what is written.
+ *
+ * `shown` is what the Gantt draws. With Released Only on (the default) it is
+ * planned again from the released orders alone — see `releasedOrderNumbers` —
+ * so the line loads, day loads and crew counts on screen are the capacity the
+ * released work needs, not that plus orders nobody can build yet. With All, or
+ * when nothing in the export is unreleased, it is `board` itself.
+ */
+export function useAssemblyBoards(releasedOnly: boolean): {
+  board: AssemblyGanttView | null;
+  shown: AssemblyGanttView | null;
+  /** Assembly orders Released Only is keeping off the board. */
+  unreleasedHidden: number;
+} {
+  const inputs = useGanttInputs();
+  const board = useMemo(() => (inputs ? computeAssemblyGantt(inputs) : null), [inputs]);
+  return useMemo(() => {
+    if (!inputs || !board || !releasedOnly) return { board, shown: board, unreleasedHidden: 0 };
+    const scoped = releasedOnlyInputs(inputs, board);
+    return !scoped.removed
+      ? { board, shown: board, unreleasedHidden: 0 }
+      : { board, shown: computeAssemblyGantt(scoped.inputs), unreleasedHidden: scoped.hidden };
+  }, [inputs, board, releasedOnly]);
+}
+
+/** The same inputs with the orders Released Only keeps off the board taken
+ *  out, and how many orders that was. `board` is the full board over
+ *  `inputs`, for the chains `releasedOrderNumbers` follows. */
+function releasedOnlyInputs(
+  inputs: GanttInputs,
+  board: AssemblyGanttView,
+): { inputs: GanttInputs; hidden: number; removed: boolean } {
+  const keep = releasedOrderNumbers(board.groups.flatMap((group) => group.rows));
+  const hiddenOrders = new Set<string>();
+  let removed = false;
+  const jobs = inputs.dataset.jobs.filter((job) => {
+    const order = jobNumOf(String(job.id));
+    if (job.released !== false || keep.has(order)) return true;
+    // Counted for the switch's title: Assembly's own orders. Unreleased press
+    // work leaves the PMD lane too, but that is not what the count is asked.
+    if (job.department === 'assembly') hiddenOrders.add(order);
+    removed = true;
+    return false;
+  });
+  return {
+    inputs: { ...inputs, dataset: { ...inputs.dataset, jobs } },
+    hidden: hiddenOrders.size,
+    removed,
+  };
+}
+
+/** Every order in the export — the plan that is saved and synced. */
+export function useAssemblyGantt(): AssemblyGanttView | null {
+  return useAssemblyBoards(false).board;
+}
+
+/**
  * Re-derive the board with extra crew on top of the current plan.
  *
  * For work that has to try something and see what the schedule does with it —
@@ -90,7 +156,7 @@ export function recomputeAssemblyGantt(
   const { dataset, indexes } = useDataStore.getState();
   if (!dataset || !indexes) return null;
   const plan = usePlanStore.getState();
-  return computeAssemblyGantt({
+  const inputs: GanttInputs = {
     dataset: { ...dataset, jobs: [...dataset.jobs, ...Object.values(plan.manualOrders).map(manualJob)] },
     indexes,
     containers: plan.containers,
@@ -119,7 +185,13 @@ export function recomputeAssemblyGantt(
     workers: dataset.workers,
     workerOnLeave: plan.workerOnLeave,
     today: new Date(),
-  });
+  };
+  const board = computeAssemblyGantt(inputs);
+  // Suggest on the board the supervisor is looking at: with Released Only on,
+  // an order that is not on screen gets no crew suggested for it.
+  if (!useUiStore.getState().releasedOnly) return board;
+  const scoped = releasedOnlyInputs(inputs, board);
+  return scoped.removed ? computeAssemblyGantt(scoped.inputs) : board;
 }
 
 /** The row for one order, if it is on a line. */
