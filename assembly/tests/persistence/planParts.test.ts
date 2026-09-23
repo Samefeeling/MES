@@ -3,12 +3,14 @@ import {
   PLANNING_KEYS,
   SHIFT_RECORD_KEYS,
   joinPlan,
+  mergeShiftRecords,
   planningFingerprint,
   planningOf,
   shiftRecordsOf,
 } from '@/persistence/planParts';
 import { JobId } from '@/domain/ids';
 import type { PersistedPlan } from '@/persistence/PlanRepository';
+import type { ActualStartRecord, ProductionEntry } from '@/store/planStore';
 
 const plan = (over: Partial<PersistedPlan> = {}): PersistedPlan => ({
   id: 'current',
@@ -117,5 +119,44 @@ describe('planningFingerprint', () => {
       plan({ assembly: { production: { J1: [{ date: '2026-09-17' } as never] } } }),
     );
     expect(planningFingerprint(before)).toBe(planningFingerprint(after));
+  });
+});
+
+describe('mergeShiftRecords — one board cannot write another board\'s bookings away', () => {
+  const entry = (date: string, complete: number): ProductionEntry =>
+    ({ date, complete, reject: 0, rework: 0, shiftOutput: complete, paused: false, jobCompleted: false, notes: '' }) as ProductionEntry;
+  const start = (at: string): ActualStartRecord =>
+    ({ startedAt: at, operatorIds: [], operatorNames: [] }) as unknown as ActualStartRecord;
+
+  it('keeps a booking only the stored plan holds, for an order this board still has', () => {
+    // Board B opened at six and was never refreshed; A booked J2 at nine.
+    const local = { assembly: { production: { J1: [entry('2026-09-22', 5)] }, orderActualStarts: {}, lastSeen: { J1: '2026-09-22', J2: '2026-09-22' } } };
+    const stored = { assembly: { production: { J2: [entry('2026-09-22', 7)] }, orderActualStarts: { J2: start('2026-09-22T07:40:00') } } };
+    const merged = mergeShiftRecords(local, stored).assembly;
+    expect(merged.production?.J2).toEqual([entry('2026-09-22', 7)]);
+    expect(merged.production?.J1).toEqual([entry('2026-09-22', 5)]);
+    expect(merged.orderActualStarts?.J2).toEqual(start('2026-09-22T07:40:00'));
+  });
+
+  it('lets this board\'s own word win on a day it holds — a reopen included', () => {
+    const local = { assembly: { production: { J1: [{ ...entry('2026-09-22', 5), jobCompleted: false }] }, lastSeen: { J1: '2026-09-22' } } };
+    const stored = { assembly: { production: { J1: [{ ...entry('2026-09-22', 5), jobCompleted: true }, entry('2026-09-21', 3)] } } };
+    const merged = mergeShiftRecords(local, stored).assembly.production!.J1;
+    expect(merged.map((e: { date: string }) => e.date)).toEqual(['2026-09-21', '2026-09-22']);
+    expect(merged.find((e: { date: string }) => e.date === '2026-09-22')).toMatchObject({ jobCompleted: false });
+  });
+
+  it('lets go of an order this board\'s retention has dropped', () => {
+    const local = { assembly: { production: {}, orderActualStarts: {}, lastSeen: {} } };
+    const stored = { assembly: { production: { OLD: [entry('2026-06-01', 1)] }, orderActualStarts: { OLD: start('2026-06-01T07:00:00') } } };
+    const merged = mergeShiftRecords(local, stored).assembly;
+    expect(merged.production).toEqual({});
+    expect(merged.orderActualStarts).toEqual({});
+  });
+
+  it('never merges records that can be taken back', () => {
+    const local = { assembly: { workerOnLeave: {}, lastSeen: {} } };
+    const stored = { assembly: { workerOnLeave: { W1: ['2026-09-22'] } } };
+    expect(mergeShiftRecords(local, stored).assembly.workerOnLeave).toEqual({});
   });
 });

@@ -79,15 +79,13 @@ export interface ProductionEntry {
   laborHours?: number;
   date: string;
   /**
-   * This booking's own key in `ASSY_Production`, written once and never again.
+   * A random key the booking was given when first saved.
    *
-   * The list used to be keyed on `Job|YYYY-MM-DD`, which ties a row's identity
-   * to a date — and a date is the one thing on the record that can be read two
-   * ways. A SharePoint date column answers in the site's timezone, not the
-   * shift's, so a row could stop matching the day it was written for and be
-   * opened a second time. The key is now the row's identity and nothing else:
-   * the plan generates it when the entry is first saved and both sides carry
-   * it, so the day is free to be an ordinary column.
+   * No longer what the row is written under: two boards booking one order on
+   * one day held two of these, so the list's unique index on `RecordKey` had
+   * nothing to refuse and both opened a row. The row key is now worked out
+   * from the order, operation and day (`production.sync` `keyFor`); this is
+   * kept so a row written under it is still recognised, once, and re-keyed.
    */
   recordKey?: string;
   /**

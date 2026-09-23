@@ -32,6 +32,7 @@ import {
   createPlanRepository,
   dailyPlanId,
   joinPlan,
+  mergeShiftRecords,
   planningFingerprint,
   planningOf,
   shiftRecordsOf,
@@ -336,15 +337,21 @@ export function usePlanPersistence(): PlanPersistence {
         return;
       }
       let base = published.current;
+      let storedRecords: ShiftRecordPart | null = null;
       try {
         const current = await repo.load();
-        if (current) base = planningOf(current);
+        if (current) {
+          base = planningOf(current);
+          storedRecords = shiftRecordsOf(current);
+        }
       } catch {
         /* keep the last planning this browser can prove */
       }
       if (!base) return;
       try {
-        await store(joinPlan(CURRENT_PLAN_ID, PLAN_NAME, base, records));
+        // Bookings made on other boards since this one last read the plan are
+        // kept, not overwritten — see mergeShiftRecords.
+        await store(joinPlan(CURRENT_PLAN_ID, PLAN_NAME, base, mergeShiftRecords(records, storedRecords)));
         if (generation === writeGeneration.current) {
           setError(null);
           setSettled(true);
@@ -365,7 +372,14 @@ export function usePlanPersistence(): PlanPersistence {
     const part = planningNow();
     savingNow.current = true;
     setSaving(true);
-    void store(joinPlan(CURRENT_PLAN_ID, PLAN_NAME, part, recordsNow()))
+    // Planning is this board's to publish whole; the shift records under it
+    // keep what other boards have booked since (see mergeShiftRecords).
+    void repo
+      .load()
+      .then((current) => (current ? shiftRecordsOf(current) : null), () => null)
+      .then((storedRecords) =>
+        store(joinPlan(CURRENT_PLAN_ID, PLAN_NAME, part, mergeShiftRecords(recordsNow(), storedRecords))),
+      )
       .then(() => {
         published.current = part;
         setClean(planningFingerprint(part));

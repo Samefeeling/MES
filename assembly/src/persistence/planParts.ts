@@ -100,6 +100,66 @@ export function shiftRecordsOf(plan: PersistedPlan): ShiftRecordPart {
   return { assembly: pick(plan.assembly ?? {}, SHIFT_RECORD_KEYS) };
 }
 
+/**
+ * This board's shift records, with what only the stored plan holds added in.
+ *
+ * Each board writes the records it holds, whole. A board opened at six and
+ * never refreshed holds none of the bookings made on the others since, and
+ * its next write took every one of them off the stored plan — the booking
+ * gone, the Start production gone with it, and the next save of that day
+ * minting a new booking over a row that was already there.
+ *
+ * Only the two records nothing ever takes back one at a time are merged: a
+ * shift's booking (`production`, per order and day) and the Start production
+ * confirmation (`orderActualStarts`, per order). What this board holds wins —
+ * it is the newer word on anything it has touched, a reopened order included.
+ * What only the stored plan holds is kept for an order this board still
+ * retains, and let go for one its retention has dropped, so a pruned order is
+ * not carried round forever.
+ *
+ * Everything else — leave, progress, last seen — can be taken back, and a
+ * merge would put back what somebody removed. Those stay this board's.
+ */
+export function mergeShiftRecords(
+  local: ShiftRecordPart,
+  stored: ShiftRecordPart | null,
+): ShiftRecordPart {
+  if (!stored) return local;
+  const mine = local.assembly;
+  const theirs = stored.assembly;
+  const retained = (id: string): boolean =>
+    id in (mine.lastSeen ?? {}) || id in (mine.production ?? {}) || id in (mine.orderActualStarts ?? {});
+
+  let production = mine.production;
+  if (mine.production && theirs.production) {
+    production = { ...mine.production };
+    for (const [id, entries] of Object.entries(theirs.production)) {
+      if (!retained(id)) continue;
+      const held = production[id] ?? [];
+      const days = new Set(held.map((entry) => entry.date));
+      const missing = entries.filter((entry) => !days.has(entry.date));
+      if (missing.length === 0) continue;
+      production[id] = [...held, ...missing].sort((a, b) => a.date.localeCompare(b.date));
+    }
+  }
+
+  let orderActualStarts = mine.orderActualStarts;
+  if (mine.orderActualStarts && theirs.orderActualStarts) {
+    orderActualStarts = { ...mine.orderActualStarts };
+    for (const [id, start] of Object.entries(theirs.orderActualStarts)) {
+      if (!(id in orderActualStarts) && retained(id)) orderActualStarts[id] = start;
+    }
+  }
+
+  return {
+    assembly: {
+      ...mine,
+      ...(production ? { production } : {}),
+      ...(orderActualStarts ? { orderActualStarts } : {}),
+    },
+  };
+}
+
 /** One plan to store, from the two halves and whoever is writing it. */
 export function joinPlan(
   id: string,

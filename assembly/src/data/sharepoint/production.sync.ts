@@ -141,12 +141,6 @@ export interface OrderFacts {
   remainingQty: number;
   /** `YYYY-MM-DD` for the row to open the order with when it has none yet. */
   anchorDay: string;
-  /**
-   * Two of the order's operations were live on the same day — Gluing foaming
-   * and sewing. Set while the facts are merged, because it is a fact about the
-   * order's rows rather than about any one of them.
-   */
-  parallelOperations?: boolean;
   /** One entry per booked shift. */
   shifts: ShiftFacts[];
 }
@@ -280,22 +274,38 @@ function orderFields(facts: OrderFacts): ListItemFields {
 }
 
 /**
- * The key a row carries when no booking gave it one: `Job|YYYY-MM-DD`.
+ * A row's key: `Job|YYYY-MM-DD`, or `Job#Op|YYYY-MM-DD` for one operation of a
+ * routed order. One order, one operation, one day — one row.
  *
- * Every row used to be keyed this way, and the trouble with it is the date —
- * the one part of the record that can be read two ways, because a SharePoint
- * date column answers in the site's timezone rather than the shift's. A
- * booking now brings its own key (`ProductionEntry.recordKey`), generated once
- * and never derived from anything; this is what is left for the two kinds of
- * row that have no booking behind them: the blank row an order opens with, and
- * rows written before keys were part of the plan.
+ * Worked out from what the booking itself holds — the order, the operation and
+ * the day as the board wrote it, never the Date column read back — so every
+ * board holding a booking for that day arrives at the same key. That is what
+ * lets the list's unique index on `RecordKey` refuse a second row outright.
+ *
+ * For a while each booking carried a random key of its own
+ * (`ProductionEntry.recordKey`). Two boards booking the same order on the same
+ * day then held two different keys, the unique index had nothing to refuse,
+ * and both opened a row: the duplicate the sync kept reporting. Rows written
+ * under those keys are still found — by that key, and by their day — and take
+ * this key the first time they are written again.
  */
 const legacyKey = (jobNum: string, date: string, opSeq?: number): string =>
   opSeq === undefined ? `${jobNum}|${date}` : `${jobNum}#${opSeq}|${date}`;
 
-/** The key this shift's row is written under, whichever kind it is. */
+/** The key this shift's row is written under. */
 const keyFor = (jobNum: string, shift: ShiftFacts): string =>
-  shift.recordKey ?? legacyKey(jobNum, shift.date, shift.opSeq);
+  legacyKey(jobNum, shift.date, shift.opSeq);
+
+/** The operation a stored row belongs to, from its `Op 10 foaming`
+ *  description; '' for a row that names none (an order with no route, a
+ *  support order, a row written before operations were recorded). */
+const rowOp = (fields: ListItemFields): string =>
+  /^Op\s+(\d+)\b/i.exec(String(fields[PRODUCTION_COLUMNS.description] ?? '').trim())?.[1] ?? '';
+
+/** One order's place in the record: a day and an operation. */
+const slotOf = (day: string, op: string): string => `${day}|${op}`;
+const shiftOp = (shift: ShiftFacts): string =>
+  shift.opSeq === undefined ? '' : String(shift.opSeq);
 
 /**
  * An empty shift — the row an order opens with before anything is booked.
@@ -476,8 +486,10 @@ const rowDay = (fields: ListItemFields): string =>
  */
 interface StoredRows {
   byKey: Map<string, ListItem>;
-  byDay: Map<string, ListItem>;
-  /** Rows beyond the first for one key — the duplicates somebody has to clear. */
+  /** Day + operation → the row holding it (see `slotOf`). */
+  bySlot: Map<string, ListItem>;
+  /** Rows beyond the first for one key or one day and operation — the
+   *  duplicates somebody has to clear. */
   extras: ListItem[];
   all: ListItem[];
 }
@@ -486,44 +498,43 @@ interface StoredRows {
 const oldestFirst = (a: ListItem, b: ListItem): number =>
   (Number(a.id) || 0) - (Number(b.id) || 0);
 
-function indexRows(
-  jobNum: string,
-  rows: ListItem[],
-  /**
-   * Whether one row per day is the rule for this order.
-   *
-   * It is, for every order worked at one place at a time. Where a route puts
-   * two benches on the same order on the same day — Gluing foams and sews side
-   * by side — two rows for that day are two records, not a duplicate, and each
-   * is told apart by the key its booking carries.
-   */
-  oneRowPerDay = true,
-): StoredRows {
+/**
+ * One row per order, per operation, per day.
+ *
+ * The operation is part of it always. It used to count only while two of an
+ * order's benches were both on the board: once the first bench finished and
+ * left it, the two rows it and the next bench had written on a shared day
+ * read as a duplicate — and the next booking that day could be written into
+ * the other bench's row.
+ */
+function indexRows(jobNum: string, rows: ListItem[]): StoredRows {
   const byKey = new Map<string, ListItem>();
-  const byDay = new Map<string, ListItem>();
+  const bySlot = new Map<string, ListItem>();
   const extras: ListItem[] = [];
   for (const row of [...rows].sort(oldestFirst)) {
     const rawKey = String(row.fields[PRODUCTION_COLUMNS.recordKey] ?? '').trim();
     const day = rowDay(row.fields);
-    const key = rawKey || legacyKey(jobNum, day);
-    if (byKey.has(key) || (oneRowPerDay && byDay.has(day))) {
+    const op = rowOp(row.fields);
+    const key = rawKey || legacyKey(jobNum, day, op ? Number(op) : undefined);
+    const slot = slotOf(day, op);
+    if (byKey.has(key) || bySlot.has(slot)) {
       extras.push(row);
       continue;
     }
     byKey.set(key, row);
-    byDay.set(day, row);
+    bySlot.set(slot, row);
   }
-  return { byKey, byDay, extras, all: rows };
+  return { byKey, bySlot, extras, all: rows };
 }
 
 /**
  * The row this shift owns, claimed so nothing else can take it.
  *
- * Three questions, narrowest first: the key the booking itself carries, then
- * the key rows used to be given, then the day. The last two are what recognise
- * a row written before bookings had keys — and the row so recognised is
- * rewritten under the booking's own key, so each row is asked the older
- * questions exactly once in its life.
+ * Narrowest first: the shift's key; the random key an older booking gave the
+ * row; the row this order holds for the shift's day and operation; and last,
+ * for an operation, a row on that day naming no operation at all — one
+ * written before operations were recorded. A row so recognised is rewritten
+ * under the shift's key, so it is asked the older questions once in its life.
  *
  * Claiming matters: a row whose key and Date disagree would otherwise answer
  * two different shifts, and the pass would write one day into it and then the
@@ -534,18 +545,16 @@ function claimRow(
   jobNum: string,
   shift: ShiftFacts,
 ): ListItem | null {
+  const op = shiftOp(shift);
   const found =
+    index.byKey.get(keyFor(jobNum, shift)) ??
     (shift.recordKey ? index.byKey.get(shift.recordKey) : undefined) ??
-    index.byKey.get(legacyKey(jobNum, shift.date, shift.opSeq)) ??
-    index.byDay.get(shift.date) ??
+    index.bySlot.get(slotOf(shift.date, op)) ??
+    (op ? index.bySlot.get(slotOf(shift.date, '')) : undefined) ??
     null;
   if (!found) return null;
-  if (shift.recordKey) index.byKey.delete(shift.recordKey);
-  index.byKey.delete(legacyKey(jobNum, shift.date, shift.opSeq));
-  const storedKey = String(found.fields[PRODUCTION_COLUMNS.recordKey] ?? '').trim();
-  if (storedKey) index.byKey.delete(storedKey);
-  index.byDay.delete(shift.date);
-  index.byDay.delete(rowDay(found.fields));
+  for (const [key, row] of index.byKey) if (row === found) index.byKey.delete(key);
+  for (const [slot, row] of index.bySlot) if (row === found) index.bySlot.delete(slot);
   return found;
 }
 
@@ -566,13 +575,11 @@ function oneFactsPerJob(orders: OrderFacts[]): OrderFacts[] {
       continue;
     }
     /*
-     * A shift is keyed by its own record key, and only falls back to the day
-     * when it has none. Two benches of one order book the same day whenever
-     * they run side by side, and keying on the day alone quietly threw one of
-     * the two bookings away.
+     * A shift is its day and its operation. Two benches of one order book the
+     * same day whenever they run side by side, and keying on the day alone
+     * quietly threw one of the two bookings away.
      */
-    const keyOf = (shift: ShiftFacts): string =>
-      shift.recordKey ?? `${shift.date}#${shift.opSeq ?? ''}`;
+    const keyOf = (shift: ShiftFacts): string => `${shift.date}#${shift.opSeq ?? ''}`;
     const shifts = new Map(held.shifts.map((shift) => [keyOf(shift), shift]));
     for (const shift of facts.shifts) shifts.set(keyOf(shift), shift);
     /*
@@ -584,16 +591,7 @@ function oneFactsPerJob(orders: OrderFacts[]): OrderFacts[] {
       (facts.operation?.index ?? 0) > (held.operation?.index ?? 0)
         ? facts
         : held;
-    byJob.set(facts.jobNum, {
-      ...base,
-      parallelOperations:
-        held.parallelOperations ||
-        facts.parallelOperations ||
-        (held.operation !== undefined &&
-          facts.operation !== undefined &&
-          held.operation.seq !== facts.operation.seq),
-      shifts: [...shifts.values()],
-    });
+    byJob.set(facts.jobNum, { ...base, shifts: [...shifts.values()] });
   }
   return [...byJob.values()];
 }
@@ -644,8 +642,6 @@ async function openRow(
   wanted: ListItemFields,
   out: SyncOutcome,
   note: (e: WriteError) => void,
-  /** One row per day for this order — see `indexRows`. */
-  oneRowPerDay = true,
 ): Promise<string | null | 'abort'> {
 
   /** The rows this job holds under one column's value, if it can be asked. */
@@ -666,11 +662,9 @@ async function openRow(
   };
 
   /*
-   * The row this job already has for this day, under whatever key.
-   *
-   * Where a route puts two benches on one order on one day, the two are two
-   * records rather than a duplicate, and the operation tells them apart — the
-   * same rule `indexRows` applies to the snapshot.
+   * The row this job already has for this day and operation, under whatever
+   * key — the same rule `claimRow` applies to the snapshot. Two benches of one
+   * order on one day are two records rather than a duplicate.
    */
   const lookupDay = async (): Promise<ListItem | null> => {
     const wantedDay = String(wanted[PRODUCTION_COLUMNS.date] ?? '');
@@ -678,16 +672,12 @@ async function openRow(
     if (!wantedDay || !job) return null;
     const rows = await ask(PRODUCTION_COLUMNS.jobNum, job);
     if (!rows) return null;
-    const wantedOp = String(wanted[PRODUCTION_COLUMNS.description] ?? '');
+    const wantedOp = rowOp(wanted);
+    const onDay = rows.filter((row) => rowDay(row.fields) === wantedDay).sort(oldestFirst);
     return (
-      rows
-        .filter((row) => rowDay(row.fields) === wantedDay)
-        .filter(
-          (row) =>
-            oneRowPerDay ||
-            String(row.fields[PRODUCTION_COLUMNS.description] ?? '') === wantedOp,
-        )
-        .sort(oldestFirst)[0] ?? null
+      onDay.find((row) => rowOp(row.fields) === wantedOp) ??
+      (wantedOp ? onDay.find((row) => rowOp(row.fields) === '') : undefined) ??
+      null
     );
   };
 
@@ -791,11 +781,7 @@ export async function syncProduction(
       withDemoCrew.push(facts.jobNum);
       continue;
     }
-    const index = indexRows(
-      facts.jobNum,
-      byJob.get(facts.jobNum) ?? [],
-      !facts.parallelOperations,
-    );
+    const index = indexRows(facts.jobNum, byJob.get(facts.jobNum) ?? []);
     /*
      * Duplicates are reported, not obeyed.
      *
@@ -839,7 +825,6 @@ export async function syncProduction(
           wanted,
           out,
           note,
-          !facts.parallelOperations,
         );
         if (opened === 'abort') return out;
         if (opened) written.add(opened);

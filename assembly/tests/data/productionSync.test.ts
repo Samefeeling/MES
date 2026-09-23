@@ -399,24 +399,34 @@ describe('syncProduction', () => {
     expect(out.created).toBe(0);
     const [write] = writes(calls);
     expect(write.url).toContain('/items/1/fields');
+    // …and it is written again under the key every board works out for that
+    // order and day, so the list's unique index can refuse a second row.
     expect(write.body).toMatchObject({
-      [C.recordKey]: 'b6f1-2f9c',
+      [C.recordKey]: 'ASM8001|2026-09-14',
       [C.date]: '2026-09-14',
       [C.bookedHour]: 9.5,
     });
   });
 
-  it('writes its own key over the one a row was opened with', async () => {
-    // Rows written before bookings carried keys are recognised by the old key
-    // and rewritten under the booking's, so each is asked that question once.
-    const calls = stubGraph([stored()]);
+  it('keys a row by order, operation and day, never by who booked it', async () => {
+    // Two boards booking one order on one day used to hold two random keys,
+    // so the unique index on RecordKey had nothing to refuse. The key is now
+    // the same whoever books it.
+    const calls = stubGraph([]);
     await syncProduction(CFG, 'ASSY_Production', [
       order({ shifts: [shift({ recordKey: 'fresh-key', complete: 3 })] }),
     ]);
+    const routed = stubGraph([]);
+    await syncProduction(CFG, 'ASSY_Production', [
+      order({
+        operation: { seq: 20, step: 'sewing', index: 2, of: 3, last: true },
+        shifts: [shift({ recordKey: 'other-key', opSeq: 20, step: 'sewing' })],
+      }),
+    ]);
 
-    const [write] = writes(calls);
-    expect(write.url).toContain('/items/1/fields');
-    expect(write.body).toMatchObject({ [C.recordKey]: 'fresh-key' });
+    // A create sends the row as `{ fields }`.
+    expect(writes(calls)[0].body).toMatchObject({ fields: { [C.recordKey]: 'ASM8001|2026-09-14' } });
+    expect(writes(routed)[0].body).toMatchObject({ fields: { [C.recordKey]: 'ASM8001#20|2026-09-14' } });
   });
 
   it('opens one row for an order the board hands it twice', async () => {
@@ -838,7 +848,6 @@ describe('a row another board opened first', () => {
         [C.shiftOutput]: 7,
       },
       order({
-        parallelOperations: true,
         operation: { seq: 20, step: 'sewing', index: 2, of: 3, last: true },
         shifts: [
           shift({
@@ -853,6 +862,50 @@ describe('a row another board opened first', () => {
 
     expect(out.created).toBe(1);
     expect(out.errors).toEqual([]);
+  });
+
+  it('keeps two benches apart after the first has left the board', async () => {
+    /*
+     * Foaming (op 10) and sewing (op 20) both booked on the 14th. Foaming is
+     * finished and gone from the board, so only sewing's facts arrive. The
+     * operation used to count only while both benches were on the board: the
+     * two rows then read as a duplicate, and sewing's booking could be written
+     * into foaming's row.
+     */
+    const calls = stubGraph([
+      stored({ [C.recordKey]: 'aaaa-foam', [C.description]: 'Op 10 foaming', [C.shiftOutput]: 5 }),
+      stored({ [C.recordKey]: 'bbbb-sew', [C.description]: 'Op 20 sewing', [C.shiftOutput]: 1 }, '2'),
+    ]);
+    const out = await syncProduction(CFG, 'ASSY_Production', [
+      order({
+        operation: { seq: 20, step: 'sewing', index: 2, of: 3, last: true },
+        shifts: [shift({ recordKey: 'bbbb-sew', opSeq: 20, step: 'sewing', shiftOutput: 4 })],
+      }),
+    ]);
+
+    expect(out.errors).toEqual([]);
+    expect(out.created).toBe(0);
+    const shiftWrites = writes(calls).filter((w) => C.shiftOutput in (w.body as object));
+    expect(shiftWrites).toHaveLength(1);
+    expect(shiftWrites[0].url).toContain('/items/2/fields');
+    expect(shiftWrites[0].body).toMatchObject({ [C.shiftOutput]: 4, [C.recordKey]: 'ASM8001#20|2026-09-14' });
+  });
+
+  it('still names a real second row for one operation on one day', async () => {
+    const calls = stubGraph([
+      stored({ [C.recordKey]: 'aaaa', [C.description]: 'Op 10 foaming' }),
+      stored({ [C.recordKey]: 'bbbb', [C.description]: 'Op 10 foaming' }, '2'),
+    ]);
+    const out = await syncProduction(CFG, 'ASSY_Production', [
+      order({
+        operation: { seq: 10, step: 'foaming', index: 1, of: 3, last: false },
+        shifts: [shift({ opSeq: 10, step: 'foaming', shiftOutput: 4 })],
+      }),
+    ]);
+    expect(out.errors).toEqual([
+      'ASM8001 2026-09-14: duplicate row (item 2) — delete it in SharePoint; the older row is the one being kept current.',
+    ]);
+    expect(writes(calls).every((w) => !w.url.includes('/items/2/'))).toBe(true);
   });
 });
 
