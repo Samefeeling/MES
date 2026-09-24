@@ -201,7 +201,16 @@ describe('what the shelf cannot cover on a pick list', () => {
       requiredQty: 40,
       onHand: 12,
       shortQty: 28,
+      incoming: null,
     });
+  });
+
+  it('adds what is on order when PODetail.csv has the part', () => {
+    const po = new Map([[PartId('FOAM'), [
+      { partNum: PartId('FOAM'), poNum: 'P1', outstandingQty: 30, dueDate: new Date(2026, 9, 5), promiseDate: new Date(2026, 9, 7), buyer: null },
+    ]]]);
+    const [, foam] = pickShortages(picks, inventory, po);
+    expect(foam.incoming).toMatchObject({ qty: 30, availableDate: new Date(2026, 9, 7), coversShort: true });
   });
 
   it('falls back to the material row’s own description', () => {

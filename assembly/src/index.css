@@ -1018,7 +1018,7 @@ button {
 .pick-list { display: grid; }
 .pick-list-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) repeat(3, minmax(52px, auto));
+  grid-template-columns: minmax(0, 1fr) repeat(4, minmax(46px, auto)) minmax(74px, auto);
   gap: 12px;
   align-items: baseline;
   padding: 3px 0;

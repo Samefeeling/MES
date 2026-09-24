@@ -23,6 +23,16 @@ let manualCsv: string | null = null;
 let manualJobMaterialCsv: string | null = null;
 let manualOnHandInventoryCsv: string | null = null;
 let manualProductLinesJson: string | null = null;
+let manualPoDetailCsv: string | null = null;
+
+/** Stash a `PODetail.csv` the user picked from disk. */
+export function setManualPoDetailCsv(text: string): void {
+  manualPoDetailCsv = text;
+}
+
+export function getManualPoDetailCsv(): string | null {
+  return manualPoDetailCsv;
+}
 
 /** Stash a `Planning1.csv` the user picked from disk. */
 export function setManualCsv(text: string): void {
@@ -78,13 +88,24 @@ export interface CsvSourceConfig {
   /** Drive path for product-lines.v3.json; empty disables the fetch. It sits
    *  in the same folder as JobMaterialReq.csv. */
   productLinesFilePath?: string;
+  /** Direct URL to PODetail.csv. */
+  poDetailUrl?: string;
+  /** Drive path for PODetail.csv; empty disables the fetch. It sits in the
+   *  same folder as Planning1.csv. */
+  poDetailFilePath?: string;
 }
+
+/** The folder a drive path is in, with its trailing slash. */
+const folderOf = (path: string): string => path.slice(0, path.lastIndexOf('/') + 1);
 
 export function readCsvConfigFromEnv(): CsvSourceConfig {
   const env = import.meta.env;
+  const filePath = env.VITE_ASSEMBLY_PLANNING_CSV_PATH ?? (env.VITE_BACKEND === 'sharepoint' ? '/Shared Documents/Planning1.csv' : env.VITE_PLANNING_CSV_PATH ?? '/Shared Documents/Planning1.csv');
   return {
     url: env.VITE_PLANNING_CSV_URL ?? '',
-    filePath: env.VITE_ASSEMBLY_PLANNING_CSV_PATH ?? (env.VITE_BACKEND === 'sharepoint' ? '/Shared Documents/Planning1.csv' : env.VITE_PLANNING_CSV_PATH ?? '/Shared Documents/Planning1.csv'),
+    filePath,
+    poDetailUrl: env.VITE_PO_DETAIL_CSV_URL ?? '',
+    poDetailFilePath: env.VITE_PO_DETAIL_CSV_PATH ?? `${folderOf(filePath) || '/Shared Documents/'}PODetail.csv`,
     linksUrl: env.VITE_JOB_MATERIAL_CSV_URL ?? '',
     linksFilePath:
       env.VITE_JOB_MATERIAL_CSV_PATH ?? '/Shared Documents/JobMaterialReq.csv',
@@ -201,6 +222,26 @@ export async function fetchOnHandInventoryCsv(
   return fetchText(
     'OnHandInventory.csv',
     sp.authMode === 'session' ? sessionFile(sp, cfg.inventoryFilePath) : graphFile(sp, cfg.inventoryFilePath),
+    sp.token,
+  );
+}
+
+/**
+ * Open purchase-order releases, or `ok(null)` when the site has not put the
+ * export beside Planning1.csv. Optional: without it a short pick line simply
+ * has no arrival date to show.
+ */
+export async function fetchPoDetailCsv(
+  cfg: CsvSourceConfig,
+  sp: SharePointConfig,
+): Promise<Result<string | null, string>> {
+  const manual = getManualPoDetailCsv();
+  if (manual !== null) return ok(manual);
+  if (cfg.poDetailUrl) return fetchText('PODetail.csv', cfg.poDetailUrl, null);
+  if (!cfg.poDetailFilePath || !sp.siteUrl || (!sp.token && sp.authMode !== 'session')) return ok(null);
+  return fetchText(
+    'PODetail.csv',
+    sp.authMode === 'session' ? sessionFile(sp, cfg.poDetailFilePath) : graphFile(sp, cfg.poDetailFilePath),
     sp.token,
   );
 }

@@ -3,18 +3,19 @@
  * and if not, when?
  *
  * For each component we net the requirement against free-on-hand. Any shortfall
- * is chased against open purchase orders (earliest due first); the cumulative
+ * is chased against open purchase orders (earliest available first); the cumulative
  * receipt that first clears the shortfall sets the component's coverage date.
  * A job's earliest start is the latest coverage date across its short
  * components.
  */
 
 import type { PartId } from '@/domain/ids';
-import type {
-  ComponentShortage,
-  InventoryItem,
-  MaterialStatus,
-  PoLine,
+import {
+  poAvailableDate,
+  type ComponentShortage,
+  type InventoryItem,
+  type MaterialStatus,
+  type PoLine,
 } from '@/domain/types';
 import type { ComponentRequirement } from './materialExplosion';
 import { maxDate } from '@/lib/time';
@@ -25,7 +26,8 @@ function coverageDate(
 ): { date: Date | null; poNum: string | null } {
   const dated = pos
     .filter((p) => p.outstandingQty > 0)
-    .map((p) => ({ p, when: p.dueDate ?? p.promiseDate }))
+    // Counted on at the later of the due and promise dates — see `poAvailableDate`.
+    .map((p) => ({ p, when: poAvailableDate(p) }))
     .filter((x): x is { p: PoLine; when: Date } => x.when !== null)
     .sort((a, b) => a.when.getTime() - b.when.getTime());
 

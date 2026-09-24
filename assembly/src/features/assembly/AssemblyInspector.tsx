@@ -14,7 +14,7 @@ import { usePlanStore } from '@/store/planStore';
 import { useUiStore } from '@/store/uiStore';
 import { remainingQty } from '@/engine/assembly/duration';
 import { startEligibility } from '@/engine/assembly/release';
-import { pickShortfall } from '@/engine/assembly/pickShortage';
+import { incomingSupply, pickShortfall } from '@/engine/assembly/pickShortage';
 import { nextWorkingMoment } from '@/engine/assembly/shift';
 import { formatDay, formatTime } from '@/lib/time';
 import { Badge, Button } from '@/ui';
@@ -135,6 +135,7 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
   const select = useUiStore((s) => s.select);
   const row = findOrderRow(board, selectedJobId);
   const inventoryByPart = useDataStore((s) => s.indexes?.inventoryByPart);
+  const poByPart = useDataStore((s) => s.indexes?.poByPart);
   const panel = useRef<HTMLDivElement>(null);
   const [place, setPlace] = useState<Place | null>(null);
 
@@ -717,6 +718,8 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
                 <span>Required</span>
                 <span>On hand</span>
                 <span title="Calculated_Demand">Demand</span>
+                <span title="Calculated_OutstandingQty on open purchase orders, from PODetail.csv">Purchased QTY</span>
+                <span title="The later of PORel_DueDate and PORel_PromiseDt — on a short line, when enough has arrived to cover it">AvailableDate</span>
               </div>
               {picks.map((material, index) => {
                 const stock = inventoryByPart?.get(material.childPart);
@@ -726,6 +729,21 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
                   : shortBy > 0
                     ? `Short ${shortBy} — ${stock.onHand} on hand against the ${material.requiredQty} this order needs`
                     : 'Calculated_OnHand from OnHandInventory.csv';
+                const incoming = incomingSupply(poByPart?.get(material.childPart), shortBy);
+                const releasesTitle = incoming
+                  ? incoming.releases
+                      .map((r) =>
+                        `PO ${r.poNum ?? '?'}: ${r.qty} available ` +
+                        (r.availableDate ? formatDay(r.availableDate) : 'undated') +
+                        (r.vendor ? ` · ${r.vendor}` : ''),
+                      )
+                      .join('\n')
+                  : 'No open purchase order in PODetail.csv';
+                const late =
+                  shortBy > 0 &&
+                  (!incoming?.coversShort ||
+                    !incoming.availableDate ||
+                    (row.job.dueDate !== null && incoming.availableDate > row.job.dueDate));
                 return (
                   <div
                     className="pick-list-row"
@@ -759,6 +777,24 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
                       title="Calculated_Demand from OnHandInventory.csv"
                     >
                       {stock?.calculatedDemand ?? '—'}
+                    </span>
+                    <span className={incoming ? 'qty' : 'qty none'} title={releasesTitle}>
+                      {incoming?.qty ?? '—'}
+                    </span>
+                    <span
+                      className={
+                        !incoming ? 'qty none' : late ? 'qty short' : 'qty'
+                      }
+                      title={
+                        shortBy > 0 && incoming && !incoming.coversShort
+                          ? `Everything on order (${incoming.qty}) is still less than the ${shortBy} short\n${releasesTitle}`
+                          : late && incoming?.availableDate
+                            ? `Arrives after this order's Due Date\n${releasesTitle}`
+                            : releasesTitle
+                      }
+                    >
+                      {incoming?.availableDate ? formatDay(incoming.availableDate) : '—'}
+                      {shortBy > 0 && incoming && !incoming.coversShort ? ' ⚠' : ''}
                     </span>
                   </div>
                 );

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { OrderRow } from '@/engine/assembly/board';
-import type { PickShortage } from '@/engine/assembly/pickShortage';
+import { incomingSupply, type PickShortage } from '@/engine/assembly/pickShortage';
 import { PartId, WorkerId } from '@/domain/ids';
 import { toDayKey } from '@/lib/time';
 import {
@@ -620,6 +620,7 @@ describe('why an order has no bar', () => {
     requiredQty: shortQty + 10,
     onHand: 10,
     shortQty,
+    incoming: null,
   });
 
   it('asks for people when people are all that is missing', () => {
@@ -644,17 +645,44 @@ describe('why an order has no bar', () => {
     expect(missing.title).toContain('No crew allocated either');
   });
 
-  it('counts the rest of the short lines without listing them', () => {
+  it('lists the short lines, and counts the rest past six', () => {
+    const lines = ['CLOTH', 'FOAM', 'A', 'B', 'C', 'D', 'E'].map((p, i) => short(p, 100 - i));
     const missing = missingBarReason(
-      stopped({
-        workers: [{ id: WorkerId('W1') } as Worker],
-        shortPicks: [short('CLOTH', 100), short('FOAM', 28)],
-      }),
+      stopped({ workers: [{ id: WorkerId('W1') } as Worker], shortPicks: lines }),
     );
-    expect(missing.title).toContain('2 lines of the pick list');
+    expect(missing.title).toContain('7 lines of the pick list');
     expect(missing.title).toContain('CLOTH short 100');
+    expect(missing.title).toContain('FOAM short 99');
+    expect(missing.title).not.toContain('E short');
     expect(missing.title).toContain('and 1 more');
+    expect(missing.title).toContain('nothing on order');
     expect(missing.title).not.toContain('No crew');
+  });
+
+  it('says when the purchase orders bring the material in', () => {
+    const frame = {
+      ...short('0765-CHARCO', 60),
+      incoming: incomingSupply(
+        [
+          { partNum: PartId('0765-CHARCO'), poNum: '504950', outstandingQty: 50, dueDate: new Date(2026, 10, 13), promiseDate: new Date(2026, 9, 16), buyer: null },
+          { partNum: PartId('0765-CHARCO'), poNum: '504867', outstandingQty: 50, dueDate: new Date(2026, 9, 28), promiseDate: new Date(2026, 8, 30), buyer: null },
+        ],
+        60,
+      ),
+    };
+    const missing = missingBarReason(stopped({ workers: [], shortPicks: [frame] }));
+    // 50 arrive 28/10, not enough; the second 50 arrive 13/11 and cover it.
+    expect(missing.title).toContain('0765-CHARCO short 60 (needs 70, 10 on hand) — 100 on order, available 13/11/2026 (PO 504950)');
+    expect(missing.title).toContain('All material available by 13/11/2026');
+  });
+
+  it('still gives the material story while it waits on another order', () => {
+    const missing = missingBarReason(
+      stopped({ workers: [], waitingOn: { onJobId: 'SFM1' } as OrderRow['waitingOn'], shortPicks: [short('FOAM', 28)] }),
+    );
+    expect(missing.label).toBe('waits on SFM1');
+    expect(missing.title).toContain('FOAM short 28');
+    expect(missing.title).toContain('nothing on order');
   });
 
   it('names the predecessor ahead of the shortage it is already clearing', () => {

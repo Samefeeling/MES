@@ -109,6 +109,18 @@ export interface PoLine {
   dueDate: Date | null;
   promiseDate: Date | null;
   buyer: string | null;
+  /** Supplier, where the export names one (`Vendor_Name`). */
+  vendor?: string | null;
+}
+
+/**
+ * When a PO release can be counted on: the later of its due date and the date
+ * the supplier promised. Either alone when only one is known.
+ */
+export function poAvailableDate(po: Pick<PoLine, 'dueDate' | 'promiseDate'>): Date | null {
+  const { dueDate: due, promiseDate: promise } = po;
+  if (due && promise) return due > promise ? due : promise;
+  return due ?? promise;
 }
 
 /** Period demand for a part, from `total req`. */

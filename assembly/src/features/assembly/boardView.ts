@@ -9,7 +9,8 @@ import {
 } from '@/engine/assembly/dates';
 import type { LineKey, Worker } from '@/domain/assembly';
 import { workersOnLeave, type LeaveDays } from '@/engine/assembly/attendance';
-import { toDayKey } from '@/lib/time';
+import { formatDay, toDayKey } from '@/lib/time';
+import type { IncomingSupply, PickShortage } from '@/engine/assembly/pickShortage';
 import {
   DRAG_STEP_MINUTES,
   SHIFT_SPAN_MINUTES,
@@ -563,6 +564,47 @@ export function barTag(bar: {
   };
 }
 
+/** Short lines spelled out on a hover before it says "and N more". */
+const SHORT_LINES_ON_HOVER = 6;
+
+/** What is on order for a short line, in one phrase. */
+export function incomingText(incoming: IncomingSupply | null): string {
+  if (!incoming) return 'nothing on order';
+  const date = incoming.availableDate ? formatDay(incoming.availableDate) : 'no date';
+  const po = incoming.releases.find((r) => r.availableDate === incoming.availableDate)?.poNum;
+  return incoming.coversShort
+    ? `${incoming.qty} on order, available ${date}${po ? ` (PO ${po})` : ''}`
+    : `only ${incoming.qty} on order (last ${date}) — still short`;
+}
+
+/**
+ * Every short line with what is on order for it, so the hover answers the
+ * question a shortage raises: when can this order be picked? Nothing when the
+ * pick list is covered.
+ */
+function shortageLines(short: readonly PickShortage[]): string[] {
+  if (short.length === 0) return [];
+  const shown = short.slice(0, SHORT_LINES_ON_HOVER);
+  const rest = short.length - shown.length;
+  const arrivals = short.map((s) => s.incoming);
+  const ready = arrivals.every((a) => a?.coversShort && a.availableDate)
+    ? arrivals.reduce<Date | null>(
+        (latest, a) => (!latest || a!.availableDate! > latest ? a!.availableDate! : latest),
+        null,
+      )
+    : null;
+  return [
+    `${short.length} line${short.length === 1 ? '' : 's'} of the pick list ` +
+      'cannot be covered by what is on hand:',
+    ...shown.map((s) => `• ${String(s.part)} short ${s.shortQty} ` +
+      `(needs ${s.requiredQty}, ${s.onHand} on hand) — ${incomingText(s.incoming)}`),
+    ...(rest > 0 ? [`• and ${rest} more`] : []),
+    ready
+      ? `All material available by ${formatDay(ready)}`
+      : 'Not every shortfall is covered by an open purchase order',
+  ];
+}
+
 export interface MissingBar {
   /** What the placeholder reads, in the grid, where the bar would have been. */
   label: string;
@@ -595,25 +637,22 @@ export function missingBarReason(row: OrderRow): MissingBar {
   if (held) {
     return {
       label: `waits on ${held}`,
-      title:
+      title: [
         `Waiting on ${held}, which has no finish date of its own — it is ` +
-        'either unstaffed or on no line yet',
+          'either unstaffed or on no line yet',
+        ...shortageLines(short),
+      ].join('\n'),
       material: false,
     };
   }
 
   if (short.length > 0) {
-    const worst = short[0];
-    const rest = short.length - 1;
     return {
       label: 'short material',
-      title:
-        `${short.length} line${short.length === 1 ? '' : 's'} of the pick ` +
-        'list cannot be covered by what is on hand — ' +
-        `${String(worst.part)} short ${worst.shortQty} (needs ` +
-        `${worst.requiredQty}, ${worst.onHand} on hand)` +
-        (rest > 0 ? ` and ${rest} more` : '') +
-        (unstaffed ? '\nNo crew allocated either' : ''),
+      title: [
+        ...shortageLines(short),
+        ...(unstaffed ? ['No crew allocated either'] : []),
+      ].join('\n'),
       material: true,
     };
   }

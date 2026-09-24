@@ -22,6 +22,7 @@ import {
   setManualCsv,
   setManualJobMaterialCsv,
   setManualOnHandInventoryCsv,
+  setManualPoDetailCsv,
 } from '@/data/csv/csv.client';
 import { PlanningCsvSource } from '@/data/csv/PlanningCsvSource';
 import { normalizeHeader, parseCsv } from '@/lib/csv';
@@ -32,8 +33,12 @@ import { Button } from '@/ui';
  * never does. That one header is enough to tell them apart.
  */
 function exportKind(text: string): Kind {
-  const header = parseCsv(text.slice(0, 4096))[0] ?? [];
+  const head = text.slice(0, 4096);
+  const firstLine = head.split('\n')[0] ?? '';
+  const tabbed = firstLine.includes('\t') && !firstLine.includes(',');
+  const header = parseCsv(head, tabbed ? '\t' : ',')[0] ?? [];
   const names = new Set(header.map(normalizeHeader));
+  if (names.has('podetailpartnum') || (names.has('outstandingqty') && names.has('porelduedate'))) return 'po';
   if (names.has('partnum') && names.has('onhand')) return 'inventory';
   if (
     names.has('jobmtljobnum') ||
@@ -43,12 +48,13 @@ function exportKind(text: string): Kind {
   return 'orders';
 }
 
-type Kind = 'orders' | 'links' | 'inventory';
+type Kind = 'orders' | 'links' | 'inventory' | 'po';
 
 const KIND_LABEL: Record<Kind, string> = {
   orders: 'order',
   links: 'material',
   inventory: 'on-hand inventory',
+  po: 'purchase order',
 };
 
 export function CsvLoader() {
@@ -58,6 +64,7 @@ export function CsvLoader() {
   const orders = useRef<HTMLInputElement>(null);
   const links = useRef<HTMLInputElement>(null);
   const inventory = useRef<HTMLInputElement>(null);
+  const po = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<Kind | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -81,6 +88,7 @@ export function CsvLoader() {
         }
         if (kind === 'links') setManualJobMaterialCsv(text);
         else if (kind === 'inventory') setManualOnHandInventoryCsv(text);
+        else if (kind === 'po') setManualPoDetailCsv(text);
         else setManualCsv(text);
         read++;
       }
@@ -94,6 +102,7 @@ export function CsvLoader() {
       if (orders.current) orders.current.value = '';
       if (links.current) links.current.value = '';
       if (inventory.current) inventory.current.value = '';
+      if (po.current) po.current.value = '';
     }
   };
 
@@ -121,6 +130,13 @@ export function CsvLoader() {
         hidden
         onChange={(e) => void onPick(e.target.files, 'inventory')}
       />
+      <input
+        ref={po}
+        type="file"
+        accept=".csv,text/csv,.txt"
+        hidden
+        onChange={(e) => void onPick(e.target.files, 'po')}
+      />
       <Button
         onClick={() => orders.current?.click()}
         disabled={busy !== null}
@@ -144,6 +160,13 @@ export function CsvLoader() {
         title="Parse OnHandInventory.csv — Calculated_OnHand by Part_PartNum"
       >
         {busy === 'inventory' ? 'Loading…' : 'Load OnHandInventory'}
+      </Button>
+      <Button
+        onClick={() => po.current?.click()}
+        disabled={busy !== null}
+        title="Parse PODetail.csv — open purchase orders: Calculated_OutstandingQty, and when they are available (the later of PORel_DueDate and PORel_PromiseDt)"
+      >
+        {busy === 'po' ? 'Loading…' : 'Load PODetail'}
       </Button>
       {problem && (
         <span className="board-warn" title={problem}>

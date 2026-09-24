@@ -72,6 +72,8 @@ VITE_SITE_URL=https://reseroglobal.sharepoint.com/sites/ReseroOperationsAU
 VITE_ASSEMBLY_PLANNING_CSV_PATH=/Shared Documents/Planning1.csv
 VITE_JOB_MATERIAL_CSV_PATH=/Shared Documents/JobMaterialReq.csv
 VITE_ON_HAND_INVENTORY_CSV_PATH=/Shared Documents/OnHandInventory.csv
+# Optional; defaults to PODetail.csv in the same folder as Planning1.csv
+VITE_PO_DETAIL_CSV_PATH=/Shared Documents/PODetail.csv
 VITE_PRODUCT_LINES_PATH=/Shared Documents/product-lines.v3.json
 VITE_PRODUCTION_LIST=ASSY_Production
 VITE_ASSEMBLY_PLAN_LIST=ASSY_Plans

@@ -1309,7 +1309,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
       status,
       material,
       pickList: picks,
-      shortPicks: pickShortages(picks, indexes.inventoryByPart),
+      shortPicks: pickShortages(picks, indexes.inventoryByPart, indexes.poByPart),
       release: releaseCheck(material, job.materialPrep),
       /*
        * Named by the row that answers for the order, not by the order number.

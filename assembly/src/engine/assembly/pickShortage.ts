@@ -17,7 +17,81 @@
  */
 
 import type { PartId } from '@/domain/ids';
-import type { InventoryItem, JobMaterialLink } from '@/domain/types';
+import {
+  poAvailableDate,
+  type InventoryItem,
+  type JobMaterialLink,
+  type PoLine,
+} from '@/domain/types';
+
+/** One open PO release for a part. */
+export interface IncomingRelease {
+  poNum: string | null;
+  vendor: string | null;
+  qty: number;
+  /** The later of its due and promise dates. */
+  availableDate: Date | null;
+}
+
+/** What is on order for one pick line, from `PODetail.csv`. */
+export interface IncomingSupply {
+  /** `Calculated_OutstandingQty`, summed over the part's open releases. */
+  qty: number;
+  /**
+   * When the order can count on the part. On a short line: the release whose
+   * arrival, added to everything due before it, first covers the shortfall —
+   * or, when all of them together fall short, the last one. On a covered line:
+   * the next release to arrive. Null when no release is dated.
+   */
+  availableDate: Date | null;
+  /** Whether everything on order adds up to the shortfall. */
+  coversShort: boolean;
+  /** Every release, earliest first. */
+  releases: IncomingRelease[];
+}
+
+/**
+ * What is coming for a part against what this order is short of it.
+ *
+ * Like the on-hand figure, the whole of each release is set against this one
+ * order: nothing here shares a delivery out between orders needing the same
+ * part.
+ */
+export function incomingSupply(
+  pos: readonly PoLine[] | undefined,
+  shortQty: number,
+): IncomingSupply | null {
+  const releases = (pos ?? [])
+    .filter((p) => p.outstandingQty > 0)
+    .map((p) => ({
+      poNum: p.poNum,
+      vendor: p.vendor ?? null,
+      qty: p.outstandingQty,
+      availableDate: poAvailableDate(p),
+    }))
+    .sort(
+      (a, b) =>
+        (a.availableDate?.getTime() ?? Infinity) - (b.availableDate?.getTime() ?? Infinity),
+    );
+  if (releases.length === 0) return null;
+  const qty = releases.reduce((n, r) => n + r.qty, 0);
+  if (shortQty <= 0) {
+    return { qty, availableDate: releases[0].availableDate, coversShort: true, releases };
+  }
+  let running = 0;
+  for (const r of releases) {
+    running += r.qty;
+    if (running >= shortQty) {
+      return { qty, availableDate: r.availableDate, coversShort: true, releases };
+    }
+  }
+  return {
+    qty,
+    availableDate: releases.findLast((r) => r.availableDate)?.availableDate ?? null,
+    coversShort: false,
+    releases,
+  };
+}
 
 /** One pick-list line the shelf cannot cover. */
 export interface PickShortage {
@@ -30,6 +104,8 @@ export interface PickShortage {
   onHand: number;
   /** `requiredQty − onHand`; always above zero. */
   shortQty: number;
+  /** What is on order for it, when `PODetail.csv` has any. */
+  incoming: IncomingSupply | null;
 }
 
 /**
@@ -60,6 +136,7 @@ export const pickShortfall = (
 export function pickShortages(
   picks: readonly JobMaterialLink[] | undefined,
   inventoryByPart: ReadonlyMap<PartId, InventoryItem>,
+  poByPart: ReadonlyMap<PartId, readonly PoLine[]> = new Map(),
 ): PickShortage[] {
   const short: PickShortage[] = [];
   for (const pick of picks ?? []) {
@@ -76,6 +153,7 @@ export function pickShortages(
       requiredQty: required,
       onHand,
       shortQty,
+      incoming: incomingSupply(poByPart.get(pick.childPart), shortQty),
     });
   }
   return short.sort((a, b) => b.shortQty - a.shortQty);
