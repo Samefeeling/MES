@@ -38,6 +38,7 @@ import {
   lineOfWorkerToday,
   strandedOrders,
   teamSummary,
+  TIMELINE_WEEKS,
 } from './boardView';
 import { ManualOrderButton } from './ManualOrders';
 import { Metric, MetricNote } from './Metric';
@@ -63,6 +64,8 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
   const toggleDueSoon = useUiStore((s) => s.toggleDueSoon);
   const showWeekends = useUiStore((s) => s.showWeekends);
   const toggleWeekends = useUiStore((s) => s.toggleWeekends);
+  const timelineWeeks = useUiStore((s) => s.timelineWeeks);
+  const setTimelineWeeks = useUiStore((s) => s.setTimelineWeeks);
   const virtualLines = usePlanStore((s) => s.virtualLines);
   /* Which figure is open, held here rather than in each of them: they hang off
      one row an inch apart, and two panels open at once is two panels on top of
@@ -201,6 +204,22 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
         >
           +
         </button>
+        {/* How far ahead the board looks. The least it shows: planned bars
+            and the Due Dates of orders waiting for a crew reach further on
+            their own, so nothing is ever cut off at the edge. */}
+        <select
+          className="timeline-weeks"
+          value={timelineWeeks}
+          onChange={(e) => setTimelineWeeks(Number(e.target.value))}
+          aria-label="Weeks ahead"
+          title="Weeks ahead of today the timeline shows at least — it reaches further on its own for planned work and for the Due Date of any order still waiting for a crew"
+        >
+          {TIMELINE_WEEKS.map((weeks) => (
+            <option key={weeks} value={weeks}>
+              {weeks} weeks
+            </option>
+          ))}
+        </select>
       </div>
 
       {/*

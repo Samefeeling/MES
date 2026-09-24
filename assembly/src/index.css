@@ -1893,6 +1893,72 @@ body.col-resizing {
   min-width: 100%;
 }
 /*
+ * A folded line's week, drawn along its own row. The row holds the strip, so
+ * it is the positioning box; the sticky block above it (z 7) covers the frozen
+ * columns and the strip scrolls under it the way the bars do.
+ */
+.agroup-head.folded { position: relative; }
+.agroup-head.folded .agroup-head-in { min-height: 34px; }
+.aline-load {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+.aline-day {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  margin: 0 1px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1.15;
+  overflow: hidden;
+  pointer-events: auto;
+  cursor: default;
+  font-variant-numeric: tabular-nums;
+}
+.aline-day.green { background: var(--ok-dim); border-color: var(--head-ok-bar); }
+.aline-day.orange { background: var(--warn-dim); border-color: var(--head-warn-bar); }
+.aline-day.red { background: var(--error-dim); border-color: var(--head-error-bar); }
+.aline-day.past { opacity: 0.6; }
+.aline-day b { font-weight: 700; }
+.aline-wait {
+  padding: 0 3px;
+  border: 1px dashed var(--head-warn-bar);
+  border-radius: 3px;
+  color: var(--head-warn);
+  font-weight: 600;
+}
+.aline-day.idle { border-style: dashed; }
+/* Positions in use, as a bar along the foot of the day. */
+.aline-fill {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  background: currentColor;
+  opacity: 0.45;
+}
+.aline-day.green .aline-fill { color: var(--head-ok-bar); }
+.aline-day.orange .aline-fill { color: var(--head-warn-bar); }
+.aline-day.red .aline-fill { color: var(--head-error-bar); }
+.timeline-weeks {
+  height: 24px;
+  margin-left: 4px;
+  font: inherit;
+  font-size: 12px;
+}
+/*
  * The part that stays put. A sticky box cannot slide inside a containing block
  * it already fills, so the row spans the whole grid to carry the background
  * and this inner block — only as wide as its own content — is what pins to the

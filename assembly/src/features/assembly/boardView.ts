@@ -21,7 +21,7 @@ import {
 import { rowIndex } from './rowIndex';
 import { jobNumOf } from '@/domain/routing';
 import { preferredCrewSize } from '@/engine/assembly/crew';
-import { durationDays } from '@/engine/assembly/duration';
+import { durationDays, remainingHours } from '@/engine/assembly/duration';
 import { subWorkingDays } from '@/engine/assembly/dates';
 
 export type OrderSortKey = 'start' | 'due';
@@ -669,4 +669,147 @@ export function lineOfWorkerToday(
     if (!at.has(id)) at.set(id, worker.skills[0] ?? 'FACTORY_GENERAL');
   }
   return at;
+}
+
+/** Weeks ahead the timeline can be asked to show, as the Timeline tool offers them. */
+export const TIMELINE_WEEKS = [2, 4, 8, 12] as const;
+export type TimelineWeeks = (typeof TIMELINE_WEEKS)[number];
+
+/**
+ * Furthest a Due Date may stretch the timeline, in days past today. A due date
+ * typed a year out would otherwise make the grid a year wide.
+ */
+export const TIMELINE_REACH_DAYS = 26 * 7;
+
+/**
+ * How many day columns the board draws, from `horizonStart`.
+ *
+ * At least `weeks` ahead of today, and never less than the engine asked for —
+ * every planned bar stays on screen. It also reaches the Due Date of every
+ * order still waiting for a crew, so its box before that date is drawn where
+ * it belongs rather than squeezed against the right edge. That reach stops at
+ * `TIMELINE_REACH_DAYS`; a scheduled bar is never cut, however far out.
+ */
+export function timelineDays(
+  board: { horizonStart: Date; today: Date; horizonDays: number; groups: { rows: OrderRow[] }[] },
+  weeks: number,
+): number {
+  const start = startOfDay(board.horizonStart);
+  const lead = wholeDaysBetween(startOfDay(board.today), start);
+  const cap = lead + TIMELINE_REACH_DAYS;
+  let days = Math.max(board.horizonDays, lead + weeks * 7);
+  for (const group of board.groups) {
+    for (const row of group.rows) {
+      if (row.start || !row.line.schedulable) continue;
+      const window = unstaffedWindow(row);
+      if (!window) continue;
+      days = Math.max(days, Math.min(cap, wholeDaysBetween(startOfDay(window.to), start) + 1));
+    }
+  }
+  return days;
+}
+
+/** How full a line is on a day: its build positions against the orders on them. */
+export type LineDayBand = 'idle' | 'green' | 'orange' | 'red';
+
+/** One day of one line, as its folded row draws it. */
+export interface LineDayLoad {
+  key: string;
+  date: Date;
+  /** Behind today: `hours` is output that was booked, not planned work. */
+  past: boolean;
+  /** Standard hours the crew is planned to work on the line that day. */
+  hours: number;
+  /** Different people planned on it. */
+  people: number;
+  /** Orders being worked that day, by order number. */
+  orders: string[];
+  /** Build positions — orders the line can run side by side. */
+  positions: number;
+  /**
+   * Hours of orders nobody is on yet, spread over the days before their Due
+   * Date they would have to be worked in — the same window as their box.
+   */
+  unstaffedHours: number;
+  unstaffedOrders: string[];
+  band: LineDayBand;
+}
+
+/**
+ * The folded line's day-by-day load: what its crew is planned to work, and the
+ * work still waiting for a crew that has to land on those days to make its Due
+ * Date.
+ *
+ * Hours are the same the per-person and board figures use — each order's
+ * `crewDays` — so the three agree. A day behind today shows what was booked.
+ * The colour is how many of the line's build positions are in use: room left
+ * (green), every position taken (orange), more orders than positions (red).
+ */
+export function lineDayLoads(
+  rows: readonly OrderRow[],
+  positions: number,
+  dates: readonly Date[],
+  today: Date,
+): LineDayLoad[] {
+  const todayKey = toDayKey(startOfDay(today));
+  const live = rows.filter((row) => row.line.schedulable);
+
+  // Waiting work, spread evenly over the open days of its window.
+  const waiting = new Map<string, { hours: number; orders: Set<string> }>();
+  for (const row of live) {
+    if (row.start || row.completedToday) continue;
+    const window = unstaffedWindow(row);
+    const hours = row.uncoveredHours ?? remainingHours(row.job);
+    if (!window || hours <= 0) continue;
+    const open: string[] = [];
+    for (let d = startOfDay(window.from); d < window.to; d = addCalendarDays(d, 1)) {
+      if (!isWeekend(d)) open.push(toDayKey(d));
+    }
+    if (open.length === 0) open.push(toDayKey(startOfDay(window.from)));
+    for (const key of open) {
+      const day = waiting.get(key) ?? { hours: 0, orders: new Set<string>() };
+      day.hours += hours / open.length;
+      day.orders.add(jobNumOf(String(row.job.id)));
+      waiting.set(key, day);
+    }
+  }
+
+  return dates.map((date) => {
+    const key = toDayKey(date);
+    const past = key < todayKey;
+    let hours = 0;
+    const people = new Set<string>();
+    const orders = new Set<string>();
+    for (const row of live) {
+      if (past) {
+        const booked = row.booked.reduce((n, b) => (b.day === key ? n + b.hours : n), 0);
+        if (booked > 0) {
+          hours += booked;
+          orders.add(jobNumOf(String(row.job.id)));
+        }
+        continue;
+      }
+      const plan = row.crewDays.find((day) => day.day === key);
+      if (!plan || plan.hours <= 0) continue;
+      hours += plan.hours;
+      orders.add(jobNumOf(String(row.job.id)));
+      for (const id of plan.workerIds) people.add(id);
+    }
+    const wait = past ? undefined : waiting.get(key);
+    const running = orders.size;
+    const band: LineDayBand =
+      running === 0 ? 'idle' : running > positions ? 'red' : running === positions ? 'orange' : 'green';
+    return {
+      key,
+      date,
+      past,
+      hours,
+      people: people.size,
+      orders: [...orders],
+      positions,
+      unstaffedHours: wait?.hours ?? 0,
+      unstaffedOrders: wait ? [...wait.orders] : [],
+      band,
+    };
+  });
 }

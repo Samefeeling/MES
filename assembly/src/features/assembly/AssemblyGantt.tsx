@@ -73,6 +73,9 @@ import {
   runningOrdersByDay,
   lineOfWorkerToday,
   withPredecessors,
+  lineDayLoads,
+  timelineDays,
+  type LineDayLoad,
   type OrderSortKey,
 } from './boardView';
 import { useStableBoardOrder } from './useStableBoardOrder';
@@ -574,6 +577,9 @@ function LineGroupView({
   visibleDates,
   showWeekends,
   collapsed,
+  lineRows,
+  dates,
+  labelWidth,
   onToggle,
   onHide,
   onClose,
@@ -607,6 +613,15 @@ function LineGroupView({
   visibleDates: DateCols;
   showWeekends: boolean;
   collapsed: boolean;
+  /**
+   * Every order the line holds, its benches' included, before any filter —
+   * what its folded row adds up day by day.
+   */
+  lineRows: OrderRow[];
+  /** The day columns, left to right, as the axis lays them out. */
+  dates: Date[];
+  /** Where the day columns begin, past the frozen columns. */
+  labelWidth: number;
   onToggle: () => void;
   /** Fold the whole line away; it comes back from the header. */
   onHide: () => void;
@@ -675,6 +690,24 @@ function LineGroupView({
     },
   });
   const load = group.load;
+  /*
+   * Folded, the line's row is all that is left of it, so it carries the line's
+   * week: hours planned on each day, and the work still waiting for a crew that
+   * has to land on those days to make its Due Date. PMD is the moulding plan
+   * mirrored for context — nobody on this board crews it — so it has none.
+   */
+  const dayLoads = useMemo(
+    () =>
+      collapsed && group.line.schedulable
+        ? lineDayLoads(
+            lineRows,
+            benchPositions(board, group),
+            dates,
+            board.today,
+          )
+        : null,
+    [collapsed, group, lineRows, dates, board],
+  );
   const crew = useMemo(
     () =>
       board.workers
@@ -696,8 +729,13 @@ function LineGroupView({
           what sticks to the left edge, so the line's totals and its people
           stay readable however far right the grid is scrolled — the row
           itself has to span the whole grid to carry the background. */}
-      <div className="agroup-head">
-       <div className="agroup-head-in">
+      <div className={`agroup-head${dayLoads ? ' folded' : ''}`}>
+       {/* Folded, the sticky block also covers the frozen columns, so the day
+           strip scrolls under them the way the bars do. */}
+       <div
+         className="agroup-head-in"
+         style={dayLoads ? { minWidth: labelWidth } : undefined}
+       >
         <div className="agroup-meta">
         {/* Its own control, in the Order column where the row starts. Folding
             used to be what clicking the line's name did, and the name is now
@@ -885,6 +923,15 @@ function LineGroupView({
 
         </div>
        </div>
+       {dayLoads && (
+         <LineLoadStrip
+           days={dayLoads}
+           axis={axis}
+           left={labelWidth}
+           width={gridWidth}
+           line={group.line.name}
+         />
+       )}
       </div>
 
       {!collapsed && (group.rows.length === 0 ? (
@@ -931,6 +978,88 @@ function LineGroupView({
   );
 }
 
+/** Build positions across a line, or across the benches a lane is made of. */
+function benchPositions(board: AssemblyGanttView, group: LineGroup): number {
+  if (group.benchOrders === undefined) return group.line.parallelOrders;
+  return board.groups
+    .filter((g) => g.line.parent === group.line.key)
+    .reduce((sum, g) => sum + g.line.parallelOrders, 0) || group.line.parallelOrders;
+}
+
+/** Every order a line holds, reaching into its benches for a lane made of them. */
+function rowsOfLine(board: AssemblyGanttView, key: LineKey): OrderRow[] {
+  return board.groups
+    .filter((g) => g.line.key === key || g.line.parent === key)
+    .flatMap((g) => g.rows);
+}
+
+const hoursText = (hours: number) =>
+  `${hours >= 10 ? hours.toFixed(0) : hours.toFixed(1)} h`;
+
+/**
+ * A folded line's week, one cell per day column: the hours its crew is
+ * planned to work, and — dashed — the hours of orders nobody is on yet that
+ * have to be worked on that day to make their Due Date. The tint is how many
+ * of the line's build positions are taken.
+ */
+function LineLoadStrip({
+  days,
+  axis,
+  left,
+  width,
+  line,
+}: {
+  days: LineDayLoad[];
+  axis: DayAxis;
+  left: number;
+  width: number;
+  line: string;
+}) {
+  return (
+    <div className="aline-load" style={{ left, width }}>
+      {days.map((day, i) => {
+        if (day.hours <= 0 && day.unstaffedHours <= 0) return null;
+        const date = formatShortDay(day.date);
+        const lines = [
+          day.past
+            ? `${line} · ${date}: ${day.hours.toFixed(1)} h booked` +
+              (day.orders.length ? ` on ${day.orders.join(', ')}` : '')
+            : `${line} · ${date}: ${day.hours.toFixed(1)} h planned` +
+              (day.orders.length
+                ? ` — ${day.people} ${day.people === 1 ? 'person' : 'people'}, ` +
+                  `${day.orders.length} of ${day.positions} positions (${day.orders.join(', ')})`
+                : ''),
+        ];
+        if (day.unstaffedHours > 0) {
+          lines.push(
+            `+${day.unstaffedHours.toFixed(1)} h waiting for a crew that has to be worked by its Due Date ` +
+              `(${day.unstaffedOrders.join(', ')})`,
+          );
+        }
+        return (
+          <div
+            key={day.key}
+            className={`aline-day ${day.band}${day.past ? ' past' : ''}`}
+            style={{ left: axis.offsets[i], width: axis.widths[i] }}
+            title={lines.join('\n')}
+          >
+            {day.hours > 0 && <b>{hoursText(day.hours)}</b>}
+            {day.unstaffedHours > 0 && (
+              <span className="aline-wait">+{hoursText(day.unstaffedHours)}</span>
+            )}
+            {day.orders.length > 0 && !day.past && (
+              <span
+                className="aline-fill"
+                style={{ width: `${Math.min(100, (day.orders.length / Math.max(1, day.positions)) * 100)}%` }}
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function AssemblyGantt({
   board,
   unreleasedHidden = 0,
@@ -967,6 +1096,13 @@ export function AssemblyGantt({
   const moveLine = usePlanStore((s) => s.moveLine);
   const unlocked = useSupervisorStore((s) => s.unlocked);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const timelineWeeks = useUiStore((s) => s.timelineWeeks);
+  // Not stopped at the engine's fortnight: at least the weeks asked for, and
+  // out to every planned bar and every waiting order's Due Date.
+  const spanDays = useMemo(
+    () => timelineDays(board, timelineWeeks),
+    [board, timelineWeeks],
+  );
   const [hoveredJobId, setHoveredJobId] = useState<string | null>(null);
 
   // The clock behind the "now" line. Five minutes is as fine as the line is
@@ -978,11 +1114,11 @@ export function AssemblyGantt({
   }, []);
 
   const days = useMemo(() => {
-    const calendar = Array.from({ length: board.horizonDays }, (_, i) =>
+    const calendar = Array.from({ length: spanDays }, (_, i) =>
       addCalendarDays(board.horizonStart, i),
     );
     return showWeekends ? calendar : calendar.filter((day) => !isWeekend(day));
-  }, [board.horizonDays, board.horizonStart, showWeekends]);
+  }, [spanDays, board.horizonStart, showWeekends]);
   /*
    * The week's widths, and everything read off them.
    *
@@ -1010,6 +1146,10 @@ export function AssemblyGantt({
     [board],
   );
   const orderedGroups = useStableBoardOrder(board.groups, sort);
+  const rowsByLine = useMemo(
+    () => new Map(board.groups.map((g) => [g.line.key, rowsOfLine(board, g.line.key)])),
+    [board],
+  );
   /**
    * The ids a date filter leaves on screen, or null when there is no filter.
    *
@@ -1281,12 +1421,12 @@ export function AssemblyGantt({
       allRows,
       board.workers,
       board.horizonStart,
-      board.horizonDays,
+      spanDays,
       board.today,
       board.workerOnLeave,
     );
     return showWeekends ? calendar : calendar.filter((load) => load.working);
-  }, [allRows, board, showWeekends]);
+  }, [allRows, board, showWeekends, spanDays]);
 
   // Where the shift has got to, as a fraction of today's column.
   const todayIndex = dayLoads.findIndex((load) => load.isToday);
@@ -1577,6 +1717,9 @@ export function AssemblyGantt({
           visibleDates={visibleDates}
           showWeekends={showWeekends}
           collapsed={Boolean(collapsed[group.line.key])}
+          lineRows={rowsByLine.get(group.line.key) ?? []}
+          dates={days}
+          labelWidth={labelWidth}
           onToggle={() => setCollapsed((current) => ({ ...current, [group.line.key]: !current[group.line.key] }))}
           onHide={() => toggleLine(group.line.key)}
           onClose={

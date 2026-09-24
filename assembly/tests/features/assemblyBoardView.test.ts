@@ -29,6 +29,8 @@ import {
   withPredecessors,
   releasedOrderNumbers,
   unstaffedWindow,
+  lineDayLoads,
+  timelineDays,
 } from '@/features/assembly/boardView';
 
 const row = (
@@ -730,5 +732,74 @@ describe('the box an order with nobody on it is drawn in', () => {
 
   it('has nowhere to go without a Due Date', () => {
     expect(unstaffedWindow(waiting(null))).toBeNull();
+  });
+});
+
+describe('a folded line reads its load day by day', () => {
+  const day = (key: string) => new Date(`${key}T00:00:00`);
+  const crewed = (id: string, days: Record<string, { hours: number; workerIds: string[] }>): OrderRow => {
+    const r = row(id, { start: '2026-09-14T07:00:00', due: '2026-09-30T00:00:00' });
+    r.crewDays = Object.entries(days).map(([key, d]) => ({
+      day: key, date: day(key), from: 0, hours: d.hours, perWorkerHours: d.hours / d.workerIds.length, workerIds: d.workerIds,
+    })) as OrderRow['crewDays'];
+    return r;
+  };
+  const waiting = (id: string, due: string): OrderRow => {
+    const r = row(id);
+    (r.job as { dueDate: Date | null }).dueDate = new Date(due);
+    Object.assign(r.job, { laborHrs: 15, remainingQty: 10, completedQty: 0 });
+    Object.assign(r, { plannedStart: new Date('2026-09-14T07:00:00'), uncoveredHours: 15 });
+    return r;
+  };
+  const dates = ['2026-09-11', '2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17'].map(day);
+
+  it('adds up the hours, people and positions its crew is planned on', () => {
+    const a = crewed('A', { '2026-09-14': { hours: 14.5, workerIds: ['1', '2'] }, '2026-09-15': { hours: 7.25, workerIds: ['1'] } });
+    const b = crewed('B', { '2026-09-14': { hours: 7.25, workerIds: ['3'] } });
+    const c = crewed('C', { '2026-09-14': { hours: 7.25, workerIds: ['4'] } });
+    const loads = lineDayLoads([a, b, c], 3, dates, day('2026-09-14'));
+    expect(loads[1]).toMatchObject({ hours: 29, people: 4, orders: ['A', 'B', 'C'], band: 'orange' });
+    expect(loads[2]).toMatchObject({ hours: 7.25, people: 1, orders: ['A'], band: 'green' });
+    expect(loads[3]).toMatchObject({ hours: 0, band: 'idle' });
+    expect(lineDayLoads([a, b, c], 2, dates, day('2026-09-14'))[1].band).toBe('red');
+  });
+
+  it('shows what was booked on a day already gone', () => {
+    const a = crewed('A', {});
+    a.booked = [{ day: '2026-09-11', qty: 4, hours: 6 }];
+    expect(lineDayLoads([a], 3, dates, day('2026-09-14'))[0]).toMatchObject({ past: true, hours: 6, orders: ['A'] });
+  });
+
+  it('lays the work nobody is on yet across the days before its Due Date', () => {
+    // 15 h at two people is one shift: it has to be worked on the 17th.
+    const loads = lineDayLoads([waiting('W', '2026-09-18T00:00:00')], 3, dates, day('2026-09-14'));
+    expect(loads.map((d) => d.unstaffedHours)).toEqual([0, 0, 0, 0, 15]);
+    expect(loads[4]).toMatchObject({ unstaffedOrders: ['W'], hours: 0 });
+  });
+});
+
+describe('the timeline is not held to a fortnight', () => {
+  const board = (horizonDays: number, rows: OrderRow[] = []) => ({
+    horizonStart: new Date('2026-09-11T00:00:00'),
+    today: new Date('2026-09-14T00:00:00'),
+    horizonDays,
+    groups: [{ rows }],
+  });
+  const waitingDue = (due: string) => {
+    const r = row('W');
+    (r.job as { dueDate: Date | null }).dueDate = new Date(due);
+    Object.assign(r.job, { laborHrs: 15, remainingQty: 10, completedQty: 0 });
+    return r;
+  };
+
+  it('shows the weeks asked for past today, and never cuts a planned bar', () => {
+    expect(timelineDays(board(17), 4)).toBe(3 + 28);
+    expect(timelineDays(board(17), 2)).toBe(17);
+    expect(timelineDays(board(300), 2)).toBe(300);
+  });
+
+  it('reaches the Due Date of an order waiting for a crew, within reason', () => {
+    expect(timelineDays(board(17, [waitingDue('2026-11-30T00:00:00')]), 2)).toBe(81);
+    expect(timelineDays(board(17, [waitingDue('2027-12-01T00:00:00')]), 2)).toBe(3 + 182);
   });
 });

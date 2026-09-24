@@ -271,6 +271,11 @@ interface UiState {
   releasedOnly: boolean;
   /** Weekend timeline columns; hidden by default to keep the working week compact. */
   showWeekends: boolean;
+  /**
+   * Weeks ahead of today the timeline shows at least. Planned bars and the Due
+   * Dates of orders waiting for a crew stretch it further — see `timelineDays`.
+   */
+  timelineWeeks: number;
   /** Sort the displayed rows without changing the scheduler's line sequence. */
   orderSort: OrderSort;
 
@@ -320,6 +325,7 @@ interface UiState {
   setReleasedOnly: (releasedOnly: boolean) => void;
   setOrderDay: (day: string | null) => void;
   toggleWeekends: () => void;
+  setTimelineWeeks: (weeks: number) => void;
   changeOrderSort: (key: OrderSortKey) => void;
   resetOrderSort: () => void;
   askOvertime: (request: OvertimeRequest) => void;
@@ -348,6 +354,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   dueSoon: false,
   releasedOnly: true,
   showWeekends: false,
+  timelineWeeks: 4,
   orderSort: { key: 'start', direction: 'asc' },
 
   // A follow-on pick — a predecessor in the detail itself — comes with no
@@ -441,6 +448,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   setReleasedOnly: (releasedOnly) => set({ releasedOnly }),
   setOrderDay: (orderDay) => set({ orderDay }),
   toggleWeekends: () => set((state) => ({ showWeekends: !state.showWeekends })),
+  setTimelineWeeks: (timelineWeeks) => set({ timelineWeeks }),
   changeOrderSort: (key) => set((state) => ({
     orderSort: {
       key,
