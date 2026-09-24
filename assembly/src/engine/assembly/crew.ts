@@ -26,7 +26,7 @@ import {
   type Worker,
 } from '@/domain/assembly';
 import { durationDays, remainingHours, remainingQty } from './duration';
-import { addDays, addWorkingDays } from './dates';
+import { addDays, addWorkingDays, startOfDay } from './dates';
 import { planVariableCrew, type CrewDayPlan } from './crewSchedule';
 import type { AssemblyGanttView, OrderRow } from './board';
 import { toDayKey } from '@/lib/time';
@@ -295,14 +295,37 @@ function freeFrom(booked: Span[] | undefined, from: Date): number {
 const dayOf = (ms: number): string => toDayKey(new Date(ms));
 
 /**
- * Most urgent first: the order with the least slack to its Due Date — the
- * last day it can start and still make it — then the earlier Due Date. An
- * order with no Due Date goes last, because nothing says it is urgent.
+ * How far out Crew orders looks, in turn: everything due within two weeks is
+ * crewed before anything due in the two after it, and that before the four
+ * after those. People go to the work that is nearest its Due Date instead of
+ * being booked weeks ahead on an order that could wait, and the orders due
+ * soon wait the least.
  */
-const bySlack = (a: OrderRow, b: OrderRow): number => {
+export const CREW_DUE_TIERS_DAYS = [14, 28, 56] as const;
+
+/**
+ * Which band of `CREW_DUE_TIERS_DAYS` an order falls in: 0 for due within two
+ * weeks (late included), 1 within four, 2 within eight, 3 beyond, 4 with no
+ * Due Date — nothing says that one is urgent.
+ */
+export function dueTier(row: OrderRow, today: Date): number {
+  const due = row.job.dueDate;
+  if (!due) return CREW_DUE_TIERS_DAYS.length + 1;
+  const days = Math.round((startOfDay(due).getTime() - startOfDay(today).getTime()) / 86_400_000);
+  const tier = CREW_DUE_TIERS_DAYS.findIndex((limit) => days <= limit);
+  return tier < 0 ? CREW_DUE_TIERS_DAYS.length : tier;
+}
+
+/**
+ * Most urgent first: the nearer Due Date band, then within it the order with
+ * the least slack to its Due Date — the last day it can start and still make
+ * it — then the earlier Due Date.
+ */
+const byUrgency = (today: Date) => (a: OrderRow, b: OrderRow): number => {
   const slack = (row: OrderRow) => (row.mustStartBy ?? row.job.dueDate)?.getTime() ?? Number.MAX_SAFE_INTEGER;
   const due = (row: OrderRow) => row.job.dueDate?.getTime() ?? Number.MAX_SAFE_INTEGER;
-  return slack(a) - slack(b) || due(a) - due(b) || a.plannedStart.getTime() - b.plannedStart.getTime();
+  return dueTier(a, today) - dueTier(b, today) ||
+    slack(a) - slack(b) || due(a) - due(b) || a.plannedStart.getTime() - b.plannedStart.getTime();
 };
 
 /** Orders on a schedulable line with nobody on them and work left to do. */
@@ -387,10 +410,11 @@ function staffOneWave(
       )
       // Forward, by urgency: every waiting order asks to start as soon as it
       // can (`plannedStart` — today, or when its parts are ready), so what
-      // decides who gets the line's people first is how little slack it has.
-      // This used to sort on `plannedStart` alone, which is the same day for
-      // nearly every order nobody is on, and left the choice to row order.
-      .sort(bySlack);
+      // decides who gets the line's people first is how near its Due Date is
+      // — two weeks, then four, then eight — and within that how little slack
+      // it has. This used to sort on `plannedStart` alone, which is the same
+      // day for nearly every order nobody is on, and left it to row order.
+      .sort(byUrgency(board.today));
 
     // The earliest order the line can actually crew. One that nobody is free
     // for is skipped rather than stalling the line behind it — the schedule

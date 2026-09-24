@@ -16,7 +16,7 @@
  * the time the export was read, beside the button that re-reads it.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { AssemblyGanttView, OrderRow } from '@/engine/assembly/board';
 import {
   DEFAULT_CREW_POOLS,
@@ -79,6 +79,23 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
      one row an inch apart, and two panels open at once is two panels on top of
      each other. */
   const [openPanel, setOpenPanel] = useState<string | null>(null);
+  // A press anywhere outside the figures, or Esc, puts the open panel away —
+  // it is a glance at what a number is made of, not a place to stay.
+  useEffect(() => {
+    if (!openPanel) return;
+    const down = (e: PointerEvent) => {
+      if (!(e.target as Element | null)?.closest?.('.metric-slot')) setOpenPanel(null);
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpenPanel(null);
+    };
+    document.addEventListener('pointerdown', down);
+    document.addEventListener('keydown', key);
+    return () => {
+      document.removeEventListener('pointerdown', down);
+      document.removeEventListener('keydown', key);
+    };
+  }, [openPanel]);
 
   const allRows = useMemo(
     () => board?.groups.flatMap((group) => group.rows) ?? [],

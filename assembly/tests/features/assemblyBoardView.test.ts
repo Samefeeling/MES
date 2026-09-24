@@ -752,6 +752,7 @@ describe('a folded line reads its load day by day', () => {
     return r;
   };
   const dates = ['2026-09-11', '2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17'].map(day);
+  const day0 = () => day('2026-09-14');
 
   it('adds up the hours, people and positions its crew is planned on', () => {
     const a = crewed('A', { '2026-09-14': { hours: 14.5, workerIds: ['1', '2'] }, '2026-09-15': { hours: 7.25, workerIds: ['1'] } });
@@ -775,6 +776,16 @@ describe('a folded line reads its load day by day', () => {
     const loads = lineDayLoads([waiting('W', '2026-09-18T00:00:00')], 3, dates, day('2026-09-14'));
     expect(loads.map((d) => d.unstaffedHours)).toEqual([0, 0, 0, 0, 15]);
     expect(loads[4]).toMatchObject({ unstaffedOrders: ['W'], hours: 0 });
+  });
+
+  it('lists the orders behind a day, and they add up to its figures', () => {
+    const a = crewed('A', { '2026-09-17': { hours: 14.5, workerIds: ['1', '2'] } });
+    const [, , , , day] = lineDayLoads([a, waiting('W', '2026-09-18T00:00:00')], 3, dates, day0());
+    expect(day.entries.map((e) => [e.order, e.kind, e.hours, e.people])).toEqual([
+      ['W', 'waiting', 15, 0],
+      ['A', 'crewed', 14.5, 2],
+    ]);
+    expect(day.entries.reduce((n, e) => n + e.hours, 0)).toBe(day.hours + day.unstaffedHours);
   });
 });
 

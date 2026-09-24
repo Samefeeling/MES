@@ -12,7 +12,7 @@ import { formatDay, formatShortDay, formatTime } from '@/lib/time';
  */
 
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AssemblyGanttView,
   LineGroup,
@@ -77,6 +77,7 @@ import {
   withPredecessors,
   lineDayLoads,
   timelineDays,
+  type DayOrderEntry,
   type LineDayLoad,
   type OrderSortKey,
 } from './boardView';
@@ -583,6 +584,7 @@ function LineGroupView({
   dates,
   capacity,
   labelWidth,
+  onOpenDay,
   onToggle,
   onHide,
   onClose,
@@ -618,13 +620,15 @@ function LineGroupView({
   collapsed: boolean;
   /**
    * Every order the line holds, its benches' included, before any filter —
-   * what its folded row adds up day by day.
+   * what its row adds up day by day.
    */
   lineRows: OrderRow[];
   /** The day columns, left to right, as the axis lays them out. */
   dates: Date[];
   /** Each day column against the crews — what the banner reads too. */
   capacity: CapacityDay[];
+  /** Open the list of orders behind one day of this line. */
+  onOpenDay: (detail: DayDetailContent, at: { x: number; y: number }) => void;
   /** Where the day columns begin, past the frozen columns. */
   labelWidth: number;
   onToggle: () => void;
@@ -696,14 +700,15 @@ function LineGroupView({
   });
   const load = group.load;
   /*
-   * Folded, the line's row is all that is left of it, so it carries the line's
-   * week: hours planned on each day, and the work still waiting for a crew that
-   * has to land on those days to make its Due Date. PMD is the moulding plan
-   * mirrored for context — nobody on this board crews it — so it has none.
+   * The line's row carries its week, folded or open: hours planned on each
+   * day, and the work still waiting for a crew that has to land on those days
+   * to make its Due Date. The row's grid is empty either way — the bars are on
+   * the order rows under it. PMD is the moulding plan mirrored for context —
+   * nobody on this board crews it — so it has none.
    */
   const dayLoads = useMemo(
     () =>
-      collapsed && group.line.schedulable
+      group.line.schedulable
         ? lineDayLoads(
             lineRows,
             benchPositions(board, group),
@@ -711,7 +716,7 @@ function LineGroupView({
             board.today,
           )
         : null,
-    [collapsed, group, lineRows, dates, board],
+    [group, lineRows, dates, board],
   );
   const crew = useMemo(
     () =>
@@ -734,8 +739,8 @@ function LineGroupView({
           what sticks to the left edge, so the line's totals and its people
           stay readable however far right the grid is scrolled — the row
           itself has to span the whole grid to carry the background. */}
-      <div className={`agroup-head${dayLoads ? ' folded' : ''}`}>
-       {/* Folded, the sticky block also covers the frozen columns, so the day
+      <div className={`agroup-head${dayLoads ? ' has-load' : ''}`}>
+       {/* With a day strip, the sticky block also covers the frozen columns, so the day
            strip scrolls under them the way the bars do. */}
        <div
          className="agroup-head-in"
@@ -932,6 +937,23 @@ function LineGroupView({
          <LineLoadStrip
            days={dayLoads}
            capacity={capacity.map((day) => day.lines.get(rootLineKey(group.line.key))?.capacity)}
+           onOpen={(i, at) => {
+             const day = dayLoads[i];
+             const crew = capacity[i]?.lines.get(rootLineKey(group.line.key))?.capacity;
+             onOpenDay(
+               {
+                 title: `${group.line.name} · ${formatShortDay(day.date)}`,
+                 summary:
+                   `${day.hours.toFixed(1)} h ${day.past ? 'booked' : 'with people on it'}` +
+                   (day.unstaffedHours > 0 ? ` + ${day.unstaffedHours.toFixed(1)} h with nobody on it yet` : '') +
+                   (crew && crew.pct !== null
+                     ? ` · ${crew.pools.join(' + ')} ${crew.demand.toFixed(1)} of ${crew.capacity.toFixed(1)} h (${pctText(crew.pct)})`
+                     : ''),
+                 groups: [{ name: group.line.name, entries: day.entries }],
+               },
+               at,
+             );
+           }}
            axis={axis}
            left={labelWidth}
            width={gridWidth}
@@ -1006,7 +1028,7 @@ const hoursText = (hours: number) =>
 const pctText = (pct: number) => (Number.isFinite(pct) ? `${Math.round(pct)}%` : 'no crew');
 
 /**
- * A folded line's week, one cell per day column: the hours its crew is
+ * A line's week, one cell per day column: the hours its crew is
  * planned to work, and — dashed — the hours of orders nobody is on yet that
  * have to be worked on that day to make their Due Date. The tint is how full
  * the crews it draws on are that day, the same figure the banner adds up.
@@ -1014,6 +1036,7 @@ const pctText = (pct: number) => (Number.isFinite(pct) ? `${Math.round(pct)}%` :
 function LineLoadStrip({
   days,
   capacity,
+  onOpen,
   axis,
   left,
   width,
@@ -1021,6 +1044,8 @@ function LineLoadStrip({
 }: {
   days: LineDayLoad[];
   capacity: (LineCapacity | undefined)[];
+  /** A day was pressed: list its orders. */
+  onOpen: (day: number, at: { x: number; y: number }) => void;
   axis: DayAxis;
   left: number;
   width: number;
@@ -1054,19 +1079,120 @@ function LineLoadStrip({
             : 'No crew group lists this line — set one under Crew groups',
         );
         return (
-          <div
+          <button
+            type="button"
             key={day.key}
             className={`aline-day ${crew?.band ?? 'idle'}${day.past ? ' past' : ''}`}
             style={{ left: axis.offsets[i], width: axis.widths[i] }}
-            title={lines.join('\n')}
+            title={`${lines.join('\n')}\nClick for the orders`}
+            onClick={(e) => onOpen(i, { x: e.clientX, y: e.clientY })}
           >
             {day.hours > 0 && <b>{hoursText(day.hours)}</b>}
             {day.unstaffedHours > 0 && (
               <span className="aline-wait">+{hoursText(day.unstaffedHours)}</span>
             )}
-          </div>
+          </button>
         );
       })}
+    </div>
+  );
+}
+
+/** What a pressed day lists: a heading, its figures, and the orders by line. */
+interface DayDetailContent {
+  title: string;
+  summary: string;
+  groups: { name: string; entries: DayOrderEntry[] }[];
+}
+
+const KIND_LABEL: Record<DayOrderEntry['kind'], string> = {
+  crewed: 'crew',
+  booked: 'booked',
+  waiting: 'no crew yet',
+};
+
+/**
+ * The orders behind one day's load, beside where it was pressed. Pressing an
+ * order selects it on the board; pressing anywhere else, or Esc, closes it.
+ */
+function DayDetail({
+  detail,
+  at,
+  onPick,
+  onClose,
+}: {
+  detail: DayDetailContent;
+  at: { x: number; y: number };
+  onPick: (jobId: string) => void;
+  onClose: () => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const down = (e: PointerEvent) => {
+      if (!box.current?.contains(e.target as Node)) onClose();
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    // Next tick: the press that opened it is still travelling.
+    const id = window.setTimeout(() => {
+      document.addEventListener('pointerdown', down);
+      document.addEventListener('keydown', key);
+    });
+    return () => {
+      window.clearTimeout(id);
+      document.removeEventListener('pointerdown', down);
+      document.removeEventListener('keydown', key);
+    };
+  }, [onClose]);
+  const width = 380;
+  const left = Math.max(8, Math.min(at.x - 20, window.innerWidth - width - 8));
+  const top = Math.min(at.y + 12, window.innerHeight - 160);
+  const shown = detail.groups.filter((g) => g.entries.length > 0);
+  return (
+    <div
+      ref={box}
+      className="day-detail"
+      role="dialog"
+      aria-label={detail.title}
+      style={{ left, top, width, maxHeight: `calc(100vh - ${top + 12}px)` }}
+    >
+      <header>
+        <strong>{detail.title}</strong>
+        <button type="button" onClick={onClose} aria-label="Close">×</button>
+      </header>
+      <p className="day-detail-sum">{detail.summary}</p>
+      {shown.length === 0 && <p className="day-detail-sum">Nothing on this day.</p>}
+      {shown.map((group) => (
+        <section key={group.name}>
+          {detail.groups.length > 1 && (
+            <h4>
+              {group.name}
+              <span>{group.entries.reduce((n, e) => n + e.hours, 0).toFixed(1)} h</span>
+            </h4>
+          )}
+          <ul>
+            {group.entries.map((e, i) => (
+              <li key={`${e.jobId}-${e.kind}-${i}`}>
+                <button
+                  type="button"
+                  className={`day-entry ${e.kind}`}
+                  onClick={() => onPick(e.jobId)}
+                  title={`${e.description}\nOn ${e.line}` + (e.due ? ` · due ${formatShortDay(e.due)}` : '')}
+                >
+                  <b>{e.order}</b>
+                  <span className="day-entry-kind">
+                    {KIND_LABEL[e.kind]}
+                    {e.kind === 'crewed' && e.people > 0 ? ` · ${e.people}p` : ''}
+                    {e.kind === 'waiting' && e.due ? ` · due ${formatShortDay(e.due)}` : ''}
+                  </span>
+                  <span className="day-entry-h">{e.hours.toFixed(1)} h</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
     </div>
   );
 }
@@ -1107,6 +1233,15 @@ export function AssemblyGantt({
   const moveLine = usePlanStore((s) => s.moveLine);
   const unlocked = useSupervisorStore((s) => s.unlocked);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [dayDetail, setDayDetail] = useState<{
+    detail: DayDetailContent;
+    at: { x: number; y: number };
+  } | null>(null);
+  const openDay = useCallback(
+    (detail: DayDetailContent, at: { x: number; y: number }) => setDayDetail({ detail, at }),
+    [],
+  );
+  const closeDay = useCallback(() => setDayDetail(null), []);
   const timelineWeeks = useUiStore((s) => s.timelineWeeks);
   // Not stopped at the engine's fortnight: at least the weeks asked for, and
   // out to every planned bar and every waiting order's Due Date.
@@ -1160,7 +1295,7 @@ export function AssemblyGantt({
   const crewPools = usePlanStore((s) => s.crewPools);
   /*
    * Every day column against the crews: what the banner shows, and what each
-   * folded line's row is tinted by. Over every row, not the filtered ones —
+   * line's row is tinted by. Over every row, not the filtered ones —
    * how full a day is does not change because the view was narrowed.
    */
   const capacity = useMemo(() => {
@@ -1697,7 +1832,25 @@ export function AssemblyGantt({
                   key={i}
                   className={`daycol ${load.working ? '' : 'weekend'} ${load.isToday ? 'today' : ''} ${load.past ? 'past' : ''}`}
                   style={{ left: axis.offsets[i], width: axis.widths[i] }}
-                  title={title}
+                  title={`${title}\nClick for the orders`}
+                  onClick={(e) => {
+                    // The count narrows the board and the edge resizes the
+                    // day; the rest of the cell lists what the day is made of.
+                    if ((e.target as Element).closest('button, .col-resize')) return;
+                    openDay(
+                      {
+                        title: `${formatShortDay(d)} · every line`,
+                        summary:
+                          `${cap.crewed.toFixed(1)} h ${cap.past ? 'booked' : 'with people on it'}` +
+                          (cap.waiting > 0 ? ` + ${cap.waiting.toFixed(1)} h with nobody on it yet` : '') +
+                          ` of ${cap.capacity.toFixed(1)} h — ${pct}%`,
+                        groups: board.groups
+                          .filter((g) => cap.lines.has(g.line.key))
+                          .map((g) => ({ name: g.line.name, entries: cap.lines.get(g.line.key)!.load.entries })),
+                      },
+                      { x: e.clientX, y: e.clientY },
+                    );
+                  }}
                 >
                   <span className="daycol-top">
                     <span className="daycol-date">{formatShortDay(d)}</span>
@@ -1776,6 +1929,7 @@ export function AssemblyGantt({
           dates={days}
           capacity={capacity}
           labelWidth={labelWidth}
+          onOpenDay={openDay}
           onToggle={() => setCollapsed((current) => ({ ...current, [group.line.key]: !current[group.line.key] }))}
           onHide={() => toggleLine(group.line.key)}
           onClose={
@@ -1798,6 +1952,17 @@ export function AssemblyGantt({
           onDependencyHover={setHoveredJobId}
         />
       ))}
+      {dayDetail && (
+        <DayDetail
+          detail={dayDetail.detail}
+          at={dayDetail.at}
+          onClose={closeDay}
+          onPick={(jobId) => {
+            select(jobId);
+            closeDay();
+          }}
+        />
+      )}
     </div>
   );
 }

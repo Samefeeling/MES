@@ -712,7 +712,26 @@ export function timelineDays(
 /** How full a line is on a day: its build positions against the orders on them. */
 export type LineDayBand = 'idle' | 'green' | 'orange' | 'red';
 
-/** One day of one line, as its folded row draws it. */
+/** One order's part of one line's day — what clicking the day lists. */
+export interface DayOrderEntry {
+  jobId: string;
+  /** Order number, operation included for a routed order. */
+  order: string;
+  description: string;
+  /** Line (bench) the order sits on. */
+  line: string;
+  hours: number;
+  /**
+   * `crewed`: planned with people on it. `booked`: output recorded on a day
+   * already gone. `waiting`: nobody on it yet — its share of the days before
+   * its Due Date.
+   */
+  kind: 'crewed' | 'booked' | 'waiting';
+  people: number;
+  due: Date | null;
+}
+
+/** One day of one line, as its row draws it. */
 export interface LineDayLoad {
   key: string;
   date: Date;
@@ -733,6 +752,8 @@ export interface LineDayLoad {
   unstaffedHours: number;
   unstaffedOrders: string[];
   band: LineDayBand;
+  /** Every order behind the day's figures, largest share first. */
+  entries: DayOrderEntry[];
 }
 
 /**
@@ -754,8 +775,18 @@ export function lineDayLoads(
   const todayKey = toDayKey(startOfDay(today));
   const live = rows.filter((row) => row.line.schedulable);
 
+  const entry = (row: OrderRow, hours: number, kind: DayOrderEntry['kind'], people = 0): DayOrderEntry => ({
+    jobId: String(row.job.id),
+    order: String(row.job.id),
+    description: row.job.description ?? '',
+    line: row.line.name,
+    hours,
+    kind,
+    people,
+    due: row.job.dueDate ?? null,
+  });
   // Waiting work, spread evenly over the open days of its window.
-  const waiting = new Map<string, { hours: number; orders: Set<string> }>();
+  const waiting = new Map<string, { hours: number; orders: Set<string>; entries: DayOrderEntry[] }>();
   for (const row of live) {
     if (row.start || row.completedToday) continue;
     const window = unstaffedWindow(row);
@@ -767,9 +798,10 @@ export function lineDayLoads(
     }
     if (open.length === 0) open.push(toDayKey(startOfDay(window.from)));
     for (const key of open) {
-      const day = waiting.get(key) ?? { hours: 0, orders: new Set<string>() };
+      const day = waiting.get(key) ?? { hours: 0, orders: new Set<string>(), entries: [] };
       day.hours += hours / open.length;
       day.orders.add(jobNumOf(String(row.job.id)));
+      day.entries.push(entry(row, hours / open.length, 'waiting'));
       waiting.set(key, day);
     }
   }
@@ -780,12 +812,14 @@ export function lineDayLoads(
     let hours = 0;
     const people = new Set<string>();
     const orders = new Set<string>();
+    const entries: DayOrderEntry[] = [];
     for (const row of live) {
       if (past) {
         const booked = row.booked.reduce((n, b) => (b.day === key ? n + b.hours : n), 0);
         if (booked > 0) {
           hours += booked;
           orders.add(jobNumOf(String(row.job.id)));
+          entries.push(entry(row, booked, 'booked'));
         }
         continue;
       }
@@ -794,8 +828,11 @@ export function lineDayLoads(
       hours += plan.hours;
       orders.add(jobNumOf(String(row.job.id)));
       for (const id of plan.workerIds) people.add(id);
+      entries.push(entry(row, plan.hours, 'crewed', plan.workerIds.length));
     }
     const wait = past ? undefined : waiting.get(key);
+    if (wait) entries.push(...wait.entries);
+    entries.sort((a, b) => b.hours - a.hours);
     const running = orders.size;
     const band: LineDayBand =
       running === 0 ? 'idle' : running > positions ? 'red' : running === positions ? 'orange' : 'green';
@@ -810,6 +847,7 @@ export function lineDayLoads(
       unstaffedHours: wait?.hours ?? 0,
       unstaffedOrders: wait ? [...wait.orders] : [],
       band,
+      entries,
     };
   });
 }

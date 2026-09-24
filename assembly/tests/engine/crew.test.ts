@@ -15,6 +15,7 @@ import {
   overlapsOnBoard,
   preferredCrewSize,
   suggestCrew,
+  dueTier,
 } from '@/engine/assembly/crew';
 import {
   addDays,
@@ -342,6 +343,7 @@ describe('current line roster priority', () => {
       const first = [...group.rows]
         .filter((row) => allocations[String(row.job.id)])
         .sort((a, c) =>
+          dueTier(a, b.today) - dueTier(c, b.today) ||
           slack(a) - slack(c) ||
           (a.job.dueDate?.getTime() ?? 0) - (c.job.dueDate?.getTime() ?? 0) ||
           a.plannedStart.getTime() - c.plannedStart.getTime())[0];
@@ -456,6 +458,24 @@ describe('crew size and selection policy', () => {
     (b.groups[0] as { rows: OrderRow[] }).rows = [relaxed, urgent];
     // Without a re-plan only the first round runs: one order per line.
     expect(Object.keys(suggestCrew(b).allocations)).toEqual(['URGENT']);
+  });
+
+  it('crews what is due within two weeks before anything due later, whatever its slack', () => {
+    // FAR is a long order due in three weeks, so it must start sooner than
+    // NEAR — but NEAR is due within two weeks, and those go first.
+    const b = fixture('ASSY', 4, [person('Only')]);
+    const base = b.groups[0].rows[0];
+    const far = { ...base, job: { ...base.job, id: 'FAR' as never, dueDate: addDays(TODAY, 21) }, mustStartBy: addDays(TODAY, 4) };
+    const near = { ...base, job: { ...base.job, id: 'NEAR' as never, dueDate: addDays(TODAY, 10) }, mustStartBy: addDays(TODAY, 9) };
+    (b.groups[0] as { rows: OrderRow[] }).rows = [far, near];
+    expect(Object.keys(suggestCrew(b).allocations)).toEqual(['NEAR']);
+  });
+
+  it('bands Due Dates at two, four and eight weeks, late ones in the first', () => {
+    const at = (days: number | null) =>
+      ({ job: { dueDate: days === null ? null : addDays(TODAY, days) } }) as unknown as OrderRow;
+    expect([-3, 0, 14, 15, 28, 29, 56, 57, null].map((d) => dueTier(at(d), TODAY)))
+      .toEqual([0, 0, 0, 1, 1, 2, 2, 3, 4]);
   });
 
   it('leaves an order without a line roster waiting and ignores zero work', () => {

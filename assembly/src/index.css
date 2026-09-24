@@ -1888,12 +1888,12 @@ body.col-resizing {
   min-width: 100%;
 }
 /*
- * A folded line's week, drawn along its own row. The row holds the strip, so
+ * A line's week, drawn along its own row. The row holds the strip, so
  * it is the positioning box; the sticky block above it (z 7) covers the frozen
  * columns and the strip scrolls under it the way the bars do.
  */
-.agroup-head.folded { position: relative; }
-.agroup-head.folded .agroup-head-in { min-height: 34px; }
+.agroup-head.has-load { position: relative; }
+.agroup-head.has-load .agroup-head-in { min-height: 34px; }
 .aline-load {
   position: absolute;
   top: 0;
@@ -1902,6 +1902,9 @@ body.col-resizing {
 }
 .aline-day {
   position: absolute;
+  padding: 0;
+  font-family: inherit;
+  cursor: pointer;
   top: 3px;
   bottom: 3px;
   box-sizing: border-box;
@@ -1919,9 +1922,10 @@ body.col-resizing {
   line-height: 1.15;
   overflow: hidden;
   pointer-events: auto;
-  cursor: default;
   font-variant-numeric: tabular-nums;
 }
+.aline-day:hover { box-shadow: 0 0 0 2px var(--accent); }
+.aline-day:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .aline-day.green { background: var(--ok-dim); border-color: var(--head-ok-bar); }
 .aline-day.orange { background: var(--warn-dim); border-color: var(--head-warn-bar); }
 .aline-day.red { background: var(--error-dim); border-color: var(--head-error-bar); }
@@ -3453,3 +3457,63 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 }
 .app-header .board-tools .crew-pools .crew-line:disabled { cursor: default; opacity: 1; }
 .crew-pools-actions { display: flex; gap: 6px; margin-top: 6px; }
+
+/* The day's load in the banner lists its orders when pressed. */
+.assy-head .daycol { cursor: pointer; }
+.assy-head .daycol:hover { box-shadow: inset 0 0 0 2px var(--accent); }
+
+/* The orders behind one day's load. */
+.day-detail {
+  position: fixed;
+  z-index: 95;
+  overflow: auto;
+  padding: 8px 10px 10px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  font-size: 12px;
+}
+.day-detail header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.day-detail header button {
+  border: 0;
+  background: transparent;
+  font-size: 16px;
+  cursor: pointer;
+  color: var(--muted);
+}
+.day-detail-sum { margin: 2px 0 6px; color: var(--muted); font-size: 11px; }
+.day-detail h4 {
+  display: flex;
+  justify-content: space-between;
+  margin: 8px 0 2px;
+  font-size: 11px;
+  color: var(--line-name);
+}
+.day-detail ul { list-style: none; margin: 0; padding: 0; }
+.day-entry {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.day-entry:hover { border-color: var(--accent); background: var(--surface-2); }
+.day-entry b { font-variant-numeric: tabular-nums; }
+.day-entry-kind { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.day-entry.waiting .day-entry-kind { color: var(--head-warn); }
+.day-entry-h { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
