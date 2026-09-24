@@ -417,6 +417,9 @@ export function OrderBar({
           ? ' · runs entirely on days this axis is hiding — show Weekends to see it'
           : '') +
         (row.overtime ? ' · weekend overtime approved' : '') +
+        (row.materialReadyAt && !row.actualStart
+          ? ` · short material on order, available ${formatDay(row.materialReadyAt)} — it does not start before then`
+          : '') +
         (heldBy
           ? ` · cannot start before ${heldBy} is finished, so it will not drag any earlier`
           : '') +

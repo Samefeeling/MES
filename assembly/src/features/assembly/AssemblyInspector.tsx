@@ -14,7 +14,7 @@ import { usePlanStore } from '@/store/planStore';
 import { useUiStore } from '@/store/uiStore';
 import { remainingQty } from '@/engine/assembly/duration';
 import { startEligibility } from '@/engine/assembly/release';
-import { incomingSupply, pickShortfall } from '@/engine/assembly/pickShortage';
+import { incomingSupply } from '@/engine/assembly/pickShortage';
 import { nextWorkingMoment } from '@/engine/assembly/shift';
 import { formatDay, formatTime } from '@/lib/time';
 import { Badge, Button } from '@/ui';
@@ -723,13 +723,23 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
               </div>
               {picks.map((material, index) => {
                 const stock = inventoryByPart?.get(material.childPart);
-                const shortBy = pickShortfall(material.requiredQty, stock?.onHand);
+                // The board's own reading: stock and POs handed out to the
+                // orders ahead of this one first, so this panel and the bar's
+                // hover can never tell two different stories.
+                const allocated = row.shortPicks?.find((s) => s.part === material.childPart);
+                const shortBy = allocated?.shortQty ?? 0;
                 const onHandTitle = !stock
                   ? 'Part not found in the loaded OnHandInventory.csv'
-                  : shortBy > 0
-                    ? `Short ${shortBy} — ${stock.onHand} on hand against the ${material.requiredQty} this order needs`
+                  : allocated
+                    ? `Short ${shortBy} — ${stock.onHand} on hand` +
+                      (allocated.heldEarlier > 0
+                        ? `, ${allocated.heldEarlier} of it already for orders scheduled ahead of this one,`
+                        : '') +
+                      ` against the ${material.requiredQty} this order needs`
                     : 'Calculated_OnHand from OnHandInventory.csv';
-                const incoming = incomingSupply(poByPart?.get(material.childPart), shortBy);
+                const incoming = allocated
+                  ? allocated.incoming
+                  : incomingSupply(poByPart?.get(material.childPart), 0);
                 const releasesTitle = incoming
                   ? incoming.releases
                       .map((r) =>
@@ -739,6 +749,9 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
                       )
                       .join('\n')
                   : 'No open purchase order in PODetail.csv';
+                const heldNote = incoming && incoming.heldEarlier > 0
+                  ? `\n${incoming.heldEarlier} of the ${incoming.qty} on order already go to orders scheduled ahead of this one`
+                  : '';
                 const late =
                   shortBy > 0 &&
                   (!incoming?.coversShort ||
@@ -778,7 +791,7 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
                     >
                       {stock?.calculatedDemand ?? '—'}
                     </span>
-                    <span className={incoming ? 'qty' : 'qty none'} title={releasesTitle}>
+                    <span className={incoming ? 'qty' : 'qty none'} title={releasesTitle + heldNote}>
                       {incoming?.qty ?? '—'}
                     </span>
                     <span
@@ -786,11 +799,17 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
                         !incoming ? 'qty none' : late ? 'qty short' : 'qty'
                       }
                       title={
-                        shortBy > 0 && incoming && !incoming.coversShort
-                          ? `Everything on order (${incoming.qty}) is still less than the ${shortBy} short\n${releasesTitle}`
-                          : late && incoming?.availableDate
-                            ? `Arrives after this order's Due Date\n${releasesTitle}`
+                        !incoming
+                          ? shortBy > 0
+                            ? `Short ${shortBy} and nothing on order in PODetail.csv`
                             : releasesTitle
+                          : shortBy > 0 && !incoming.coversShort
+                          ? `What is left on order is less than the ${shortBy} short${heldNote}\n${releasesTitle}`
+                          : late && incoming?.availableDate
+                            ? `Arrives after this order's Due Date${heldNote}\n${releasesTitle}`
+                            : shortBy > 0
+                              ? `This order's ${shortBy} is covered by then${heldNote}\n${releasesTitle}`
+                              : releasesTitle
                       }
                     >
                       {incoming?.availableDate ? formatDay(incoming.availableDate) : '—'}

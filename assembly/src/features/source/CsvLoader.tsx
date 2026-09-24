@@ -64,7 +64,6 @@ export function CsvLoader() {
   const orders = useRef<HTMLInputElement>(null);
   const links = useRef<HTMLInputElement>(null);
   const inventory = useRef<HTMLInputElement>(null);
-  const po = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<Kind | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -102,7 +101,6 @@ export function CsvLoader() {
       if (orders.current) orders.current.value = '';
       if (links.current) links.current.value = '';
       if (inventory.current) inventory.current.value = '';
-      if (po.current) po.current.value = '';
     }
   };
 
@@ -130,13 +128,7 @@ export function CsvLoader() {
         hidden
         onChange={(e) => void onPick(e.target.files, 'inventory')}
       />
-      <input
-        ref={po}
-        type="file"
-        accept=".csv,text/csv,.txt"
-        hidden
-        onChange={(e) => void onPick(e.target.files, 'po')}
-      />
+
       <Button
         onClick={() => orders.current?.click()}
         disabled={busy !== null}
@@ -161,13 +153,7 @@ export function CsvLoader() {
       >
         {busy === 'inventory' ? 'Loading…' : 'Load OnHandInventory'}
       </Button>
-      <Button
-        onClick={() => po.current?.click()}
-        disabled={busy !== null}
-        title="Parse PODetail.csv — open purchase orders: Calculated_OutstandingQty, and when they are available (the later of PORel_DueDate and PORel_PromiseDt)"
-      >
-        {busy === 'po' ? 'Loading…' : 'Load PODetail'}
-      </Button>
+
       {problem && (
         <span className="board-warn" title={problem}>
           Check the file

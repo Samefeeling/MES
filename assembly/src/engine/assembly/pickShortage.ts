@@ -37,6 +37,8 @@ export interface IncomingRelease {
 export interface IncomingSupply {
   /** `Calculated_OutstandingQty`, summed over the part's open releases. */
   qty: number;
+  /** Of `qty`, what orders ahead of this one have already been given. */
+  heldEarlier: number;
   /**
    * When the order can count on the part. On a short line: the release whose
    * arrival, added to everything due before it, first covers the shortfall —
@@ -76,17 +78,18 @@ export function incomingSupply(
   if (releases.length === 0) return null;
   const qty = releases.reduce((n, r) => n + r.qty, 0);
   if (shortQty <= 0) {
-    return { qty, availableDate: releases[0].availableDate, coversShort: true, releases };
+    return { qty, heldEarlier: 0, availableDate: releases[0].availableDate, coversShort: true, releases };
   }
   let running = 0;
   for (const r of releases) {
     running += r.qty;
     if (running >= shortQty) {
-      return { qty, availableDate: r.availableDate, coversShort: true, releases };
+      return { qty, heldEarlier: 0, availableDate: r.availableDate, coversShort: true, releases };
     }
   }
   return {
     qty,
+    heldEarlier: 0,
     availableDate: releases.findLast((r) => r.availableDate)?.availableDate ?? null,
     coversShort: false,
     releases,
@@ -102,7 +105,9 @@ export interface PickShortage {
   requiredQty: number;
   /** `Calculated_OnHand`, summed over the part's bins. */
   onHand: number;
-  /** `requiredQty − onHand`; always above zero. */
+  /** Of `onHand`, what orders ahead of this one have already been given. */
+  heldEarlier: number;
+  /** What the shelf leaves this order short; always above zero. */
   shortQty: number;
   /** What is on order for it, when `PODetail.csv` has any. */
   incoming: IncomingSupply | null;
@@ -127,7 +132,95 @@ export const pickShortfall = (
     : Math.max(0, requiredQty - onHand);
 
 /**
- * Every line of a pick list the shelf is short of, worst first.
+ * The shelf and the open purchase orders, handed out one order at a time.
+ *
+ * Every order used to be measured against the whole of both, so two orders
+ * needing the same frame each read as covered by the same delivery. A ledger
+ * is taken from in the order the board schedules — the most urgent first —
+ * and what one order is given is gone for the next: on-hand stock first, then
+ * the PO releases earliest first. An order that cannot be covered in full
+ * still takes what there is, because it is the more urgent one.
+ */
+export interface PickLedger {
+  /** Give one order its pick list; returns the lines it is short of, worst first. */
+  take(picks: readonly JobMaterialLink[] | undefined): PickShortage[];
+}
+
+export function pickLedger(
+  inventoryByPart: ReadonlyMap<PartId, InventoryItem>,
+  poByPart: ReadonlyMap<PartId, readonly PoLine[]> = new Map(),
+): PickLedger {
+  const shelfTaken = new Map<PartId, number>();
+  const onOrder = new Map<PartId, { release: IncomingRelease; left: number }[]>();
+  const releasesOf = (part: PartId) => {
+    let held = onOrder.get(part);
+    if (!held) {
+      held = (incomingSupply(poByPart.get(part), 0)?.releases ?? []).map((release) => ({
+        release,
+        left: release.qty,
+      }));
+      onOrder.set(part, held);
+    }
+    return held;
+  };
+
+  return {
+    take(picks) {
+      const short: PickShortage[] = [];
+      for (const pick of picks ?? []) {
+        const stock = inventoryByPart.get(pick.childPart);
+        const required = pick.requiredQty;
+        // Unknown is not a shortage: a part the on-hand export has never heard
+        // of, or a line with no required quantity — see `pickShortfall`.
+        if (required === null || !stock || required <= 0) continue;
+        const onHand = stock.onHand;
+        const taken = shelfTaken.get(pick.childPart) ?? 0;
+        const use = Math.min(Math.max(0, onHand - taken), required);
+        shelfTaken.set(pick.childPart, taken + use);
+        const shortQty = required - use;
+        if (shortQty <= 0) continue;
+
+        const releases = releasesOf(pick.childPart);
+        let incoming: IncomingSupply | null = null;
+        if (releases.length > 0) {
+          const qty = releases.reduce((n, r) => n + r.release.qty, 0);
+          const heldEarlier = releases.reduce((n, r) => n + (r.release.qty - r.left), 0);
+          let still = shortQty;
+          let availableDate: Date | null = null;
+          for (const r of releases) {
+            if (still <= 0) break;
+            if (r.left <= 0) continue;
+            const draw = Math.min(r.left, still);
+            r.left -= draw;
+            still -= draw;
+            availableDate = r.release.availableDate;
+          }
+          incoming = {
+            qty,
+            heldEarlier,
+            availableDate,
+            coversShort: still <= 0,
+            releases: releases.map((r) => r.release),
+          };
+        }
+        short.push({
+          part: pick.childPart,
+          description: stock.description || pick.childDescription || '',
+          requiredQty: required,
+          onHand,
+          heldEarlier: Math.max(0, Math.min(onHand, taken)),
+          shortQty,
+          incoming,
+        });
+      }
+      return short.sort((a, b) => b.shortQty - a.shortQty);
+    },
+  };
+}
+
+/**
+ * Every line of a pick list the shelf is short of, worst first, for one order
+ * on its own — nothing ahead of it has taken anything.
  *
  * The part is looked up by the spelling the material export uses, which is the
  * lookup the panel makes — a part the on-hand export spells differently is
@@ -138,23 +231,20 @@ export function pickShortages(
   inventoryByPart: ReadonlyMap<PartId, InventoryItem>,
   poByPart: ReadonlyMap<PartId, readonly PoLine[]> = new Map(),
 ): PickShortage[] {
-  const short: PickShortage[] = [];
-  for (const pick of picks ?? []) {
-    const stock = inventoryByPart.get(pick.childPart);
-    const required = pick.requiredQty;
-    const onHand = stock?.onHand;
-    const shortQty = pickShortfall(required, onHand);
-    // Both figures are known whenever there is a shortage at all — the rule
-    // above answers 0 when either of them is missing.
-    if (shortQty <= 0 || required === null || onHand === undefined) continue;
-    short.push({
-      part: pick.childPart,
-      description: stock?.description || pick.childDescription || '',
-      requiredQty: required,
-      onHand,
-      shortQty,
-      incoming: incomingSupply(poByPart.get(pick.childPart), shortQty),
-    });
+  return pickLedger(inventoryByPart, poByPart).take(picks);
+}
+
+/**
+ * When everything an order is short of that is on order has arrived: the
+ * latest date among its short lines that the purchase orders cover. A line
+ * nothing covers has no date to wait for and is left out — it is named on the
+ * hover instead. Null when no line is covered by a dated PO.
+ */
+export function materialArrival(short: readonly PickShortage[]): Date | null {
+  let latest: Date | null = null;
+  for (const s of short) {
+    const when = s.incoming?.coversShort ? s.incoming.availableDate : null;
+    if (when && (!latest || when > latest)) latest = when;
   }
-  return short.sort((a, b) => b.shortQty - a.shortQty);
+  return latest;
 }

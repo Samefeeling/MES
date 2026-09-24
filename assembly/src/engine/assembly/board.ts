@@ -97,7 +97,7 @@ import {
   type ScheduleStatus,
 } from './dates';
 import { allocateStock, partKey } from './stockAllocation';
-import { pickShortages, type PickShortage } from './pickShortage';
+import { materialArrival, pickLedger, type PickShortage } from './pickShortage';
 import { endOfCrewDay, idleRuns, planVariableCrew, type CrewDayPlan, type TakenOnDay, type VariableCrewPlan } from './crewSchedule';
 import { onLeaveOnDay, type LeaveDays } from './attendance';
 import { lineLoad, type LineLoad } from './workload';
@@ -231,6 +231,12 @@ export interface OrderRow {
    * which the CSV source does not carry. See `engine/assembly/pickShortage`.
    */
   shortPicks?: PickShortage[];
+  /**
+   * When everything it is short of that a purchase order covers has arrived —
+   * the day it may start at the earliest, as far as bought-in material goes.
+   * Null when nothing it lacks is on a dated PO.
+   */
+  materialReadyAt?: Date | null;
   release: ReleaseCheck;
   /** Orders this one waits on, with the component each supplies. */
   predecessors: Dependency[];
@@ -748,6 +754,24 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
     else pickListByJob.set(id, [material]);
   }
 
+  /*
+   * The shelf and the open POs, given out as the orders are scheduled — the
+   * most urgent first — so two orders never both count on the same delivery.
+   * Once per order number: every operation of a routed order works towards
+   * the one pick list.
+   */
+  const ledger = pickLedger(indexes.inventoryByPart, indexes.poByPart);
+  const shortByOrder = new Map<string, PickShortage[]>();
+  const shortPicksOf = (job: Job, orderNum: string): PickShortage[] => {
+    let short = shortByOrder.get(orderNum);
+    if (!short) {
+      // A finished order has had its material; it takes nothing more.
+      short = job.remainingQty > 0 ? ledger.take(pickListByJob.get(orderNum)) : [];
+      shortByOrder.set(orderNum, short);
+    }
+    return short;
+  };
+
   const rowsByJob = new Map<string, OrderRow>();
   const placed = new Set<string>();
   const groups: LineGroup[] = [];
@@ -1154,6 +1178,13 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
     if (!actualStart && material.earliestStart && material.earliestStart > want) {
       want = startOfDay(material.earliestStart);
     }
+    // The same for the pick list, from PODetail.csv: an order short of a
+    // bought-in part starts no earlier than the day its PO makes it whole.
+    const shortPicks = shortPicksOf(job, jobNumOf(id));
+    const materialReadyAt = materialArrival(shortPicks);
+    if (!actualStart && materialReadyAt && startOfDay(materialReadyAt) > want) {
+      want = startOfDay(materialReadyAt);
+    }
     if (!overtime && !actualStart) want = nextWorkingDay(want);
 
     // Take one of the line's build positions. The order keeps the day it asked
@@ -1309,7 +1340,8 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
       status,
       material,
       pickList: picks,
-      shortPicks: pickShortages(picks, indexes.inventoryByPart, indexes.poByPart),
+      shortPicks,
+      materialReadyAt,
       release: releaseCheck(material, job.materialPrep),
       /*
        * Named by the row that answers for the order, not by the order number.

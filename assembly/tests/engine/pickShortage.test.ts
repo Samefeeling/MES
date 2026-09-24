@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { computeAssemblyGantt } from '@/engine/assembly/board';
-import { pickShortages, pickShortfall } from '@/engine/assembly/pickShortage';
+import { pickLedger, pickShortages, pickShortfall } from '@/engine/assembly/pickShortage';
 import { buildIndexes } from '@/engine/indexes';
 import { JobId, PartId, WorkCenterId, WorkerId } from '@/domain/ids';
 import {
@@ -23,6 +23,7 @@ import type {
   Job,
   JobMaterialLink,
   PlanningDataset,
+  PoLine,
 } from '@/domain/types';
 
 const LANE = LINES.find((l) => l.key === 'ASSY')!;
@@ -96,6 +97,7 @@ function board(
   over: {
     links?: JobMaterialLink[];
     inventory?: InventoryItem[];
+    po?: PoLine[];
     /** Orders to put a person on; the rest stand there unstaffed. */
     crewed?: string[];
   } = {},
@@ -115,7 +117,7 @@ function board(
     routing: [],
     inventory: over.inventory ?? [],
     bom: [],
-    po: [],
+    po: over.po ?? [],
     demand: [],
     jobLinks: over.links ?? [],
     workers,
@@ -200,6 +202,7 @@ describe('what the shelf cannot cover on a pick list', () => {
       description: 'Foam: seat',
       requiredQty: 40,
       onHand: 12,
+      heldEarlier: 0,
       shortQty: 28,
       incoming: null,
     });
@@ -257,5 +260,72 @@ describe('the board carries the shortage onto the row', () => {
      */
     const b = board([job('ASM1')], { links: [link('ASM1', 'FOAM', 40)], crewed: [] });
     expect(b.rowsByJob.get('ASM1')!.shortPicks).toEqual([]);
+  });
+});
+
+const po = (part: string, qty: number, due: Date, promise: Date | null = null, poNum = 'P'): PoLine => ({
+  partNum: PartId(part), poNum, outstandingQty: qty, dueDate: due, promiseDate: promise, buyer: null,
+});
+
+describe('stock and purchase orders are handed out one order at a time', () => {
+  it('gives the shelf to the first order, and the next one waits for the PO', () => {
+    const ledger = pickLedger(
+      indexOf([stock('FRAME', 40)]),
+      new Map([[PartId('FRAME'), [po('FRAME', 50, new Date(2026, 9, 5), new Date(2026, 9, 7), 'P1')]]]),
+    );
+    expect(ledger.take([link('A', 'FRAME', 30)])).toEqual([]);
+    const [b] = ledger.take([link('B', 'FRAME', 30)]);
+    // 40 on the shelf, 30 of them A's: B is 20 short, and the PO (due the
+    // 5th, promised the 7th — the later counts) covers it.
+    expect(b).toMatchObject({ onHand: 40, heldEarlier: 30, shortQty: 20 });
+    expect(b.incoming).toMatchObject({ qty: 50, heldEarlier: 0, coversShort: true, availableDate: new Date(2026, 9, 7) });
+    // What B drew from the PO is gone for C.
+    const [c] = ledger.take([link('C', 'FRAME', 40)]);
+    expect(c).toMatchObject({ heldEarlier: 40, shortQty: 40 });
+    expect(c.incoming).toMatchObject({ heldEarlier: 20, coversShort: false });
+  });
+
+  it('dates an order by the last release it has to draw on', () => {
+    const ledger = pickLedger(
+      indexOf([stock('FRAME', 0)]),
+      new Map([[PartId('FRAME'), [po('FRAME', 50, new Date(2026, 9, 20)), po('FRAME', 25, new Date(2026, 9, 5))]]]),
+    );
+    expect(ledger.take([link('A', 'FRAME', 30)])[0].incoming?.availableDate).toEqual(new Date(2026, 9, 20));
+    expect(ledger.take([link('B', 'FRAME', 20)])[0].incoming).toMatchObject({
+      heldEarlier: 30, availableDate: new Date(2026, 9, 20), coversShort: true,
+    });
+  });
+});
+
+describe('an order short of bought-in material waits for its PO', () => {
+  it('does not start before the PO that makes it whole', () => {
+    const b = board([job('A')], {
+      links: [link('A', 'FRAME', 30)],
+      inventory: [stock('FRAME', 10)],
+      po: [po('FRAME', 50, new Date(2026, 8, 17), new Date(2026, 8, 16))],
+    });
+    const row = b.rowsByJob.get('A')!;
+    expect(row.materialReadyAt).toEqual(new Date(2026, 8, 17));
+    expect(row.start!.getTime()).toBeGreaterThanOrEqual(new Date(2026, 8, 17).getTime());
+  });
+
+  it('holds nothing back when no PO covers the shortfall — there is no date to wait for', () => {
+    const b = board([job('A')], { links: [link('A', 'FRAME', 30)], inventory: [stock('FRAME', 10)] });
+    const row = b.rowsByJob.get('A')!;
+    expect(row.materialReadyAt).toBeNull();
+    expect(row.start!.getTime()).toBeLessThan(new Date(2026, 8, 17).getTime());
+  });
+
+  it('gives the shelf to the more urgent order, and the other waits for the PO', () => {
+    const b = board(
+      [job('LATER', { dueDate: new Date(2026, 9, 30) }), job('SOONER', { dueDate: new Date(2026, 8, 18) })],
+      {
+        links: [link('LATER', 'FRAME', 30), link('SOONER', 'FRAME', 30)],
+        inventory: [stock('FRAME', 30)],
+        po: [po('FRAME', 30, new Date(2026, 8, 24))],
+      },
+    );
+    expect(b.rowsByJob.get('SOONER')!.shortPicks).toEqual([]);
+    expect(b.rowsByJob.get('LATER')!.materialReadyAt).toEqual(new Date(2026, 8, 24));
   });
 });

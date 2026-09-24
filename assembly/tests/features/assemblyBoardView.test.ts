@@ -619,6 +619,7 @@ describe('why an order has no bar', () => {
     description: part,
     requiredQty: shortQty + 10,
     onHand: 10,
+    heldEarlier: 0,
     shortQty,
     incoming: null,
   });

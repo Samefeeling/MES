@@ -572,9 +572,13 @@ export function incomingText(incoming: IncomingSupply | null): string {
   if (!incoming) return 'nothing on order';
   const date = incoming.availableDate ? formatDay(incoming.availableDate) : 'no date';
   const po = incoming.releases.find((r) => r.availableDate === incoming.availableDate)?.poNum;
+  const shared = incoming.heldEarlier > 0
+    ? ` (${incoming.heldEarlier} of it already for orders ahead)`
+    : '';
   return incoming.coversShort
-    ? `${incoming.qty} on order, available ${date}${po ? ` (PO ${po})` : ''}`
-    : `only ${incoming.qty} on order (last ${date}) — still short`;
+    ? `${incoming.qty} on order${shared}, available ${date}${po ? ` (PO ${po})` : ''}`
+    : `${incoming.qty} on order${shared} — not enough left for this order` +
+      (incoming.availableDate ? ` (part by ${date})` : '');
 }
 
 /**
@@ -597,10 +601,12 @@ function shortageLines(short: readonly PickShortage[]): string[] {
     `${short.length} line${short.length === 1 ? '' : 's'} of the pick list ` +
       'cannot be covered by what is on hand:',
     ...shown.map((s) => `• ${String(s.part)} short ${s.shortQty} ` +
-      `(needs ${s.requiredQty}, ${s.onHand} on hand) — ${incomingText(s.incoming)}`),
+      `(needs ${s.requiredQty}, ${s.onHand} on hand` +
+      (s.heldEarlier > 0 ? `, ${s.heldEarlier} of it for orders ahead` : '') +
+      `) — ${incomingText(s.incoming)}`),
     ...(rest > 0 ? [`• and ${rest} more`] : []),
     ready
-      ? `All material available by ${formatDay(ready)}`
+      ? `All material available by ${formatDay(ready)} — it is not scheduled to start before then`
       : 'Not every shortfall is covered by an open purchase order',
   ];
 }
