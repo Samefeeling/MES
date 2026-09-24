@@ -9,7 +9,7 @@ import {
 } from '@/engine/assembly/dates';
 import type { LineKey, Worker } from '@/domain/assembly';
 import { workersOnLeave, type LeaveDays } from '@/engine/assembly/attendance';
-import { formatDay, toDayKey } from '@/lib/time';
+import { formatDay, fromDayKey, toDayKey } from '@/lib/time';
 import type { IncomingSupply, PickShortage } from '@/engine/assembly/pickShortage';
 import {
   DRAG_STEP_MINUTES,
@@ -331,6 +331,58 @@ export function dueWithin(today: Date, count: number): Date {
 export function isDueSoon(row: OrderRow, today: Date, count = 2): boolean {
   if (!row.job.dueDate || row.completedToday) return false;
   return row.job.dueDate < dueWithin(today, count);
+}
+
+/**
+ * The ids a date filter leaves on screen, or null when there is no filter.
+ *
+ * Worked out across the whole board rather than line by line, because what
+ * an order waits for is usually on another line — the press work on PMD,
+ * most often — and a chain cut at the line boundary is what made the arrows
+ * come and go as bars were dragged. Two narrowings, and an order has to
+ * satisfy both; each keeps whatever the orders it shows are waiting for.
+ */
+export function filteredOrderIds(
+  rows: OrderRow[],
+  filter: { orderDay: string | null; dueSoon: boolean; dueSoonDays: number; today: Date },
+): Set<string> | null {
+  const chosen: ((row: OrderRow) => boolean)[] = [];
+  const { orderDay } = filter;
+  if (orderDay) {
+    const day = fromDayKey(orderDay);
+    chosen.push((row) => row.line.schedulable && isRunningOnDay(row, day));
+  }
+  if (filter.dueSoon) {
+    chosen.push(
+      (row) => row.line.schedulable && isDueSoon(row, filter.today, filter.dueSoonDays),
+    );
+  }
+  if (chosen.length === 0) return null;
+  const selected = withPredecessors(rows, (row) => chosen.every((f) => f(row)));
+  // Daily Assembly filtering excludes PMD, including PMD predecessors.
+  if (orderDay) {
+    for (const row of rows) if (!row.line.schedulable) selected.delete(String(row.job.id));
+  }
+  return selected;
+}
+
+/**
+ * The orders the board is showing: on a line nobody has taken off it, and
+ * through whatever date filter is on. A folded line still counts — its orders
+ * are summed on its row, not gone from the view.
+ */
+export function rowsInView(
+  groups: readonly { line: { key: LineKey; parent?: LineKey | null; schedulable: boolean }; rows: OrderRow[] }[],
+  view: { hiddenLines: readonly LineKey[]; ids: ReadonlySet<string> | null; orderDay: string | null },
+): OrderRow[] {
+  return groups
+    .filter(
+      (g) =>
+        !view.hiddenLines.includes(g.line.key) &&
+        !(g.line.parent && view.hiddenLines.includes(g.line.parent)) &&
+        (!view.orderDay || g.line.schedulable),
+    )
+    .flatMap((g) => (view.ids ? g.rows.filter((r) => view.ids!.has(String(r.job.id))) : g.rows));
 }
 
 /**

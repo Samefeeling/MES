@@ -23,6 +23,7 @@ import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { useDataStore } from '@/store/dataStore';
 import { jobNumOf } from '@/domain/routing';
 import { STEP_NAME } from '@/domain/assembly';
+import { activeCrewOf } from './bulkPlan';
 
 const NO_PRODUCTION: ProductionEntry[] = [];
 
@@ -309,12 +310,7 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
    * the first: it used to refuse an order with three people on it because
    * none of their days had come round yet.
    */
-  const todayCrew = row.workers.filter((worker) =>
-    (row.crewDays.find((day) => day.day === today)?.workerIds ?? []).includes(
-      String(worker.id),
-    ),
-  );
-  const activeCrew = todayCrew.length > 0 ? todayCrew : row.workers;
+  const activeCrew = activeCrewOf(row, today);
   const picks = row.pickList ?? [];
 
   const eligibility = startEligibility(

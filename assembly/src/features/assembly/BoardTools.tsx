@@ -41,12 +41,16 @@ import {
 } from '@/store/uiStore';
 import {
   countRunningOrders,
+  filteredOrderIds,
   isDueSoon,
   lineOfWorkerToday,
   strandedOrders,
+  rowsInView,
   teamSummary,
   TIMELINE_WEEKS,
 } from './boardView';
+import { shortageReport } from './shortageReport';
+import { ShortageDetail } from './ShortageDetail';
 import { ManualOrderButton } from './ManualOrders';
 import { Metric, MetricNote } from './Metric';
 import { ReviewOrders } from './SuggestCrew';
@@ -112,7 +116,23 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
     [board, allRows],
   );
 
-  if (!board || !team) return null;
+  /*
+   * What the orders on screen are short of. The view is the board's own —
+   * lines taken off it and the date filters — so the figure answers for what
+   * the reader is looking at; a folded line's orders are still in it.
+   */
+  const shortages = useMemo(() => {
+    if (!board) return null;
+    const ids = filteredOrderIds(allRows, {
+      orderDay,
+      dueSoon,
+      dueSoonDays: DUE_SOON_DAYS,
+      today: board.today,
+    });
+    return shortageReport(rowsInView(board.groups, { hiddenLines, ids, orderDay }));
+  }, [board, allRows, orderDay, dueSoon, hiddenLines]);
+
+  if (!board || !team || !shortages) return null;
   const hidden = DATE_COLS.filter((key) => !dateCols[key]);
   const hiddenCols = HIDEABLE_COLS.filter((key) => !cols[key]);
   const allLines = [...LINES, ...virtualLines.map(virtualLineDef)];
@@ -305,6 +325,16 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
           <span className="metric-label">Due within {DUE_SOON_DAYS} days</span>
           <b className="metric-value">{dueCount}</b>
         </button>
+        <Metric
+          name="short"
+          className={`short-material${shortages.orders > 0 ? ' has-short' : ''}`}
+          label="Short material"
+          value={shortages.orders}
+          title="Orders in the current view short of a pick-list part — by part, with what is on order and when it is available"
+          open={openPanel}
+          onOpen={setOpenPanel}
+          detail={() => <ShortageDetail report={shortages} onDone={() => setOpenPanel(null)} />}
+        />
         <Metric
           name="crew"
           className="crew-allocated"

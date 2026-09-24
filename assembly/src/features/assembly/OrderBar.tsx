@@ -158,11 +158,17 @@ export function OrderBar({
     return (
       <button
         type="button"
-        className={`bar-missing${missing.material ? ' short-material' : ''}${window ? ' placed' : ''}${window?.late ? ' late' : ''}`}
+        className={`bar-missing${missing.material ? ' short-material' : ''}${window ? ' placed' : ''}${window?.late ? ' late' : ''}${marked ? ' marked' : ''}`}
         style={placed}
         title={missing.title + when}
         onClick={(event) => {
           event.stopPropagation();
+          // Ctrl marks it, as on a bar — for the right-click menu; nothing
+          // here is drawn to be dragged.
+          if (event.ctrlKey || event.metaKey) {
+            onMark(id);
+            return;
+          }
           onSelect(id, { x: event.clientX, y: event.clientY });
         }}
         onMouseEnter={() => onDependencyHover(id)}

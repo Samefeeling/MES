@@ -70,11 +70,9 @@ import {
   teamSummary,
   onLeaveWorkerOrders,
   strandedOrders,
-  isDueSoon,
-  isRunningOnDay,
   runningOrdersByDay,
   lineOfWorkerToday,
-  withPredecessors,
+  filteredOrderIds,
   lineDayLoads,
   timelineDays,
   type DayOrderEntry,
@@ -83,8 +81,10 @@ import {
 } from './boardView';
 import { useStableBoardOrder } from './useStableBoardOrder';
 import { earliestStart, markedSet, type MarkedMove } from './groupMove';
-import { fromDayKey, toDayKey } from '@/lib/time';
+import { toDayKey } from '@/lib/time';
 import { rowIndex } from './rowIndex';
+import { BulkActions } from './BulkActions';
+import { bulkTargets } from './bulkPlan';
 import { jobNumOf } from '@/domain/routing';
 
 /** How often the "now" line catches up with the clock. */
@@ -380,6 +380,7 @@ function OrderRowView({
   const orderQty = row.job.remainingQty + row.job.completedQty;
   return (
     <div
+      data-row-id={String(row.job.id)}
       className={`arow ${row.line.parent ? 'bench' : ''} ${selected ? 'selected' : ''} ${isContext ? 'context' : ''} ${row.completedToday ? 'completed-today' : ''} ${isNew ? 'new-order' : ''}`}
     >
       <div className="acell order">
@@ -1242,6 +1243,9 @@ export function AssemblyGantt({
     [],
   );
   const closeDay = useCallback(() => setDayDetail(null), []);
+  /** The right-click menu: which orders it acts on, and where it was opened. */
+  const [bulk, setBulk] = useState<{ ids: string[]; at: { x: number; y: number } } | null>(null);
+  const closeBulk = useCallback(() => setBulk(null), []);
   const timelineWeeks = useUiStore((s) => s.timelineWeeks);
   // Not stopped at the engine's fortnight: at least the weeks asked for, and
   // out to every planned bar and every waiting order's Due Date.
@@ -1320,25 +1324,16 @@ export function AssemblyGantt({
    * most often — and a chain cut at the line boundary is what made the arrows
    * come and go as bars were dragged.
    */
-  const visibleIds = useMemo(() => {
-    // Two narrowings, and an order has to satisfy both. Each keeps whatever
-    // the orders it shows are waiting for, all the way up the chain: a chain
-    // shown with its middle missing says less than no chain at all.
-    const chosen: ((row: OrderRow) => boolean)[] = [];
-    if (orderDay) {
-      chosen.push((row) => row.line.schedulable && isRunningOnDay(row, fromDayKey(orderDay)));
-    }
-    if (dueSoon) {
-      chosen.push((row) => row.line.schedulable && isDueSoon(row, board.today, DUE_SOON_DAYS));
-    }
-    if (chosen.length === 0) return null;
-    const selected = withPredecessors(allRows, (row) => chosen.every((f) => f(row)));
-    // Daily Assembly filtering excludes PMD, including PMD predecessors.
-    if (orderDay) {
-      for (const row of allRows) if (!row.line.schedulable) selected.delete(String(row.job.id));
-    }
-    return selected;
-  }, [allRows, board.today, orderDay, dueSoon]);
+  const visibleIds = useMemo(
+    () =>
+      filteredOrderIds(allRows, {
+        orderDay,
+        dueSoon,
+        dueSoonDays: DUE_SOON_DAYS,
+        today: board.today,
+      }),
+    [allRows, board.today, orderDay, dueSoon],
+  );
   const visibleGroups = useMemo(
     () =>
       // Arranged before it is narrowed: the sequence is the whole board's, so
@@ -1633,6 +1628,14 @@ export function AssemblyGantt({
     <div
       ref={root}
       className="assy"
+      // Right-click on an order: its menu, acting on every Ctrl-marked order
+      // when the one pressed is among them.
+      onContextMenu={(e) => {
+        const id = (e.target as Element).closest?.('[data-row-id]')?.getAttribute('data-row-id');
+        if (!id) return;
+        e.preventDefault();
+        setBulk({ ids: bulkTargets(id, marked), at: { x: e.clientX, y: e.clientY } });
+      }}
       style={
         {
           minWidth: labelWidth + gridWidth,
@@ -1952,6 +1955,9 @@ export function AssemblyGantt({
           onDependencyHover={setHoveredJobId}
         />
       ))}
+      {bulk && (
+        <BulkActions ids={bulk.ids} at={bulk.at} rows={allRows} onClose={closeBulk} />
+      )}
       {dayDetail && (
         <DayDetail
           detail={dayDetail.detail}

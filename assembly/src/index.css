@@ -3517,3 +3517,119 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .day-entry-kind { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .day-entry.waiting .day-entry-kind { color: var(--head-warn); }
 .day-entry-h { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+
+/* An unstaffed order ticked with Ctrl, the same dashed ring a bar gets. */
+.bar-missing.marked {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+
+/* Right-click on an order: its actions, then the confirmation. */
+.bulk-menu {
+  position: fixed;
+  z-index: 96;
+  overflow: auto;
+  padding: 6px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  font-size: 12px;
+}
+.bulk-menu header {
+  padding: 2px 6px 6px;
+  font-weight: 700;
+}
+.bulk-menu > button {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.bulk-menu > button:hover:not(:disabled) { border-color: var(--accent); background: var(--surface-2); }
+.bulk-menu > button:disabled { opacity: 0.5; cursor: default; }
+.bulk-menu > button span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.bulk-menu.confirm { padding: 10px; }
+.bulk-list { list-style: none; margin: 0 0 8px; padding: 0; max-height: 50vh; overflow: auto; }
+.bulk-list li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  padding: 3px 4px;
+  border-top: 1px solid var(--border);
+}
+.bulk-list li:first-child { border-top: 0; }
+.bulk-list b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bulk-list li.ok b::before { content: '✓ '; color: #15803d; }
+.bulk-list li.held,
+.bulk-list li.skip { color: var(--muted); }
+.bulk-list li.held b::before { content: '⚠ '; color: #b45309; }
+.bulk-list li.skip b::before { content: '– '; }
+.bulk-hint { margin: 4px 0 8px; color: var(--muted); font-size: 11px; line-height: 1.35; }
+.bulk-done { margin: 4px 6px 10px; }
+.bulk-menu footer { display: flex; justify-content: flex-end; gap: 8px; }
+.bulk-menu footer button {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.bulk-menu footer button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.bulk-menu footer button:disabled { opacity: 0.5; cursor: default; }
+.bulk-menu textarea { width: 100%; box-sizing: border-box; margin-bottom: 8px; }
+
+/* Short material: every part the orders in view lack, with its orders. */
+.metric-panel:has(.shortage-report) { width: min(620px, calc(100vw - 32px)); max-height: 70vh; }
+.shortage-report table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.shortage-report th {
+  padding: 2px 6px 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.shortage-report td { padding: 5px 6px; vertical-align: top; border-top: 1px solid var(--border); }
+.shortage-report .num { text-align: right; font-variant-numeric: tabular-nums; }
+.shortage-report td.late { color: #b91c1c; font-weight: 600; }
+.shortage-report .short-part { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; }
+.shortage-report .short-desc { margin-left: 6px; color: var(--muted); }
+.shortage-report .short-orders { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.shortage-report .short-order {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.shortage-report .short-order:hover { border-color: var(--accent); }
+.shortage-report .short-order i { margin-left: 4px; color: var(--muted); font-style: normal; }
+.shortage-report .short-order.late { border-color: #fca5a5; color: #b91c1c; }
+.metric.short-material.has-short .metric-value { color: #b91c1c; }
+/* Over the header's own panel-button colours, which would otherwise win. */
+.app-header .board-tools .metric-panel button.short-order.late {
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
