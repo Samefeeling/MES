@@ -51,6 +51,8 @@ import {
 } from './boardView';
 import { shortageReport } from './shortageReport';
 import { ShortageDetail } from './ShortageDetail';
+import { overdueOrders } from './overdue';
+import { OverdueDetail } from './OverdueDetail';
 import { ManualOrderButton } from './ManualOrders';
 import { Metric, MetricNote } from './Metric';
 import { ReviewOrders } from './SuggestCrew';
@@ -131,6 +133,13 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
     });
     return shortageReport(rowsInView(board.groups, { hiddenLines, ids, orderDay }));
   }, [board, allRows, orderDay, dueSoon, hiddenLines]);
+
+  // Over the whole board, not the view: logistics needs every late order,
+  // whatever the planner has narrowed the board to.
+  const overdue = useMemo(
+    () => (board ? overdueOrders(allRows, board.today) : []),
+    [board, allRows],
+  );
 
   if (!board || !team || !shortages) return null;
   const hidden = DATE_COLS.filter((key) => !dateCols[key]);
@@ -325,6 +334,16 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
           <span className="metric-label">Due within {DUE_SOON_DAYS} days</span>
           <b className="metric-value">{dueCount}</b>
         </button>
+        <Metric
+          name="overdue"
+          className={`overdue${overdue.length > 0 ? ' has-overdue' : ''}`}
+          label="Overdue"
+          value={overdue.length}
+          title="Orders past their Due Date and not finished — with the date each is now expected, to move container and truck bookings to"
+          open={openPanel}
+          onOpen={setOpenPanel}
+          detail={() => <OverdueDetail orders={overdue} onDone={() => setOpenPanel(null)} />}
+        />
         <Metric
           name="short"
           className={`short-material${shortages.orders > 0 ? ' has-short' : ''}`}

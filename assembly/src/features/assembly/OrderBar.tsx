@@ -48,6 +48,7 @@ export function OrderBar({
   selected,
   dependencyRelated,
   marked = false,
+  overdue = false,
   moveWith,
   floorISO = null,
   onSelect,
@@ -67,6 +68,8 @@ export function OrderBar({
   dependencyRelated: boolean;
   /** Ticked with Ctrl held, to be moved with the rest of the marked set. */
   marked?: boolean;
+  /** Past its Due Date and not finished. */
+  overdue?: boolean;
   /**
    * Every marked order and the day its bar is drawn on, so a drag can move the
    * whole set by the same number of columns. Only the bar being dragged reads
@@ -158,7 +161,7 @@ export function OrderBar({
     return (
       <button
         type="button"
-        className={`bar-missing${missing.material ? ' short-material' : ''}${window ? ' placed' : ''}${window?.late ? ' late' : ''}${marked ? ' marked' : ''}`}
+        className={`bar-missing${missing.material ? ' short-material' : ''}${window ? ' placed' : ''}${window?.late ? ' late' : ''}${marked ? ' marked' : ''}${overdue ? ' overdue' : ''}`}
         style={placed}
         title={missing.title + when}
         onClick={(event) => {
@@ -384,7 +387,7 @@ export function OrderBar({
         tag.outside ? 'tagged' : ''
       } ${tag.flip ? 'tag-left' : ''} ${marked ? 'marked' : ''} ${
         row.actualStart ? 'started' : ''
-      }`}
+      } ${overdue ? 'overdue' : ''}`}
       style={{
         left,
         width,

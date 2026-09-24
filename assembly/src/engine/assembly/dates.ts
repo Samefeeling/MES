@@ -14,7 +14,7 @@
  * its due date a day late.
  */
 
-import { MS_PER_DAY, toDayKey } from '@/lib/time';
+import { formatDay, MS_PER_DAY, toDayKey } from '@/lib/time';
 
 export type ScheduleColor = 'green' | 'red' | 'grey';
 
@@ -59,6 +59,28 @@ export function scheduleStatus(
         dueSlackDays,
         reason: 'On track for the due date',
       };
+}
+
+/**
+ * An order whose Due Date is behind today and which is not finished is not
+ * "going to be late" — it is late, and red whatever the plan says, including
+ * when nobody is on it and it has no Expect Date to compare. The reason says
+ * so, because what somebody does about it is different: the date the goods
+ * were booked out on has gone.
+ */
+export function overdueStatus(
+  status: ScheduleStatus,
+  job: { dueDate: Date | null; remainingQty: number },
+  today: Date,
+): ScheduleStatus {
+  if (!job.dueDate || job.remainingQty <= 0) return status;
+  const days = wholeDaysBetween(startOfDay(today), startOfDay(job.dueDate));
+  if (days <= 0) return status;
+  return {
+    color: 'red',
+    dueSlackDays: status.dueSlackDays,
+    reason: `Overdue ${days} day${days === 1 ? '' : 's'} — due ${formatDay(job.dueDate)}, not finished`,
+  };
 }
 
 /** Add whole and fractional days to a date. */

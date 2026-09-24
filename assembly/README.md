@@ -213,6 +213,7 @@ plan goes back the other way, into the `ASSY_Production` list.
   | 🟢 green | finishes on or before the Due Date | will make the customer date |
   | 🔴 red | finishes after it | the customer date will be missed |
   | ⚪ grey | no Expect Date, or no Due Date | nothing to judge it against |
+  | 🔴 **OVERDUE** | Due Date is before today and the order is not finished | already late — red whatever the plan says; the row carries `OVERDUE Nd`, the Due cell is filled red, and the header's **Overdue** list gives the Expect Date to move container and truck bookings to (Copy for logistics pastes it into Excel) |
 
   The bands are exhaustive and non-overlapping. Note that an Expect Date is an
   *exclusive* end — work filling Tuesday ends at Wednesday midnight — so the

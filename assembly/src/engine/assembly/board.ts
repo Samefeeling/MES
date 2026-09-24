@@ -90,6 +90,7 @@ import {
   addWorkingDays,
   nextWorkingDay,
   prevWorkingDay,
+  overdueStatus,
   scheduleStatus,
   startOfDay,
   subWorkingDays,
@@ -1269,7 +1270,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
           dueSlackDays: null,
           reason: 'Job completed today',
         }
-      : scheduleStatus(orderExpect, job.dueDate);
+      : overdueStatus(scheduleStatus(orderExpect, job.dueDate), job, today);
 
     /*
      * Keyed by the order number, not the row key. JobMaterialReq.csv

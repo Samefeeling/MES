@@ -84,6 +84,7 @@ import { earliestStart, markedSet, type MarkedMove } from './groupMove';
 import { toDayKey } from '@/lib/time';
 import { rowIndex } from './rowIndex';
 import { BulkActions } from './BulkActions';
+import { overdueDays } from './overdue';
 import { bulkTargets } from './bulkPlan';
 import { jobNumOf } from '@/domain/routing';
 
@@ -378,10 +379,12 @@ function OrderRowView({
   const startAt = row.job.startDate;
   const mustStart = row.mustStartBy;
   const orderQty = row.job.remainingQty + row.job.completedQty;
+  // Past its Due Date and not finished — see `overdue`.
+  const over = isContext ? null : overdueDays(row, board.today);
   return (
     <div
       data-row-id={String(row.job.id)}
-      className={`arow ${row.line.parent ? 'bench' : ''} ${selected ? 'selected' : ''} ${isContext ? 'context' : ''} ${row.completedToday ? 'completed-today' : ''} ${isNew ? 'new-order' : ''}`}
+      className={`arow ${row.line.parent ? 'bench' : ''} ${selected ? 'selected' : ''} ${isContext ? 'context' : ''} ${row.completedToday ? 'completed-today' : ''} ${isNew ? 'new-order' : ''} ${over ? 'overdue' : ''}`}
     >
       <div className="acell order">
         {/* A manual support order belongs to Factory General and the plan
@@ -415,6 +418,19 @@ function OrderRowView({
             }
           >
             RUN
+          </span>
+        )}
+        {over && (
+          <span
+            className="order-tag overdue"
+            title={
+              `Due ${formatDay(row.job.dueDate!)} and not finished — ${over} day${over === 1 ? '' : 's'} overdue.\n` +
+              (row.expectDate
+                ? `Now expected ${formatDay(row.expectDate)}: bookings made against the Due Date need moving to it.`
+                : 'No finish date — some of it has nobody on it. Bookings made against the Due Date need moving.')
+            }
+          >
+            OVERDUE {over}d
           </span>
         )}
         {isNew && <span className="order-tag new">NEW</span>}
@@ -498,7 +514,15 @@ function OrderRowView({
           )}
         </div>
       )}
-      {visibleDates.due && <div className="acell date due frozen" style={dueStyle}>{fmt(row.job.dueDate)}</div>}
+      {visibleDates.due && (
+        <div
+          className={`acell date due frozen${over ? ' overdue' : ''}`}
+          style={dueStyle}
+          title={over ? `${over} day${over === 1 ? '' : 's'} overdue` : undefined}
+        >
+          {fmt(row.job.dueDate)}
+        </div>
+      )}
       {/* A blank Expect Date is not a fault, it is a shortfall — say which,
           and how big, where the dash is. */}
       {visibleDates.expect && <div
@@ -543,6 +567,7 @@ function OrderRowView({
           selected={selected}
           dependencyRelated={dependencyRelated}
           marked={marked}
+          overdue={over !== null}
           moveWith={moveWith}
           floorISO={floorISO}
           onSelect={onSelect}

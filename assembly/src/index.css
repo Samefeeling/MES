@@ -3627,9 +3627,56 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .shortage-report .short-order:hover { border-color: var(--accent); }
 .shortage-report .short-order i { margin-left: 4px; color: var(--muted); font-style: normal; }
 .shortage-report .short-order.late { border-color: #fca5a5; color: #b91c1c; }
-.metric.short-material.has-short .metric-value { color: #b91c1c; }
+.metric.short-material.has-short:not(.active) .metric-value { color: #b91c1c; }
 /* Over the header's own panel-button colours, which would otherwise win. */
 .app-header .board-tools .metric-panel button.short-order.late {
   border-color: #fca5a5;
   color: #b91c1c;
 }
+
+/*
+ * Overdue: the Due Date has gone and the order is not finished. Stronger than
+ * the red a forecast gets — this one is already late, and something booked
+ * against the date has to move.
+ */
+.order-tag.overdue {
+  background: #b91c1c;
+  border-color: #991b1b;
+  color: #fff;
+}
+.acell.date.due.overdue {
+  background: #fee2e2;
+  color: #b91c1c;
+  font-weight: 700;
+}
+.bar.overdue .bar-piece {
+  background: #fca5a5;
+  border: 2px solid #991b1b;
+}
+.bar.overdue { color: #7f1d1d; }
+.bar-missing.overdue {
+  border-color: #991b1b;
+  color: #991b1b;
+}
+.metric.overdue.has-overdue:not(.active) .metric-value { color: #b91c1c; }
+.metric-panel:has(.overdue-report) { width: min(560px, calc(100vw - 32px)); max-height: 70vh; }
+.overdue-report table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.overdue-report th {
+  padding: 2px 6px 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.overdue-report td { padding: 3px 6px; border-top: 1px solid var(--border); white-space: nowrap; }
+.overdue-report .num { text-align: right; font-variant-numeric: tabular-nums; }
+.overdue-report .late { color: #b91c1c; font-weight: 600; }
+.app-header .board-tools .metric-panel button.overdue-order {
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.overdue-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: 11px; color: var(--muted); }
+.app-header .board-tools .metric-panel .overdue-actions button { padding: 3px 10px; }
