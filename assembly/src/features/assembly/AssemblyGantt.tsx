@@ -620,7 +620,7 @@ function LineGroupView({
   collapsed: boolean;
   /**
    * Every order the line holds, its benches' included, before any filter —
-   * what its row adds up day by day.
+   * what its folded row adds up day by day.
    */
   lineRows: OrderRow[];
   /** The day columns, left to right, as the axis lays them out. */
@@ -700,15 +700,15 @@ function LineGroupView({
   });
   const load = group.load;
   /*
-   * The line's row carries its week, folded or open: hours planned on each
-   * day, and the work still waiting for a crew that has to land on those days
-   * to make its Due Date. The row's grid is empty either way — the bars are on
-   * the order rows under it. PMD is the moulding plan mirrored for context —
-   * nobody on this board crews it — so it has none.
+   * Folded, the line's row is all that is left of it, so it carries the line's
+   * week: hours planned on each day, and the work still waiting for a crew that
+   * has to land on those days to make its Due Date. Open, the bars under it
+   * say the same and the row stays clear. PMD is the moulding plan mirrored
+   * for context — nobody on this board crews it — so it has none.
    */
   const dayLoads = useMemo(
     () =>
-      group.line.schedulable
+      collapsed && group.line.schedulable
         ? lineDayLoads(
             lineRows,
             benchPositions(board, group),
@@ -716,7 +716,7 @@ function LineGroupView({
             board.today,
           )
         : null,
-    [group, lineRows, dates, board],
+    [collapsed, group, lineRows, dates, board],
   );
   const crew = useMemo(
     () =>
@@ -1028,7 +1028,7 @@ const hoursText = (hours: number) =>
 const pctText = (pct: number) => (Number.isFinite(pct) ? `${Math.round(pct)}%` : 'no crew');
 
 /**
- * A line's week, one cell per day column: the hours its crew is
+ * A folded line's week, one cell per day column: the hours its crew is
  * planned to work, and — dashed — the hours of orders nobody is on yet that
  * have to be worked on that day to make their Due Date. The tint is how full
  * the crews it draws on are that day, the same figure the banner adds up.
