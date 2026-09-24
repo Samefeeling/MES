@@ -587,3 +587,27 @@ export const PRODUCTIVE_HOURS_PER_PERSON = SHIFT_HOURS - BREAK_HOURS;
 
 /** How many days the timeline shows by default. */
 export const DEFAULT_HORIZON_DAYS = 14;
+
+/**
+ * People the supervisor counts as one crew, and the lines they share.
+ *
+ * A line has no capacity of its own: whoever cuts on UPL-CUT also works Smart
+ * Soft Seating and Upholstery, and the assembly crew helps out on Upholstery.
+ * So capacity is set per group, and a line that appears in two groups draws on
+ * both — its own group first, the next one for whatever that cannot cover.
+ */
+export interface CrewPool {
+  id: string;
+  name: string;
+  /** The lanes this crew works, first-listed taking precedence for sharing. */
+  lines: LineKey[];
+  /** Head count on a normal working day. */
+  people: number;
+}
+
+/** The floor as the supervisor described it; editable on the board. */
+export const DEFAULT_CREW_POOLS: CrewPool[] = [
+  { id: 'upholstery', name: 'Upholstery crew', lines: ['UPL_CUT_SEW', 'UPL_SOFTIE', 'UPL_GLUING'], people: 4 },
+  { id: 'assembly', name: 'Assembly crew', lines: ['ASSY', 'UPL_GLUING'], people: 4 },
+  { id: 'table', name: 'Table crew', lines: ['TABLE'], people: 3 },
+];

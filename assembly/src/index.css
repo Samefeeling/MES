@@ -85,11 +85,6 @@
 
   --lane-h: 64px;
   --label-w: 150px;
-  /* The load bar down a day column's left edge. A quarter of what it started
-     at: floor to ceiling, the band no longer needs width to be read — the
-     height carries the figure, and 6 px of it beside a date is a gauge on the
-     column rather than a second column of its own. */
-  --day-bar-w: 6px;
   --radius: 8px;
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
     Arial, sans-serif;
@@ -1099,7 +1094,7 @@ button {
      tall enough for four lines so the Team column could list a whole idle
      shift without scrolling — which cost every other shift a band of empty
      blue across the top of the board. The rolls scroll instead. */
-  min-height: 40px;
+  min-height: 52px;
   font-size: 11px;
   font-weight: 700;
 }
@@ -1116,7 +1111,7 @@ button {
   border-left-color: var(--head-rule);
   color: var(--head-dim);
 }
-.assy-head .day-bar {
+.assy-head .day-meter {
   background: var(--day-bar-track);
 }
 .assy-head .day-order-filter {
@@ -1167,10 +1162,10 @@ button {
 .assy-head .day-load.orange { color: var(--head-warn); }
 .assy-head .day-load.red { color: var(--head-error); }
 .assy-head .day-load.closed { color: var(--head-dim); }
-.assy-head .day-bar.green i { background: var(--head-ok-bar); }
-.assy-head .day-bar.orange i { background: var(--head-warn-bar); }
-.assy-head .day-bar.red i { background: var(--head-error-bar); }
-.assy-head .day-bar.closed i { background: rgb(7 89 133 / 30%); }
+.assy-head .day-meter.green .crewed { background: var(--head-ok-bar); }
+.assy-head .day-meter.orange .crewed { background: var(--head-warn-bar); }
+.assy-head .day-meter.red .crewed { background: var(--head-error-bar); }
+.assy-head .day-meter.closed .crewed { background: rgb(7 89 133 / 30%); }
 .acell {
   display: flex;
   align-items: center;
@@ -1514,44 +1509,42 @@ body.col-resizing {
    down the left-hand edge, the date in the middle, the count in the corner.
    Stacked in a column they pushed the date off centre and left the load bar
    standing in a box it could not fill. */
-.daycol-main {
-  position: absolute;
-  inset: 0;
-}
-.daycol-sub {
-  position: absolute;
-  right: 4px;
-  bottom: 1px;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  max-width: 100%;
-}
 /*
- * Load histogram. One bar per day filled to its percentage, so the week reads
- * as a shape before anyone reads a number. Bands: green under 80%, orange to
- * 90%, red beyond.
+ * Three rows, left to right as they are read: the date and how full the day
+ * is; the hours asked against the hours the crews can work, with the order
+ * count; and the same as a meter along the foot.
  */
-/* The figure on the column, so a date is legible from the floor — and in the
-   middle of the cell, which is where the eye goes looking for it. It is
-   centred in what the load bar leaves rather than in the whole cell, so the
-   two never sit on top of each other on a column dragged narrow. */
-.daycol-date {
+.daycol-top,
+.daycol-mid {
   position: absolute;
-  left: var(--day-bar-w);
-  right: 0;
-  top: 0;
-  bottom: 0;
+  left: 4px;
+  right: 3px;
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 3px;
-  font-size: 15px;
+  white-space: nowrap;
+}
+.daycol-top { top: 2px; }
+.daycol-mid { top: 22px; }
+.daycol-date {
+  font-size: 14px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.2px;
-  white-space: nowrap;
 }
+.daycol-top .day-load { margin-left: auto; font-size: 11px; }
+.day-hours {
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.day-hours em {
+  font-style: normal;
+  border-bottom: 1px dashed currentColor;
+}
+.daycol-mid .day-order-filter { margin-left: auto; }
 /* How many orders run on the day, and the way to narrow to them. A figure
    rather than "10 orders": the column it sits under is the only thing it could
    be counting, and the word cost the heading its width. */
@@ -1577,43 +1570,45 @@ body.col-resizing {
   outline-offset: 1px;
 }
 /*
- * The load, standing the height of the heading rather than lying across it.
- * A column of bars down the week is read as a skyline in one glance; a row of
- * short horizontal ones is read one at a time.
+ * The day's load lying along the foot of its column: solid for hours with
+ * people on them, dashed for orders nobody is on yet, a tick at what the crews
+ * can work, and red past it.
  */
-.day-bar {
+.day-meter {
   position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  height: 7px;
   display: flex;
-  align-items: flex-end;
-  width: var(--day-bar-w);
-  border: 0;
-  border-radius: 0;
+  border-radius: 2px;
   background: var(--day-bar-track);
-  overflow: hidden;
 }
-.day-bar i {
-  display: block;
-  width: 100%;
-  min-height: 2px;
+.day-meter i { display: block; height: 100%; }
+.day-meter .waiting {
+  box-sizing: border-box;
+  border: 1px dashed var(--head-warn-bar);
+  background: rgb(217 119 6 / 18%);
 }
-/* Beside the track rather than inside it. Half the width ago the number fitted
-   over the fill; it no longer does, and a clipped "6" is worse than no
-   percentage at all. */
-.day-load {
+.day-meter .over {
   position: absolute;
-  left: calc(var(--day-bar-w) + 2px);
-  top: 1px;
-  font-style: normal;
-  font-size: 9px;
-  letter-spacing: -0.3px;
-  font-variant-numeric: tabular-nums;
+  top: -1px;
+  bottom: -1px;
+  background: repeating-linear-gradient(135deg, var(--head-error-bar) 0 3px, transparent 3px 5px);
+  opacity: 0.85;
 }
-.day-bar.green i { background: var(--ok); }
-.day-bar.orange i { background: var(--warn); }
-.day-bar.red i { background: var(--error); }
+.day-meter .cap {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--head-tx);
+}
+.day-load { font-style: normal; font-variant-numeric: tabular-nums; }
+.day-meter.green .crewed { background: var(--ok); }
+.day-meter.orange .crewed { background: var(--warn); }
+.day-meter.red .crewed { background: var(--error); }
 .day-load { font-weight: 700; }
 .day-load.green { color: var(--ok); }
 .day-load.orange { color: var(--warn); }
@@ -1747,7 +1742,7 @@ body.col-resizing {
 /* Recorded output is muted; planned work uses the full fill. The track stays:
    the band is the full height of the heading now, and an actual day with no
    track behind it would be a column-wide hole in the block. */
-.day-bar.actual i {
+.day-meter.actual .crewed {
   opacity: 0.55;
 }
 .daycol.weekend {
@@ -1773,7 +1768,7 @@ body.col-resizing {
   vertical-align: 1px;
 }
 /* A closed day reads 0% unless overtime was approved, which shows muted. */
-.day-bar.closed i { background: var(--faint); }
+.day-meter.closed .crewed { background: var(--faint); }
 .day-load.closed { color: var(--faint); }
 
 /* An order approved to run through the weekend. */
@@ -1940,18 +1935,6 @@ body.col-resizing {
   font-weight: 600;
 }
 .aline-day.idle { border-style: dashed; }
-/* Positions in use, as a bar along the foot of the day. */
-.aline-fill {
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  height: 3px;
-  background: currentColor;
-  opacity: 0.45;
-}
-.aline-day.green .aline-fill { color: var(--head-ok-bar); }
-.aline-day.orange .aline-fill { color: var(--head-warn-bar); }
-.aline-day.red .aline-fill { color: var(--head-error-bar); }
 .timeline-weeks {
   height: 24px;
   margin-left: 4px;
@@ -3440,3 +3423,33 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 /* Overlay only: the alignment aid never moves rows or catches the pointer. */
 .drag-time-guide { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed #0869ad; z-index: 12; pointer-events: none; }
 .drag-time-guide span { position: sticky; top: 58px; display: block; width: max-content; margin-left: 5px; padding: 3px 6px; border-radius: 3px; background: #075985; color: #fff; font-size: 11px; font-variant-numeric: tabular-nums; box-shadow: 0 1px 4px #0003; }
+
+/* Crew capacity panel: one row per crew, its lines as toggles. */
+.metric-panel:has(.crew-pools) { width: min(660px, calc(100vw - 32px)); max-height: none; }
+.crew-pools table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.crew-pools th {
+  text-align: left;
+  font-size: 10.5px;
+  color: var(--muted);
+  padding: 2px 6px;
+}
+.crew-pools td { padding: 3px 6px; vertical-align: middle; }
+.crew-pools input { font: inherit; padding: 1px 4px; }
+.crew-pools input[type='number'] { width: 4.5em; }
+.crew-pools input:not([type]) { width: 11em; }
+.crew-pool-lines { display: flex; flex-wrap: wrap; gap: 3px; }
+.crew-pools .crew-line { white-space: nowrap; }
+.crew-pools .crew-line {
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 11px;
+  opacity: 0.6;
+}
+.app-header .board-tools .crew-pools .crew-line.on {
+  opacity: 1;
+  font-weight: 700;
+  border-color: var(--accent);
+  background: var(--line-band);
+}
+.app-header .board-tools .crew-pools .crew-line:disabled { cursor: default; opacity: 1; }
+.crew-pools-actions { display: flex; gap: 6px; margin-top: 6px; }

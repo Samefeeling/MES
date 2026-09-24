@@ -32,6 +32,7 @@ export const PLANNING_KEYS = [
   'virtualLines',
   'lineNames',
   'lineOrder',
+  'crewPools',
   'orderCrewAssignments',
   'orderStarts',
   'orderOvertime',

@@ -18,7 +18,14 @@
 
 import { useMemo, useState } from 'react';
 import type { AssemblyGanttView, OrderRow } from '@/engine/assembly/board';
-import { LINES, virtualLineDef } from '@/domain/assembly';
+import {
+  DEFAULT_CREW_POOLS,
+  LINES,
+  PRODUCTIVE_HOURS_PER_PERSON,
+  virtualLineDef,
+  type CrewPool,
+  type LineKey,
+} from '@/domain/assembly';
 import { JobId } from '@/domain/ids';
 import { PLAN_RETENTION_DAYS, usePlanStore } from '@/store/planStore';
 import { useDataStore } from '@/store/dataStore';
@@ -67,6 +74,7 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
   const timelineWeeks = useUiStore((s) => s.timelineWeeks);
   const setTimelineWeeks = useUiStore((s) => s.setTimelineWeeks);
   const virtualLines = usePlanStore((s) => s.virtualLines);
+  const crewPools = usePlanStore((s) => s.crewPools);
   /* Which figure is open, held here rather than in each of them: they hang off
      one row an inch apart, and two panels open at once is two panels on top of
      each other. */
@@ -243,6 +251,16 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
           </button>
         )}
         <Metric
+          name="crews"
+          className="crew-capacity"
+          label="Crew capacity"
+          value={`${crewPools.reduce((n, p) => n + p.people, 0)} people`}
+          title="The crews the lines share, and how many people each has — what every day on the timeline is measured against"
+          open={openPanel}
+          onOpen={setOpenPanel}
+          detail={() => <CrewPoolsEditor board={board} />}
+        />
+        <Metric
           name="load"
           className="board-load"
           label="Hours on board"
@@ -409,6 +427,131 @@ function CrewDetail({ board, rows }: { board: AssemblyGanttView; rows: OrderRow[
  * a bench opened this morning is a fact about the week, and every screen
  * reading the board has to see the same one.
  */
+/**
+ * The crews and the lines each shares — the capacity every day is measured
+ * against, on the banner and on each folded line.
+ *
+ * A line appearing under two crews is worked by the first, and the second
+ * lends whatever room it has left. Changes are the supervisor's, and go out
+ * with the plan on Save like the rest of the line layout.
+ */
+function CrewPoolsEditor({ board }: { board: AssemblyGanttView }) {
+  const unlocked = useSupervisorStore((s) => s.unlocked);
+  const pools = usePlanStore((s) => s.crewPools);
+  const setPools = usePlanStore((s) => s.setCrewPools);
+  const lines = board.groups
+    .map((g) => g.line)
+    .filter((line) => line.schedulable && !line.parent);
+  const nameOf = (key: LineKey) => lines.find((l) => l.key === key)?.name ?? key;
+  const change = (i: number, patch: Partial<CrewPool>) =>
+    setPools(pools.map((p, j) => (j === i ? { ...p, ...patch } : p)));
+  const listed = new Set(pools.flatMap((p) => p.lines));
+  const unlisted = lines.filter((l) => !listed.has(l.key));
+
+  return (
+    <div className="crew-pools">
+      <MetricNote>
+        People per crew on a working day, at {PRODUCTIVE_HOURS_PER_PERSON} h each. A line
+        under two crews is worked by the first; the second lends what room it has left.
+      </MetricNote>
+      <table>
+        <thead>
+          <tr><th>Crew</th><th>People</th><th>Lines it works</th>{unlocked && <th />}</tr>
+        </thead>
+        <tbody>
+          {pools.map((pool, i) => (
+            <tr key={pool.id}>
+              <td>
+                {unlocked ? (
+                  <input
+                    value={pool.name}
+                    maxLength={32}
+                    aria-label="Crew name"
+                    onChange={(e) => change(i, { name: e.target.value })}
+                  />
+                ) : pool.name}
+              </td>
+              <td>
+                {unlocked ? (
+                  <input
+                    type="number"
+                    min={0}
+                    max={99}
+                    value={pool.people}
+                    aria-label={`People in ${pool.name}`}
+                    onChange={(e) => change(i, { people: Number(e.target.value) })}
+                  />
+                ) : pool.people}
+              </td>
+              <td>
+               <div className="crew-pool-lines">
+                {lines.map((line) => {
+                  const on = pool.lines.includes(line.key);
+                  if (!unlocked && !on) return null;
+                  return (
+                    <button
+                      key={line.key}
+                      className={`crew-line${on ? ' on' : ''}`}
+                      aria-pressed={on}
+                      disabled={!unlocked}
+                      onClick={() =>
+                        change(i, {
+                          lines: on
+                            ? pool.lines.filter((k) => k !== line.key)
+                            : [...pool.lines, line.key],
+                        })
+                      }
+                    >
+                      {line.name}
+                    </button>
+                  );
+                })}
+               </div>
+              </td>
+              {unlocked && (
+                <td>
+                  <button
+                    onClick={() => setPools(pools.filter((_, j) => j !== i))}
+                    title={`Remove ${pool.name}`}
+                    aria-label={`Remove ${pool.name}`}
+                  >
+                    ×
+                  </button>
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {unlisted.length > 0 && (
+        <MetricNote>
+          No crew works {unlisted.map((l) => nameOf(l.key)).join(', ')} — its hours count on the
+          banner but no capacity stands behind them.
+        </MetricNote>
+      )}
+      {unlocked ? (
+        <div className="crew-pools-actions">
+          <button
+            onClick={() =>
+              setPools([
+                ...pools,
+                { id: `crew-${Date.now().toString(36)}`, name: 'New crew', lines: [], people: 1 },
+              ])
+            }
+          >
+            + Crew
+          </button>
+          <button onClick={() => setPools(DEFAULT_CREW_POOLS)} title="Back to the three crews the board started with">
+            Reset
+          </button>
+        </div>
+      ) : (
+        <MetricNote>Sign in as supervisor to change the crews.</MetricNote>
+      )}
+    </div>
+  );
+}
+
 function AddLine() {
   const unlocked = useSupervisorStore((s) => s.unlocked);
   const addVirtualLine = usePlanStore((s) => s.addVirtualLine);

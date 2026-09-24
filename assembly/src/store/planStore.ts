@@ -17,6 +17,7 @@ import type { JobId } from '@/domain/ids';
 import type { Job, JobMaterialLink, WorkCenter } from '@/domain/types';
 import { expandRouting } from '@/engine/assembly/routing';
 import {
+  DEFAULT_CREW_POOLS,
   LINES,
   MAX_WORKERS_PER_ORDER,
   arrangeLines,
@@ -25,6 +26,7 @@ import {
   virtualLineDef,
   virtualLineKey,
   type CrewAssignment,
+  type CrewPool,
   type LineKey,
   type VirtualLine,
   type VirtualLineKey,
@@ -197,6 +199,12 @@ interface PlanState {
    */
   lineOrder: LineKey[];
   /**
+   * The crews and the lines each shares — what a day on the board can deliver.
+   * In the plan, like the line order: it is a fact about the floor.
+   */
+  crewPools: CrewPool[];
+  setCrewPools: (pools: CrewPool[]) => void;
+  /**
    * Put one line where another currently is, the way a dragged list item lands:
    * dropped on a line below, it comes to rest under that line; dropped on one
    * above, it takes that line's place and pushes it down.
@@ -344,6 +352,7 @@ interface PlanState {
     virtualLines?: VirtualLine[];
     lineNames?: Record<string, string>;
     lineOrder?: LineKey[];
+    crewPools?: CrewPool[];
     orderCrewAssignments?: Record<string, CrewAssignment[]>;
     orderStarts?: Record<string, string>;
     orderActualStarts?: Record<string, ActualStartRecord>;
@@ -489,6 +498,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   virtualLines: [],
   lineNames: {},
   lineOrder: [],
+  crewPools: DEFAULT_CREW_POOLS,
   orderCrewAssignments: {},
   orderStarts: {},
   orderActualStarts: {},
@@ -999,6 +1009,17 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     });
   },
 
+  setCrewPools(pools) {
+    set({
+      crewPools: pools.map((pool) => ({
+        ...pool,
+        name: pool.name.slice(0, 32),
+        people: Math.max(0, Math.round(Number(pool.people) || 0)),
+        lines: [...new Set(pool.lines)],
+      })),
+    });
+  },
+
   removeVirtualLine(key) {
     set((state) => {
       if (!state.virtualLines.some((line) => line.key === key)) return state;
@@ -1049,6 +1070,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         // A plan saved before the lines could be arranged carries none, which
         // reads as the built-in order rather than as an empty board.
         lineOrder: plan.lineOrder ?? state.lineOrder,
+        crewPools: plan.crewPools ?? state.crewPools,
         orderCrewAssignments,
         orderStarts: plan.orderStarts ?? state.orderStarts,
         orderActualStarts: plan.orderActualStarts ?? state.orderActualStarts,
