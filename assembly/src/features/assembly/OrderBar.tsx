@@ -16,6 +16,7 @@
  * minimum width by then and no longer means anything to the eye.
  */
 
+import type { CSSProperties } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import type { OrderRow } from '@/engine/assembly/board';
@@ -24,7 +25,7 @@ import { completedFraction, remainingHours } from '@/engine/assembly/duration';
 import { MS_PER_DAY, formatDay, formatTime } from '@/lib/time';
 import { endOfCrewDay, startOfCrewDay } from '@/engine/assembly/crewSchedule';
 import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
-import { barTag, missingBarReason, timelineDayOffset } from './boardView';
+import { barTag, missingBarReason, timelineDayOffset, unstaffedWindow } from './boardView';
 import type { DayAxis } from './dayAxis';
 import type { MarkedMove } from './groupMove';
 import { jobNumOf } from '@/domain/routing';
@@ -131,11 +132,35 @@ export function OrderBar({
     // Which of the four reasons to name, and the rest of them on hover — see
     // `missingBarReason`.
     const missing = missingBarReason(row);
+    /*
+     * Drawn against the Due Date rather than at the left edge: the box ends
+     * on the Due Date and reaches back to the last day the work can start
+     * (see `unstaffedWindow`), so an order with nobody on it still shows the
+     * planner the days it has to be fitted into. Past the grid's edge it is
+     * held to the edge; an order already too late sits where it can start.
+     */
+    const window = readOnly ? null : unstaffedWindow(row);
+    const at = (date: Date) =>
+      Math.min(Math.max(axis.x(timelineDayOffset(date, horizonStart, showWeekends)), 0), gridWidth);
+    const placed: CSSProperties | undefined = window
+      ? window.late
+        ? { left: at(window.from) + 4 }
+        : {
+            right: gridWidth - at(window.to),
+            width: Math.max(at(window.to) - at(window.from), 0),
+          }
+      : undefined;
+    const when = window
+      ? window.late
+        ? `\nCannot make its Due Date ${formatDay(row.job.dueDate!)} — the earliest it can start is ${formatDay(window.from)}`
+        : `\nTo make its Due Date ${formatDay(window.to)}, start by ${formatDay(window.from)}`
+      : '';
     return (
       <button
         type="button"
-        className={`bar-missing${missing.material ? ' short-material' : ''}`}
-        title={missing.title}
+        className={`bar-missing${missing.material ? ' short-material' : ''}${window ? ' placed' : ''}${window?.late ? ' late' : ''}`}
+        style={placed}
+        title={missing.title + when}
         onClick={(event) => {
           event.stopPropagation();
           onSelect(id, { x: event.clientX, y: event.clientY });

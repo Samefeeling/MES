@@ -20,6 +20,9 @@ import {
 } from '@/engine/assembly/shift';
 import { rowIndex } from './rowIndex';
 import { jobNumOf } from '@/domain/routing';
+import { preferredCrewSize } from '@/engine/assembly/crew';
+import { durationDays } from '@/engine/assembly/duration';
+import { subWorkingDays } from '@/engine/assembly/dates';
 
 export type OrderSortKey = 'start' | 'due';
 export type SortDirection = 'asc' | 'desc';
@@ -380,6 +383,33 @@ export function crewedOnDay(row: OrderRow, day: Date): boolean {
 /** Has this order been picked up on the floor — started, or booked against? */
 export function hasBegun(row: OrderRow): boolean {
   return Boolean(row.actualStart) || row.booked.some((day) => day.qty > 0);
+}
+
+/**
+ * Where an order with no bar is drawn: the stretch it needs before its Due
+ * Date, so the box that says why it has no bar also says when it has to be
+ * picked up.
+ *
+ * `to` is the Due Date and `from` the last moment the work can begin and
+ * still finish by it, at the crew Crew orders would give it (see
+ * `preferredCrewSize`) — the same window a planner is filling when they crew
+ * it. Neither is ever before the order could actually begin (`plannedStart`:
+ * today, or when what it waits on is ready). `late` says even that is too
+ * late: the order cannot make its Due Date whoever is put on it, and the box
+ * sits at the day it can start instead.
+ *
+ * null with no Due Date: nothing to place it against.
+ */
+export function unstaffedWindow(
+  row: OrderRow,
+): { from: Date; to: Date; late: boolean } | null {
+  const due = row.job.dueDate;
+  if (!due) return null;
+  const floor = row.plannedStart;
+  const days = durationDays(row.job, Math.max(1, preferredCrewSize(row))) ?? 0;
+  const latest = subWorkingDays(due, days);
+  if (due <= floor) return { from: floor, to: floor, late: true };
+  return { from: latest > floor ? latest : floor, to: due, late: latest < floor };
 }
 
 /**

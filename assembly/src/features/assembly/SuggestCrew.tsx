@@ -109,8 +109,9 @@ export function ReviewOrders({
               disabled={!unlocked}
               title={
                 unlocked
-                  ? `Crew ${waiting} unstaffed orders from their current production-line rosters. ` +
-                    'Prefer matching skills and trades, then availability. Remaining work: ' +
+                  ? `Crew ${waiting} unstaffed orders from their current production-line rosters, ` +
+                    'forward from today: the order with the least slack to its Due Date first, ' +
+                    'matching skills and trades, then whoever is free soonest. Remaining work: ' +
                     'up to 7.5 h: 1 person; over 7.5 h: 2; over 50 h: 3. Tables: 3. ' +
                     'Use a smaller crew if the line has fewer people. Existing crews stay unchanged. ' +
                     'Busy workers queue behind existing work; conflicting suggestions are removed.'

@@ -333,12 +333,18 @@ describe('current line roster priority', () => {
     const b = board();
     const { allocations } = suggestCrew(b, settle);
 
-    // With nothing booked, matching trades come before roster order.
+    // With nothing booked, matching trades come before roster order. The
+    // first order crewed on a line is its most urgent — least slack first.
+    const slack = (row: OrderRow) =>
+      (row.mustStartBy ?? row.job.dueDate)?.getTime() ?? Number.MAX_SAFE_INTEGER;
     for (const group of b.groups) {
       if (!group.line.schedulable) continue;
       const first = [...group.rows]
         .filter((row) => allocations[String(row.job.id)])
-        .sort((a, c) => a.plannedStart.getTime() - c.plannedStart.getTime())[0];
+        .sort((a, c) =>
+          slack(a) - slack(c) ||
+          (a.job.dueDate?.getTime() ?? 0) - (c.job.dueDate?.getTime() ?? 0) ||
+          a.plannedStart.getTime() - c.plannedStart.getTime())[0];
       if (!first) continue;
 
       const onLine = b.workers.filter(
@@ -421,6 +427,35 @@ describe('crew size and selection policy', () => {
       { ...person('Leave', ['TABLE']), plannedLeave: ['2026-09-11'] },
     ]);
     expect(Object.values(suggestCrew(b).allocations)).toEqual([['Available']]);
+  });
+
+  it('crews forward: the person free soonest, not the first in the roster', () => {
+    // Both can do it and both are busy. Slow is on another order all week;
+    // Soon comes off theirs tomorrow. Taking Slow — who is first in the
+    // roster — would park the order behind a week of work while Soon sits idle.
+    const b = fixture('ASSY', 4, [person('Slow'), person('Soon')]);
+    const target = { ...b.groups[0].rows[0], plannedStart: TODAY };
+    const busy = (id: string, worker: string, days: number): OrderRow => ({
+      ...target,
+      job: { ...target.job, id: id as never },
+      workers: [person(worker)],
+      start: TODAY,
+      expectDate: addDays(TODAY, days),
+    });
+    (b.groups[0] as { rows: OrderRow[] }).rows = [busy('W1', 'Slow', 5), busy('W2', 'Soon', 1), target];
+    expect(suggestCrew(b).allocations[String(target.job.id)]).toEqual(['Soon']);
+  });
+
+  it('crews the order with the least slack first', () => {
+    // One person, two orders; the one listed first can wait, the other is due
+    // first. Whoever is crewed first gets the person's earliest days.
+    const b = fixture('ASSY', 4, [person('Only')]);
+    const base = b.groups[0].rows[0];
+    const relaxed = { ...base, job: { ...base.job, id: 'RELAXED' as never, dueDate: addDays(TODAY, 20) }, mustStartBy: addDays(TODAY, 19) };
+    const urgent = { ...base, job: { ...base.job, id: 'URGENT' as never, dueDate: addDays(TODAY, 3) }, mustStartBy: addDays(TODAY, 2) };
+    (b.groups[0] as { rows: OrderRow[] }).rows = [relaxed, urgent];
+    // Without a re-plan only the first round runs: one order per line.
+    expect(Object.keys(suggestCrew(b).allocations)).toEqual(['URGENT']);
   });
 
   it('leaves an order without a line roster waiting and ignores zero work', () => {

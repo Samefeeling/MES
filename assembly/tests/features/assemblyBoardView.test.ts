@@ -28,6 +28,7 @@ import {
   timelineDayOffset,
   withPredecessors,
   releasedOrderNumbers,
+  unstaffedWindow,
 } from '@/features/assembly/boardView';
 
 const row = (
@@ -699,5 +700,35 @@ describe('Released Only', () => {
 
   it('answers in order numbers, so every operation of a routed order goes together', () => {
     expect([...releasedOrderNumbers([order('SFM1#10', true), order('SFM1#20', true)])]).toEqual(['SFM1']);
+  });
+});
+
+describe('the box an order with nobody on it is drawn in', () => {
+  // 15 h of work: two people (preferredCrewSize), so exactly one shift of it.
+  const waiting = (due: string | null, plannedStart = '2026-09-14T07:00:00'): OrderRow => {
+    const r = row('W');
+    (r.job as { dueDate: Date | null }).dueDate = due ? new Date(due) : null;
+    Object.assign(r.job, { laborHrs: 15, remainingQty: 10, completedQty: 0 });
+    Object.assign(r, { plannedStart: new Date(plannedStart), line: { key: 'ASSY', schedulable: true } });
+    return r;
+  };
+
+  it('ends on the Due Date and reaches back to the last day the work can start', () => {
+    const w = unstaffedWindow(waiting('2026-09-18T00:00:00'))!;
+    expect(w.late).toBe(false);
+    expect(w.to).toEqual(new Date('2026-09-18T00:00:00'));
+    expect(toDayKey(w.from)).toBe('2026-09-17');
+  });
+
+  it('never starts before the order can, and says when it cannot make its Due Date', () => {
+    const tight = unstaffedWindow(waiting('2026-09-15T00:00:00', '2026-09-14T12:00:00'))!;
+    expect(tight.from).toEqual(new Date('2026-09-14T12:00:00'));
+    expect(tight.late).toBe(true);
+    const gone = unstaffedWindow(waiting('2026-09-10T00:00:00'))!;
+    expect(gone).toEqual({ from: new Date('2026-09-14T07:00:00'), to: new Date('2026-09-14T07:00:00'), late: true });
+  });
+
+  it('has nowhere to go without a Due Date', () => {
+    expect(unstaffedWindow(waiting(null))).toBeNull();
   });
 });

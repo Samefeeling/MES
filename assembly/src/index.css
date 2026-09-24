@@ -2331,6 +2331,19 @@ body.col-resizing {
   border-radius: 4px;
   padding: 1px 6px;
 }
+/* Placed against the Due Date (see OrderBar): the box spans the days the work
+   has to start in, and its label never shrinks below its own width — the
+   right edge is the anchor, so a short window grows back towards today. */
+.bar-missing.placed {
+  left: auto;
+  min-width: max-content;
+  text-align: center;
+  white-space: nowrap;
+}
+.bar-missing.late {
+  right: auto;
+  font-weight: 700;
+}
 /* The racks, not the roster. A stopped order is a stopped order, but the two
    want different people doing different things about them, so the one waiting
    on material is amber and filled rather than another dashed red outline —

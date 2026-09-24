@@ -279,6 +279,32 @@ interface Span {
 const clashesWith = (booked: Span[] | undefined, want: Span): boolean =>
   (booked ?? []).some((s) => s.from < want.to && want.from < s.to);
 
+/**
+ * The first moment from `from` on that somebody is not on another order —
+ * what their day-to-day capacity says about when they could begin this one.
+ */
+function freeFrom(booked: Span[] | undefined, from: Date): number {
+  let at = from.getTime();
+  for (const s of [...(booked ?? [])].sort((a, b) => a.from.getTime() - b.from.getTime())) {
+    if (s.from.getTime() <= at && s.to.getTime() > at) at = s.to.getTime();
+  }
+  return at;
+}
+
+/** Whole local days, so two people free on the same day count as equally free. */
+const dayOf = (ms: number): string => toDayKey(new Date(ms));
+
+/**
+ * Most urgent first: the order with the least slack to its Due Date — the
+ * last day it can start and still make it — then the earlier Due Date. An
+ * order with no Due Date goes last, because nothing says it is urgent.
+ */
+const bySlack = (a: OrderRow, b: OrderRow): number => {
+  const slack = (row: OrderRow) => (row.mustStartBy ?? row.job.dueDate)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+  const due = (row: OrderRow) => row.job.dueDate?.getTime() ?? Number.MAX_SAFE_INTEGER;
+  return slack(a) - slack(b) || due(a) - due(b) || a.plannedStart.getTime() - b.plannedStart.getTime();
+};
+
 /** Orders on a schedulable line with nobody on them and work left to do. */
 const waitingRows = (board: AssemblyGanttView): OrderRow[] =>
   board.groups
@@ -359,7 +385,12 @@ function staffOneWave(
           remainingHours(r.job) > 0 &&
           !into[String(r.job.id)],
       )
-      .sort((a, b) => a.plannedStart.getTime() - b.plannedStart.getTime());
+      // Forward, by urgency: every waiting order asks to start as soon as it
+      // can (`plannedStart` — today, or when its parts are ready), so what
+      // decides who gets the line's people first is how little slack it has.
+      // This used to sort on `plannedStart` alone, which is the same day for
+      // nearly every order nobody is on, and left the choice to row order.
+      .sort(bySlack);
 
     // The earliest order the line can actually crew. One that nobody is free
     // for is skipped rather than stalling the line behind it — the schedule
@@ -378,11 +409,15 @@ function staffOneWave(
         if (!want) break;
         const rest = pool.filter((w) => !crew.includes(String(w.id)));
         if (rest.length === 0) break;
-        // Skills come first. Among equal matches, prefer someone free, then
-        // the lighter queue, with roster order as a deterministic tie-break.
-        // A busy match queues behind existing work when the board settles.
+        // Skills come first — nobody is put on a bench they cannot work. Among
+        // equal matches, the day each could begin: the line's capacity is
+        // filled forward from today, so the person free soonest takes it, not
+        // merely anyone who is free at some point. Then someone with no
+        // overlap at all, the lighter queue, and roster order to break ties.
+        const freeDay = (w: Worker) => dayOf(freeFrom(booked.get(String(w.id)), want.from));
         const pick = [...rest].sort((a, b) =>
           skillRank(a, next) - skillRank(b, next) ||
+          freeDay(a).localeCompare(freeDay(b)) ||
           Number(clashesWith(booked.get(String(a.id)), want)) -
             Number(clashesWith(booked.get(String(b.id)), want)) ||
           (booked.get(String(a.id))?.length ?? 0) -
