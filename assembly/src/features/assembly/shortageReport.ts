@@ -36,6 +36,8 @@ export interface ShortOrder {
 export interface PartShortage {
   part: string;
   description: string;
+  /** Bought in rather than made here. */
+  purchased: boolean;
   /** Summed over the orders listed. */
   shortQty: number;
   /** Everything open on PODetail.csv for the part; 0 when nothing is. */
@@ -58,10 +60,13 @@ export interface ShortageReport {
 }
 
 /**
- * Parts with an order nothing covers come first, then those arriving latest:
- * the ones somebody has to pick up the phone about.
+ * Bought-in parts first — a supplier can be chased; a part made here is the
+ * board's own schedule. Within each, parts with an order nothing covers come
+ * first, then those arriving latest: the ones somebody has to pick up the
+ * phone about.
  */
 const byConcern = (a: PartShortage, b: PartShortage): number =>
+  Number(b.purchased) - Number(a.purchased) ||
   Number(b.uncovered > 0) - Number(a.uncovered > 0) ||
   (b.lastArrival?.getTime() ?? 0) - (a.lastArrival?.getTime() ?? 0) ||
   b.shortQty - a.shortQty ||
@@ -91,6 +96,7 @@ export function shortageReport(rows: readonly OrderRow[]): ShortageReport {
         part = {
           part: key,
           description: s.description,
+          purchased: s.purchased,
           shortQty: 0,
           onOrder: s.incoming?.qty ?? 0,
           uncovered: 0,

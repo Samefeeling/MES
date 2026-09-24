@@ -54,7 +54,20 @@ export function ShortageDetail({
           </tr>
         </thead>
         <tbody>
-          {report.parts.map((p) => (
+          {report.parts.map((p, i) => [
+            // Bought-in parts first, under their own heading, then those
+            // made here — a supplier can be chased; our own orders are the
+            // board's schedule.
+            (i === 0 || report.parts[i - 1].purchased !== p.purchased) && (
+              <tr key={`group-${String(p.purchased)}`} className="short-group">
+                <th colSpan={4}>
+                  {p.purchased ? 'Purchased' : 'Made in-house'}
+                  <span>
+                    {report.parts.filter((q) => q.purchased === p.purchased).length} parts
+                  </span>
+                </th>
+              </tr>
+            ),
             <tr key={p.part} className={p.uncovered > 0 ? 'uncovered' : undefined}>
               <td>
                 <span className="short-part">{p.part}</span>
@@ -87,8 +100,8 @@ export function ShortageDetail({
                   </span>
                 )}
               </td>
-            </tr>
-          ))}
+            </tr>,
+          ])}
         </tbody>
       </table>
     </div>

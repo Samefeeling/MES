@@ -3680,3 +3680,39 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 }
 .overdue-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: 11px; color: var(--muted); }
 .app-header .board-tools .metric-panel .overdue-actions button { padding: 3px 10px; }
+
+/*
+ * Weeks fold. An open week's first day carries "◂ W40" to fold it; a folded
+ * week is one column carrying its week, with "W40 ▸" to open it. A heavier
+ * rule between weeks keeps the two scales from reading as one.
+ */
+.assy-head .week-fold {
+  padding: 0 4px;
+  border: 1px solid var(--head-rule);
+  border-radius: 4px;
+  background: var(--chrome-tint);
+  color: var(--head-tx);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 15px;
+  cursor: pointer;
+}
+.assy-head .week-fold:hover { background: var(--head-tx); color: var(--head-bg); }
+.assy-head .week-fold.open { background: var(--head-tx); color: var(--head-bg); }
+.assy-head .daycol.weekcol {
+  background: var(--chrome-tint);
+  border-left: 2px solid var(--head-rule);
+  color: var(--head-tx);
+}
+.aline-day.week { border-left-width: 2px; }
+.shortage-report tr.short-group th {
+  padding: 8px 6px 3px;
+  color: var(--text);
+  font-size: 10.5px;
+  font-weight: 750;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  border-top: 0;
+}
+.shortage-report tr.short-group th span { margin-left: 8px; color: var(--muted); font-weight: 600; text-transform: none; }

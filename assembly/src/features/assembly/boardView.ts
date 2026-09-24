@@ -768,10 +768,6 @@ export function lineOfWorkerToday(
   return at;
 }
 
-/** Weeks ahead the timeline can be asked to show, as the Timeline tool offers them. */
-export const TIMELINE_WEEKS = [2, 4, 8, 12] as const;
-export type TimelineWeeks = (typeof TIMELINE_WEEKS)[number];
-
 /**
  * Furthest a Due Date may stretch the timeline, in days past today. A due date
  * typed a year out would otherwise make the grid a year wide.

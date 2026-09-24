@@ -47,23 +47,20 @@ import {
   strandedOrders,
   rowsInView,
   teamSummary,
-  TIMELINE_WEEKS,
+  timelineDays,
 } from './boardView';
 import { shortageReport } from './shortageReport';
 import { ShortageDetail } from './ShortageDetail';
 import { overdueOrders } from './overdue';
 import { OverdueDetail } from './OverdueDetail';
+import { TIMELINE_MIN_WEEKS, weekKeyOf } from './weekFold';
+import { addCalendarDays } from '@/engine/assembly/dates';
 import { ManualOrderButton } from './ManualOrders';
 import { Metric, MetricNote } from './Metric';
 import { ReviewOrders } from './SuggestCrew';
 import { formatShortDay, fromDayKey, toDayKey } from '@/lib/time';
 
-/** How much one press of − or + moves the day column, in pixels. */
-const ZOOM_STEP = 16;
-
 export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
-  const dayWidth = useUiStore((s) => s.dayWidth);
-  const setDayWidth = useUiStore((s) => s.setDayWidth);
   const dateCols = useUiStore((s) => s.dateCols);
   const toggleDateCol = useUiStore((s) => s.toggleDateCol);
   const cols = useUiStore((s) => s.cols);
@@ -77,8 +74,8 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
   const toggleDueSoon = useUiStore((s) => s.toggleDueSoon);
   const showWeekends = useUiStore((s) => s.showWeekends);
   const toggleWeekends = useUiStore((s) => s.toggleWeekends);
-  const timelineWeeks = useUiStore((s) => s.timelineWeeks);
-  const setTimelineWeeks = useUiStore((s) => s.setTimelineWeeks);
+  const setWeekFold = useUiStore((s) => s.setWeekFold);
+  const resetWeekFold = useUiStore((s) => s.resetWeekFold);
   const virtualLines = usePlanStore((s) => s.virtualLines);
   const crewPools = usePlanStore((s) => s.crewPools);
   /* Which figure is open, held here rather than in each of them: they hang off
@@ -140,6 +137,16 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
     () => (board ? overdueOrders(allRows, board.today) : []),
     [board, allRows],
   );
+
+  // Every week the timeline reaches, for Open all.
+  const weekKeys = useMemo(() => {
+    if (!board) return [];
+    const span = timelineDays(board, TIMELINE_MIN_WEEKS);
+    const keys = new Set<string>();
+    for (let i = 0; i < span; i += 7) keys.add(weekKeyOf(addCalendarDays(board.horizonStart, i)));
+    keys.add(weekKeyOf(addCalendarDays(board.horizonStart, span - 1)));
+    return [...keys];
+  }, [board]);
 
   if (!board || !team || !shortages) return null;
   const hidden = DATE_COLS.filter((key) => !dateCols[key]);
@@ -240,40 +247,22 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
         <ManualOrderButton board={board} />
       </div>
 
+      {/* How much of the timeline is read a day at a time. Each week folds and
+          opens from its own heading; these two do every week at once. */}
       <div className="tool-group">
-        <strong>Timeline</strong>
+        <strong>Weeks</strong>
         <button
-          className="zoom-step"
-          onClick={() => setDayWidth(dayWidth - ZOOM_STEP)}
-          aria-label="Zoom out"
-          title="Narrower days — see further ahead. Every day column goes back to one width."
+          onClick={() => setWeekFold(weekKeys, false)}
+          title="Open every week on the timeline, a column per day"
         >
-          −
+          Open all
         </button>
         <button
-          className="zoom-step"
-          onClick={() => setDayWidth(dayWidth + ZOOM_STEP)}
-          aria-label="Zoom in"
-          title="Wider days. Every day column goes back to one width."
+          onClick={resetWeekFold}
+          title="This week and next a day at a time, every week after them folded to one column"
         >
-          +
+          Fold later
         </button>
-        {/* How far ahead the board looks. The least it shows: planned bars
-            and the Due Dates of orders waiting for a crew reach further on
-            their own, so nothing is ever cut off at the edge. */}
-        <select
-          className="timeline-weeks"
-          value={timelineWeeks}
-          onChange={(e) => setTimelineWeeks(Number(e.target.value))}
-          aria-label="Weeks ahead"
-          title="Weeks ahead of today the timeline shows at least — it reaches further on its own for planned work and for the Due Date of any order still waiting for a crew"
-        >
-          {TIMELINE_WEEKS.map((weeks) => (
-            <option key={weeks} value={weeks}>
-              {weeks} weeks
-            </option>
-          ))}
-        </select>
       </div>
 
       {/*

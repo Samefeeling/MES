@@ -111,6 +111,27 @@ export interface PickShortage {
   shortQty: number;
   /** What is on order for it, when `PODetail.csv` has any. */
   incoming: IncomingSupply | null;
+  /** Bought in rather than made here — see `isPurchased`. */
+  purchased: boolean;
+}
+
+/**
+ * Whether a part is bought in. `Part_TypeCode` says so when the export has it
+ * (P purchased, M manufactured). Without it: a part some order on the board
+ * builds is made here, and anything else is bought — in this plant a component
+ * is one or the other, and one with a purchase order open is bought whatever
+ * else is said about it.
+ */
+export function isPurchased(
+  item: InventoryItem | undefined,
+  hasPo: boolean,
+  madeHere: boolean,
+): boolean {
+  if (hasPo) return true;
+  const type = item?.typeCode?.trim().toUpperCase();
+  if (type === 'P') return true;
+  if (type === 'M') return false;
+  return !madeHere;
 }
 
 /**
@@ -149,6 +170,8 @@ export interface PickLedger {
 export function pickLedger(
   inventoryByPart: ReadonlyMap<PartId, InventoryItem>,
   poByPart: ReadonlyMap<PartId, readonly PoLine[]> = new Map(),
+  /** Parts some order builds, for telling made from bought — see `isPurchased`. */
+  madeParts: ReadonlySet<string> = new Set(),
 ): PickLedger {
   const shelfTaken = new Map<PartId, number>();
   const onOrder = new Map<PartId, { release: IncomingRelease; left: number }[]>();
@@ -211,15 +234,20 @@ export function pickLedger(
           heldEarlier: Math.max(0, Math.min(onHand, taken)),
           shortQty,
           incoming,
+          purchased: isPurchased(stock, releases.length > 0, madeParts.has(String(pick.childPart))),
         });
       }
-      return short.sort((a, b) => b.shortQty - a.shortQty);
+      // Bought-in parts first: those are the ones a phone call to a supplier
+      // can move, and the ones a purchase order date is known for.
+      return short.sort(
+        (a, b) => Number(b.purchased) - Number(a.purchased) || b.shortQty - a.shortQty,
+      );
     },
   };
 }
 
 /**
- * Every line of a pick list the shelf is short of, worst first, for one order
+ * Every line of a pick list the shelf is short of, bought-in first, for one order
  * on its own — nothing ahead of it has taken anything.
  *
  * The part is looked up by the spelling the material export uses, which is the
@@ -230,8 +258,9 @@ export function pickShortages(
   picks: readonly JobMaterialLink[] | undefined,
   inventoryByPart: ReadonlyMap<PartId, InventoryItem>,
   poByPart: ReadonlyMap<PartId, readonly PoLine[]> = new Map(),
+  madeParts: ReadonlySet<string> = new Set(),
 ): PickShortage[] {
-  return pickLedger(inventoryByPart, poByPart).take(picks);
+  return pickLedger(inventoryByPart, poByPart, madeParts).take(picks);
 }
 
 /**

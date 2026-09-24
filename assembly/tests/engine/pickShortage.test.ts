@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { computeAssemblyGantt } from '@/engine/assembly/board';
-import { pickLedger, pickShortages, pickShortfall } from '@/engine/assembly/pickShortage';
+import { isPurchased, pickLedger, pickShortages, pickShortfall } from '@/engine/assembly/pickShortage';
 import { buildIndexes } from '@/engine/indexes';
 import { JobId, PartId, WorkCenterId, WorkerId } from '@/domain/ids';
 import {
@@ -205,6 +205,8 @@ describe('what the shelf cannot cover on a pick list', () => {
       heldEarlier: 0,
       shortQty: 28,
       incoming: null,
+      // Nothing on the board builds foam: bought in.
+      purchased: true,
     });
   });
 
@@ -327,5 +329,36 @@ describe('an order short of bought-in material waits for its PO', () => {
     );
     expect(b.rowsByJob.get('SOONER')!.shortPicks).toEqual([]);
     expect(b.rowsByJob.get('LATER')!.materialReadyAt).toEqual(new Date(2026, 8, 24));
+  });
+});
+
+describe('bought in or made here', () => {
+  const item = (typeCode: string | null) => ({ typeCode }) as never;
+  it('reads Part_TypeCode when the export carries it', () => {
+    expect(isPurchased(item('P'), false, true)).toBe(true);
+    expect(isPurchased(item('M'), false, false)).toBe(false);
+  });
+  it('without it, calls a part some order builds made here, and anything else bought', () => {
+    expect(isPurchased(item(null), false, true)).toBe(false);
+    expect(isPurchased(item(null), false, false)).toBe(true);
+    expect(isPurchased(undefined, false, false)).toBe(true);
+  });
+  it('calls a part with a purchase order open bought, whatever else is said', () => {
+    expect(isPurchased(item('M'), true, true)).toBe(true);
+  });
+  it('puts the bought-in lines of a pick list first', () => {
+    const inv = new Map([
+      [PartId('COVER'), { partNum: PartId('COVER'), description: 'Cover', typeCode: null, onHand: 0 }],
+      [PartId('FRAME'), { partNum: PartId('FRAME'), description: 'Frame', typeCode: null, onHand: 0 }],
+    ]) as never;
+    const list = [
+      { childPart: PartId('COVER'), requiredQty: 50, childDescription: 'Cover' },
+      { childPart: PartId('FRAME'), requiredQty: 5, childDescription: 'Frame' },
+    ] as never;
+    const short = pickShortages(list, inv, new Map(), new Set(['COVER']));
+    expect(short.map((s) => [String(s.part), s.purchased])).toEqual([
+      ['FRAME', true],
+      ['COVER', false],
+    ]);
   });
 });

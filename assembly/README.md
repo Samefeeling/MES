@@ -28,12 +28,16 @@ plan goes back the other way, into the `ASSY_Production` list.
   the hours the shift can deliver, so the week reads as a shape before anyone
   reads a number. Green below 80%, orange to 90%, red beyond. Drag a bar to a
   greener day to level the week.
-- **Yesterday is still on the board** — the first column is the previous
-  working day (Friday, on a Monday), because the first question of the morning
-  is what the last shift actually finished. Those columns carry *booked
-  output*, not plan: the shift's entered quantities valued at the order's
-  standard hours, drawn hollow so the two are never confused. Nothing is ever
-  scheduled into them.
+- **The board opens on today** — there is no column for the previous working
+  day; it was seldom read and cost a day of width on every screen. What the
+  last shift booked is still in each order's detail and on the KPI page.
+- **Weeks fold** — this week and next open a day at a time; every week after
+  them is one narrow column carrying the week's hours against what its crews
+  can work. `◂ W40` on a week's first day folds it, `W41 ▸` opens it, and
+  **Weeks → Open all / Fold later** in the tool row does every week at once.
+  A folded week's days share its width, so bars, arrows and drags work
+  through it at a coarser scale. The zoom and the weeks-ahead box are gone;
+  the timeline reaches eight weeks at least, further for planned work.
 - **A line down today's column** — assembly works **07:00–15:30**, and the
   marker sits where the shift has got to, nudged on every five minutes. Before
   07:00 and after 15:30 it rests against the edge of the column.

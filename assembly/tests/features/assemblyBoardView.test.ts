@@ -622,6 +622,7 @@ describe('why an order has no bar', () => {
     heldEarlier: 0,
     shortQty,
     incoming: null,
+    purchased: true,
   });
 
   it('asks for people when people are all that is missing', () => {

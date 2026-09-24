@@ -38,4 +38,11 @@ describe('inventory demand and descriptions', () => {
     const result = parseOnHandInventoryCsv('Part_PartNum,Calculated_OnHand,Calculated_Demand\nA,10,\nB,5,0');
     expect(result.values.map((item) => item.calculatedDemand)).toEqual([null, 0]);
   });
+
+  it('reads Part_TypeCode when the export carries it', () => {
+    const result = parseOnHandInventoryCsv(
+      'Part_PartNum,Calculated_OnHand,Part_TypeCode\nP-1,2,p\nP-2,4,M\nP-3,1,',
+    );
+    expect(result.values.map((item) => item.typeCode)).toEqual(['P', 'M', null]);
+  });
 });

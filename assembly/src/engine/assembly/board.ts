@@ -89,7 +89,6 @@ import {
   addDays,
   addWorkingDays,
   nextWorkingDay,
-  prevWorkingDay,
   overdueStatus,
   scheduleStatus,
   startOfDay,
@@ -679,11 +678,11 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
     input.workerOnLeave ?? {},
     today,
   );
-  // Two different "starts". Work is planned from today — there is no working
-  // yesterday — but the board opens one working day earlier, so the shift that
-  // has just finished is still on screen to be compared against the plan.
+  // Work is planned from today, and the board opens on it too. It used to
+  // open one working day earlier to keep the shift just finished in view, and
+  // that column was hardly ever read — it cost a day of width on every screen.
   const planStart = startOfDay(today);
-  const horizonStart = prevWorkingDay(planStart);
+  const horizonStart = planStart;
 
   // The moulding plan, as rows. Built for every press job rather than the few
   // that fit on screen, because any of them may be the one an assembly order
@@ -761,7 +760,9 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
    * Once per order number: every operation of a routed order works towards
    * the one pick list.
    */
-  const ledger = pickLedger(indexes.inventoryByPart, indexes.poByPart);
+  // A part an order in the export builds is made here, not bought.
+  const madeParts = new Set(dataset.jobs.map((j) => String(j.partNum)));
+  const ledger = pickLedger(indexes.inventoryByPart, indexes.poByPart, madeParts);
   const shortByOrder = new Map<string, PickShortage[]>();
   const shortPicksOf = (job: Job, orderNum: string): PickShortage[] => {
     let short = shortByOrder.get(orderNum);

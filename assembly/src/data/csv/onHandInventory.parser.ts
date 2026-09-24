@@ -9,6 +9,7 @@ const aliases = {
   onHand: ['calculatedonhand', 'onhand'],
   demand: ['calculateddemand', 'demand'],
   description: ['partdescription', 'description'],
+  typeCode: ['parttypecode', 'typecode'],
 } as const;
 
 const column = (headers: string[], names: readonly string[]): number =>
@@ -35,6 +36,7 @@ export function parseOnHandInventoryCsv(text: string): {
   const onHandCol = column(headers, aliases.onHand);
   const demandCol = column(headers, aliases.demand);
   const descriptionCol = column(headers, aliases.description);
+  const typeCol = column(headers, aliases.typeCode);
   if (partCol < 0 || onHandCol < 0) {
     return {
       values: [],
@@ -47,6 +49,7 @@ export function parseOnHandInventoryCsv(text: string): {
   const totals = new Map<string, number>();
   const demands = new Map<string, number>();
   const descriptions = new Map<string, string>();
+  const types = new Map<string, string>();
   const errors: string[] = [];
   rows.slice(1).forEach((row, index) => {
     const part = row[partCol]?.trim();
@@ -64,13 +67,16 @@ export function parseOnHandInventoryCsv(text: string): {
     }
     const description = row[descriptionCol]?.trim();
     if (description) descriptions.set(part, description);
+    // Part_TypeCode, when the export carries it: P bought in, M made here.
+    const type = typeCol >= 0 ? row[typeCol]?.trim().toUpperCase() : '';
+    if (type) types.set(part, type);
   });
 
   return {
     values: [...totals].map(([partNum, onHand]) => ({
       partNum: PartId(partNum),
       description: descriptions.get(partNum) ?? '',
-      typeCode: null,
+      typeCode: types.get(partNum) ?? null,
       onHand,
       cmplWip: 0,
       supply: 0,

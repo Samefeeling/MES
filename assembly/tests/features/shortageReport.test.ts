@@ -11,7 +11,9 @@ const short = (
   part: string,
   shortQty: number,
   po: { qty: number; at: string | null; covers: boolean } | null,
+  purchased = true,
 ): PickShortage => ({
+  purchased,
   part: PartId(part),
   description: `${part} desc`,
   requiredQty: shortQty,
@@ -106,5 +108,20 @@ describe('the orders in the current view', () => {
     const shown = rowsInView(groups, { hiddenLines: [], ids, orderDay: null });
     expect(shown.map((r) => r.job.id)).toEqual(['A', 'C']);
     expect(filteredOrderIds([a], { orderDay: null, dueSoon: false, dueSoonDays: 2, today: d('2026-09-24') })).toBeNull();
+  });
+});
+
+describe('purchased parts first', () => {
+  it('lists bought-in parts before those made here, whatever else', () => {
+    const report = shortageReport([
+      row('J1', '2026-10-10', [
+        short('COVER', 90, null, false),
+        short('FRAME', 5, { qty: 10, at: '2026-10-01', covers: true }),
+      ]),
+    ]);
+    expect(report.parts.map((p) => [p.part, p.purchased])).toEqual([
+      ['FRAME', true],
+      ['COVER', false],
+    ]);
   });
 });

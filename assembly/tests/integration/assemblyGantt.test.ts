@@ -654,12 +654,12 @@ describe('the board the planner laid out', () => {
   });
 });
 
-describe('yesterday, still on the board', () => {
-  it('opens on the previous working day', () => {
+describe('the board opens on today', () => {
+  it('has no column for yesterday', () => {
     const b = build();
-    // TODAY is Friday 11 Sep 2026, so the board opens on the Thursday.
+    // TODAY is Friday 11 Sep 2026: the board opens on it, not on the Thursday.
     expect(b.today).toEqual(new Date('2026-09-11T00:00:00'));
-    expect(b.horizonStart).toEqual(new Date('2026-09-10T00:00:00'));
+    expect(b.horizonStart).toEqual(new Date('2026-09-11T00:00:00'));
   });
 
   it('plans nothing into a day that has already gone', () => {
@@ -671,9 +671,8 @@ describe('yesterday, still on the board', () => {
   });
 
   it('still shows the usual run of days ahead', () => {
-    // The history column is extra, not taken out of the planning window.
     const b = build();
-    expect(b.horizonDays).toBeGreaterThanOrEqual(DEFAULT_HORIZON_DAYS + 1);
+    expect(b.horizonDays).toBeGreaterThanOrEqual(DEFAULT_HORIZON_DAYS);
   });
 
   it('carries the shift log on the row, valued in hours', () => {
