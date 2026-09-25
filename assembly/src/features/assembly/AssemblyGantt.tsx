@@ -71,7 +71,6 @@ import {
   teamSummary,
   onLeaveWorkerOrders,
   strandedOrders,
-  runningOrdersByDay,
   lineOfWorkerToday,
   filteredOrderIds,
   lineDayLoads,
@@ -1083,10 +1082,11 @@ const hoursText = (hours: number) =>
 const pctText = (pct: number) => (Number.isFinite(pct) ? `${Math.round(pct)}%` : 'no crew');
 
 /**
- * A folded line's week, one cell per day column: the hours its crew is
- * planned to work, and — dashed — the hours of orders nobody is on yet that
- * have to be worked on that day to make their Due Date. The tint is how full
- * the crews it draws on are that day, the same figure the banner adds up.
+ * A folded line's days, one column each: as tall as the line's hours are
+ * against what the crews it draws on can work that day, coloured by that
+ * share. The figures in it are the hours with people on them, and — in blue —
+ * the hours of orders nobody is on yet that have to be worked that day to make
+ * their Due Date. A folded week is one column for the week.
  */
 function LineLoadStrip({
   days,
@@ -1108,83 +1108,80 @@ function LineLoadStrip({
   width: number;
   line: string;
 }) {
+  const cell = (
+    key: string,
+    from: number,
+    to: number,
+    heading: string,
+    detail: string[],
+  ) => {
+    const picked = days.slice(from, to);
+    const hours = picked.reduce((n, d) => n + d.hours, 0);
+    const waiting = picked.reduce((n, d) => n + d.unstaffedHours, 0);
+    if (hours <= 0 && waiting <= 0) return null;
+    const crews = capacity.slice(from, to).filter((c): c is LineCapacity => Boolean(c) && c!.pct !== null);
+    const cap = crews.reduce((n, c) => n + c.capacity, 0);
+    const pool = crews.reduce((n, c) => n + c.demand, 0);
+    const share = cap > 0 ? ((hours + waiting) / cap) * 100 : Infinity;
+    const x = axis.offsets[from];
+    return (
+      <button
+        type="button"
+        key={key}
+        className={`aline-day${to - from > 1 ? ' week' : ''}${crews.length === 0 ? ' idle' : ''}`}
+        style={{ left: x, width: axis.offsets[to] - x }}
+        title={[
+          `${line} · ${heading}: ${hours.toFixed(1)} h with people on it`,
+          ...detail,
+          ...(waiting > 0 ? [`${waiting.toFixed(1)} h (blue) of orders waiting for a crew, to be worked by their Due Date`] : []),
+          crews.length > 0
+            ? `${pctText(share)} of the ${cap.toFixed(1)} h ${crews[0].pools.join(' + ')} can work` +
+              ` · the crew as a whole is at ${pctText((pool / cap) * 100)}`
+            : 'No crew group lists this line — set one under Crew capacity',
+          'Click for the orders',
+        ].join('\n')}
+        onClick={(e) => onOpen(from, to, { x: e.clientX, y: e.clientY })}
+      >
+        <LoadColumn
+          crewed={hours}
+          waiting={waiting}
+          capacity={cap}
+          band={crews.length > 0 ? loadBand(share) : 'idle'}
+        />
+        <span className="aline-figures">
+          {hours > 0 && <b>{hoursText(hours)}</b>}
+          {waiting > 0 && <span className="aline-wait">{hoursText(waiting)}</span>}
+        </span>
+      </button>
+    );
+  };
   return (
     <div className="aline-load" style={{ left, width }}>
-      {spans.filter((span) => span.folded).map((span) => {
-        const week = days.slice(span.from, span.to);
-        const hours = week.reduce((n, d) => n + d.hours, 0);
-        const waiting = week.reduce((n, d) => n + d.unstaffedHours, 0);
-        if (hours <= 0 && waiting <= 0) return null;
-        const crews = capacity.slice(span.from, span.to).filter((c): c is LineCapacity => Boolean(c));
-        const cap = crews.reduce((n, c) => n + c.capacity, 0);
-        const demand = crews.reduce((n, c) => n + c.demand, 0);
-        const listed = crews.some((c) => c.pct !== null);
-        const pct = cap > 0 ? (demand / cap) * 100 : demand > 0 ? Infinity : 0;
-        const x = axis.offsets[span.from];
-        return (
-          <button
-            type="button"
-            key={`week-${span.key}`}
-            className={`aline-day week ${listed ? loadBand(pct) : 'idle'}`}
-            style={{ left: x, width: axis.offsets[span.to] - x }}
-            title={
-              `${line} · ${span.label} (${formatShortDay(span.first)}–${formatShortDay(span.last)}): ` +
-              `${hours.toFixed(1)} h planned` +
-              (waiting > 0 ? ` + ${waiting.toFixed(1)} h waiting for a crew` : '') +
-              (listed
-                ? `\n${crews[0].pools.join(' + ')}: ${demand.toFixed(1)} of ${cap.toFixed(1)} h — ${pctText(pct)}`
-                : '') +
-              '\nClick for the orders'
-            }
-            onClick={(e) => onOpen(span.from, span.to, { x: e.clientX, y: e.clientY })}
-          >
-            {hours > 0 && <b>{hoursText(hours)}</b>}
-            {waiting > 0 && <span className="aline-wait">+{hoursText(waiting)}</span>}
-          </button>
-        );
-      })}
-      {days.map((day, i) => {
-        if (day.hours <= 0 && day.unstaffedHours <= 0) return null;
-        if (spans.some((span) => span.folded && i >= span.from && i < span.to)) return null;
-        const date = formatShortDay(day.date);
-        const lines = [
-          day.past
-            ? `${line} · ${date}: ${day.hours.toFixed(1)} h booked` +
-              (day.orders.length ? ` on ${day.orders.join(', ')}` : '')
-            : `${line} · ${date}: ${day.hours.toFixed(1)} h planned` +
-              (day.orders.length
-                ? ` — ${day.people} ${day.people === 1 ? 'person' : 'people'}, ` +
-                  `${day.orders.length} of ${day.positions} positions (${day.orders.join(', ')})`
-                : ''),
-        ];
-        if (day.unstaffedHours > 0) {
-          lines.push(
-            `+${day.unstaffedHours.toFixed(1)} h waiting for a crew that has to be worked by its Due Date ` +
-              `(${day.unstaffedOrders.join(', ')})`,
-          );
-        }
-        const crew = capacity[i];
-        lines.push(
-          crew && crew.pct !== null
-            ? `${crew.pools.join(' + ')}: ${crew.demand.toFixed(1)} of ${crew.capacity.toFixed(1)} h — ${pctText(crew.pct)}`
-            : 'No crew group lists this line — set one under Crew groups',
-        );
-        return (
-          <button
-            type="button"
-            key={day.key}
-            className={`aline-day ${crew?.band ?? 'idle'}${day.past ? ' past' : ''}`}
-            style={{ left: axis.offsets[i], width: axis.widths[i] }}
-            title={`${lines.join('\n')}\nClick for the orders`}
-            onClick={(e) => onOpen(i, i + 1, { x: e.clientX, y: e.clientY })}
-          >
-            {day.hours > 0 && <b>{hoursText(day.hours)}</b>}
-            {day.unstaffedHours > 0 && (
-              <span className="aline-wait">+{hoursText(day.unstaffedHours)}</span>
-            )}
-          </button>
-        );
-      })}
+      {spans.map((span) =>
+        span.folded
+          ? cell(
+              `week-${span.key}`,
+              span.from,
+              span.to,
+              `${span.label} (${formatShortDay(span.first)}–${formatShortDay(span.last)})`,
+              [],
+            )
+          : range(span.from, span.to).map((i) => {
+              const day = days[i];
+              return cell(
+                day.key,
+                i,
+                i + 1,
+                formatShortDay(day.date),
+                day.orders.length
+                  ? [
+                      `${day.people} ${day.people === 1 ? 'person' : 'people'}, ` +
+                        `${day.orders.length} of ${day.positions} positions (${day.orders.join(', ')})`,
+                    ]
+                  : [],
+              );
+            }),
+      )}
     </div>
   );
 }
@@ -1194,6 +1191,40 @@ interface DayDetailContent {
   title: string;
   summary: string;
   groups: { name: string; entries: DayOrderEntry[] }[];
+  /** Set for one whole day on every line: the board can be narrowed to it. */
+  day?: string;
+}
+
+/**
+ * A load as a column: as tall as the hours asked are against the hours the
+ * crews can work. Solid in the day's band for work with people on it, blue on
+ * top for orders nobody is on yet. Past capacity the column is scaled to fit
+ * and a tick marks where capacity sits, so what is over reads above it.
+ */
+function LoadColumn({
+  crewed,
+  waiting,
+  capacity,
+  band,
+  label,
+}: {
+  crewed: number;
+  waiting: number;
+  capacity: number;
+  band: string;
+  label?: string;
+}) {
+  const asked = crewed + waiting;
+  const scale = Math.max(asked, capacity) || 1;
+  const pct = (h: number) => `${Math.min(100, (h / scale) * 100)}%`;
+  return (
+    <span className={`load-col ${band}`}>
+      <i className="lc-crewed" style={{ height: pct(crewed) }} />
+      <i className="lc-waiting" style={{ bottom: pct(crewed), height: pct(waiting) }} />
+      {asked > capacity && capacity > 0 && <i className="lc-cap" style={{ bottom: pct(capacity) }} />}
+      {label && <b className="lc-label">{label}</b>}
+    </span>
+  );
 }
 
 const KIND_LABEL: Record<DayOrderEntry['kind'], string> = {
@@ -1211,11 +1242,17 @@ function DayDetail({
   at,
   onPick,
   onClose,
+  filteredDay,
+  onFilter,
 }: {
   detail: DayDetailContent;
   at: { x: number; y: number };
   onPick: (jobId: string) => void;
   onClose: () => void;
+  /** The day the board is narrowed to, if any. */
+  filteredDay?: string | null;
+  /** Narrow the board to the orders running on a day, or (null) stop. */
+  onFilter?: (day: string | null) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1253,6 +1290,15 @@ function DayDetail({
         <button type="button" onClick={onClose} aria-label="Close">×</button>
       </header>
       <p className="day-detail-sum">{detail.summary}</p>
+      {detail.day && onFilter && (
+        <button
+          type="button"
+          className="day-detail-filter"
+          onClick={() => onFilter(filteredDay === detail.day ? null : detail.day!)}
+        >
+          {filteredDay === detail.day ? 'Show every order again' : 'Show only the orders running this day'}
+        </button>
+      )}
       {shown.length === 0 && <p className="day-detail-sum">Nothing planned.</p>}
       {shown.map((group) => (
         <section key={group.name}>
@@ -1561,10 +1607,6 @@ export function AssemblyGantt({
       ),
     [allRows, board.today],
   );
-  const runningByDay = useMemo(
-    () => runningOrdersByDay(allRows, days),
-    [allRows, days],
-  );
 
   // The Free / On Leave rolls. They read the whole roster, not one column, so
   // they live in the Order heading — which has room to spare beside its one
@@ -1694,25 +1736,19 @@ export function AssemblyGantt({
       ? null
       : axis.x(todayIndex + shiftColumnFraction(now));
 
-  /** One day's heading: its load against the crews, and its count of orders. */
+  /** One day's heading: a column as tall as the day is full. */
   const dayHead = (d: Date, i: number, span: WeekSpan) => {
     const load = dayLoads[i];
     const cap = capacity[i];
-    const running = runningByDay.get(toDayKey(d)) ?? 0;
-    const asked = cap.crewed + cap.waiting;
     const pct = Math.round(cap.pct);
-    // A closed day still shows what landed on it — that is the case
-    // for overtime — but muted, so it never reads as normal capacity.
+    // A closed day still shows what landed on it — that is the case for
+    // overtime — but muted, so it never reads as normal capacity.
     const band = cap.working ? cap.band : 'closed';
-    // One scale for the three pieces: the bar is as long as the
-    // larger of the asked and the available, so the capacity mark
-    // stays put and anything past it is over.
-    const scale = Math.max(asked, cap.capacity) || 1;
-    const wide = axis.widths[i] >= 104;
+    const day = toDayKey(d);
     const title = [
-      `${formatShortDay(d)} — ${cap.past ? 'booked as output' : 'asked of the crews'}`,
-      `${cap.crewed.toFixed(1)} h ${cap.past ? 'booked' : 'with people on it'}` +
-        (cap.waiting > 0 ? ` + ${cap.waiting.toFixed(1)} h of orders with nobody on them yet` : ''),
+      `${formatShortDay(d)} — asked of the crews`,
+      `${cap.crewed.toFixed(1)} h with people on it` +
+        (cap.waiting > 0 ? `, ${cap.waiting.toFixed(1)} h of orders with nobody on them yet (blue)` : ''),
       `of ${cap.capacity.toFixed(1)} h the crews can work — ${pct}%` +
         (cap.working ? '' : ' · factory closed, needs overtime'),
       ...cap.pools.map((p) =>
@@ -1724,24 +1760,25 @@ export function AssemblyGantt({
     ].join('\n');
     return (
       <div
-        key={i}
-        className={`daycol ${load.working ? '' : 'weekend'} ${load.isToday ? 'today' : ''} ${load.past ? 'past' : ''}`}
+        key={day}
+        className={`daycol ${load.working ? '' : 'weekend'} ${load.isToday ? 'today' : ''} ${load.past ? 'past' : ''} ${orderDay === day ? 'filtered' : ''}`}
         style={{ left: axis.offsets[i], width: axis.widths[i] }}
         title={`${title}\nClick for the orders`}
         onClick={(e) => {
-          // The count narrows the board and the edge resizes the
-          // day; the rest of the cell lists what the day is made of.
+          // The fold chip folds and the edge resizes the day; the rest of
+          // the cell lists what the day is made of.
           if ((e.target as Element).closest('button, .col-resize')) return;
           openDay(
             {
               title: `${formatShortDay(d)} · every line`,
               summary:
-                `${cap.crewed.toFixed(1)} h ${cap.past ? 'booked' : 'with people on it'}` +
-                (cap.waiting > 0 ? ` + ${cap.waiting.toFixed(1)} h with nobody on it yet` : '') +
+                `${cap.crewed.toFixed(1)} h with people on it` +
+                (cap.waiting > 0 ? `, ${cap.waiting.toFixed(1)} h with nobody on it yet` : '') +
                 ` of ${cap.capacity.toFixed(1)} h — ${pct}%`,
               groups: board.groups
                 .filter((g) => cap.lines.has(g.line.key))
                 .map((g) => ({ name: g.line.name, entries: cap.lines.get(g.line.key)!.load.entries })),
+              day,
             },
             { x: e.clientX, y: e.clientY },
           );
@@ -1756,71 +1793,24 @@ export function AssemblyGantt({
               title={`Fold ${span.label} to one column`}
               aria-label={`Fold week ${span.label}`}
             >
-              ◂ {span.label}
+              ◂
             </button>
           )}
           <span className="daycol-date">{formatShortDay(d)}</span>
-          {load.isToday && <b className="today-tag">today</b>}
-          {load.past && <b className="past-tag">done</b>}
-          <b className={`day-load ${band}`}>{pct}%</b>
         </span>
-        <span className="daycol-mid">
-          <span className="day-hours">
-            {wide ? (
-              <>
-                {cap.crewed.toFixed(0)}
-                {cap.waiting > 0 && <em> + {cap.waiting.toFixed(0)}</em>}
-                {' / '}{cap.capacity.toFixed(0)} h
-              </>
-            ) : (
-              <>{asked.toFixed(0)}/{cap.capacity.toFixed(0)}</>
-            )}
-          </span>
-          {/* How many orders run on the day, and the way to narrow
-              the board to them. */}
-          <button
-            className="day-order-filter"
-            aria-label={`Filter orders running on ${toDayKey(d)}`}
-            aria-pressed={orderDay === toDayKey(d)}
-            title={`${running} ${running === 1 ? 'order' : 'orders'} running — select to show only those`}
-            onClick={() => setOrderDay(
-              orderDay === toDayKey(d) ? null : toDayKey(d),
-            )}
-          >
-            {running}
-          </button>
-        </span>
-        {/* Solid: hours with people on them. Dashed: hours of orders
-            nobody is on yet that belong on this day. The tick is
-            what the crews can work; past it is over. */}
-        <span className={`day-meter ${band} ${cap.past ? 'actual' : ''}`}>
-          <i className="crewed" style={{ width: `${(cap.crewed / scale) * 100}%` }} />
-          <i className="waiting" style={{ width: `${(cap.waiting / scale) * 100}%` }} />
-          {asked > cap.capacity && (
-            <i
-              className="over"
-              style={{ left: `${(cap.capacity / scale) * 100}%`, width: `${((asked - cap.capacity) / scale) * 100}%` }}
-            />
-          )}
-          <i className="cap" style={{ left: `${(cap.capacity / scale) * 100}%` }} />
-        </span>
-        {/* Every day is dragged by its own edge, the way the seven
-            columns to the left of it are. */}
-        <DayGrip day={toDayKey(d)} width={axis.widths[i]} />
+        <LoadColumn crewed={cap.crewed} waiting={cap.waiting} capacity={cap.capacity} band={band} label={`${pct}%`} />
+        {/* Every day is dragged by its own edge, the way the seven columns
+            to the left of it are. */}
+        <DayGrip day={day} width={axis.widths[i]} />
       </div>
     );
   };
 
-  /**
-   * A folded week's heading: the week's hours against what its crews can work,
-   * summed from its days, and the way to open it again.
-   */
+  /** A folded week's heading: the week's column, summed from its days. */
   const weekHead = (span: WeekSpan) => {
     const caps = capacity.slice(span.from, span.to);
     const week = weekLoad(caps);
     const pct = Math.round(week.pct);
-    const asked = week.crewed + week.waiting;
-    const scale = Math.max(asked, week.capacity) || 1;
     const dates = `${formatShortDay(span.first)}–${formatShortDay(span.last)}`;
     const left = axis.offsets[span.from];
     const width = axis.offsets[span.to] - left;
@@ -1832,7 +1822,7 @@ export function AssemblyGantt({
         title={
           `${span.label} · ${dates}\n` +
           `${week.crewed.toFixed(1)} h with people on it` +
-          (week.waiting > 0 ? ` + ${week.waiting.toFixed(1)} h with nobody on it yet` : '') +
+          (week.waiting > 0 ? `, ${week.waiting.toFixed(1)} h with nobody on it yet (blue)` : '') +
           ` of ${week.capacity.toFixed(1)} h the crews can work — ${pct}%\nClick for the orders`
         }
         onClick={(e) => {
@@ -1842,7 +1832,7 @@ export function AssemblyGantt({
               title: `${span.label} · ${dates} · every line`,
               summary:
                 `${week.crewed.toFixed(1)} h with people on it` +
-                (week.waiting > 0 ? ` + ${week.waiting.toFixed(1)} h with nobody on it yet` : '') +
+                (week.waiting > 0 ? `, ${week.waiting.toFixed(1)} h with nobody on it yet` : '') +
                 ` of ${week.capacity.toFixed(1)} h — ${pct}%`,
               groups: board.groups
                 .filter((g) => caps.some((c) => c.lines.has(g.line.key)))
@@ -1865,24 +1855,8 @@ export function AssemblyGantt({
           >
             {span.label} ▸
           </button>
-          <b className={`day-load ${week.band}`}>{pct}%</b>
         </span>
-        <span className="daycol-mid">
-          <span className="day-hours">
-            {asked.toFixed(0)}/{week.capacity.toFixed(0)} h
-          </span>
-        </span>
-        <span className={`day-meter ${week.band}`}>
-          <i className="crewed" style={{ width: `${(week.crewed / scale) * 100}%` }} />
-          <i className="waiting" style={{ width: `${(week.waiting / scale) * 100}%` }} />
-          {asked > week.capacity && (
-            <i
-              className="over"
-              style={{ left: `${(week.capacity / scale) * 100}%`, width: `${((asked - week.capacity) / scale) * 100}%` }}
-            />
-          )}
-          <i className="cap" style={{ left: `${(week.capacity / scale) * 100}%` }} />
-        </span>
+        <LoadColumn crewed={week.crewed} waiting={week.waiting} capacity={week.capacity} band={week.band} label={`${pct}%`} />
       </div>
     );
   };
@@ -2160,6 +2134,11 @@ export function AssemblyGantt({
           detail={dayDetail.detail}
           at={dayDetail.at}
           onClose={closeDay}
+          filteredDay={orderDay}
+          onFilter={(day) => {
+            setOrderDay(day);
+            closeDay();
+          }}
           onPick={(jobId) => {
             select(jobId);
             closeDay();

@@ -20,6 +20,7 @@ import {
 } from '@/domain/assembly';
 import type { OrderRow } from '@/engine/assembly/board';
 import { isWeekend, startOfDay } from '@/engine/assembly/dates';
+import { remainingHours } from '@/engine/assembly/duration';
 import { loadBand, type LoadBand } from '@/engine/assembly/workload';
 import { toDayKey } from '@/lib/time';
 import { lineDayLoads, type LineDayLoad } from './boardView';
@@ -203,4 +204,88 @@ export function capacityDays(
       unpooled: shared.unpooled,
     };
   });
+}
+
+/** One crew's share of the hours still on the board, and how long it needs. */
+export interface PoolHours {
+  id: string;
+  name: string;
+  people: number;
+  /** Hours on its lines; a line two crews share is split by headcount. */
+  hours: number;
+  /** What the crew can work in a day: people × a productive shift. */
+  perDay: number;
+  /** Working days to clear its hours at that; null with nobody in it. */
+  days: number | null;
+  lines: { key: LineKey; hours: number; shared: boolean }[];
+}
+
+export interface BoardHours {
+  /** Every standard hour still to run on the assembly lines. */
+  total: number;
+  pools: PoolHours[];
+  /** Lines no crew lists, and their hours — counted in `total`, not in any crew. */
+  unpooled: { key: LineKey; hours: number }[];
+  /** What every crew together can work in a day. */
+  perDay: number;
+  /** Working days for every crew together to clear the pooled hours. */
+  days: number | null;
+}
+
+/**
+ * Hours on the board, read against the crews on Crew capacity.
+ *
+ * The board's total used to be broken down line by line against whoever was
+ * planned on each line — a count that is not the crew the supervisor set, so
+ * the two figures side by side on the header disagreed. This reads the same
+ * hours against the same crews the day columns are measured with. A line two
+ * crews share is split between them by headcount: over a queue of days that
+ * is how the help it gets evens out.
+ */
+export function boardHours(rows: readonly OrderRow[], pools: readonly CrewPool[]): BoardHours {
+  const byLine = new Map<LineKey, number>();
+  for (const row of rows) {
+    if (!row.line.schedulable) continue;
+    const lane = rootLineKey(row.line.key);
+    byLine.set(lane, (byLine.get(lane) ?? 0) + remainingHours(row.job));
+  }
+  const out: PoolHours[] = pools.map((p) => ({
+    id: p.id,
+    name: p.name,
+    people: p.people,
+    hours: 0,
+    perDay: p.people * PRODUCTIVE_HOURS_PER_PERSON,
+    days: null,
+    lines: [],
+  }));
+  const unpooled: { key: LineKey; hours: number }[] = [];
+  let total = 0;
+  for (const [key, hours] of byLine) {
+    total += hours;
+    if (hours <= 0) continue;
+    const mine = pools.map((p, i) => (p.lines.includes(key) ? i : -1)).filter((i) => i >= 0);
+    if (mine.length === 0) {
+      unpooled.push({ key, hours });
+      continue;
+    }
+    const heads = mine.reduce((n, i) => n + pools[i].people, 0);
+    for (const i of mine) {
+      const share = heads > 0 ? (hours * pools[i].people) / heads : hours / mine.length;
+      out[i].hours += share;
+      out[i].lines.push({ key, hours: share, shared: mine.length > 1 });
+    }
+  }
+  for (const p of out) {
+    p.days = p.perDay > 0 ? p.hours / p.perDay : null;
+    p.lines.sort((a, b) => b.hours - a.hours);
+  }
+  const perDay = out.reduce((n, p) => n + p.perDay, 0);
+  const pooled = out.reduce((n, p) => n + p.hours, 0);
+  return {
+    total,
+    pools: out,
+    unpooled: unpooled.sort((a, b) => b.hours - a.hours),
+    perDay,
+    days: perDay > 0 ? pooled / perDay : null,
+  };
 }

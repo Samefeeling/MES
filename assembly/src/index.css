@@ -3716,3 +3716,95 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
   border-top: 0;
 }
 .shortage-report tr.short-group th span { margin-left: 8px; color: var(--muted); font-weight: 600; text-transform: none; }
+
+/*
+ * Load as columns. Every day heading, folded week and folded line cell is one
+ * column as tall as its load: solid in the band's colour for hours with people
+ * on them, blue on top for orders nobody is on yet, and past capacity a tick
+ * where capacity sits. No numbers in the heading — the column is the reading,
+ * and its hover and its click carry the figures.
+ */
+.load-col {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  bottom: 2px;
+  border-radius: 2px 2px 0 0;
+  background: rgb(15 23 42 / 6%);
+  overflow: hidden;
+  pointer-events: none;
+}
+.load-col i { position: absolute; left: 0; right: 0; }
+.load-col .lc-crewed { bottom: 0; background: var(--head-ok-bar); }
+.load-col.orange .lc-crewed { background: var(--head-warn-bar); }
+.load-col.red .lc-crewed { background: var(--head-error-bar); }
+.load-col.closed .lc-crewed,
+.load-col.idle .lc-crewed { background: #94a3b8; }
+.load-col .lc-waiting { background: #60a5fa; }
+.load-col .lc-cap { height: 0; border-top: 2px solid #0f172a; }
+.load-col .lc-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 1px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #0f172a;
+  text-shadow: 0 0 2px #fff, 0 0 2px #fff;
+}
+
+/* The day heading: the date over its column. */
+.assy-head .daycol .daycol-top { top: 1px; left: 2px; right: 2px; gap: 1px; justify-content: center; }
+.assy-head .daycol .daycol-date { font-size: 11px; font-weight: 700; letter-spacing: -0.3px; }
+.assy-head .daycol .load-col { top: 17px; }
+.assy-head .daycol.today .daycol-date { color: var(--head-tx); text-decoration: underline 2px; text-underline-offset: 2px; }
+.assy-head .daycol.filtered { box-shadow: inset 0 0 0 2px var(--head-tx); }
+.assy-head .week-fold { padding: 0 2px; font-size: 9.5px; line-height: 13px; }
+.assy-head .weekcol .daycol-top { justify-content: center; }
+
+/* A folded line's cells: the column behind, the figures over it. */
+.aline-day {
+  border: 0;
+  background: transparent;
+  margin: 0;
+}
+.aline-day .load-col { top: 0; bottom: 0; left: 2px; right: 2px; background: rgb(15 23 42 / 4%); }
+.aline-day .load-col .lc-crewed { opacity: 0.55; }
+.aline-day .load-col .lc-waiting { opacity: 0.55; }
+.aline-figures {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.1;
+  font-size: 10px;
+}
+.aline-figures b { color: var(--text); font-weight: 750; }
+.aline-day .aline-wait {
+  padding: 0;
+  border: 0;
+  color: #1d4ed8;
+  font-weight: 750;
+}
+.aline-day.week { border-left: 2px solid var(--border); }
+
+.day-detail-filter {
+  margin: 0 0 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.board-hours .pool-row th { font-weight: 750; }
+.board-hours .pool-line th { padding-left: 14px; font-weight: 500; color: var(--muted); }
+.board-hours .pool-line td { color: var(--muted); }
+.board-hours .pool-row.none th { color: #b45309; }
+.board-hours .pool-row.total th,
+.board-hours .pool-row.total td { border-top: 2px solid var(--border-strong, var(--border)); font-weight: 750; }
+.metric-panel:has(.board-hours) { width: min(440px, calc(100vw - 32px)); max-height: 70vh; }

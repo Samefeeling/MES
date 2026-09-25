@@ -24,10 +24,19 @@ plan goes back the other way, into the `ASSY_Production` list.
   Date · Team, beside the day grid with a draggable bar. Start is
   Epicor's own scheduled start, to the hour; any date column can be hidden to
   make room.
-- **A load histogram along the top** — one bar per day, hours booked against
-  the hours the shift can deliver, so the week reads as a shape before anyone
-  reads a number. Green below 80%, orange to 90%, red beyond. Drag a bar to a
-  greener day to level the week.
+- **A load histogram along the top** — each day heading *is* a column, as
+  tall as the hours asked of the crews are against what the crews on Crew
+  capacity can work: solid for hours with people on them, blue on top for
+  orders nobody is on yet, a tick at capacity when it is over. Green below 80%,
+  orange to 90%, red beyond. Day columns open at 44 px, the narrowest that
+  still carries a date; drag a day's edge to widen it. Click a day for its
+  orders — and from there, to narrow the board to the orders running that day.
+- **Folded lines read the same way** — a folded line's cell is its own column:
+  its hours against what its crews can work that day, the hours with people on
+  them in black and those waiting for a crew in blue.
+- **Hours on board** is read against the same crews: each crew's hours, what
+  its people can work in a day and the working days that makes (a line two
+  crews share is split by headcount), with the total in days on the header.
 - **The board opens on today** — there is no column for the previous working
   day; it was seldom read and cost a day of width on every screen. What the
   last shift booked is still in each order's detail and on the KPI page.

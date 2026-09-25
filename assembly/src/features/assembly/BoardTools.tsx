@@ -51,6 +51,7 @@ import {
 } from './boardView';
 import { shortageReport } from './shortageReport';
 import { ShortageDetail } from './ShortageDetail';
+import { boardHours, type BoardHours } from './crewCapacity';
 import { overdueOrders } from './overdue';
 import { OverdueDetail } from './OverdueDetail';
 import { TIMELINE_MIN_WEEKS, weekKeyOf } from './weekFold';
@@ -147,6 +148,9 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
     keys.add(weekKeyOf(addCalendarDays(board.horizonStart, span - 1)));
     return [...keys];
   }, [board]);
+
+  // Hours on board, read against the same crews as Crew capacity.
+  const hours = useMemo(() => boardHours(allRows, crewPools), [allRows, crewPools]);
 
   if (!board || !team || !shortages) return null;
   const hidden = DATE_COLS.filter((key) => !dateCols[key]);
@@ -299,11 +303,16 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
           name="load"
           className="board-load"
           label="Hours on board"
-          value={`${board.totals.remainingHours.toFixed(0)} h`}
-          title="Standard hours still to run across every scheduled order — line by line"
+          value={
+            <>
+              {hours.total.toFixed(0)} h
+              {hours.days != null && <i> · {hours.days.toFixed(1)} d</i>}
+            </>
+          }
+          title="Standard hours still to run, and the working days the crews on Crew capacity need to clear them — crew by crew"
           open={openPanel}
           onOpen={setOpenPanel}
-          detail={() => <BoardLoadDetail board={board} />}
+          detail={() => <BoardLoadDetail hours={hours} board={board} />}
         />
         {/* What has to go out before the board is next looked at. Late orders
             are in it: one due last Tuesday is not less urgent than one due
@@ -369,33 +378,59 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
 }
 
 /**
- * Where the hours on the board actually are.
+ * Where the hours on the board actually are, against the crews that work them.
  *
- * The total answers "is this week heavy?" and nothing else; the question it
- * always leads to is which line is carrying it. Heaviest first, with the crew
- * on each and how long that crew needs to clear it — a line with 80 hours and
- * six people is not the same board as a line with 80 hours and one.
+ * Read with the same crews as Crew capacity and the day columns, so the three
+ * cannot disagree: each crew's hours, what it can work in a day, and how many
+ * working days that is. The lines under each crew say where its hours are.
  */
-function BoardLoadDetail({ board }: { board: AssemblyGanttView }) {
-  const lines = board.groups
-    .filter((group) => group.line.schedulable && group.load.hours > 0)
-    .sort((a, b) => b.load.hours - a.load.hours);
-  if (lines.length === 0) return <MetricNote>Nothing left to run on any line.</MetricNote>;
+function BoardLoadDetail({ hours, board }: { hours: BoardHours; board: AssemblyGanttView }) {
+  const nameOf = new Map(board.groups.map((g) => [g.line.key, g.line.name]));
+  const name = (key: LineKey) => nameOf.get(key) ?? key;
+  if (hours.total <= 0) return <MetricNote>Nothing left to run on any line.</MetricNote>;
   return (
     <>
-      <MetricNote>Standard hours still to run, heaviest line first.</MetricNote>
-      <table className="metric-table">
+      <MetricNote>
+        Standard hours still to run, by the crews on Crew capacity — each crew’s hours against the{' '}
+        {PRODUCTIVE_HOURS_PER_PERSON} h a day each of its people can work. A line two crews share is
+        split between them by headcount.
+      </MetricNote>
+      <table className="metric-table board-hours">
         <tbody>
-          {lines.map((group) => (
-            <tr key={group.line.key}>
-              <th title={group.line.fullName ?? group.line.name}>{group.line.name}</th>
-              <td>{group.load.hours.toFixed(0)} h</td>
-              <td title={`${group.load.crew} on the line`}>{group.load.crew || '—'} crew</td>
-              <td title="Working days to clear the queue at that crew">
-                {group.load.daysOfWork == null ? '—' : `${group.load.daysOfWork.toFixed(1)} d`}
+          {hours.pools.map((p) => [
+            <tr key={p.id} className="pool-row">
+              <th>{p.name}</th>
+              <td>{p.hours.toFixed(0)} h</td>
+              <td title={`${p.people} × ${PRODUCTIVE_HOURS_PER_PERSON} h`}>
+                {p.people} people · {p.perDay.toFixed(0)} h/d
               </td>
+              <td title="Working days for this crew to clear its hours">
+                {p.days == null ? '—' : `${p.days.toFixed(1)} d`}
+              </td>
+            </tr>,
+            ...p.lines.map((l) => (
+              <tr key={`${p.id}-${l.key}`} className="pool-line">
+                <th>{name(l.key)}{l.shared ? ' (shared)' : ''}</th>
+                <td>{l.hours.toFixed(0)} h</td>
+                <td />
+                <td />
+              </tr>
+            )),
+          ])}
+          {hours.unpooled.map((l) => (
+            <tr key={`none-${l.key}`} className="pool-row none">
+              <th title="No crew on Crew capacity lists this line">{name(l.key)} — no crew</th>
+              <td>{l.hours.toFixed(0)} h</td>
+              <td />
+              <td />
             </tr>
           ))}
+          <tr className="pool-row total">
+            <th>All crews</th>
+            <td>{hours.total.toFixed(0)} h</td>
+            <td>{hours.perDay.toFixed(0)} h/d</td>
+            <td>{hours.days == null ? '—' : `${hours.days.toFixed(1)} d`}</td>
+          </tr>
         </tbody>
       </table>
     </>

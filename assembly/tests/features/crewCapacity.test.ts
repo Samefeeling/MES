@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { OrderRow } from '@/engine/assembly/board';
 import { DEFAULT_CREW_POOLS, type LineKey } from '@/domain/assembly';
-import { capacityDays, shareDay } from '@/features/assembly/crewCapacity';
+import { boardHours, capacityDays, shareDay } from '@/features/assembly/crewCapacity';
 
 const demand = (entries: [string, number][]) => new Map(entries as [LineKey, number][]);
 
@@ -82,5 +82,33 @@ describe('the banner is the sum of the lines', () => {
     expect(monday.lines.get('ASSY' as LineKey)?.load.unstaffedHours).toBe(15);
     const lineTotal = [...monday.lines.values()].reduce((s, l) => s + l.load.hours + l.load.unstaffedHours, 0);
     expect(lineTotal).toBe(monday.crewed + monday.waiting);
+  });
+});
+
+describe('hours on the board, against the crews', () => {
+  const r = (line: string, hours: number, schedulable = true) =>
+    ({
+      line: { key: line, schedulable },
+      job: { laborHrs: hours, remainingQty: 1, completedQty: 0 },
+    }) as never;
+  const pools = [
+    { id: 'u', name: 'Upholstery', lines: ['UPL_CUT_SEW', 'UPL_GLUING'], people: 4 },
+    { id: 'a', name: 'Assembly', lines: ['ASSY', 'UPL_GLUING'], people: 2 },
+  ] as never;
+
+  it('reads each crew’s hours against its people, splitting a shared line by headcount', () => {
+    const got = boardHours(
+      [r('UPL_CUT_SEW', 30), r('UPL_GLUING', 30), r('ASSY', 15), r('GENERAL', 5), r('PMD', 99, false)],
+      pools,
+    );
+    expect(got.total).toBe(80);
+    const [u, a] = got.pools;
+    expect(u.hours).toBeCloseTo(50, 6); // 30 own + 4/6 of 30
+    expect(u.perDay).toBe(30);
+    expect(u.days).toBeCloseTo(50 / 30, 6);
+    expect(a.hours).toBeCloseTo(25, 6); // 15 own + 2/6 of 30
+    expect(got.unpooled).toEqual([{ key: 'GENERAL', hours: 5 }]);
+    expect(got.perDay).toBe(45);
+    expect(got.days).toBeCloseTo(75 / 45, 6);
   });
 });

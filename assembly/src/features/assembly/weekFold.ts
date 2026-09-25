@@ -20,7 +20,7 @@ import { loadBand, type LoadBand } from '@/engine/assembly/workload';
 import { toDayKey } from '@/lib/time';
 
 /** How wide a folded week is, whatever days it has on screen. */
-export const FOLDED_WEEK_PX = 132;
+export const FOLDED_WEEK_PX = 56;
 /** This week and the next open by default; every week after them folds. */
 export const OPEN_WEEKS_BY_DEFAULT = 2;
 /** Weeks the timeline reaches at least, now that later weeks cost one column. */
