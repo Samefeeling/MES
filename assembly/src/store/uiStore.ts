@@ -97,15 +97,16 @@ export type ColumnKey = (typeof COLUMN_KEYS)[number];
 export type ColumnWidths = Record<ColumnKey, number>;
 
 export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
-  // Wide enough to hold the description that now carries the emphasis, and the
-  // line's roster which right-aligns into it rather than spilling over the
-  // schedule.
-  order: 300,
-  qty: 58,
-  hours: 82,
-  start: 62,
-  due: 62,
-  expect: 62,
+  // Half what it used to open at: the order number and the start of the
+  // description, with the schedule getting the room. Drag it out to read more.
+  order: 150,
+  // Just the figure. Headings and dates that need more are clipped; the
+  // tooltip and a drag give the rest.
+  qty: 40,
+  hours: 40,
+  start: 40,
+  due: 40,
+  expect: 40,
   team: 172,
 };
 
@@ -119,11 +120,11 @@ export const COLUMN_LIMITS: Record<ColumnKey, { min: number; max: number }> = {
   // the one a plant genuinely wants to pull out wide. Its ceiling is high
   // enough to read as "drag it as far as you like".
   order: { min: 120, max: 1000 },
-  qty: { min: 46, max: 200 },
-  hours: { min: 58, max: 220 },
-  start: { min: 48, max: 220 },
-  due: { min: 48, max: 220 },
-  expect: { min: 48, max: 220 },
+  qty: { min: 32, max: 200 },
+  hours: { min: 32, max: 220 },
+  start: { min: 32, max: 220 },
+  due: { min: 32, max: 220 },
+  expect: { min: 32, max: 220 },
   team: { min: 96, max: 460 },
 };
 

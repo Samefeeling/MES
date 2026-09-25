@@ -928,12 +928,12 @@ button {
 .assy {
   /* Anchors the day-stripe layer below. */
   position: relative;
-  --order-w: 200px;
-  --qty-w: 58px;
-  --hours-w: 82px;
-  --start-w: 62px;
-  --due-w: 62px;
-  --expect-w: 62px;
+  --order-w: 150px;
+  --qty-w: 40px;
+  --hours-w: 40px;
+  --start-w: 40px;
+  --due-w: 40px;
+  --expect-w: 40px;
   --team-w: 172px;
   font-size: 12px;
 }
@@ -1282,6 +1282,37 @@ body.col-resizing {
 }
 .acell.date.expect.green { color: var(--ok); }
 .acell.date.expect.red { color: var(--error); }
+/*
+ * Qty, Hours and the dates open 40 px wide: the figure and nothing else. The
+ * cell's side padding goes and nothing wraps, so "29.0 h" stays one line; a
+ * heading's − sits under its word, and a date's sort arrow shows only on the
+ * column being sorted by.
+ */
+.acell.qty,
+.acell.hours,
+.acell.date {
+  padding-left: 2px;
+  padding-right: 2px;
+  white-space: nowrap;
+}
+.assy-head .acell.qty,
+.assy-head .acell.hours,
+.assy-head .date-head {
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  font-size: 11px;
+  letter-spacing: -0.2px;
+}
+.assy-head .date-head .date-sort {
+  gap: 1px;
+  padding: 0 3px;
+  border-radius: 4px;
+  line-height: 16px;
+}
+.date-head .date-sort:not(.active) span {
+  display: none;
+}
 .acell.team {
   width: var(--team-w);
   flex: 0 0 var(--team-w);
