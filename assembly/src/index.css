@@ -928,7 +928,7 @@ button {
 .assy {
   /* Anchors the day-stripe layer below. */
   position: relative;
-  --order-w: 150px;
+  --order-w: 500px;
   --qty-w: 40px;
   --hours-w: 40px;
   --start-w: 40px;
@@ -1677,46 +1677,12 @@ body.col-resizing {
  * Today is bracketed by its two edges and the shift clock that runs down it,
  * not filled: a wash across the whole column — widest of all at a high zoom —
  * sat over the short bars that live around today and made them hard to pick
- * out. The edges and the now-line mark the day without touching the work in it.
+ * out. The edges mark the day without touching the work in it.
  */
 .stripe.today {
   box-shadow:
     inset 1px 0 0 rgba(37, 99, 235, 0.35),
     inset -1px 0 0 rgba(37, 99, 235, 0.35);
-}
-
-/*
- * Where the shift has got to, drawn across today's column between 07:00 and
- * 15:30 and nudged on every five minutes. Above the bars — the whole point is
- * to see which of them the shift should have reached by now.
- */
-/*
- * The line itself takes no pointer events. It runs the full height of the
- * board above every bar, so the two pixels it occupies were two pixels of
- * every bar it crossed that could not be grabbed — and today's column, where
- * it always is, is exactly where the short orders sit. Its marker keeps the
- * tooltip: a hover target belongs on the head of the line, not down its whole
- * length.
- */
-.now-line {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  margin-left: -1px;
-  z-index: 6;
-  background: #ef4444;
-  pointer-events: none;
-}
-.now-line::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -3px;
-  border: 4px solid transparent;
-  border-top-color: #ef4444;
-  pointer-events: auto;
-  cursor: help;
 }
 
 .crew-window-editor {

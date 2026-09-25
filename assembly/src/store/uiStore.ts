@@ -97,9 +97,8 @@ export type ColumnKey = (typeof COLUMN_KEYS)[number];
 export type ColumnWidths = Record<ColumnKey, number>;
 
 export const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
-  // Half what it used to open at: the order number and the start of the
-  // description, with the schedule getting the room. Drag it out to read more.
-  order: 150,
+  // Room for the order number, the whole description and a line's roster.
+  order: 500,
   // Just the figure. Headings and dates that need more are clipped; the
   // tooltip and a drag give the rest.
   qty: 40,
@@ -387,7 +386,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   showWeekends: false,
   weekView: false,
   weekFold: {},
-  orderSort: { key: 'start', direction: 'asc' },
+  // Nearest Due Date at the top of each line: what has to ship next.
+  orderSort: { key: 'due', direction: 'asc' },
 
   // A follow-on pick — a predecessor in the detail itself — comes with no
   // point, and leaves the panel where the reader is already looking.
@@ -495,7 +495,7 @@ export const useUiStore = create<UiState>((set, get) => ({
         ? 'desc' : 'asc',
     },
   })),
-  resetOrderSort: () => set({ orderSort: { key: 'start', direction: 'asc' } }),
+  resetOrderSort: () => set({ orderSort: { key: 'due', direction: 'asc' } }),
   askOvertime: (overtimeRequest) => set({ overtimeRequest }),
   clearOvertime: () => set({ overtimeRequest: null }),
   askClash: (clashRequest) => set({ clashRequest }),

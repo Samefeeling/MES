@@ -38,18 +38,18 @@ describe('board display defaults', () => {
     // nothing on screen saying so, reads as a board that has lost them.
     expect(state.orderDay).toBeNull();
     expect(state.showWeekends).toBe(false);
-    expect(state.orderSort).toEqual({ key: 'start', direction: 'asc' });
+    expect(state.orderSort).toEqual({ key: 'due', direction: 'asc' });
     state.toggleWeekends();
     expect(useUiStore.getState().showWeekends).toBe(true);
     useUiStore.getState().toggleWeekends();
   });
 
-  it('restores earliest-start ordering when Refresh resets a custom sort', () => {
-    useUiStore.getState().changeOrderSort('due');
-    useUiStore.getState().changeOrderSort('due');
-    expect(useUiStore.getState().orderSort).toEqual({ key: 'due', direction: 'desc' });
+  it('restores nearest-Due-Date ordering when Refresh resets a custom sort', () => {
+    useUiStore.getState().changeOrderSort('start');
+    useUiStore.getState().changeOrderSort('start');
+    expect(useUiStore.getState().orderSort).toEqual({ key: 'start', direction: 'desc' });
     useUiStore.getState().resetOrderSort();
-    expect(useUiStore.getState().orderSort).toEqual({ key: 'start', direction: 'asc' });
+    expect(useUiStore.getState().orderSort).toEqual({ key: 'due', direction: 'asc' });
     const snapshot = useUiStore.getState().orderSort;
     useUiStore.getState().resetOrderSort();
     expect(useUiStore.getState().orderSort).not.toBe(snapshot);

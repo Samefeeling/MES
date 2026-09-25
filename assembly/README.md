@@ -48,9 +48,12 @@ plan goes back the other way, into the `ASSY_Production` list.
   week's days share its width, so bars, arrows and drags work through it at a
   coarser scale. The timeline reaches eight weeks at least, further for
   planned work.
-- **A line down today's column** — assembly works **07:00–15:30**, and the
-  marker sits where the shift has got to, nudged on every five minutes. Before
-  07:00 and after 15:30 it rests against the edge of the column.
+- **Lines first, nearest Due Date on top** — the board opens with every line
+  folded to its one summary row; `▶` on a line (or the one in the Order
+  heading, for all of them) opens its orders. While Due soon or a day filter is
+  on, lines open by themselves so the orders asked for are in sight. Inside a
+  line, orders are sorted by Due Date, nearest first; Start or Due in the
+  heading re-sorts and Refresh puts it back.
 - **The head stays put** — the day columns are frozen at the top, and the line
   summaries and their people pin to the left edge, so the board can be scrolled
   in either direction without losing what a row means. The **Order column can

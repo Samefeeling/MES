@@ -23,8 +23,6 @@ import {
   PRODUCTIVE_HOURS_PER_PERSON,
   arrangeLines,
   isVirtualLine,
-  SHIFT_END_HOUR,
-  SHIFT_START_HOUR,
   STEP_NAME,
   WORK_KIND_SHORT,
   rootLineKey,
@@ -34,7 +32,6 @@ import {
 import { capacityDays, type CapacityDay, type LineCapacity } from './crewCapacity';
 import { loadBand } from '@/engine/assembly/workload';
 import { addCalendarDays, isWeekend } from '@/engine/assembly/dates';
-import { shiftColumnFraction } from '@/engine/assembly/shift';
 import { remainingHours } from '@/engine/assembly/duration';
 import {
   boardDayLoads,
@@ -99,9 +96,6 @@ import { jobNumOf } from '@/domain/routing';
 /** The integers from `from` up to, not including, `to`. */
 const range = (from: number, to: number): number[] =>
   Array.from({ length: Math.max(0, to - from) }, (_, k) => from + k);
-
-/** How often the "now" line catches up with the clock. */
-const CLOCK_TICK_MS = 5 * 60 * 1000;
 
 const TIME_FMT = new Intl.DateTimeFormat('en-AU', {
   hour: '2-digit',
@@ -266,12 +260,6 @@ function DayGrip({ day, width }: { day: string; width: number }) {
     />
   );
 }
-
-/** A clock hour as text — 15.5 reads as 15:30. */
-const hourLabel = (h: number): string =>
-  TIME_FMT.format(
-    new Date(2000, 0, 1, Math.floor(h), Math.round((h % 1) * 60)),
-  );
 
 /**
  * The time of day a start falls at. Midnight means there is no hour to show —
@@ -1369,7 +1357,13 @@ export function AssemblyGantt({
   const lineOrder = usePlanStore((s) => s.lineOrder);
   const moveLine = usePlanStore((s) => s.moveLine);
   const unlocked = useSupervisorStore((s) => s.unlocked);
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // The board opens on its lines, one row each, and a line is opened to see
+  // its orders. Only what has been pressed is held here. A line nobody has
+  // pressed is folded — unless a filter is on: that asks for orders, and a
+  // board of folded lines would answer with none of them.
+  const [opened, setOpened] = useState<Record<string, boolean>>({});
+  const filtering = orderDay !== null || dueSoon;
+  const isFolded = (key: string): boolean => !(opened[key] ?? filtering);
   const [dayDetail, setDayDetail] = useState<{
     detail: DayDetailContent;
     at: { x: number; y: number };
@@ -1398,14 +1392,6 @@ export function AssemblyGantt({
     [board],
   );
   const [hoveredJobId, setHoveredJobId] = useState<string | null>(null);
-
-  // The clock behind the "now" line. Five minutes is as fine as the line is
-  // worth reading, and it keeps the board from re-rendering every second.
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(new Date()), CLOCK_TICK_MS);
-    return () => window.clearInterval(id);
-  }, []);
 
   const days = useMemo(() => {
     const calendar = Array.from({ length: spanDays }, (_, i) =>
@@ -1500,7 +1486,7 @@ export function AssemblyGantt({
         // triangle did nothing — the benches are separate groups. Fold them
         // with their parent so the ▶/▼ on Smart Soft Seating or UPHOLSTRY
         // opens and shuts the whole section.
-        !(group.line.parent && collapsed[group.line.parent]) &&
+        !(group.line.parent && isFolded(group.line.parent)) &&
         (!orderDay || group.line.schedulable),
       ).map((group) => ({
         ...group,
@@ -1517,7 +1503,7 @@ export function AssemblyGantt({
         // of them — this used to throw that away and count the filtered rows.
         total: group.rows.length,
       })),
-    [orderedGroups, visibleIds, hiddenLines, orderDay, lineOrder, collapsed],
+    [orderedGroups, visibleIds, hiddenLines, orderDay, lineOrder, opened, filtering],
   );
   const visibleRows = useMemo(
     () => visibleGroups.flatMap((group) => group.rows),
@@ -1528,7 +1514,7 @@ export function AssemblyGantt({
   // says nothing false.
   const allFolded =
     visibleGroups.length > 0 &&
-    visibleGroups.every((group) => collapsed[group.line.key]);
+    visibleGroups.every((group) => isFolded(group.line.key));
   const markedIds = useMemo(() => new Set(marked), [marked]);
   /*
    * The marked set and where each of its bars is drawn, so dragging any one of
@@ -1730,13 +1716,6 @@ export function AssemblyGantt({
     return showWeekends ? calendar : calendar.filter((load) => load.working);
   }, [allRows, board, showWeekends, spanDays]);
 
-  // Where the shift has got to, as a fraction of today's column.
-  const todayIndex = dayLoads.findIndex((load) => load.isToday);
-  const nowOffset =
-    todayIndex < 0
-      ? null
-      : axis.x(todayIndex + shiftColumnFraction(now));
-
   /** One day's heading: a column as tall as the day is full. */
   const dayHead = (d: Date, i: number, span: WeekSpan) => {
     const load = dayLoads[i];
@@ -1932,19 +1911,6 @@ export function AssemblyGantt({
         ))}
       </div>
 
-      {/* Where the shift has got to. Its own layer, above the bars: the point
-          is to see which of them today should have reached by now. */}
-      {nowOffset !== null && (
-        <div
-          className="now-line"
-          style={{ left: labelWidth + nowOffset }}
-          title={
-            `Now — ${TIME_FMT.format(now)} · the shift runs ` +
-            `${hourLabel(SHIFT_START_HOUR)}–${hourLabel(SHIFT_END_HOUR)}`
-          }
-        />
-      )}
-
       <DragTimeGuide horizonStart={board.horizonStart} labelWidth={labelWidth} />
       <DependencyArrows
         root={root}
@@ -1967,12 +1933,12 @@ export function AssemblyGantt({
                 type="button"
                 className="fold-all"
                 onClick={() =>
-                  setCollapsed(
-                    allFolded
-                      ? {}
-                      : Object.fromEntries(
-                          visibleGroups.map((group) => [group.line.key, true]),
-                        ),
+                  // Opening opens the benches under a lane too, which are
+                  // not on screen while their lane is folded.
+                  setOpened(
+                    Object.fromEntries(
+                      orderedGroups.map((group) => [group.line.key, allFolded]),
+                    ),
                   )
                 }
                 aria-expanded={!allFolded}
@@ -2096,14 +2062,14 @@ export function AssemblyGantt({
           colWidths={colWidths}
           visibleDates={visibleDates}
           showWeekends={showWeekends}
-          collapsed={Boolean(collapsed[group.line.key])}
+          collapsed={isFolded(group.line.key)}
           lineRows={rowsByLine.get(group.line.key) ?? []}
           dates={days}
           capacity={capacity}
           spans={spans}
           labelWidth={labelWidth}
           onOpenDay={openDay}
-          onToggle={() => setCollapsed((current) => ({ ...current, [group.line.key]: !current[group.line.key] }))}
+          onToggle={() => setOpened((current) => ({ ...current, [group.line.key]: isFolded(group.line.key) }))}
           onHide={() => toggleLine(group.line.key)}
           onClose={
             unlocked && isVirtualLine(group.line.key)
