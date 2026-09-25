@@ -148,7 +148,7 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
   // widens instead, and only a window too small for even the widest scrolls.
   useLayoutEffect(() => {
     const el = panel.current;
-    if (!el || !selectedAt) return setPlace(null);
+    if (!el || !selectedJobId) return setPlace(null);
 
     const roomW = window.innerWidth - PANEL_GAP * 2;
     const roomH = window.innerHeight - PANEL_GAP * 2;
@@ -175,8 +175,13 @@ export function AssemblyInspector({ board }: { board: AssemblyGanttView }) {
     setPlace({
       width,
       height,
-      left: clamp(selectedAt.x + PANEL_GAP, PANEL_GAP, roomW + PANEL_GAP - width),
-      top: clamp(selectedAt.y - PANEL_GAP * 3, PANEL_GAP, roomH + PANEL_GAP - boxH),
+      // Beside the click; with no click to open beside, in the middle.
+      left: selectedAt
+        ? clamp(selectedAt.x + PANEL_GAP, PANEL_GAP, roomW + PANEL_GAP - width)
+        : Math.max(PANEL_GAP, (window.innerWidth - width) / 2),
+      top: selectedAt
+        ? clamp(selectedAt.y - PANEL_GAP * 3, PANEL_GAP, roomH + PANEL_GAP - boxH)
+        : Math.max(PANEL_GAP, (window.innerHeight - boxH) / 2),
     });
   }, [selectedAt, selectedJobId, row]);
 

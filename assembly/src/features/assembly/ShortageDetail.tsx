@@ -59,7 +59,10 @@ export function ShortageDetail({
             // made here — a supplier can be chased; our own orders are the
             // board's schedule.
             (i === 0 || report.parts[i - 1].purchased !== p.purchased) && (
-              <tr key={`group-${String(p.purchased)}`} className="short-group">
+              <tr
+                key={`group-${String(p.purchased)}`}
+                className={`short-group ${p.purchased ? 'purchased' : 'made'}`}
+              >
                 <th colSpan={4}>
                   {p.purchased ? 'Purchased' : 'Made in-house'}
                   <span>
@@ -68,7 +71,10 @@ export function ShortageDetail({
                 </th>
               </tr>
             ),
-            <tr key={p.part} className={p.uncovered > 0 ? 'uncovered' : undefined}>
+            <tr
+              key={p.part}
+              className={`${p.purchased ? 'purchased' : 'made'}${p.uncovered > 0 ? ' uncovered' : ''}`}
+            >
               <td>
                 <span className="short-part">{p.part}</span>
                 {p.description && <span className="short-desc">{p.description}</span>}

@@ -29,6 +29,17 @@ describe('single employee picker', () => {
     expect(useUiStore.getState().crewPickerJobId).toBeNull();
     expect(useUiStore.getState().selectedJobId).toBe('JOB-2');
   });
+
+  it('opens an order picked from a list in the middle, not where the last one was', () => {
+    useUiStore.getState().select('JOB-1', { x: 10, y: 20 });
+    // A follow-on pick with no point keeps the panel where it is.
+    useUiStore.getState().select('JOB-2');
+    expect(useUiStore.getState().selectedAt).toEqual({ x: 10, y: 20 });
+    // Null centres it.
+    useUiStore.getState().select('JOB-3', null);
+    expect(useUiStore.getState().selectedJobId).toBe('JOB-3');
+    expect(useUiStore.getState().selectedAt).toBeNull();
+  });
 });
 
 describe('board display defaults', () => {

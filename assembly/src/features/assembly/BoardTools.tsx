@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import type { AssemblyGanttView, OrderRow } from '@/engine/assembly/board';
+import type { AssemblyGanttView } from '@/engine/assembly/board';
 import {
   DEFAULT_CREW_POOLS,
   LINES,
@@ -44,10 +44,7 @@ import {
   countRunningOrders,
   filteredOrderIds,
   isDueSoon,
-  lineOfWorkerToday,
-  strandedOrders,
   rowsInView,
-  teamSummary,
 } from './boardView';
 import { shortageReport } from './shortageReport';
 import { ShortageDetail } from './ShortageDetail';
@@ -104,17 +101,6 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
     () => board?.groups.flatMap((group) => group.rows) ?? [],
     [board],
   );
-  // The same figure the Team column heading used to carry, worked out the same
-  // way. It is about the whole roster on the whole board, so it belongs with
-  // the other three totals rather than over one column of one table.
-  const team = useMemo(
-    () =>
-      board
-        ? teamSummary(board.workers, allRows, board.today, board.workerOnLeave)
-        : null,
-    [board, allRows],
-  );
-
   /*
    * What the orders on screen are short of. The view is the board's own —
    * lines taken off it and the date filters — so the figure answers for what
@@ -141,7 +127,7 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
   // Hours on board, read against the same crews as Crew capacity.
   const hours = useMemo(() => boardHours(allRows, crewPools), [allRows, crewPools]);
 
-  if (!board || !team || !shortages) return null;
+  if (!board || !shortages) return null;
   const hidden = DATE_COLS.filter((key) => !dateCols[key]);
   const hiddenCols = HIDEABLE_COLS.filter((key) => !cols[key]);
   const allLines = [...LINES, ...virtualLines.map(virtualLineDef)];
@@ -339,21 +325,6 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
           onOpen={setOpenPanel}
           detail={() => <ShortageDetail report={shortages} onDone={() => setOpenPanel(null)} />}
         />
-        <Metric
-          name="crew"
-          className="crew-allocated"
-          label="Crew allocated"
-          value={
-            <>
-              {team.allocated}
-              <i>/{team.total}</i>
-            </>
-          }
-          title="Allocated today / staff on site; includes orders outside the current view"
-          open={openPanel}
-          onOpen={setOpenPanel}
-          detail={() => <CrewDetail board={board} rows={allRows} />}
-        />
         {/* Orders that were not on the board when the day started. It used to
             be a line of small print under Refresh, which is the one place on
             this row it must not be: a count nobody is looking for, tucked under
@@ -418,73 +389,6 @@ function BoardLoadDetail({ hours, board }: { hours: BoardHours; board: AssemblyG
             <td>{hours.perDay.toFixed(0)} h/d</td>
             <td>{hours.days == null ? '—' : `${hours.days.toFixed(1)} d`}</td>
           </tr>
-        </tbody>
-      </table>
-    </>
-  );
-}
-
-/**
- * Who the ratio is about.
- *
- * "11/14" is only half an answer: the useful half is the three names, because
- * they are who can be put on the order somebody is standing there looking at.
- * They were on the hover, which is no use on the touchscreen this board spends
- * most of its life on.
- */
-function CrewDetail({ board, rows }: { board: AssemblyGanttView; rows: OrderRow[] }) {
-  const overrides = usePlanStore((s) => s.workerLines);
-  const team = teamSummary(board.workers, rows, board.today, board.workerOnLeave);
-  const stranded = strandedOrders(rows, board.today);
-  const byLine = lineOfWorkerToday(board.workers, rows, board.today, overrides);
-  // The line's own name, not its key: "UPL-Gluing" is what is written on the
-  // row this panel hangs over, and UPL_GLUING is not.
-  const nameOf = new Map(board.groups.map((group) => [group.line.key, group.line.name]));
-  const free = new Set(team.free.map((worker) => String(worker.id)));
-  const placed = new Map<string, string[]>();
-  // Exactly the people the figure's numerator counts: on site today, and on an
-  // order. Anyone else in the roster belongs to the other half of the ratio.
-  for (const worker of team.attendance) {
-    const id = String(worker.id);
-    if (free.has(id)) continue;
-    const line = byLine.get(id);
-    const label = (line && nameOf.get(line)) ?? line ?? '—';
-    placed.set(label, [...(placed.get(label) ?? []), worker.name]);
-  }
-  return (
-    <>
-      <MetricNote>
-        {team.total === 0
-          ? 'Nobody is on site today.'
-          : `${team.allocated} of ${team.total} on site are on an order today.`}
-      </MetricNote>
-      {team.free.length > 0 && (
-        <p className="metric-free">
-          <b>Free</b> {team.free.map((worker) => worker.name).join(', ')}
-        </p>
-      )}
-      {/* The other half of the roll. Out of the ratio entirely — they are not
-          on site — but the board used to let them leave it without saying so,
-          and whatever they were part-way through is still on the line. */}
-      {team.onLeave.length > 0 && (
-        <p className="metric-free on-leave">
-          <b>On leave</b> {team.onLeave.map((worker) => worker.name).join(', ')}
-          {stranded.length > 0 && (
-            <span>
-              {' '}— nobody on {stranded.map((row) => String(row.job.id)).join(', ')}
-            </span>
-          )}
-        </p>
-      )}
-      <table className="metric-table">
-        <tbody>
-          {[...placed.entries()].map(([line, names]) => (
-            <tr key={line}>
-              <th>{line}</th>
-              <td>{names.length}</td>
-              <td className="metric-names" title={names.join(', ')}>{names.join(', ')}</td>
-            </tr>
-          ))}
         </tbody>
       </table>
     </>

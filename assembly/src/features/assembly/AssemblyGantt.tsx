@@ -2105,7 +2105,9 @@ export function AssemblyGantt({
             closeDay();
           }}
           onPick={(jobId) => {
-            select(jobId);
+            // Centred: the list it was picked from is closing, and the order's
+            // own row may be folded away or off screen.
+            select(jobId, null);
             closeDay();
           }}
         />

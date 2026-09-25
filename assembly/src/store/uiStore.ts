@@ -232,7 +232,8 @@ interface UiState {
   /**
    * Where the pointer was when it was picked. The detail opens there rather
    * than in a fixed column: the supervisor is already looking at that row, and
-   * the schedule keeps the whole width.
+   * the schedule keeps the whole width. Null centres it in the window: an order
+   * picked from a list has no row under the pointer to open beside.
    */
   selectedAt: ClickPoint | null;
   overtimeRequest: OvertimeRequest | null;
@@ -306,8 +307,11 @@ interface UiState {
   /** Sort the displayed rows without changing the scheduler's line sequence. */
   orderSort: OrderSort;
 
-  /** Show an order's detail; `at` moves the panel, omitting it leaves it. */
-  select: (jobId: string | null, at?: ClickPoint) => void;
+  /**
+   * Show an order's detail; `at` moves the panel, null centres it, omitting
+   * it leaves it where it is.
+   */
+  select: (jobId: string | null, at?: ClickPoint | null) => void;
   /** Add or remove one order from the set being moved together. */
   toggleMark: (jobId: string) => void;
   clearMarks: () => void;
@@ -394,7 +398,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   select: (selectedJobId, at) =>
     set((state) => ({
       selectedJobId,
-      selectedAt: at ?? state.selectedAt,
+      selectedAt: at === undefined ? state.selectedAt : at,
       crewPickerJobId: null,
       workerLoadId: null,
     })),
