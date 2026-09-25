@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  readonly VITE_DATA_SOURCE?: 'mock' | 'planning-csv' | 'excel';
+  readonly VITE_DATA_SOURCE?: 'mock' | 'planning-csv';
   readonly VITE_SHAREPOINT_SITE_URL?: string;
   readonly VITE_SHAREPOINT_FILE_PATH?: string;
   readonly VITE_GRAPH_TOKEN?: string;

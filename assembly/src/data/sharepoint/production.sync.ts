@@ -28,7 +28,7 @@
  */
 
 import type { AssemblyGanttView } from '@/engine/assembly/board';
-import type { SharePointConfig } from '@/data/excel/sharepoint.client';
+import type { SharePointConfig } from '@/data/sharepoint/site';
 import type { ProductionEntry } from '@/store/planStore';
 import type { ListItemFields } from './lists.client';
 import {

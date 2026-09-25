@@ -14,7 +14,7 @@ Assembly board is `assembly/`, with its own package.json and lockfile. A
 `git pull` that adds a dependency to either half leaves a tree that looks
 installed and is not, and the symptoms name neither npm nor the missing
 package — `Cannot find module 'node:url'` out of `vite.config.ts` (root
-`@types/node`), or a wall of unresolved `react` / `zustand` / `xlsx`
+`@types/node`), or a wall of unresolved `react` / `zustand`
 imports when `vite` starts (Assembly). `npm run dev` and `npm run build`
 now run `scripts/check-deps.mjs` first, which names the missing packages
 and the command to fix them (`npm install` / `npm run setup:assembly`).

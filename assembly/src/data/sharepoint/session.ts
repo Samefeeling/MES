@@ -1,5 +1,5 @@
 /** Cookie-authenticated REST transport for an app hosted on the SharePoint site. */
-import type { SharePointConfig } from '@/data/excel/sharepoint.client';
+import type { SharePointConfig } from '@/data/sharepoint/site';
 import type { ListItem, ListItemFields } from './lists.write';
 
 import { readableFields, resolveField, writableFields, type ListField } from './fieldMap';

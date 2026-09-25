@@ -16,7 +16,7 @@
 import { WorkerId } from '@/domain/ids';
 import { LINES, type LineKey, type Worker, type WorkKind } from '@/domain/assembly';
 import type { ListItemFields } from './lists.client';
-import type { ParseOutcome } from '@/data/excel/parsers/types';
+import type { ParseOutcome } from '@/data/parsers/types';
 
 /** Column aliases, most-specific first; matched case/separator-insensitively. */
 const COLUMNS = {

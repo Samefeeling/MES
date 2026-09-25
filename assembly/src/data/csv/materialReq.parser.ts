@@ -20,7 +20,7 @@
 import { JobId, PartId } from '@/domain/ids';
 import type { JobMaterialLink } from '@/domain/types';
 import { mapHeaders, parseCsv, type CsvRow } from '@/lib/csv';
-import type { ParseOutcome } from '@/data/excel/parsers/types';
+import type { ParseOutcome } from '@/data/parsers/types';
 
 type Field =
   | 'jobNum'

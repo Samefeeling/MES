@@ -2,7 +2,7 @@
  * Reads a SharePoint list through Microsoft Graph.
  *
  * The operator roster lives in the `ASSY_Operator` list rather than the
- * workbook, so this is separate from `data/excel/sharepoint.client.ts` (which
+ * workbook, so this is separate from `data/sharepoint/site.ts` (which
  * fetches file bytes).
  *
  * The paging itself lives in `lists.write`, which needs the item id to address
@@ -11,7 +11,7 @@
  */
 
 import { ok, err, type Result } from '@/lib/result';
-import type { SharePointConfig } from '@/data/excel/sharepoint.client';
+import type { SharePointConfig } from '@/data/sharepoint/site';
 import { fetchListRows, type ListItemFields } from './lists.write';
 
 export type { ListItemFields };

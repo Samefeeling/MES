@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { erpNamedLine, readLineKey, LINES } from '@/domain/assembly';
 import { parseOperators } from '@/data/sharepoint/operator.parser';
 import { usePlanStore } from '@/store/planStore';
-import { assemblyWorkCenters } from '@/data/excel/parsers/machine.parser';
+import { assemblyWorkCenters } from '@/data/parsers/machine.parser';
 import { manualJob } from '@/domain/manualOrder';
 import { JobId, WorkCenterId } from '@/domain/ids';
 

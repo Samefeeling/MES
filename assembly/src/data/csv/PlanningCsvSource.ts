@@ -26,12 +26,12 @@ import type { Worker } from '@/domain/assembly';
 import {
   assemblyWorkCenters,
   makeMachine,
-} from '@/data/excel/parsers/machine.parser';
+} from '@/data/parsers/machine.parser';
 import { BaseDataSource } from '@/data/DataSource';
 import {
   readConfigFromEnv,
   type SharePointConfig,
-} from '@/data/excel/sharepoint.client';
+} from '@/data/sharepoint/site';
 import { fetchListItems } from '@/data/sharepoint/lists.client';
 import { parseOperators } from '@/data/sharepoint/operator.parser';
 import {

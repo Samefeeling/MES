@@ -1,4 +1,4 @@
-import type { SharePointConfig } from '@/data/excel/sharepoint.client';
+import type { SharePointConfig } from '@/data/sharepoint/site';
 import { sessionRows, sessionCreate, sessionUpdate } from '@/data/sharepoint/session';
 import { CURRENT_PLAN_ID, isDailyPlanId, type PersistedPlan, type PlanRepository, type PlanSummary } from './PlanRepository';
 

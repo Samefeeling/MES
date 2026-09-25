@@ -18,7 +18,7 @@ async function sessionResult<T>(run: () => Promise<T>): Promise<Result<T, WriteE
 import {
   graphSite,
   type SharePointConfig,
-} from '@/data/excel/sharepoint.client';
+} from '@/data/sharepoint/site';
 
 /** One list row: the column values, keyed by internal column name. */
 export type ListItemFields = Record<string, unknown>;

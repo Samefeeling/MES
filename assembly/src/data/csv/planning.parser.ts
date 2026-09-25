@@ -31,7 +31,7 @@ import {
 import { NULL_LINE_ROUTER, type LineRouter } from '@/engine/assembly/lineRouter';
 import { isVisibleMachine } from '@/domain/constants';
 import { mapHeaders, normalizeHeader, parseCsv, type CsvRow } from '@/lib/csv';
-import type { ParseOutcome } from '@/data/excel/parsers/types';
+import type { ParseOutcome } from '@/data/parsers/types';
 
 type Field =
   | 'jobNum'

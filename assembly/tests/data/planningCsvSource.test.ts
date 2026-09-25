@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { PlanningCsvSource } from '@/data/csv/PlanningCsvSource';
-import type { SharePointConfig } from '@/data/excel/sharepoint.client';
+import type { SharePointConfig } from '@/data/sharepoint/site';
 
 const CSV = [
   'JobHead_JobNum,JobHead_PartNum,JobHead_PartDescription,JobHead_Department,JobHead_ProdQty,Calculated_RemainingQty,JobHead_StartDate,JobHead_ReqDueDate,Calculated_LaborHrs,JobOper_ProdStandard',

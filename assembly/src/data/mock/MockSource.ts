@@ -35,7 +35,7 @@ import { readLineKey } from '@/domain/assembly';
 import {
   assemblyWorkCenters,
   makeMachine,
-} from '@/data/excel/parsers/machine.parser';
+} from '@/data/parsers/machine.parser';
 import { isVisibleMachine } from '@/domain/constants';
 import { MS_PER_DAY } from '@/lib/time';
 import { BaseDataSource } from '@/data/DataSource';

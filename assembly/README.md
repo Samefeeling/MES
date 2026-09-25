@@ -293,10 +293,9 @@ Configure via `.env.local` (see `.env.example`):
 | ------------------ | --------- |
 | `mock` (default)   | Bundled `seed.json`. Instant, offline. |
 | `planning-csv`     | Orders from `Planning1.csv`, dependencies from `JobMaterialReq.csv`, people from the `ASSY_Operator` SharePoint list. |
-| `excel`            | Fetch the master workbook from SharePoint (Microsoft Graph) and parse it with SheetJS. Falls back to a manual file upload if Graph isn't configured. |
 
-The Excel source (and the heavy `xlsx` dependency) is **lazy-loaded**, so
-neither the mock nor the CSV build ships the parser.
+There used to be a third source that read the PMD master workbook directly;
+it was not in use and has been removed, along with the `xlsx` package.
 
 Whichever is configured, **Load orders** and **Load JobMaterialReq** in the
 header parse files picked from disk through exactly the same code — the
@@ -387,9 +386,9 @@ this file is optional.
   TABLE only run Final Assembly. UPL runs both Cutting/Sewing and Upholstery, so
   its orders show no type until the column exists.
 
-The CSV carries no inventory, BOM or POs, so under `planning-csv` the material
-engine sees nothing and every order reads as material-OK. Use `excel` when the
-shortage view matters.
+Planning1.csv carries no stock or purchase orders of its own: the shortage
+view reads them from `OnHandInventory.csv` and `PODetail.csv`. Without those
+two, every order reads as material-OK.
 
 ### `ASSY_Operator` → roster
 
@@ -592,26 +591,6 @@ which is how the demo runs.
 > means moving the comparison to a server that holds the secret and returns a
 > session. Until then, do not reuse a password that matters anywhere else.
 
-### Sheet → domain mapping (`excel` source)
-
-| Workbook sheet | Parser | Used for |
-| --- | --- | --- |
-| `planning` | `job.parser` | orders — assembly rows, and moulding jobs for the PMD context row |
-| `ohb` | `inventory.parser` | free-on-hand |
-| `part req` | `bom.parser` | components per order |
-| `po` | `supply.parser` | incoming raw material |
-| `total req` | `demand.parser` | period demand |
-| `resource` | `machine.parser` | which moulding lines' jobs to load |
-
-To drive assembly from the same sheet, add these columns to `planning`
-(`job.parser` reads them when present and defaults every row to moulding
-otherwise): `Department`, `OrderType`, `Priority`, `MaterialStatus`, `Line`,
-`CompletedQty`.
-
-The shift roster is **not** in the workbook — it is the `ASSY_Operator` list
-above. The mock source supplies one; `SharePointExcelSource.fetchWorkers()`
-returns empty.
-
 ## Architecture
 
 A strict one-way dependency flow keeps the core testable and the data source
@@ -626,8 +605,8 @@ domain  →  lib  →  engine  →  store  →  features (UI)
 - **`domain/`** — pure types, branded ids, constants. Zero dependencies.
   `assembly.ts` holds the lines, the three work-order types and the shift
   constants.
-- **`data/`** — the `DataSource` contract with three implementations (`mock`,
-  `csv/PlanningCsvSource`, `excel`). Every parser is lenient and reports what it
+- **`data/`** — the `DataSource` contract with two implementations (`mock`,
+  `csv/PlanningCsvSource`). Every parser is lenient and reports what it
   could not read as a warning rather than failing the load.
 - **`engine/`** — pure, unit-tested functions. Shared: `materialAvailability`,
   `materialExplosion`, `netRequirements`, `indexes`. Assembly:
@@ -718,8 +697,6 @@ both pages can read one source without a second fetch.
   approved for overtime. The arithmetic is in `engine/assembly/dates`.
 - **Mock dates** are anchored to a fixed epoch and shifted forward on load, so
   the demo always reads as the current week.
-- **`xlsx`** is the npm SheetJS build; it carries known advisories and is only
-  loaded for the (trusted, internal) Excel source.
 
 ## MES integration and SharePoint sessions
 

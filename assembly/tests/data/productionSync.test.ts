@@ -16,7 +16,7 @@ import {
   type OrderFacts,
   type ShiftFacts,
 } from '@/data/sharepoint/production.sync';
-import type { SharePointConfig } from '@/data/excel/sharepoint.client';
+import type { SharePointConfig } from '@/data/sharepoint/site';
 import { MockSource } from '@/data/mock/MockSource';
 import { buildIndexes } from '@/engine/indexes';
 import { computeAssemblyGantt } from '@/engine/assembly/board';

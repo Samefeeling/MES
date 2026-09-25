@@ -55,7 +55,7 @@ npm run build          # typecheck + static bundle to dist/, both apps
 changes either package.json.** The repository is two npm packages with two
 lockfiles, so one `npm install` leaves a tree that looks installed and is
 not — which surfaces as `Cannot find module 'node:url'` from
-`vite.config.ts`, or as a wall of unresolved `react` / `zustand` / `xlsx`
+`vite.config.ts`, or as a wall of unresolved `react` / `zustand`
 imports when `vite` starts. `npm run dev` and `npm run build` check for this
 first and print the command to run (`scripts/check-deps.mjs`).
 

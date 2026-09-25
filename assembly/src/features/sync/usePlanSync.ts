@@ -19,7 +19,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AssemblyGanttView } from '@/engine/assembly/board';
-import { readConfigFromEnv } from '@/data/excel/sharepoint.client';
+import { readConfigFromEnv } from '@/data/sharepoint/site';
 import {
   PRODUCTION_LIST,
   orderFactsFromBoard,

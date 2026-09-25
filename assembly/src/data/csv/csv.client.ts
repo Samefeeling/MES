@@ -17,7 +17,7 @@ import { sessionFile } from '@/data/sharepoint/session';
 import {
   graphFile,
   type SharePointConfig,
-} from '@/data/excel/sharepoint.client';
+} from '@/data/sharepoint/site';
 
 let manualCsv: string | null = null;
 let manualJobMaterialCsv: string | null = null;

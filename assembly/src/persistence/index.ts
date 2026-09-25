@@ -3,7 +3,7 @@
  * `VITE_PERSIST_API_URL` is set, otherwise browser localStorage.
  */
 
-import { readConfigFromEnv } from '@/data/excel/sharepoint.client';
+import { readConfigFromEnv } from '@/data/sharepoint/site';
 import { SharePointPlanRepository } from './SharePointPlanRepository';
 import type { PlanRepository } from './PlanRepository';
 import { ApiPlanRepository } from './ApiPlanRepository';

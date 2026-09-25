@@ -16,7 +16,7 @@ import {
   LINES,
 } from '@/domain/assembly';
 import { usePlanStore, POOL_ID, virtualWorkCenters } from '@/store/planStore';
-import { assemblyWorkCenters } from '@/data/excel/parsers/machine.parser';
+import { assemblyWorkCenters } from '@/data/parsers/machine.parser';
 import { manualJob } from '@/domain/manualOrder';
 import { JobId, WorkCenterId } from '@/domain/ids';
 

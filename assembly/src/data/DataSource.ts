@@ -1,7 +1,7 @@
 /**
  * The contract every data source implements. The app talks only to this
- * interface, so the bundled mock and the live SharePoint/Excel source are
- * fully interchangeable (see `data/mock` and `data/excel`).
+ * interface, so the bundled mock and the live SharePoint CSV source are
+ * fully interchangeable (see `data/mock` and `data/csv`).
  */
 
 import type {
@@ -19,7 +19,7 @@ import type { Worker } from '@/domain/assembly';
 import { ok, err, type Result } from '@/lib/result';
 
 export interface DataSource {
-  /** Identifier for diagnostics, e.g. "mock" or "sharepoint-excel". */
+  /** Identifier for diagnostics, e.g. "mock" or "planning-csv". */
   readonly name: string;
 
   /**
