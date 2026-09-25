@@ -1,13 +1,8 @@
 /**
- * Folding the timeline a week at a time.
+ * The timeline a week to a column — the last step of the zoom out.
  *
- * The board used to answer "how far ahead?" with a zoom and a weeks box: zoom
- * out far enough to see two months and no single day can be read or worked;
- * zoom in and the weeks after next fall off the edge. A week folds instead.
- * Open, it is its days, each as wide as it was; folded, it is one narrow
- * column carrying the week's total load. So this week and next can be worked
- * a day at a time while the ones after are read a week at a time — on the
- * same screen, on the same axis.
+ * Past the narrowest day a day column cannot carry its date, so the next step
+ * out is a week: one column carrying the week's total load.
  *
  * A folded week's days are not removed. They share its width, so every bar,
  * arrow and drag keeps working through it, just at a coarser scale.
@@ -21,9 +16,7 @@ import { toDayKey } from '@/lib/time';
 
 /** How wide a folded week is, whatever days it has on screen. */
 export const FOLDED_WEEK_PX = 56;
-/** This week and the next open by default; every week after them folds. */
-export const OPEN_WEEKS_BY_DEFAULT = 2;
-/** Weeks the timeline reaches at least, now that later weeks cost one column. */
+/** Weeks the timeline reaches at least. */
 export const TIMELINE_MIN_WEEKS = 8;
 
 /** The Monday of a date's week, as a day key — the week's identity. */
@@ -57,17 +50,15 @@ export interface WeekSpan {
 
 /**
  * The weeks the drawn days fall into, in order, and whether each is folded:
- * what the reader chose for it, else open for the first
- * `OPEN_WEEKS_BY_DEFAULT` weeks from today and folded after.
+ * what its own heading was set to, else what the zoom says — every week
+ * folded in week view, every week open otherwise.
  */
 export function weekSpans(
   days: readonly Date[],
-  today: Date,
-  choices: Readonly<Record<string, boolean>>,
+  weekView: boolean,
+  choices: Readonly<Record<string, boolean>> = {},
 ): WeekSpan[] {
   const spans: WeekSpan[] = [];
-  const thisWeek = weekKeyOf(today);
-  let weeksFromToday = -1;
   days.forEach((day, i) => {
     const key = weekKeyOf(day);
     const open = spans[spans.length - 1];
@@ -76,13 +67,12 @@ export function weekSpans(
       open.last = day;
       return;
     }
-    if (key >= thisWeek) weeksFromToday += 1;
     spans.push({
       key,
       label: `W${isoWeek(day)}`,
       from: i,
       to: i + 1,
-      folded: choices[key] ?? weeksFromToday >= OPEN_WEEKS_BY_DEFAULT,
+      folded: choices[key] ?? weekView,
       first: day,
       last: day,
     });

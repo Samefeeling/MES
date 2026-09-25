@@ -8,6 +8,7 @@ import {
   weekLoad,
   weekSpans,
 } from '@/features/assembly/weekFold';
+import { zoomIn, zoomOut } from '@/store/uiStore';
 
 const d = (iso: string) => new Date(`${iso}T00:00:00`);
 /** Weekdays from Thursday 24 Sep 2026, weekends left out as the board draws them. */
@@ -28,26 +29,26 @@ describe('weeks on the timeline', () => {
     expect(isoWeek(d('2027-01-01'))).toBe(53);
   });
 
-  it('opens this week and next, and folds every week after', () => {
-    const spans = weekSpans(weekdays(17), d('2026-09-24'), {});
+  it('splits the drawn days into their weeks, folded only in week view', () => {
+    const spans = weekSpans(weekdays(17), true);
     expect(spans.map((s) => [s.label, s.to - s.from, s.folded])).toEqual([
-      ['W39', 2, false],
-      ['W40', 5, false],
+      ['W39', 2, true],
+      ['W40', 5, true],
       ['W41', 5, true],
       ['W42', 5, true],
     ]);
+    expect(weekSpans(weekdays(17), false).every((s) => !s.folded)).toBe(true);
   });
 
-  it('keeps what the reader chose for a week', () => {
-    const spans = weekSpans(weekdays(12), d('2026-09-24'), { '2026-09-21': true, '2026-10-05': false });
-    expect(spans.map((s) => s.folded)).toEqual([true, false, false]);
+  it('lets one week be folded or opened from its heading, over the zoom', () => {
+    expect(weekSpans(weekdays(12), false, { '2026-09-28': true }).map((s) => s.folded)).toEqual([false, true, false]);
+    expect(weekSpans(weekdays(12), true, { '2026-09-21': false }).map((s) => s.folded)).toEqual([false, true, true]);
   });
 
   it('gives a folded week one column’s width, shared by its days', () => {
-    const spans = weekSpans(weekdays(12), d('2026-09-24'), {});
-    const widths = foldedWidths(spans, () => 160);
-    expect(widths.slice(0, 7)).toEqual(Array(7).fill(160));
-    expect(widths.slice(7).reduce((a, b) => a + b, 0)).toBeCloseTo(FOLDED_WEEK_PX, 6);
+    const widths = foldedWidths(weekSpans(weekdays(12), true), () => 160);
+    expect(widths.slice(2, 7).reduce((a, b) => a + b, 0)).toBeCloseTo(FOLDED_WEEK_PX, 6);
+    expect(foldedWidths(weekSpans(weekdays(12), false), () => 160)).toEqual(Array(12).fill(160));
   });
 
   it('sums a week’s load before banding it', () => {
@@ -68,5 +69,29 @@ describe('weeks on the timeline', () => {
       { jobId: 'A', kind: 'crewed', hours: 15 },
       { jobId: 'B', kind: 'waiting', hours: 3 },
     ]);
+  });
+});
+
+describe('the timeline zoom', () => {
+  it('steps from weeks through 44 px up to 200 px, and back down to weeks', () => {
+    let state = { dayWidth: 44, weekView: false };
+    const seen: string[] = [];
+    for (let i = 0; i < 7; i += 1) {
+      state = zoomIn(state);
+      seen.push(state.weekView ? 'weeks' : String(state.dayWidth));
+    }
+    expect(seen).toEqual(['64', '88', '120', '160', '200', '200', '200']);
+    seen.length = 0;
+    for (let i = 0; i < 8; i += 1) {
+      state = zoomOut(state);
+      seen.push(state.weekView ? 'weeks' : String(state.dayWidth));
+    }
+    expect(seen).toEqual(['160', '120', '88', '64', '44', 'weeks', 'weeks', 'weeks']);
+    expect(zoomIn(state)).toEqual({ dayWidth: 44, weekView: false });
+  });
+
+  it('snaps a width dragged off the ladder to the next step', () => {
+    expect(zoomIn({ dayWidth: 100, weekView: false }).dayWidth).toBe(120);
+    expect(zoomOut({ dayWidth: 100, weekView: false }).dayWidth).toBe(88);
   });
 });

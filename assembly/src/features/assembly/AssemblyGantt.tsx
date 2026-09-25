@@ -1382,6 +1382,7 @@ export function AssemblyGantt({
   /** The right-click menu: which orders it acts on, and where it was opened. */
   const [bulk, setBulk] = useState<{ ids: string[]; at: { x: number; y: number } } | null>(null);
   const closeBulk = useCallback(() => setBulk(null), []);
+  const weekView = useUiStore((s) => s.weekView);
   const weekFold = useUiStore((s) => s.weekFold);
   const setWeekFold = useUiStore((s) => s.setWeekFold);
   // Not stopped at the engine's fortnight: at least the weeks asked for, and
@@ -1420,10 +1421,10 @@ export function AssemblyGantt({
    * positions the stripes, the headings, the bars and the drop all work in —
    * see `dayAxis`.
    */
-  // Which weeks are read a day at a time and which are folded to one column.
+  // The weeks along the axis — each one column when zoomed out to weeks.
   const spans = useMemo(
-    () => weekSpans(days, board.today, weekFold),
-    [days, board.today, weekFold],
+    () => weekSpans(days, weekView, weekFold),
+    [days, weekView, weekFold],
   );
   const axis = useMemo(
     () =>
@@ -1789,8 +1790,7 @@ export function AssemblyGantt({
             <button
               type="button"
               className="week-fold"
-              onClick={() => setWeekFold([span.key], true)}
-              title={`Fold ${span.label} to one column`}
+              onClick={() => setWeekFold(span.key, true)}
               aria-label={`Fold week ${span.label}`}
             >
               ◂
@@ -1849,8 +1849,7 @@ export function AssemblyGantt({
           <button
             type="button"
             className="week-fold open"
-            onClick={() => setWeekFold([span.key], false)}
-            title={`Open ${span.label} a day at a time`}
+            onClick={() => setWeekFold(span.key, false)}
             aria-label={`Open week ${span.label}`}
           >
             {span.label} ▸

@@ -35,6 +35,7 @@ import {
   DATE_COLS,
   DATE_COL_LABEL,
   DUE_SOON_DAYS,
+  MAX_DAY_WIDTH,
   HIDEABLE_COLS,
   HIDEABLE_COL_LABEL,
   useUiStore,
@@ -47,15 +48,12 @@ import {
   strandedOrders,
   rowsInView,
   teamSummary,
-  timelineDays,
 } from './boardView';
 import { shortageReport } from './shortageReport';
 import { ShortageDetail } from './ShortageDetail';
 import { boardHours, type BoardHours } from './crewCapacity';
 import { overdueOrders } from './overdue';
 import { OverdueDetail } from './OverdueDetail';
-import { TIMELINE_MIN_WEEKS, weekKeyOf } from './weekFold';
-import { addCalendarDays } from '@/engine/assembly/dates';
 import { ManualOrderButton } from './ManualOrders';
 import { Metric, MetricNote } from './Metric';
 import { ReviewOrders } from './SuggestCrew';
@@ -75,8 +73,9 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
   const toggleDueSoon = useUiStore((s) => s.toggleDueSoon);
   const showWeekends = useUiStore((s) => s.showWeekends);
   const toggleWeekends = useUiStore((s) => s.toggleWeekends);
-  const setWeekFold = useUiStore((s) => s.setWeekFold);
-  const resetWeekFold = useUiStore((s) => s.resetWeekFold);
+  const zoom = useUiStore((s) => s.zoom);
+  const weekView = useUiStore((s) => s.weekView);
+  const dayWidth = useUiStore((s) => s.dayWidth);
   const virtualLines = usePlanStore((s) => s.virtualLines);
   const crewPools = usePlanStore((s) => s.crewPools);
   /* Which figure is open, held here rather than in each of them: they hang off
@@ -138,16 +137,6 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
     () => (board ? overdueOrders(allRows, board.today) : []),
     [board, allRows],
   );
-
-  // Every week the timeline reaches, for Open all.
-  const weekKeys = useMemo(() => {
-    if (!board) return [];
-    const span = timelineDays(board, TIMELINE_MIN_WEEKS);
-    const keys = new Set<string>();
-    for (let i = 0; i < span; i += 7) keys.add(weekKeyOf(addCalendarDays(board.horizonStart, i)));
-    keys.add(weekKeyOf(addCalendarDays(board.horizonStart, span - 1)));
-    return [...keys];
-  }, [board]);
 
   // Hours on board, read against the same crews as Crew capacity.
   const hours = useMemo(() => boardHours(allRows, crewPools), [allRows, crewPools]);
@@ -251,21 +240,19 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
         <ManualOrderButton board={board} />
       </div>
 
-      {/* How much of the timeline is read a day at a time. Each week folds and
-          opens from its own heading; these two do every week at once. */}
-      <div className="tool-group">
-        <strong>Weeks</strong>
-        <button
-          onClick={() => setWeekFold(weekKeys, false)}
-          title="Open every week on the timeline, a column per day"
-        >
-          Open all
+      {/* The timeline's zoom: + widens every day up to 200 px, − narrows
+          them to 44 px and then to a week a column. */}
+      <div className="tool-group zoom">
+        <button className="zoom-step" onClick={() => zoom('out')} disabled={weekView} aria-label="Zoom out">
+          −
         </button>
         <button
-          onClick={resetWeekFold}
-          title="This week and next a day at a time, every week after them folded to one column"
+          className="zoom-step"
+          onClick={() => zoom('in')}
+          disabled={!weekView && dayWidth >= MAX_DAY_WIDTH}
+          aria-label="Zoom in"
         >
-          Fold later
+          +
         </button>
       </div>
 

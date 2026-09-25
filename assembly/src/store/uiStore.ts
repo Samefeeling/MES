@@ -37,8 +37,30 @@ export interface OvertimeRequest {
  * its own, by the edge of its heading.
  */
 export const MIN_DAY_WIDTH = 44;
-export const MAX_DAY_WIDTH = 160;
+export const MAX_DAY_WIDTH = 200;
 export const DEFAULT_DAY_WIDTH = MIN_DAY_WIDTH;
+
+/**
+ * The steps − and + move through. Below the first there is one more step:
+ * the whole timeline a week to a column — see `weekView`.
+ */
+export const ZOOM_LEVELS = [44, 64, 88, 120, 160, 200] as const;
+
+/** One step out: a narrower day, or from the narrowest day to weeks. */
+export function zoomOut(state: { dayWidth: number; weekView: boolean }) {
+  if (state.weekView) return state;
+  const lower = [...ZOOM_LEVELS].reverse().find((w) => w < state.dayWidth);
+  return lower === undefined
+    ? { dayWidth: MIN_DAY_WIDTH, weekView: true }
+    : { dayWidth: lower, weekView: false };
+}
+
+/** One step in: from weeks to the narrowest day, or a wider day. */
+export function zoomIn(state: { dayWidth: number; weekView: boolean }) {
+  if (state.weekView) return { dayWidth: MIN_DAY_WIDTH, weekView: false };
+  const higher = ZOOM_LEVELS.find((w) => w > state.dayWidth);
+  return { dayWidth: higher ?? MAX_DAY_WIDTH, weekView: false };
+}
 
 /**
  * How far one day column may be dragged on its own.
@@ -272,8 +294,13 @@ interface UiState {
   /** Weekend timeline columns; hidden by default to keep the working week compact. */
   showWeekends: boolean;
   /**
-   * Weeks the reader has folded (true) or opened (false), by the Monday's day
-   * key. A week nobody has touched follows the default — see `weekSpans`.
+   * The timeline a week to a column — the step past the narrowest day on the
+   * zoom. Each week then carries its week's load.
+   */
+  weekView: boolean;
+  /**
+   * Single weeks folded (true) or opened (false) from their own heading, by
+   * the Monday's day key, over what the zoom says. A zoom press clears them.
    */
   weekFold: Record<string, boolean>;
   /** Sort the displayed rows without changing the scheduler's line sequence. */
@@ -325,9 +352,10 @@ interface UiState {
   setReleasedOnly: (releasedOnly: boolean) => void;
   setOrderDay: (day: string | null) => void;
   toggleWeekends: () => void;
-  setWeekFold: (weeks: readonly string[], folded: boolean) => void;
-  /** Every week back to the default: this week and next open, the rest folded. */
-  resetWeekFold: () => void;
+  /** − and +: see `zoomOut` / `zoomIn`. Every day column goes back to one width. */
+  zoom: (direction: 'in' | 'out') => void;
+  /** Fold or open one week from its heading. */
+  setWeekFold: (week: string, folded: boolean) => void;
   changeOrderSort: (key: OrderSortKey) => void;
   resetOrderSort: () => void;
   askOvertime: (request: OvertimeRequest) => void;
@@ -356,6 +384,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   dueSoon: false,
   releasedOnly: true,
   showWeekends: false,
+  weekView: false,
   weekFold: {},
   orderSort: { key: 'start', direction: 'asc' },
 
@@ -450,11 +479,14 @@ export const useUiStore = create<UiState>((set, get) => ({
   setReleasedOnly: (releasedOnly) => set({ releasedOnly }),
   setOrderDay: (orderDay) => set({ orderDay }),
   toggleWeekends: () => set((state) => ({ showWeekends: !state.showWeekends })),
-  setWeekFold: (weeks, folded) =>
+  zoom: (direction) =>
     set((state) => ({
-      weekFold: { ...state.weekFold, ...Object.fromEntries(weeks.map((w) => [w, folded])) },
+      ...(direction === 'in' ? zoomIn(state) : zoomOut(state)),
+      dayWidths: {},
+      weekFold: {},
     })),
-  resetWeekFold: () => set({ weekFold: {} }),
+  setWeekFold: (week, folded) =>
+    set((state) => ({ weekFold: { ...state.weekFold, [week]: folded } })),
   changeOrderSort: (key) => set((state) => ({
     orderSort: {
       key,

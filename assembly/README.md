@@ -40,13 +40,14 @@ plan goes back the other way, into the `ASSY_Production` list.
 - **The board opens on today** — there is no column for the previous working
   day; it was seldom read and cost a day of width on every screen. What the
   last shift booked is still in each order's detail and on the KPI page.
-- **Weeks fold** — this week and next open a day at a time; every week after
-  them is one narrow column carrying the week's hours against what its crews
-  can work. `◂ W40` on a week's first day folds it, `W41 ▸` opens it, and
-  **Weeks → Open all / Fold later** in the tool row does every week at once.
-  A folded week's days share its width, so bars, arrows and drags work
-  through it at a coarser scale. The zoom and the weeks-ahead box are gone;
-  the timeline reaches eight weeks at least, further for planned work.
+- **Zoom and weeks** — **−** and **+** beside Show step every day column
+  through 44 · 64 · 88 · 120 · 160 · 200 px; one more **−** past 44 px turns
+  the timeline into weeks, a column each carrying the week's load. On top of
+  the zoom, `◂` on a week's first day folds that week alone and `W41 ▸` opens
+  it; the next zoom press puts every week back to what the zoom says. A folded
+  week's days share its width, so bars, arrows and drags work through it at a
+  coarser scale. The timeline reaches eight weeks at least, further for
+  planned work.
 - **A line down today's column** — assembly works **07:00–15:30**, and the
   marker sits where the shift has got to, nudged on every five minutes. Before
   07:00 and after 15:30 it rests against the edge of the column.
