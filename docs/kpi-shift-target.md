@@ -23,7 +23,16 @@ For each finished shift and each order Planning.csv has on the press in it:
   crewed for — M (Morning = Day), A (Afternoon), N (Night); "MAN" is all
   three. A shift outside the list is not planned, however far the order's
   Start–Due window stretches across it. A blank or unreadable value means no
-  restriction.
+  restriction. The list is for weekdays.
+- **Weekend overtime.** A Saturday or Sunday (07:00 to 07:00 the next
+  morning; Friday's night is a weekday shift, Sunday's is weekend) is worked
+  a whole day at a time, all three shifts, or not at all. Which days were is
+  read off the order itself (`weekendDaysWorked`): the work is
+  Calculated_RemainingQty ÷ JobOper_ProdStandard hours; take away the weekday
+  shifts of its Start→Due window that "no of shift" crews, and what is left
+  had to be done on the weekend — about nothing, no day; about 24 h, one day
+  (the earlier); about 48 h, both. A weekend day not worked is not planned.
+  An order with no rate keeps its "no of shift" on weekends too.
 - **Plan** = the order's share of the shift's planned runtime ×
   JobOper_ProdStandard (`plannedRuntimeForShift`), never more than is left of
   the order quantity after the earlier shifts of its window were asked for

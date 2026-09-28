@@ -4,7 +4,7 @@ import {
   scheduleTuplesForShift,
   targetAttainmentForRecords,
 } from '../src/core/kpi-attainment';
-import { crewedWindowHoursBefore, plannedOrdersForShift } from '../src/core/schedule';
+import { crewedWindowHoursBefore, orderCrewedForShift, plannedOrdersForShift, weekendDaysWorked } from '../src/core/schedule';
 import { parseShiftPattern } from '../src/core/shifts';
 import { parsePlanningCsv } from '../src/dal/sharepoint';
 import { order, rec } from './helpers';
@@ -183,5 +183,70 @@ describe('Vs Target is unchanged', () => {
       actual: 170, expected: 200, pct: 85, covered: 2, total: 2,
     });
     expect(targetAttainmentForRecords(records, true)).toMatchObject({ actual: 150 });
+  });
+});
+
+describe('weekend overtime, read off the order\'s own schedule', () => {
+  // 320T as Planning.csv had it on 25 Sept 2026 (a Friday).
+  const PLANNING_320T = [
+    'Machine,JobHead_StartDate,JobOper_ProdStandard,JobHead_ReqDueDate,JobHead_JobNum,JobHead_PartNum,JobHead_PartDescription,Calculated_RemainingQty,JobHead_ProdQty,no of shift',
+    '320T,25/09/2026 14:49,42.00000672,25/09/2026 16:39,507822,G06021000,Cosmic Seat,56,56,MAN',
+    '320T,26/09/2026 3:00,45.0000045,30/09/2026 5:21,SFM507827,7416-BLACK,Progress Link Male Black,1500,1500,MN',
+    '320T,26/09/2026 3:00,116.9999801,30/09/2026 5:21,SFM507828,7417-BLACK,Progress Link Female Black,1500,1500,MN',
+  ].join('\n');
+  const MONDAY = new Date('2026-09-28T08:00:00');
+
+  it('keeps an order Epicor ran straight over an idle weekend off the weekend shifts', () => {
+    const orders = parsePlanningCsv(PLANNING_320T);
+    // SFM507827: 1500 at 45/h is 33.3 h; the weekday M and N shifts in its
+    // window (Fri night from 03:00, Monday, Tuesday to 05:21) hold 34.4 h.
+    expect([...weekendDaysWorked(orders[1])!]).toEqual([]);
+    const planned = (shiftId: string) =>
+      scheduleTuplesForShift([], orders, '320T', shiftId, MONDAY).map((l) => l.jobNumber);
+    // Friday's night, which runs to 07:00 Saturday, is a weekday shift.
+    expect(planned('2026-09-25-Night')).toEqual(['SFM507827', 'SFM507828']);
+    expect(planned('2026-09-25-Day')).toEqual(['507822']);
+    for (const shift of ['Day', 'Afternoon', 'Night']) {
+      expect(planned(`2026-09-26-${shift}`)).toEqual([]);
+      expect(planned(`2026-09-27-${shift}`)).toEqual([]);
+    }
+  });
+
+  // Friday 07:00 to Monday 07:00 at 10 an hour on every shift: 72 h of
+  // window, 24 of them Friday's.
+  const across = (remaining: number, shifts?: ('Day' | 'Afternoon' | 'Night')[]) =>
+    order({
+      jobNumber: 'W',
+      plannedStart: '2026-09-25T07:00:00',
+      plannedEnd: '2026-09-28T07:00:00',
+      qtyPerHr: 1 / 10,
+      jobRequired: remaining,
+      ...(shifts ? { shifts } : {}),
+    });
+
+  it('reads the gap between the window and the work as the weekend days not worked', () => {
+    // 48 h short of the window: neither day.
+    expect([...weekendDaysWorked(across(240))!]).toEqual([]);
+    // 24 h short: one day, the Saturday.
+    expect([...weekendDaysWorked(across(480))!]).toEqual(['2026-09-26']);
+    // The whole window: both.
+    expect([...weekendDaysWorked(across(720))!]).toEqual(['2026-09-26', '2026-09-27']);
+  });
+
+  it('works an overtime day round the clock, whatever the weekday pattern', () => {
+    // Day + Night on weekdays (16 h Friday), and 40 h of work.
+    const twoShift = across(400, ['Day', 'Night']);
+    expect([...weekendDaysWorked(twoShift)!]).toEqual(['2026-09-26']);
+    expect(orderCrewedForShift(twoShift, '2026-09-25-Afternoon')).toBe(false);
+    expect(orderCrewedForShift(twoShift, '2026-09-26-Afternoon')).toBe(true);
+    expect(orderCrewedForShift(twoShift, '2026-09-27-Day')).toBe(false);
+    // Asked before Sunday: Friday's 16 h and all 24 of Saturday's.
+    expect(crewedWindowHoursBefore(twoShift, new Date('2026-09-27T07:00:00'))).toBe(40);
+  });
+
+  it('falls back to "no of shift" when there is no rate to tell from', () => {
+    const unrated = { ...across(480), qtyPerHr: 0 };
+    expect(weekendDaysWorked(unrated)).toBeNull();
+    expect(orderCrewedForShift(unrated, '2026-09-27-Day')).toBe(true);
   });
 });
