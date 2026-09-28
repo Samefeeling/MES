@@ -31,7 +31,8 @@ For each finished shift and each order Planning.csv has on the press in it:
   Calculated_RemainingQty ÷ JobOper_ProdStandard hours; take away the weekday
   shifts of its Start→Due window that "no of shift" crews, and what is left
   had to be done on the weekend — about nothing, no day; about 24 h, one day
-  (the earlier); about 48 h, both. A weekend day not worked is not planned.
+  (the earlier); about 48 h, both. Up to 2 h short is the planner's own
+  allowance for an insert or colour change and is never read as overtime. A weekend day not worked is not planned.
   An order with no rate keeps its "no of shift" on weekends too.
 - **Plan** = the order's share of the shift's planned runtime ×
   JobOper_ProdStandard (`plannedRuntimeForShift`), never more than is left of

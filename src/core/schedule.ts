@@ -81,6 +81,13 @@ function hoursInShifts(start: number, end: number, crewed: (shiftId: string) => 
 const weekendMemo = new WeakMap<PlanningOrder, ReadonlySet<string> | null>();
 
 /**
+ * What a planner adds to a window by hand — half an hour to an hour for an
+ * insert or colour change, or both. A window this much longer than its
+ * weekday shifts can hold is that allowance, not weekend work.
+ */
+export const PLANNER_ALLOWANCE_HOURS = 2;
+
+/**
  * The weekend days an order's own schedule says were worked, by date
  * (YYYY-MM-DD); null when there is nothing to tell it from.
  *
@@ -92,9 +99,10 @@ const weekendMemo = new WeakMap<PlanningOrder, ReadonlySet<string> | null>();
  * crews and what is left of the work had to be done on the weekend — near
  * nothing, none of it; near 24 hours, one day; near 48, both.
  *
- * Days are taken earliest first, and one counts when it is needed for more
- * than half of what it holds, so a window that only clips a weekend day is
- * not read as working it.
+ * Up to `PLANNER_ALLOWANCE_HOURS` short is the planner's changeover
+ * allowance and works no weekend. Past that, days are taken earliest first,
+ * and one counts when it is needed for more than half of what it holds, so a
+ * window that only clips a weekend day is not read as working it.
  */
 export function weekendDaysWorked(order: PlanningOrder): ReadonlySet<string> | null {
   if (weekendMemo.has(order)) return weekendMemo.get(order)!;
@@ -110,6 +118,7 @@ export function weekendDaysWorked(order: PlanningOrder): ReadonlySet<string> | n
       return !!p && !isWeekend(p.year, p.month, p.day) && patternCrews(order, id);
     });
     let short = workHours - weekdayHours;
+    if (short <= PLANNER_ALLOWANCE_HOURS) short = 0;
     const day = new Date(start);
     day.setHours(0, 0, 0, 0);
     day.setDate(day.getDate() - 1);

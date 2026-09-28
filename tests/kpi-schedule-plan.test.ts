@@ -233,6 +233,24 @@ describe('weekend overtime, read off the order\'s own schedule', () => {
     expect([...weekendDaysWorked(across(720))!]).toEqual(['2026-09-26', '2026-09-27']);
   });
 
+  it('reads up to two hours over as the planner\'s changeover allowance, not overtime', () => {
+    // Friday 07:00 to Saturday 10:00: Friday's 24 h, and 3 h of Saturday.
+    const clipped = (remaining: number) =>
+      order({
+        jobNumber: 'C',
+        plannedStart: '2026-09-25T07:00:00',
+        plannedEnd: '2026-09-26T10:00:00',
+        qtyPerHr: 1 / 10,
+        jobRequired: remaining,
+      });
+    // 1.5 h more than Friday holds: an insert and a colour change.
+    expect([...weekendDaysWorked(clipped(255))!]).toEqual([]);
+    // 2.5 h more: Saturday morning was worked.
+    expect([...weekendDaysWorked(clipped(265))!]).toEqual(['2026-09-26']);
+    // A two-day weekend with an hour of allowance on top is still both days.
+    expect([...weekendDaysWorked(across(710))!]).toEqual(['2026-09-26', '2026-09-27']);
+  });
+
   it('works an overtime day round the clock, whatever the weekday pattern', () => {
     // Day + Night on weekdays (16 h Friday), and 40 h of work.
     const twoShift = across(400, ['Day', 'Night']);
