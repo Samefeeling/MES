@@ -9,6 +9,8 @@
  */
 
 import { create } from 'zustand';
+import { setFactoryCalendar } from '@/engine/assembly/dates';
+import { cleanRdo, type RdoDay } from '@/engine/assembly/factoryCalendar';
 import { bookedLabourHours } from '@/engine/assembly/shift';
 import { fromDayKey, toDayKey } from '@/lib/time';
 import { withLeave } from '@/engine/assembly/attendance';
@@ -205,6 +207,14 @@ interface PlanState {
   crewPools: CrewPool[];
   setCrewPools: (pools: CrewPool[]) => void;
   /**
+   * The factory's Rostered Days Off: weekdays the whole plant is shut, on top
+   * of the weekends and the NSW public holidays the board works out itself.
+   * In the plan, like the crews — every screen has to schedule round the same
+   * days. Kept in date order, one entry a day.
+   */
+  rdoDays: RdoDay[];
+  setRdoDays: (days: RdoDay[]) => void;
+  /**
    * Put one line where another currently is, the way a dragged list item lands:
    * dropped on a line below, it comes to rest under that line; dropped on one
    * above, it takes that line's place and pushes it down.
@@ -359,6 +369,7 @@ interface PlanState {
     lineNames?: Record<string, string>;
     lineOrder?: LineKey[];
     crewPools?: CrewPool[];
+    rdoDays?: RdoDay[];
     orderCrewAssignments?: Record<string, CrewAssignment[]>;
     orderStarts?: Record<string, string>;
     orderActualStarts?: Record<string, ActualStartRecord>;
@@ -497,6 +508,16 @@ const withinCrewLimit = (assignments: CrewAssignment[]): boolean => {
   );
 };
 
+/** RDOs as the plan keeps them: real dates, one entry a day, in date order. */
+function cleanRdoDays(days: readonly RdoDay[]): RdoDay[] {
+  const byDay = new Map<string, RdoDay>();
+  for (const entry of days) {
+    const clean = cleanRdo(entry);
+    if (clean) byDay.set(clean.day, clean);
+  }
+  return [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day));
+}
+
 export const usePlanStore = create<PlanState>((set, get) => ({
   containers: { [POOL_ID]: [] },
   workerLines: {},
@@ -505,6 +526,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   lineNames: {},
   lineOrder: [],
   crewPools: DEFAULT_CREW_POOLS,
+  rdoDays: [],
   orderCrewAssignments: {},
   orderStarts: {},
   orderActualStarts: {},
@@ -1037,6 +1059,10 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     });
   },
 
+  setRdoDays(days) {
+    set({ rdoDays: cleanRdoDays(days) });
+  },
+
   removeVirtualLine(key) {
     set((state) => {
       if (!state.virtualLines.some((line) => line.key === key)) return state;
@@ -1088,6 +1114,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         // reads as the built-in order rather than as an empty board.
         lineOrder: plan.lineOrder ?? state.lineOrder,
         crewPools: plan.crewPools ?? state.crewPools,
+        rdoDays: plan.rdoDays ? cleanRdoDays(plan.rdoDays) : state.rdoDays,
         orderCrewAssignments,
         orderStarts: plan.orderStarts ?? state.orderStarts,
         orderActualStarts: plan.orderActualStarts ?? state.orderActualStarts,
@@ -1122,3 +1149,13 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     return null;
   },
 }));
+
+/*
+ * The engine's calendar follows the plan's RDOs. Set before anything reads the
+ * board, and again the moment they change — the board is worked out afresh
+ * then, because `rdoDays` is one of its inputs (see `assemblySelectors`).
+ */
+setFactoryCalendar({ rdo: usePlanStore.getState().rdoDays });
+usePlanStore.subscribe((state, prev) => {
+  if (state.rdoDays !== prev.rdoDays) setFactoryCalendar({ rdo: state.rdoDays });
+});

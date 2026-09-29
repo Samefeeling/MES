@@ -15,6 +15,7 @@
  */
 
 import { formatDay, MS_PER_DAY, toDayKey } from '@/lib/time';
+import { cleanRdo, nswHolidayOn, type Closure, type RdoDay } from './factoryCalendar';
 
 export type ScheduleColor = 'green' | 'red' | 'grey';
 
@@ -113,11 +114,55 @@ export const wholeDaysBetween = (a: Date, b: Date): number =>
 // Thursday finishes on the Monday, not on the Saturday. A weekend is only
 // worked when the supervisor has approved overtime on that particular order,
 // which the board asks for the moment a bar is dropped on one.
+//
+// A weekday can be shut too: a New South Wales public holiday, or one of the
+// factory's Rostered Days Off. Those are read the same way as a weekend by
+// everything that counts working days — `isClosed` — while `isWeekend` stays
+// what it says, for the columns the Weekends switch hides.
 // ---------------------------------------------------------------------------
 
-/** Saturday or Sunday — the factory is closed. */
+/** Saturday or Sunday. */
 export const isWeekend = (d: Date): boolean =>
   d.getDay() === 0 || d.getDay() === 6;
+
+/*
+ * The factory's calendar. It is configuration rather than an input to each
+ * function because every working-day step on the board goes through the few
+ * helpers below, and threading a calendar through all their callers would
+ * change every signature for one fact about the plant. The plan store sets it
+ * (`setFactoryCalendar`) whenever the RDOs change, before the board is
+ * worked out again.
+ */
+let rdoDays = new Map<string, Closure>();
+let nswHolidays = true;
+
+/**
+ * Set the days the factory is shut on top of the weekends: the RDOs entered,
+ * and whether NSW public holidays count (they do unless turned off).
+ */
+export function setFactoryCalendar(calendar: {
+  rdo?: readonly RdoDay[];
+  holidays?: boolean;
+}): void {
+  if (calendar.rdo) {
+    const next = new Map<string, Closure>();
+    for (const entry of calendar.rdo) {
+      const clean = cleanRdo(entry);
+      if (clean) next.set(clean.day, { day: clean.day, name: clean.name ?? 'RDO', kind: 'rdo' });
+    }
+    rdoDays = next;
+  }
+  if (calendar.holidays !== undefined) nswHolidays = calendar.holidays;
+}
+
+/** Why the factory is shut on a weekday, or null when it is open (or it is a weekend). */
+export function closureOn(d: Date): Closure | null {
+  const key = toDayKey(d);
+  return (nswHolidays ? nswHolidayOn(key) : null) ?? rdoDays.get(key) ?? null;
+}
+
+/** The factory is shut: a weekend, a public holiday or an RDO. */
+export const isClosed = (d: Date): boolean => isWeekend(d) || closureOn(d) !== null;
 
 /**
  * Midnight of the next day, robust across daylight-saving shifts.
@@ -155,16 +200,16 @@ export function openFraction(d: Date): number {
 }
 
 /**
- * `d` itself when the factory runs that day, otherwise the following Monday.
- * A weekend start is pulled to the start of Monday: nothing was worked on the
- * Saturday, so there is no part-day to carry over.
+ * `d` itself when the factory runs that day, otherwise the start of the next
+ * day it does — the Monday after a weekend, the Tuesday after Easter Monday.
+ * Nothing was worked on the closed day, so there is no part-day to carry over.
  */
 export function nextWorkingDay(d: Date): Date {
-  if (!isWeekend(d)) return d;
+  if (!isClosed(d)) return d;
   let out = startOfDay(d);
   do {
     out = nextMidnight(out);
-  } while (isWeekend(out));
+  } while (isClosed(out));
   return out;
 }
 
@@ -179,7 +224,7 @@ export function prevWorkingDay(d: Date): Date {
   let out = startOfDay(d);
   do {
     out = startOfDay(addCalendarDays(out, -1));
-  } while (isWeekend(out));
+  } while (isClosed(out));
   return out;
 }
 
@@ -208,7 +253,7 @@ export function openDaysBetween(from: Date, to: Date, overtime = false): string[
   let cursor = nextMidnight(startOfDay(from));
   const end = startOfDay(to);
   for (let guard = 0; guard < MAX_SPAN_DAYS && cursor < end; guard++) {
-    if (overtime || !isWeekend(cursor)) out.push(toDayKey(cursor));
+    if (overtime || !isClosed(cursor)) out.push(toDayKey(cursor));
     cursor = nextMidnight(cursor);
   }
   return out;
@@ -256,7 +301,7 @@ export function workingSpans(
   for (let guard = 0; guard < MAX_SPAN_DAYS && cursor < to; guard++) {
     const tomorrow = nextMidnight(cursor);
     const end = tomorrow < to ? tomorrow : to;
-    if (isWeekend(cursor)) {
+    if (isClosed(cursor)) {
       if (open) {
         const worked = (cursor.getTime() - open.getTime()) / MS_PER_DAY;
         out.push({ from: open, to: new Date(cursor), workedBefore: done, worked });
@@ -306,14 +351,14 @@ export function subWorkingDays(from: Date, days: number): Date {
 
   // The part of `from`'s own day that lies behind it. None of a weekend does:
   // nothing was worked there to step back through.
-  const behind = isWeekend(from) ? 0 : 1 - openFraction(from);
+  const behind = isClosed(from) ? 0 : 1 - openFraction(from);
   if (left < behind) return addDays(from, -left);
   left -= behind;
 
   // Then whole days, each one either a full day's work or none at all.
   let day = prevMidnight(from);
   for (let guard = 0; guard < MAX_SPAN_DAYS; guard++) {
-    const open = isWeekend(day) ? 0 : 1;
+    const open = isClosed(day) ? 0 : 1;
     if (left < open) return addDays(nextMidnight(day), -left);
     left -= open;
     if (left <= 0) return new Date(day);
@@ -328,7 +373,7 @@ export function addWorkingDays(from: Date, days: number): Date {
   let left = days;
 
   for (let guard = 0; guard < MAX_SPAN_DAYS; guard++) {
-    if (isWeekend(cursor)) {
+    if (isClosed(cursor)) {
       cursor = nextMidnight(cursor);
       continue;
     }

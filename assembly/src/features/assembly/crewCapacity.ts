@@ -19,7 +19,7 @@ import {
   type LineKey,
 } from '@/domain/assembly';
 import type { OrderRow } from '@/engine/assembly/board';
-import { isWeekend, startOfDay } from '@/engine/assembly/dates';
+import { isClosed, startOfDay } from '@/engine/assembly/dates';
 import { remainingHours } from '@/engine/assembly/duration';
 import { loadBand, type LoadBand } from '@/engine/assembly/workload';
 import { toDayKey } from '@/lib/time';
@@ -171,7 +171,7 @@ export function capacityDays(
 
   return dates.map((date, i) => {
     const key = toDayKey(date);
-    const working = !isWeekend(date);
+    const working = !isClosed(date);
     const demand = new Map<LineKey, number>();
     let crewed = 0;
     let waiting = 0;

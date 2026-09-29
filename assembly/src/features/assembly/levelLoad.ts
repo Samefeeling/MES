@@ -47,7 +47,7 @@
 import { rootLineKey, type CrewPool, type LineKey } from '@/domain/assembly';
 import { jobNumOf } from '@/domain/routing';
 import type { OrderRow } from '@/engine/assembly/board';
-import { addCalendarDays, isWeekend, startOfDay } from '@/engine/assembly/dates';
+import { addCalendarDays, isClosed, startOfDay } from '@/engine/assembly/dates';
 import { remainingHours } from '@/engine/assembly/duration';
 import { shiftOpensOn } from '@/engine/assembly/shift';
 import { formatShortDay, fromDayKey, toDayKey } from '@/lib/time';
@@ -192,7 +192,7 @@ function buildCalendar(from: Date, until: Date): Calendar {
   const days: Date[] = [];
   const keys: string[] = [];
   for (let d = startOfDay(from); d <= until; d = addCalendarDays(d, 1)) {
-    if (isWeekend(d)) continue;
+    if (isClosed(d)) continue;
     days.push(d);
     keys.push(toDayKey(d));
   }
@@ -275,7 +275,7 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
     if (!window || hours <= 0) return out;
     const open: string[] = [];
     for (let d = startOfDay(window.from); d < window.to; d = addCalendarDays(d, 1)) {
-      if (!isWeekend(d)) open.push(toDayKey(d));
+      if (!isClosed(d)) open.push(toDayKey(d));
     }
     if (open.length === 0) open.push(toDayKey(startOfDay(window.from)));
     for (const key of open) out.set(key, (out.get(key) ?? 0) + hours / open.length);
@@ -424,7 +424,7 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
   const dayShare = (day: string, extra?: { lane: LineKey; hours: number }) => {
     const demand = new Map(ledger.get(day) ?? []);
     if (extra) demand.set(extra.lane, (demand.get(extra.lane) ?? 0) + extra.hours);
-    return shareDay(demand, pools, !isWeekend(fromDayKey(day))).pools;
+    return shareDay(demand, pools, !isClosed(fromDayKey(day))).pools;
   };
   const overOf = (poolsDay: ReturnType<typeof dayShare>): number =>
     poolsDay.reduce((n, p) => n + Math.max(0, p.demand - p.capacity * ceiling), 0);

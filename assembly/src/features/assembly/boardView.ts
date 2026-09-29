@@ -3,6 +3,7 @@
 import type { OrderRow } from '@/engine/assembly/board';
 import {
   addCalendarDays,
+  isClosed,
   isWeekend,
   nextWorkingDay,
   prevWorkingDay,
@@ -92,7 +93,7 @@ export function isRunningOnDay(row: OrderRow, day: Date): boolean {
     return row.crewDays.some((entry) => entry.day === key && entry.hours > 0);
   }
   if (row.completedToday || !row.start || !row.expectDate) return false;
-  if (row.line.schedulable && isWeekend(day) && !row.overtime) return false;
+  if (row.line.schedulable && isClosed(day) && !row.overtime) return false;
   return row.start < addCalendarDays(startOfDay(day), 1) &&
     row.expectDate > startOfDay(day);
 }
@@ -314,9 +315,9 @@ export function withPredecessors(
  */
 export function dueWithin(today: Date, count: number): Date {
   let cursor = startOfDay(today);
-  for (let found = isWeekend(cursor) ? 0 : 1; found < Math.max(1, count); ) {
+  for (let found = isClosed(cursor) ? 0 : 1; found < Math.max(1, count); ) {
     cursor = addCalendarDays(cursor, 1);
-    if (!isWeekend(cursor)) found++;
+    if (!isClosed(cursor)) found++;
   }
   // Through the end of that day, so an order due on it is included.
   return addCalendarDays(cursor, 1);
@@ -470,7 +471,7 @@ export function unstaffedWindow(
      */
     const span = unstaffedSpanDays(row);
     let last = startOfDay(floor);
-    if (isWeekend(last)) last = nextWorkingDay(last);
+    if (isClosed(last)) last = nextWorkingDay(last);
     for (let i = 1; i < span; i++) last = nextWorkingDay(addCalendarDays(last, 1));
     return {
       from: floor,
@@ -500,13 +501,13 @@ export function unstaffedSpanDays(row: OrderRow): number {
  * Due Date. A Due Date carrying no time of day is a deadline at the *start* of
  * that day — the same reading the box that ends on it has always had — so the
  * last day is the working day before it; one carrying a time is met by work
- * on that day itself, or on the working day before it when it falls at a
- * weekend.
+ * on that day itself, or on the working day before it when the factory is
+ * shut that day.
  */
 export function lastWorkingDayFor(due: Date): Date {
   const day = startOfDay(due);
   const bare = due.getTime() === day.getTime();
-  if (bare || isWeekend(day)) return prevWorkingDay(day);
+  if (bare || isClosed(day)) return prevWorkingDay(day);
   return day;
 }
 
@@ -932,7 +933,7 @@ export function lineDayLoads(
     if (!window || hours <= 0) continue;
     const open: string[] = [];
     for (let d = startOfDay(window.from); d < window.to; d = addCalendarDays(d, 1)) {
-      if (!isWeekend(d)) open.push(toDayKey(d));
+      if (!isClosed(d)) open.push(toDayKey(d));
     }
     if (open.length === 0) open.push(toDayKey(startOfDay(window.from)));
     for (const key of open) {

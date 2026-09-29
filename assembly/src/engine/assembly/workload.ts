@@ -13,7 +13,7 @@
 import { PRODUCTIVE_HOURS_PER_PERSON, type Worker } from '@/domain/assembly';
 import type { JobId } from '@/domain/ids';
 import { remainingHours } from './duration';
-import { addCalendarDays, isWeekend, startOfDay } from './dates';
+import { addCalendarDays, isClosed, startOfDay } from './dates';
 import type { OrderRow } from './board';
 import { toDayKey } from '@/lib/time';
 import { onLeaveOnDay, type LeaveDays } from './attendance';
@@ -177,7 +177,7 @@ export function boardDayLoads(
       isToday: key === todayKey,
       past,
       actual: past,
-      working: !isWeekend(date),
+      working: !isClosed(date),
       hours,
       capacity,
       pct,
@@ -280,7 +280,7 @@ export function workerLoad(
 
     entries.sort((a, b) => b.hours - a.hours);
     const hours = entries.reduce((s, e) => s + e.hours, 0);
-    const working = !isWeekend(date);
+    const working = !isClosed(date);
     const capacity = onLeave || !working ? 0 : PRODUCTIVE_HOURS_PER_PERSON;
     days.push({
       key,

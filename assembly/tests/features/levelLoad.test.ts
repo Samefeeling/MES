@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CrewPool, LineKey } from '@/domain/assembly';
 import type { OrderRow } from '@/engine/assembly/board';
 import { pickedOverload, pinsOf, planLevelLoad } from '@/features/assembly/levelLoad';
+import { setFactoryCalendar } from '@/engine/assembly/dates';
 
 // Monday. Nine working days of 30 h — four people, 7.5 h each — from here.
 const TODAY = new Date('2026-09-14T07:00:00');
@@ -149,6 +150,32 @@ describe('level loading', () => {
     const rows = ['A', 'B', 'C'].map((id) => row(id, { due: '2026-09-21' }));
     const plan = level(rows, ['2026-09-18']);
     for (const m of plan.moves) expect([0, 6]).not.toContain(new Date(`${m.toDay}T00:00:00`).getDay());
+  });
+
+  describe('a day the factory is shut', () => {
+    it('never takes work on an RDO', () => {
+      setFactoryCalendar({ rdo: [{ day: '2026-09-16' }] });
+      try {
+        // Wednesday is an RDO, so Thursday's spare order goes to Tuesday.
+        const plan = level(three(), ['2026-09-17']);
+        expect(plan.moves).toHaveLength(1);
+        expect(plan.moves[0].toDay).toBe('2026-09-15');
+        // Picked on its own, it has no room to fill.
+        const rdo = level(three(), ['2026-09-16']);
+        expect(rdo.moves).toEqual([]);
+        expect(rdo.room.before).toBe(0);
+      } finally {
+        setFactoryCalendar({ rdo: [] });
+      }
+    });
+
+    it('never takes work on a public holiday', () => {
+      // Labour Day is Monday 5 October; three orders due that Friday.
+      const rows = ['A', 'B', 'C'].map((id) => row(id, { due: '2026-10-09' }));
+      const plan = level(rows, ['2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08']);
+      expect(plan.moves.length).toBeGreaterThan(0);
+      expect(plan.moves.some((m) => m.toDay === '2026-10-05')).toBe(false);
+    });
   });
 
   it('has nothing to level against on a line no crew lists', () => {

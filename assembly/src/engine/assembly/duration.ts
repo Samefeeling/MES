@@ -11,7 +11,7 @@ import {
   PRODUCTIVE_HOURS_PER_PERSON,
 } from '@/domain/assembly';
 import type { Job } from '@/domain/types';
-import { isWeekend, prevWorkingDay, startOfDay } from './dates';
+import { isClosed, prevWorkingDay, startOfDay } from './dates';
 import { shiftStartAt } from './shift';
 
 /** Fraction of the order already finished, clamped to [0, 1]. */
@@ -111,7 +111,7 @@ export function latestStart(
   // weekend, the working day before it. This used to count back from the day
   // before in every case, which was right while an Expect Date landing on the
   // due date counted as late.
-  let day = isWeekend(due) ? prevWorkingDay(due) : startOfDay(due);
+  let day = isClosed(due) ? prevWorkingDay(due) : startOfDay(due);
 
   // Whole days come off first; the remainder is the tail of the starting day,
   // which is what puts a clock time on the answer.

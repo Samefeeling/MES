@@ -54,6 +54,8 @@ export interface PersistedPlan {
     lineOrder?: LineKey[];
     /** Crews and the lines they share — the board's daily capacity. */
     crewPools?: import('@/domain/assembly').CrewPool[];
+    /** The factory's Rostered Days Off, on top of weekends and NSW public holidays. */
+    rdoDays?: import('@/engine/assembly/factoryCalendar').RdoDay[];
     /** Date-bounded crew plan; supersedes static `orderWorkers`. */
     orderCrewAssignments?: Record<string, CrewAssignment[]>;
     orderStarts?: Record<string, string>;

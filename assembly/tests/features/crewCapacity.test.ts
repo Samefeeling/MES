@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { OrderRow } from '@/engine/assembly/board';
 import { DEFAULT_CREW_POOLS, type LineKey } from '@/domain/assembly';
 import { boardHours, capacityDays, shareDay } from '@/features/assembly/crewCapacity';
+import { setFactoryCalendar } from '@/engine/assembly/dates';
 
 const demand = (entries: [string, number][]) => new Map(entries as [LineKey, number][]);
 
@@ -110,5 +111,19 @@ describe('hours on the board, against the crews', () => {
     expect(got.unpooled).toEqual([{ key: 'GENERAL', hours: 5 }]);
     expect(got.perDay).toBe(45);
     expect(got.days).toBeCloseTo(75 / 45, 6);
+  });
+});
+
+describe('a day the factory is shut', () => {
+  it('has no capacity on a public holiday or an RDO', () => {
+    setFactoryCalendar({ rdo: [{ day: '2026-10-07' }] });
+    try {
+      const days = ['2026-10-05', '2026-10-06', '2026-10-07'].map((k) => new Date(`${k}T00:00:00`));
+      const out = capacityDays([], DEFAULT_CREW_POOLS, () => 3, days, days[0]);
+      // Labour Day, a Tuesday, an RDO.
+      expect(out.map((d) => [d.working, d.capacity])).toEqual([[false, 0], [true, 82.5], [false, 0]]);
+    } finally {
+      setFactoryCalendar({ rdo: [] });
+    }
   });
 });

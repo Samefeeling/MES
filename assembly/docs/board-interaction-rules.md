@@ -316,6 +316,34 @@ The order detail shows the pinned start — to the minute — with a **Release**
 button, which hands the order back to the schedule: it then starts as early as
 its crew, its line and the orders it waits on allow.
 
+## Closed days
+
+**The factory is shut at the weekend, on every NSW public holiday and on the
+RDOs the supervisor enters.** A closed weekday is read exactly like a weekend:
+the schedule steps over it (work that would have run on it runs on the next
+open day, and a crew's days skip it), it carries no capacity on the banner or
+on any folded line, nothing waiting for a crew is spread onto it, an empty
+one cannot be picked for level loading and level loading never moves an order
+onto one. A bar dropped on one asks for overtime, naming the holiday or RDO;
+**Move to** takes the next day the factory is open.
+
+The public holidays are worked out for every year from the Public Holidays Act
+2010 (NSW), days in lieu included: New Year's Day (and the Monday after a
+weekend one), Australia Day (the Monday, when the 26th is a weekend), Good
+Friday to Easter Monday, Anzac Day (no day in lieu), King's Birthday (second
+Monday in June), Labour Day (first Monday in October), Christmas Day and Boxing
+Day (each with the next free weekday when it falls on a weekend). Bank Holiday
+is left out — it is not a factory holiday — and a one-off holiday the state
+proclaims is entered as an RDO.
+
+**RDOs are entered under Crew capacity → Closed days** (supervisor only), a
+date and an optional name each; the list shows both calendars a year at a time.
+They are planning, like the crews: they go out with the plan on **Save**, and the
+board is worked out again round them the moment one is added or removed. In the
+heading a closed weekday reads **PH** or **RDO** in place of its percentage and
+names itself on hover; the Weekends switch hides weekends only, so a closed
+weekday stays on the timeline, greyed.
+
 ## Level loading
 
 **Ctrl + click load blocks to pick them; right-click to level them.** A load

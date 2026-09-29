@@ -31,7 +31,7 @@ import {
 } from '@/domain/assembly';
 import { capacityDays, type CapacityDay, type LineCapacity } from './crewCapacity';
 import { loadBand } from '@/engine/assembly/workload';
-import { addCalendarDays, isWeekend } from '@/engine/assembly/dates';
+import { addCalendarDays, closureOn, isClosed, isWeekend } from '@/engine/assembly/dates';
 import { remainingHours } from '@/engine/assembly/duration';
 import {
   boardDayLoads,
@@ -1142,7 +1142,7 @@ function LineLoadStrip({
     if (hours <= 0 && waiting <= 0) {
       // Nothing on it, but a day to come the crew works is room to level
       // into: it can still be picked.
-      if (!picked.some((d) => !d.past && !isWeekend(d.date))) return null;
+      if (!picked.some((d) => !d.past && !isClosed(d.date))) return null;
       return (
         <button
           type="button"
@@ -1817,7 +1817,7 @@ export function AssemblyGantt({
       board.today,
       board.workerOnLeave,
     );
-    return showWeekends ? calendar : calendar.filter((load) => load.working);
+    return showWeekends ? calendar : calendar.filter((load) => !isWeekend(load.date));
   }, [allRows, board, showWeekends, spanDays]);
 
   /** One day's heading: a column as tall as the day is full. */
@@ -1829,11 +1829,16 @@ export function AssemblyGantt({
     // overtime — but muted, so it never reads as normal capacity.
     const band = cap.working ? cap.band : 'closed';
     const day = toDayKey(d);
+    // A weekday the factory is shut: a public holiday or an RDO.
+    const closure = closureOn(d);
     // Every line's block for this day, for level loading.
     const pickKeys = [...cap.lines.keys()].map((lane) => loadPickKey(lane, cap.key));
     const isPicked = pickKeys.length > 0 && pickKeys.every((k) => pickedLoads.has(k));
     const title = [
       `${formatShortDay(d)} — asked of the crews`,
+      ...(closure
+        ? [`${closure.name} — ${closure.kind === 'rdo' ? 'Rostered Day Off' : 'NSW public holiday'}, factory closed`]
+        : []),
       `${cap.crewed.toFixed(1)} h with people on it` +
         (cap.waiting > 0 ? `, ${cap.waiting.toFixed(1)} h of orders with nobody on them yet (blue)` : ''),
       `of ${cap.capacity.toFixed(1)} h the crews can work — ${pct}%` +
@@ -1848,7 +1853,7 @@ export function AssemblyGantt({
     return (
       <div
         key={day}
-        className={`daycol ${load.working ? '' : 'weekend'} ${load.isToday ? 'today' : ''} ${load.past ? 'past' : ''} ${orderDay === day ? 'filtered' : ''} ${isPicked ? 'picked' : ''}`}
+        className={`daycol ${load.working ? '' : 'weekend'} ${closure ? `closure ${closure.kind}` : ''} ${load.isToday ? 'today' : ''} ${load.past ? 'past' : ''} ${orderDay === day ? 'filtered' : ''} ${isPicked ? 'picked' : ''}`}
         style={{ left: axis.offsets[i], width: axis.widths[i] }}
         title={`${title}\nClick for the orders · Ctrl + click to pick every line's load for level loading`}
         onContextMenu={(e) => {
@@ -1893,7 +1898,13 @@ export function AssemblyGantt({
           )}
           <span className="daycol-date">{formatShortDay(d)}</span>
         </span>
-        <LoadColumn crewed={cap.crewed} waiting={cap.waiting} capacity={cap.capacity} band={band} label={`${pct}%`} />
+        <LoadColumn
+          crewed={cap.crewed}
+          waiting={cap.waiting}
+          capacity={cap.capacity}
+          band={band}
+          label={closure ? (closure.kind === 'rdo' ? 'RDO' : 'PH') : `${pct}%`}
+        />
         {/* Every day is dragged by its own edge, the way the seven columns
             to the left of it are. */}
         <DayGrip day={day} width={axis.widths[i]} />
@@ -1925,7 +1936,13 @@ export function AssemblyGantt({
           `${span.label} · ${dates}\n` +
           `${week.crewed.toFixed(1)} h with people on it` +
           (week.waiting > 0 ? `, ${week.waiting.toFixed(1)} h with nobody on it yet (blue)` : '') +
-          ` of ${week.capacity.toFixed(1)} h the crews can work — ${pct}%\nClick for the orders`
+          ` of ${week.capacity.toFixed(1)} h the crews can work — ${pct}%\n` +
+          caps
+            .map((c) => closureOn(c.date))
+            .filter((c): c is NonNullable<typeof c> => c !== null)
+            .map((c) => `${c.name} (${c.day.slice(8)}/${c.day.slice(5, 7)}) — closed\n`)
+            .join('') +
+          'Click for the orders'
         }
         onClick={(e) => {
           if ((e.target as Element).closest('button')) return;

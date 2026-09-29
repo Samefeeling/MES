@@ -3464,6 +3464,26 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .app-header .board-tools .crew-pools .crew-line:disabled { cursor: default; opacity: 1; }
 .crew-pools-actions { display: flex; gap: 6px; margin-top: 6px; }
 
+/* Closed days, under the crews: public holidays and RDOs side by side. */
+.factory-calendar { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+.factory-calendar .fc-head { display: flex; align-items: center; gap: 10px; }
+.factory-calendar h4 { margin: 0; font-size: 12px; }
+.factory-calendar .fc-year { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.factory-calendar .fc-lists { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.factory-calendar h5 { margin: 4px 0; font-size: 11px; color: var(--muted); font-weight: 700; }
+.factory-calendar ul { list-style: none; margin: 0 0 4px; padding: 0; max-height: 280px; overflow: auto; font-size: 12px; }
+.factory-calendar li { display: flex; align-items: center; gap: 8px; padding: 1px 0; }
+.factory-calendar li.fc-weekend { color: var(--muted); }
+.factory-calendar .fc-day { width: 6.5em; flex: none; font-variant-numeric: tabular-nums; }
+.factory-calendar .fc-remove { margin-left: auto; padding: 0 5px; }
+.factory-calendar .fc-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.factory-calendar .fc-add input { font: inherit; font-size: 12px; padding: 1px 4px; }
+.factory-calendar .fc-add input:not([type]) { width: 10em; }
+.factory-calendar .fc-clash { flex-basis: 100%; color: #b45309; font-size: 11px; }
+@media (max-width: 640px) {
+  .factory-calendar .fc-lists { grid-template-columns: 1fr; }
+}
+
 /* The day's load in the banner lists its orders when pressed. */
 .assy-head .daycol { cursor: pointer; }
 .assy-head .daycol:hover { box-shadow: inset 0 0 0 2px var(--accent); }
@@ -3840,3 +3860,7 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .board-hours .pool-row.total th,
 .board-hours .pool-row.total td { border-top: 2px solid var(--border-strong, var(--border)); font-weight: 750; }
 .metric-panel:has(.board-hours) { width: min(440px, calc(100vw - 32px)); max-height: 70vh; }
+
+/* A weekday the factory is shut: a public holiday (PH) or a Rostered Day Off. */
+.assy-head .daycol.closure .lc-label { color: #b91c1c; }
+.assy-head .daycol.closure.rdo .lc-label { color: #6d28d9; }

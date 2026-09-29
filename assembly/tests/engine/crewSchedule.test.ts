@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { setFactoryCalendar } from '@/engine/assembly/dates';
 import { PRODUCTIVE_HOURS_PER_PERSON } from '@/domain/assembly';
 import { planVariableCrew } from '@/engine/assembly/crewSchedule';
 
@@ -73,6 +74,12 @@ describe('date-bounded crew capacity', () => {
  * — and with it the moment the crew came free — drifted with them.
  */
 describe('planning across the day the clocks change', () => {
+  // Good Friday, Easter Monday (3 and 6 April) and Labour Day (5 October) sit
+  // right against these transitions. What is tested here is the clock, so the
+  // days are counted without the public holidays; they have tests of their own.
+  beforeAll(() => setFactoryCalendar({ holidays: false }));
+  afterAll(() => setFactoryCalendar({ holidays: true }));
+
   const crewOf = (...ids: string[]) =>
     ids.map((workerId) => ({ workerId, fromDay: null, toDayExclusive: null }));
 

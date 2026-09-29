@@ -15,7 +15,7 @@ import {
   type CrewAssignment,
 } from '@/domain/assembly';
 import {
-  isWeekend,
+  isClosed,
   nextMidnight,
   openDaysBetween,
   startOfDay,
@@ -179,7 +179,7 @@ export function planVariableCrew(
   }
 
   for (let i = 0; i < MAX_PLAN_DAYS && remaining > EPSILON; i++) {
-    if (!overtime && isWeekend(cursor)) {
+    if (!overtime && isClosed(cursor)) {
       cursor = nextMidnight(cursor);
       continue;
     }

@@ -21,7 +21,7 @@
  * before the drag.
  */
 
-import { isWeekend, nextWorkingDay, startOfDay } from '@/engine/assembly/dates';
+import { isClosed, nextWorkingDay, startOfDay } from '@/engine/assembly/dates';
 import {
   atColumnMinute,
   columnMinuteOf,
@@ -131,16 +131,17 @@ function columnsBetween(from: Date, to: Date, showWeekends: boolean): number {
 }
 
 /**
- * Weekends are shut unless overtime is approved, and a bulk move is not where
- * that gets decided — so a bar landing on one opens on the Monday. With weekend
- * columns hidden this never fires: the column axis has no weekends on it.
+ * Weekends, public holidays and RDOs are shut unless overtime is approved, and
+ * a bulk move is not where that gets decided — so a bar landing on one opens
+ * on the next working day. With weekend columns hidden a weekend never comes
+ * up: the column axis has none on it.
  *
  * The time of day is kept either way. A marked run is a shape, and half of what
  * gives it its shape is where in the shift each order sits — flattening all of
  * them to the open of their day is not moving the run, it is redrawing it.
  */
 const onShift = (at: Date): Date =>
-  isWeekend(at)
+  isClosed(at)
     ? atColumnMinute(nextWorkingDay(at), columnMinuteOf(at))
     : at;
 

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 import {
   addWorkingDays,
   subWorkingDays,
@@ -9,6 +9,7 @@ import {
   prevMidnight,
   prevWorkingDay,
   scheduleStatus,
+  setFactoryCalendar,
   wholeDaysBetween,
   workingSpans,
 } from '@/engine/assembly/dates';
@@ -226,6 +227,12 @@ describe('drawing a bar across the closed days', () => {
  * Sun 5 Apr 2026 (AEDT→AEST, NZDT→NZST) and Sun 4 Oct 2026 (AEST→AEDT).
  */
 describe('crossing the day the clocks change', () => {
+  // Good Friday, Easter Monday (3 and 6 April) and Labour Day (5 October) sit
+  // right against these transitions. What is tested here is the clock, so the
+  // days are counted without the public holidays; they have tests of their own.
+  beforeAll(() => setFactoryCalendar({ holidays: false }));
+  afterAll(() => setFactoryCalendar({ holidays: true }));
+
   const midnights = (from: Date, count: number): Date[] => {
     const out: Date[] = [];
     let cursor = from;

@@ -34,6 +34,9 @@ function useGanttInputs(): GanttInputs | null {
   const production = usePlanStore((s) => s.production);
   const virtualLines = usePlanStore((s) => s.virtualLines);
   const lineNames = usePlanStore((s) => s.lineNames);
+  // Not read here: the engine's calendar already carries them (see
+  // `planStore`). A dependency, so the board is worked out again round them.
+  const rdoDays = usePlanStore((s) => s.rdoDays);
 
   return useMemo(
     () =>
@@ -73,6 +76,7 @@ function useGanttInputs(): GanttInputs | null {
       production,
       virtualLines,
       lineNames,
+      rdoDays,
     ],
   );
 }

@@ -53,6 +53,7 @@ import { overdueOrders } from './overdue';
 import { OverdueDetail } from './OverdueDetail';
 import { ManualOrderButton } from './ManualOrders';
 import { Metric, MetricNote } from './Metric';
+import { FactoryCalendar } from './FactoryCalendar';
 import { ReviewOrders } from './SuggestCrew';
 import { formatShortDay, fromDayKey, toDayKey } from '@/lib/time';
 
@@ -529,6 +530,7 @@ function CrewPoolsEditor({ board }: { board: AssemblyGanttView }) {
       ) : (
         <MetricNote>Sign in as supervisor to change the crews.</MetricNote>
       )}
+      <FactoryCalendar today={board.today} />
     </div>
   );
 }

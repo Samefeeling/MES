@@ -24,7 +24,7 @@ import { useUiStore } from '@/store/uiStore';
 import { DRAG_TYPE_BAR } from '@/features/assembly/OrderBar';
 import { DRAG_TYPE_LINE } from '@/features/assembly/lineDrag';
 import type { LineKey } from '@/domain/assembly';
-import { isWeekend } from '@/engine/assembly/dates';
+import { isClosed } from '@/engine/assembly/dates';
 import { shiftOpensOn } from '@/engine/assembly/shift';
 import { shiftTimelineKeepingClock } from './boardView';
 import { barDragLanding } from './barDrag';
@@ -238,19 +238,20 @@ export function useDragDrop() {
       // below five minutes there is no move to write.
       if (moved.getTime() === from.getTime()) return;
 
-      // The factory is shut at the weekend. Ask before writing work into one;
-      // nothing changes until the supervisor answers.
-      if (isWeekend(moved)) {
+      // The factory is shut at the weekend, on a public holiday and on an
+      // RDO. Ask before writing work into one; nothing changes until the
+      // supervisor answers.
+      if (isClosed(moved)) {
+        // The same time of day on the next working day: saying "not that day
+        // then" should not also move the order to the open of the shift.
+        let next = shiftTimelineKeepingClock(moved, 1, false);
+        for (let guard = 0; guard < 31 && isClosed(next); guard++) {
+          next = shiftTimelineKeepingClock(next, 1, false);
+        }
         useUiStore.getState().askOvertime({
           jobId: key,
           atISO: moved.toISOString(),
-          // The same time of day on the Monday: saying "not the weekend then"
-          // should not also move the order to the open of the shift.
-          nextWorkingISO: shiftTimelineKeepingClock(
-            moved,
-            1,
-            false,
-          ).toISOString(),
+          nextWorkingISO: next.toISOString(),
         });
         return;
       }

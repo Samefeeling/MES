@@ -1,7 +1,8 @@
 /**
- * The weekend question.
+ * The weekend question — and the public holiday's and the RDO's.
  *
- * Saturday and Sunday are closed, so a bar dropped on one is not written
+ * Saturday and Sunday are closed, and so are NSW public holidays and the
+ * factory's Rostered Days Off, so a bar dropped on one is not written
  * straight to the plan: paying a crew to come in is the supervisor's call, and
  * this is where they make it. Until they answer, the order stays exactly where
  * it was — the drag has changed nothing.
@@ -18,6 +19,7 @@ import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { useUiStore } from '@/store/uiStore';
 import { Button } from '@/ui';
 import { formatDay } from '@/lib/time';
+import { closureOn } from '@/engine/assembly/dates';
 
 
 export function OvertimePrompt() {
@@ -37,6 +39,7 @@ export function OvertimePrompt() {
   const jobId = JobId(request.jobId);
   const dropped = new Date(request.atISO);
   const monday = new Date(request.nextWorkingISO);
+  const closure = closureOn(dropped);
 
   const confirm = () => {
     setOvertime(jobId, true);
@@ -59,10 +62,13 @@ export function OvertimePrompt() {
       onClick={clear}
     >
       <div className="ot-dialog" onClick={(e) => e.stopPropagation()}>
-        <h2 id="ot-title">Weekend working</h2>
+        <h2 id="ot-title">
+          {closure ? `${closure.kind === 'rdo' ? 'RDO' : 'Public holiday'} working` : 'Weekend working'}
+        </h2>
         <p>
           <strong>{request.jobId}</strong> was dropped on{' '}
-          <strong>{formatDay(dropped)}</strong>. The factory is closed that
+          <strong>{formatDay(dropped)}</strong>
+          {closure && <> ({closure.name})</>}. The factory is closed that
           day, so running it needs overtime.
         </p>
         <p className="ot-note">
