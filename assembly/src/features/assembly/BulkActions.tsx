@@ -34,7 +34,7 @@ const label = (row: OrderRow): string =>
     : jobNumOf(String(row.job.id));
 
 /** Closes on a press outside it, or Esc. */
-function useDismiss(box: React.RefObject<HTMLElement | null>, onClose: () => void) {
+export function useDismiss(box: React.RefObject<HTMLElement | null>, onClose: () => void) {
   useEffect(() => {
     const down = (e: PointerEvent) => {
       if (!box.current?.contains(e.target as Node)) onClose();

@@ -152,6 +152,8 @@ export function useAssemblyGantt(): AssemblyGanttView | null {
  */
 export function recomputeAssemblyGantt(
   extraCrew: Record<string, string[]>,
+  /** Start days to try on top of the plan's own pins, by order id. */
+  extraStarts: Record<string, string> = {},
 ): AssemblyGanttView | null {
   const { dataset, indexes } = useDataStore.getState();
   if (!dataset || !indexes) return null;
@@ -174,7 +176,7 @@ export function recomputeAssemblyGantt(
       ),
     },
     orderDoubleBooked: plan.orderDoubleBooked,
-    orderStarts: plan.orderStarts,
+    orderStarts: { ...plan.orderStarts, ...extraStarts },
     orderActualStarts: plan.orderActualStarts,
     orderOvertime: plan.orderOvertime,
     progress: plan.progress,

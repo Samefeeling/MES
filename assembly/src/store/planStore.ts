@@ -308,6 +308,12 @@ interface PlanState {
   setWorkerOnLeave: (workerId: string, day: string, away: boolean) => void;
   /** Pin an order's bar to a start day (null clears the pin). */
   setOrderStart: (jobId: JobId, isoDay: string | null) => void;
+  /**
+   * Pin, or (null) release, several orders' starts in one write — a level
+   * loading run and its undo. One write rather than one per order: every
+   * change to the plan is saved and synced, and a run of forty is one edit.
+   */
+  setOrderStarts: (starts: Record<string, string | null>) => void;
   startOrder: (jobId: JobId, record: ActualStartRecord) => void;
   /** Approve, or withdraw, weekend working on one order. */
   setOvertime: (jobId: JobId, approved: boolean) => void;
@@ -801,6 +807,17 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       const orderStarts = { ...state.orderStarts };
       if (isoDay === null) delete orderStarts[String(jobId)];
       else orderStarts[String(jobId)] = isoDay;
+      return { orderStarts };
+    });
+  },
+
+  setOrderStarts(starts) {
+    set((state) => {
+      const orderStarts = { ...state.orderStarts };
+      for (const [jobId, isoDay] of Object.entries(starts)) {
+        if (isoDay === null) delete orderStarts[jobId];
+        else orderStarts[jobId] = isoDay;
+      }
       return { orderStarts };
     });
   },

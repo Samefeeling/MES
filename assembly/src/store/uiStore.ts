@@ -230,6 +230,12 @@ interface UiState {
    */
   marked: string[];
   /**
+   * Load blocks picked with Ctrl held, for level loading, as `line|day` —
+   * see `loadPickKey`. A week's block is its days, so what is picked survives
+   * the timeline being zoomed or a week being folded open.
+   */
+  loadPicks: string[];
+  /**
    * Where the pointer was when it was picked. The detail opens there rather
    * than in a fixed column: the supervisor is already looking at that row, and
    * the schedule keeps the whole width. Null centres it in the window: an order
@@ -315,6 +321,9 @@ interface UiState {
   /** Add or remove one order from the set being moved together. */
   toggleMark: (jobId: string) => void;
   clearMarks: () => void;
+  /** Pick these load-block days, or — when every one is already picked — let them go. */
+  toggleLoadPicks: (keys: string[]) => void;
+  clearLoadPicks: () => void;
   setCrewPicker: (jobId: string | null) => void;
   setWorkerLoad: (workerId: string | null) => void;
   /**
@@ -372,6 +381,7 @@ interface UiState {
 export const useUiStore = create<UiState>((set, get) => ({
   selectedJobId: null,
   marked: [],
+  loadPicks: [],
   selectedAt: null,
   overtimeRequest: null,
   clashRequest: null,
@@ -409,6 +419,14 @@ export const useUiStore = create<UiState>((set, get) => ({
         : [...state.marked, jobId],
     })),
   clearMarks: () => set({ marked: [] }),
+  toggleLoadPicks: (keys) =>
+    set((state) => {
+      const held = new Set(state.loadPicks);
+      if (keys.every((key) => held.has(key))) for (const key of keys) held.delete(key);
+      else for (const key of keys) held.add(key);
+      return { loadPicks: [...held] };
+    }),
+  clearLoadPicks: () => set({ loadPicks: [] }),
   // The two popups that sit over the board are mutually exclusive, the way
   // opening an order's detail already closes the picker.
   setCrewPicker: (crewPickerJobId) =>
@@ -426,7 +444,8 @@ export const useUiStore = create<UiState>((set, get) => ({
       (state.crewPickerJobId && { crewPickerJobId: null }) ||
       (state.workerLoadId && { workerLoadId: null }) ||
       (state.selectedJobId && { selectedJobId: null }) ||
-      (state.marked.length > 0 && { marked: [] });
+      (state.marked.length > 0 && { marked: [] }) ||
+      (state.loadPicks.length > 0 && { loadPicks: [] });
     if (!top) return false;
     set(top);
     return true;

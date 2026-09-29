@@ -316,6 +316,58 @@ The order detail shows the pinned start — to the minute — with a **Release**
 button, which hands the order back to the schedule: it then starts as early as
 its crew, its line and the orders it waits on allow.
 
+## Level loading
+
+**Ctrl + click load blocks to pick them; right-click to level them.** A load
+block is a folded line's cell for a day or for a folded week, or a day or week
+in the heading (which picks every line's block for it). Picked blocks are ringed
+and ticked; Esc lets them go. A week is picked as its days, so what is picked
+survives a zoom. Right-click on a block that is not among the picked ones
+levels that block alone.
+
+The right-click opens a panel and writes nothing. It lists what would move —
+each order with the day it starts on now and the day it would start on — and
+what it would leave, each with the reason, and reads the overload on the picked
+days before and after off a real re-plan of the board rather than off its own
+sums. **Level** writes the starts (supervisor only, like a drag); **Undo**, in
+the same panel, puts the pins back as they were. Any one order can be handed
+back to the schedule from its detail with **Release**.
+
+**Capacity is the crews', as the banner reads it.** A day is over when the crew
+group serving the line is asked for more than it can work — people × 7.5 h — after
+the hours of every other line that group serves. Orders are not moved to fill a
+day past 100% (90% and 80% are offered: 80% keeps every day green).
+
+**What it moves.** Orders nobody is on yet. Their start is a plan and nothing
+else, so pinning one is all it takes: an order with a pinned start and no crew is
+drawn from its start for as many whole days as its work takes at the crew Crew
+orders would give it, instead of tucked up against its Due Date. An overloaded
+picked day gives up, one order at a time, whichever can leave it for the least
+disturbance — a day with room beating a day that only spreads the overload, then
+the fewest days moved, then the later Due Date, then the day before rather than
+the day after (finishing early costs a shelf, finishing late costs a customer).
+
+**What it never moves.** An order with a crew (its days come out of the crew's
+diary, and a pin would quietly re-sequence whoever is on it), one already begun,
+a support order, a routed operation (its bench follows the route) and one with
+weekend overtime approved. Their hours still count against the day. It says so
+for each of them in the list of orders it left.
+
+**What holds an order.** Nothing starts before today, before the day its material
+lands, or before every component it is made from is finished; and nothing is put
+later than the last day it can start and still make its Due Date — which is
+counted back through whatever waits for it. An order short of material with no
+dated PO is held where it is: there is no honest day to give it. A day nothing
+can relieve stays over, and the panel names why.
+
+**Linked orders move with it.** Putting an order later pushes whatever waits for
+its output to start after it, and so on down the chain; pulling it earlier
+brings the orders it waits on earlier with it. Each such move is listed against
+the order that caused it ("follows 018140", "brought ahead of 018142"). A chain
+is never left with an order starting before its supplier is done, and never
+pushed past the Due Date of what is downstream. Where several open batches of
+one part are alternatives, only the one that would serve first is a link.
+
 ## Crew orders
 
 The button fills orders that have remaining work and no crew. It preserves

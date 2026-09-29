@@ -81,6 +81,9 @@ import { earliestStart, markedSet, type MarkedMove } from './groupMove';
 import { toDayKey } from '@/lib/time';
 import { rowIndex } from './rowIndex';
 import { BulkActions } from './BulkActions';
+import { LevelLoading } from './LevelLoading';
+import { loadPickKey, pickedOverload } from './levelLoad';
+import { recomputeAssemblyGantt } from '@/store/assemblySelectors';
 import { overdueDays } from './overdue';
 import {
   TIMELINE_MIN_WEEKS,
@@ -625,6 +628,9 @@ function LineGroupView({
   rowFloors,
   onMark,
   onDependencyHover,
+  loadPicks,
+  onPickLoad,
+  onLevel,
 }: {
   group: LineGroup;
   /** Orders on the line, before any date window narrowed what is drawn. */
@@ -678,6 +684,12 @@ function LineGroupView({
   rowFloors: ReadonlyMap<string, string>;
   onMark: (id: string) => void;
   onDependencyHover: (id: string | null) => void;
+  /** Load-block days picked with Ctrl, as `line|day`. */
+  loadPicks: ReadonlySet<string>;
+  /** Ctrl + click on a block: pick it, or let it go. */
+  onPickLoad: (keys: string[]) => void;
+  /** Right-click on a block: level what is picked (or, if it is not, this one). */
+  onLevel: (keys: string[], at: { x: number; y: number }) => void;
 }) {
   const { active } = useDndContext();
   const arranging = active?.data.current?.type === DRAG_TYPE_LINE;
@@ -1000,6 +1012,10 @@ function LineGroupView({
            left={labelWidth}
            width={gridWidth}
            line={group.line.name}
+           lineKey={group.line.key}
+           picks={loadPicks}
+           onPick={onPickLoad}
+           onLevel={onLevel}
          />
        )}
       </div>
@@ -1085,6 +1101,10 @@ function LineLoadStrip({
   left,
   width,
   line,
+  lineKey,
+  picks,
+  onPick,
+  onLevel,
 }: {
   days: LineDayLoad[];
   capacity: (LineCapacity | undefined)[];
@@ -1095,6 +1115,11 @@ function LineLoadStrip({
   left: number;
   width: number;
   line: string;
+  lineKey: LineKey;
+  /** Picked for level loading: `line|day`. */
+  picks: ReadonlySet<string>;
+  onPick: (keys: string[]) => void;
+  onLevel: (keys: string[], at: { x: number; y: number }) => void;
 }) {
   const cell = (
     key: string,
@@ -1112,11 +1137,14 @@ function LineLoadStrip({
     const pool = crews.reduce((n, c) => n + c.demand, 0);
     const share = cap > 0 ? ((hours + waiting) / cap) * 100 : Infinity;
     const x = axis.offsets[from];
+    // A week is picked as its days, so the pick outlives a zoom.
+    const pickKeys = picked.map((d) => loadPickKey(lineKey, d.key));
+    const isPicked = pickKeys.length > 0 && pickKeys.every((k) => picks.has(k));
     return (
       <button
         type="button"
         key={key}
-        className={`aline-day${to - from > 1 ? ' week' : ''}${crews.length === 0 ? ' idle' : ''}`}
+        className={`aline-day${to - from > 1 ? ' week' : ''}${crews.length === 0 ? ' idle' : ''}${isPicked ? ' picked' : ''}`}
         style={{ left: x, width: axis.offsets[to] - x }}
         title={[
           `${line} · ${heading}: ${hours.toFixed(1)} h with people on it`,
@@ -1126,9 +1154,19 @@ function LineLoadStrip({
             ? `${pctText(share)} of the ${cap.toFixed(1)} h ${crews[0].pools.join(' + ')} can work` +
               ` · the crew as a whole is at ${pctText((pool / cap) * 100)}`
             : 'No crew group lists this line — set one under Crew capacity',
-          'Click for the orders',
+          'Click for the orders · Ctrl + click to pick it, right-click to level the picked loads',
         ].join('\n')}
-        onClick={(e) => onOpen(from, to, { x: e.clientX, y: e.clientY })}
+        onClick={(e) => {
+          if (e.ctrlKey || e.metaKey) {
+            onPick(pickKeys);
+            return;
+          }
+          onOpen(from, to, { x: e.clientX, y: e.clientY });
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onLevel(pickKeys, { x: e.clientX, y: e.clientY });
+        }}
       >
         <LoadColumn
           crewed={hours}
@@ -1376,6 +1414,21 @@ export function AssemblyGantt({
   /** The right-click menu: which orders it acts on, and where it was opened. */
   const [bulk, setBulk] = useState<{ ids: string[]; at: { x: number; y: number } } | null>(null);
   const closeBulk = useCallback(() => setBulk(null), []);
+  // Level loading: load blocks picked with Ctrl, and the panel a right-click on
+  // one opens over them.
+  const loadPicks = useUiStore((s) => s.loadPicks);
+  const toggleLoadPicks = useUiStore((s) => s.toggleLoadPicks);
+  const pickedLoads = useMemo(() => new Set(loadPicks), [loadPicks]);
+  const [level, setLevel] = useState<{ keys: string[]; at: { x: number; y: number } } | null>(null);
+  const closeLevel = useCallback(() => setLevel(null), []);
+  /** Right-click: what is picked if this block is among it, else just this block. */
+  const openLevel = useCallback(
+    (keys: string[], at: { x: number; y: number }) => {
+      if (keys.length === 0) return;
+      setLevel({ keys: keys.every((k) => pickedLoads.has(k)) ? loadPicks : keys, at });
+    },
+    [loadPicks, pickedLoads],
+  );
   const weekView = useUiStore((s) => s.weekView);
   const weekFold = useUiStore((s) => s.weekFold);
   const setWeekFold = useUiStore((s) => s.setWeekFold);
@@ -1450,6 +1503,31 @@ export function AssemblyGantt({
   const rowsByLine = useMemo(
     () => new Map(board.groups.map((g) => [g.line.key, rowsOfLine(board, g.line.key)])),
     [board],
+  );
+  /**
+   * How over capacity the picked days would read if these starts were pinned —
+   * off a fresh schedule of the whole board, not the level-loading plan's own
+   * sums, so the panel promises only what the board will then draw.
+   */
+  const verifyLevel = useCallback(
+    (
+      pins: Record<string, string>,
+      picks: ReadonlyMap<LineKey, ReadonlySet<string>>,
+      ceiling: number,
+    ) => {
+      const next = recomputeAssemblyGantt({}, pins);
+      if (!next) return null;
+      const positions = new Map(next.groups.map((g) => [g.line.key, benchPositions(next, g)]));
+      const after = capacityDays(
+        next.groups.flatMap((g) => g.rows),
+        crewPools,
+        (lane) => positions.get(lane) ?? 0,
+        days,
+        next.today,
+      );
+      return pickedOverload(after, picks, crewPools, ceiling);
+    },
+    [crewPools, days],
   );
   /**
    * The ids a date filter leaves on screen, or null when there is no filter.
@@ -1725,6 +1803,9 @@ export function AssemblyGantt({
     // overtime — but muted, so it never reads as normal capacity.
     const band = cap.working ? cap.band : 'closed';
     const day = toDayKey(d);
+    // Every line's block for this day, for level loading.
+    const pickKeys = [...cap.lines.keys()].map((lane) => loadPickKey(lane, cap.key));
+    const isPicked = pickKeys.length > 0 && pickKeys.every((k) => pickedLoads.has(k));
     const title = [
       `${formatShortDay(d)} — asked of the crews`,
       `${cap.crewed.toFixed(1)} h with people on it` +
@@ -1741,13 +1822,22 @@ export function AssemblyGantt({
     return (
       <div
         key={day}
-        className={`daycol ${load.working ? '' : 'weekend'} ${load.isToday ? 'today' : ''} ${load.past ? 'past' : ''} ${orderDay === day ? 'filtered' : ''}`}
+        className={`daycol ${load.working ? '' : 'weekend'} ${load.isToday ? 'today' : ''} ${load.past ? 'past' : ''} ${orderDay === day ? 'filtered' : ''} ${isPicked ? 'picked' : ''}`}
         style={{ left: axis.offsets[i], width: axis.widths[i] }}
-        title={`${title}\nClick for the orders`}
+        title={`${title}\nClick for the orders · Ctrl + click to pick every line's load for level loading`}
+        onContextMenu={(e) => {
+          if ((e.target as Element).closest('button, .col-resize')) return;
+          e.preventDefault();
+          openLevel(pickKeys, { x: e.clientX, y: e.clientY });
+        }}
         onClick={(e) => {
           // The fold chip folds and the edge resizes the day; the rest of
           // the cell lists what the day is made of.
           if ((e.target as Element).closest('button, .col-resize')) return;
+          if (e.ctrlKey || e.metaKey) {
+            toggleLoadPicks(pickKeys);
+            return;
+          }
           openDay(
             {
               title: `${formatShortDay(d)} · every line`,
@@ -1793,11 +1883,18 @@ export function AssemblyGantt({
     const dates = `${formatShortDay(span.first)}–${formatShortDay(span.last)}`;
     const left = axis.offsets[span.from];
     const width = axis.offsets[span.to] - left;
+    const pickKeys = caps.flatMap((c) => [...c.lines.keys()].map((lane) => loadPickKey(lane, c.key)));
+    const isPicked = pickKeys.length > 0 && pickKeys.every((k) => pickedLoads.has(k));
     return (
       <div
         key={`week-${span.key}`}
-        className="daycol weekcol"
+        className={`daycol weekcol${isPicked ? ' picked' : ''}`}
         style={{ left, width }}
+        onContextMenu={(e) => {
+          if ((e.target as Element).closest('button')) return;
+          e.preventDefault();
+          openLevel(pickKeys, { x: e.clientX, y: e.clientY });
+        }}
         title={
           `${span.label} · ${dates}\n` +
           `${week.crewed.toFixed(1)} h with people on it` +
@@ -1806,6 +1903,10 @@ export function AssemblyGantt({
         }
         onClick={(e) => {
           if ((e.target as Element).closest('button')) return;
+          if (e.ctrlKey || e.metaKey) {
+            toggleLoadPicks(pickKeys);
+            return;
+          }
           openDay(
             {
               title: `${span.label} · ${dates} · every line`,
@@ -2089,8 +2190,23 @@ export function AssemblyGantt({
           rowFloors={rowFloors}
           onMark={toggleMark}
           onDependencyHover={setHoveredJobId}
+          loadPicks={pickedLoads}
+          onPickLoad={toggleLoadPicks}
+          onLevel={openLevel}
         />
       ))}
+      {level && (
+        <LevelLoading
+          keys={level.keys}
+          at={level.at}
+          rows={allRows}
+          pools={crewPools}
+          today={board.today}
+          lineName={(line) => board.groups.find((g) => g.line.key === line)?.line.name ?? line}
+          verify={verifyLevel}
+          onClose={closeLevel}
+        />
+      )}
       {bulk && (
         <BulkActions ids={bulk.ids} at={bulk.at} rows={allRows} onClose={closeBulk} />
       )}

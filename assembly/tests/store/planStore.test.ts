@@ -483,3 +483,21 @@ describe('surviving a twice-daily export', () => {
     expect(state().lastSeen.B).toBe('2026-09-08');
   });
 });
+
+describe('setOrderStarts', () => {
+  beforeEach(() => {
+    usePlanStore.setState({ orderStarts: { KEEP: '2026-09-14T07:00:00.000Z', GONE: '2026-09-15T07:00:00.000Z' } });
+  });
+
+  it('pins and releases several orders in one write, leaving the rest alone', () => {
+    let writes = 0;
+    const off = usePlanStore.subscribe(() => { writes++; });
+    usePlanStore.getState().setOrderStarts({ NEW: '2026-09-16T07:00:00.000Z', GONE: null });
+    off();
+    expect(writes).toBe(1);
+    expect(usePlanStore.getState().orderStarts).toEqual({
+      KEEP: '2026-09-14T07:00:00.000Z',
+      NEW: '2026-09-16T07:00:00.000Z',
+    });
+  });
+});

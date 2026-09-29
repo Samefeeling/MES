@@ -1936,6 +1936,19 @@ body.col-resizing {
   font-weight: 600;
 }
 .aline-day.idle { border-style: dashed; }
+/* Picked with Ctrl for level loading: ringed, and ticked in the corner so it
+   still reads as picked when the load colour is the same either side of it. */
+.aline-day.picked { box-shadow: 0 0 0 2px var(--accent), 0 0 0 4px rgb(37 99 235 / 28%); }
+.aline-day.picked::after {
+  content: '✓';
+  position: absolute;
+  top: 0;
+  right: 2px;
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.2;
+}
 .timeline-weeks {
   height: 24px;
   margin-left: 4px;
@@ -3454,6 +3467,7 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 /* The day's load in the banner lists its orders when pressed. */
 .assy-head .daycol { cursor: pointer; }
 .assy-head .daycol:hover { box-shadow: inset 0 0 0 2px var(--accent); }
+.assy-head .daycol.picked { box-shadow: inset 0 0 0 2px var(--accent), inset 0 0 0 4px rgb(37 99 235 / 28%); }
 
 /* The orders behind one day's load. */
 .day-detail {
@@ -3568,6 +3582,17 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .bulk-list li.held b::before { content: '⚠ '; color: #b45309; }
 .bulk-list li.skip b::before { content: '– '; }
 .bulk-hint { margin: 4px 0 8px; color: var(--muted); font-size: 11px; line-height: 1.35; }
+.level-menu .level-warn { color: #b45309; }
+.level-ceiling { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; color: var(--muted); font-size: 11px; }
+.level-ceiling select { font: inherit; }
+.level-h {
+  margin: 8px 0 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
 .bulk-done { margin: 4px 6px 10px; }
 .bulk-menu footer { display: flex; justify-content: flex-end; gap: 8px; }
 .bulk-menu footer button {

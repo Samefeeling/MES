@@ -763,6 +763,33 @@ describe('the box an order with nobody on it is drawn in', () => {
   it('has nowhere to go without a Due Date', () => {
     expect(unstaffedWindow(waiting(null))).toBeNull();
   });
+
+  describe('with its start fixed', () => {
+    // 45 h at the two people Crew orders would give it: three whole days.
+    const fixed = (due: string, plannedStart: string): OrderRow => {
+      const r = waiting(due, plannedStart);
+      Object.assign(r.job, { laborHrs: 45 });
+      Object.assign(r, { startPinned: true });
+      return r;
+    };
+
+    it('is drawn from that day for as long as the work takes, not up against the Due Date', () => {
+      const w = unstaffedWindow(fixed('2026-09-30T00:00:00', '2026-09-14T07:00:00'))!;
+      expect(w.from).toEqual(new Date('2026-09-14T07:00:00'));
+      expect(toDayKey(w.to)).toBe('2026-09-17');
+      expect(w.late).toBe(false);
+    });
+
+    it('steps over the weekend, and says so when the run ends after the Due Date', () => {
+      // Thursday, Friday, Monday.
+      const w = unstaffedWindow(fixed('2026-09-21T00:00:00', '2026-09-17T07:00:00'))!;
+      expect(toDayKey(w.to)).toBe('2026-09-22');
+      // Due at the start of Monday: the run has to be over by Friday.
+      expect(w.late).toBe(true);
+      // Due with a time on Monday: work on Monday itself still makes it.
+      expect(unstaffedWindow(fixed('2026-09-21T16:00:00', '2026-09-17T07:00:00'))!.late).toBe(false);
+    });
+  });
 });
 
 describe('a folded line reads its load day by day', () => {
@@ -806,6 +833,14 @@ describe('a folded line reads its load day by day', () => {
     const loads = lineDayLoads([waiting('W', '2026-09-18T00:00:00')], 3, dates, day('2026-09-14'));
     expect(loads.map((d) => d.unstaffedHours)).toEqual([0, 0, 0, 0, 15]);
     expect(loads[4]).toMatchObject({ unstaffedOrders: ['W'], hours: 0 });
+  });
+
+  it('lays a fixed start out from its own day, whole days at a time', () => {
+    const w = waiting('W', '2026-09-30T00:00:00');
+    Object.assign(w.job, { laborHrs: 45 });
+    Object.assign(w, { startPinned: true, plannedStart: new Date('2026-09-15T07:00:00'), uncoveredHours: 45 });
+    const loads = lineDayLoads([w], 3, dates, day0());
+    expect(loads.map((d) => d.unstaffedHours)).toEqual([0, 0, 15, 15, 15]);
   });
 
   it('lists the orders behind a day, and they add up to its figures', () => {

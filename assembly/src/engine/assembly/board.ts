@@ -209,6 +209,13 @@ export interface OrderRow {
    * she be on two orders at once?" before she is on it.
    */
   plannedStart: Date;
+  /**
+   * The planner (or a level-loading run) fixed this order's start. An order
+   * with nobody on it and a fixed start is drawn from that day for as long as
+   * its work takes, instead of being spread over the days before its Due Date —
+   * see `unstaffedWindow`.
+   */
+  startPinned?: boolean;
   /** Bar end = Expect Date; null when unschedulable. */
   expectDate: Date | null;
   /** Bar length in days worked; null when unschedulable. */
@@ -1331,6 +1338,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
           ? start
           : crewPlan.start,
       plannedStart: start,
+      startPinned: Boolean(orderStarts[id]) && !actualStart && !completedToday,
       expectDate: orderExpect,
       days,
       slot: claim.slot,

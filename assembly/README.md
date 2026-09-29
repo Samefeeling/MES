@@ -222,6 +222,16 @@ plan goes back the other way, into the `ASSY_Production` list.
   claims a build position first is a separate question, settled by date — and a
   dragged bar claims its *people* before anything else does, or the order it was
   taken off would simply take them back.
+- **Level loading** — hold **Ctrl** and click load blocks (a folded line's day
+  or week, or a day or week in the heading for every line) to pick them, then
+  **right-click**. The panel lists which orders would move to which day, which it
+  leaves and why, and the overload on the picked days before and after — read off
+  a re-plan of the board — and **Level** writes the starts (**Undo** in the same
+  panel). It fills each day to what its crew group can work, moving only orders
+  nobody is on yet, never before today, their material or the components they are
+  made from, and never past the last day that makes their Due Date; linked orders
+  are pushed later or brought earlier with the order that moved. See
+  `docs/board-interaction-rules.md`.
 - **Colour by date** — Due is the date the customer asked for, and finishing
   during that day counts as making it:
 

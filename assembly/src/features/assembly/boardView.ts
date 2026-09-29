@@ -4,6 +4,8 @@ import type { OrderRow } from '@/engine/assembly/board';
 import {
   addCalendarDays,
   isWeekend,
+  nextWorkingDay,
+  prevWorkingDay,
   startOfDay,
   wholeDaysBetween,
 } from '@/engine/assembly/dates';
@@ -459,10 +461,53 @@ export function unstaffedWindow(
   const due = row.job.dueDate;
   if (!due) return null;
   const floor = row.plannedStart;
+  if (row.startPinned) {
+    /*
+     * A start somebody fixed — by hand, or a level-loading run — is a
+     * decision about when the order runs, so it is drawn from that day for as
+     * many whole days as the work takes rather than tucked up against the Due
+     * Date. Without a crew there is still no bar; this is the box.
+     */
+    const span = unstaffedSpanDays(row);
+    let last = startOfDay(floor);
+    if (isWeekend(last)) last = nextWorkingDay(last);
+    for (let i = 1; i < span; i++) last = nextWorkingDay(addCalendarDays(last, 1));
+    return {
+      from: floor,
+      to: addCalendarDays(last, 1),
+      late: last > lastWorkingDayFor(due),
+    };
+  }
   const days = durationDays(row.job, Math.max(1, preferredCrewSize(row))) ?? 0;
   const latest = subWorkingDays(due, days);
   if (due <= floor) return { from: floor, to: floor, late: true };
   return { from: latest > floor ? latest : floor, to: due, late: latest < floor };
+}
+
+/**
+ * Whole working days an order with nobody on it is drawn over: its hours at
+ * the crew Crew orders would give it, rounded up to the day. The one number
+ * both the pinned box and level loading use, so a run that plans an order for
+ * three days finds it drawn for three.
+ */
+export function unstaffedSpanDays(row: OrderRow): number {
+  const days = durationDays(row.job, Math.max(1, preferredCrewSize(row))) ?? 0;
+  return Math.max(1, Math.ceil(days - 1e-9));
+}
+
+/**
+ * The last working day an unfinished order may still be worked on and make its
+ * Due Date. A Due Date carrying no time of day is a deadline at the *start* of
+ * that day — the same reading the box that ends on it has always had — so the
+ * last day is the working day before it; one carrying a time is met by work
+ * on that day itself, or on the working day before it when it falls at a
+ * weekend.
+ */
+export function lastWorkingDayFor(due: Date): Date {
+  const day = startOfDay(due);
+  const bare = due.getTime() === day.getTime();
+  if (bare || isWeekend(day)) return prevWorkingDay(day);
+  return day;
 }
 
 /**

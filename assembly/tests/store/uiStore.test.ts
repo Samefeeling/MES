@@ -110,6 +110,36 @@ describe('the marked set', () => {
   });
 });
 
+describe('load blocks picked for level loading', () => {
+  beforeEach(() => {
+    useUiStore.setState({ loadPicks: [], marked: [], selectedJobId: null });
+  });
+
+  it('picks a block, and lets go of it when every one of its days is already picked', () => {
+    const week = ['ASSY|2026-09-14', 'ASSY|2026-09-15'];
+    useUiStore.getState().toggleLoadPicks(week);
+    expect(useUiStore.getState().loadPicks).toEqual(week);
+    // One of its days is picked on its own already: pressing the week completes it.
+    useUiStore.getState().toggleLoadPicks(['ASSY|2026-09-15', 'ASSY|2026-09-16']);
+    expect(new Set(useUiStore.getState().loadPicks)).toEqual(
+      new Set(['ASSY|2026-09-14', 'ASSY|2026-09-15', 'ASSY|2026-09-16']),
+    );
+    useUiStore.getState().toggleLoadPicks(['ASSY|2026-09-15', 'ASSY|2026-09-16']);
+    expect(useUiStore.getState().loadPicks).toEqual(['ASSY|2026-09-14']);
+  });
+
+  it('is one layer of Escape, after the marked orders', () => {
+    useUiStore.getState().toggleMark('A');
+    useUiStore.getState().toggleLoadPicks(['ASSY|2026-09-14']);
+    expect(useUiStore.getState().dismissTop()).toBe(true);
+    expect(useUiStore.getState().marked).toEqual([]);
+    expect(useUiStore.getState().loadPicks).toEqual(['ASSY|2026-09-14']);
+    expect(useUiStore.getState().dismissTop()).toBe(true);
+    expect(useUiStore.getState().loadPicks).toEqual([]);
+    expect(useUiStore.getState().dismissTop()).toBe(false);
+  });
+});
+
 /**
  * Escape used to be five listeners that all fired at once, so closing the
  * order detail also let go of a run of orders somebody had marked. One press
