@@ -25,6 +25,15 @@
  * done. Each of those moves is listed against the order that caused it, and
  * the room they need is counted like any other order's.
  *
+ * A picked day with room is a day to level into. An order leaving a day that is
+ * over goes to a picked day with room before an unpicked one, and whatever
+ * room the picked days still have is then filled with the next orders that
+ * could start there — nearest first, those standing on a day that is over
+ * before the rest — so picking an empty day asks for work to be brought
+ * forward onto it. Nothing is brought forward past its material, its
+ * components or onto a day it would tip over, and the panel can turn the
+ * filling off.
+ *
  * Capacity is the crews', not the line's: a day's room is read off the same
  * `shareDay` the banner and the folded rows are drawn from, so the plan agrees
  * with what the board shows afterwards. Orders are placed nearest Due Date
@@ -70,6 +79,11 @@ export interface LevelInput {
   picks: ReadonlyMap<LineKey, ReadonlySet<string>>;
   /** Share of a crew's day the plan may fill, 0–1. Defaults to all of it. */
   ceiling?: number;
+  /**
+   * Bring the next orders forward into room the picked days still have once
+   * nothing on them is over. On unless turned off.
+   */
+  fill?: boolean;
 }
 
 export type LeftKind = 'fixed' | 'held' | 'window';
@@ -86,7 +100,11 @@ export interface LevelMove {
   toDay: string;
   /** What to pin: the open of the shift on `toDay`. */
   startISO: string;
-  kind: 'level' | 'linked';
+  /**
+   * `level`: taken off a day that was over. `fill`: brought forward into room
+   * on a picked day. `linked`: moved with an order it waits on or supplies.
+   */
+  kind: 'level' | 'fill' | 'linked';
   /** For a linked move: the order that pulled it, and which way. */
   because?: { order: string; effect: 'follows' | 'ahead of' };
   /** Still over capacity on some of its days, even here. */
@@ -117,6 +135,8 @@ export interface LevelPlan {
   /** Hours over capacity, and days over, across the picked days. */
   before: { hours: number; days: number };
   after: { hours: number; days: number };
+  /** Hours the crews could still work on the picked days, before and after. */
+  room: { before: number; after: number };
   /** What is still over after the plan, worst first. */
   stillOver: OverDay[];
   /** Orders behind the picked blocks, moved or not. */
@@ -146,6 +166,8 @@ interface Item {
   /** Set when the plan puts it somewhere new. */
   placed?: number;
   linked?: { order: string; effect: 'follows' | 'ahead of' };
+  /** Brought forward into room on a picked day. */
+  filled?: boolean;
   inScope: boolean;
   /** What it waits on, grouped by the component that is waited for. */
   groups: Supplier[];
@@ -194,6 +216,7 @@ const dayNameOf = (key: string): string => formatShortDay(fromDayKey(key));
 export function planLevelLoad(input: LevelInput): LevelPlan {
   const { rows, pools, today, picks } = input;
   const ceiling = Math.min(1, Math.max(0.1, input.ceiling ?? 1));
+  const fill = input.fill ?? true;
   const todayKey = toDayKey(startOfDay(today));
 
   // ---- the calendar ------------------------------------------------------
@@ -430,9 +453,10 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
   const pickedDays = new Set<string>();
   for (const days of picks.values()) for (const d of days) if (d >= todayKey) pickedDays.add(d);
 
-  const measure = (): { hours: number; days: number; over: OverDay[] } => {
+  const measure = (): { hours: number; days: number; over: OverDay[]; room: number } => {
     let hours = 0;
     let days = 0;
+    let room = 0;
     const over: OverDay[] = [];
     for (const day of [...pickedDays].sort()) {
       let dayOver = 0;
@@ -442,12 +466,14 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
         if (excess > EPS) {
           dayOver += excess;
           over.push({ day, pool: p.name, demand: p.demand, capacity: p.capacity * ceiling });
+        } else if (excess < -EPS) {
+          room -= excess;
         }
       }
       hours += dayOver;
       if (dayOver > EPS) days++;
     }
-    return { hours, days, over };
+    return { hours, days, over, room };
   };
   const before = measure();
 
@@ -506,6 +532,7 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
     item.placed = s;
     if (linked) item.linked = linked;
     else delete item.linked;
+    delete item.filled;
     put(item.lane, uniform(item, s), 1);
   };
 
@@ -563,12 +590,25 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
     }
   };
 
+  /** Share of the days `item` would run on from `s` that were picked for it. */
+  const pickedShare = (item: Item, s: number): number => {
+    const days = pickedFor(item);
+    if (!days) return 0;
+    let n = 0;
+    for (let i = 0; i < item.span && s + i < cal.keys.length; i++) {
+      if (days.has(cal.keys[s + i])) n++;
+    }
+    return n / item.span;
+  };
+
   interface Offer {
     item: Item;
     /** Overload it adds where it stands, and at the best other day it could take. */
     stay: number;
     over: number;
     at: number;
+    /** How much of that day's run is on days that were picked to level into. */
+    share: number;
     distance: number;
   }
   /** The best other start for `item` — the closest that adds least overload. */
@@ -584,15 +624,19 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
     for (let s = lo; s <= hi; s++) {
       if (s === now) continue;
       const over = Math.round(added(item.lane, uniform(item, s)) / EPS) * EPS;
+      const share = pickedShare(item, s);
       const distance = Math.abs(s - now);
-      // Least overload, then the least far to go, then the earlier day: a
-      // finished order waits on a shelf, a late one costs a customer.
+      // Least overload; then the days that were picked to level into; then
+      // the least far to go, and the earlier day: a finished order waits on a
+      // shelf, a late one costs a customer.
       if (
         !best ||
         over < best.over - 1e-9 ||
-        (Math.abs(over - best.over) < 1e-9 && distance < best.distance)
+        (Math.abs(over - best.over) < 1e-9 &&
+          (share > best.share + 1e-9 ||
+            (Math.abs(share - best.share) < 1e-9 && distance < best.distance)))
       ) {
-        best = { item, stay, over, at: s, distance };
+        best = { item, stay, over, at: s, share, distance };
       }
     }
     put(item.lane, cur, 1);
@@ -623,6 +667,7 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
         offers.sort(
           (a, b) =>
             Number(a.over > EPS) - Number(b.over > EPS) ||
+            b.share - a.share ||
             a.distance - b.distance ||
             (b.item.row.job.dueDate?.getTime() ?? 0) - (a.item.row.job.dueDate?.getTime() ?? 0) ||
             b.item.hours - a.item.hours ||
@@ -637,6 +682,64 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
       }
     }
     if (!changed) break;
+  }
+
+  // Room the picked days still have is filled, earliest day first, with the
+  // orders that could start there and would come next: one standing on a
+  // day that is over before any other, then the nearest, then the nearest
+  // Due Date. An order only comes if it lands without tipping any day over,
+  // and brings more of its hours onto the picked days than it had there.
+  if (fill) {
+    const dueOf = (item: Item) => item.row.job.dueDate?.getTime() ?? Number.POSITIVE_INFINITY;
+    let pulled = 0;
+    const pullLimit = items.size + 20;
+    for (const day of [...pickedDays].sort()) {
+      const d = lowerBound(cal.keys, day);
+      if (cal.keys[d] !== day) continue;
+      while (pulled < pullLimit) {
+        const room = dayShare(day)
+          .filter((p) => pickedPools.has(p.id))
+          .reduce((n, p) => n + Math.max(0, p.capacity * ceiling - p.demand), 0);
+        if (room <= EPS) break;
+        const offers: { item: Item; relieves: boolean; start: number }[] = [];
+        for (const item of items.values()) {
+          if (item.kind !== 'free' || noCrew.includes(item.lane)) continue;
+          const days = pickedFor(item);
+          if (!days?.has(day)) continue;
+          const start = startOf(item);
+          if (start === null || start <= d) continue;
+          if (d < releaseOf(item) || d + item.span > cal.keys.length) continue;
+          const cur = current(item);
+          const next = uniform(item, d);
+          const onPicked = (profile: ReadonlyMap<string, number>) => {
+            let h = 0;
+            for (const [k, v] of profile) if (days.has(k) && k >= todayKey) h += v;
+            return h;
+          };
+          if (onPicked(next) - onPicked(cur) <= EPS) continue;
+          put(item.lane, cur, -1);
+          const stay = added(item.lane, cur);
+          const over = added(item.lane, next);
+          put(item.lane, cur, 1);
+          if (over > EPS) continue;
+          offers.push({ item, relieves: stay > EPS, start });
+        }
+        if (offers.length === 0) break;
+        offers.sort(
+          (a, b) =>
+            Number(b.relieves) - Number(a.relieves) ||
+            a.start - b.start ||
+            dueOf(a.item) - dueOf(b.item) ||
+            a.item.id.localeCompare(b.item.id),
+        );
+        const pick = offers[0].item;
+        moveTo(pick, d);
+        pick.filled = true;
+        followers(pick);
+        leaders(pick);
+        pulled++;
+      }
+    }
   }
 
   // What is still over, and which orders it is standing on.
@@ -682,14 +785,15 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
       fromDay: fromKey,
       toDay: toKey,
       startISO: shiftOpensOn(cal.days[item.placed]).toISOString(),
-      kind: item.linked ? 'linked' : 'level',
+      kind: item.linked ? 'linked' : item.filled ? 'fill' : 'level',
       because: item.linked,
       stillOver: over,
     });
   }
+  const kindRank = { level: 0, fill: 1, linked: 2 } as const;
   moves.sort(
     (a, b) =>
-      Number(a.kind === 'linked') - Number(b.kind === 'linked') ||
+      kindRank[a.kind] - kindRank[b.kind] ||
       a.toDay.localeCompare(b.toDay) ||
       a.order.localeCompare(b.order),
   );
@@ -699,6 +803,7 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
     noCrew,
     before: { hours: before.hours, days: before.days },
     after: { hours: after.hours, days: after.days },
+    room: { before: before.room, after: after.room },
     stillOver: after.over.sort((a, b) => b.demand - b.capacity - (a.demand - a.capacity)),
     inScope,
   };
@@ -764,17 +869,23 @@ export function parseLoadPicks(keys: readonly string[]): Map<LineKey, Set<string
 }
 
 /**
- * Hours over capacity across the picked days, read off the board's own
- * capacity figures — the same sum the plan predicts, taken from a real
- * schedule. What is asked of a crew is measured against the crews that serve
- * the picked lines, at the share of the day the plan was allowed to fill.
+ * Hours over capacity across the picked days, and the room they still have,
+ * read off the board's own capacity figures — the same sums the plan predicts,
+ * taken from a real schedule. What is asked of a crew is measured against the
+ * crews that serve the picked lines, at the share of the day the plan was
+ * allowed to fill. A day already gone is not counted: nothing is levelled
+ * onto it.
  */
 export function pickedOverload(
-  capacity: readonly { key: string; pools: readonly { id: string; demand: number; capacity: number }[] }[],
+  capacity: readonly {
+    key: string;
+    past?: boolean;
+    pools: readonly { id: string; demand: number; capacity: number }[];
+  }[],
   picks: ReadonlyMap<LineKey, ReadonlySet<string>>,
   pools: readonly CrewPool[],
   ceiling = 1,
-): { hours: number; days: number } {
+): { hours: number; days: number; room: number } {
   const served = new Set<string>();
   const days = new Set<string>();
   for (const [line, picked] of picks) {
@@ -783,14 +894,18 @@ export function pickedOverload(
   }
   let hours = 0;
   let over = 0;
+  let room = 0;
   for (const day of capacity) {
-    if (!days.has(day.key)) continue;
+    if (!days.has(day.key) || day.past) continue;
     let dayOver = 0;
     for (const p of day.pools) {
-      if (served.has(p.id)) dayOver += Math.max(0, p.demand - p.capacity * ceiling);
+      if (!served.has(p.id)) continue;
+      const excess = p.demand - p.capacity * ceiling;
+      if (excess > EPS) dayOver += excess;
+      else if (excess < -EPS) room -= excess;
     }
     if (dayOver > EPS) over++;
     hours += dayOver > EPS ? dayOver : 0;
   }
-  return { hours, days: over };
+  return { hours, days: over, room };
 }

@@ -323,7 +323,9 @@ block is a folded line's cell for a day or for a folded week, or a day or week
 in the heading (which picks every line's block for it). Picked blocks are ringed
 and ticked; Esc lets them go. A week is picked as its days, so what is picked
 survives a zoom. Right-click on a block that is not among the picked ones
-levels that block alone.
+levels that block alone. A day or week with nothing planned on it is still a
+block — blank until pointed at, tinted once picked — because an empty day the
+crew works is room to level into.
 
 The right-click opens a panel and writes nothing. It lists what would move —
 each order with the day it starts on now and the day it would start on — and
@@ -346,6 +348,18 @@ picked day gives up, one order at a time, whichever can leave it for the least
 disturbance — a day with room beating a day that only spreads the overload, then
 the fewest days moved, then the later Due Date, then the day before rather than
 the day after (finishing early costs a shelf, finishing late costs a customer).
+
+**A picked day with room is a day to level into.** An order leaving a day that
+is over goes to a picked day with room before a nearer day nobody picked. Then
+whatever room the picked days still have is filled, earliest day first, with the
+orders that could start there and would come next: one standing on a day that is
+over before any other, then the nearest, then the nearest Due Date. An order is
+only brought forward if it lands without tipping any day over and brings more of
+its hours onto the picked days than it had there, so orders already on picked
+days are not shuffled between them. The panel shows the room left on the picked
+days before and after, and filling can be turned off there to only relieve what
+is over. Picking an empty day on its own therefore brings the next work forward
+onto it.
 
 **What it never moves.** An order with a crew (its days come out of the crew's
 diary, and a pin would quietly re-sequence whoever is on it), one already begun,

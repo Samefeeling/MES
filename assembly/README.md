@@ -230,8 +230,10 @@ plan goes back the other way, into the `ASSY_Production` list.
   panel). It fills each day to what its crew group can work, moving only orders
   nobody is on yet, never before today, their material or the components they are
   made from, and never past the last day that makes their Due Date; linked orders
-  are pushed later or brought earlier with the order that moved. See
-  `docs/board-interaction-rules.md`.
+  are pushed later or brought earlier with the order that moved. An empty day or
+  week can be picked too: a picked day with room takes what an overloaded day
+  gives up first, and is then filled with the next orders that can start on it
+  (the panel can turn filling off). See `docs/board-interaction-rules.md`.
 - **Colour by date** — Due is the date the customer asked for, and finishing
   during that day counts as making it:
 

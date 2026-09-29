@@ -1131,7 +1131,6 @@ function LineLoadStrip({
     const picked = days.slice(from, to);
     const hours = picked.reduce((n, d) => n + d.hours, 0);
     const waiting = picked.reduce((n, d) => n + d.unstaffedHours, 0);
-    if (hours <= 0 && waiting <= 0) return null;
     const crews = capacity.slice(from, to).filter((c): c is LineCapacity => Boolean(c) && c!.pct !== null);
     const cap = crews.reduce((n, c) => n + c.capacity, 0);
     const pool = crews.reduce((n, c) => n + c.demand, 0);
@@ -1140,6 +1139,33 @@ function LineLoadStrip({
     // A week is picked as its days, so the pick outlives a zoom.
     const pickKeys = picked.map((d) => loadPickKey(lineKey, d.key));
     const isPicked = pickKeys.length > 0 && pickKeys.every((k) => picks.has(k));
+    if (hours <= 0 && waiting <= 0) {
+      // Nothing on it, but a day to come the crew works is room to level
+      // into: it can still be picked.
+      if (!picked.some((d) => !d.past && !isWeekend(d.date))) return null;
+      return (
+        <button
+          type="button"
+          key={key}
+          className={`aline-day empty${to - from > 1 ? ' week' : ''}${isPicked ? ' picked' : ''}`}
+          style={{ left: x, width: axis.offsets[to] - x }}
+          title={[
+            `${line} · ${heading}: nothing planned`,
+            crews.length > 0
+              ? `${cap.toFixed(1)} h ${crews[0].pools.join(' + ')} can work`
+              : 'No crew group lists this line — set one under Crew capacity',
+            'Ctrl + click to pick it as room to level into, right-click to level the picked loads',
+          ].join('\n')}
+          onClick={(e) => {
+            if (e.ctrlKey || e.metaKey) onPick(pickKeys);
+          }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            onLevel(pickKeys, { x: e.clientX, y: e.clientY });
+          }}
+        />
+      );
+    }
     return (
       <button
         type="button"

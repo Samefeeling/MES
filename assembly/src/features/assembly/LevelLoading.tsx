@@ -6,6 +6,8 @@
  * accepted: each order that would move is listed with the day it goes to, each
  * order it will not touch is listed with why, and the overload it leaves is
  * read off a real re-plan of the board rather than off the plan's own sums.
+ * A picked day with room is filled with the next orders that can start on
+ * it, unless that is turned off here.
  * What it wrote can be taken back from the same panel — and any one order can
  * be handed back to the schedule from its own detail with Release.
  *
@@ -44,29 +46,30 @@ export function LevelLoading({
   today: Date;
   lineName: (line: LineKey) => string;
   /**
-   * Overload on the picked days if these starts were pinned, read off a fresh
-   * schedule of the whole board — or null when the board cannot be re-planned.
+   * Overload and room on the picked days if these starts were pinned, read off
+   * a fresh schedule of the whole board — or null when it cannot be re-planned.
    */
   verify: (
     pins: Record<string, string>,
     picks: ReadonlyMap<LineKey, ReadonlySet<string>>,
     ceiling: number,
-  ) => { hours: number; days: number } | null;
+  ) => { hours: number; days: number; room: number } | null;
   onClose: () => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   useDismiss(box, onClose);
   const [ceiling, setCeiling] = useState<number>(1);
+  const [fill, setFill] = useState(true);
   const [undo, setUndo] = useState<Record<string, string | null> | null>(null);
-  const [applied, setApplied] = useState<{ moved: number; linked: number } | null>(null);
+  const [applied, setApplied] = useState<{ moved: number; filled: number; linked: number } | null>(null);
   const unlocked = useSupervisorStore((s) => s.unlocked);
   const gate = signInAt(useSupervisorStore((s) => s.hosted));
   const clearLoadPicks = useUiStore((s) => s.clearLoadPicks);
 
   const picks = useMemo(() => parseLoadPicks(keys), [keys]);
   const plan = useMemo(
-    () => planLevelLoad({ rows, pools, today, picks, ceiling }),
-    [rows, pools, today, picks, ceiling],
+    () => planLevelLoad({ rows, pools, today, picks, ceiling, fill }),
+    [rows, pools, today, picks, ceiling, fill],
   );
   const verified = useMemo(
     () => (plan.moves.length > 0 ? verify(pinsOf(plan), picks, ceiling) : null),
@@ -83,6 +86,9 @@ export function LevelLoading({
 
   const afterHours = verified ? verified.hours : plan.after.hours;
   const afterDays = verified ? verified.days : plan.after.days;
+  const afterRoom = verified ? verified.room : plan.room.after;
+  const over = plan.before.hours > 0.05;
+  const room = plan.room.before > 0.05;
 
   const apply = () => {
     const { orderStarts, setOrderStarts } = usePlanStore.getState();
@@ -91,6 +97,7 @@ export function LevelLoading({
     setOrderStarts(pins);
     setApplied({
       moved: plan.moves.length,
+      filled: plan.moves.filter((m) => m.kind === 'fill').length,
       linked: plan.moves.filter((m) => m.kind === 'linked').length,
     });
     clearLoadPicks();
@@ -110,6 +117,7 @@ export function LevelLoading({
       <b title={m.description}>{m.order}</b>
       <span>
         {m.line} · {dayText(m.fromDay)} → {dayText(m.toDay)} · {hours(m.hours)}
+        {m.kind === 'fill' && ' · brought forward into room'}
         {m.because &&
           ` · ${m.because.effect === 'follows' ? 'follows' : 'brought ahead of'} ${m.because.order}`}
         {m.stillOver && ' · still over capacity there'}
@@ -132,7 +140,14 @@ export function LevelLoading({
         <>
           <p className="bulk-done" role="status">
             Moved {applied.moved} {applied.moved === 1 ? 'order' : 'orders'}
-            {applied.linked > 0 && ` (${applied.linked} linked)`}. Their starts are fixed on the days above; Release
+            {(applied.filled > 0 || applied.linked > 0) &&
+              ` (${[
+                applied.filled > 0 && `${applied.filled} brought forward`,
+                applied.linked > 0 && `${applied.linked} linked`,
+              ]
+                .filter(Boolean)
+                .join(', ')})`}
+            . Their starts are fixed on the days above; Release
             in an order’s detail hands it back to the schedule.
           </p>
           <footer>
@@ -149,13 +164,18 @@ export function LevelLoading({
             </p>
           )}
           <p className="bulk-hint">
-            {plan.before.hours > 0.05
+            {over
               ? `Over capacity on the picked days: ${hours(plan.before.hours)} on ${plan.before.days} ` +
                 `${plan.before.days === 1 ? 'day' : 'days'} → ${hours(afterHours)} on ${afterDays} ` +
-                `${afterDays === 1 ? 'day' : 'days'} once levelled` +
-                (verified ? ' (checked against a re-plan of the board)' : '')
-              : `Nothing is over capacity on the picked days (${plan.inScope} ` +
-                `${plan.inScope === 1 ? 'order' : 'orders'} behind them).`}
+                `${afterDays === 1 ? 'day' : 'days'} once levelled.`
+              : plan.inScope === 0
+                ? 'Nothing is planned on the picked days.'
+                : `Nothing is over capacity on the picked days (${plan.inScope} ` +
+                  `${plan.inScope === 1 ? 'order' : 'orders'} behind them).`}
+            {room &&
+              ` Room the crews still have on them: ${hours(plan.room.before)}` +
+                (plan.moves.length > 0 ? ` → ${hours(afterRoom)}.` : '.')}
+            {verified && plan.moves.length > 0 && ' Checked against a re-plan of the board.'}
           </p>
           <label className="level-ceiling">
             Fill a day to
@@ -164,6 +184,10 @@ export function LevelLoading({
                 <option key={c} value={c}>{Math.round(c * 100)}% of the crew’s day</option>
               ))}
             </select>
+          </label>
+          <label className="level-ceiling">
+            <input type="checkbox" checked={fill} onChange={(e) => setFill(e.target.checked)} />
+            Fill room on the picked days with the next orders that can start there
           </label>
 
           {plan.moves.length > 0 && (
@@ -190,7 +214,8 @@ export function LevelLoading({
               Orders with a crew, routed operations and started orders are never moved, but their
               hours count against the day. Nothing is moved before today, before its material
               lands or before the order it is made from finishes, or past the last day it can
-              start and make its Due Date.
+              start and make its Due Date. An order is only brought forward onto a day it
+              fits on without tipping it over.
             </p>
           )}
           <footer>

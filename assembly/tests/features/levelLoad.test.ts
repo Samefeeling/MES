@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CrewPool, LineKey } from '@/domain/assembly';
 import type { OrderRow } from '@/engine/assembly/board';
-import { pinsOf, planLevelLoad } from '@/features/assembly/levelLoad';
+import { pickedOverload, pinsOf, planLevelLoad } from '@/features/assembly/levelLoad';
 
 // Monday. Nine working days of 30 h — four people, 7.5 h each — from here.
 const TODAY = new Date('2026-09-14T07:00:00');
@@ -163,6 +163,91 @@ describe('level loading', () => {
 
   it('does not touch days behind today', () => {
     expect(level(three(), ['2026-09-11']).moves).toEqual([]);
+  });
+
+  describe('a picked day with room', () => {
+    it('is where an over day sends its order first, ahead of a nearer day nobody picked', () => {
+      // Thursday is 15 h over; Monday was picked with it and is empty. Wednesday
+      // is nearer, but Monday is the day that was asked to take the work.
+      const plan = level(three(), ['2026-09-14', '2026-09-17']);
+      expect(plan.moves).toHaveLength(1);
+      expect(plan.moves[0]).toMatchObject({ toDay: '2026-09-14', kind: 'level' });
+      // The two left on Thursday are already on a picked day: they stay put.
+      expect(plan.after.hours).toBe(0);
+    });
+
+    it('is filled with the next orders that can start on it, nearest first', () => {
+      const rows = [
+        row('A', { due: '2026-09-18' }),
+        row('B', { due: '2026-09-25' }),
+        row('LAST', { due: '2026-10-09' }),
+        // Its material is not there until Thursday.
+        row('LATE', { due: '2026-09-18', materialAt: '2026-09-17' }),
+        row('SHORT', { due: '2026-09-17', short: true }),
+      ];
+      const plan = level(rows, ['2026-09-14']);
+      expect(plan.before.hours).toBe(0);
+      expect(plan.room.before).toBeCloseTo(30);
+      // Two 15 h orders fill Monday's 30 h: the two that come next.
+      expect(moved(plan)).toEqual({ A: '2026-09-14', B: '2026-09-14' });
+      expect(plan.moves.every((m) => m.kind === 'fill')).toBe(true);
+      expect(plan.room.after).toBe(0);
+      expect(plan.after.hours).toBe(0);
+    });
+
+    it('is left empty when filling is turned off', () => {
+      const plan = level([row('A', { due: '2026-09-18' })], ['2026-09-14'], { fill: false });
+      expect(plan.moves).toEqual([]);
+      expect(plan.room.before).toBeCloseTo(30);
+    });
+
+    it('takes an order off a day that is over before one that is nearer', () => {
+      const rows = [row('NEAR', { due: '2026-09-16' }), ...three()];
+      const plan = level(rows, ['2026-09-14']);
+      // One of Thursday's three leaves the pile first; NEAR fills what is left.
+      const onMonday = plan.moves.filter((m) => m.toDay === '2026-09-14').map((m) => m.jobId);
+      expect(onMonday).toHaveLength(2);
+      expect(onMonday).toContain('NEAR');
+      expect(onMonday.filter((id) => ['A', 'B', 'C'].includes(id))).toHaveLength(1);
+    });
+
+    it('never takes an order it would tip over', () => {
+      const rows = [
+        row('CREW', { due: '2026-09-18', crewed: { '2026-09-14': 20 } }),
+        row('BIG', { due: '2026-09-17' }),
+        row('SMALL', { due: '2026-09-18', hours: 7.5 }),
+      ];
+      // 10 h spare on Monday: the 15 h order does not fit, the 7.5 h one does.
+      const plan = level(rows, ['2026-09-14']);
+      expect(moved(plan)).toEqual({ SMALL: '2026-09-14' });
+      expect(plan.room.after).toBeCloseTo(2.5);
+    });
+
+    it('does not shuffle orders between days that were both picked', () => {
+      // Monday and Thursday are both picked; Thursday's two fit where they are.
+      const plan = level(three().slice(0, 2), ['2026-09-14', '2026-09-17']);
+      expect(plan.moves).toEqual([]);
+    });
+
+    it('brings an order forward no earlier than the day after its supplier finishes', () => {
+      const p = row('P', { due: '2026-09-22' });
+      const rows = [p, row('A', { due: '2026-09-25', predecessors: [p] })];
+      // Monday and Tuesday picked: A may only start once P is done.
+      const plan = level(rows, ['2026-09-14', '2026-09-15']);
+      const to = moved(plan);
+      expect(to.P).toBe('2026-09-14');
+      expect(to.A).toBe('2026-09-15');
+    });
+  });
+
+  it('reads the room a re-plan leaves, not counting a day already gone', () => {
+    const capacity = [
+      { key: '2026-09-11', past: true, pools: [{ id: 'assy', demand: 50, capacity: 30 }] },
+      { key: '2026-09-14', pools: [{ id: 'assy', demand: 20, capacity: 30 }] },
+      { key: '2026-09-15', pools: [{ id: 'assy', demand: 36, capacity: 30 }] },
+    ];
+    const picks = new Map([['ASSY' as LineKey, new Set(['2026-09-11', '2026-09-14', '2026-09-15'])]]);
+    expect(pickedOverload(capacity, picks, POOLS)).toEqual({ hours: 6, days: 1, room: 10 });
   });
 
   describe('benches', () => {

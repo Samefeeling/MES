@@ -3817,6 +3817,10 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
   font-weight: 750;
 }
 .aline-day.week { border-left: 2px solid var(--border); }
+/* Nothing planned: blank until pointed at, but there to be picked as room to
+   level into — tinted once it is. */
+.aline-day.empty:hover { box-shadow: inset 0 0 0 1px var(--accent); }
+.aline-day.empty.picked { background: rgb(37 99 235 / 8%); }
 
 .day-detail-filter {
   margin: 0 0 6px;
