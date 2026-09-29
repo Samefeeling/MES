@@ -3743,7 +3743,6 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
   border-left: 2px solid var(--head-rule);
   color: var(--head-tx);
 }
-.aline-day.week { border-left-width: 2px; }
 .shortage-report tr.short-group th {
   padding: 8px 6px 3px;
   color: var(--text);
@@ -3836,7 +3835,6 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
   color: #1d4ed8;
   font-weight: 750;
 }
-.aline-day.week { border-left: 2px solid var(--border); }
 /* Nothing planned: blank until pointed at, but there to be picked as room to
    level into — tinted once it is. */
 .aline-day.empty:hover { box-shadow: inset 0 0 0 1px var(--accent); }
