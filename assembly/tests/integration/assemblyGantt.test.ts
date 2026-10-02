@@ -95,8 +95,12 @@ describe('assembly Gantt (mock data)', () => {
   it('loads a roster and shows every line group in the floor’s order', () => {
     const b = build();
     expect(dataset.workers.length).toBeGreaterThan(10);
+    // Every built-in line, with the presses that have orders as sub-lines
+    // of PMD, straight after it.
+    const presses = b.groups.filter((g) => g.line.parent === 'PMD').map((g) => g.line.key);
+    expect(presses.length).toBeGreaterThan(0);
     expect(b.groups.map((g) => g.line.key)).toEqual(
-      LINES.map((l) => l.key),
+      LINES.flatMap((l) => (l.key === 'PMD' ? [l.key, ...presses] : [l.key])),
     );
     // PMD is context only — it mirrors moulding's plan and is scheduled there.
     expect(b.groups.find((g) => g.line.key === 'PMD')!.line.schedulable).toBe(false);
@@ -285,14 +289,17 @@ describe('assembly Gantt (mock data)', () => {
     }
   });
 
-  it('drops the moulding lane when nothing is waiting on a press', () => {
-    // The same board with the material links taken away: no assembly order
-    // waits for a press job, so the lane has nothing to say and is not drawn.
+  it('shows the whole press plan, and drops the lane only when there is none and nothing waits', () => {
+    // With a press plan, PMD shows every press that has an order, whether or
+    // not anything on the assembly side is waiting for it.
+    expect(build().groups.some((g) => g.line.parent === 'PMD' && g.rows.length > 0)).toBe(true);
+    // Without one, and with the material links taken away, no assembly order
+    // waits for a press job: the lane has nothing to say and is not drawn.
     const indexes = buildIndexes(dataset);
     usePlanStore.getState().reconcile(dataset.workCenters, dataset.jobs, undefined, dataset.jobLinks);
     const state = usePlanStore.getState();
     const bare = computeAssemblyGantt({
-      dataset: { ...dataset, jobLinks: [], jobs: dataset.jobs.map((j) => ({ ...j, predecessors: [] })) },
+      dataset: { ...dataset, jobLinks: [], jobs: dataset.jobs.map((j) => ({ ...j, predecessors: [], press: undefined })) },
       indexes,
       containers: state.containers,
       orderCrewAssignments: state.orderCrewAssignments,

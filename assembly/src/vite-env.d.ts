@@ -10,6 +10,10 @@ interface ImportMetaEnv {
   /** The order export — a plain URL, else a path in the SharePoint drive. */
   readonly VITE_PLANNING_CSV_URL?: string;
   readonly VITE_PLANNING_CSV_PATH?: string;
+  readonly VITE_PMD_PLANNING_CSV_URL?: string;
+  readonly VITE_PMD_PLANNING_CSV_PATH?: string;
+  readonly VITE_PRODUCT_DIE_COLOR_LIST?: string;
+  readonly VITE_FACTORY_CALENDAR_LIST?: string;
   /** The material-link export, which carries the dependency chain. */
   readonly VITE_JOB_MATERIAL_CSV_URL?: string;
   readonly VITE_JOB_MATERIAL_CSV_PATH?: string;

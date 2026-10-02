@@ -23,6 +23,7 @@ import {
   setManualJobMaterialCsv,
   setManualOnHandInventoryCsv,
   setManualPoDetailCsv,
+  setManualPressCsv,
 } from '@/data/csv/csv.client';
 import { PlanningCsvSource } from '@/data/csv/PlanningCsvSource';
 import { normalizeHeader, parseCsv } from '@/lib/csv';
@@ -40,6 +41,8 @@ function exportKind(text: string): Kind {
   const names = new Set(header.map(normalizeHeader));
   if (names.has('podetailpartnum') || (names.has('outstandingqty') && names.has('porelduedate'))) return 'po';
   if (names.has('partnum') && names.has('onhand')) return 'inventory';
+  // The PMD dashboard's Planning.csv: the one order export naming the press.
+  if (names.has('jobnum') && names.has('machine')) return 'press';
   if (
     names.has('jobmtljobnum') ||
     names.has('jobmtlpartnum') ||
@@ -48,13 +51,14 @@ function exportKind(text: string): Kind {
   return 'orders';
 }
 
-type Kind = 'orders' | 'links' | 'inventory' | 'po';
+type Kind = 'orders' | 'links' | 'inventory' | 'po' | 'press';
 
 const KIND_LABEL: Record<Kind, string> = {
   orders: 'order',
   links: 'material',
   inventory: 'on-hand inventory',
   po: 'purchase order',
+  press: 'PMD press plan (Planning.csv)',
 };
 
 export function CsvLoader() {
@@ -78,7 +82,8 @@ export function CsvLoader() {
         const kind = exportKind(text);
         // Both pickers take either file, but say so when they differ — a
         // silent swap is how you end up sure you loaded something you did not.
-        if (kind !== want) {
+        // Planning.csv goes in with Planning1.csv: both are order exports.
+        if (kind !== want && !(kind === 'press' && want === 'orders')) {
           setProblem(
             `${file.name} looks like the ${KIND_LABEL[kind]} export, not the ` +
               `${KIND_LABEL[want]} ` +
@@ -88,6 +93,7 @@ export function CsvLoader() {
         if (kind === 'links') setManualJobMaterialCsv(text);
         else if (kind === 'inventory') setManualOnHandInventoryCsv(text);
         else if (kind === 'po') setManualPoDetailCsv(text);
+        else if (kind === 'press') setManualPressCsv(text);
         else setManualCsv(text);
         read++;
       }
@@ -132,7 +138,7 @@ export function CsvLoader() {
       <Button
         onClick={() => orders.current?.click()}
         disabled={busy !== null}
-        title="Parse Planning1.csv — the orders, their hours and their dates"
+        title="Parse Planning1.csv — the orders, their hours and their dates. Pick the PMD dashboard's Planning.csv with it for the press plan"
       >
         {busy === 'orders' ? 'Loading…' : 'Load orders'}
       </Button>

@@ -74,7 +74,18 @@ export const STEP_NAME: Record<ProductionStep, string> = {
 export type VirtualLineKey = `VL_${string}`;
 export const VIRTUAL_LINE_PREFIX = 'VL_';
 
-export type LineKey = BuiltInLineKey | VirtualLineKey;
+/**
+ * One moulding press, as a sub-line of PMD. Made from the press plan on every
+ * load — a press is on the board while it has orders and gone when it has none
+ * — so it is never stored, arranged or renamed: the key only has to tell it
+ * apart from every other line while the board is drawn.
+ */
+export type PressLineKey = `PRESS_${string}`;
+export const PRESS_LINE_PREFIX = 'PRESS_';
+export const pressLineKey = (machine: string): PressLineKey => `${PRESS_LINE_PREFIX}${machine}`;
+export const isPressLine = (key: string): key is PressLineKey => key.startsWith(PRESS_LINE_PREFIX);
+
+export type LineKey = BuiltInLineKey | VirtualLineKey | PressLineKey;
 
 export const isVirtualLine = (key: string): key is VirtualLineKey =>
   key.startsWith(VIRTUAL_LINE_PREFIX);
@@ -407,8 +418,14 @@ export function arrangeLines<T extends { key: string }>(
  */
 function keepBenchesWithLanes<T extends { key: string }>(lines: readonly T[]): T[] {
   const benches = new Map<string, T[]>();
+  // A press line names its parent itself (as a line, or as a group's line);
+  // a bench is found in LINES.
+  const parentOf = (line: T): string | undefined => {
+    const own = line as { parent?: string; line?: { parent?: string } };
+    return own.parent ?? own.line?.parent ?? LINES.find((def) => def.key === line.key)?.parent;
+  };
   for (const line of lines) {
-    const parent = LINES.find((def) => def.key === line.key)?.parent;
+    const parent = parentOf(line);
     if (!parent) continue;
     const held = benches.get(parent);
     if (held) held.push(line);
@@ -427,10 +444,15 @@ function keepBenchesWithLanes<T extends { key: string }>(lines: readonly T[]): T
     // foam, then sew, then staple is how the work runs.
     const held = benches.get(line.key);
     if (held) {
+      const steps = stepLinesOf(line.key as LineKey);
+      // Presses keep the order the board found them in; benches the order
+      // the work runs through them.
       out.push(
-        ...stepLinesOf(line.key as LineKey)
-          .map((def) => held.find((line) => line.key === def.key))
-          .filter((line): line is T => Boolean(line)),
+        ...(steps.length === 0
+          ? held
+          : steps
+              .map((def) => held.find((line) => line.key === def.key))
+              .filter((line): line is T => Boolean(line))),
       );
     }
   }
@@ -611,3 +633,21 @@ export const DEFAULT_CREW_POOLS: CrewPool[] = [
   { id: 'assembly', name: 'Assembly crew', lines: ['ASSY', 'UPL_GLUING'], people: 4 },
   { id: 'table', name: 'Table crew', lines: ['TABLE'], people: 3 },
 ];
+
+/**
+ * A press as a sub-line of PMD: plan only, like PMD itself, drawn indented
+ * under it in the order `index` gives, between PMD and the first line after it.
+ */
+export function pressLineDef(machine: string, index: number): LineDef {
+  const key = pressLineKey(machine);
+  return {
+    key,
+    id: WorkCenterId(key),
+    name: machine,
+    parent: 'PMD',
+    schedulable: false,
+    types: [],
+    parallelOrders: 0,
+    sortIndex: 1 + (index + 1) / 1000,
+  };
+}

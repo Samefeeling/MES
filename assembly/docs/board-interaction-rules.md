@@ -316,6 +316,45 @@ The order detail shows the pinned start — to the minute — with a **Release**
 button, which hands the order back to the schedule: it then starts as early as
 its crew, its line and the orders it waits on allow.
 
+## PMD presses
+
+**PMD is the moulding plan, one sub-line per press.** The press plan comes from
+the PMD dashboard's own `Planning.csv` — the export with the `Machine` and
+`No of shift` columns — read from `VITE_PMD_PLANNING_CSV_PATH`, or from
+`VITE_PLANNING_CSV_PATH` when that is the PMD file (both builds share one
+`.env.local`). A press order in both exports is taken from Planning.csv; one
+only Planning.csv has is added, so PMD is the whole press plan, not only the
+press work assembly waits for. Without the file PMD falls back to what it was:
+the press orders Planning1.csv carries that an assembly order waits on, on one
+line.
+
+Every press with an order is a line under PMD, indented like a bench, folding
+and hiding with PMD; a press with nothing on it is not drawn. Its orders run in
+Epicor's start order, drawn from JobHead_StartDate + StartHour to
+JobHead_ReqDueDate, and its header and every order's **Team** cell carry the
+press's **No of shift** (`MAN · 3 shifts`, `MA · 2 shifts`).
+
+**Between two orders the changeover is a row of its own**, straight after the
+order before it — the way the PMD dashboard lists its DC pseudo-orders:
+
+| Between | Changeover | Time |
+| --- | --- | --- |
+| a different die | Die Change, `Die 123 → Die 456` | 4 h |
+| the same die, a different insert (size) | Insert Change | 30 min |
+| the same die, a different colour | Colour Change | 30 min |
+| the same part again | none | — |
+
+The die and colour of each part come from `PMD_ProductDieColor` (DieNumber,
+Die, ActualColor). Where the die of either part is not on it, the change is
+taken as a die change — the expensive answer, rather than a plan four hours
+optimistic. On one die with nothing saying the insert differs, a different
+colour is a colour change and anything else an insert change. Two orders
+Epicor overlaps on one die are a co-run and get no change. Where Epicor left
+less room than the change needs, the next order — and everything behind it on
+that press — moves back by the difference, and says so on hover; an assembly
+order waiting for it waits that much longer. The times are the floor's
+standards, the same the PMD KPIs judge a changeover against.
+
 ## Closed days
 
 **The factory is shut at the weekend, on every NSW public holiday and on the

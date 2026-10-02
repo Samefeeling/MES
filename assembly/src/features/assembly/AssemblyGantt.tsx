@@ -22,6 +22,7 @@ import {
   ORDER_TYPE_SHORT,
   PRODUCTIVE_HOURS_PER_PERSON,
   arrangeLines,
+  isPressLine,
   isVirtualLine,
   STEP_NAME,
   WORK_KIND_SHORT,
@@ -33,6 +34,7 @@ import { capacityDays, type CapacityDay, type LineCapacity } from './crewCapacit
 import { loadBand } from '@/engine/assembly/workload';
 import { addCalendarDays, closureOn, isClosed, isWeekend } from '@/engine/assembly/dates';
 import { remainingHours } from '@/engine/assembly/duration';
+import { CHANGE_NAME, shiftText } from '@/engine/assembly/pressPlan';
 import {
   boardDayLoads,
   rosterLoad,
@@ -387,7 +389,7 @@ function OrderRowView({
   return (
     <div
       data-row-id={String(row.job.id)}
-      className={`arow ${row.line.parent ? 'bench' : ''} ${selected ? 'selected' : ''} ${isContext ? 'context' : ''} ${row.completedToday ? 'completed-today' : ''} ${isNew ? 'new-order' : ''} ${over ? 'overdue' : ''}`}
+      className={`arow ${row.line.parent ? 'bench' : ''} ${selected ? 'selected' : ''} ${isContext ? 'context' : ''} ${row.job.press?.change ? `changeover ${row.job.press.change.kind}` : ''} ${row.completedToday ? 'completed-today' : ''} ${isNew ? 'new-order' : ''} ${over ? 'overdue' : ''}`}
     >
       <div className="acell order">
         {/* A manual support order belongs to Factory General and the plan
@@ -395,7 +397,7 @@ function OrderRowView({
         <OrderGrip
           id={String(row.job.id)}
           movable={!isContext && !row.job.manual}
-          label={jobNumOf(String(row.job.id))}
+          label={row.job.press?.change ? CHANGE_NAME[row.job.press.change.kind] : jobNumOf(String(row.job.id))}
         />
         {/*
           * Running on the floor, beside the order number rather than on the
@@ -547,7 +549,19 @@ function OrderRowView({
       {cols.team && (
         <div className="acell team frozen" style={{ left: lefts.team }}>
           {isContext ? (
-            <span className="chip empty">moulding</span>
+            // A press order's team is the press's crew: the shifts Planning.csv
+            // says it is manned for while the order runs.
+            row.job.press?.change ? (
+              <span className={`chip changeover ${row.job.press.change.kind}`}>
+                {row.job.press.change.hours} h
+              </span>
+            ) : row.job.press?.shifts ? (
+              <span className="chip press-shifts" title={`No of shift on Planning.csv: ${row.job.press.shifts}`}>
+                {shiftText(row.job.press.shifts)}
+              </span>
+            ) : (
+              <span className="chip empty">moulding</span>
+            )
           ) : (
             <TeamChips
               row={row}
@@ -769,6 +783,16 @@ function LineGroupView({
         ),
     [board.workers, group.line.key, todayLine],
   );
+  const isChange = (r: OrderRow) => Boolean(r.job.press?.change);
+  const changeovers = group.rows.filter(isChange).length;
+  const shownOrders = group.rows.length - changeovers;
+  const totalOrders = total - lineRows.filter(isChange).length;
+  /** A press's shifts, from the orders on it — one pattern, or each that differs. */
+  const pressShifts = useMemo(() => {
+    if (!isPressLine(String(group.line.key))) return null;
+    const seen = [...new Set(group.rows.map((r) => r.job.press?.shifts).filter((s): s is string => Boolean(s)))];
+    return seen.length === 0 ? null : seen.map(shiftText).join(' / ');
+  }, [group.line.key, group.rows]);
 
   return (
     <section
@@ -877,25 +901,27 @@ function LineGroupView({
             <span className="agroup-note">plan only</span>
           )}
           {/* "9 of 11" whenever the two differ: a line quietly showing two
-              thirds of itself is the thing a planner has to be able to see. */}
+              thirds of itself is the thing a planner has to be able to see.
+              A press's changeovers are rows, not orders, and are not counted. */}
           <span
             className="agroup-count"
             title={
               // A lane holds none of its own once its work is on its benches,
               // so it counts theirs: a header reading "0 orders, 0 h" over
               // three rows of work is the one thing it must not say.
-              group.benchOrders !== undefined
+              (group.benchOrders !== undefined
                 ? `${group.benchOrders} orders across this line's benches`
-                : group.rows.length === total
-                  ? `${total} orders on this line`
-                  : `${group.rows.length} of ${total} orders shown — the rest are outside the date window`
+                : shownOrders === totalOrders
+                  ? `${totalOrders} orders on this line`
+                  : `${shownOrders} of ${totalOrders} orders shown — the rest are outside the date window`) +
+              (changeovers > 0 ? ` · ${changeovers} changeover${changeovers === 1 ? '' : 's'} between them` : '')
             }
           >
             {group.benchOrders !== undefined
               ? group.benchOrders
-              : group.rows.length === total
-                ? total
-                : `${group.rows.length} of ${total}`}
+              : shownOrders === totalOrders
+                ? totalOrders
+                : `${shownOrders} of ${totalOrders}`}
           </span>
 
           {/* The line's own work load: remaining standard hours, and how long
@@ -924,6 +950,11 @@ function LineGroupView({
               : undefined
           }
         >
+          {pressShifts && (
+            <span className="chip press-shifts" title="No of shift on Planning.csv, for the orders on this press">
+              {pressShifts}
+            </span>
+          )}
           {crew.map((worker) => {
             const week = rosterLoads.get(String(worker.id));
             return week ? (

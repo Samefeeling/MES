@@ -12,7 +12,11 @@ export const restList = (cfg: SharePointConfig, list: string): string =>
 export function sessionFile(cfg: SharePointConfig, path: string): string {
   const site = new URL(cfg.siteUrl);
   const root = site.pathname.replace(/\/$/, '');
-  const relative = path.startsWith(`${root}/`) ? path : `${root}/${path.replace(/^\//, '')}`;
+  // A path that already names a site (`/sites/PMD/Shared Documents/…`) is
+  // server-relative as it stands — the PMD dashboard's files are given so.
+  const relative = path.startsWith(`${root}/`) || /^\/(sites|teams)\//i.test(path)
+    ? path
+    : `${root}/${path.replace(/^\//, '')}`;
   return `${cfg.siteUrl.replace(/\/$/, '')}/_api/web/GetFileByServerRelativePath(decodedurl='${literal(relative)}')/$value`;
 }
 

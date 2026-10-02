@@ -22,6 +22,7 @@ import {
   DEFAULT_CREW_POOLS,
   LINES,
   PRODUCTIVE_HOURS_PER_PERSON,
+  isPressLine,
   virtualLineDef,
   type CrewPool,
   type LineKey,
@@ -131,7 +132,13 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
   if (!board || !shortages) return null;
   const hidden = DATE_COLS.filter((key) => !dateCols[key]);
   const hiddenCols = HIDEABLE_COLS.filter((key) => !cols[key]);
-  const allLines = [...LINES, ...virtualLines.map(virtualLineDef)];
+  // The presses too: a press is a line of the board's own making, and one
+  // hidden with its × has to have a way back like any other.
+  const allLines = [
+    ...LINES,
+    ...virtualLines.map(virtualLineDef),
+    ...board.groups.map((group) => group.line).filter((line) => isPressLine(String(line.key))),
+  ];
   const foldedLines = allLines.filter((line) => hiddenLines.includes(line.key));
   const running = orderDay
     ? countRunningOrders(

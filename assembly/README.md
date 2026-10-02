@@ -18,6 +18,16 @@ plan goes back the other way, into the `ASSY_Production` list.
 
 - **Four row groups** — `PMD` (the moulding plan, mirrored for context: greyed
   out, not draggable, never scheduled here), then `UPL`, `ASSY` and `TABLE`.
+- **PMD is one sub-line per press** — read from the PMD dashboard's
+  `Planning.csv` (`VITE_PMD_PLANNING_CSV_PATH`, else `VITE_PLANNING_CSV_PATH`),
+  every press that has an order gets its own line under PMD, the way the
+  benches sit under UPL; a press with nothing on it has none. Between two
+  orders on a press the board adds the changeover as a row of its own: a
+  **Die Change** of 4 h (`Die 123 → Die 456`) when the die differs, else an
+  **Insert Change** (a different size) or a **Colour Change** of 30 min — the
+  die and colour of each part come from `PMD_ProductDieColor`. Where Epicor
+  left no room for it, the next order moves back. The Team column carries the
+  press's **No of shift** (`MAN · 3 shifts`).
 - **Three kinds of work order** — Cutting/Sewing and Upholstery run on UPL;
   Final Assembly runs on ASSY and TABLE.
 - **One row per order**: Order · Order Qty · Start Date · Due Date · Expect

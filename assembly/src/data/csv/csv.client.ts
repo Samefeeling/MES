@@ -24,6 +24,16 @@ let manualJobMaterialCsv: string | null = null;
 let manualOnHandInventoryCsv: string | null = null;
 let manualProductLinesJson: string | null = null;
 let manualPoDetailCsv: string | null = null;
+let manualPressCsv: string | null = null;
+
+/** Stash a PMD `Planning.csv` the user picked from disk. */
+export function setManualPressCsv(text: string): void {
+  manualPressCsv = text;
+}
+
+export function getManualPressCsv(): string | null {
+  return manualPressCsv;
+}
 
 /** Stash a `PODetail.csv` the user picked from disk. */
 export function setManualPoDetailCsv(text: string): void {
@@ -93,6 +103,11 @@ export interface CsvSourceConfig {
   /** Drive path for PODetail.csv; empty disables the fetch. It sits in the
    *  same folder as Planning1.csv. */
   poDetailFilePath?: string;
+  /** Direct URL to the PMD dashboard's Planning.csv. */
+  pressUrl?: string;
+  /** Path of the PMD dashboard's Planning.csv — the press plan, one row per
+   *  press order with its Machine and No of shift; empty disables the fetch. */
+  pressFilePath?: string;
 }
 
 /** The folder a drive path is in, with its trailing slash. */
@@ -115,6 +130,14 @@ export function readCsvConfigFromEnv(): CsvSourceConfig {
     productLinesUrl: env.VITE_PRODUCT_LINES_URL ?? '',
     productLinesFilePath:
       env.VITE_PRODUCT_LINES_PATH ?? '/Shared Documents/product-lines.v3.json',
+    pressUrl: env.VITE_PMD_PLANNING_CSV_URL ?? '',
+    // The PMD dashboard's own file, by default from the setting it is read
+    // with — both builds share one .env.local. Never Planning1.csv itself,
+    // which a development build without the Assembly path falls back to.
+    pressFilePath: (() => {
+      const path = env.VITE_PMD_PLANNING_CSV_PATH ?? env.VITE_PLANNING_CSV_PATH ?? '';
+      return path === filePath ? '' : path;
+    })(),
   };
 }
 
@@ -242,6 +265,26 @@ export async function fetchPoDetailCsv(
   return fetchText(
     'PODetail.csv',
     sp.authMode === 'session' ? sessionFile(sp, cfg.poDetailFilePath) : graphFile(sp, cfg.poDetailFilePath),
+    sp.token,
+  );
+}
+
+/**
+ * The PMD press plan, or `ok(null)` when this build has no path for it.
+ * Optional: without it the PMD lane is the press orders Planning1.csv carries,
+ * on one line, as before.
+ */
+export async function fetchPressPlanningCsv(
+  cfg: CsvSourceConfig,
+  sp: SharePointConfig,
+): Promise<Result<string | null, string>> {
+  const manual = getManualPressCsv();
+  if (manual !== null) return ok(manual);
+  if (cfg.pressUrl) return fetchText('Planning.csv', cfg.pressUrl, null);
+  if (!cfg.pressFilePath || !sp.siteUrl || (!sp.token && sp.authMode !== 'session')) return ok(null);
+  return fetchText(
+    'Planning.csv',
+    sp.authMode === 'session' ? sessionFile(sp, cfg.pressFilePath) : graphFile(sp, cfg.pressFilePath),
     sp.token,
   );
 }

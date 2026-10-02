@@ -63,6 +63,7 @@ import type {
 import {
   DEFAULT_HORIZON_DAYS,
   LINES,
+  pressLineDef,
   stepLinesOf,
   virtualLineDef,
   workKind,
@@ -101,6 +102,7 @@ import { materialArrival, pickLedger, type PickShortage } from './pickShortage';
 import { endOfCrewDay, idleRuns, planVariableCrew, type CrewDayPlan, type TakenOnDay, type VariableCrewPlan } from './crewSchedule';
 import { onLeaveOnDay, type LeaveDays } from './attendance';
 import { lineLoad, type LineLoad } from './workload';
+import { changeLabel, planPresses, type PressSlot } from './pressPlan';
 import { expandRouting } from './routing';
 import { jobNumOf } from '@/domain/routing';
 import { JobId } from '@/domain/ids';
@@ -410,9 +412,20 @@ const mouldingStart = (j: Job): Date | null => j.startDate ?? j.dueDate;
  * work is visible above the assembly lines, and so an assembly order that
  * needs one of these shells can be held behind the run that makes it.
  */
-function mouldingRow(job: Job, line: LineDef, today: Date): OrderRow {
-  const days = Math.max(0.25, job.laborHrs / 24);
-  const start = startOfDay(mouldingStart(job) ?? today);
+function mouldingRow(
+  job: Job,
+  line: LineDef,
+  today: Date,
+  run?: { start: Date; end: Date; pushedHours: number },
+): OrderRow {
+  // A press run is drawn to the hour, as the press plan has it; an order from
+  // Planning1.csv alone keeps the whole-day reading it always had.
+  const start = run ? run.start : startOfDay(mouldingStart(job) ?? today);
+  const days = run
+    ? Math.max((run.end.getTime() - run.start.getTime()) / 86_400_000, 1 / 96)
+    : Math.max(0.25, job.laborHrs / 24);
+  const end = run ? run.end : addDays(start, days);
+  const pushed = run && run.pushedHours > 0.01 ? run.pushedHours : 0;
   return {
     job,
     sourceRemainingQty: job.remainingQty,
@@ -422,13 +435,13 @@ function mouldingRow(job: Job, line: LineDef, today: Date): OrderRow {
     workers: [],
     crewAssignments: [],
     crewDays: [],
-    planThrough: addDays(start, days),
+    planThrough: end,
     uncoveredHours: 0,
     actualStart: null,
     completedAt: null,
     start,
     plannedStart: start,
-    expectDate: addDays(start, days),
+    expectDate: end,
     days,
     slot: 0,
     overtime: false,
@@ -436,7 +449,9 @@ function mouldingRow(job: Job, line: LineDef, today: Date): OrderRow {
     status: {
       color: 'grey' as const,
       dueSlackDays: null,
-      reason: 'Moulding plan — shown for context, not scheduled here',
+      reason: pushed
+        ? `Moulding plan — starts ${pushed.toFixed(1)} h after Epicor's start: the changeover in front of it needs the time`
+        : 'Moulding plan — shown for context, not scheduled here',
     },
     material: MOULDING_MATERIAL,
     pickList: [],
@@ -467,6 +482,55 @@ function mouldingRow(job: Job, line: LineDef, today: Date): OrderRow {
  * filled the top of the board with work nothing on it depended on. With
  * nothing needed the row is empty, and the caller drops the lane entirely.
  */
+/**
+ * A changeover between two press orders, drawn as a row of its own between
+ * them — the way the PMD dashboard lists its DC pseudo-orders — so the press
+ * reads top to bottom as the floor works it: order, change, order.
+ */
+function changeoverRow(machine: string, slot: PressSlot, line: LineDef, before: OrderRow): OrderRow {
+  const { change } = slot;
+  const job: Job = {
+    id: JobId(`CHG|${machine}|${change.fromJob}|${change.toJob}`),
+    department: 'moulding',
+    partNum: before.job.partNum,
+    description: changeLabel(change),
+    remainingQty: 0,
+    qtyPerHr: null,
+    laborHrs: change.hours,
+    dueDate: null,
+    startDate: slot.start,
+    reqBy: null,
+    released: true,
+    priority: 3,
+    materialPrep: 'unknown',
+    tool: null,
+    preferredMachine: before.job.preferredMachine,
+    orderType: null,
+    line: null,
+    completedQty: 0,
+    predecessors: [],
+    assignedWorkers: [],
+    press: {
+      machine,
+      shifts: before.job.press?.shifts ?? null,
+      end: slot.end,
+      die: change.toDie,
+      dieName: null,
+      color: change.toColor,
+      insert: null,
+      change,
+    },
+  };
+  const row = mouldingRow(job, line, slot.start, { start: slot.start, end: slot.end, pushedHours: 0 });
+  return {
+    ...row,
+    status: {
+      ...row.status,
+      reason: `${changeLabel(change)} — ${change.hours} h after ${change.fromJob}, before ${change.toJob}`,
+    },
+  };
+}
+
 function mouldingContextRows(
   rows: Map<string, OrderRow>,
   neededIds: Set<string>,
@@ -695,10 +759,31 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
   // that fit on screen, because any of them may be the one an assembly order
   // is waiting for.
   const pmdLine = named(LINES.find((l) => !l.schedulable)!);
+  /*
+   * The presses, each a sub-line of PMD with its orders in the sequence they
+   * run and the changeovers between them (see `pressPlan`). An order the press
+   * plan has moved for a changeover is drawn — and waited for — where it now
+   * runs, so an assembly order behind it waits the four hours too.
+   */
+  const presses = planPresses(dataset.jobs);
+  const pressLines = new Map(
+    presses.map((p, i) => [p.machine, pressLineDef(p.machine, i)]),
+  );
+  const pressRuns = new Map(
+    presses.flatMap((p) => p.runs.map((run) => [String(run.job.id), { machine: p.machine, run }] as const)),
+  );
   const mouldingRows = new Map<string, OrderRow>(
     dataset.jobs
       .filter((j) => j.department === 'moulding')
-      .map((j) => [String(j.id), mouldingRow(j, pmdLine, today)]),
+      .map((j) => {
+        const onPress = pressRuns.get(String(j.id));
+        return [
+          String(j.id),
+          onPress
+            ? mouldingRow(j, pressLines.get(onPress.machine)!, today, onPress.run)
+            : mouldingRow(j, pmdLine, today),
+        ];
+      }),
   );
 
   /*
@@ -1449,9 +1534,13 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
   const rollUpBenches = (groups: LineGroup[]): LineGroup[] => {
     const byLine = new Map(groups.map((group) => [group.line.key, group]));
     return groups.map((group) => {
-      const benches = stepLinesOf(group.line.key)
-        .map((line) => byLine.get(line.key))
-        .filter((held): held is LineGroup => Boolean(held));
+      // A lane's benches, or PMD's presses.
+      const steps = stepLinesOf(group.line.key);
+      const benches = (
+        steps.length > 0
+          ? steps.map((line) => byLine.get(line.key))
+          : groups.filter((held) => held.line.parent === group.line.key)
+      ).filter((held): held is LineGroup => Boolean(held));
       if (benches.length === 0) return group;
       const rows = [...group.rows, ...benches.flatMap((held) => held.rows)];
       const incoming = benches.reduce(
@@ -1461,7 +1550,8 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
       return {
         ...group,
         load: lineLoad(rows, incoming),
-        benchOrders: rows.length,
+        // A press's changeovers are rows between its orders, not orders.
+        benchOrders: rows.filter((row) => !row.job.press?.change).length,
       };
     });
   };
@@ -1505,12 +1595,30 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
     [...rowsByJob.values()]
       .flatMap((r) => r.predecessors)
       .map((d) => String(d.onJobId))
-      .filter((id) => mouldingRows.has(id)),
+      .filter((id) => mouldingRows.has(id) && !pressRuns.has(id)),
   );
   // Nothing on the assembly side waiting for a press means nothing to show:
   // the lane is context, and context nobody is waiting on is just noise.
   const pmdRows = mouldingContextRows(mouldingRows, neededMoulding);
-  if (pmdRows.length > 0) groups.unshift(withLoad(pmdLine, pmdRows));
+  // With a press plan, every press that has an order is a sub-line of PMD —
+  // its orders and its changeovers, in the order they run. A press with
+  // nothing on it has no line. PMD itself keeps only the press orders
+  // Planning1.csv carries and the press plan does not.
+  for (const press of presses) {
+    const line = pressLines.get(press.machine)!;
+    const runs = press.runs
+      .map((run) => mouldingRows.get(String(run.job.id)))
+      .filter((r): r is OrderRow => Boolean(r));
+    const before = new Map(runs.map((r) => [String(r.job.id), r]));
+    const changes = press.changes.map((slot) =>
+      changeoverRow(press.machine, slot, line, before.get(slot.change.fromJob)!),
+    );
+    const rows = [...runs, ...changes].sort(
+      (a, b) => a.start!.getTime() - b.start!.getTime() || (a.job.press?.change ? -1 : 1),
+    );
+    groups.push(withLoad(line, rows));
+  }
+  if (pmdRows.length > 0 || presses.length > 0) groups.unshift(withLoad(pmdLine, pmdRows));
   groups.sort((a, b) => a.line.sortIndex - b.line.sortIndex);
   const rolled = rollUpBenches(groups);
   groups.length = 0;

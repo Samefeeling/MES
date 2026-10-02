@@ -1349,6 +1349,21 @@ body.col-resizing {
 .arow.context {
   opacity: 0.72;
 }
+/* A press changeover: its own row between the two orders, drawn in the PMD
+   dashboard's status colours — die change red, insert orange, colour amber. */
+.arow.changeover .acell.order { font-style: italic; }
+.arow.changeover.die .bar { color: #7f1d1d; }
+.arow.changeover.die .bar .bar-piece { background: #fecaca; border-color: #dc2626; }
+.arow.changeover.insert .bar { color: #7c2d12; }
+.arow.changeover.insert .bar .bar-piece { background: #fed7aa; border-color: #c2410c; }
+.arow.changeover.colour .bar { color: #78350f; }
+.arow.changeover.colour .bar .bar-piece { background: #fde68a; border-color: #d97706; }
+.chip.changeover { cursor: default; }
+.chip.changeover.die { background: #fee2e2; border-color: #dc2626; color: #7f1d1d; }
+.chip.changeover.insert { background: #ffedd5; border-color: #c2410c; color: #7c2d12; }
+.chip.changeover.colour { background: #fef3c7; border-color: #d97706; color: #78350f; }
+.chip.press-shifts { background: #e2e8f0; border-color: #94a3b8; color: #1e293b; cursor: default; }
+.chip.changeover:hover, .chip.press-shifts:hover { border-color: inherit; }
 .arow.empty .acell.order {
   color: var(--faint);
   font-style: italic;

@@ -76,6 +76,12 @@ VITE_ON_HAND_INVENTORY_CSV_PATH=/Shared Documents/OnHandInventory.csv
 # Optional; defaults to PODetail.csv in the same folder as Planning1.csv
 VITE_PO_DETAIL_CSV_PATH=/Shared Documents/PODetail.csv
 VITE_PRODUCT_LINES_PATH=/Shared Documents/product-lines.v3.json
+# The PMD lane's press plan: the PMD dashboard's Planning.csv. Defaults to
+# VITE_PLANNING_CSV_PATH, which is that file; a /sites/... path is server-relative.
+VITE_PMD_PLANNING_CSV_PATH=/sites/<PMDsite>/Shared Documents/PMD/Planning.csv
+# Optional overrides of the list names
+VITE_PRODUCT_DIE_COLOR_LIST=PMD_ProductDieColor
+VITE_FACTORY_CALENDAR_LIST=FactoryCalendar
 VITE_PRODUCTION_LIST=ASSY_Production
 VITE_ASSEMBLY_PLAN_LIST=ASSY_Plans
 ```

@@ -96,6 +96,9 @@ export class MockSource extends BaseDataSource {
   }
 
   async fetchJobs(): Promise<Job[]> {
+    // The demo's routing says each part's colour and insert, which is what the
+    // press plan reads off PMD_ProductDieColor on the live board.
+    const routeOf = new Map(seed.routing.map((r) => [r.partNum, r]));
     const jobs: Job[] = seed.jobs.map((j) => ({
       id: JobId(j.jobNum),
       department: (j.department ?? 'moulding') as Department,
@@ -114,6 +117,19 @@ export class MockSource extends BaseDataSource {
       materialPrep: (j.materialPrep ?? 'unknown') as MaterialPrepStatus,
       tool: j.die ? ToolId(j.die) : null,
       preferredMachine: j.machine ? MachineId(j.machine) : null,
+      ...((j.department ?? 'moulding') === 'moulding' && j.machine
+        ? {
+            press: {
+              machine: j.machine,
+              shifts: null,
+              end: null,
+              die: j.die ?? null,
+              dieName: j.die ?? null,
+              color: routeOf.get(j.partNum)?.color ?? null,
+              insert: routeOf.get(j.partNum)?.insert ?? null,
+            },
+          }
+        : {}),
       orderType: (j.orderType ?? null) as OrderType | null,
       // The seed was written when UPL was one lane. Read through readLineKey
       // so the demo lands on the lines the board actually has.

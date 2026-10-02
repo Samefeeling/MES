@@ -29,6 +29,7 @@ import { barTag, missingBarReason, timelineDayOffset, unstaffedWindow } from './
 import type { DayAxis } from './dayAxis';
 import type { MarkedMove } from './groupMove';
 import { jobNumOf } from '@/domain/routing';
+import { CHANGE_SHORT } from '@/engine/assembly/pressPlan';
 
 export const DRAG_TYPE_BAR = 'order-bar';
 
@@ -352,6 +353,7 @@ export function OrderBar({
    * against the edge that will not move.
    */
   const heldBy = row.waitingOn ? jobNumOf(String(row.waitingOn.onJobId)) : null;
+  const change = row.job.press?.change;
 
   // A couple of hours of work is a few pixels of bar; where the label cannot
   // fit inside it, the tag goes in the empty grid beside the block.
@@ -360,8 +362,9 @@ export function OrderBar({
     // key a routed order carries. The bar keeps the full id for its drag and
     // its data attributes; only what it prints is trimmed, the same as the
     // order number in the row.
-    jobId: jobNumOf(id),
-    hours: remainingHours(row.job),
+    // A press changeover is named by what it is, not by its row key.
+    jobId: change ? CHANGE_SHORT[change.kind] : jobNumOf(id),
+    hours: change ? change.hours : remainingHours(row.job),
     spanDays: span,
     width,
     left,
@@ -407,7 +410,10 @@ export function OrderBar({
       onMouseEnter={() => onDependencyHover(id)}
       onMouseLeave={() => onDependencyHover(null)}
       title={
-        `${jobNumOf(String(row.job.id))} · ${row.days.toFixed(1)} d worked with ${row.workers.length}` +
+        (change
+          ? `${row.job.description} · ${change.hours} h` +
+            ` (after ${change.fromJob}, before ${change.toJob})`
+          : `${jobNumOf(String(row.job.id))} · ${row.days.toFixed(1)} d worked with ${row.workers.length}`) +
         (readOnly ? '' : ` · position ${row.slot + 1} of ${row.line.parallelOrders}`) +
         (idleDays > 0
           ? ` · put down for ${idleDays} working day${idleDays === 1 ? '' : 's'}` +
