@@ -331,7 +331,10 @@ line.
 Every press with an order is a line under PMD, indented like a bench, folding
 and hiding with PMD; a press with nothing on it is not drawn. Its orders run in
 Epicor's start order, drawn from JobHead_StartDate + StartHour to
-JobHead_ReqDueDate, and its header and every order's **Team** cell carry the
+JobHead_ReqDueDate on a **24-hour day** — the presses run round the clock, so
+on a press row a day column is midnight to midnight and an order starting at
+19:00 is drawn four fifths of the way across it (the assembly lines keep the
+07:00–15:30 shift), and its header and every order's **Team** cell carry the
 press's **No of shift** (`MAN · 3 shifts`, `MA · 2 shifts`).
 
 **Between two orders the changeover is a row of its own**, straight after the
@@ -340,15 +343,17 @@ order before it — the way the PMD dashboard lists its DC pseudo-orders:
 | Between | Changeover | Time |
 | --- | --- | --- |
 | a different die | Die Change, `Die 123 → Die 456` | 4 h |
-| the same die, a different insert (size) | Insert Change | 30 min |
-| the same die, a different colour | Colour Change | 30 min |
+| the same die, a different size | Insert Change | 30 min |
+| the same die, the same size | Colour Change | 30 min |
 | the same part again | none | — |
 
 The die and colour of each part come from `PMD_ProductDieColor` (DieNumber,
 Die, ActualColor). Where the die of either part is not on it, the change is
 taken as a die change — the expensive answer, rather than a plan four hours
-optimistic. On one die with nothing saying the insert differs, a different
-colour is a colour change and anything else an insert change. Two orders
+optimistic. On one die the size decides, read off the part description:
+every height and size it names (`460h`, `Size 3`). A colour change leaves the
+rest of the description alone, so a different size is an insert change and the
+same size — or no size named on either — a colour change. Two orders
 Epicor overlaps on one die are a co-run and get no change. Where Epicor left
 less room than the change needs, the next order — and everything behind it on
 that press — moves back by the difference, and says so on hover; an assembly

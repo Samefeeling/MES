@@ -183,8 +183,10 @@ export function OrderBar({
     );
   }
 
+  // A press row's day is 24 hours; an assembly row's is the white shift.
+  const fullDay = Boolean(row.job.press);
   const axisOffset = (date: Date) =>
-    timelineDayOffset(date, horizonStart, showWeekends);
+    timelineDayOffset(date, horizonStart, showWeekends, fullDay);
   const offsetDays = axisOffset(row.start);
   const left = axis.x(offsetDays);
   const end = row.expectDate ?? row.planThrough ?? row.start;

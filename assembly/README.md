@@ -24,8 +24,9 @@ plan goes back the other way, into the `ASSY_Production` list.
   benches sit under UPL; a press with nothing on it has none. Between two
   orders on a press the board adds the changeover as a row of its own: a
   **Die Change** of 4 h (`Die 123 → Die 456`) when the die differs, else an
-  **Insert Change** (a different size) or a **Colour Change** of 30 min — the
-  die and colour of each part come from `PMD_ProductDieColor`. Where Epicor
+  **Insert Change** (the size in the description changes — `460h`,
+  `Size 3`) or a **Colour Change** of 30 min — the die and colour of each part
+  come from `PMD_ProductDieColor`. A press row reads its day as 24 hours. Where Epicor
   left no room for it, the next order moves back. The Team column carries the
   press's **No of shift** (`MAN · 3 shifts`).
 - **Three kinds of work order** — Cutting/Sewing and Upholstery run on UPL;

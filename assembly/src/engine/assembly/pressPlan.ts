@@ -5,18 +5,20 @@
  * Between two orders on one press:
  *
  *   different die                 Die Change, 4 h — "Die 123 → Die 456"
- *   same die, different insert    Insert Change, 30 min (a different size)
- *   same die, different colour    Colour Change, 30 min
+ *   same die, different size      Insert Change, 30 min — the size the
+ *                                 description names ("460h", "Size 3")
+ *   same die, same size           Colour Change, 30 min — a colour change
+ *                                 leaves the rest of the description alone
  *   same part again               nothing
  *
  * The allowances are the floor's standards, the same ones the PMD KPIs judge
  * a changeover against (`src/core/standards.ts` on the PMD side). Where the die
  * of either part is not known the two are taken to need a die change — the
  * expensive answer, because assuming a 30-minute swap on an unknown tool is
- * how a press plan comes out four hours optimistic. Where the die is the same
- * and nothing says the insert differs, a colour difference makes it a colour
- * change and anything else an insert change: same tool, different part, same
- * colour is a different size.
+ * how a press plan comes out four hours optimistic. On the same die the size
+ * decides: an insert field where the source has one, else every height and
+ * size the part description carries. Two parts naming the same size — or
+ * neither naming one — differ by colour.
  *
  * The changeover goes straight after the order before it. Epicor plans the
  * presses back to back, so where the gap to the next order is shorter than the
@@ -54,6 +56,20 @@ const key = (v: string | null | undefined): string | null => {
   return k === '' ? null : k;
 };
 
+/**
+ * The size a part description names, as one comparable key: every height
+ * ("460h", "350 h") and size ("Size 3") in it, in order. Null with none — two
+ * parts that both name no size are the same size as far as anyone can tell.
+ */
+export function sizeOf(description: string | null | undefined): string | null {
+  const text = description ?? '';
+  const found = [
+    ...[...text.matchAll(/\b(\d{2,4})\s*h\b/gi)].map((m) => `${m[1]}h`),
+    ...[...text.matchAll(/\bsize\s*([0-9a-z]+)\b/gi)].map((m) => `size${m[1].toLowerCase()}`),
+  ];
+  return found.length > 0 ? found.join('|') : null;
+}
+
 const dieOf = (job: Job): string | null => job.press?.die ?? (job.tool ? String(job.tool) : null);
 
 const sameDie = (a: Job, b: Job): boolean => {
@@ -71,11 +87,12 @@ export function changeBetween(prev: Job, next: Job): PressChange | null {
   let kind: PressChangeKind;
   if (!key(fromDie) || !key(toDie) || key(fromDie) !== key(toDie)) kind = 'die';
   else {
-    const fromInsert = key(prev.press?.insert);
-    const toInsert = key(next.press?.insert);
-    if (fromInsert && toInsert && fromInsert !== toInsert) kind = 'insert';
-    else if (key(fromColor) && key(toColor) && key(fromColor) !== key(toColor)) kind = 'colour';
-    else kind = 'insert';
+    // The size is the insert: an insert field where the source has one, else
+    // the size the description carries ("460h", "Size 3"). Only the colour
+    // changing leaves the rest of the description as it was.
+    const fromSize = key(prev.press?.insert) ?? sizeOf(prev.description);
+    const toSize = key(next.press?.insert) ?? sizeOf(next.description);
+    kind = fromSize !== toSize ? 'insert' : 'colour';
   }
   return {
     kind,

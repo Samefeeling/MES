@@ -159,10 +159,18 @@ export function timelineDayOffset(
   date: Date,
   horizonStart: Date,
   showWeekends: boolean,
+  /**
+   * Read the column as the whole day, 00:00 to 24:00, instead of the white
+   * shift: the presses run round the clock, so a press order starting at 19:00
+   * is drawn four fifths of the way across its day, not pinned to the edge.
+   */
+  fullDay = false,
 ): number {
   const origin = startOfDay(horizonStart);
   const target = startOfDay(date);
-  const fraction = shiftColumnFraction(date);
+  const fraction = fullDay
+    ? (date.getHours() * 60 + date.getMinutes() + date.getSeconds() / 60) / 1440
+    : shiftColumnFraction(date);
   if (showWeekends) return wholeDaysBetween(target, origin) + fraction;
 
   let offset = 0;

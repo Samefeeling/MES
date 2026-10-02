@@ -879,3 +879,16 @@ describe('the timeline is not held to a fortnight', () => {
     expect(timelineDays(board(17, [waitingDue('2027-12-01T00:00:00')]), 2)).toBe(3 + 182);
   });
 });
+
+describe('a press row on the timeline', () => {
+  // Thursday 1 October 2026.
+  const origin = new Date(2026, 9, 1);
+  it('reads its day as 24 hours, where an assembly row reads the white shift', () => {
+    const evening = new Date(2026, 9, 2, 19, 0);
+    expect(timelineDayOffset(evening, origin, true, true)).toBeCloseTo(1 + 19 / 24);
+    expect(timelineDayOffset(new Date(2026, 9, 2, 0, 0), origin, true, true)).toBe(1);
+    expect(timelineDayOffset(new Date(2026, 9, 2, 12, 0), origin, true, true)).toBeCloseTo(1.5);
+    // The same evening on an assembly row is pinned to the end of the shift.
+    expect(timelineDayOffset(evening, origin, true)).toBe(2);
+  });
+});

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { JobId, MachineId, PartId } from '@/domain/ids';
 import type { Job } from '@/domain/types';
-import { changeBetween, changeLabel, planPresses, shiftCount, shiftText } from '@/engine/assembly/pressPlan';
+import { changeBetween, changeLabel, planPresses, shiftCount, shiftText, sizeOf } from '@/engine/assembly/pressPlan';
 import { parsePressPlanningCsv } from '@/data/csv/pressPlanning.parser';
 import { mergePressPlan } from '@/data/csv/PlanningCsvSource';
 import { parseDieColors, withDieColors } from '@/data/sharepoint/dieColor.parser';
@@ -54,13 +54,29 @@ describe('the changeover between two press orders', () => {
     expect(changeBetween(press('A', 'P1', 'M', '05T07:00', '05T08:00', null), press('B', 'P2', 'M', '05T08:00', '05T09:00', '456'))?.kind).toBe('die');
   });
 
-  it('on one die: a colour change when the colour differs, an insert change when it does not', () => {
-    const a = press('A', 'P1', 'M', '05T07:00', '05T08:00', '123', 'Black');
-    expect(changeBetween(a, press('B', 'P2', 'M', '05T08:00', '05T09:00', '123', 'Slate'))).toMatchObject({ kind: 'colour', hours: 0.5 });
-    expect(changeBetween(a, press('B', 'P3', 'M', '05T08:00', '05T09:00', '123', 'black'))).toMatchObject({ kind: 'insert', hours: 0.5 });
-    // A known insert that differs is an insert change whatever the colour.
-    const sized = press('C', 'P4', 'M', '05T08:00', '05T09:00', '123', 'Slate', '18');
-    expect(changeBetween({ ...a, press: { ...a.press!, insert: '16' } }, sized)?.kind).toBe('insert');
+  it('on one die: an insert change when the size in the description changes, else a colour change', () => {
+    const desc = (j: Job, d: string): Job => ({ ...j, description: d });
+    const a = desc(press('A', 'P1', 'M', '05T07:00', '05T08:00', '123', 'Navy'), 'Postura Max Chair - Size 3 - 350h - Navy');
+    // Only the colour word differs.
+    const slate = desc(press('B', 'P2', 'M', '05T08:00', '05T09:00', '123', 'Slate'), 'Postura Max Chair - Size 3 - 350h - Slate');
+    expect(changeBetween(a, slate)).toMatchObject({ kind: 'colour', hours: 0.5 });
+    // The height changes: a different insert, whatever the colour.
+    const tall = desc(press('C', 'P3', 'M', '05T08:00', '05T09:00', '123', 'Navy'), 'Postura Max Chair - Size 4 - 460h - Navy');
+    expect(changeBetween(a, tall)).toMatchObject({ kind: 'insert', hours: 0.5 });
+    expect(changeBetween(a, { ...tall, press: { ...tall.press!, color: 'Slate' } })?.kind).toBe('insert');
+    // Neither names a size: the same size as far as anyone can tell.
+    const plain = (id: string, part: string, d: string) => desc(press(id, part, 'M', '05T08:00', '05T09:00', '9'), d);
+    expect(changeBetween(plain('D', 'P4', 'Snc Shell Blue'), plain('E', 'P5', 'Snc Shell Slate'))?.kind).toBe('colour');
+    // An insert field, where the source has one, outranks the description.
+    expect(changeBetween({ ...a, press: { ...a.press!, insert: '16' } }, { ...slate, press: { ...slate.press!, insert: '18' } })?.kind).toBe('insert');
+  });
+
+  it('reads the size off a description', () => {
+    expect(sizeOf('Progress Chair - Flame Resistant - 460h - Cove')).toBe('460h');
+    expect(sizeOf('Postura Max Chair - Size 3 - 350 H - Navy')).toBe('350h|size3');
+    expect(sizeOf('Viva Seat - Shadow PP Outdoor')).toBeNull();
+    // A part number in the text is not a height.
+    expect(sizeOf('Snc Shell Hal Holes Blue (PM8567)')).toBeNull();
   });
 
   it('is nothing for the same part again', () => {
