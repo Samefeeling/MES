@@ -8,11 +8,15 @@
  *   New Year's Day      1 January; on a weekend, the Monday after as well
  *   Australia Day       26 January; on a weekend, the Monday after instead
  *   Good Friday, Easter Saturday, Easter Sunday, Easter Monday
- *   Anzac Day           25 April; no day in lieu when it is on a weekend
+ *   Anzac Day           25 April; on a weekend, the Monday after as well
  *   King's Birthday     second Monday in June
  *   Labour Day          first Monday in October
  *   Christmas Day       25 December; on a weekend, the next free weekday as well
  *   Boxing Day          26 December; on a weekend, the next free weekday as well
+ *
+ * Anzac Day's Monday is the factory's rule, not the Act's: the Act gives no
+ * additional day for it, but the plant shuts on the Monday after a weekend
+ * Anzac Day the same way it does for New Year's Day.
  *
  * Bank Holiday (first Monday in August) is left out: it is a holiday for banks
  * and some financial institutions, not for a factory. A one-off holiday the
@@ -33,12 +37,21 @@ export interface Closure {
   kind: ClosureKind;
 }
 
-/** A Rostered Day Off, as the plan stores it. */
+/** A day the FactoryCalendar list holds: an RDO, or a holiday by name. */
 export interface RdoDay {
   day: string;
-  /** What the supervisor called it; "RDO" when they did not. */
+  /** What the list calls it; "RDO" when it says nothing. */
   name?: string;
 }
+
+/**
+ * What a listed day is, read off its name. The list's Name column holds either
+ * "RDO" or the holiday's own name, so anything naming a rostered day off is an
+ * RDO and everything else — a holiday typed by hand, a proclaimed day of
+ * mourning — is a holiday.
+ */
+export const closureKindOf = (name: string): ClosureKind =>
+  /\bRDO\b|rostered/i.test(name) ? 'rdo' : 'holiday';
 
 const date = (year: number, month: number, day: number): Date => new Date(year, month - 1, day);
 
@@ -100,7 +113,15 @@ export function nswPublicHolidays(year: number): Closure[] {
   add(easter, 'Easter Sunday');
   add(plusDays(easter, 1), 'Easter Monday');
 
-  add(date(year, 4, 25), 'Anzac Day');
+  const anzac = date(year, 4, 25);
+  add(anzac, 'Anzac Day');
+  if (weekend(anzac)) {
+    // The Monday after — unless Easter Monday already has it (Easter Sunday
+    // is Anzac Day in 2038), when the next weekday that is still open.
+    let monday = mondayAfter(anzac);
+    while (out.some((h) => h.day === toDayKey(monday))) monday = plusDays(monday, 1);
+    add(monday, 'Anzac Day (additional day)');
+  }
   add(nthMonday(year, 6, 2), "King's Birthday");
   add(nthMonday(year, 10, 1), 'Labour Day');
 

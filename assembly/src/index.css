@@ -3480,6 +3480,8 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .factory-calendar .fc-add input { font: inherit; font-size: 12px; padding: 1px 4px; }
 .factory-calendar .fc-add input:not([type]) { width: 10em; }
 .factory-calendar .fc-clash { flex-basis: 100%; color: #b45309; font-size: 11px; }
+.factory-calendar .fc-error { margin: 4px 0; color: #b91c1c; font-size: 11px; }
+.factory-calendar .fc-kind.rdo { color: #6d28d9; }
 @media (max-width: 640px) {
   .factory-calendar .fc-lists { grid-template-columns: 1fr; }
 }

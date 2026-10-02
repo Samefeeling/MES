@@ -41,6 +41,7 @@ Thresholds are fixed and printed on the page, not editable: PMD's are argued ove
 | --- | --- | --- |
 | ASSY_Operator | Real operator names (Title), Position, Skills, Supervisor, OnShift and PlannedAnnualLeave | SharePoint item ID |
 | ASSY_Plans | Shared working plan, crew windows, pinned starts, output history and ignored orders, plus one read-only row per day of history | Unique Title = current, or day-YYYY-MM-DD |
+| FactoryCalendar | Days the factory is shut beyond weekends and NSW public holidays: Date (date only) and Name ("RDO" or the holiday's name). Written from Crew capacity → Closed days the moment a day is added. | SharePoint item ID |
 | ASSY_Production | Daily job quantities, booked labour hours, crew snapshot, dates, completion and pause details | Unique RecordKey, generated per booking |
 
 `ASSY_Production.RecordKey` is the row's identity and nothing else: the board generates it when a shift first saves that day's entry, both sides carry it, and it is never rebuilt from anything. It used to be `Job|YYYY-MM-DD`, which tied a row's identity to a date — the one field on the record that can be read two ways, because a SharePoint date column answers in the site's timezone rather than the shift's. Keep the unique index on it. Rows opened by the sync before any booking (the blank row an order starts with) still take `Job|YYYY-MM-DD`, which both sides can work out; the first real entry for that day claims the row and writes its own key over it.

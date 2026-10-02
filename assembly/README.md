@@ -223,8 +223,10 @@ plan goes back the other way, into the `ASSY_Production` list.
   dragged bar claims its *people* before anything else does, or the order it was
   taken off would simply take them back.
 - **Closed days** — weekends, NSW public holidays (worked out for every year,
-  days in lieu included) and the factory's RDOs (entered under **Crew capacity →
-  Closed days**, saved with the plan) are shut: the schedule steps over them,
+  days in lieu included, plus the Monday after a weekend Anzac Day) and the
+  days in the SharePoint list `FactoryCalendar` (Date, Name — "RDO" or a
+  holiday's name; added or removed under **Crew capacity → Closed days**, and
+  written to the list at once) are shut: the schedule steps over them,
   they carry no capacity, level loading never puts work on them, and a bar
   dropped on one asks for overtime. The heading marks them **PH** / **RDO**.
 - **Level loading** — hold **Ctrl** and click load blocks (a folded line's day

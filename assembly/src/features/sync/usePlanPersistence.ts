@@ -67,7 +67,6 @@ const planningNow = (): PlanningPart => {
       lineNames: p.lineNames,
       lineOrder: p.lineOrder,
       crewPools: p.crewPools,
-      rdoDays: p.rdoDays,
       orderCrewAssignments: p.orderCrewAssignments,
       orderStarts: p.orderStarts,
       orderOvertime: p.orderOvertime,
@@ -150,7 +149,6 @@ export function usePlanPersistence(): PlanPersistence {
   const lineNames = usePlanStore((s) => s.lineNames);
   const lineOrder = usePlanStore((s) => s.lineOrder);
   const crewPools = usePlanStore((s) => s.crewPools);
-  const rdoDays = usePlanStore((s) => s.rdoDays);
   const orderCrewAssignments = usePlanStore((s) => s.orderCrewAssignments);
   const orderStarts = usePlanStore((s) => s.orderStarts);
   const orderOvertime = usePlanStore((s) => s.orderOvertime);
@@ -177,7 +175,6 @@ export function usePlanPersistence(): PlanPersistence {
       lineNames,
       lineOrder,
       crewPools,
-      rdoDays,
       orderCrewAssignments,
       orderStarts,
       orderOvertime,

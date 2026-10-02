@@ -29,14 +29,22 @@ describe('NSW public holidays', () => {
       '2026-04-04': 'Easter Saturday',
       '2026-04-05': 'Easter Sunday',
       '2026-04-06': 'Easter Monday',
-      // A Saturday: NSW gives no day in lieu for Anzac Day.
+      // A Saturday: the factory shuts the Monday after as well.
       '2026-04-25': 'Anzac Day',
+      '2026-04-27': 'Anzac Day (additional day)',
       '2026-06-08': "King's Birthday",
       '2026-10-05': 'Labour Day',
       '2026-12-25': 'Christmas Day',
       '2026-12-26': 'Boxing Day',
       '2026-12-28': 'Boxing Day (additional day)',
     });
+  });
+
+  it('adds the Monday after a weekend Anzac Day, and only then', () => {
+    expect(days(2027)['2027-04-26']).toBe('Anzac Day (additional day)');
+    expect(Object.values(days(2025)).filter((n) => n.startsWith('Anzac'))).toEqual(['Anzac Day']);
+    // Easter Sunday is Anzac Day: Easter Monday has the Monday, so the Tuesday.
+    expect(days(2038)['2038-04-27']).toBe('Anzac Day (additional day)');
   });
 
   it('moves Australia Day off a weekend to the Monday', () => {
@@ -73,7 +81,7 @@ describe('NSW public holidays', () => {
 });
 
 describe('the factory calendar', () => {
-  afterEach(() => setFactoryCalendar({ rdo: [], holidays: true }));
+  afterEach(() => setFactoryCalendar({ listed: [], holidays: true }));
 
   it('shuts the factory on a public holiday the way it is shut at the weekend', () => {
     expect(isClosed(d('2026-04-03'))).toBe(true);
@@ -89,12 +97,12 @@ describe('the factory calendar', () => {
 
   it('shuts it on an RDO the supervisor entered, and on nothing else', () => {
     expect(isClosed(d('2026-09-16'))).toBe(false);
-    setFactoryCalendar({ rdo: [{ day: '2026-09-16' }, { day: '2026-11-13', name: 'Plant shutdown' }] });
+    setFactoryCalendar({ listed: [{ day: '2026-09-16' }, { day: '2026-11-13', name: 'Plant shutdown' }] });
     expect(closureOn(d('2026-09-16'))).toEqual({ day: '2026-09-16', name: 'RDO', kind: 'rdo' });
     expect(closureOn(d('2026-11-13'))?.name).toBe('Plant shutdown');
     expect(nextWorkingDay(d('2026-09-16'))).toEqual(d('2026-09-17'));
     expect(addWorkingDays(d('2026-09-15'), 2)).toEqual(d('2026-09-18'));
-    setFactoryCalendar({ rdo: [] });
+    setFactoryCalendar({ listed: [] });
     expect(isClosed(d('2026-09-16'))).toBe(false);
   });
 

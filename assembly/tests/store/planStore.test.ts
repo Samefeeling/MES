@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { JobId } from '@/domain/ids';
 import { usePlanStore, type ProductionEntry } from '@/store/planStore';
 import type { CrewAssignment } from '@/domain/assembly';
-import { closureOn, isClosed } from '@/engine/assembly/dates';
 
 /** Whole-order allocations — the plain case, with no day windows. */
 const crewOf = (
@@ -500,34 +499,5 @@ describe('setOrderStarts', () => {
       KEEP: '2026-09-14T07:00:00.000Z',
       NEW: '2026-09-16T07:00:00.000Z',
     });
-  });
-});
-
-describe('rdoDays', () => {
-  beforeEach(() => usePlanStore.setState({ rdoDays: [] }));
-
-  it('keeps real dates, one a day, in date order — and shuts the factory on them', () => {
-    usePlanStore.getState().setRdoDays([
-      { day: '2026-11-13', name: ' Shutdown ' },
-      { day: '2026-09-16' },
-      { day: 'not a date' },
-      { day: '2026-09-16', name: 'Again' },
-    ]);
-    expect(usePlanStore.getState().rdoDays).toEqual([
-      { day: '2026-09-16', name: 'Again' },
-      { day: '2026-11-13', name: 'Shutdown' },
-    ]);
-    expect(isClosed(new Date('2026-09-16T00:00:00'))).toBe(true);
-    usePlanStore.getState().setRdoDays([]);
-    expect(isClosed(new Date('2026-09-16T00:00:00'))).toBe(false);
-  });
-
-  it('comes back with a stored plan, and a plan without any keeps what is there', () => {
-    usePlanStore.getState().setAssemblyPlan({ rdoDays: [{ day: '2026-12-29' }] });
-    expect(usePlanStore.getState().rdoDays).toEqual([{ day: '2026-12-29' }]);
-    expect(closureOn(new Date('2026-12-29T00:00:00'))?.kind).toBe('rdo');
-    usePlanStore.getState().setAssemblyPlan({});
-    expect(usePlanStore.getState().rdoDays).toEqual([{ day: '2026-12-29' }]);
-    usePlanStore.getState().setRdoDays([]);
   });
 });

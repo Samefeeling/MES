@@ -154,7 +154,7 @@ describe('level loading', () => {
 
   describe('a day the factory is shut', () => {
     it('never takes work on an RDO', () => {
-      setFactoryCalendar({ rdo: [{ day: '2026-09-16' }] });
+      setFactoryCalendar({ listed: [{ day: '2026-09-16' }] });
       try {
         // Wednesday is an RDO, so Thursday's spare order goes to Tuesday.
         const plan = level(three(), ['2026-09-17']);
@@ -165,7 +165,7 @@ describe('level loading', () => {
         expect(rdo.moves).toEqual([]);
         expect(rdo.room.before).toBe(0);
       } finally {
-        setFactoryCalendar({ rdo: [] });
+        setFactoryCalendar({ listed: [] });
       }
     });
 

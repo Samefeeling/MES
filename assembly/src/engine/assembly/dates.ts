@@ -15,7 +15,7 @@
  */
 
 import { formatDay, MS_PER_DAY, toDayKey } from '@/lib/time';
-import { cleanRdo, nswHolidayOn, type Closure, type RdoDay } from './factoryCalendar';
+import { cleanRdo, closureKindOf, nswHolidayOn, type Closure, type RdoDay } from './factoryCalendar';
 
 export type ScheduleColor = 'green' | 'red' | 'grey';
 
@@ -129,28 +129,31 @@ export const isWeekend = (d: Date): boolean =>
  * The factory's calendar. It is configuration rather than an input to each
  * function because every working-day step on the board goes through the few
  * helpers below, and threading a calendar through all their callers would
- * change every signature for one fact about the plant. The plan store sets it
- * (`setFactoryCalendar`) whenever the RDOs change, before the board is
- * worked out again.
+ * change every signature for one fact about the plant. The calendar store sets
+ * it (`setFactoryCalendar`) whenever the FactoryCalendar list is read or
+ * changed, before the board is worked out again.
  */
-let rdoDays = new Map<string, Closure>();
+let listedDays = new Map<string, Closure>();
 let nswHolidays = true;
 
 /**
- * Set the days the factory is shut on top of the weekends: the RDOs entered,
+ * Set the days the factory is shut on top of the weekends: the days the
+ * FactoryCalendar list holds (an RDO, or a holiday nobody's rule works out),
  * and whether NSW public holidays count (they do unless turned off).
  */
 export function setFactoryCalendar(calendar: {
-  rdo?: readonly RdoDay[];
+  listed?: readonly RdoDay[];
   holidays?: boolean;
 }): void {
-  if (calendar.rdo) {
+  if (calendar.listed) {
     const next = new Map<string, Closure>();
-    for (const entry of calendar.rdo) {
+    for (const entry of calendar.listed) {
       const clean = cleanRdo(entry);
-      if (clean) next.set(clean.day, { day: clean.day, name: clean.name ?? 'RDO', kind: 'rdo' });
+      if (!clean) continue;
+      const name = clean.name ?? 'RDO';
+      next.set(clean.day, { day: clean.day, name, kind: closureKindOf(name) });
     }
-    rdoDays = next;
+    listedDays = next;
   }
   if (calendar.holidays !== undefined) nswHolidays = calendar.holidays;
 }
@@ -158,7 +161,7 @@ export function setFactoryCalendar(calendar: {
 /** Why the factory is shut on a weekday, or null when it is open (or it is a weekend). */
 export function closureOn(d: Date): Closure | null {
   const key = toDayKey(d);
-  return (nswHolidays ? nswHolidayOn(key) : null) ?? rdoDays.get(key) ?? null;
+  return (nswHolidays ? nswHolidayOn(key) : null) ?? listedDays.get(key) ?? null;
 }
 
 /** The factory is shut: a weekend, a public holiday or an RDO. */

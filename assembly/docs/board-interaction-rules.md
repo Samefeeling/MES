@@ -319,7 +319,7 @@ its crew, its line and the orders it waits on allow.
 ## Closed days
 
 **The factory is shut at the weekend, on every NSW public holiday and on the
-RDOs the supervisor enters.** A closed weekday is read exactly like a weekend:
+days in the `FactoryCalendar` list.** A closed weekday is read exactly like a weekend:
 the schedule steps over it (work that would have run on it runs on the next
 open day, and a crew's days skip it), it carries no capacity on the banner or
 on any folded line, nothing waiting for a crew is spread onto it, an empty
@@ -330,16 +330,24 @@ onto one. A bar dropped on one asks for overtime, naming the holiday or RDO;
 The public holidays are worked out for every year from the Public Holidays Act
 2010 (NSW), days in lieu included: New Year's Day (and the Monday after a
 weekend one), Australia Day (the Monday, when the 26th is a weekend), Good
-Friday to Easter Monday, Anzac Day (no day in lieu), King's Birthday (second
+Friday to Easter Monday, Anzac Day (and, by the factory's own rule — the Act
+gives none — the Monday after a weekend one), King's Birthday (second
 Monday in June), Labour Day (first Monday in October), Christmas Day and Boxing
 Day (each with the next free weekday when it falls on a weekend). Bank Holiday
 is left out — it is not a factory holiday — and a one-off holiday the state
-proclaims is entered as an RDO.
+proclaims goes in the list under its own name.
 
-**RDOs are entered under Crew capacity → Closed days** (supervisor only), a
-date and an optional name each; the list shows both calendars a year at a time.
-They are planning, like the crews: they go out with the plan on **Save**, and the
-board is worked out again round them the moment one is added or removed. In the
+**Everything else lives in the SharePoint list `FactoryCalendar`**: a `Date`
+column and a `Name` column, which holds "RDO" or the holiday's name — a row
+whose name says RDO (or "rostered") is an RDO, any other is a holiday. Rows can
+be kept by hand in SharePoint or under **Crew capacity → Closed days**
+(supervisor only), where a day added or removed is written to the list at once
+rather than held for **Save**: the days used to ride in the saved plan, and a
+reload before Save — which every new build forces — lost them. Every screen
+reads the list on each load and refresh, and a failed read keeps the days it
+already had rather than reopening the factory. Without SharePoint (the mock
+board) the rows are kept in the browser. The board is worked out again round
+them the moment one is added or removed. In the
 heading a closed weekday reads **PH** or **RDO** in place of its percentage and
 names itself on hover; the Weekends switch hides weekends only, so a closed
 weekday stays on the timeline, greyed.

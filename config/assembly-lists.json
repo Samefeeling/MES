@@ -182,6 +182,26 @@
           "type": "Number"
         }
       ]
+    },
+    {
+      "name": "FactoryCalendar",
+      "description": "Days the factory is shut beyond weekends and NSW public holidays: RDOs and hand-entered holidays. Name is \"RDO\" or the holiday's name.",
+      "fields": [
+        {
+          "name": "Title",
+          "type": "Text"
+        },
+        {
+          "name": "Date",
+          "type": "DateTime",
+          "indexed": true,
+          "format": "DateOnly"
+        },
+        {
+          "name": "Name",
+          "type": "Text"
+        }
+      ]
     }
   ]
 }
