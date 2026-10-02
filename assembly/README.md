@@ -250,7 +250,9 @@ plan goes back the other way, into the `ASSY_Production` list.
   are pushed later or brought earlier with the order that moved. An empty day or
   week can be picked too: a picked day with room takes what an overloaded day
   gives up first, and is then filled with the next orders that can start on it
-  (the panel can turn filling off). See `docs/board-interaction-rules.md`.
+  (the panel can turn filling off). With **Weekends** shown, every weekend day
+  is a block too — hatched when empty — and work levelled onto a picked weekend
+  goes with weekend overtime approved. See `docs/board-interaction-rules.md`.
 - **Colour by date** — Due is the date the customer asked for, and finishing
   during that day counts as making it:
 

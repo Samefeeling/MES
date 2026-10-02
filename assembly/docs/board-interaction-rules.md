@@ -363,7 +363,8 @@ the schedule steps over it (work that would have run on it runs on the next
 open day, and a crew's days skip it), it carries no capacity on the banner or
 on any folded line, nothing waiting for a crew is spread onto it, an empty
 one cannot be picked for level loading and level loading never moves an order
-onto one. A bar dropped on one asks for overtime, naming the holiday or RDO;
+onto one — except a weekend picked with the Weekends switch on, below. A bar
+dropped on one asks for overtime, naming the holiday or RDO;
 **Move to** takes the next day the factory is open.
 
 The public holidays are worked out for every year from the Public Holidays Act
@@ -435,6 +436,22 @@ days are not shuffled between them. The panel shows the room left on the picked
 days before and after, and filling can be turned off there to only relieve what
 is over. Picking an empty day on its own therefore brings the next work forward
 onto it.
+
+**A weekend is a day to level into once the Weekends switch is on.** The
+switch is turned on to plan overtime, so with it on every weekend day carries a
+load block of its own — hatched when empty, so it reads as a place work can go
+— and can be Ctrl-picked like any other. A picked weekend day is read at the
+crews' ordinary day (people × 7.5 h), and an order levelled onto it is listed
+with **weekend overtime** and written with weekend overtime approved, so it
+runs straight through the weekend as one block (`OT`); **Undo** takes the
+approval back with the start. An order is only put where its run follows the
+calendar day by day — Friday and a picked Saturday, or a picked Saturday and
+Sunday, but never a picked Saturday and the Monday over a Sunday nobody picked
+— because an overtime order is drawn straight through. An order due on the
+Monday may run on the Saturday picked. Weekends nobody picked stay shut, and
+public holidays and RDOs cannot be picked. With weekend work on it, a weekend's
+heading reads the hours it carries rather than a share of a roster it has not
+got.
 
 **What it never moves.** An order with a crew (its days come out of the crew's
 diary, and a pin would quietly re-sequence whoever is on it), one already begun,

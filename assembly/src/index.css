@@ -3856,6 +3856,11 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
    level into — tinted once it is. */
 .aline-day.empty:hover { box-shadow: inset 0 0 0 1px var(--accent); }
 .aline-day.empty.picked { background: rgb(37 99 235 / 8%); }
+/* A weekend on the board is there to plan overtime: its empty block is drawn,
+   hatched, so it reads as a place work can be levelled onto. */
+.aline-day.empty.weekend { box-shadow: inset 0 0 0 1px rgb(217 119 6 / 45%); background: repeating-linear-gradient(-45deg, transparent 0 4px, rgb(217 119 6 / 8%) 4px 8px); }
+.aline-day.empty.weekend:hover { box-shadow: inset 0 0 0 1px #d97706; }
+.aline-day.empty.weekend.picked { background: rgb(37 99 235 / 12%); box-shadow: inset 0 0 0 1px var(--accent); }
 
 .day-detail-filter {
   margin: 0 0 6px;

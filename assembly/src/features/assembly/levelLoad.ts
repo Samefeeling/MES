@@ -47,13 +47,12 @@
 import { rootLineKey, type CrewPool, type LineKey } from '@/domain/assembly';
 import { jobNumOf } from '@/domain/routing';
 import type { OrderRow } from '@/engine/assembly/board';
-import { addCalendarDays, isClosed, startOfDay } from '@/engine/assembly/dates';
+import { addCalendarDays, isClosed, isWeekend, startOfDay } from '@/engine/assembly/dates';
 import { remainingHours } from '@/engine/assembly/duration';
 import { shiftOpensOn } from '@/engine/assembly/shift';
 import { formatShortDay, fromDayKey, toDayKey } from '@/lib/time';
 import {
   hasBegun,
-  lastWorkingDayFor,
   unstaffedSpanDays,
   unstaffedWindow,
 } from './boardView';
@@ -109,6 +108,8 @@ export interface LevelMove {
   because?: { order: string; effect: 'follows' | 'ahead of' };
   /** Still over capacity on some of its days, even here. */
   stillOver: boolean;
+  /** Runs on a picked weekend: applied with weekend overtime approved. */
+  overtime: boolean;
 }
 
 export interface LevelLeft {
@@ -188,11 +189,11 @@ interface Calendar {
   keys: string[];
 }
 
-function buildCalendar(from: Date, until: Date): Calendar {
+function buildCalendar(from: Date, until: Date, closed: (d: Date) => boolean): Calendar {
   const days: Date[] = [];
   const keys: string[] = [];
   for (let d = startOfDay(from); d <= until; d = addCalendarDays(d, 1)) {
-    if (isClosed(d)) continue;
+    if (closed(d)) continue;
     days.push(d);
     keys.push(toDayKey(d));
   }
@@ -220,6 +221,15 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
   const todayKey = toDayKey(startOfDay(today));
 
   // ---- the calendar ------------------------------------------------------
+  /*
+   * A weekend picked for level loading is a weekend somebody means to work:
+   * the Weekends switch is turned on to plan overtime. So a picked weekend
+   * day is open, at the crews' ordinary day, and an order levelled onto it
+   * goes with weekend overtime approved (`LevelMove.overtime`). Public
+   * holidays and RDOs stay shut — they cannot be picked.
+   */
+  const opened = overtimeDays(picks, todayKey);
+  const closed = (d: Date): boolean => isClosed(d) && !opened.has(toDayKey(d));
   let horizon = addCalendarDays(startOfDay(today), 8 * 7);
   for (const row of rows) {
     const due = row.job.dueDate;
@@ -227,8 +237,18 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
   }
   const cap = addCalendarDays(startOfDay(today), MAX_HORIZON_DAYS);
   if (horizon > cap) horizon = cap;
-  const cal = buildCalendar(today, addCalendarDays(horizon, TAIL_DAYS));
+  const cal = buildCalendar(today, addCalendarDays(horizon, TAIL_DAYS), closed);
   const posOnOrAfter = (d: Date) => lowerBound(cal.keys, toDayKey(startOfDay(d)));
+  /**
+   * The last day an order due `due` may be worked on, as a calendar position —
+   * `lastWorkingDayFor`, read on this calendar, so a weekend opened for
+   * overtime counts: an order due Monday may run on the Saturday picked.
+   */
+  const lastPosFor = (due: Date): number => {
+    const day = startOfDay(due);
+    const bare = due.getTime() === day.getTime();
+    return bare || closed(day) ? posOnOrBefore(addCalendarDays(day, -1)) : posOnOrBefore(day);
+  };
   /** The last working day at or before `d`, or -1 when that is before today. */
   const posOnOrBefore = (d: Date): number => {
     const key = toDayKey(startOfDay(d));
@@ -275,7 +295,7 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
     if (!window || hours <= 0) return out;
     const open: string[] = [];
     for (let d = startOfDay(window.from); d < window.to; d = addCalendarDays(d, 1)) {
-      if (!isClosed(d)) open.push(toDayKey(d));
+      if (row.overtime || !isClosed(d)) open.push(toDayKey(d));
     }
     if (open.length === 0) open.push(toDayKey(startOfDay(window.from)));
     for (const key of open) out.set(key, (out.get(key) ?? 0) + hours / open.length);
@@ -395,7 +415,7 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
     if (visiting.has(item.id)) return Number.MAX_SAFE_INTEGER;
     visiting.add(item.id);
     const due = item.row.job.dueDate;
-    let l = due ? posOnOrBefore(lastWorkingDayFor(due)) - item.span + 1 : cal.days.length;
+    let l = due ? lastPosFor(due) - item.span + 1 : cal.days.length;
     for (const succ of item.succs) {
       const bound =
         succ.kind === 'fixed' ? fixedStart(succ.row, succ) : latest(succ);
@@ -424,7 +444,7 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
   const dayShare = (day: string, extra?: { lane: LineKey; hours: number }) => {
     const demand = new Map(ledger.get(day) ?? []);
     if (extra) demand.set(extra.lane, (demand.get(extra.lane) ?? 0) + extra.hours);
-    return shareDay(demand, pools, !isClosed(fromDayKey(day))).pools;
+    return shareDay(demand, pools, !closed(fromDayKey(day))).pools;
   };
   const overOf = (poolsDay: ReturnType<typeof dayShare>): number =>
     poolsDay.reduce((n, p) => n + Math.max(0, p.demand - p.capacity * ceiling), 0);
@@ -513,6 +533,24 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
   };
   const current = (item: Item): Map<string, number> =>
     item.placed !== undefined ? uniform(item, item.placed) : item.profile;
+  /**
+   * Whether a run from `s` can be drawn as planned. One that touches a picked
+   * weekend goes with overtime, and an overtime order runs straight through
+   * the calendar — so its days must follow one another with no shut day left
+   * out between them: Friday and the picked Saturday, yes; the picked
+   * Saturday and Monday over an unpicked Sunday, no.
+   */
+  const fitsCalendar = (item: Item, s: number): boolean => {
+    let touches = false;
+    for (let i = 0; i < item.span && s + i < cal.keys.length; i++) {
+      if (opened.has(cal.keys[s + i])) touches = true;
+    }
+    if (!touches) return true;
+    for (let i = 1; i < item.span && s + i < cal.keys.length; i++) {
+      if (toDayKey(addCalendarDays(cal.days[s + i - 1], 1)) !== cal.keys[s + i]) return false;
+    }
+    return true;
+  };
 
   /** Overload added by putting `profile` on `lane`'s days, on top of the ledger. */
   const added = (lane: LineKey, profile: ReadonlyMap<string, number>): number => {
@@ -562,8 +600,9 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
       // is not this move's to answer for.
       const group = succ.groups.find((g) => g.items.includes(item));
       if (!group) continue;
-      const need = servedAt(group, finishDrawn) + 1;
+      let need = servedAt(group, finishDrawn) + 1;
       if (start >= need) continue;
+      while (need <= succ.L && !fitsCalendar(succ, need)) need++;
       if (need > succ.L || need + succ.span > cal.keys.length) continue;
       seen.add(succ.id);
       moveTo(succ, need, { order: item.order, effect: 'follows' });
@@ -582,7 +621,8 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
         null,
       );
       if (!p || p.kind !== 'free' || seen.has(p.id)) continue;
-      const to = start - p.span;
+      let to = start - p.span;
+      while (to >= p.E && !fitsCalendar(p, to)) to--;
       if (to < p.E) continue;
       seen.add(p.id);
       moveTo(p, to, { order: item.order, effect: 'ahead of' });
@@ -622,7 +662,7 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
     const hi = Math.min(item.L, cal.keys.length - item.span);
     let best: Offer | null = null;
     for (let s = lo; s <= hi; s++) {
-      if (s === now) continue;
+      if (s === now || !fitsCalendar(item, s)) continue;
       const over = Math.round(added(item.lane, uniform(item, s)) / EPS) * EPS;
       const share = pickedShare(item, s);
       const distance = Math.abs(s - now);
@@ -708,7 +748,7 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
           if (!days?.has(day)) continue;
           const start = startOf(item);
           if (start === null || start <= d) continue;
-          if (d < releaseOf(item) || d + item.span > cal.keys.length) continue;
+          if (d < releaseOf(item) || d + item.span > cal.keys.length || !fitsCalendar(item, d)) continue;
           const cur = current(item);
           const next = uniform(item, d);
           const onPicked = (profile: ReadonlyMap<string, number>) => {
@@ -772,7 +812,8 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
     const toKey = cal.keys[item.placed];
     const fromKey = item.first !== null ? cal.keys[item.first] : null;
     const lanePools = new Set(poolsFor(item.lane).map((p) => p.id));
-    const over = [...uniform(item, item.placed).keys()].some((day) =>
+    const runsOn = [...uniform(item, item.placed).keys()];
+    const over = runsOn.some((day) =>
       dayShare(day).some((p) => lanePools.has(p.id) && p.demand - p.capacity * ceiling > EPS),
     );
     moves.push({
@@ -788,6 +829,7 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
       kind: item.linked ? 'linked' : item.filled ? 'fill' : 'level',
       because: item.linked,
       stillOver: over,
+      overtime: runsOn.some((day) => opened.has(day)),
     });
   }
   const kindRank = { level: 0, fill: 1, linked: 2 } as const;
@@ -810,7 +852,7 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
 
   function windowReason(item: Item, release: number): string {
     const due = item.row.job.dueDate;
-    const dueLast = due ? posOnOrBefore(lastWorkingDayFor(due)) : -1;
+    const dueLast = due ? lastPosFor(due) : -1;
     if (due && dueLast < 0) return `already past its Due Date ${dayNameOf(toDayKey(due))}`;
     const material = [item.row.materialReadyAt, item.row.material.earliestStart]
       .filter((d): d is Date => Boolean(d))
@@ -834,7 +876,7 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
     const hi = Math.min(item.L, cal.keys.length - item.span);
     if (lo > hi) return windowReason(item, lo);
     const due = item.row.job.dueDate;
-    const byDue = due ? posOnOrBefore(lastWorkingDayFor(due)) - item.span + 1 : Number.MAX_SAFE_INTEGER;
+    const byDue = due ? lastPosFor(due) - item.span + 1 : Number.MAX_SAFE_INTEGER;
     if (item.L < byDue) {
       const holder = item.succs
         .filter((succ) => (succ.kind === 'fixed' ? fixedStart(succ.row, succ) : latest(succ)) - item.span === item.L)[0];
@@ -844,6 +886,27 @@ export function planLevelLoad(input: LevelInput): LevelPlan {
     }
     return 'no other day it may run on has room for it — it needs overtime or more people';
   }
+}
+
+/**
+ * The weekend days the picks open for overtime: every picked day still to come
+ * that falls on a weekend. Only reachable with the Weekends switch on — a
+ * weekend is not drawn, so not pickable, otherwise.
+ */
+export function overtimeDays(
+  picks: ReadonlyMap<LineKey, ReadonlySet<string>>,
+  todayKey: string,
+): Set<string> {
+  const out = new Set<string>();
+  for (const days of picks.values()) {
+    for (const day of days) if (day >= todayKey && isWeekend(fromDayKey(day))) out.add(day);
+  }
+  return out;
+}
+
+/** The orders a plan puts on a picked weekend, which go with overtime approved. */
+export function overtimeOf(plan: Pick<LevelPlan, 'moves'>): Record<string, boolean> {
+  return Object.fromEntries(plan.moves.filter((m) => m.overtime).map((m) => [m.jobId, true]));
 }
 
 /** The pins a plan writes: order id → the shift open of its new start day. */

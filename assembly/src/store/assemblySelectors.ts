@@ -159,6 +159,8 @@ export function recomputeAssemblyGantt(
   extraCrew: Record<string, string[]>,
   /** Start days to try on top of the plan's own pins, by order id. */
   extraStarts: Record<string, string> = {},
+  /** Weekend overtime to try on top of the plan's own approvals. */
+  extraOvertime: Record<string, boolean> = {},
 ): AssemblyGanttView | null {
   const { dataset, indexes } = useDataStore.getState();
   if (!dataset || !indexes) return null;
@@ -183,7 +185,7 @@ export function recomputeAssemblyGantt(
     orderDoubleBooked: plan.orderDoubleBooked,
     orderStarts: { ...plan.orderStarts, ...extraStarts },
     orderActualStarts: plan.orderActualStarts,
-    orderOvertime: plan.orderOvertime,
+    orderOvertime: { ...plan.orderOvertime, ...extraOvertime },
     progress: plan.progress,
     progressBaselines: plan.progressBaselines,
     production: plan.production,

@@ -152,6 +152,8 @@ export function capacityDays(
   positionsOf: (line: LineKey) => number,
   dates: readonly Date[],
   today: Date,
+  /** Weekend days worked as overtime, read at the crews' ordinary day. */
+  overtime: ReadonlySet<string> = new Set(),
 ): CapacityDay[] {
   const todayKey = toDayKey(startOfDay(today));
   const byLane = new Map<LineKey, OrderRow[]>();
@@ -171,7 +173,7 @@ export function capacityDays(
 
   return dates.map((date, i) => {
     const key = toDayKey(date);
-    const working = !isClosed(date);
+    const working = !isClosed(date) || overtime.has(key);
     const demand = new Map<LineKey, number>();
     let crewed = 0;
     let waiting = 0;

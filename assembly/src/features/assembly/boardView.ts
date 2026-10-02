@@ -471,8 +471,13 @@ export function unstaffedWindow(
      */
     const span = unstaffedSpanDays(row);
     let last = startOfDay(floor);
-    if (isClosed(last)) last = nextWorkingDay(last);
-    for (let i = 1; i < span; i++) last = nextWorkingDay(addCalendarDays(last, 1));
+    if (row.overtime) {
+      // Weekend overtime approved: it runs straight through, as its bar would.
+      last = addCalendarDays(last, span - 1);
+    } else {
+      if (isClosed(last)) last = nextWorkingDay(last);
+      for (let i = 1; i < span; i++) last = nextWorkingDay(addCalendarDays(last, 1));
+    }
     return {
       from: floor,
       to: addCalendarDays(last, 1),
@@ -933,7 +938,8 @@ export function lineDayLoads(
     if (!window || hours <= 0) continue;
     const open: string[] = [];
     for (let d = startOfDay(window.from); d < window.to; d = addCalendarDays(d, 1)) {
-      if (!isClosed(d)) open.push(toDayKey(d));
+      // An order with weekend overtime approved works the closed days too.
+      if (row.overtime || !isClosed(d)) open.push(toDayKey(d));
     }
     if (open.length === 0) open.push(toDayKey(startOfDay(window.from)));
     for (const key of open) {

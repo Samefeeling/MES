@@ -14,6 +14,7 @@
  * See `levelLoad` for what it moves, what it leaves and how linked orders go.
  */
 
+import type { JobId } from '@/domain/ids';
 import { useMemo, useRef, useState } from 'react';
 import type { CrewPool, LineKey } from '@/domain/assembly';
 import type { OrderRow } from '@/engine/assembly/board';
@@ -22,7 +23,7 @@ import { usePlanStore } from '@/store/planStore';
 import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { useUiStore } from '@/store/uiStore';
 import { useDismiss } from './BulkActions';
-import { parseLoadPicks, pinsOf, planLevelLoad, type LevelMove } from './levelLoad';
+import { overtimeOf, parseLoadPicks, pinsOf, planLevelLoad, type LevelMove } from './levelLoad';
 
 const CEILINGS = [1, 0.9, 0.8] as const;
 const hours = (n: number) => `${n.toFixed(1)} h`;
@@ -53,6 +54,7 @@ export function LevelLoading({
     pins: Record<string, string>,
     picks: ReadonlyMap<LineKey, ReadonlySet<string>>,
     ceiling: number,
+    overtime?: Record<string, boolean>,
   ) => { hours: number; days: number; room: number } | null;
   onClose: () => void;
 }) {
@@ -60,7 +62,10 @@ export function LevelLoading({
   useDismiss(box, onClose);
   const [ceiling, setCeiling] = useState<number>(1);
   const [fill, setFill] = useState(true);
-  const [undo, setUndo] = useState<Record<string, string | null> | null>(null);
+  const [undo, setUndo] = useState<{
+    starts: Record<string, string | null>;
+    overtime: Record<string, boolean>;
+  } | null>(null);
   const [applied, setApplied] = useState<{ moved: number; filled: number; linked: number } | null>(null);
   const unlocked = useSupervisorStore((s) => s.unlocked);
   const gate = signInAt(useSupervisorStore((s) => s.hosted));
@@ -72,7 +77,7 @@ export function LevelLoading({
     [rows, pools, today, picks, ceiling, fill],
   );
   const verified = useMemo(
-    () => (plan.moves.length > 0 ? verify(pinsOf(plan), picks, ceiling) : null),
+    () => (plan.moves.length > 0 ? verify(pinsOf(plan), picks, ceiling, overtimeOf(plan)) : null),
     [plan, verify, picks, ceiling],
   );
 
@@ -91,10 +96,16 @@ export function LevelLoading({
   const room = plan.room.before > 0.05;
 
   const apply = () => {
-    const { orderStarts, setOrderStarts } = usePlanStore.getState();
+    const { orderStarts, orderOvertime, setOrderStarts, setOvertime } = usePlanStore.getState();
     const pins = pinsOf(plan);
-    setUndo(Object.fromEntries(Object.keys(pins).map((id) => [id, orderStarts[id] ?? null])));
+    const overtime = overtimeOf(plan);
+    setUndo({
+      starts: Object.fromEntries(Object.keys(pins).map((id) => [id, orderStarts[id] ?? null])),
+      overtime: Object.fromEntries(Object.keys(overtime).map((id) => [id, Boolean(orderOvertime[id])])),
+    });
     setOrderStarts(pins);
+    // Levelled onto a picked weekend: the overtime is the reason it was picked.
+    for (const id of Object.keys(overtime)) setOvertime(id as JobId, true);
     setApplied({
       moved: plan.moves.length,
       filled: plan.moves.filter((m) => m.kind === 'fill').length,
@@ -103,7 +114,11 @@ export function LevelLoading({
     clearLoadPicks();
   };
   const revert = () => {
-    if (undo) usePlanStore.getState().setOrderStarts(undo);
+    if (undo) {
+      const { setOrderStarts, setOvertime } = usePlanStore.getState();
+      setOrderStarts(undo.starts);
+      for (const [id, was] of Object.entries(undo.overtime)) setOvertime(id as JobId, was);
+    }
     setUndo(null);
     setApplied(null);
   };
@@ -118,6 +133,7 @@ export function LevelLoading({
       <span>
         {m.line} · {dayText(m.fromDay)} → {dayText(m.toDay)} · {hours(m.hours)}
         {m.kind === 'fill' && ' · brought forward into room'}
+        {m.overtime && ' · weekend overtime'}
         {m.because &&
           ` · ${m.because.effect === 'follows' ? 'follows' : 'brought ahead of'} ${m.because.order}`}
         {m.stillOver && ' · still over capacity there'}

@@ -84,7 +84,7 @@ import { toDayKey } from '@/lib/time';
 import { rowIndex } from './rowIndex';
 import { BulkActions } from './BulkActions';
 import { LevelLoading } from './LevelLoading';
-import { loadPickKey, pickedOverload } from './levelLoad';
+import { loadPickKey, overtimeDays, pickedOverload } from './levelLoad';
 import { recomputeAssemblyGantt } from '@/store/assemblySelectors';
 import { overdueDays } from './overdue';
 import {
@@ -1172,19 +1172,24 @@ function LineLoadStrip({
     const isPicked = pickKeys.length > 0 && pickKeys.every((k) => picks.has(k));
     if (hours <= 0 && waiting <= 0) {
       // Nothing on it, but a day to come the crew works is room to level
-      // into: it can still be picked.
-      if (!picked.some((d) => !d.past && !isClosed(d.date))) return null;
+      // into: it can still be picked. So is a weekend — it is only on the
+      // board when the Weekends switch is on, which is turned on to plan
+      // overtime; work levelled onto it goes with overtime approved.
+      if (!picked.some((d) => !d.past && (!isClosed(d.date) || isWeekend(d.date)))) return null;
+      const weekend = picked.every((d) => isWeekend(d.date));
       return (
         <button
           type="button"
           key={key}
-          className={`aline-day empty${to - from > 1 ? ' week' : ''}${isPicked ? ' picked' : ''}`}
+          className={`aline-day empty${to - from > 1 ? ' week' : ''}${weekend ? ' weekend' : ''}${isPicked ? ' picked' : ''}`}
           style={{ left: x, width: axis.offsets[to] - x }}
           title={[
             `${line} · ${heading}: nothing planned`,
-            crews.length > 0
-              ? `${cap.toFixed(1)} h ${crews[0].pools.join(' + ')} can work`
-              : 'No crew group lists this line — set one under Crew capacity',
+            weekend
+              ? 'Weekend — overtime: picked and levelled, work goes onto it with weekend overtime approved, at the crews’ ordinary day'
+              : crews.length > 0
+                ? `${cap.toFixed(1)} h ${crews[0].pools.join(' + ')} can work`
+                : 'No crew group lists this line — set one under Crew capacity',
             'Ctrl + click to pick it as room to level into, right-click to level the picked loads',
           ].join('\n')}
           onClick={(e) => {
@@ -1207,10 +1212,12 @@ function LineLoadStrip({
           `${line} · ${heading}: ${hours.toFixed(1)} h with people on it`,
           ...detail,
           ...(waiting > 0 ? [`${waiting.toFixed(1)} h (blue) of orders waiting for a crew, to be worked by their Due Date`] : []),
-          crews.length > 0
-            ? `${pctText(share)} of the ${cap.toFixed(1)} h ${crews[0].pools.join(' + ')} can work` +
-              ` · the crew as a whole is at ${pctText((pool / cap) * 100)}`
-            : 'No crew group lists this line — set one under Crew capacity',
+          picked.every((d) => isWeekend(d.date))
+            ? 'Weekend — overtime: no crew is rostered, so it is not read against capacity'
+            : crews.length > 0
+              ? `${pctText(share)} of the ${cap.toFixed(1)} h ${crews[0].pools.join(' + ')} can work` +
+                ` · the crew as a whole is at ${pctText((pool / cap) * 100)}`
+              : 'No crew group lists this line — set one under Crew capacity',
           'Click for the orders · Ctrl + click to pick it, right-click to level the picked loads',
         ].join('\n')}
         onClick={(e) => {
@@ -1571,8 +1578,9 @@ export function AssemblyGantt({
       pins: Record<string, string>,
       picks: ReadonlyMap<LineKey, ReadonlySet<string>>,
       ceiling: number,
+      overtime: Record<string, boolean> = {},
     ) => {
-      const next = recomputeAssemblyGantt({}, pins);
+      const next = recomputeAssemblyGantt({}, pins, overtime);
       if (!next) return null;
       const positions = new Map(next.groups.map((g) => [g.line.key, benchPositions(next, g)]));
       const after = capacityDays(
@@ -1581,6 +1589,8 @@ export function AssemblyGantt({
         (lane) => positions.get(lane) ?? 0,
         days,
         next.today,
+        // A picked weekend is read as the planner reads it: worked overtime.
+        overtimeDays(picks, toDayKey(next.today)),
       );
       return pickedOverload(after, picks, crewPools, ceiling);
     },
@@ -1934,7 +1944,15 @@ export function AssemblyGantt({
           waiting={cap.waiting}
           capacity={cap.capacity}
           band={band}
-          label={closure ? (closure.kind === 'rdo' ? 'RDO' : 'PH') : `${pct}%`}
+          label={
+            closure
+              ? closure.kind === 'rdo' ? 'RDO' : 'PH'
+              : !cap.working && cap.crewed + cap.waiting > 0.05
+                // Weekend overtime: no rostered capacity to be a share of,
+                // so the hours it carries.
+                ? `${Math.round(cap.crewed + cap.waiting)} h`
+                : `${pct}%`
+          }
         />
         {/* Every day is dragged by its own edge, the way the seven columns
             to the left of it are. */}

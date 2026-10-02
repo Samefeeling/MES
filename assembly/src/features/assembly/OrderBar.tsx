@@ -162,9 +162,9 @@ export function OrderBar({
     return (
       <button
         type="button"
-        className={`bar-missing${missing.material ? ' short-material' : ''}${window ? ' placed' : ''}${window?.late ? ' late' : ''}${marked ? ' marked' : ''}${overdue ? ' overdue' : ''}`}
+        className={`bar-missing${missing.material ? ' short-material' : ''}${window ? ' placed' : ''}${window?.late ? ' late' : ''}${marked ? ' marked' : ''}${overdue ? ' overdue' : ''}${row.overtime ? ' overtime' : ''}`}
         style={placed}
-        title={missing.title + when}
+        title={missing.title + when + (row.overtime ? '\nWeekend overtime approved — it runs straight through the weekend' : '')}
         onClick={(event) => {
           event.stopPropagation();
           // Ctrl marks it, as on a bar — for the right-click menu; nothing

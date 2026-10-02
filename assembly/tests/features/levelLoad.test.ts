@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CrewPool, LineKey } from '@/domain/assembly';
 import type { OrderRow } from '@/engine/assembly/board';
-import { pickedOverload, pinsOf, planLevelLoad } from '@/features/assembly/levelLoad';
+import { overtimeDays, overtimeOf, pickedOverload, pinsOf, planLevelLoad } from '@/features/assembly/levelLoad';
 import { setFactoryCalendar } from '@/engine/assembly/dates';
 
 // Monday. Nine working days of 30 h — four people, 7.5 h each — from here.
@@ -145,11 +145,53 @@ describe('level loading', () => {
     expect(plan.left.find((l) => l.jobId === 'CREW')).toMatchObject({ kind: 'fixed' });
   });
 
-  it('never puts work on a weekend', () => {
+  it('never puts work on a weekend nobody picked', () => {
     // Monday's orders are due the Monday after: the pile is on Friday 18th.
     const rows = ['A', 'B', 'C'].map((id) => row(id, { due: '2026-09-21' }));
     const plan = level(rows, ['2026-09-18']);
     for (const m of plan.moves) expect([0, 6]).not.toContain(new Date(`${m.toDay}T00:00:00`).getDay());
+    expect(plan.moves.every((m) => !m.overtime)).toBe(true);
+  });
+
+  describe('a weekend picked for overtime', () => {
+    it('levels onto it at the crews’ ordinary day, with overtime approved', () => {
+      // Friday 18th holds 45 h against 30; Saturday 19th is picked as well.
+      const rows = ['A', 'B', 'C'].map((id) => row(id, { due: '2026-09-21' }));
+      const plan = level(rows, ['2026-09-18', '2026-09-19']);
+      expect(plan.before.hours).toBeCloseTo(15);
+      // The picked Saturday is preferred over the unpicked Thursday — and an
+      // order due Monday may still run on it.
+      expect(plan.moves).toHaveLength(1);
+      expect(plan.moves[0]).toMatchObject({ toDay: '2026-09-19', overtime: true });
+      expect(overtimeOf(plan)).toEqual({ [plan.moves[0].jobId]: true });
+      expect(plan.after.hours).toBe(0);
+      // Room on the picked days counts the Saturday's 30 h.
+      expect(plan.room.before).toBeCloseTo(30);
+    });
+
+    it('fills an empty picked weekend with the next orders', () => {
+      const rows = [row('NEXT', { due: '2026-09-25', pinned: '2026-09-22' })];
+      const plan = level(rows, ['2026-09-19']);
+      expect(plan.moves).toMatchObject([{ jobId: 'NEXT', toDay: '2026-09-19', kind: 'fill', overtime: true }]);
+    });
+
+    it('never runs an order from a picked Saturday over an unpicked Sunday', () => {
+      // 30 h is two days: Saturday and — the Sunday shut — Monday. An overtime
+      // order is drawn straight through, so that run cannot be what is drawn.
+      const rows = [row('TWO', { due: '2026-09-25', hours: 30, pinned: '2026-09-22' })];
+      expect(level(rows, ['2026-09-19']).moves).toEqual([]);
+      // With the Sunday picked as well it runs the two days of the weekend.
+      expect(level(rows, ['2026-09-19', '2026-09-20']).moves).toMatchObject([
+        { jobId: 'TWO', toDay: '2026-09-19', overtime: true },
+      ]);
+    });
+
+    it('opens only the weekend days picked, and only to come', () => {
+      expect([...overtimeDays(new Map([['ASSY' as LineKey, new Set(['2026-09-12', '2026-09-18', '2026-09-19', '2026-09-20'])]]), '2026-09-14')]).toEqual([
+        '2026-09-19',
+        '2026-09-20',
+      ]);
+    });
   });
 
   describe('a day the factory is shut', () => {
