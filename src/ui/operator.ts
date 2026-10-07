@@ -1176,6 +1176,7 @@ async function upsertSlot(
     toast('Read only — sign in as supervisor to edit', 'warn');
     return;
   }
+  claimForSupervisorEdit();
   const existing = S!.prod.find(
     (r) => r.jobNumber === S!.selJob && r.slotIndex === slot,
   );
@@ -1382,6 +1383,23 @@ function isReadOnlyDevice(): boolean {
 function needsConfirm(): boolean {
   if (!S!.selJob || isPastShift() || isReadOnlyDevice() || isJobLocked()) return false;
   return !isTupleConfirmed(S!.mc, sid(), S!.selJob);
+}
+
+/** Whether the ✅ Confirm gate stops a Machine Status or defect edit. A
+ *  signed-in supervisor is not stopped: they vouch for the order by editing
+ *  it, and `claimForSupervisorEdit` confirms the tuple on their first write.
+ *  Kept apart from needsConfirm(), which also holds back the start-of-run
+ *  automation and discards a browse — a supervisor merely LOOKING at a
+ *  press must still leave no data behind. */
+function confirmBlocksEdit(): boolean {
+  return needsConfirm() && !isSupervisor();
+}
+
+/** A supervisor's first Machine Status / defect write on an unconfirmed
+ *  live order confirms it, so the edit is mirrored like any other and is not
+ *  discarded when they move on. */
+function claimForSupervisorEdit(): void {
+  if (isSupervisor() && needsConfirm()) confirmTuple(S!.mc, sid(), S!.selJob);
 }
 
 /** Mirror of the DAL's hasMeaningfulProgress: real production evidence,
@@ -2134,9 +2152,12 @@ function statusCellHtml(
       ? `<span class="bd-tag">${escapeHtml(bdIssue.split('-')[0])}</span>`
       : '';
   let cls = `status-cell${isNow ? ' is-now' : ''}`;
-  if (occ) cls += ' is-occupied';
+  // Still hatched for a supervisor — the slot IS another order's — but
+  // tappable (sup-open), so they can correct it.
+  if (occ) cls += isSupervisor() ? ' is-occupied sup-open' : ' is-occupied';
   if (S!.selSet.has(slot)) cls += ' multisel';
-  const btnAttrs = occ ? ' disabled aria-disabled="true"' : '';
+  // A signed-in supervisor can still pick an occupied slot to correct it.
+  const btnAttrs = occ && !isSupervisor() ? ' disabled aria-disabled="true"' : '';
   // Unified status entry — single-tap selects this slot, hold-and-drag across
   // cells selects a range; the picker opens automatically on finger-up.
   // Occupied cells render the occupier's code but are not selectable.
@@ -2591,6 +2612,10 @@ function slotIsPast(slot: number): boolean {
  *  value is per-cell, so a wrong number can be cleared without opening the
  *  rest of the column. */
 function rejectEntryBlocked(slot: number, code: string): { blocked: boolean; reason: string } {
+  // A signed-in supervisor corrects the record: none of the rules below —
+  // sign-off lock (already lifted for them), the ✅ Confirm gate, another
+  // order's half-hour or an empty past half-hour — stops their defect entry.
+  if (isSupervisor()) return { blocked: false, reason: '' };
   if (isReadOnlyDevice())
     return { blocked: true, reason: 'Read only — sign in as supervisor to edit' };
   if (isJobLocked())
@@ -3351,8 +3376,9 @@ function wireStatusPicker(): void {
     // Slots already held by another job on this (machine, shift) are
     // not selectable — neither single-tap nor drag-range can pick them
     // up. Prevents the duplicate-15:00 case where two orders both
-    // claim the same half-hour as Run time.
-    if (occupyingOtherJob(slot)) return null;
+    // claim the same half-hour as Run time. A signed-in supervisor may
+    // take one anyway, to correct a timeline (warned when they do).
+    if (occupyingOtherJob(slot) && !isSupervisor()) return null;
     return slot;
   };
 
@@ -3365,7 +3391,7 @@ function wireStatusPicker(): void {
     // reopened-for-correction mode also skip slots the mode blocks
     // (empty slots of an ended shift without a supervisor).
     for (let i = lo; i <= hi; i++) {
-      if (occupyingOtherJob(i)) continue;
+      if (occupyingOtherJob(i) && !isSupervisor()) continue;
       if (reopenedBlocksNewPeriod(i)) continue;
       S!.selSet.add(i);
     }
@@ -3396,7 +3422,7 @@ function wireStatusPicker(): void {
       toast('Read only — sign in as supervisor to edit', 'warn');
       return;
     }
-    if (needsConfirm()) {
+    if (confirmBlocksEdit()) {
       toast('Tap ✅ Confirm first — confirm the order, press, operator & supervisor to start logging', 'warn');
       return;
     }
@@ -3648,6 +3674,11 @@ async function multiFillApply(
   // (they share the press, so they share the timeline). Counts / rejects
   // / sign-off stay per-order — only the status row is mirrored.
   const siblings = coRunSiblings(S!.selJob);
+  // A supervisor may write over another order's half-hour; say which, so the
+  // other order's copy gets cleared rather than left as a double booking.
+  const clashes = slots
+    .map((slot) => ({ slot, occ: occupyingOtherJob(slot) }))
+    .filter((c): c is { slot: number; occ: ProductionRecord } => c.occ !== null);
   // Sequential upserts — keep simple; could batch later if needed.
   for (const slot of slots) {
     await upsertSlotNoReload(slot, apply);
@@ -3659,6 +3690,14 @@ async function multiFillApply(
     `Filled ${slots.length} slot${slots.length === 1 ? '' : 's'} with ${code}${mirroredNote}`,
     'ok',
   );
+  if (clashes.length) {
+    toast(
+      `Also recorded on ${[...new Set(clashes.map((c) => c.occ.jobNumber))].join(', ')} at ` +
+        clashes.map((c) => slotClock(sid(), c.slot).split('–')[0]).join(', ') +
+        ' — clear it there so the press is not in two orders at once',
+      'warn',
+    );
+  }
   // Skip reload() here. upsertSlotNoReload already mutated S!.prod in
   // memory, and a status edit cannot change anything reload() would
   // re-fetch — Job Left / Total Good are driven by Count Start/End and
@@ -4112,6 +4151,7 @@ async function upsertSlotNoReload(
   // must not write when the order is signed off and the user isn't
   // a supervisor, or when this is a read-only (non-iPad) device.
   if (isJobLocked() || isReadOnlyDevice()) return;
+  claimForSupervisorEdit();
   const existing = S!.prod.find(
     (r) => r.jobNumber === S!.selJob && r.slotIndex === slot,
   );

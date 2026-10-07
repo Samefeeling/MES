@@ -632,6 +632,7 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    as locked, and the button itself is :disabled so taps don't fire. */
 .op-grid td.is-occupied{opacity:.55;background-image:repeating-linear-gradient(135deg,transparent 0 6px,rgba(15,23,42,.18) 6px 8px)}
 .op-grid td.is-occupied .slot-cell{cursor:not-allowed;pointer-events:none}
+.op-grid td.is-occupied.sup-open .slot-cell{cursor:pointer;pointer-events:auto}
 .ab-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px}
 .ab-pill{padding:14px 8px;border-radius:12px;font-weight:800;cursor:pointer;border:2px solid;text-align:center;min-height:84px;display:flex;flex-direction:column;gap:4px;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent;transition:transform .08s}
 .ab-pill:active{transform:scale(.94)}

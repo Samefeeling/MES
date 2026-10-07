@@ -344,6 +344,13 @@ B instead.
 > Goal: a supervisor can re-open a shift that was already saved so the
 > operator can fix something. Four taps, one minute.
 
+> **While signed in as supervisor, the timeline and defect counts are
+> never locked.** The supervisor can set a Machine Status or type a defect
+> on any half-hour — without ✅ Confirm (their first edit confirms the order
+> on that press), on a half-hour another order already used (the sheet
+> warns, and that order's copy should then be cleared), and on a past
+> half-hour with no status yet. Operators keep all of these checks.
+
 ## Scene 13 — Find the orange banner
 
 **SHOW**: An operator sheet for a past shift, with the orange "🔒
