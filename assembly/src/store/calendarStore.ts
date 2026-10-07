@@ -5,6 +5,13 @@
  * The engine's calendar (`setFactoryCalendar`) follows `rows`, set before the
  * board is worked out again — `rows` is one of the board's inputs (see
  * `assemblySelectors`) for exactly that reason.
+ *
+ * Once the SharePoint list has been read it is the whole calendar: the NSW
+ * holidays the board can work out for itself are turned off, so a holiday is
+ * shut on the day the list says and no other, and is not shown twice. They
+ * stand in only while there is no list — the mock board — or before it has
+ * been read: a list that cannot be reached must not open the factory on
+ * Christmas Day.
  */
 
 import { create } from 'zustand';
@@ -17,6 +24,8 @@ import {
 
 interface CalendarState {
   rows: CalendarRow[];
+  /** The rows are the SharePoint list, read: the list is the whole calendar. */
+  fromList: boolean;
   status: 'idle' | 'loading' | 'ready' | 'error';
   /** The last read or write that failed, for the panel. */
   error: string | null;
@@ -34,6 +43,7 @@ const sorted = (rows: CalendarRow[]) => [...rows].sort((a, b) => a.day.localeCom
 
 export const useCalendarStore = create<CalendarState>((set, get) => ({
   rows: [],
+  fromList: false,
   status: 'idle',
   error: null,
   busy: false,
@@ -44,7 +54,7 @@ export const useCalendarStore = create<CalendarState>((set, get) => ({
     const res = await get().backend.load();
     // A failed read keeps the days already known: a list outage must not
     // quietly reopen the factory on its RDOs.
-    if (res.ok) set({ rows: res.value, status: 'ready', error: null });
+    if (res.ok) set({ rows: res.value, fromList: get().backend.isList, status: 'ready', error: null });
     else set({ status: 'error', error: res.error });
   },
 
@@ -71,11 +81,13 @@ export const useCalendarStore = create<CalendarState>((set, get) => ({
   },
 
   setBackend(backend) {
-    set({ backend, rows: [], status: 'idle', error: null });
+    set({ backend, rows: [], fromList: false, status: 'idle', error: null });
   },
 }));
 
-setFactoryCalendar({ listed: useCalendarStore.getState().rows });
+const follow = (state: CalendarState) =>
+  setFactoryCalendar({ listed: state.rows, holidays: !state.fromList });
+follow(useCalendarStore.getState());
 useCalendarStore.subscribe((state, prev) => {
-  if (state.rows !== prev.rows) setFactoryCalendar({ listed: state.rows });
+  if (state.rows !== prev.rows || state.fromList !== prev.fromList) follow(state);
 });

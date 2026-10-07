@@ -362,8 +362,8 @@ standards, the same the PMD KPIs judge a changeover against.
 
 ## Closed days
 
-**The factory is shut at the weekend, on every NSW public holiday and on the
-days in the `FactoryCalendar` list.** A closed weekday is read exactly like a weekend:
+**The factory is shut at the weekend and on the days in the SharePoint list
+`FactoryCalendar`** — its public holidays and its RDOs. A closed weekday is read exactly like a weekend:
 the schedule steps over it (work that would have run on it runs on the next
 open day, and a crew's days skip it), it carries no capacity on the banner or
 on any folded line, nothing waiting for a crew is spread onto it, an empty
@@ -372,18 +372,27 @@ onto one — except a weekend picked with the Weekends switch on, below. A bar
 dropped on one asks for overtime, naming the holiday or RDO;
 **Move to** takes the next day the factory is open.
 
-The public holidays are worked out for every year from the Public Holidays Act
-2010 (NSW), days in lieu included: New Year's Day (and the Monday after a
-weekend one), Australia Day (the Monday, when the 26th is a weekend), Good
-Friday to Easter Monday, Anzac Day (and, by the factory's own rule — the Act
-gives none — the Monday after a weekend one), King's Birthday (second
-Monday in June), Labour Day (first Monday in October), Christmas Day and Boxing
-Day (each with the next free weekday when it falls on a weekend). Bank Holiday
-is left out — it is not a factory holiday — and a one-off holiday the state
-proclaims goes in the list under its own name.
+**The list is the whole calendar.** Once it has been read, a holiday is shut
+on the day the list says and on no other: the board does not add holidays of
+its own beside it. The one rule on top of the list is the factory's Anzac Day
+rule — an Anzac Day row on a Saturday or Sunday shuts the Monday after as well
+(the next open weekday when that Monday is already shut), shown in grey italics
+as not in the list, and not added when the list already has an Anzac Monday.
 
-**Everything else lives in the SharePoint list `FactoryCalendar`**: a `Date`
-column and a `Name` column, which holds "RDO" or the holiday's name — a row
+Only while there is no list to read — the mock board, or a list that cannot be
+reached — does the board fall back on the NSW public holidays it works out from
+the Public Holidays Act 2010 (days in lieu included, plus the Monday after a
+weekend Anzac Day), so an outage does not open the factory on Christmas Day.
+
+A `Date` cell is read as the day SharePoint shows, wherever the browser is:
+SharePoint sends a date-only value as the UTC instant of the site's midnight
+(`2026-12-24T13:00:00Z` is 25 December in Sydney), which the board takes to the
+nearest UTC midnight rather than reading in the browser's time zone — read in
+China or on UTC that instant is still the 24th, and every day in the list came
+out one early. A day added from the board is written as 11:00 UTC on it, which
+is the same day in every time zone from UTC−11 to UTC+11.
+
+**The list**: a `Date` column and a `Name` column, which holds "RDO" or the holiday's name — a row
 whose name says RDO (or "rostered") is an RDO, any other is a holiday. Rows can
 be kept by hand in SharePoint or under **Crew capacity → Closed days**
 (supervisor only), where a day added or removed is written to the list at once

@@ -1,6 +1,6 @@
 /**
- * The `FactoryCalendar` SharePoint list: the days the factory is shut that no
- * rule works out — the RDOs, and any holiday somebody types in by hand.
+ * The `FactoryCalendar` SharePoint list: every day the factory is shut —
+ * the public holidays and the RDOs. Once read, it is the whole calendar.
  *
  *   Date   the day (a Date column; the time of day is ignored)
  *   Name   "RDO", or the holiday's name
@@ -18,7 +18,6 @@
  */
 
 import { ok, err, type Result } from '@/lib/result';
-import { toDayKey } from '@/lib/time';
 import { readConfigFromEnv, graphSite, type SharePointConfig } from './site';
 import { restList, sessionRequest } from './session';
 import { createListItem, fetchListRows } from './lists.write';
@@ -38,6 +37,13 @@ export interface CalendarRow {
 export interface CalendarBackend {
   /** Where the rows are kept, for the panel to say. */
   readonly where: string;
+  /**
+   * The rows are the SharePoint list, which holds the public holidays as well
+   * as the RDOs. Once it has been read it is the whole calendar; the holidays
+   * the board works out for itself only stand in where there is no list (the
+   * mock board) or it has not been read.
+   */
+  readonly isList: boolean;
   load(): Promise<Result<CalendarRow[], string>>;
   add(day: string, name: string): Promise<Result<CalendarRow, string>>;
   remove(id: string): Promise<Result<void, string>>;
@@ -45,11 +51,18 @@ export interface CalendarBackend {
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+const DAY_MS = 86_400_000;
+
 /**
  * A Date cell as a day. SharePoint answers a date-only column as the UTC
  * instant of the site's midnight — `2026-12-24T13:00:00Z` is 25 December in
- * Sydney — so a value with a time is read in local time, which on the floor is
- * the site's. A bare `YYYY-MM-DD` is taken as it is written.
+ * Sydney. Reading that instant in the browser's own time zone is only right
+ * when the browser is in the site's: in China or on UTC it is still the 24th,
+ * and every day in the list came out one early. So the instant is taken to the
+ * nearest UTC midnight instead — the site's midnight is within twelve hours of
+ * it for any site between UTC−11 and UTC+11, all of Australia with daylight
+ * saving included — and the day is that, wherever the browser is. A bare
+ * `YYYY-MM-DD`, or a time with no zone, is taken as it is written.
  */
 export function readCalendarDay(value: unknown): string | null {
   if (typeof value !== 'string' || value.trim() === '') return null;
@@ -57,8 +70,11 @@ export function readCalendarDay(value: unknown): string | null {
   if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
   const au = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(v);
   if (au) return `${au[3]}-${au[2].padStart(2, '0')}-${au[1].padStart(2, '0')}`;
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? null : toDayKey(d);
+  const unzoned = /^(\d{4}-\d{2}-\d{2})T[\d:.]+$/.exec(v);
+  if (unzoned) return unzoned[1];
+  const ms = new Date(v).getTime();
+  if (Number.isNaN(ms)) return null;
+  return new Date(Math.round(ms / DAY_MS) * DAY_MS).toISOString().slice(0, 10);
 }
 
 /**
@@ -82,11 +98,14 @@ export function readCalendarRows(
   return [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day));
 }
 
-/** The local midnight of a day, as the instant SharePoint stores for a Date. */
-const midnightIso = (day: string): string => {
-  const [y, m, d] = day.split('-').map(Number);
-  return new Date(y, m - 1, d).toISOString();
-};
+/**
+ * The instant written for a day: 11:00 UTC on it. In every time zone from
+ * UTC−11 to UTC+11 that is still the same day, so SharePoint stores the day
+ * meant whether it keeps the instant or cuts it to the site's midnight, and
+ * `readCalendarDay` reads it back as that day. The browser's own midnight was
+ * the day before in UTC for a browser east of the site.
+ */
+const dayInstant = (day: string): string => `${day}T11:00:00Z`;
 
 // --- the signed-in session (production) ------------------------------------
 
@@ -118,6 +137,7 @@ async function sessionColumns(cfg: SharePointConfig, list: string) {
 
 class SessionCalendar implements CalendarBackend {
   readonly where = `SharePoint list ${FACTORY_CALENDAR_LIST}`;
+  readonly isList = true;
   constructor(private readonly cfg: SharePointConfig, private readonly list = FACTORY_CALENDAR_LIST) {}
 
   async load(): Promise<Result<CalendarRow[], string>> {
@@ -145,7 +165,7 @@ class SessionCalendar implements CalendarBackend {
   async add(day: string, name: string): Promise<Result<CalendarRow, string>> {
     try {
       const cols = await sessionColumns(this.cfg, this.list);
-      const body: Record<string, unknown> = { Title: name, [cols.date]: midnightIso(day) };
+      const body: Record<string, unknown> = { Title: name, [cols.date]: dayInstant(day) };
       if (cols.name) body[cols.name] = name;
       const res = await sessionRequest(this.cfg, `${restList(this.cfg, this.list)}/items`, {
         method: 'POST',
@@ -176,6 +196,7 @@ class SessionCalendar implements CalendarBackend {
 
 class GraphCalendar implements CalendarBackend {
   readonly where = `SharePoint list ${FACTORY_CALENDAR_LIST}`;
+  readonly isList = true;
   constructor(private readonly cfg: SharePointConfig, private readonly list = FACTORY_CALENDAR_LIST) {}
 
   async load(): Promise<Result<CalendarRow[], string>> {
@@ -184,7 +205,7 @@ class GraphCalendar implements CalendarBackend {
   }
 
   async add(day: string, name: string): Promise<Result<CalendarRow, string>> {
-    const res = await createListItem(this.cfg, this.list, { Title: name, Date: midnightIso(day), Name: name });
+    const res = await createListItem(this.cfg, this.list, { Title: name, Date: dayInstant(day), Name: name });
     return res.ok ? ok({ id: res.value, day, name }) : err(`${this.list}: ${day} not saved — ${res.error.message}`);
   }
 
@@ -207,6 +228,7 @@ const LOCAL_KEY = 'assembly.factoryCalendar.v1';
 
 export class LocalCalendar implements CalendarBackend {
   readonly where = 'this browser (no SharePoint configured)';
+  readonly isList = false;
 
   private read(): CalendarRow[] {
     try {

@@ -1,8 +1,11 @@
 /**
- * The days the factory is shut on a weekday, under Crew capacity: the NSW
- * public holidays the board works out for itself, and the days held in the
- * SharePoint list `FactoryCalendar` — the RDOs, and any holiday typed in by
- * hand (a row's Name says which: "RDO", or the holiday's name).
+ * The days the factory is shut on a weekday, under Crew capacity: the days
+ * held in the SharePoint list `FactoryCalendar` — the public holidays and the
+ * RDOs (a row's Name says which: "RDO", or the holiday's name) — plus the
+ * Monday after an Anzac Day the list puts on a weekend. Once the list has been
+ * read it is the whole calendar; the NSW holidays the board works out for
+ * itself are shown, and count, only while it has not been (or on the mock
+ * board, which has no list).
  *
  * Both carry no capacity and take no work — the schedule steps over them the
  * way it steps over a weekend, the load strip and the banner read them as
@@ -12,7 +15,7 @@
  */
 
 import { useState } from 'react';
-import { closureKindOf, nswPublicHolidays } from '@/engine/assembly/factoryCalendar';
+import { listedClosures, nswPublicHolidays } from '@/engine/assembly/factoryCalendar';
 import { formatShortDay, fromDayKey } from '@/lib/time';
 import { useCalendarStore } from '@/store/calendarStore';
 import { useSupervisorStore } from '@/store/supervisorStore';
@@ -31,6 +34,7 @@ const weekend = (key: string) => {
 export function FactoryCalendar({ today }: { today: Date }) {
   const unlocked = useSupervisorStore((s) => s.unlocked);
   const rows = useCalendarStore((s) => s.rows);
+  const fromList = useCalendarStore((s) => s.fromList);
   const status = useCalendarStore((s) => s.status);
   const error = useCalendarStore((s) => s.error);
   const busy = useCalendarStore((s) => s.busy);
@@ -41,10 +45,12 @@ export function FactoryCalendar({ today }: { today: Date }) {
   const [day, setDay] = useState('');
   const [name, setName] = useState('');
 
-  const holidays = nswPublicHolidays(year);
+  // The list is the calendar once read; the worked-out holidays stand in until then.
+  const holidays = fromList ? [] : nswPublicHolidays(year);
   const holidayOn = new Map(holidays.map((h) => [h.day, h]));
-  const listed = rows.filter((r) => r.day.startsWith(`${year}-`));
-  const rdoCount = listed.filter((r) => closureKindOf(r.name) === 'rdo').length;
+  const idOf = new Map(rows.map((r) => [r.day, r.id]));
+  const listed = listedClosures(rows).filter((c) => c.day.startsWith(`${year}-`));
+  const rdoCount = listed.filter((c) => c.kind === 'rdo').length;
   const closedWeekdays = holidays.filter((h) => !weekend(h.day)).length;
 
   /** Why the day being entered would change nothing, if it would not. */
@@ -79,10 +85,11 @@ export function FactoryCalendar({ today }: { today: Date }) {
         </span>
       </div>
       <MetricNote>
-        Weekends, NSW public holidays and the days in the FactoryCalendar list are shut: nothing is
-        planned on them, they carry no capacity, and dropping work on one asks for overtime.
+        Weekends and the days in the FactoryCalendar list are shut: nothing is planned on them, they
+        carry no capacity, and dropping work on one asks for overtime.
       </MetricNote>
-      <div className="fc-lists">
+      <div className={fromList ? 'fc-lists fc-one' : 'fc-lists'}>
+        {!fromList && (
         <section>
           <h5>NSW public holidays · {closedWeekdays} on weekdays</h5>
           <ul>
@@ -94,11 +101,12 @@ export function FactoryCalendar({ today }: { today: Date }) {
             ))}
           </ul>
           <MetricNote>
-            Worked out from the Public Holidays Act 2010, days in lieu included, plus the Monday
-            after a weekend Anzac Day. Bank Holiday is not a factory holiday; a one-off proclaimed
-            holiday goes in the list under its own name.
+            Worked out from the Public Holidays Act 2010 and standing in because the
+            FactoryCalendar list {status === 'error' ? 'could not be read' : 'is not available here'}.
+            Once it is read, the list alone decides.
           </MetricNote>
         </section>
+        )}
         <section>
           <h5>
             FactoryCalendar list · {rdoCount} RDO{rdoCount === 1 ? '' : 's'}
@@ -113,13 +121,18 @@ export function FactoryCalendar({ today }: { today: Date }) {
               {listed.map((r) => (
                 <li key={r.day} className={weekend(r.day) ? 'fc-weekend' : undefined}>
                   <span className="fc-day">{dayText(r.day)}</span>
-                  <span className={`fc-kind ${closureKindOf(r.name)}`}>{r.name}</span>
-                  {unlocked && (
+                  <span
+                    className={`fc-kind ${r.kind}${r.derived ? ' fc-derived' : ''}`}
+                    title={r.derived ? 'Not in the list: Anzac Day falls on a weekend, so the Monday after is shut too' : undefined}
+                  >
+                    {r.name}
+                  </span>
+                  {unlocked && !r.derived && idOf.has(r.day) && (
                     <button
                       type="button"
                       className="fc-remove"
                       disabled={busy}
-                      onClick={() => void removeDay(r.id)}
+                      onClick={() => void removeDay(idOf.get(r.day)!)}
                       aria-label={`Remove ${r.name} on ${dayText(r.day)}`}
                       title="Remove from the list"
                     >

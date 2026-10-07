@@ -7,7 +7,7 @@ import {
   prevWorkingDay,
   setFactoryCalendar,
 } from '@/engine/assembly/dates';
-import { cleanRdo, easterSunday, nswPublicHolidays } from '@/engine/assembly/factoryCalendar';
+import { cleanRdo, easterSunday, listedClosures, nswPublicHolidays } from '@/engine/assembly/factoryCalendar';
 import { toDayKey } from '@/lib/time';
 
 const d = (s: string) => new Date(`${s}T00:00:00`);
@@ -130,5 +130,31 @@ describe('setFactoryCalendar', () => {
     // `listed` wins when both are given.
     setFactoryCalendar({ listed: [], rdo: [{ day: '2026-09-17' }] });
     expect(isClosed(d('2026-09-17'))).toBe(false);
+  });
+});
+
+describe('listedClosures', () => {
+  it('adds the Monday after a weekend Anzac Day, once, and steps past a day already shut', () => {
+    // 2026: Saturday 25 April.
+    expect(listedClosures([{ day: '2026-04-25', name: 'Anzac Day' }]).map((c) => c.day)).toEqual([
+      '2026-04-25',
+      '2026-04-27',
+    ]);
+    // The list already names the Monday: nothing added.
+    expect(
+      listedClosures([
+        { day: '2026-04-25', name: 'Anzac Day' },
+        { day: '2026-04-27', name: 'Anzac Day (Additional)' },
+      ]).filter((c) => c.derived),
+    ).toEqual([]);
+    // 2038: Anzac Day is Easter Sunday; Easter Monday has the Monday.
+    expect(
+      listedClosures([
+        { day: '2038-04-25', name: 'Easter Sunday / Anzac Day' },
+        { day: '2038-04-26', name: 'Easter Monday' },
+      ]).find((c) => c.derived)?.day,
+    ).toBe('2038-04-27');
+    // A weekday Anzac Day brings nothing.
+    expect(listedClosures([{ day: '2027-04-26', name: 'Anzac Day' }])).toHaveLength(1);
   });
 });

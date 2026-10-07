@@ -35,6 +35,8 @@ export interface Closure {
   day: string;
   name: string;
   kind: ClosureKind;
+  /** Not a row of the list: the Monday a weekend Anzac Day in it brings. */
+  derived?: boolean;
 }
 
 /** A day the FactoryCalendar list holds: an RDO, or a holiday by name. */
@@ -167,4 +169,34 @@ export function cleanRdo(entry: RdoDay): RdoDay | null {
   if (back.getFullYear() !== y || back.getMonth() !== m - 1 || back.getDate() !== d) return null;
   const name = entry.name?.trim().slice(0, 40);
   return name ? { day, name } : { day };
+}
+
+/**
+ * The days the FactoryCalendar list shuts, as closures: each row as it is
+ * written, plus the factory's one rule on top of it — an Anzac Day the list
+ * puts on a weekend shuts the Monday after as well (the next weekday still
+ * open, when that Monday is already shut for something else). A Monday the
+ * list already names for Anzac Day is not added twice.
+ */
+export function listedClosures(entries: readonly RdoDay[]): Closure[] {
+  const byDay = new Map<string, Closure>();
+  for (const entry of entries) {
+    const clean = cleanRdo(entry);
+    if (!clean) continue;
+    const name = clean.name ?? 'RDO';
+    byDay.set(clean.day, { day: clean.day, name, kind: closureKindOf(name) });
+  }
+  const anzac = /anzac/i;
+  for (const c of [...byDay.values()]) {
+    const [y, m, d] = c.day.split('-').map(Number);
+    const day = date(y, m, d);
+    if (!anzac.test(c.name) || !weekend(day)) continue;
+    let monday = mondayAfter(day);
+    const already = byDay.get(toDayKey(monday));
+    if (already && anzac.test(already.name)) continue;
+    while (byDay.has(toDayKey(monday)) || weekend(monday)) monday = plusDays(monday, 1);
+    const key = toDayKey(monday);
+    byDay.set(key, { day: key, name: `${c.name} (additional day)`, kind: 'holiday', derived: true });
+  }
+  return [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day));
 }

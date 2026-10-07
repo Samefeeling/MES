@@ -5,6 +5,7 @@ import {
   readCalendarRows,
 } from '@/data/sharepoint/factoryCalendar.list';
 import { closureOn, isClosed } from '@/engine/assembly/dates';
+import { ok } from '@/lib/result';
 import { useCalendarStore } from '@/store/calendarStore';
 
 const d = (s: string) => new Date(`${s}T00:00:00`);
@@ -16,6 +17,13 @@ describe('reading the FactoryCalendar list', () => {
     // SharePoint's answer for a date-only column: the site's midnight in UTC.
     const midnight = new Date(2026, 11, 29).toISOString();
     expect(readCalendarDay(midnight)).toBe('2026-12-29');
+    // ...whatever time zone the browser is in: 13:00Z on the 24th is
+    // Sydney's midnight on Christmas Day, though it is still the 24th in
+    // China and on UTC (the day-early list this replaced).
+    expect(readCalendarDay('2026-12-24T13:00:00Z')).toBe('2026-12-25');
+    expect(readCalendarDay('2026-06-30T14:00:00Z')).toBe('2026-07-01'); // AEST
+    expect(readCalendarDay('2026-12-25T11:00:00Z')).toBe('2026-12-25'); // what the board writes
+    expect(readCalendarDay('2026-12-25T00:00:00')).toBe('2026-12-25');
     expect(readCalendarDay('')).toBeNull();
     expect(readCalendarDay('soon')).toBeNull();
     expect(readCalendarDay(null)).toBeNull();
@@ -77,6 +85,7 @@ describe('the calendar store', () => {
     useCalendarStore.setState({
       backend: {
         where: 'nowhere',
+        isList: true,
         load: async () => ({ ok: false, error: 'FactoryCalendar not read: 503' }),
         add: async () => ({ ok: false, error: 'no' }),
         remove: async () => ({ ok: false, error: 'no' }),
@@ -85,5 +94,54 @@ describe('the calendar store', () => {
     await useCalendarStore.getState().load();
     expect(useCalendarStore.getState().error).toMatch(/503/);
     expect(isClosed(d('2026-09-16'))).toBe(true);
+  });
+});
+
+describe('the list as the whole calendar', () => {
+  afterEach(() => {
+    useCalendarStore.getState().setBackend(new LocalCalendar());
+    vi.unstubAllGlobals();
+  });
+
+  const listBackend = (rows: { id: string; day: string; name: string }[], fails = false) => ({
+    where: 'SharePoint list FactoryCalendar',
+    isList: true,
+    load: async () => (fails ? ({ ok: false, error: 'FactoryCalendar not read: 503' } as const) : ok(rows)),
+    add: async () => ({ ok: false, error: 'no' }) as const,
+    remove: async () => ({ ok: false, error: 'no' }) as const,
+  });
+
+  it('shuts the days the list names and only those, once it is read', async () => {
+    useCalendarStore.getState().setBackend(
+      listBackend([
+        { id: '1', day: '2026-12-25', name: 'Christmas Day' },
+        { id: '2', day: '2026-12-28', name: 'Additional Day' },
+        { id: '3', day: '2026-12-29', name: 'RDO' },
+      ]),
+    );
+    // Not read yet: the worked-out holidays stand in.
+    expect(isClosed(d('2026-04-06'))).toBe(true); // Easter Monday
+    await useCalendarStore.getState().load();
+    expect(useCalendarStore.getState().fromList).toBe(true);
+    expect(closureOn(d('2026-12-25'))).toMatchObject({ name: 'Christmas Day' });
+    expect(closureOn(d('2026-12-28'))).toMatchObject({ name: 'Additional Day' });
+    expect(closureOn(d('2026-12-29'))).toMatchObject({ kind: 'rdo' });
+    // Not in the list, so open — the list decides, not the Act.
+    expect(isClosed(d('2026-04-06'))).toBe(false);
+    expect(isClosed(d('2026-12-31'))).toBe(false);
+  });
+
+  it('keeps the worked-out holidays when the list cannot be read', async () => {
+    useCalendarStore.getState().setBackend(listBackend([], true));
+    await useCalendarStore.getState().load();
+    expect(useCalendarStore.getState().fromList).toBe(false);
+    expect(isClosed(d('2026-12-25'))).toBe(true);
+  });
+
+  it('shuts the Monday after an Anzac Day the list puts on a weekend', async () => {
+    useCalendarStore.getState().setBackend(listBackend([{ id: '1', day: '2026-04-25', name: 'Anzac Day' }]));
+    await useCalendarStore.getState().load();
+    expect(closureOn(d('2026-04-27'))).toMatchObject({ name: 'Anzac Day (additional day)', derived: true });
+    expect(isClosed(d('2026-04-28'))).toBe(false);
   });
 });

@@ -15,7 +15,7 @@
  */
 
 import { formatDay, MS_PER_DAY, toDayKey } from '@/lib/time';
-import { cleanRdo, closureKindOf, nswHolidayOn, type Closure, type RdoDay } from './factoryCalendar';
+import { listedClosures, nswHolidayOn, type Closure, type RdoDay } from './factoryCalendar';
 
 export type ScheduleColor = 'green' | 'red' | 'grey';
 
@@ -138,8 +138,10 @@ let nswHolidays = true;
 
 /**
  * Set the days the factory is shut on top of the weekends: the days the
- * FactoryCalendar list holds (an RDO, or a holiday nobody's rule works out),
- * and whether NSW public holidays count (they do unless turned off).
+ * FactoryCalendar list holds (its holidays and RDOs, with the Monday after a
+ * weekend Anzac Day), and whether the NSW public holidays the board works out
+ * for itself count as well. They do until the list has been read; after that
+ * the list is the calendar and they are turned off (`calendarStore`).
  */
 export function setFactoryCalendar(calendar: {
   listed?: readonly RdoDay[];
@@ -152,16 +154,7 @@ export function setFactoryCalendar(calendar: {
   holidays?: boolean;
 }): void {
   const listed = calendar.listed ?? calendar.rdo;
-  if (listed) {
-    const next = new Map<string, Closure>();
-    for (const entry of listed) {
-      const clean = cleanRdo(entry);
-      if (!clean) continue;
-      const name = clean.name ?? 'RDO';
-      next.set(clean.day, { day: clean.day, name, kind: closureKindOf(name) });
-    }
-    listedDays = next;
-  }
+  if (listed) listedDays = new Map(listedClosures(listed).map((c) => [c.day, c]));
   if (calendar.holidays !== undefined) nswHolidays = calendar.holidays;
 }
 
