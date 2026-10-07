@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { JobId } from '@/domain/ids';
 import { usePlanStore, type ProductionEntry } from '@/store/planStore';
 import type { CrewAssignment } from '@/domain/assembly';
@@ -321,7 +321,12 @@ describe('operator production-line placement', () => {
  * half-way through is left exactly where it is.
  */
 describe('marking somebody off for the day', () => {
+  // Days already past are dropped as leave is written, so the days below are
+  // read from a fixed Monday rather than from whenever the suite runs.
+  afterEach(() => vi.useRealTimers());
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 8, 14, 9, 0));
     usePlanStore.setState({
       workerOnLeave: {},
       orderCrewAssignments: crewOf({ 'ASSY-1': ['Bill', 'Ann'] }),

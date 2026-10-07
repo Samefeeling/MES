@@ -143,11 +143,18 @@ let nswHolidays = true;
  */
 export function setFactoryCalendar(calendar: {
   listed?: readonly RdoDay[];
+  /**
+   * The same days under the name they had before the FactoryCalendar list
+   * — "RDOs". Still accepted, so code written against it keeps building;
+   * `listed` wins when both are given.
+   */
+  rdo?: readonly RdoDay[];
   holidays?: boolean;
 }): void {
-  if (calendar.listed) {
+  const listed = calendar.listed ?? calendar.rdo;
+  if (listed) {
     const next = new Map<string, Closure>();
-    for (const entry of calendar.listed) {
+    for (const entry of listed) {
       const clean = cleanRdo(entry);
       if (!clean) continue;
       const name = clean.name ?? 'RDO';

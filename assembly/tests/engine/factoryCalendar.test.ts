@@ -118,3 +118,17 @@ describe('the factory calendar', () => {
     expect(cleanRdo({ day: ' 2026-09-16 ', name: '  ' })).toEqual({ day: '2026-09-16' });
   });
 });
+
+describe('setFactoryCalendar', () => {
+  afterEach(() => setFactoryCalendar({ listed: [], holidays: true }));
+
+  it('still takes the days under their old name, rdo', () => {
+    setFactoryCalendar({ rdo: [{ day: '2026-09-16' }], holidays: false });
+    expect(closureOn(d('2026-09-16'))).toEqual({ day: '2026-09-16', name: 'RDO', kind: 'rdo' });
+    // Holidays off, as asked alongside it.
+    expect(isClosed(d('2026-10-05'))).toBe(false);
+    // `listed` wins when both are given.
+    setFactoryCalendar({ listed: [], rdo: [{ day: '2026-09-17' }] });
+    expect(isClosed(d('2026-09-17'))).toBe(false);
+  });
+});
