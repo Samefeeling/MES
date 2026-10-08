@@ -3062,3 +3062,68 @@ describe('listProduction carries Cavities onto the canonical slot', () => {
     expect(aggregate(rows).output).toBe(212);
   });
 });
+
+describe('Cavities on the header write', () => {
+  // A 2-cavity die run on one because the other cavity is blocked off is
+  // set to 1 on the sheet. The write used to skip 1 as "the default", so
+  // the column stayed at 2 and the shift's Good came out doubled.
+  const bodyFor = async (cavities: number | undefined): Promise<Record<string, unknown>> => {
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+      canWrite: () => true,
+    });
+    let sent: Record<string, unknown> = {};
+    const o = dal as unknown as {
+      itemType: (list: string) => Promise<string>;
+      getAllItems: () => Promise<Record<string, unknown>[]>;
+      postWithFieldRetry: (list: string, url: string, body: Record<string, unknown>) => Promise<void>;
+      upsertHeaderInto: (list: string, h: Record<string, unknown>) => Promise<void>;
+    };
+    o.itemType = async () => 'SP.Data.PMD_ProductionListItem';
+    o.getAllItems = async () => [];
+    o.postWithFieldRetry = async (_list, _url, body) => {
+      sent = body;
+    };
+    await o.upsertHeaderInto('PMD_Production', {
+      machineCode: '550T',
+      date: '2026-10-08',
+      shift: 'Day',
+      jobNumber: 'J1',
+      partNumber: 'P1',
+      partDescription: '',
+      jobRequired: 0,
+      cycleTime: 0,
+      timeline: '',
+      countStart: 100,
+      countEnd: 200,
+      reject: 0,
+      operator: '',
+      supervisor: '',
+      handover: { machine: '', mold: '', material: '', method: '' },
+      qcChecks: '',
+      rejectsBySlot: '',
+      downTime: 0,
+      runTime: 0,
+      cavities,
+    });
+    return sent;
+  };
+
+  it('writes a 1 the sheet set, and counts Good on it', async () => {
+    const body = await bodyFor(1);
+    expect(body.Cavities).toBe(1);
+    expect(body.TotalGood).toBe(100);
+  });
+
+  it('writes a blocked-down count', async () => {
+    const body = await bodyFor(3);
+    expect(body.Cavities).toBe(3);
+    expect(body.TotalGood).toBe(300);
+  });
+
+  it('leaves the column alone when the row has no number', async () => {
+    const body = await bodyFor(undefined);
+    expect('Cavities' in body).toBe(false);
+    expect(body.TotalGood).toBe(100);
+  });
+});

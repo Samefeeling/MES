@@ -13,7 +13,9 @@
  *
  * So it is looked up rather than chosen. Picking the order fixes the
  * Part #, the part fixes the Die # (PMD_ProductDieColor), and the die
- * fixes the cavity count (PMD_DieMaster). Nothing left to select.
+ * fixes the cavity count (PMD_DieMaster) — the count the row starts with.
+ * It can still be lowered on the sheet afterwards: a cavity blocked off
+ * runs the tool on fewer than it has (`runningCavities`).
  *
  * When the chain cannot answer, the count is 1 — the only safe assumption,
  * since it leaves the arithmetic exactly as it was before cavities
@@ -75,8 +77,7 @@ export function resolveCavities(
 
 /** The one-line explanation the operator sheet puts on the Cavities field.
  *  Says where the number came from, or what is missing and who fixes it —
- *  the operator can no longer correct it themselves, so the sheet owes
- *  them the reason. */
+ *  the sheet owes them the reason. */
 export function cavityNote(src: CavitySource): string {
   switch (src.reason) {
     case 'die':
@@ -92,4 +93,39 @@ export function cavityNote(src: CavitySource): string {
     default:
       return 'This part has no Die # in PMD_ProductDieColor, so the cavity count cannot be looked up — counting 1 piece per cycle.';
   }
+}
+
+/**
+ * Cavities this shift actually runs on.
+ *
+ * The register says how many cavities the tool HAS; the press does not
+ * always run them all. A damaged cavity is blocked off and the die keeps
+ * running on the rest — a 4-cavity tool making 3 a cycle — so counting it
+ * at the register's 4 would book a quarter of the shift's Good that was
+ * never made. The number the row carries is therefore the one that counts:
+ * the register's count, stamped on the row when it is born, or whatever the
+ * operator or supervisor set it to since.
+ *
+ * Only a row with no number at all — written before the register knew the
+ * tool — takes the register's answer, and failing that 1.
+ */
+export function runningCavities(stored: number | null | undefined, src: CavitySource): number {
+  if (stored != null && Number.isFinite(stored) && stored >= 1) return Math.floor(stored);
+  return src.count;
+}
+
+/** Cavities blocked off: how far the running count is below the register's. 0 when the register has no answer. */
+export function blockedCavities(running: number, src: CavitySource): number {
+  return src.known ? Math.max(0, src.count - running) : 0;
+}
+
+/**
+ * The counts the sheet offers. Up to the register's count when it has one —
+ * a tool cannot run more cavities than it has — else up to 8, and always
+ * including the number the row already carries, so a value set before the
+ * register was corrected still shows rather than silently changing.
+ */
+export function cavityChoices(running: number, src: CavitySource): number[] {
+  const top = Math.max(src.known ? src.count : 8, running);
+  return Array.from({ length: top }, (_, i) => i + 1);
 }

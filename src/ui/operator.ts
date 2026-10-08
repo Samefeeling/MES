@@ -26,7 +26,15 @@ import {
 } from '../core/shifts';
 import { STATUSES, STATUS_MAP } from '../core/status';
 import { cavityGross } from '../core/metrics';
-import { cavityNote, dieKey, resolveCavities, type CavitySource } from '../core/cavities';
+import {
+  blockedCavities,
+  cavityChoices,
+  cavityNote,
+  dieKey,
+  resolveCavities,
+  runningCavities,
+  type CavitySource,
+} from '../core/cavities';
 import { ordersCoRun } from '../core/corun';
 // Re-exported so existing importers (Trace view, tests) can keep pulling
 // these from ./operator while the canonical definitions live in core.
@@ -656,8 +664,13 @@ function blankRecordForJob(slot: number, job: string): ProductionRecord {
     // Cavities from the die register, stamped at birth so the row is
     // right without waiting for the load-time sync — and so a co-run
     // sibling written by upsertSlotForJob carries its own die's count.
-    // Left undefined when the register has no answer, which reads as 1.
-    cavities: cavitySourceForJob(job).count,
+    // Left undefined when the register has no answer, which reads as 1
+    // and lets the sync fill it in once the toolroom does: a 1 stamped
+    // here would be the row's own number and stick.
+    cavities: (() => {
+      const src = cavitySourceForJob(job);
+      return src.known ? src.count : undefined;
+    })(),
     slotIndex: slot,
     statusCode: '',
     countStart: null,
@@ -1581,7 +1594,7 @@ function hydrateOperatorSupervisor(): void {
  * round-trips — on iPad/SP that turns a 2-3 s "switch to a fresh
  * shift" lag into a single sub-200 ms call.
  */
-async function prevShiftCountEnd(): Promise<number | null> {
+async function prevShiftCountEnd(): Promise<{ countEnd: number; cavities?: number } | null> {
   if (!S!.selJob) return null;
   const currentSid = buildShiftId(S!.viewDate, S!.shiftCode);
   const sevenDaysAgo = new Date(S!.viewDate);
@@ -1608,7 +1621,7 @@ async function prevShiftCountEnd(): Promise<number | null> {
   }
   for (let hops = 0; hops < 21 && sid; hops++) {
     const canon = byShift.get(sid);
-    if (canon) return Number(canon.countEnd);
+    if (canon) return { countEnd: Number(canon.countEnd), cavities: canon.cavities };
     sid = previousShift(sid);
   }
   return null;
@@ -1623,28 +1636,42 @@ async function maybeCarryCountStart(): Promise<void> {
   if (c?.countStart != null) return;
   const prev = await prevShiftCountEnd();
   if (prev == null) return;
+  // A cavity blocked off on the last shift is still blocked on this one
+  // unless somebody says otherwise: the die has not been out of the press.
+  // Carried only when it is BELOW the register's count — a full count is
+  // what the row was born with anyway.
+  const src = cavitySource();
+  const blocked =
+    src.known && prev.cavities != null && prev.cavities >= 1 && prev.cavities < src.count
+      ? prev.cavities
+      : null;
   console.info(
-    `[pmd] auto-carry Count Start ← ${prev} (prev shift's Count End on ${S!.mc}/${S!.selJob})`,
+    `[pmd] auto-carry Count Start ← ${prev.countEnd} (prev shift's Count End on ${S!.mc}/${S!.selJob})` +
+      (blocked != null ? `, cavities ×${blocked} of ${src.count} (blocked on the prev shift)` : ''),
   );
   // Use no-reload upsert so we don't recurse via reload().
   await upsertSlotNoReload(0, (r) => {
-    r.countStart = prev;
+    r.countStart = prev.countEnd;
+    if (blocked != null) r.cavities = blocked;
   });
 }
 
 /**
- * Keep the canonical row's Cavities in step with the die register.
+ * Give the canonical row a Cavities number when it has none.
  *
- * New rows are born with the right count (blankRecordForJob), but a row
- * written before the toolroom filled the tool in — or before this became
- * automatic at all — carries whatever it was given, and every consumer
- * downstream reads the stored number rather than re-deriving it. So the
- * sheet corrects it on load.
+ * New rows are born with the register's count (blankRecordForJob), but a
+ * row written before the toolroom filled the tool in carries nothing, and
+ * every consumer downstream reads the stored number rather than
+ * re-deriving it. So the sheet fills it on load.
  *
- * Three things it will not do: create a row (an unconfirmed browse must
- * leave no footprint), touch a signed-off shift (history is frozen), or
- * overwrite anything when PMD_DieMaster has no answer — a hand-set 4 is
- * worth more than a guessed 1.
+ * It fills; it never corrects. A number the row already carries is the
+ * one the shift ran on — the register's count, or fewer when a cavity was
+ * blocked off and somebody set it so on the sheet — and putting the
+ * register's count back over it would book Good the press never made.
+ *
+ * Nor will it create a row (an unconfirmed browse must leave no
+ * footprint), touch a signed-off shift (history is frozen), or write
+ * anything when PMD_DieMaster has no answer.
  */
 async function syncCavitiesFromDie(): Promise<void> {
   if (!S!.selJob) return;
@@ -1652,10 +1679,8 @@ async function syncCavitiesFromDie(): Promise<void> {
   if (!src.known) return;
   const c = canonical();
   if (!c || c.locked) return;
-  if ((c.cavities ?? 1) === src.count) return;
-  console.info(
-    `[pmd] cavities ×${c.cavities ?? 1} → ×${src.count} from ${src.dieNumber} (PMD_DieMaster)`,
-  );
+  if (c.cavities != null && c.cavities >= 1) return;
+  console.info(`[pmd] cavities → ×${src.count} from ${src.dieNumber} (PMD_DieMaster)`);
   await upsertSlotNoReload(0, (r) => {
     r.cavities = src.count;
   });
@@ -1672,23 +1697,13 @@ function cavitySource(): CavitySource {
 }
 
 /**
- * Cavities to count this job's output on.
- *
- * The die register wins whenever it has an answer — that is the whole
- * point of the change, and it means a tool re-cut to four cavities is
- * right on every press and every shift the moment the toolroom updates
- * the row.
- *
- * Where it has no answer we keep whatever the row already carries rather
- * than resetting to 1. Some of those values were set by hand on the old
- * dropdown, and quietly turning a 4-cavity job into a 1-cavity one would
- * quarter its recorded output.
+ * Cavities to count this job's output on: the number the row carries —
+ * the register's count from when the row was born, or fewer where a
+ * cavity was blocked off and the sheet was set so — else the register's
+ * answer, else 1. See `runningCavities`.
  */
 function cavities(): number {
-  const src = cavitySource();
-  if (src.known) return src.count;
-  const v = canonical()?.cavities;
-  return v && v > 0 ? v : 1;
+  return runningCavities(canonical()?.cavities, cavitySource());
 }
 
 /**
@@ -2264,31 +2279,47 @@ function handoverBox(
 }
 
 /**
- * The Cavities row — every press now, and read-only on all of them.
+ * The Cavities row — every press, because a multi-cavity die can be fitted
+ * to any of them.
  *
- * It shows on every machine because a multi-cavity die can be fitted to
- * any of them; it is not editable because the number is the toolroom's
- * fact about the tool, not the operator's judgement. When it is wrong the
- * fix belongs in PMD_DieMaster, where it corrects every press and every
- * shift at once instead of one sheet.
+ * It starts at PMD_DieMaster's count and can be lowered afterwards, at the
+ * time or later: a damaged cavity is blocked off and the tool runs on the
+ * rest, so a 4-cavity die can make 3 a cycle for a shift or a week. The
+ * register stays the ceiling — a tool cannot run cavities it does not
+ * have — and the sheet says how many are blocked, so a block left on after
+ * the die was repaired is plain to see. The same lock as Count Start /
+ * Count End applies: a signed-off shift needs a supervisor.
  *
- * The "?" marks the one case worth acting on: a die that IS fitted but
- * whose cavity count the register cannot supply. A part with no die at
- * all already says so on the Die# pill above, so it gets the explanation
- * without the flag.
+ * The "?" marks a die that IS fitted but whose cavity count the register
+ * cannot supply. A part with no die at all already says so on the Die#
+ * pill above, so it gets the explanation without the flag.
  */
-function cavityRow(): string {
+function cavityRow(rdo: string, rdoTitle: string): string {
   const src = cavitySource();
   const cav = cavities();
-  const note = S!.selJob ? cavityNote(src) : 'Pick an order — its die decides the cavity count.';
+  const blocked = blockedCavities(cav, src);
+  const base = S!.selJob ? cavityNote(src) : 'Pick an order — its die decides the cavity count.';
+  const note = blocked > 0
+    ? `${blocked} of ${src.count} cavities blocked — counting ${cav} per cycle. Set it back to ${src.count} once the die is repaired. ${base}`
+    : `${base} Lower it when a cavity is blocked off.`;
   const flag = S!.selJob && !src.known && src.dieNumber
     ? ' <span class="cav-flag" aria-label="cavity count missing from the die register">?</span>'
     : '';
-  return `<div class="sk sk-cavity"><label title="${escapeHtml(
-    note,
-  )}">Cavities</label><b class="cav-val" data-cavities="${cav}" title="${escapeHtml(
-    note,
-  )}">×${cav}${flag}</b></div>`;
+  const tag = blocked > 0
+    ? ` <span class="cav-blocked" aria-label="${blocked} cavities blocked">${blocked} blocked</span>`
+    : '';
+  if (!S!.selJob) {
+    return `<div class="sk sk-cavity"><label title="${escapeHtml(note)}">Cavities</label><b class="cav-val" data-cavities="${cav}" title="${escapeHtml(note)}">×${cav}</b></div>`;
+  }
+  const options = cavityChoices(cav, src)
+    .map((n) => {
+      const of = src.known && n < src.count ? ` of ${src.count}` : '';
+      return `<option value="${n}"${n === cav ? ' selected' : ''}>×${n}${of}</option>`;
+    })
+    .join('');
+  return `<div class="sk sk-cavity"><label title="${escapeHtml(note)}">Cavities${flag}${tag}</label><select class="cav-val${
+    blocked > 0 ? ' cav-short' : ''
+  }" data-meta="cavities" data-cavities="${cav}" aria-label="Cavities running" title="${escapeHtml(note)}" ${rdo}${rdoTitle}>${options}</select></div>`;
 }
 
 function buildSide(): string {
@@ -2332,7 +2363,7 @@ function buildSide(): string {
     <div class="sk"><label title="${escapeHtml(targetTitle)}">Shift Target</label><b title="${escapeHtml(targetTitle)}">${targetDisplay}</b></div>
     <div class="sk"><label>Count Start</label><input class="count-input${outputWarning ? ' count-invalid' : ''}" type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cstart" value="${cs}" aria-invalid="${outputWarning ? 'true' : 'false'}" ${rdo}${rdoTitle}></div>
     <div class="sk"><label>Count End</label><input class="count-input${outputWarning ? ' count-invalid' : ''}" type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cend" value="${ce}" aria-invalid="${outputWarning ? 'true' : 'false'}" ${rdo}${rdoTitle}></div>
-    ${cavityRow()}
+    ${cavityRow(rdo, rdoTitle)}
     <div class="sk"><label>Total Reject</label><b class="r" data-live="totalReject">${totalReject}</b></div>
     <div class="sk"><label${cav > 1 ? ` title="(Count End − Count Start) × ${cav} cavities − Reject"` : ''}>Total Good${cav > 1 ? ` <span class="cavity-tag">×${cav}</span>` : ''}</label><b class="g${outputWarning ? ' count-invalid' : ''}" data-live="totalGood">${good}</b></div>
     <div class="count-warning" data-live="outputWarn" role="alert"${outputWarning ? '' : ' hidden'}>${outputWarning ? escapeHtml(outputWarning.message) : ''}</div>
@@ -3163,6 +3194,22 @@ function onMetaChange(el: HTMLElement): void {
       // touch the visible cells directly so the operator still sees a
       // live total without losing focus.
       void refreshJobTotalAndPaintSide();
+      break;
+    }
+    case 'cavities': {
+      if (needsConfirm()) {
+        toast('Tap ✅ Confirm first — order, press, operator & supervisor', 'warn');
+        render();
+        break;
+      }
+      const n = Math.floor(Number(val));
+      if (!Number.isFinite(n) || n < 1) break;
+      // Full upsert with a reload: Total Good, Job Left and the Count
+      // Start → End line all multiply by this, and a select has no typing
+      // in progress for a re-render to lose.
+      void upsertSlot(0, (r) => {
+        r.cavities = n;
+      });
       break;
     }
     case 'hand-machine':

@@ -149,6 +149,16 @@ dropdown of jobs appears.
 
 **PAUSE 3 seconds**
 
+**Cavities.** Just under Count End is **Cavities** — how many parts the
+die makes each time the press cycles. It starts at the number the
+toolroom keeps for the die in PMD_DieMaster. If a cavity is blocked off
+and the die runs on fewer, pick the lower number (for example ×3 of 4):
+Total Good is worked out on what you pick, and the sheet shows
+"1 blocked" in amber. It stays on the next shift of the same order until
+somebody sets it back — set it back to the full number once the die is
+repaired. It can be changed later as well; a signed-off shift needs a
+supervisor, the same as the counters.
+
 ---
 
 ## Scene 7 — Fill the status row, one cell at a time

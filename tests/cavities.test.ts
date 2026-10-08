@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { cavityNote, dieKey, resolveCavities } from '../src/core/cavities';
+import {
+  blockedCavities,
+  cavityChoices,
+  cavityNote,
+  dieKey,
+  resolveCavities,
+  runningCavities,
+} from '../src/core/cavities';
 
 const register = new Map<string, number | null>([
   ['DIE-3597', 2],
@@ -114,5 +121,33 @@ describe('cavityNote — the operator can no longer fix it, so say why', () => {
     for (const die of ['', 'DIE-NEW', 'DIE-BLANK']) {
       expect(cavityNote(resolveCavities(die, register))).toContain('counting 1 piece per cycle');
     }
+  });
+});
+
+describe('a cavity blocked off', () => {
+  const four = resolveCavities('D-100', new Map([['D-100', 4]]));
+  const unknown = resolveCavities('D-200', new Map());
+
+  it('counts on the number the row carries, not the register', () => {
+    expect(runningCavities(3, four)).toBe(3);
+    expect(runningCavities(1, four)).toBe(1);
+    expect(blockedCavities(3, four)).toBe(1);
+    expect(blockedCavities(4, four)).toBe(0);
+  });
+
+  it('takes the register only when the row has no number yet', () => {
+    expect(runningCavities(undefined, four)).toBe(4);
+    expect(runningCavities(null, four)).toBe(4);
+    expect(runningCavities(0, four)).toBe(4);
+    expect(runningCavities(undefined, unknown)).toBe(1);
+    // Nothing is "blocked" against a register that does not know the tool.
+    expect(blockedCavities(2, unknown)).toBe(0);
+  });
+
+  it('offers up to the cavities the tool has, and always the number already set', () => {
+    expect(cavityChoices(3, four)).toEqual([1, 2, 3, 4]);
+    expect(cavityChoices(1, unknown)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    // Set to 6 before the register was cut to 4: still shown, not changed.
+    expect(cavityChoices(6, four)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 });

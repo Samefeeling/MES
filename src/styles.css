@@ -535,11 +535,15 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .op-meta .m-corun{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px;font-size:12px;font-weight:800;color:#6d28d9;text-transform:none;letter-spacing:0}
 .op-meta .corun-chip{height:auto;padding:4px 10px;border:2px solid #6d28d9;border-radius:999px;background:#f5f3ff;color:#5b21b6;font-size:13px;font-weight:800;cursor:pointer;font-variant-numeric:tabular-nums}
 .op-meta .corun-chip:active{background:#6d28d9;color:#fff}
-/* Cavities is read from PMD_DieMaster, not chosen — it reads as a fact
-   like Job Left, not as a control. `help` on the cursor because the whole
-   explanation (which die, and what to do when it's missing) is in the
-   title. */
-.sk-cavity .cav-val{cursor:help}
+/* Cavities starts at PMD_DieMaster's count and can be lowered when a
+   cavity is blocked off. Sized like the count inputs; amber, with the
+   number blocked beside the label, whenever it runs below the register —
+   a block left on after a repair must be impossible to miss. */
+.sk-cavity b.cav-val{cursor:help}
+.op-side .sk select.cav-val{width:130px;padding:8px 10px;border:2px solid var(--bd);border-radius:8px;font-size:20px;font-weight:700;min-height:48px;text-align:right;font-variant-numeric:tabular-nums;background:#fff}
+.op-side .sk select.cav-val:focus{outline:3px solid var(--theme-dark);outline-offset:1px}
+.op-side .sk select.cav-val.cav-short{border-color:#f59e0b;background:#fffbeb;color:#92400e}
+.cav-blocked{display:inline-block;margin-left:4px;padding:0 6px;border-radius:6px;background:#fef3c7;border:1px solid #f59e0b;color:#92400e;font-size:11px;font-weight:800;vertical-align:middle;text-transform:none;letter-spacing:0}
 .cav-flag{display:inline-block;min-width:16px;padding:0 4px;border-radius:6px;background:#fef3c7;border:1px solid #f59e0b;color:#92400e;font-size:11px;font-weight:800;vertical-align:middle}
 .cavity-tag{display:inline-block;padding:0 6px;border-radius:6px;background:#fde68a;color:#92400e;font-size:11px;font-weight:800;vertical-align:middle}
 .op-meta .m-op select,.op-meta .m-sup select{width:140px}

@@ -2652,9 +2652,12 @@ export class SharePointDataLayer implements PmdDataLayer {
       partDescription: F.partDesc ? str(r[F.partDesc]) : '',
       jobRequired: F.jobRequired ? num(r[F.jobRequired]) : 0,
       cycleTime: F.cycleTime ? num(r[F.cycleTime]) : 0,
-      // Cavities defaults to 1 when the column is absent / empty (a 0 from
-      // a blank cell must not zero the multiplier — that would wipe Good).
-      cavities: F.cavities && num(r[F.cavities]) > 0 ? num(r[F.cavities]) : 1,
+      // Cavities stays undefined when the column is absent / empty — every
+      // Good figure reads that as 1 (a 0 from a blank cell must not zero
+      // the multiplier), but the operator sheet must be able to tell "no
+      // number yet" (fill it from PMD_DieMaster) from a 1 somebody set
+      // because a cavity was blocked off (leave it alone).
+      cavities: F.cavities && num(r[F.cavities]) > 0 ? num(r[F.cavities]) : undefined,
       // The 16-char status timeline lives in the MachineCode column on
       // this tenant; prefer it over the (empty / fallback) F.timeline
       // entry so listProduction can rebuild per-slot status without a
@@ -3556,7 +3559,7 @@ export class SharePointDataLayer implements PmdDataLayer {
             // old client-frozen snapshot is how a contaminated value
             // spread to every device (SFM507147's phantom "200").
             cycleTime: canon.cycleTime ?? 0,
-            cavities: canon.cavities ?? 1,
+            cavities: canon.cavities,
             timeline: agg.timeline,
             countStart: agg.countStart,
             countEnd: agg.countEnd,
@@ -3860,11 +3863,13 @@ export class SharePointDataLayer implements PmdDataLayer {
     // never blank an existing one via MERGE when planning has since
     // dropped the order.
     if (F.plannedStart && h.plannedStart) body[F.plannedStart] = h.plannedStart;
-    // Cavities: write only when > 1 (a real multi-cavity die). 1 is the
-    // default, and writing 1 via MERGE is harmless but pointless; skipping
-    // also means a tenant without the column never trips stripRejected.
+    // Cavities: write whatever number the row carries, 1 included. It used
+    // to be skipped at 1 as "the default", but a 2-cavity die run on one
+    // because the other cavity is blocked off is set to 1 — and skipping
+    // that write left the column at 2 and doubled the shift's Good. No
+    // number (the register did not know the tool) leaves the column alone.
     const cavities = h.cavities && h.cavities > 0 ? h.cavities : 1;
-    if (F.cavities && cavities > 1) body[F.cavities] = cavities;
+    if (F.cavities && h.cavities != null && h.cavities > 0) body[F.cavities] = h.cavities;
     if (F.totalGood) {
       const cs = h.countStart;
       const ce = h.countEnd;
@@ -4891,10 +4896,11 @@ interface HeaderRow {
   partDescription: string;
   jobRequired: number;
   cycleTime: number;
-  /** Identical cavities on the die (pieces per cycle); 1 when the column
-   *  is absent / empty. Stamped onto the canonical record so every Good
-   *  computation can multiply (CountEnd − CountStart) by it. */
-  cavities: number;
+  /** Cavities the shift ran on (pieces per cycle); undefined when the
+   *  column is absent / empty, which every Good figure reads as 1.
+   *  Stamped onto the canonical record so every Good computation can
+   *  multiply (CountEnd − CountStart) by it. */
+  cavities?: number;
   timeline: string;
   countStart: number | null;
   countEnd: number | null;
