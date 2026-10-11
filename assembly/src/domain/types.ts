@@ -197,6 +197,9 @@ export interface PressInfo {
   /** The die's own name (the list's Die column). */
   dieName: string | null;
   color: string | null;
+  /** The product's colour as `#rrggbb` (PMD_ProductDieColor.ColorHex): the
+   *  press bar is drawn in it. Absent or null leaves the bar its status colour. */
+  hex?: string | null;
   /** The insert (size) set, where the source says. */
   insert: string | null;
   /** Set on a changeover row: the synthetic order a changeover is drawn as. */

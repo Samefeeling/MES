@@ -18,6 +18,16 @@ export interface PartDie {
   die: string | null;
   dieName: string | null;
   color: string | null;
+  /** ColorHex as `#rrggbb`, null when the cell is not a colour. */
+  hex: string | null;
+}
+
+/** "#1E3A8A", "1e3a8a", "#abc" → "#1e3a8a"; anything else → null. */
+export function readHex(v: string | null): string | null {
+  const s = (v ?? '').trim().replace(/^#/, '');
+  if (/^[0-9a-f]{6}$/i.test(s)) return `#${s.toLowerCase()}`;
+  if (/^[0-9a-f]{3}$/i.test(s)) return `#${[...s.toLowerCase()].map((c) => c + c).join('')}`;
+  return null;
 }
 
 const text = (row: ListItemFields, ...names: string[]): string | null => {
@@ -42,6 +52,7 @@ export function parseDieColors(rows: readonly ListItemFields[]): Map<string, Par
       die: die ?? dieName,
       dieName,
       color: text(row, 'ActualColor', 'Actual_x0020_Color', 'ColorHex'),
+      hex: readHex(text(row, 'ColorHex', 'Color_x0020_Hex', 'HexColor')),
     });
   }
   return out;
@@ -59,6 +70,7 @@ export function withDieColors(jobs: readonly Job[], dies: ReadonlyMap<string, Pa
         die: job.press.die ?? known.die,
         dieName: job.press.dieName ?? known.dieName,
         color: job.press.color ?? known.color,
+        hex: job.press.hex ?? known.hex,
       },
     };
   });

@@ -291,23 +291,12 @@ Output: `sharepoint/solution/pmd-operator-sheet.sppkg`.
 
 1. Go to `https://reseroglobal.sharepoint.com/sites/ReseroOperationsAU`.
 2. **Gear → Add an app** → install **PMD Operator Sheet**.
-3. **+ New → Page** → blank layout → name it **Resero-MES** (the page is
-   `SitePages/Resero-MES.aspx`; it used to be `Resero-PMD-Operator-Sheet.aspx`
-   — see "Renaming the page" below).
+3. **+ New → Page** → blank layout → name it "PMD Operator".
 4. Click **+** in the page → search **PMD Operator Sheet** → insert.
 5. **Publish**.
 
 The operators open that page URL on any iPad / desktop and it just
 works. No CORS extension, no localhost.
-
-**Renaming the page.** Nothing in the app depends on the page's name — it
-routes on the `#/…` part of the address only — so renaming is a SharePoint
-step, not a rebuild: open the page → **Page details** (or Site contents →
-Site Pages → ⋯ → Rename) → name `Resero-MES` → Publish. SharePoint does not
-redirect the old address, so re-point the iPads' home-screen bookmarks and
-any links (Teams tabs, the site navigation) at
-`…/SitePages/Resero-MES.aspx`, or keep a one-line redirect page under the
-old name.
 
 ---
 

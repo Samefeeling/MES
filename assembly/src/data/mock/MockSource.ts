@@ -80,6 +80,17 @@ const toDate = (s: string | null | undefined): Date | null => {
 const delay = <T>(value: T, ms = 120): Promise<T> =>
   new Promise((resolve) => setTimeout(() => resolve(value), ms));
 
+/** The demo's product colours, as PMD_ProductDieColor.ColorHex would give them. */
+const DEMO_HEX: Record<string, string> = {
+  slate: '#64748b',
+  shadow: '#374151',
+  black: '#1f2937',
+  white: '#f8fafc',
+  blue: '#1d4ed8',
+  red: '#b91c1c',
+  green: '#15803d',
+};
+
 export class MockSource extends BaseDataSource {
   readonly name = 'mock';
 
@@ -126,6 +137,7 @@ export class MockSource extends BaseDataSource {
               die: j.die ?? null,
               dieName: j.die ?? null,
               color: routeOf.get(j.partNum)?.color ?? null,
+              hex: DEMO_HEX[(routeOf.get(j.partNum)?.color ?? '').toLowerCase()] ?? null,
               insert: routeOf.get(j.partNum)?.insert ?? null,
             },
           }

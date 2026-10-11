@@ -928,6 +928,10 @@ button {
 .assy {
   /* Anchors the day-stripe layer below. */
   position: relative;
+  /* The timeline is on the same white as the Team column beside it, not the
+     page grey showing through, so an order's row reads straight across. The
+     day tints (past, closed) and the lines' own colours lie on top of it. */
+  background: var(--surface);
   --order-w: 500px;
   --qty-w: 40px;
   --hours-w: 40px;
@@ -3886,3 +3890,18 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 /* A weekday the factory is shut: a public holiday (PH) or a Rostered Day Off. */
 .assy-head .daycol.closure .lc-label { color: #b91c1c; }
 .assy-head .daycol.closure.rdo .lc-label { color: #6d28d9; }
+
+/*
+ * A press order in its product's colour (PMD_ProductDieColor.ColorHex), the
+ * way the moulding floor knows it, instead of the status grey. The schedule
+ * status still shows: a late order keeps a red edge. A label pushed outside a
+ * short bar sits on the grid, so it goes back to the grid's ink.
+ */
+.bar.product .bar-piece {
+  background: var(--product);
+  border-color: color-mix(in srgb, var(--product) 70%, #000);
+}
+.bar.product { color: var(--product-ink); }
+.bar.product.tagged { color: var(--text); }
+.bar.product .bar-progress { background: rgba(0, 0, 0, 0.22); }
+.bar.product.red .bar-piece { box-shadow: inset 0 0 0 2px #dc2626; }

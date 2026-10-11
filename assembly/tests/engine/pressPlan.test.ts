@@ -4,7 +4,7 @@ import type { Job } from '@/domain/types';
 import { changeBetween, changeLabel, planPresses, shiftCount, shiftText, sizeOf } from '@/engine/assembly/pressPlan';
 import { parsePressPlanningCsv } from '@/data/csv/pressPlanning.parser';
 import { mergePressPlan } from '@/data/csv/PlanningCsvSource';
-import { parseDieColors, withDieColors } from '@/data/sharepoint/dieColor.parser';
+import { parseDieColors, readHex, withDieColors } from '@/data/sharepoint/dieColor.parser';
 
 const at = (s: string) => new Date(`2026-10-${s}`);
 
@@ -187,6 +187,18 @@ describe('Planning.csv', () => {
     expect(a.press).toMatchObject({ die: '123', dieName: 'Encore', color: 'Black' });
     // No DieNumber: the die's name is the die.
     expect(b.press).toMatchObject({ die: 'Encore HB', color: '#334455' });
+  });
+
+  it('draws an order in its product colour where the list gives a hex', () => {
+    const dies = parseDieColors([
+      { PartNum: '7911FR', ActualColor: 'Black', ColorHex: '1F2937' },
+      { PartNum: '7912FR', ActualColor: 'Slate', ColorHex: 'slate' },
+    ]);
+    const [a, b] = withDieColors(parsePressPlanningCsv(csv).values, dies);
+    expect(a.press?.hex).toBe('#1f2937');
+    // Not a colour: the bar keeps its status colour.
+    expect(b.press?.hex).toBeNull();
+    expect(readHex('#abc')).toBe('#aabbcc');
   });
 
   it('stands in for Planning1.csv’s press rows and adds the ones it lacks', () => {

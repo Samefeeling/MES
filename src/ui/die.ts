@@ -579,11 +579,11 @@ export async function mountDieTab(
 ): Promise<void> {
   dalRef = dal;
   hostEl = host;
-  // The usage figures cover the last 30 days. The date pickers that set the
+  // The usage figures cover the last 90 days. The date pickers that set the
   // window gave their place in the bar to the Tool / Machine / Team buttons.
   const to = new Date();
   const from = new Date();
-  from.setDate(from.getDate() - 29);
+  from.setDate(from.getDate() - 89);
   S = {
     tab: openDie ? 'tool' : tab,
     machinePm: [],
@@ -820,7 +820,7 @@ function renderDataErrors(errors: string[]): string {
 }
 
 /** The Maint bar: Tool / Machine / Team, and the filter box. It took the
- *  place of the date window (now fixed at the last 30 days). */
+ *  place of the date window (now fixed at the last 90 days). */
 function renderHead(): string {
   const tab = (t: MaintTab, label: string, title: string): string =>
     `<button class="shift-btn${S!.tab === t ? ' a' : ''}" data-maint-tab="${t}" title="${title}" aria-pressed="${S!.tab === t}">${label}</button>`;
@@ -1233,7 +1233,7 @@ function renderDieTable(): string {
     </tr></thead>
     <tbody>${rows}</tbody>
   </table></div>
-  <p class="kpi-note">Usage over the last 30 days. <b>Shots</b> = press cycles (Count End − Count Start) — the number that wears the die; <b>Pieces</b> = shots × cavities. <b>Status</b> is the toolroom's verdict from PMD_DieMaster. <b>Defect trend</b>: bar height = reject qty per day, colour = that day's reject-% band — a die drifting 🟡→🔴 left-to-right is due for service. The header, <b>Die #</b> and <b>Description</b> stay pinned while scrolling. Tap a column header to sort; drag a header's right edge to resize the column (double-tap the edge to reset); tap Die # or the trend for detail.</p>`;
+  <p class="kpi-note">Usage over the last 90 days. <b>Shots</b> = press cycles (Count End − Count Start) — the number that wears the die; <b>Pieces</b> = shots × cavities. <b>Status</b> is the toolroom's verdict from PMD_DieMaster. <b>Defect trend</b>: bar height = reject qty per day, colour = that day's reject-% band — a die drifting 🟡→🔴 left-to-right is due for service. The header, <b>Die #</b> and <b>Description</b> stay pinned while scrolling. Tap a column header to sort; drag a header's right edge to resize the column (double-tap the edge to reset); tap Die # or the trend for detail.</p>`;
 }
 
 /** READ-ONLY work-order mirror. Mango owns the lifecycle — this list

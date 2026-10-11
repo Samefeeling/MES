@@ -356,6 +356,9 @@ export function OrderBar({
    */
   const heldBy = row.waitingOn ? jobNumOf(String(row.waitingOn.onJobId)) : null;
   const change = row.job.press?.change;
+  // A press order is drawn in its product's colour, the way the moulding
+  // floor knows it; a changeover keeps its own D / I / C colours.
+  const product = !change ? row.job.press?.hex ?? null : null;
 
   // A couple of hours of work is a few pixels of bar; where the label cannot
   // fit inside it, the tag goes in the empty grid beside the block.
@@ -392,11 +395,14 @@ export function OrderBar({
         tag.outside ? 'tagged' : ''
       } ${tag.flip ? 'tag-left' : ''} ${marked ? 'marked' : ''} ${
         row.actualStart ? 'started' : ''
-      } ${overdue ? 'overdue' : ''}`}
+      } ${overdue ? 'overdue' : ''} ${product ? 'product' : ''}`}
       style={{
         left,
         width,
         transform: CSS.Translate.toString(transform),
+        ...(product
+          ? ({ '--product': product, '--product-ink': inkOn(product) } as CSSProperties)
+          : {}),
       }}
       onClick={(e) => {
         e.stopPropagation();
@@ -495,4 +501,17 @@ export function OrderBar({
       </span>
     </div>
   );
+}
+
+/** Black or white, whichever reads on `hex` (WCAG relative luminance). */
+function inkOn(hex: string): string {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) return '#111827';
+  const lin = (h: string) => {
+    const c = parseInt(h, 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const l = 0.2126 * lin(m[1]) + 0.7152 * lin(m[2]) + 0.0722 * lin(m[3]);
+  // Contrast with white is 1.05 / (l + 0.05); with black (l + 0.05) / 0.05.
+  return 1.05 / (l + 0.05) >= (l + 0.05) / 0.05 ? '#ffffff' : '#111827';
 }

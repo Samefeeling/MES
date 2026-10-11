@@ -186,7 +186,7 @@ export function renderMachineBoard(ctx: MaintCtx): string {
       ${th('', 'Name', "MachinePM.csv's Name — the same as Mango's Plant/Equipment")}
       ${th('state', 'Status', '🔴 an open breakdown · 🟠 a PM or work order overdue · 🟡 one due within 7 days · 🟢 nothing due')}
       ${th('', 'Last service', 'The last preventive or calibration work order closed in Mango')}
-      ${th('', 'Die #', 'Dies that ran on the press in the last 30 days or are planned on it — ▶ = running now. Tap a die for its detail')}
+      ${th('', 'Die #', 'Dies that ran on the press in the last 90 days or are planned on it — ▶ = running now. Tap a die for its detail')}
       ${th('open', 'Open MR', 'Open Mango maintenance requests — tap for the machine’s PM plan and work orders')}
       ${th('next', 'Next service', "MachinePM.csv Event Due Date — the soonest live PM event")}
       ${th('', 'Event detail', 'MachinePM.csv Event Detail of that event')}
