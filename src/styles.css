@@ -685,6 +685,9 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    tuple's PMD_Production row as attachments at Sign off; uploaded ones
    render from their SP URL and open full-size in a new tab. */
 .photos{display:flex;flex-direction:column;gap:6px;margin-top:4px;border-top:2px solid var(--theme-accent);padding-top:10px}
+.photos-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.mango-btn{display:inline-flex;align-items:center;gap:4px;min-height:36px;padding:4px 12px;border:2px solid #f59e0b;border-radius:8px;background:#fffbeb;color:#92400e;font-size:14px;font-weight:800;text-decoration:none}
+.mango-btn:active{background:#f59e0b;color:#fff}
 .photos-title{font-size:13px;font-weight:800;color:var(--theme-on-base);text-transform:uppercase;letter-spacing:.5px}
 .photo-strip{display:flex;flex-wrap:wrap;gap:6px}
 .photo-strip:empty{display:none}
@@ -1512,3 +1515,60 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .assembly-kpi .kpi-bookings .kpi-table{table-layout:auto;min-width:0;width:100%}
 .assembly-kpi .kpi-bookings td,.assembly-kpi .kpi-bookings th{font-size:12px;white-space:nowrap}
 .assembly-kpi .kpi-bookings .kpi-work{white-space:normal;min-width:180px}
+
+/* ---- Maint → Machine / Team ------------------------------------------ */
+.mt-chip,.tm-owner,.tm-level{font-family:inherit;cursor:pointer}
+.mt-chip.on,.tm-owner.on,.tm-level.on{background:var(--theme-dark);border-color:var(--theme-dark);color:#fff;font-weight:700}
+.mt-chip.on b,.tm-owner.on b,.tm-level.on b{color:#fff}
+.mt-state{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:700;white-space:nowrap;border:1px solid var(--bd);background:#fff}
+.mt-state.ms-breakdown{border-color:var(--rd);background:var(--rd-bg);color:#991b1b}
+.mt-state.ms-overdue{border-color:#ea580c;background:#ffedd5;color:#9a3412}
+.mt-state.ms-soon{border-color:var(--am);background:var(--am-bg);color:#92400e}
+.mt-state.ms-ok{border-color:var(--gn);background:var(--gn-bg);color:#166534}
+.mt-table tr.mt-press td:first-child{font-weight:800}
+.mt-table .mt-dies{max-width:260px;white-space:normal;line-height:1.9}
+.mt-table .mt-detail{max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mt-die-now{font-weight:800;color:#15803d}
+.mt-due{display:inline-block;padding:1px 7px;border-radius:6px;font-size:12px;font-weight:700;white-space:nowrap;background:#f1f5f9;color:var(--mu)}
+.mt-due.overdue{background:var(--rd-bg);color:#991b1b}
+.mt-due.soon{background:var(--am-bg);color:#92400e}
+.mt-due.ok{background:var(--gn-bg);color:#166534}
+.mt-stats,.tm-tiles{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+.mt-stat{flex:1 1 120px;background:#fff;border:1px solid var(--bd);border-radius:10px;padding:8px 12px;display:flex;flex-direction:column;gap:2px}
+.mt-stat span{font-size:11px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.4px}
+.mt-stat b{font-size:20px;font-variant-numeric:tabular-nums}
+.mt-pm-table{width:100%;margin-top:4px}
+.tm{display:flex;flex-direction:column;gap:12px;margin-top:10px}
+.tm-head{gap:10px}
+.tm-branch{font-size:13px;font-weight:700;color:var(--mu);display:flex;align-items:center;gap:6px}
+.tm-branch select{font:inherit;font-size:14px;padding:5px 8px;border:1px solid var(--bd);border-radius:8px;background:#fff;color:var(--tx)}
+.tm-owners{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.tm-lbl{font-size:13px;font-weight:700;color:var(--mu);margin-right:2px}
+.tm-card{background:#fff;border:1px solid var(--bd);border-radius:12px;padding:12px 14px}
+.tm-card h3{margin:0 0 8px;font-size:16px}
+.tm-range{border:none;padding:0;background:transparent}
+.tm-zoom{display:flex;gap:6px}
+.tm-zoom .shift-btn{min-height:0;padding:6px 12px;font-size:14px;border-width:1px;border-radius:8px}
+.tm-span{font-size:13px;color:var(--mu);font-variant-numeric:tabular-nums}
+.tm-chart{width:100%;height:240px;touch-action:pan-y;cursor:zoom-in}
+.tm-chart svg{width:100%;height:100%;display:block}
+.tm-hbar{fill:var(--theme-accent);opacity:.85}
+.tm-hbar:hover{opacity:1}
+.tm-line{fill:none;stroke:#ea580c;stroke-width:2;vector-effect:non-scaling-stroke}
+.tm-dot{fill:#ea580c}
+.tm-axis{stroke:var(--bd);stroke-width:1;vector-effect:non-scaling-stroke}
+.tm-tick{font-size:12px;fill:var(--mu)}
+.tm-tick.tm-n{fill:#ea580c}
+.tm-owner-table{margin-top:8px;max-width:640px}
+.tm-barcell{width:40%}
+.tm-bar{display:block;height:10px;border-radius:5px;background:var(--theme-accent)}
+.tm-open-table td{vertical-align:top}
+.tm-kind{display:inline-block;padding:1px 7px;border-radius:6px;font-size:12px;font-weight:800}
+.tm-kind.MR{background:#ede9fe;color:#5b21b6}
+.tm-kind.PM{background:#e0f2fe;color:#075985}
+.tm-level.overdue{border-color:var(--rd)}
+.tm-level.soon{border-color:var(--am)}
+.tm .kpi-table,.mt-modal .kpi-table{font-size:13px}
+.tm .kpi-table th,.mt-modal .kpi-table th{font-size:12px}
+.mt-modal .mt-pm-wrap{overflow-x:auto}
+.tm-owner-table{width:auto;min-width:420px}

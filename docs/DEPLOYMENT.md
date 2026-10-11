@@ -291,12 +291,23 @@ Output: `sharepoint/solution/pmd-operator-sheet.sppkg`.
 
 1. Go to `https://reseroglobal.sharepoint.com/sites/ReseroOperationsAU`.
 2. **Gear → Add an app** → install **PMD Operator Sheet**.
-3. **+ New → Page** → blank layout → name it "PMD Operator".
+3. **+ New → Page** → blank layout → name it **Resero-MES** (the page is
+   `SitePages/Resero-MES.aspx`; it used to be `Resero-PMD-Operator-Sheet.aspx`
+   — see "Renaming the page" below).
 4. Click **+** in the page → search **PMD Operator Sheet** → insert.
 5. **Publish**.
 
 The operators open that page URL on any iPad / desktop and it just
 works. No CORS extension, no localhost.
+
+**Renaming the page.** Nothing in the app depends on the page's name — it
+routes on the `#/…` part of the address only — so renaming is a SharePoint
+step, not a rebuild: open the page → **Page details** (or Site contents →
+Site Pages → ⋯ → Rename) → name `Resero-MES` → Publish. SharePoint does not
+redirect the old address, so re-point the iPads' home-screen bookmarks and
+any links (Teams tabs, the site navigation) at
+`…/SitePages/Resero-MES.aspx`, or keep a one-line redirect page under the
+old name.
 
 ---
 
@@ -543,6 +554,21 @@ for the Plant/Equipment module):
    cost/effort. The report header is fixed, so if Mango ever renames a
    column update the map there; a console warning names any essential
    column that stops matching and prints the header row.
+   **Maint → Machine and Team** read the other rows of the same file —
+   every work order whose `Plant/Equipment` is not a die — together with
+   **`MachinePM.csv`**, Mango's equipment register with its PM events, in
+   the same folder (or `VITE_MACHINE_PM_CSV_PATH`). The two join on the
+   equipment's name: MachinePM.csv's first column `Name` is the same string
+   as the report's `Plant/Equipment`. MachinePM.csv is read by column name:
+   `Name`, `Asset Number`, `Description`, `Department`, `Branch`, `Event
+   Type`, `Owner of work`, `Event Frequency`, `Event Frequency Number`,
+   `Event Start Date`, `Event Due Date`, `Event Detail`, `Superseded` (TRUE
+   rows are old versions and are skipped). Machine shows each equipment's
+   next PM (Event Due Date / Event Detail), its open requests and dies, and
+   MTBF / MTTR worked out from the report's `2. Breakdown` orders and their
+   `Downtime` (calendar time, last 12 months or since the export begins).
+   Team charts closed orders and `Labour Hours` per `Assign to Action`, and
+   lists every open request and live PM with whether it is due.
 3. Without `VITE_MANGO_CSV_PATH` (or while the file doesn't exist yet)
    the tab falls back to the legacy `PMD_DieMaintenance` list, whose
    schema stays documented below for the sync-less transition period:

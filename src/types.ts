@@ -202,6 +202,42 @@ export interface DieMaintenanceRequest {
   /** "To be completed by" — Mango's promised completion date. For open
    *  orders this is when the die should be AVAILABLE again (ISO). */
   dueDate?: string;
+  /** "Type of Maintenance" as Mango wrote it ("2. Breakdown"). `maintType`
+   *  folds it into four buckets; MTBF needs the breakdowns exactly. */
+  maintTypeRaw?: string;
+  /** "Branch" — "Resero - Minto", "Resero - Hastings". The export covers
+   *  every site; the Team page narrows to one. */
+  branch?: string;
+}
+
+/**
+ * One row of MachinePM.csv — Mango's plant-equipment register with its
+ * preventive-maintenance events, one row per (equipment, event). An
+ * equipment with no PM yet has a single row with no event on it.
+ *
+ * `asset` (the file's first column, Name) is the same string as the
+ * Plant/Equipment column of MangoWorkOrders.csv: that is the join.
+ */
+export interface MachinePmEvent {
+  asset: string;
+  assetNumber: string;
+  description: string;
+  department: string;
+  branch: string;
+  /** "Event Type" — the kind of PM. */
+  eventType: string;
+  /** "Owner of work" — who carries the PM out. */
+  owner: string;
+  /** "Event Frequency Number" + "Event Frequency": "3 months". '' when none. */
+  frequency: string;
+  /** "Event Start Date", YYYY-MM-DD ('' when none). */
+  startDate: string;
+  /** "Event Due Date", YYYY-MM-DD — the next time the PM is due. */
+  dueDate: string;
+  /** "Event Detail" — what the PM is. */
+  detail: string;
+  /** "Superseded" = TRUE: an old version of the event, kept by Mango for history. */
+  superseded: boolean;
 }
 
 /** Condition of one die component at die-change time, mapping the

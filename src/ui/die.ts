@@ -14,6 +14,7 @@ import type { PmdDataLayer } from '../dal';
 import type {
   DieMaintenanceRequest,
   DieMaster,
+  MachinePmEvent,
   MaintPriority,
   MaintStatus,
   MaintType,
@@ -56,6 +57,14 @@ import { isSupervisor } from './supervisor-auth';
 import { peekDieNoteContext } from './nav-context';
 import { STATUS_MAP } from '../core/status';
 import { dateKey } from '../core/shifts';
+import {
+  renderMachineBoard,
+  renderTeam,
+  wireMachineBoard,
+  wireTeam,
+  type MachineDie,
+  type MaintCtx,
+} from './maint';
 
 /** 'smart' = the aggregate's attention-first order (open requests, then
  *  reject-%, then shots). Any other key is a user-picked column sort. */
@@ -78,7 +87,13 @@ type DieSortKey =
   | 'scheduled'
   | 'available';
 
+/** The three pages of Maint: dies, machines, the maintenance team. */
+export type MaintTab = 'tool' | 'machine' | 'team';
+
 interface DieState {
+  tab: MaintTab;
+  /** MachinePM.csv — equipment and its PM events (Machine and Team pages). */
+  machinePm: MachinePmEvent[];
   from: string; // YYYY-MM-DD inclusive
   to: string;
   filter: string;
@@ -560,13 +575,18 @@ export async function mountDieTab(
   dal: PmdDataLayer,
   host: HTMLElement,
   openDie?: string,
+  tab: MaintTab = 'tool',
 ): Promise<void> {
   dalRef = dal;
   hostEl = host;
+  // The usage figures cover the last 30 days. The date pickers that set the
+  // window gave their place in the bar to the Tool / Machine / Team buttons.
   const to = new Date();
   const from = new Date();
-  from.setDate(from.getDate() - 29); // default window: last 30 days
+  from.setDate(from.getDate() - 29);
   S = {
+    tab: openDie ? 'tool' : tab,
+    machinePm: [],
     from: isoDay(from),
     to: isoDay(to),
     filter: '',
@@ -594,7 +614,7 @@ export async function mountDieTab(
   // board (no route re-entry: replaceState doesn't fire hashchange) so a
   // refresh or Back doesn't reopen it.
   if (openDie && hostEl === host && S && S.dies.some((x) => x.dieNumber === openDie)) {
-    history.replaceState(null, document.title, '#/tool');
+    history.replaceState(null, document.title, '#/maint');
     openDieDetail(openDie);
   }
 }
@@ -646,7 +666,7 @@ async function loadAll(): Promise<void> {
             .then((rows) => rows.filter((r) => r.slotIndex === 0)),
           [],
         );
-  const [dieColors, requests, machineRequests, rejCats, records, planning, master, changeLogs, serviceCounters] = await Promise.all([
+  const [dieColors, requests, machineRequests, rejCats, records, planning, master, changeLogs, serviceCounters, machinePm] = await Promise.all([
     dalRef.listProductDieColors
       ? safe('Die/part mapping', dalRef.listProductDieColors(), [])
       : Promise.resolve([]),
@@ -670,6 +690,7 @@ async function loadAll(): Promise<void> {
       ? safe('Die-change condition logs', dalRef.listDieChangeLog(), [])
       : Promise.resolve([]),
     serviceCountersPromise,
+    dalRef.listMachinePm ? safe('MachinePM.csv', dalRef.listMachinePm(), []) : Promise.resolve([]),
   ]);
   // A slower response for an old date range must never overwrite the range
   // the user picked afterwards (or a newly-mounted tab instance).
@@ -682,6 +703,7 @@ async function loadAll(): Promise<void> {
   state.serviceHistoryAvailable = !errors.some((e) => e.startsWith('Service shot history:'));
   state.requests = requests;
   state.machineRequests = machineRequests;
+  state.machinePm = machinePm;
   state.rejectLabels = new Map(rejCats.map((c) => [c.code, c.label]));
   state.dies = aggregateDies(dieColors, records, requests);
   // Description: PMD_DieMaster's DieDescription is the toolroom's own name
@@ -739,12 +761,55 @@ function render(): void {
   // observing the old Die # header before its DOM is detached.
   stickyColumnObserver?.disconnect();
   stickyColumnObserver = null;
+  const ctx = maintCtx();
+  const body =
+    S.tab === 'machine' ? renderMachineBoard(ctx) : S.tab === 'team' ? renderTeam(ctx) : renderBody();
   hostEl.innerHTML = `
     ${renderHead()}
     ${renderDataErrors(S.errors)}
-    ${S.loading ? `<div class="trace-empty">Loading die usage…</div>` : renderBody()}
+    ${S.loading ? `<div class="trace-empty">Loading maintenance data…</div>` : body}
   `;
   wire();
+  if (!S.loading && S.tab === 'machine') wireMachineBoard(hostEl, ctx);
+  if (!S.loading && S.tab === 'team') wireTeam(hostEl, ctx);
+}
+
+/** What the Machine and Team pages read from the shared load. */
+function maintCtx(): MaintCtx {
+  const today = isoDay(new Date());
+  return {
+    today,
+    pm: S!.machinePm,
+    machineOrders: S!.machineRequests,
+    dieOrders: S!.requests,
+    filter: S!.filter,
+    diesFor,
+    openDie: (die) => openDieDetail(die),
+    woRow,
+    rerender: render,
+  };
+}
+
+/** The dies that ran on a press in the window, or are planned on it next. */
+function diesFor(code: string): MachineDie[] {
+  const out: MachineDie[] = [];
+  const key = code.trim().toUpperCase();
+  for (const d of S!.dies) {
+    const plan = S!.planByDie.get(d.dieNumber);
+    const planned = plan?.machineCode?.trim().toUpperCase() === key;
+    const ran = d.machines.some((m) => m.trim().toUpperCase() === key);
+    if (!planned && !ran) continue;
+    const running = planned && !!plan?.running;
+    const title = [
+      d.description,
+      ran ? `ran here, last ${d.lastRun || '—'}` : '',
+      planned ? `${running ? 'running now' : 'planned'} · ${plan!.jobNumber} · ${fmtPlanned(plan!.start)}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    out.push({ die: d.dieNumber, running, title });
+  }
+  return out.sort((a, b) => Number(b.running) - Number(a.running) || dieNumberSortKey(a.die).localeCompare(dieNumberSortKey(b.die)));
 }
 
 function renderDataErrors(errors: string[]): string {
@@ -754,29 +819,20 @@ function renderDataErrors(errors: string[]): string {
     .join(' · ')}</div>`;
 }
 
-/** Same visual language as the KPI page head: compact preset tabs (the
- *  active range highlighted) + the same From/To date pickers, in one
- *  white card. */
+/** The Maint bar: Tool / Machine / Team, and the filter box. It took the
+ *  place of the date window (now fixed at the last 30 days). */
 function renderHead(): string {
-  const today = isoDay(new Date());
-  const activeDays =
-    S!.to === today
-      ? Math.round(
-          (new Date(`${S!.to}T00:00:00`).getTime() - new Date(`${S!.from}T00:00:00`).getTime()) /
-            86_400_000,
-        ) + 1
-      : 0;
-  const preset = (days: number, label: string): string =>
-    `<button class="shift-btn${days === activeDays ? ' a' : ''}" data-die-preset="${days}">${label}</button>`;
+  const tab = (t: MaintTab, label: string, title: string): string =>
+    `<button class="shift-btn${S!.tab === t ? ' a' : ''}" data-maint-tab="${t}" title="${title}" aria-pressed="${S!.tab === t}">${label}</button>`;
+  const placeholder =
+    S!.tab === 'machine' ? 'Filter machine / die…' : S!.tab === 'team' ? 'Filter equipment / owner / ticket…' : 'Filter die / part…';
   return `<div class="kpi-head die-head">
     <div class="shift-tabs">
-      ${preset(7, '7 days')}${preset(30, '30 days')}${preset(90, '90 days')}
+      ${tab('tool', '🧩 Tool', 'Dies — usage, defects, service')}
+      ${tab('machine', '🏭 Machine', 'Machines — PM plan, work orders, MTBF / MTTR')}
+      ${tab('team', '👷 Team', 'Maintenance team — completed work and what is due')}
     </div>
-    <div class="kpi-range">
-      <label>From <input type="date" data-die-from value="${escapeHtml(S!.from)}"></label>
-      <label>To <input type="date" data-die-to value="${escapeHtml(S!.to)}"></label>
-    </div>
-    <input type="text" class="die-filter" data-die-filter placeholder="Filter die / part…" value="${escapeHtml(S!.filter)}">
+    <input type="text" class="die-filter" data-die-filter placeholder="${placeholder}" value="${escapeHtml(S!.filter)}">
   </div>`;
 }
 
@@ -1177,7 +1233,7 @@ function renderDieTable(): string {
     </tr></thead>
     <tbody>${rows}</tbody>
   </table></div>
-  <p class="kpi-note">Usage inside the selected window. <b>Shots</b> = press cycles (Count End − Count Start) — the number that wears the die; <b>Pieces</b> = shots × cavities. <b>Status</b> is the toolroom's verdict from PMD_DieMaster. <b>Defect trend</b>: bar height = reject qty per day, colour = that day's reject-% band — a die drifting 🟡→🔴 left-to-right is due for service. The header, <b>Die #</b> and <b>Description</b> stay pinned while scrolling. Tap a column header to sort; drag a header's right edge to resize the column (double-tap the edge to reset); tap Die # or the trend for detail.</p>`;
+  <p class="kpi-note">Usage over the last 30 days. <b>Shots</b> = press cycles (Count End − Count Start) — the number that wears the die; <b>Pieces</b> = shots × cavities. <b>Status</b> is the toolroom's verdict from PMD_DieMaster. <b>Defect trend</b>: bar height = reject qty per day, colour = that day's reject-% band — a die drifting 🟡→🔴 left-to-right is due for service. The header, <b>Die #</b> and <b>Description</b> stay pinned while scrolling. Tap a column header to sort; drag a header's right edge to resize the column (double-tap the edge to reset); tap Die # or the trend for detail.</p>`;
 }
 
 /** READ-ONLY work-order mirror. Mango owns the lifecycle — this list
@@ -2030,14 +2086,16 @@ function openDieDetail(dieNumber: string): void {
 function wire(): void {
   const h = hostEl;
   if (!h || !S) return;
-  h.querySelector<HTMLInputElement>('[data-die-from]')?.addEventListener('change', (e) => {
-    S!.from = (e.target as HTMLInputElement).value;
-    void loadAll();
-  });
-  h.querySelector<HTMLInputElement>('[data-die-to]')?.addEventListener('change', (e) => {
-    S!.to = (e.target as HTMLInputElement).value;
-    void loadAll();
-  });
+  h.querySelectorAll<HTMLButtonElement>('[data-maint-tab]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const tab = b.dataset.maintTab as MaintTab;
+      if (S!.tab === tab) return;
+      S!.tab = tab;
+      // Keep the address on the page, without re-entering the route (and a reload).
+      history.replaceState(null, document.title, tab === 'tool' ? '#/maint' : `#/maint/${tab}`);
+      render();
+    }),
+  );
   h.querySelectorAll<HTMLButtonElement>('[data-die-status-chip]').forEach((b) =>
     b.addEventListener('click', () => {
       const st = b.dataset.dieStatusChip as ToolStatus;
@@ -2053,17 +2111,6 @@ function wire(): void {
       ?.querySelector('[data-die-wo-section]')
       ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
-  h.querySelectorAll<HTMLButtonElement>('[data-die-preset]').forEach((b) =>
-    b.addEventListener('click', () => {
-      const days = Number(b.dataset.diePreset);
-      const to = new Date();
-      const from = new Date();
-      from.setDate(from.getDate() - (days - 1));
-      S!.from = isoDay(from);
-      S!.to = isoDay(to);
-      void loadAll();
-    }),
-  );
   h.querySelector<HTMLInputElement>('[data-die-filter]')?.addEventListener('input', (e) => {
     S!.filter = (e.target as HTMLInputElement).value;
     // Re-render only the table+requests, keeping the filter input focused.

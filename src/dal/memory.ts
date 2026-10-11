@@ -5,6 +5,7 @@ import type {
   BreakdownLogDetail,
   DieChangeLog,
   DieMaintenanceRequest,
+  MachinePmEvent,
   DieMaster,
   Machine,
   Operator,
@@ -33,6 +34,8 @@ import {
   seedDieChangeLogs,
   seedDieMaintenance,
   seedDieMaster,
+  seedMachineMaintenance,
+  seedMachinePm,
   seedMachines,
   seedOperators,
   seedPlanning,
@@ -144,6 +147,14 @@ export class MemoryDataLayer implements PmdDataLayer {
   }
 
   // ---- die maintenance (PMD_DieMaintenance parity) ---------------------
+
+  async listMachineMaintenance(): Promise<DieMaintenanceRequest[]> {
+    return MemoryDataLayer.clone(seedMachineMaintenance(new Date()));
+  }
+
+  async listMachinePm(): Promise<MachinePmEvent[]> {
+    return MemoryDataLayer.clone(seedMachinePm(new Date()));
+  }
 
   async listDieMaintenance(): Promise<DieMaintenanceRequest[]> {
     return MemoryDataLayer.clone(

@@ -7,6 +7,7 @@ import type {
   DieChangeLog,
   DieComponentCondition,
   DieMaintenanceRequest,
+  MachinePmEvent,
   DieMaster,
   Machine,
   MaintPriority,
@@ -433,6 +434,12 @@ export interface SharePointOptions {
    *   "/sites/PMD/Shared Documents/PMD/MangoWorkOrders.csv"
    */
   mangoCsvPath?: string;
+  /**
+   * Server-relative path to MachinePM.csv — Mango's plant-equipment
+   * register with its PM events, in the same folder as the other two.
+   * Feeds Maint → Machine (next service) and Maint → Team (PM due).
+   */
+  machinePmCsvPath?: string;
   /** Override any list/field internal name without editing this file. */
   fieldMap?: PartialFieldMap;
   /**
@@ -454,6 +461,7 @@ export class SharePointDataLayer implements PmdDataLayer {
   private readonly siteUrl: string;
   private readonly planningCsvPath?: string;
   private readonly mangoCsvPath?: string;
+  private readonly machinePmCsvPath?: string;
   private readonly canWriteHook: () => boolean;
   /** Live-mirror gate (setLiveGate) — pushLiveSnapshot skips any tuple
    *  the hook rejects. null = no gate (mirror everything dirty). */
@@ -597,6 +605,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     this.siteUrl = o.siteUrl.replace(/\/$/, '');
     this.planningCsvPath = o.planningCsvPath;
     this.mangoCsvPath = o.mangoCsvPath;
+    this.machinePmCsvPath = o.machinePmCsvPath;
     this.canWriteHook = o.canWrite ?? ((): boolean => true);
     // Merge user overrides into the defaults.
     this.F = mergeFieldMap(DEFAULT_FIELDS, o.fieldMap);
@@ -1833,6 +1842,21 @@ export class SharePointDataLayer implements PmdDataLayer {
       return orders;
     } catch (e) {
       console.warn('[pmd] Mango machine work orders unavailable:', e);
+      return [];
+    }
+  }
+
+  async listMachinePm(): Promise<MachinePmEvent[]> {
+    if (!this.machinePmCsvPath) return [];
+    try {
+      const rows = parseMachinePmCsv(await this.fetchSiteFile(this.machinePmCsvPath, 'MachinePM CSV'));
+      console.info(
+        '[pmd] MachinePM.csv:', new Set(rows.map((r) => r.asset)).size, 'equipment ·',
+        rows.filter((r) => r.detail && !r.superseded).length, 'live PM events',
+      );
+      return rows;
+    } catch (e) {
+      console.warn('[pmd] MachinePM.csv unavailable:', e);
       return [];
     }
   }
@@ -5537,6 +5561,7 @@ const MANGO_HEADERS: Record<string, string> = {
   correctiveAction: 'Corrective action taken',
   preventativeAction: 'Preventative action taken',
   summary: 'Summary',
+  branch: 'Branch',
 };
 
 /** Columns whose absence is a real problem (everything else is optional
@@ -5696,6 +5721,8 @@ function parseMangoReport(text: string, mode: 'die' | 'machine'): DieMaintenance
       summary: cell(row, 'summary') || undefined,
       cost: cell(row, 'cost') || undefined,
       dueDate: csvDateToIso(cell(row, 'dueDate')) || undefined,
+      maintTypeRaw: cell(row, 'type') || undefined,
+      branch: cell(row, 'branch') || undefined,
     });
     dueDiag.push({ ticket, raw: idx['dueDate'] >= 0 ? (row[idx['dueDate']] ?? '') : '' });
   }
@@ -5716,6 +5743,86 @@ function parseMangoReport(text: string, mode: 'die' | 'machine'): DieMaintenance
     );
   }
   return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+// ---------------------------------------------------------------------------
+// MachinePM.csv — Mango's plant-equipment register with its PM events. One
+// row per (equipment, event); Name, the first column, is the same string as
+// the work-order report's Plant/Equipment. Columns are found by name, so the
+// export's other forty-odd columns can come and go.
+// ---------------------------------------------------------------------------
+
+const MACHINE_PM_HEADERS = {
+  asset: 'Name',
+  assetNumber: 'Asset Number',
+  description: 'Description',
+  department: 'Department',
+  branch: 'Branch',
+  eventType: 'Event Type',
+  owner: 'Owner of work',
+  frequency: 'Event Frequency',
+  frequencyNumber: 'Event Frequency Number',
+  startDate: 'Event Start Date',
+  dueDate: 'Event Due Date',
+  detail: 'Event Detail',
+  superseded: 'Superseded',
+} as const;
+
+export function parseMachinePmCsv(text: string): MachinePmEvent[] {
+  const rows = parseCsv(text.replace(/^\uFEFF/, ''));
+  if (rows.length === 0) throw new Error('MachinePM CSV is empty');
+  const norm = (v: string): string => v.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const wanted = new Set(Object.values(MACHINE_PM_HEADERS).map(norm));
+  // Like the work-order report, an export may open with a title line.
+  let headerAt = 0;
+  let best = -1;
+  for (let i = 0; i < Math.min(rows.length, 10); i++) {
+    const score = rows[i].reduce((n, c) => n + (c && wanted.has(norm(c)) ? 1 : 0), 0);
+    if (score > best) {
+      best = score;
+      headerAt = i;
+    }
+  }
+  const header = rows[headerAt].map(norm);
+  const at = (name: string): number => header.indexOf(norm(name));
+  const idx = Object.fromEntries(
+    Object.entries(MACHINE_PM_HEADERS).map(([k, name]) => [k, at(name)]),
+  ) as Record<keyof typeof MACHINE_PM_HEADERS, number>;
+  // Name is the first column whatever it is called.
+  if (idx.asset < 0) idx.asset = 0;
+  if (idx.dueDate < 0 && idx.detail < 0) {
+    throw new Error(
+      `MachinePM CSV schema invalid: no 'Event Due Date' or 'Event Detail' column; header: ${rows[headerAt].join(' | ')}`,
+    );
+  }
+  const cell = (row: string[], k: keyof typeof MACHINE_PM_HEADERS): string =>
+    idx[k] >= 0 ? (row[idx[k]] ?? '').replace(/\u00a0/g, ' ').trim() : '';
+  const day = (v: string): string => csvDateToIso(v).slice(0, 10);
+  const out: MachinePmEvent[] = [];
+  for (let r = headerAt + 1; r < rows.length; r++) {
+    const row = rows[r];
+    const asset = cell(row, 'asset');
+    if (!asset) continue;
+    const unit = cell(row, 'frequency');
+    const n = cell(row, 'frequencyNumber');
+    // "3" + "months", or a number column that already says "3 months".
+    const frequency = n && unit && !/[a-z]/i.test(n) ? `${n} ${unit}` : n || unit;
+    out.push({
+      asset,
+      assetNumber: cell(row, 'assetNumber'),
+      description: cell(row, 'description'),
+      department: cell(row, 'department'),
+      branch: cell(row, 'branch'),
+      eventType: cell(row, 'eventType'),
+      owner: cell(row, 'owner'),
+      frequency,
+      startDate: day(cell(row, 'startDate')),
+      dueDate: day(cell(row, 'dueDate')),
+      detail: cell(row, 'detail'),
+      superseded: /^(true|yes|1)$/i.test(cell(row, 'superseded')),
+    });
+  }
+  return out;
 }
 
 /**

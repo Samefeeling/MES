@@ -446,6 +446,10 @@ function toggleDictation(field: string, btn: HTMLButtonElement): void {
   }
 }
 
+/** Mango's home page — the button beside Photos opens it in a new tab, so a
+ *  breakdown can be raised there without leaving the sheet. */
+const MANGO_HOME_URL = 'https://my.mangolive.com/';
+
 // ===== Defect photos → PMD_Production attachments =====
 // 📷 button on the side panel opens the iPad camera (file input with
 // capture — native in Edge/Safari on iOS, no getUserMedia needed). The
@@ -2369,7 +2373,10 @@ function buildSide(): string {
     <div class="count-warning" data-live="outputWarn" role="alert"${outputWarning ? '' : ' hidden'}>${outputWarning ? escapeHtml(outputWarning.message) : ''}</div>
     <div class="sk"><label>Purge (kg)</label><input type="text" inputmode="numeric" pattern="[0-9]*" data-meta="purge" value="${purge}" ${rdo}${rdoTitle}></div>
     <div class="photos">
-      <div class="photos-title">📷 Photos</div>
+      <div class="photos-head">
+        <div class="photos-title">📷 Photos</div>
+        <a class="mango-btn" href="${MANGO_HOME_URL}" target="_blank" rel="noopener" title="Open Mango — raise or check a maintenance request">🥭 Mango</a>
+      </div>
       <div class="photo-strip" data-photo-strip></div>
       <button type="button" class="photo-take" data-photo-take ${
         isReadOnlyDevice()

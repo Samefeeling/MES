@@ -3,6 +3,7 @@ import type {
   DieChangeLog,
   DieComponentCondition,
   DieMaintenanceRequest,
+  MachinePmEvent,
   DieMaster,
   Machine,
   Operator,
@@ -559,4 +560,107 @@ export function seedProduction(now: Date, planning: PlanningOrder[]): Production
     }
   }
   return recs;
+}
+
+/** MachinePM.csv parity for the demo: the presses' PM events (one overdue,
+ *  one due this week, the rest ahead), a superseded old version, and a
+ *  piece of plant equipment that is not a press. */
+export function seedMachinePm(now: Date): MachinePmEvent[] {
+  const day = (n: number): string => {
+    const d = new Date(now);
+    d.setDate(d.getDate() + n);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  const ev = (
+    asset: string,
+    detail: string,
+    due: number,
+    owner: string,
+    frequency: string,
+    extra: Partial<MachinePmEvent> = {},
+  ): MachinePmEvent => ({
+    asset,
+    assetNumber: '',
+    description: 'Injection moulding machine',
+    department: 'PMD - AU',
+    branch: 'Resero - Minto',
+    eventType: 'Preventive Maintenance',
+    owner,
+    frequency,
+    startDate: day(due - 90),
+    dueDate: day(due),
+    detail,
+    superseded: false,
+    ...extra,
+  });
+  return [
+    ev('AU - 125T Superjack Injection Molding Machine', 'Monthly maintenance — check hydraulic oil level and filters', -3, 'Aryan Apte', '1 months'),
+    ev('AU - 125T Superjack Injection Molding Machine', 'Check heater bands and thermocouples', 40, 'Erin Toman', '3 months'),
+    ev('AU - 320T Macosys Injection Molding Machine', 'Grease toggle and tie-bar bushes', 4, 'Aryan Apte', '1 months'),
+    ev('AU - 550T Meiki Injection Molding Machine', 'Oil sample and analysis', 21, 'Erin Toman', '6 months'),
+    ev('AU - 850T Meiki Injection Molding Machine', 'Electrical cabinet inspection', 60, 'Wisam Istefo', '1 years'),
+    ev('AU - 1600T Toshiba Injection Molding Machine', 'Check screw and barrel wear', 15, 'Aryan Apte', '6 months'),
+    ev('AU - 1600T Toshiba Injection Molding Machine', 'Check screw and barrel wear', -200, 'Aryan Apte', '6 months', { superseded: true }),
+    ev('AU - Batt-1 BattenFeld Injection Molding Machine (1000T)', 'Safety gate interlock test', 9, 'Wisam Istefo', '3 months'),
+    ev('AU - Encore Cold Saw', 'Blade and guard check', 2, 'Erin Toman', '1 months', {
+      description: 'Cold saw',
+      department: 'Manufacturing - AU',
+    }),
+  ];
+}
+
+/** The machine half of the Mango report for the demo: breakdowns with
+ *  downtime (for MTBF / MTTR), closed orders with labour hours by owner
+ *  (for Team), and open ones either side of their due date. */
+export function seedMachineMaintenance(now: Date): DieMaintenanceRequest[] {
+  const iso = (n: number): string => {
+    const d = new Date(now);
+    d.setDate(d.getDate() - n);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  let id = 500;
+  const wo = (
+    asset: string,
+    type: string,
+    raisedDaysAgo: number,
+    closedDaysAgo: number | null,
+    owner: string,
+    downtime: number,
+    labour: number,
+    description: string,
+    dueInDays?: number,
+  ): DieMaintenanceRequest => ({
+    id: id++,
+    dieNumber: '',
+    asset,
+    status: closedDaysAgo == null ? 'in-progress' : 'done',
+    maintType: /breakdown/i.test(type) ? 'repair' : /prevent|calibrat/i.test(type) ? 'inspection' : 'other',
+    maintTypeRaw: type,
+    priority: 'normal',
+    description,
+    contact: owner,
+    requestedBy: 'Joe Talamaivao',
+    machineCode: '',
+    jobNumber: '',
+    mangoTicket: `MWO ${String(2700 + id).padStart(5, '0')}`,
+    createdAt: iso(raisedDaysAgo),
+    closedAt: closedDaysAgo == null ? '' : iso(closedDaysAgo),
+    downtime: downtime ? String(downtime) : undefined,
+    labourHours: labour ? String(labour) : undefined,
+    dueDate: dueInDays == null ? undefined : iso(-dueInDays),
+    branch: 'Resero - Minto',
+  });
+  const press1600 = 'AU - 1600T Toshiba Injection Molding Machine';
+  const press1300 = 'AU - 1300T LS Mtron Injection Molding Machine';
+  return [
+    wo(press1600, '2. Breakdown', 1, null, 'Wisam Istefo', 0, 0, 'Nozzle leak, material stuck', 2),
+    wo(press1600, '2. Breakdown', 40, 39, 'Wisam Istefo', 6, 4, 'Robot light curtain not working'),
+    wo(press1600, '2. Breakdown', 120, 118, 'Chris Buckley', 10, 6, 'Hydraulic hose burst'),
+    wo(press1300, '2. Breakdown', 9, 8, 'Wisam Istefo', 10, 0.25, 'Motor lock alarm, unable to start'),
+    wo(press1300, '3. Preventive Maintenance', 30, 28, 'Aryan Apte', 0, 3, 'Six-monthly service'),
+    wo('AU - 550T Meiki Injection Molding Machine', '2. Breakdown', 60, 59, 'Chris Buckley', 3, 2, 'Ejector plate stuck'),
+    wo('AU - 320T Macosys Injection Molding Machine', '1. Calibration', 14, 12, 'Erin Toman', 0, 1.5, 'Pressure transducer calibration'),
+    wo('AU - Encore Cold Saw', '2. Breakdown', 12, 11, 'Quoc Vo', 0.25, 0.25, 'No power — plug not seated'),
+    wo('AU - Encore Cold Saw', '5. Employee Suggestion', 3, null, '', 0, 0, 'Add a stand light', -4),
+  ];
 }

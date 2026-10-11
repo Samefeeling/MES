@@ -12,10 +12,20 @@ export type { PmdDataLayer } from './types';
  *  mirror lights up from one env var — swap the planning file name for
  *  MangoWorkOrders.csv. Returns '' when there's nothing to derive from. */
 export function deriveMangoCsvPath(planningPath?: string): string {
+  return siblingOf(planningPath, 'MangoWorkOrders.csv');
+}
+
+/** `file` in the same folder as the Planning CSV; '' with no planning path. */
+function siblingOf(planningPath: string | undefined, file: string): string {
   if (!planningPath) return '';
   const slash = planningPath.lastIndexOf('/');
   const dir = slash >= 0 ? planningPath.slice(0, slash) : '';
-  return `${dir}/MangoWorkOrders.csv`;
+  return `${dir}/${file}`;
+}
+
+/** MachinePM.csv — VITE_MACHINE_PM_CSV_PATH, else beside the Planning CSV. */
+export function resolveMachinePmCsvPath(env: Record<string, string | undefined>): string {
+  return env.VITE_MACHINE_PM_CSV_PATH || siblingOf(env.VITE_PLANNING_CSV_PATH, 'MachinePM.csv');
 }
 
 /** Resolve the Mango work-order CSV path from the environment, tolerating
@@ -45,6 +55,9 @@ export function createDataLayer(env: Record<string, string | undefined> = {}): P
         // MangoWorkOrders.csv beside the Planning CSV. See
         // scripts/sync-mango-csv.mjs + DEPLOYMENT.md.
         mangoCsvPath: resolveMangoCsvPath(env),
+        // Mango's equipment register + PM events, same folder (Maint →
+        // Machine / Team).
+        machinePmCsvPath: resolveMachinePmCsvPath(env),
         // Device-class write rule: iPad writes freely; anything else is
         // read-only unless a supervisor is signed in. Replaces the old
         // per-device OwnerDevice claim arbitration that caused fights

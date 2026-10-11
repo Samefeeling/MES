@@ -3,6 +3,7 @@ import type {
   BreakdownLogDetail,
   DieChangeLog,
   DieMaintenanceRequest,
+  MachinePmEvent,
   DieMaster,
   Machine,
   Operator,
@@ -76,6 +77,10 @@ export interface PmdDataLayer {
    *  match them to a press by code. Only the CSV mirror serves these;
    *  returns [] on backends/tenants without it. Newest first. */
   listMachineMaintenance?(): Promise<DieMaintenanceRequest[]>;
+  /** MachinePM.csv — the plant-equipment register and its PM events, read
+   *  from beside the Planning CSV. [] when the file isn't configured or
+   *  can't be read. */
+  listMachinePm?(): Promise<MachinePmEvent[]>;
   /** Persist a new request (id/createdAt assigned by the backend). */
   createDieMaintenance?(
     req: Omit<DieMaintenanceRequest, 'id' | 'createdAt' | 'closedAt'>,

@@ -227,6 +227,12 @@ breakdown categories — Mechanical, Electrical, Hydraulic, etc.
 
 ---
 
+**Mango.** Beside **📷 Photos** is a **🥭 Mango** button. It opens Mango
+in a new tab, to raise a maintenance request for a breakdown or check one
+— the sheet stays open behind it.
+
+---
+
 ## Scene 10 — Log rejects
 
 **SHOW**: Below the status row, rows for D01, D02, D03 reject codes.

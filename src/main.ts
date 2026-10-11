@@ -9,7 +9,7 @@ import { unmountTracePanel } from './ui/trace';
 import { createAssemblyDataLayer } from './dal/assembly';
 import { showAssembly } from './ui/assembly';
 import { renderKpi, unmountKpi } from './ui/kpi';
-import { mountDieTab } from './ui/die';
+import { mountDieTab, type MaintTab } from './ui/die';
 import { closeModal, openModal } from './ui/modal';
 import {
   clearSupervisor,
@@ -136,6 +136,8 @@ updateMirrorBadge();
 interface Route {
   view: 'operator' | 'tool' | 'kpi' | 'assembly';
   machineCode?: string;
+  /** Which page of Maint: the die board, the machine board or the team. */
+  maintTab?: MaintTab;
   /** Die to auto-open in the Tool board's drilldown, from a
    *  `#/tool/die/<dieNumber>` deep link (the operator sheet's Die# pill). */
   openDie?: string;
@@ -145,11 +147,15 @@ function parseRoute(): Route {
   const h = window.location.hash || '#/';
   // Keep the old #/trace URL working for saved bookmarks, but the page is
   // now the dedicated Tool board rather than a three-view Trace shell.
-  if (h.startsWith('#/tool') || h.startsWith('#/trace')) {
+  // Maint is the old Tool page grown into three: Tool (dies), Machine and
+  // Team. #/tool and #/trace stay working for saved bookmarks and the
+  // operator sheet's Die# deep link.
+  if (h.startsWith('#/maint') || h.startsWith('#/tool') || h.startsWith('#/trace')) {
     // Deep link from the operator sheet: open this die's drilldown once the
     // board has loaded.
-    const d = /^#\/tool\/die\/(.+)$/.exec(h);
-    return { view: 'tool', openDie: d ? decodeURIComponent(d[1]) : undefined };
+    const d = /^#\/(?:tool|maint\/tool)\/die\/(.+)$/.exec(h);
+    const tab = /^#\/maint\/(machine|team)\b/.exec(h)?.[1] as MaintTab | undefined;
+    return { view: 'tool', maintTab: tab ?? 'tool', openDie: d ? decodeURIComponent(d[1]) : undefined };
   }
   if (h.startsWith('#/assembly')) return { view: 'assembly' };
   if (h.startsWith('#/kpi')) return { view: 'kpi' };
@@ -182,7 +188,7 @@ function ensureNav(): void {
     // the sheet" mental model the operator already has.
     '<a href="#/" data-nav data-view="operator">\u{270F}\u{FE0F} PMD</a>' +
     '<a href="#/assembly" data-nav data-view="assembly">Assembly</a>' +
-    '<a href="#/tool" data-nav data-view="tool">\u{1F6E0}Tool</a>' +
+    '<a href="#/maint" data-nav data-view="tool">\u{1F6E0} Maint</a>' +
     '<a href="#/kpi" data-nav data-view="kpi">\u{1F4CA} KPIs</a>' +
     `<button type="button" class="nav-btn sv-toggle${sv ? ' on' : ''}" data-supervisor title="${
       sv ? 'Supervisor mode is on — tap to sign out' : 'Sign in as supervisor to unlock signed-off shifts'
@@ -303,7 +309,7 @@ async function route(): Promise<void> {
       document.body.className = 'shift-day';
       const app = document.getElementById('app')!;
       app.innerHTML = '<div class="die-host"></div>';
-      await mountDieTab(dal, app.querySelector<HTMLElement>('.die-host')!, r.openDie);
+      await mountDieTab(dal, app.querySelector<HTMLElement>('.die-host')!, r.openDie, r.maintTab);
     } else if (r.view === 'kpi') {
       await renderKpi(dal, assemblyDal);
     } else {
