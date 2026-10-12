@@ -125,15 +125,70 @@ export interface DualOpts {
   legend?: boolean;
   /** Bars only: no line and no right axis. */
   noOverlay?: boolean;
-  /** Colour of the segment labels — white on saturated fills. */
+  /** Colour of the segment labels — white on saturated fills; 'auto' picks
+   *  dark or white ink per fill, for a palette that has both. */
   segmentLabelColor?: string;
+  /** Right axis from this value to 100 instead of 0 to 100. A yield line at
+   *  97–99% on a 0–100 axis is a flat line along the top. */
+  overlayFloor?: number;
+  /** Each bar's total above it. */
+  labelTotals?: boolean;
+  /** A thin surface-coloured gap between stacked segments, so a stack of
+   *  many colours does not run together. */
+  segmentGap?: boolean;
+}
+
+/** Dark ink on a light fill, white on a dark one (WCAG relative luminance). */
+export function inkOn(hex: string): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return '#1e293b';
+  const lin = (i: number): number => {
+    const c = parseInt(m[1].slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const l = 0.2126 * lin(0) + 0.7152 * lin(2) + 0.0722 * lin(4);
+  // Contrast with white beats contrast with #1e293b below this luminance.
+  return l < 0.3 ? '#fff' : '#1e293b';
+}
+
+interface LegendItem {
+  label: string;
+  color: string;
+  line?: boolean;
+}
+
+/** SVG legend items laid out left to right from x0, wrapping at `maxX`.
+ *  Returns the marks and the number of rows they took. */
+function svgLegend(items: LegendItem[], x0: number, y0: number, maxX: number): { svg: string; rows: number } {
+  let x = x0;
+  let row = 0;
+  let svg = '';
+  for (const it of items) {
+    const w = (it.line ? 40 : 34) + it.label.length * 6;
+    if (x > x0 && x + w > maxX) {
+      x = x0;
+      row++;
+    }
+    const y = y0 + row * 16;
+    svg += it.line
+      ? `<g transform="translate(${x},${y})"><line x1="0" y1="-4" x2="14" y2="-4" stroke="${it.color}" stroke-width="2.5"/><circle cx="7" cy="-4" r="3" fill="${it.color}"/><text x="20" y="0" font-size="11" fill="#1e293b">${escAttr(it.label)}</text></g>`
+      : `<g transform="translate(${x},${y})"><rect width="10" height="10" y="-9" fill="${it.color}"/><text x="14" y="0" font-size="11" fill="#1e293b">${escAttr(it.label)}</text></g>`;
+    x += w;
+  }
+  return { svg, rows: row + 1 };
 }
 
 function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
-  const PL = 42, PR = 48, PT = 24, PB = 36;
-  const H2 = 240;
+  const PL = 42, PR = 48, PB = 36;
   const n = Math.max(buckets.length, 1);
   const width = Math.max(420, PL + PR + n * 60);
+  // A legend too long for one row wraps, and the plot moves down under it.
+  const legendItems: LegendItem[] = o.segmentLabels.map((label, s) => ({ label, color: o.segmentColors[s] }));
+  if (!o.noOverlay) legendItems.push({ label: o.overlayLabel, color: o.overlayColor, line: true });
+  const legendOut = svgLegend(legendItems, PL, 14, width - PR);
+  const extra = o.legend === false ? 0 : (legendOut.rows - 1) * 16;
+  const PT = 24 + extra + (o.labelTotals ? 8 : 0);
+  const H2 = 240 + extra + (o.labelTotals ? 8 : 0);
   const innerH = H2 - PT - PB;
   const innerW = width - PL - PR;
   const slot = innerW / n;
@@ -149,6 +204,7 @@ function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
     : niceCeil(
         Math.max(1, ...buckets.map((b) => Math.max(b.overlay ?? 0, 0))),
       );
+  const floorRight = o.overlayAsPercent && o.overlayFloor != null ? Math.min(o.overlayFloor, 99) : 0;
 
   let bars = '';
   const linePts: string[] = [];
@@ -164,16 +220,26 @@ function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
       cumY -= h;
       bars += `<rect x="${x.toFixed(1)}" y="${cumY.toFixed(1)}" width="${bw.toFixed(
         1,
-      )}" height="${h.toFixed(1)}" fill="${o.segmentColors[s]}" rx="2"></rect>`;
+      )}" height="${h.toFixed(1)}" fill="${o.segmentColors[s]}" rx="2"${
+        o.segmentGap ? ' stroke="#fff" stroke-width="1.5"' : ''
+      }></rect>`;
       // The segment's own value, centred in it (skip if too short to fit).
       if (o.labelSegments && h >= 12) {
+        const ink = o.segmentLabelColor === 'auto' ? inkOn(o.segmentColors[s]) : o.segmentLabelColor ?? '#1e293b';
         bars += `<text x="${cx.toFixed(1)}" y="${(cumY + h / 2 + 3).toFixed(
           1,
-        )}" font-size="9" fill="${o.segmentLabelColor ?? '#1e293b'}" text-anchor="middle">${v}</text>`;
+        )}" font-size="9" fill="${ink}" text-anchor="middle">${v}</text>`;
+      }
+    }
+    if (o.labelTotals) {
+      const total = b.segments.reduce((a, v) => a + (v || 0), 0);
+      if (total > 0) {
+        bars += `<text x="${cx.toFixed(1)}" y="${(cumY - 4).toFixed(1)}" font-size="10" font-weight="700" fill="#1e293b" text-anchor="middle">${total}</text>`;
       }
     }
     if (b.overlay != null && !o.noOverlay) {
-      const y = PT + innerH - (b.overlay / niceRight) * innerH;
+      const v = Math.max(floorRight, b.overlay);
+      const y = PT + innerH - ((v - floorRight) / (niceRight - floorRight)) * innerH;
       linePts.push(`${cx.toFixed(1)},${y.toFixed(1)}`);
     }
     bars += `<text x="${cx.toFixed(1)}" y="${H2 - 14}" font-size="11" font-weight="${
@@ -190,6 +256,11 @@ function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
       )}" height="${(innerH + 18).toFixed(1)}" fill="transparent" data-bucket="${escAttr(
         b.clickKey,
       )}" role="button" tabindex="0"><title>${escAttr(b.title ?? b.label)}</title></rect>`;
+    } else if (b.title) {
+      // Hover only: the column's numbers, without making it a control.
+      bars += `<rect x="${(cx - slot / 2).toFixed(1)}" y="${PT}" width="${slot.toFixed(
+        1,
+      )}" height="${(innerH + 18).toFixed(1)}" fill="transparent"><title>${escAttr(b.title)}</title></rect>`;
     }
   }
 
@@ -208,7 +279,7 @@ function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
   for (let g = 0; g <= 4; g++) {
     const y = PT + innerH - (g / 4) * innerH;
     const vL = +((g / 4) * niceLeft).toFixed(1);
-    const vR = +((g / 4) * niceRight).toFixed(1);
+    const vR = +(floorRight + (g / 4) * (niceRight - floorRight)).toFixed(1);
     grid += `<line x1="${PL}" y1="${y.toFixed(1)}" x2="${(width - PR).toFixed(
       1,
     )}" y2="${y.toFixed(1)}" stroke="#e2e8f0" stroke-width="1"/>`;
@@ -223,20 +294,7 @@ function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
       }</text>`;
   }
 
-  // legend
-  let legendX = PL;
-  const legend: string[] = [];
-  for (let s = 0; s < o.segmentLabels.length; s++) {
-    legend.push(
-      `<g transform="translate(${legendX},${PT - 10})"><rect width="10" height="10" y="-9" fill="${o.segmentColors[s]}"/><text x="14" y="0" font-size="11" fill="#1e293b">${escAttr(o.segmentLabels[s])}</text></g>`,
-    );
-    legendX += 12 + 14 + o.segmentLabels[s].length * 6 + 8;
-  }
-  legend.push(
-    `<g transform="translate(${legendX},${PT - 10})"><line x1="0" y1="-4" x2="14" y2="-4" stroke="${o.overlayColor}" stroke-width="2.5"/><circle cx="7" cy="-4" r="3" fill="${o.overlayColor}"/><text x="20" y="0" font-size="11" fill="#1e293b">${escAttr(o.overlayLabel)}</text></g>`,
-  );
-
-  return `<svg viewBox="0 0 ${width} ${H2}" width="100%" height="${H2}" role="img" preserveAspectRatio="xMidYMid meet">${grid}${bars}${line}${o.legend === false ? '' : legend.join('')}</svg>`;
+  return `<svg viewBox="0 0 ${width} ${H2}" width="100%" height="${H2}" role="img" preserveAspectRatio="xMidYMid meet">${grid}${bars}${line}${o.legend === false ? '' : legendOut.svg}</svg>`;
 }
 
 /** Any stacked series on the left axis with one line on the right. */
@@ -365,6 +423,93 @@ export function renderHoursOeeChart(
     overlayColor: '#1d4ed8',
     overlayAsPercent: true,
   });
+}
+
+// =========================================================================
+// Horizontal stacked bars — one row per person or thing being ranked.
+// Names read along the row instead of being squeezed under a column, which
+// is what a ranking of fifteen operators needs. Same ink, grid and legend
+// as the column charts above.
+// =========================================================================
+
+export interface BarRow {
+  label: string;
+  segments: number[];
+  /** Printed after the bar, e.g. "2.5 h over". */
+  end?: string;
+  clickKey?: string;
+  title?: string;
+}
+
+/** Whole-number ticks for counts: 0, 1, 2… or 0, 2, 4… — never 2.5 of a
+ *  stoppage. */
+function countTicks(max: number): { top: number; step: number } {
+  const target = Math.max(1, max);
+  const step = [1, 2, 5, 10, 20, 50, 100, 200, 500].find((st) => target / st <= 6) ?? 1000;
+  return { top: Math.ceil(target / step) * step, step };
+}
+
+export function renderStackedBarsH(
+  rows: BarRow[],
+  o: { segmentColors: string[]; segmentLabels: string[] },
+): string {
+  const width = 640;
+  const labelW = Math.min(170, Math.max(90, Math.max(0, ...rows.map((r) => r.label.length)) * 6.6 + 14));
+  const endW = Math.max(40, Math.max(0, ...rows.map((r) => (r.end ?? '').length)) * 6 + 12);
+  const PL = labelW, PR = endW;
+  // Over the plot when it fits on one row there, else from the left edge.
+  const items = o.segmentLabels.map((label, s) => ({ label, color: o.segmentColors[s] }));
+  const legendW = items.reduce((w, it) => w + 34 + it.label.length * 6, 0);
+  const legend = svgLegend(items, Math.max(10, Math.min(PL, width - 10 - legendW)), 14, width - 10);
+  const PT = 26 + (legend.rows - 1) * 16;
+  const ROW = 26, BAR = 16, PB = 22;
+  const innerW = width - PL - PR;
+  const H2 = PT + rows.length * ROW + PB;
+  const max = Math.max(0, ...rows.map((r) => r.segments.reduce((a, v) => a + (v || 0), 0)));
+  const { top, step } = countTicks(max);
+  const xOf = (v: number): number => PL + (v / top) * innerW;
+
+  let grid = '';
+  for (let v = 0; v <= top; v += step) {
+    const x = xOf(v);
+    grid += `<line x1="${x.toFixed(1)}" y1="${PT - 4}" x2="${x.toFixed(1)}" y2="${(H2 - PB + 2).toFixed(1)}" stroke="#e2e8f0" stroke-width="1"/>`;
+    grid += `<text x="${x.toFixed(1)}" y="${(H2 - 6).toFixed(1)}" font-size="10" fill="#64748b" text-anchor="middle">${v}</text>`;
+  }
+
+  let bars = '';
+  rows.forEach((r, i) => {
+    const y = PT + i * ROW + (ROW - BAR) / 2;
+    const cy = y + BAR / 2;
+    bars += `<text x="${PL - 8}" y="${(cy + 4).toFixed(1)}" font-size="11" font-weight="${
+      r.clickKey ? 700 : 400
+    }" fill="${r.clickKey ? '#1d4ed8' : '#475569'}" text-anchor="end">${escAttr(r.label)}</text>`;
+    let x = PL;
+    r.segments.forEach((v, s) => {
+      if (!(v > 0)) return;
+      const w = (v / top) * innerW;
+      bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${BAR}" fill="${
+        o.segmentColors[s]
+      }" rx="2" stroke="#fff" stroke-width="1.5"></rect>`;
+      if (w >= 14) {
+        bars += `<text x="${(x + w / 2).toFixed(1)}" y="${(cy + 3.5).toFixed(1)}" font-size="9.5" font-weight="700" fill="${inkOn(
+          o.segmentColors[s],
+        )}" text-anchor="middle">${v}</text>`;
+      }
+      x += w;
+    });
+    if (r.end) {
+      bars += `<text x="${(x + 6).toFixed(1)}" y="${(cy + 4).toFixed(1)}" font-size="10.5" fill="#1e293b">${escAttr(r.end)}</text>`;
+    }
+    if (r.clickKey || r.title) {
+      bars += `<rect${r.clickKey ? ' class="chart-hit"' : ''} x="0" y="${(PT + i * ROW).toFixed(1)}" width="${width}" height="${ROW}" fill="transparent"${
+        r.clickKey ? ` data-bucket="${escAttr(r.clickKey)}" role="button" tabindex="0"` : ''
+      }><title>${escAttr(r.title ?? r.label)}</title></rect>`;
+    }
+  });
+
+  // Fixed height like the column charts: it shrinks into a narrow card but
+  // never blows its text up in a wide one.
+  return `<svg viewBox="0 0 ${width} ${H2}" width="100%" height="${H2}" role="img" preserveAspectRatio="xMidYMin meet">${legend.svg}${grid}${bars}</svg>`;
 }
 
 // =========================================================================

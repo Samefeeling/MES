@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
+  inkOn,
   renderOutputRejectChart,
   renderParetoByShiftChart,
   renderParetoChart,
+  renderStackedBarsH,
+  renderStackedLineChart,
 } from '../src/ui/charts';
 
 describe('output/reject bar chart', () => {
@@ -68,5 +71,74 @@ describe('reject Pareto stacked by shift', () => {
       { label: 'D01', day: 0, afternoon: 0, night: 0 },
     ]);
     expect(svg).toMatch(/^<svg/);
+  });
+});
+
+describe('stacked bars with a line — the operator output chart', () => {
+  const opts = {
+    segmentColors: ['#2a78d6', '#eda100'],
+    segmentLabels: ['125T', '550T'],
+    overlayLabel: 'Yield %',
+    overlayColor: '#0f172a',
+    overlayAsPercent: true,
+  };
+
+  it('starts the % axis at the floor it is given', () => {
+    const svg = renderStackedLineChart([{ label: '10-06', segments: [10, 5], overlay: 98 }], { ...opts, overlayFloor: 92 });
+    expect(svg).toContain('>92%<');
+    expect(svg).toContain('>100%<');
+    expect(svg).not.toContain('>0%<');
+  });
+
+  it('prints each bar’s total and gives a hover title to a bar that is not a control', () => {
+    const svg = renderStackedLineChart(
+      [{ label: '10-06', segments: [10, 5], overlay: 98, title: '10-06 · 15 good' }],
+      { ...opts, labelTotals: true },
+    );
+    expect(svg).toContain('>15</text>');
+    expect(svg).toContain('<title>10-06 · 15 good</title>');
+    expect(svg).not.toContain('chart-hit');
+  });
+
+  it('wraps a legend too long for one row and moves the plot down', () => {
+    const many = Array.from({ length: 10 }, (_, i) => `Press ${i + 1}`);
+    const svg = renderStackedLineChart([{ label: 'a', segments: many.map(() => 1), overlay: null }], {
+      ...opts,
+      segmentColors: many.map(() => '#2a78d6'),
+      segmentLabels: many,
+    });
+    expect(Number(/height="(\d+)"/.exec(svg)![1])).toBeGreaterThan(240);
+  });
+
+  it('picks white ink on dark fills and dark ink on light ones', () => {
+    expect(inkOn('#1e3a8a')).toBe('#fff');
+    expect(inkOn('#eda100')).toBe('#1e293b');
+  });
+});
+
+describe('horizontal stacked bars — the stoppage ranking', () => {
+  const rows = [
+    { label: 'Phong Xuan', segments: [0, 0, 1, 4], end: '2.5 h over', clickKey: 'Phong Xuan', title: 'Phong Xuan — 5' },
+    { label: 'Edin Kulelija', segments: [1, 0, 0, 2], end: '2.0 h over' },
+  ];
+  const svg = renderStackedBarsH(rows, {
+    segmentColors: ['#2a78d6', '#c2410c', '#f59e0b', '#dc2626'],
+    segmentLabels: ['Startup > 1 h', 'Die setup > 4 h', 'Insert / colour > 0.5 h', 'Breakdown'],
+  });
+
+  it('draws a row per name with its end label', () => {
+    expect(svg).toContain('>Phong Xuan</text>');
+    expect(svg).toContain('>2.5 h over</text>');
+    expect(svg).toContain('>Edin Kulelija</text>');
+  });
+
+  it('counts in whole numbers on the axis', () => {
+    const ticks = [...svg.matchAll(/text-anchor="middle">(\d+(?:\.\d+)?)<\/text>/g)].map((m) => m[1]);
+    expect(ticks.length).toBeGreaterThan(0);
+    expect(ticks.every((t) => !t.includes('.'))).toBe(true);
+  });
+
+  it('makes a row with a click key a control that names what clicking does', () => {
+    expect(svg).toContain('data-bucket="Phong Xuan" role="button" tabindex="0"><title>Phong Xuan — 5</title>');
   });
 });

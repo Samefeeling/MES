@@ -1379,7 +1379,8 @@ async function compute(now = new Date()): Promise<void> {
   // hot-stamp press's setups are not judged against the injection limits.
   S!.ops.perf = operatorPerformance(perMachineProd.flat(), ctByJob, (mc) => !S!.hstampCodes.has(mc));
   S!.ops.weekly = to.getTime() - from.getTime() > 31 * 86_400_000;
-  S!.ops.machineOrder = S!.machines.map((m) => m.machineCode);
+  S!.ops.machineOrder = S!.machines.filter((m) => !isHotStampMachine(m)).map((m) => m.machineCode);
+  S!.ops.total = perMachineProd.some((recs) => recs.length) ? aggregate(perMachineProd.flat(), ctByJob) : null;
   S!.hstampSetupEvents = collectSetupEvents(
     perMachineProd.filter((_, i) => S!.hstampCodes.has(S!.machines[i].machineCode)).flat(),
   );
@@ -3438,7 +3439,8 @@ function render(): void {
     else S!.expandedMonths.add(m);
     render();
   };
-  app.querySelectorAll<SVGElement>('.kpi-charts .chart-hit[data-bucket]').forEach((hit) => {
+  // The operator charts sit in the same grid and wire their own bars.
+  app.querySelectorAll<SVGElement>('.kpi-charts:not(.kpi-ops-charts) .chart-hit[data-bucket]').forEach((hit) => {
     hit.addEventListener('click', () => toggleMonth(hit.dataset.bucket ?? ''));
     hit.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -3885,7 +3887,7 @@ export async function renderKpi(dal: PmdDataLayer, assemblyDal?: AssemblyDataLay
     dieByJob: new Map(),
     impwSlices: [],
     impwFindings: [],
-    ops: { perf: [], weekly: false, machineOrder: [], thresholds: DEFAULT_KPI_THRESHOLDS, pick: '', open: new Set() },
+    ops: { perf: [], weekly: false, machineOrder: [], thresholds: DEFAULT_KPI_THRESHOLDS, pick: '', open: new Set(), total: null },
     equalWeight: false,
     impwDecisions: loadImpwDecisions(),
     impwSite: loadImpwSite(),

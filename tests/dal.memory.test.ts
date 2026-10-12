@@ -163,6 +163,22 @@ describe('MemoryDataLayer — PmdDataLayer contract', () => {
     expect(dal.isUnlockedTuple?.('320T', sid, 'JL')).toBe(false);
   });
 
+  it('lockShift saves the shift’s Schedule Adherence and plan on its header rows', async () => {
+    const sid = currentShift(NOW).shiftId;
+    const open = (await dal.listProduction({ machineCode: '320T', shiftId: sid })).filter((r) => !r.locked);
+    expect(open.length).toBeGreaterThan(0);
+    await dal.lockShift('320T', sid, 'Jeff Penn', 'Tin Maung');
+    const heads = (await dal.listProduction({ machineCode: '320T', shiftId: sid })).filter((r) => r.slotIndex === 0);
+    expect(heads.length).toBeGreaterThan(0);
+    for (const h of heads) {
+      expect(h.schedulePlan).toBeGreaterThan(0);
+      expect(h.scheduleAttain).toBeGreaterThanOrEqual(0);
+      expect(h.scheduleAttain).toBeLessThanOrEqual(100);
+    }
+    // The whole shift's figures, the same on every order it signed.
+    expect(new Set(heads.map((h) => `${h.schedulePlan}|${h.scheduleAttain}`)).size).toBe(1);
+  });
+
   it('lockShift scoped to a job leaves other jobs on the shift editable', async () => {
     const sid = currentShift(NOW).shiftId;
     const base = {

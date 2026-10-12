@@ -15,6 +15,7 @@ import type {
   StatusCode,
   Supervisor,
 } from '../types';
+import { scheduleSnapshotForShift, snapshotToSave } from '../core/kpi-attainment';
 import { bdAsBdCodes } from '../core/breakdown';
 import { dieChangeEventKey, dieSignOffStatus } from '../core/die';
 import { generateDieChanges } from '../core/planning';
@@ -557,6 +558,26 @@ export function seedProduction(now: Date, planning: PlanningOrder[]): Production
           updatedAt: stamp,
         });
       }
+    }
+  }
+  // What sign-off would have saved on each signed shift (ScheduleAttain /
+  // SchedulePlan), so a wider KPI period has plans to add up in the demo.
+  const shifts = new Map<string, ProductionRecord[]>();
+  for (const r of recs) {
+    if (!r.locked) continue;
+    const key = `${r.machineCode}|${r.shiftId}`;
+    shifts.set(key, [...(shifts.get(key) ?? []), r]);
+  }
+  for (const rows of shifts.values()) {
+    const snap = snapshotToSave(
+      scheduleSnapshotForShift(rows, planning, rows[0].machineCode, rows[0].shiftId, now),
+      null,
+    );
+    if (!snap) continue;
+    for (const r of rows) {
+      if (r.slotIndex !== 0) continue;
+      r.schedulePlan = snap.plan;
+      if (snap.pct != null) r.scheduleAttain = snap.pct;
     }
   }
   return recs;
