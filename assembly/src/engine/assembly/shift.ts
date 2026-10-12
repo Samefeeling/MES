@@ -26,11 +26,7 @@
  * quarter of an hour of it was spent standing at the urn.
  */
 
-import {
-  PRODUCTIVE_HOURS_PER_PERSON,
-  SHIFT_END_HOUR,
-  SHIFT_START_HOUR,
-} from '@/domain/assembly';
+import { SHIFT_END_HOUR, SHIFT_START_HOUR } from '@/domain/assembly';
 import { startOfDay } from './dates';
 
 const MS_PER_MINUTE = 60_000;
@@ -239,10 +235,6 @@ export function breakAt(instant: Date): ShiftBreak | null {
   const minute = minuteOfDay(instant);
   return BREAKS.find((rest) => minute >= rest.from && minute < rest.to) ?? null;
 }
-
-/** `PRODUCTIVE_HOURS_PER_PERSON` in the same minutes this module counts. */
-export const PRODUCTIVE_HOURS_AS_MINUTES =
-  PRODUCTIVE_HOURS_PER_PERSON * MINUTES_PER_HOUR;
 
 /**
  * Minutes of *work* between two instants — the clock time between them, less

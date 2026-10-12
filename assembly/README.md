@@ -329,15 +329,6 @@ Configure via `.env.local` (see `.env.example`):
 There used to be a third source that read the PMD master workbook directly;
 it was not in use and has been removed, along with the `xlsx` package.
 
-Whichever is configured, **Load orders** and **Load JobMaterialReq** in the
-header parse files picked from disk through exactly the same code — the
-quickest way to check an export against the board without wiring up Graph auth.
-Two buttons because the two files answer different questions and are checked
-separately: what to build, and what has to finish first. Either picker still
-takes either file — which is which is decided by the header row, not the file
-name, so a copy saved out of Excel lands in the right parser — but picking the
-wrong one says so rather than loading it silently.
-
 **Did the links land?** The header carries the answer: *N orders wait on
 another*, and hovering it lists every one of them — `ASM8020 (UPL) waits on
 ASM8019 · SFA3S-STRM-SS`. It reads *No order links* when nothing waits, which
@@ -641,7 +632,7 @@ domain  →  lib  →  engine  →  store  →  features (UI)
   `csv/PlanningCsvSource`). Every parser is lenient and reports what it
   could not read as a warning rather than failing the load.
 - **`engine/`** — pure, unit-tested functions. Shared: `materialAvailability`,
-  `materialExplosion`, `netRequirements`, `indexes`. Assembly:
+  `materialExplosion`, `indexes`. Assembly:
   `assembly/{duration,dates,release,board,workload,dependencies}`, plus
   `assembly/{attendance,stockAllocation,routing}`. `routing` works out the
   operations a UPL-SSS or UPL-Gluing order passes through — foaming, sewing,

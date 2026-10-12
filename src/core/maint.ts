@@ -9,7 +9,7 @@
 // on the press as well.
 
 import type { DieMaintenanceRequest, MachineMaster, MachinePmEvent } from '../types';
-import { MACHINE_ASSET_TO_CODE, machineCodeForAsset } from './die';
+import { MACHINE_ASSET_TO_CODE, machineCodeForAsset, normaliseAsset } from './die';
 
 const DAY_MS = 86_400_000;
 
@@ -32,8 +32,6 @@ function pressRank(code: string): number {
 /** Mango's own name for each press, for a press nothing else names. */
 const PRESS_ASSET = new Map(MACHINE_ASSET_TO_CODE.map(([asset, code]) => [code, asset]));
 export const pressAssetName = (code: string): string => PRESS_ASSET.get(code) ?? code;
-
-export const normaliseAsset = (s: string): string => s.trim().replace(/\s+/g, ' ').toUpperCase();
 
 /**
  * The press an equipment name is, or ''. The registered name first

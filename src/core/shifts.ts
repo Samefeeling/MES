@@ -112,11 +112,6 @@ export function slotClock(shiftId: string, slotIndex: number): string {
   return `${hhmm(r.start)}–${hhmm(r.end)}`;
 }
 
-/** "Slot 6/16 · 09:00–09:30" — modal header (§8.2). */
-export function slotLabel(shiftId: string, slotIndex: number): string {
-  return `Slot ${slotIndex + 1}/${SLOTS_PER_SHIFT} · ${slotClock(shiftId, slotIndex)}`;
-}
-
 /**
  * The shift active at `now`, accounting for Night belonging to the previous
  * calendar day when the clock is past midnight (§2.3).

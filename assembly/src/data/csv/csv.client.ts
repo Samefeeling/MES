@@ -3,10 +3,9 @@
  * `JobMaterialReq.csv` (material demand and dependencies), and optional
  * `OnHandInventory.csv` (calculated on-hand quantity by part).
  *
- * Three paths each, in order: a file the planner picked from disk (works
- * today, with no auth), a plain URL (an export dropped on a share or served by
- * the task schedule), and finally Microsoft Graph if the file lives in the
- * SharePoint document library.
+ * Two paths each, in order: a plain URL (an export dropped on a share or
+ * served by the task schedule), else the SharePoint document library through
+ * the session or Microsoft Graph.
  *
  * The orders are required; the material links are not. A site that has not
  * exported them simply gets a board where every order stands on its own.
@@ -18,67 +17,6 @@ import {
   graphFile,
   type SharePointConfig,
 } from '@/data/sharepoint/site';
-
-let manualCsv: string | null = null;
-let manualJobMaterialCsv: string | null = null;
-let manualOnHandInventoryCsv: string | null = null;
-let manualProductLinesJson: string | null = null;
-let manualPoDetailCsv: string | null = null;
-let manualPressCsv: string | null = null;
-
-/** Stash a PMD `Planning.csv` the user picked from disk. */
-export function setManualPressCsv(text: string): void {
-  manualPressCsv = text;
-}
-
-export function getManualPressCsv(): string | null {
-  return manualPressCsv;
-}
-
-/** Stash a `PODetail.csv` the user picked from disk. */
-export function setManualPoDetailCsv(text: string): void {
-  manualPoDetailCsv = text;
-}
-
-export function getManualPoDetailCsv(): string | null {
-  return manualPoDetailCsv;
-}
-
-/** Stash a `Planning1.csv` the user picked from disk. */
-export function setManualCsv(text: string): void {
-  manualCsv = text;
-}
-
-export function getManualCsv(): string | null {
-  return manualCsv;
-}
-
-/** Stash a `JobMaterialReq.csv` the user picked from disk. */
-export function setManualJobMaterialCsv(text: string): void {
-  manualJobMaterialCsv = text;
-}
-
-export function getManualJobMaterialCsv(): string | null {
-  return manualJobMaterialCsv;
-}
-
-/** Stash an `OnHandInventory.csv` the user picked from disk. */
-export function setManualOnHandInventoryCsv(text: string): void {
-  manualOnHandInventoryCsv = text;
-}
-
-export function getManualOnHandInventoryCsv(): string | null {
-  return manualOnHandInventoryCsv;
-}
-
-/** Stash a `product-lines.v3.json` the user picked from disk. */
-export function setManualProductLinesJson(text: string): void {
-  manualProductLinesJson = text;
-}
-
-export function getManualProductLinesJson(): string | null {
-  return manualProductLinesJson;
-}
 
 export interface CsvSourceConfig {
   /** Direct URL to the order export, if it is served over plain HTTP. */
@@ -167,14 +105,10 @@ export async function fetchPlanningCsv(
   cfg: CsvSourceConfig,
   sp: SharePointConfig,
 ): Promise<Result<string, string>> {
-  const manual = getManualCsv();
-  if (manual !== null) return ok(manual);
-
   const viaGraph = !cfg.url;
   if (viaGraph && !sp.siteUrl) {
     return err(
-      'No Planning1.csv available: set VITE_PLANNING_CSV_URL, configure ' +
-        'SharePoint, or load the file by hand.',
+      'No Planning1.csv available: set VITE_PLANNING_CSV_URL or configure SharePoint.',
     );
   }
   if (viaGraph && !sp.token && sp.authMode !== 'session') {
@@ -194,9 +128,6 @@ export async function fetchJobMaterialCsv(
   cfg: CsvSourceConfig,
   sp: SharePointConfig,
 ): Promise<Result<string | null, string>> {
-  const manual = getManualJobMaterialCsv();
-  if (manual !== null) return ok(manual);
-
   if (cfg.linksUrl) return fetchText('JobMaterialReq.csv', cfg.linksUrl, null);
   if (!cfg.linksFilePath || !sp.siteUrl || (!sp.token && sp.authMode !== 'session')) return ok(null);
 
@@ -218,9 +149,6 @@ export async function fetchProductLinesJson(
   cfg: CsvSourceConfig,
   sp: SharePointConfig,
 ): Promise<Result<string | null, string>> {
-  const manual = getManualProductLinesJson();
-  if (manual !== null) return ok(manual);
-
   if (cfg.productLinesUrl) return fetchText('product-lines.v3.json', cfg.productLinesUrl, null);
   if (!cfg.productLinesFilePath || !sp.siteUrl || (!sp.token && sp.authMode !== 'session')) return ok(null);
 
@@ -233,13 +161,11 @@ export async function fetchProductLinesJson(
   );
 }
 
-/** Optional on-hand export, using the same manual/URL/Graph order as the other files. */
+/** Optional on-hand export, read the same way as the other files. */
 export async function fetchOnHandInventoryCsv(
   cfg: CsvSourceConfig,
   sp: SharePointConfig,
 ): Promise<Result<string | null, string>> {
-  const manual = getManualOnHandInventoryCsv();
-  if (manual !== null) return ok(manual);
   if (cfg.inventoryUrl) return fetchText('OnHandInventory.csv', cfg.inventoryUrl, null);
   if (!cfg.inventoryFilePath || !sp.siteUrl || (!sp.token && sp.authMode !== 'session')) return ok(null);
   return fetchText(
@@ -258,8 +184,6 @@ export async function fetchPoDetailCsv(
   cfg: CsvSourceConfig,
   sp: SharePointConfig,
 ): Promise<Result<string | null, string>> {
-  const manual = getManualPoDetailCsv();
-  if (manual !== null) return ok(manual);
   if (cfg.poDetailUrl) return fetchText('PODetail.csv', cfg.poDetailUrl, null);
   if (!cfg.poDetailFilePath || !sp.siteUrl || (!sp.token && sp.authMode !== 'session')) return ok(null);
   return fetchText(
@@ -278,8 +202,6 @@ export async function fetchPressPlanningCsv(
   cfg: CsvSourceConfig,
   sp: SharePointConfig,
 ): Promise<Result<string | null, string>> {
-  const manual = getManualPressCsv();
-  if (manual !== null) return ok(manual);
   if (cfg.pressUrl) return fetchText('Planning.csv', cfg.pressUrl, null);
   if (!cfg.pressFilePath || !sp.siteUrl || (!sp.token && sp.authMode !== 'session')) return ok(null);
   return fetchText(

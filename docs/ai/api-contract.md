@@ -23,7 +23,6 @@ interface PmdDataLayer {
   // Production (hot path)
   listProduction(filter: ProductionFilter): Promise<ProductionRecord[]>
   upsertProductionRecord(record: ProductionRecord): Promise<ProductionRecord>
-  deleteProductionRecord(id: number): Promise<void>
   lockShift(machineCode, shiftId, supervisor, operator): Promise<void>
   unlockShift(machineCode, shiftId): Promise<void>
 

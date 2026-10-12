@@ -1009,6 +1009,10 @@ async function compute(now = new Date()): Promise<void> {
   // than dropping the floor chart.
   const fromKey = dateKey(from);
   const toKey = dateKey(to);
+  // Ask SharePoint for the period only. Without the range every press read
+  // its whole history on each period change, and that grows every shift.
+  // inRange below still trims to the exact window (or the 3 shifts).
+  const shiftRange = { shiftIdFrom: `${fromKey}-`, shiftIdTo: `${toKey}-￿` };
   const paretoMachines = ['', ...S!.machines.map((m) => m.machineCode)];
   const [planning, perMachineRead, dieColorList, rejectParetoBy, downtimeParetoBy] =
     await Promise.all([
@@ -1019,7 +1023,7 @@ async function compute(now = new Date()): Promise<void> {
       Promise.all(
         S!.machines.map((m) =>
           dalRef
-            .listProduction({ machineCode: m.machineCode })
+            .listProduction({ machineCode: m.machineCode, ...shiftRange })
             .then((p) => p.filter((r) => inRange(r, from, to, shiftIds)))
             .catch((err) => {
               recordError(`Production ${m.machineCode}`, err);
@@ -3540,32 +3544,6 @@ const REJECT_STATUS_ORDER: Array<StatusCode | 'Unknown'> = [
   'O',
   'Unknown',
 ];
-
-/** Quantifies the action signal without inventing a plant-specific alarm
- *  threshold. Managers see the raw R quantity and its share, then decide
- *  whether the volume warrants Take Action. */
-export function rejectActionContext(slice: ParetoSlice): {
-  runningQty: number;
-  startupQty: number;
-  unknownQty: number;
-  statusTotal: number;
-  runningPct: number | null;
-} {
-  const runningQty = slice.byStatus?.R ?? 0;
-  const startupQty = slice.byStatus?.S ?? 0;
-  const unknownQty = slice.byStatus?.Unknown ?? 0;
-  const statusTotal = Object.values(slice.byStatus ?? {}).reduce(
-    (sum, qty) => sum + (Number(qty) || 0),
-    0,
-  );
-  return {
-    runningQty,
-    startupQty,
-    unknownQty,
-    statusTotal,
-    runningPct: statusTotal > 0 ? Math.round((runningQty / statusTotal) * 100) : null,
-  };
-}
 
 function renderRejectStatusBadges(slice: ParetoSlice): string {
   const badges = REJECT_STATUS_ORDER.flatMap((code) => {

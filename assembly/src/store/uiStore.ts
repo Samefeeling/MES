@@ -127,17 +127,6 @@ export const COLUMN_LIMITS: Record<ColumnKey, { min: number; max: number }> = {
   team: { min: 96, max: 460 },
 };
 
-/** CSS custom property carrying each column's width to the stylesheet. */
-export const COLUMN_VAR: Record<ColumnKey, string> = {
-  order: '--order-w',
-  qty: '--qty-w',
-  hours: '--hours-w',
-  start: '--start-w',
-  due: '--due-w',
-  expect: '--expect-w',
-  team: '--team-w',
-};
-
 const clamp = (n: number, lo: number, hi: number): number =>
   Math.min(hi, Math.max(lo, Math.round(n)));
 

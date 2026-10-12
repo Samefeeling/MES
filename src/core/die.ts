@@ -20,6 +20,7 @@ import type {
   ToolStatus,
 } from '../types';
 import { cavityGross } from './metrics';
+import { dateKey } from './shifts';
 
 // ---------------------------------------------------------------------
 // Die-change condition report (PMD_DieChangeLog). The component keys ARE
@@ -599,13 +600,11 @@ export interface DieTrendBucket {
   rejByStatus: Record<string, number>;
 }
 
-function addDays(day: string, n: number): string {
+/** A local calendar day `n` days on from `day` (YYYY-MM-DD). */
+export function addDays(day: string, n: number): string {
   const d = new Date(`${day}T00:00:00`);
   d.setDate(d.getDate() + n);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${dd}`;
+  return dateKey(d);
 }
 
 /**
@@ -984,7 +983,7 @@ export const MACHINE_ASSET_TO_CODE: ReadonlyArray<readonly [string, string]> = [
   ['AU - Batt-2 BattenFeld Injection Molding Machine (1000T Modified Screw & Barrel)', 'Batt2'],
 ];
 
-const normaliseAsset = (s: string): string => s.trim().replace(/\s+/g, ' ').toUpperCase();
+export const normaliseAsset = (s: string): string => s.trim().replace(/\s+/g, ' ').toUpperCase();
 
 const ASSET_CODE_LOOKUP = new Map<string, string>(
   MACHINE_ASSET_TO_CODE.map(([asset, code]) => [normaliseAsset(asset), code]),

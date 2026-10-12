@@ -431,39 +431,7 @@ describe('goodByJob', () => {
   });
 });
 
-describe('MemoryDataLayer die maintenance lifecycle', () => {
-  it('creates, advances and closes a request', async () => {
-    const dal = new MemoryDataLayer();
-    const created = await dal.createDieMaintenance({
-      dieNumber: 'DIE-0091',
-      status: 'open',
-      maintType: 'cleaning',
-      priority: 'high',
-      description: 'Vents blocked',
-      contact: 'Maintenance Team',
-      requestedBy: 'Christopher King',
-      machineCode: 'HS',
-      jobNumber: '',
-      mangoTicket: '',
-    });
-    expect(created.id).toBeGreaterThan(0);
-    expect(created.createdAt).not.toBe('');
-
-    await dal.updateDieMaintenance(created.id, { status: 'in-progress' });
-    await dal.updateDieMaintenance(created.id, {
-      status: 'done',
-      closedAt: '2026-07-10T05:00:00Z',
-      mangoTicket: 'MAN-31234',
-    });
-    const all = await dal.listDieMaintenance();
-    const row = all.find((r) => r.id === created.id)!;
-    expect(row.status).toBe('done');
-    expect(row.closedAt).toBe('2026-07-10T05:00:00Z');
-    expect(row.mangoTicket).toBe('MAN-31234');
-    // Newest first.
-    expect(all[0].id).toBe(created.id);
-  });
-
+describe('MemoryDataLayer die maintenance', () => {
   it('seeds the die master so the demo tab has data', async () => {
     const dal = new MemoryDataLayer();
     const colors = await dal.listProductDieColors();

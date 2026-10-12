@@ -138,11 +138,6 @@ function releasedOnlyInputs(
   };
 }
 
-/** Every order in the export — the plan that is saved and synced. */
-export function useAssemblyGantt(): AssemblyGanttView | null {
-  return useAssemblyBoards(false).board;
-}
-
 /**
  * Re-derive the board with extra crew on top of the current plan.
  *

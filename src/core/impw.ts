@@ -1,6 +1,6 @@
 import { BD_FREE_TEXT_CODE, bdLabelFor, bdOwnerFor } from './breakdown';
 import { parseHandover } from './handover';
-import { shiftBounds, SLOTS_PER_SHIFT, SLOT_MINUTES } from './shifts';
+import { SLOTS_PER_SHIFT, SLOT_MINUTES } from './shifts';
 
 // Mango IMPW (Improvement Workflow) — the company's improvement / corrective
 // action register. Mango is the system of record (same management decision
@@ -506,19 +506,6 @@ export interface ImpwRaiser {
   email?: string;
 }
 
-/**
- * When the occurrence began, as Mango wants it: ISO 8601 UTC.
- *
- * The shift's own start instant, not midnight — a Night shift's ShiftId
- * carries its START date, and dating it 00:00 would put a 23:00 Tuesday
- * stoppage on Tuesday morning. shiftBounds() already knows every shift's
- * wall-clock start, and Date#toISOString converts local → UTC, so a site in
- * NZDT files the same instant Mango would have recorded itself.
- */
-export function impwOccurrenceIso(shiftId: string): string {
-  return shiftBounds(shiftId)?.start.toISOString() ?? '';
-}
-
 /** '2026-08-26-Night' → '26/08/2026'. The form's own format, for the human
  *  paste-in path and for showing the date back on screen. */
 export function impwOccurrenceDate(shiftId: string): string {
@@ -530,32 +517,6 @@ export function impwOccurrenceDate(shiftId: string): string {
 function shiftCodeOf(shiftId: string): string {
   const m = /-(Day|Afternoon|Night)$/.exec(shiftId);
   return m ? m[1] : '';
-}
-
-/**
- * One department name out of a taxonomy owner. The taxonomy writes an
- * escalation path ("Operator → Maintenance") or a shared job ("Maintenance
- * / Setter"); Mango's Department is a single existing name, so take the end
- * of an escalation (whoever it lands on) and the front of a shared job (the
- * primary owner).
- */
-export function impwDepartmentOf(owner: string): string {
-  const escalated = owner.split('→').pop() ?? '';
-  return (escalated.split('/')[0] ?? '').trim();
-}
-
-/**
- * Department suggestion. A breakdown has a real answer — the taxonomy names
- * who owns each cause, and the biggest cause of the shift is the one to
- * route to. Quality-only findings go to the department that ran the press.
- */
-export function suggestImpwDepartment(f: ImpwFinding): string {
-  if (f.triggers.includes('breakdown') && f.slice.breakdowns.length) {
-    const worst = [...f.slice.breakdowns].sort((a, b) => b.hours - a.hours)[0];
-    const dept = impwDepartmentOf(worst.owner);
-    if (dept) return dept;
-  }
-  return 'Production';
 }
 
 /** The distinct materials a shift ran, first appearance first. A job with no

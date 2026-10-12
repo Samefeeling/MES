@@ -87,9 +87,9 @@ const LISTS = {
   rejectCategories: 'PMD_RejectCategories',
   breakdownMaster: 'PMD_BreakdownMaster',
   productDieColor: 'PMD_ProductDieColor',
-  /** Die maintenance work requests (Trace → 🛠 Die Management). Created
-   *  automatically by ensureDieMaintenanceList() on the first write if
-   *  the tenant doesn't have it yet — see that method for the schema. */
+  /** Legacy die maintenance requests, read only when the Mango report
+   *  mirror (MangoWorkOrders.csv) is missing. Work orders are raised in
+   *  Mango now, so the app never writes here. */
   dieMaintenance: 'PMD_DieMaintenance',
   /** Die asset register (one row per physical tool) — created by hand on
    *  the site (2026-07). Read-only from the app; the toolroom maintains
@@ -790,18 +790,42 @@ export class SharePointDataLayer implements PmdDataLayer {
     return (await res.json()) as T;
   }
 
-  private async getAllItems<T = Record<string, unknown>>(list: string, qs = ''): Promise<T[]> {
-    const out: T[] = [];
-    let url = `${this.listUrl(list)}/items?$top=5000${qs ? '&' + qs : ''}`;
-    while (url) {
-      const env = await this.getJson<{ d: { results: T[]; __next?: string } }>(url);
-      out.push(...env.d.results);
-      url = env.d.__next ?? '';
-    }
-    return out;
+  private getAllItems<T = Record<string, unknown>>(list: string, qs = ''): Promise<T[]> {
+    const first = `${this.listUrl(list)}/items?$top=5000${qs ? '&' + qs : ''}`;
+    return this.shareRead(first, async () => {
+      const out: T[] = [];
+      let url = first;
+      while (url) {
+        const env = await this.getJson<{ d: { results: T[]; __next?: string } }>(url);
+        out.push(...env.d.results);
+        url = env.d.__next ?? '';
+      }
+      return out;
+    }).then((rows) => rows.slice());
+  }
+
+  /** Reads on the wire, by URL. Two callers asking for the same thing at
+   *  once (the roster and its supervisors; the Die and Machine halves of
+   *  the Mango report) share one request. A read only joins one that
+   *  started after the last write, so nothing reads back stale data, and
+   *  each is dropped once it settles: this is not a cache. */
+  private readsInFlight = new Map<string, { writes: number; read: Promise<unknown> }>();
+  private writesStarted = 0;
+
+  private shareRead<T>(key: string, read: () => Promise<T>): Promise<T> {
+    const hit = this.readsInFlight.get(key);
+    if (hit && hit.writes === this.writesStarted) return hit.read as Promise<T>;
+    const entry = { writes: this.writesStarted, read: read() };
+    const settled = (): void => {
+      if (this.readsInFlight.get(key) === entry) this.readsInFlight.delete(key);
+    };
+    entry.read.then(settled, settled);
+    this.readsInFlight.set(key, entry);
+    return entry.read as Promise<T>;
   }
 
   private async post(url: string, body: unknown, ifMatch?: string): Promise<Response> {
+    this.writesStarted++;
     const digest = await this.getDigest();
     const res = await fetch(url, {
       method: 'POST',
@@ -847,6 +871,7 @@ export class SharePointDataLayer implements PmdDataLayer {
   }
 
   private async del(url: string): Promise<void> {
+    this.writesStarted++;
     const digest = await this.getDigest();
     const res = await fetch(url, {
       method: 'POST',
@@ -889,6 +914,7 @@ export class SharePointDataLayer implements PmdDataLayer {
   ): Promise<boolean> {
     const id = await this.findProductionRowId(machineCode, shiftId, jobNumber);
     if (id == null) return false; // not signed off yet — caller keeps it queued
+    this.writesStarted++;
     const digest = await this.getDigest();
     // Attachment upload is raw binary, NOT the JSON post() path — SP
     // stores the request body verbatim as the file.
@@ -1706,72 +1732,6 @@ export class SharePointDataLayer implements PmdDataLayer {
 
   // ---- die maintenance (PMD_DieMaintenance) ---------------------------
 
-  /** Set true once the list is known to exist so the ensure probe runs at
-   *  most once per page load. */
-  private dieMaintEnsured = false;
-  /** Which source the last listDieMaintenance() served (diagnostics). */
-  private woSource: 'mango-csv' | 'list' | null = null;
-
-  workOrderSource(): 'mango-csv' | 'list' | null {
-    return this.woSource;
-  }
-
-  /**
-   * Make sure PMD_DieMaintenance exists, creating it (plus its columns)
-   * when it doesn't. Auto-provisioning keeps the Die Management tab
-   * usable without an IT round-trip: the first person to raise a request
-   * creates the list under their own permissions (site members can add
-   * lists on this site). Schema — Title holds the DieNumber; Status /
-   * MaintType / Priority / Contact / RequestedBy / Machine / JobNumber /
-   * MangoTicket / ClosedAt are single-line text; Description is a note.
-   * If creation is denied (read-only visitor), the caller's write fails
-   * with SharePoint's own message, which the UI surfaces in a toast.
-   */
-  private async ensureDieMaintenanceList(): Promise<void> {
-    if (this.dieMaintEnsured) return;
-    try {
-      await this.getJson(`${this.listUrl(LISTS.dieMaintenance)}?$select=Title`);
-      this.dieMaintEnsured = true;
-      return;
-    } catch {
-      /* not there — create it */
-    }
-    await this.post(`${this.siteUrl}/_api/web/lists`, {
-      __metadata: { type: 'SP.List' },
-      Title: LISTS.dieMaintenance,
-      BaseTemplate: 100, // generic list
-      Description:
-        'Die / tool maintenance work requests raised from the PMD Operator Sheet (Trace → Die Management). MangoTicket links to the Mango system.',
-    });
-    const F = this.F.dieMaintenance;
-    const textFields = [
-      F.status,
-      F.maintType,
-      F.priority,
-      F.contact,
-      F.requestedBy,
-      F.machine,
-      F.jobNumber,
-      F.mangoTicket,
-      F.closedAt,
-    ];
-    const fieldsUrl = `${this.listUrl(LISTS.dieMaintenance)}/fields`;
-    for (const title of textFields) {
-      await this.post(fieldsUrl, {
-        __metadata: { type: 'SP.Field' },
-        Title: title,
-        FieldTypeKind: 2, // single-line text
-      });
-    }
-    await this.post(fieldsUrl, {
-      __metadata: { type: 'SP.Field' },
-      Title: F.description,
-      FieldTypeKind: 3, // multi-line note
-    });
-    console.info('[pmd] PMD_DieMaintenance list created (auto-provisioned)');
-    this.dieMaintEnsured = true;
-  }
-
   async listDieMaintenance(): Promise<DieMaintenanceRequest[]> {
     // Mango CSV report (preferred when configured): Mango is the system
     // of record for work orders; scripts/sync-mango-csv.mjs downloads its
@@ -1801,7 +1761,6 @@ export class SharePointDataLayer implements PmdDataLayer {
             'Sample row dueDate:', JSON.stringify(orders[0]?.dueDate),
           );
         }
-        this.woSource = 'mango-csv';
         return orders;
       } catch (e) {
         console.warn(
@@ -1809,11 +1768,9 @@ export class SharePointDataLayer implements PmdDataLayer {
         );
       }
     }
-    this.woSource = 'list';
     const F = this.F.dieMaintenance;
     try {
       const rows = await this.getAllItems<Record<string, unknown>>(LISTS.dieMaintenance);
-      this.dieMaintEnsured = true;
       return rows
         .map((r) => ({
           id: getId(r),
@@ -2001,48 +1958,6 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
   }
 
-  async createDieMaintenance(
-    req: Omit<DieMaintenanceRequest, 'id' | 'createdAt' | 'closedAt'>,
-  ): Promise<DieMaintenanceRequest> {
-    await this.ensureDieMaintenanceList();
-    const F = this.F.dieMaintenance;
-    const res = await this.post(`${this.listUrl(LISTS.dieMaintenance)}/items`, {
-      __metadata: { type: await this.itemType(LISTS.dieMaintenance) },
-      [F.dieNumber]: req.dieNumber,
-      [F.status]: req.status,
-      [F.maintType]: req.maintType,
-      [F.priority]: req.priority,
-      [F.description]: req.description,
-      [F.contact]: req.contact,
-      [F.requestedBy]: req.requestedBy,
-      [F.machine]: req.machineCode,
-      [F.jobNumber]: req.jobNumber,
-      [F.mangoTicket]: req.mangoTicket,
-      [F.closedAt]: '',
-    });
-    const j = (await res.json()) as { d?: { ID?: number; Id?: number; Created?: string } };
-    return {
-      ...req,
-      id: j.d?.ID ?? j.d?.Id ?? 0,
-      createdAt: j.d?.Created ?? new Date().toISOString(),
-      closedAt: '',
-    };
-  }
-
-  async updateDieMaintenance(
-    id: number,
-    patch: Partial<Pick<DieMaintenanceRequest, 'status' | 'mangoTicket' | 'closedAt'>>,
-  ): Promise<void> {
-    const F = this.F.dieMaintenance;
-    const body: Record<string, unknown> = {
-      __metadata: { type: await this.itemType(LISTS.dieMaintenance) },
-    };
-    if (patch.status) body[F.status] = patch.status;
-    if (patch.mangoTicket !== undefined) body[F.mangoTicket] = patch.mangoTicket;
-    if (patch.closedAt !== undefined) body[F.closedAt] = patch.closedAt;
-    await this.post(`${this.listUrl(LISTS.dieMaintenance)}/items(${id})`, body, '*');
-  }
-
   async listPlanning(_filter: PlanningFilter): Promise<PlanningOrder[]> {
     // ERP orders + supervisor-added manual orders, ERP winning on a job
     // number collision (once Epicor picks the job up, its row takes over).
@@ -2101,7 +2016,11 @@ export class SharePointDataLayer implements PmdDataLayer {
    *  normalise once, encode per segment so '/' separators survive,
    *  double single quotes for OData. Cache-busts per request so OneDrive
    *  uploads show up immediately. */
-  private async fetchSiteFile(rawPath: string, what: string): Promise<string> {
+  private fetchSiteFile(rawPath: string, what: string): Promise<string> {
+    return this.shareRead(`file:${rawPath}`, () => this.readSiteFile(rawPath, what));
+  }
+
+  private async readSiteFile(rawPath: string, what: string): Promise<string> {
     const serverRelative = toServerRelativePath(rawPath);
     const encodedPath = serverRelative
       .split('/')
@@ -2248,9 +2167,6 @@ export class SharePointDataLayer implements PmdDataLayer {
    */
   async listRejectPareto(filter: ParetoFilter): Promise<ParetoSlice[]> {
     const F = this.F.rejects;
-    const parts: string[] = [this.dateLowerBound(F.date, filter.from)];
-    if (filter.machineCode) parts.push(`${F.machine} eq '${odataString(filter.machineCode)}'`);
-    const qs = '$filter=' + encodeURIComponent(parts.join(' and '));
     // Start the shared catalogue read alongside the event read. If the
     // catalogue is temporarily unavailable the Pareto still shows the real
     // PMD_Rejects counts, labelled by code rather than by a false R/S status.
@@ -2260,7 +2176,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     });
     let rows: Record<string, unknown>[] = [];
     try {
-      rows = await this.getAllItems(LISTS.rejects, qs);
+      rows = await this.paretoRows(LISTS.rejects, F.date, filter);
     } catch (e) {
       console.warn('[pmd] listRejectPareto: PMD_Rejects read failed', e);
       throw e;
@@ -2279,6 +2195,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       Partial<Record<StatusCode | 'Unknown', number>>
     >();
     for (const r of rows) {
+      if (!onMachine(r[F.machine], filter.machineCode)) continue;
       const day = dateOnly(r[F.date]);
       if (day < filter.from || day > filter.to) continue;
       const code = str(r[F.rejectCode]).trim().toUpperCase();
@@ -2316,18 +2233,16 @@ export class SharePointDataLayer implements PmdDataLayer {
    */
   async listDowntimePareto(filter: ParetoFilter): Promise<ParetoSlice[]> {
     const F = this.F.breakdown;
-    const parts: string[] = [this.dateLowerBound(F.date, filter.from)];
-    if (filter.machineCode) parts.push(`${F.machine} eq '${odataString(filter.machineCode)}'`);
-    const qs = '$filter=' + encodeURIComponent(parts.join(' and '));
     let rows: Record<string, unknown>[] = [];
     try {
-      rows = await this.getAllItems(LISTS.breakdown, qs);
+      rows = await this.paretoRows(LISTS.breakdown, F.date, filter);
     } catch (e) {
       console.warn('[pmd] listDowntimePareto: PMD_BreakDownlog read failed', e);
       throw e;
     }
     const hrs = new Map<string, number>();
     for (const r of rows) {
+      if (!onMachine(r[F.machine], filter.machineCode)) continue;
       const day = dateOnly(r[F.date]);
       if (day < filter.from || day > filter.to) continue;
       const code = str(r[F.bdCode]).trim();
@@ -2339,13 +2254,17 @@ export class SharePointDataLayer implements PmdDataLayer {
     return paretoFrom(hrs, (code) => bdLabelFor(code) || code);
   }
 
-  /** Lower-bound clause on a DateTime column, one calendar day before
-   *  `fromDate` to cushion the noon-UTC marker / legacy local-start rows.
-   *  The exact day window is then enforced client-side via dateOnly. */
-  private dateLowerBound(field: string, fromDate: string): string {
-    const d = new Date(`${fromDate}T00:00:00Z`);
-    d.setUTCDate(d.getUTCDate() - 1);
-    return `${field} ge datetime'${d.toISOString()}'`;
+  /**
+   * PMD_Rejects / PMD_BreakDownlog rows for a Pareto window, every press.
+   * The KPI page asks for the floor and each press over the same window at
+   * once; every call reads the same URL, so they share one request (see
+   * shareRead) and each picks its press out of the rows, instead of one
+   * more read per press. The window is a day wider on each side to catch
+   * the noon-UTC marker and legacy local-start rows; callers keep the
+   * exact days via dateOnly.
+   */
+  private paretoRows(list: string, field: string, filter: ParetoFilter): Promise<Record<string, unknown>[]> {
+    return this.getAllItems(list, '$filter=' + encodeURIComponent(shiftDateRange(filter.from, field, filter.to)));
   }
 
   // ---- production (header / events) ----------------------------------
@@ -2934,6 +2853,10 @@ export class SharePointDataLayer implements PmdDataLayer {
       parts.push(`(${shiftDateRange(filter.shiftId, F.date)})`);
       if (shift) parts.push(`${F.shift} eq '${odataString(shift)}'`);
     }
+    // A ranged read (Maint's 7–90 days) used to pull every reject ever
+    // logged; only the rows the headers can join to are wanted.
+    const fromTo = shiftDateRangeFromTo(filter.shiftIdFrom, filter.shiftIdTo, F.date);
+    if (fromTo) parts.push(fromTo);
     const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
     const rows = await this.getAllItems<Record<string, unknown>>(LISTS.rejects, qs);
     const out = new Map<string, RejectRow[]>();
@@ -3232,19 +3155,6 @@ export class SharePointDataLayer implements PmdDataLayer {
     this.dirtyTuples.add(key);
     this.persistEditCache();
     return stored;
-  }
-
-  async deleteProductionRecord(id: number): Promise<void> {
-    // Remove from cache. Persisted rows are deleted only via shift unlock.
-    let mutated = false;
-    for (const [key, list] of this.editCache) {
-      const filtered = list.filter((r) => r.id !== id);
-      if (filtered.length !== list.length) {
-        this.editCache.set(key, filtered);
-        mutated = true;
-      }
-    }
-    if (mutated) this.persistEditCache();
   }
 
   /**
@@ -5074,6 +4984,12 @@ function shiftDateRangeFromTo(
     new Date(`${to!.slice(0, 10)}T00:00:00.000Z`).getTime() + 2 * 86_400_000,
   ).toISOString();
   return `${fDate} le datetime'${hi}'`;
+}
+
+/** A row's press against an optional filter press, as SharePoint's own
+ *  `eq` compares them: case-insensitive. No press means every press. */
+function onMachine(cell: unknown, machineCode: string | undefined): boolean {
+  return !machineCode || str(cell).trim().toUpperCase() === machineCode.trim().toUpperCase();
 }
 
 function productionMatches(r: ProductionRecord, f: ProductionFilter): boolean {

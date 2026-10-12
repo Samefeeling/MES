@@ -248,7 +248,7 @@ const WO_SOON_DAYS = 7;
 function woDueLevel(
   dieNumber: string,
 ): { level: 'overdue' | 'soon' | 'ok'; due: string; days: number } | null {
-  const today = isoDay(new Date());
+  const today = dateKey(new Date());
   const dues = requestsFor(dieNumber)
     .filter((r) => r.status !== 'done')
     .map((r) => (r.dueDate ?? '').slice(0, 10))
@@ -276,7 +276,7 @@ export function activeMaintenanceRequests(
  *  derived from its promised completion date. Due today is not overdue. */
 export function isWorkOrderOverdue(
   request: Pick<DieMaintenanceRequest, 'status' | 'dueDate'>,
-  today = isoDay(new Date()),
+  today = dateKey(new Date()),
 ): boolean {
   const due = (request.dueDate ?? '').slice(0, 10);
   return request.status !== 'done' && due !== '' && due < today;
@@ -316,7 +316,7 @@ export function woRow(r: DieMaintenanceRequest): string {
   // work compares the actual closure date with the promise so history says
   // whether it was completed on time or late (never "OVERDUE" today).
   const dueIso = (r.dueDate ?? '').slice(0, 10);
-  const overdue = !closed && dueIso !== '' && dueIso < isoDay(new Date());
+  const overdue = !closed && dueIso !== '' && dueIso < dateKey(new Date());
   const completion =
     closed && dueIso
       ? ` · ${closed > dueIso ? 'Completed late' : 'Completed on time'}`
@@ -394,7 +394,7 @@ function openWorkOrders(dieNumber: string): void {
  *  the default blue link. Tapping opens that press's work-order history. */
 function machineCellHtml(d: DieAgg): string {
   if (d.machines.length === 0) return '<span class="die-tstat none">—</span>';
-  const today = isoDay(new Date());
+  const today = dateKey(new Date());
   return d.machines
     .map((mc) => {
       const level = machineWorkOrderLevel(mc, S!.machineRequests, today);
@@ -490,7 +490,7 @@ function availableFor(d: DieAgg): { html: string; sort: string | null } {
         html: '<span class="die-avail maint" title="In service — no return date on record (PMD_DieMaster Available column is empty; this row predates the mandatory date). Tap the Status badge and re-pick In service to record it">In maint</span>',
         sort: '9998-99-99',
       };
-    const late = back < isoDay(new Date());
+    const late = back < dateKey(new Date());
     return {
       html: `<span class="die-avail${late ? ' late' : ''}" title="Return date confirmed by the maintenance team (PMD_DieMaster Available)${late ? ' — DATE HAS PASSED, chase the toolroom' : ''}">${late ? '⚠ ' : ''}${escapeHtml(back.slice(5))}</span>`,
       sort: back,
@@ -531,13 +531,6 @@ function toolStatusBadge(dieNumber: string, editable = false): string {
   return `<span class="${cls}" title="${escapeHtml(src)}">${inner}</span>`;
 }
 
-function isoDay(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
 /** Present a stored ISO date (yyyy-mm-dd) in the site's dd/mm/yyyy form —
  *  the same format Mango's "To be completed by" column uses, so the
  *  operators read dates the way the source file writes them. '' passes
@@ -567,8 +560,8 @@ export async function mountDieTab(
     machinePm: [],
     machineMaster: new Map(),
     machineSync: '',
-    from: isoDay(from),
-    to: isoDay(to),
+    from: dateKey(from),
+    to: dateKey(to),
     filter: '',
     statusFilter: '',
     sortKey: 'smart',
@@ -624,8 +617,8 @@ async function loadAll(): Promise<void> {
   // cannot change the action.
   const serviceFromDate = new Date();
   serviceFromDate.setDate(serviceFromDate.getDate() - 399);
-  const serviceFrom = isoDay(serviceFromDate);
-  const serviceTo = isoDay(new Date());
+  const serviceFrom = dateKey(serviceFromDate);
+  const serviceTo = dateKey(new Date());
   const serviceCountersPromise: Promise<ProductionCounterRecord[]> =
     dalRef.listProductionCounters
       ? safe(
@@ -745,7 +738,7 @@ async function saveMachineFigures(state: DieState): Promise<void> {
     if (S === state) render();
     return;
   }
-  const today = isoDay(new Date());
+  const today = dateKey(new Date());
   const rows = buildMachineRows(
     state.machinePm,
     state.machineRequests,
@@ -785,7 +778,7 @@ async function setMachineStatus(code: string, status: ToolStatus, availableDate?
   const m = S?.machineMaster.get(machineKey(code));
   if (!m || !dalRef.updateMachineMaster) return;
   const patch: Partial<Omit<MachineMaster, 'machineCode'>> = { status };
-  if (status === 'serviced') patch.lastService = isoDay(new Date());
+  if (status === 'serviced') patch.lastService = dateKey(new Date());
   if (availableDate !== undefined) patch.availableDate = availableDate;
   const prev = { status: m.status, lastService: m.lastService, availableDate: m.availableDate };
   Object.assign(m, patch);
@@ -830,7 +823,7 @@ function render(): void {
 
 /** What the Machine and Team pages read from the shared load. */
 function maintCtx(): MaintCtx {
-  const today = isoDay(new Date());
+  const today = dateKey(new Date());
   return {
     today,
     pm: S!.machinePm,
@@ -1206,7 +1199,7 @@ function renderDieTable(): string {
  *  legacy PMD_DieMaintenance rows on tenants without the sync yet). */
 function renderRequests(): string {
   const note = `<p class="die-req-note">Work orders live in <b>Mango</b> — raise and progress them there; this list is a read-only mirror refreshed by the report sync.</p>`;
-  const today = isoDay(new Date());
+  const today = dateKey(new Date());
   const active = activeMaintenanceRequests(S!.requests);
   if (active.length === 0) {
     return `<div class="die-req-section" data-die-wo-section><h3>🛠 Maintenance Work Orders ${mangoLink('Mango', 'sm')}</h3>
@@ -1335,7 +1328,7 @@ async function applyToolStatus(
   // LastServiceDate is a calendar-day reset, not an instant. Stamp
   // midnight UTC of the Sydney/browser day so an early-morning
   // service does not become "yesterday" when ISO is sliced.
-  if (st === 'serviced') patch.lastServiceDate = `${isoDay(changedAt)}T00:00:00.000Z`;
+  if (st === 'serviced') patch.lastServiceDate = `${dateKey(changedAt)}T00:00:00.000Z`;
   if (availableDate !== undefined) patch.availableDate = availableDate;
   const prev = {
     toolStatus: m.toolStatus,
@@ -1373,7 +1366,7 @@ function openInServiceStep(dieNumber: string): void {
   const m = masterFor(dieNumber);
   if (!m || !dalRef.updateDieMaster) return;
   const meta = TOOL_STATUS_META['in-service'];
-  const today = isoDay(new Date());
+  const today = dateKey(new Date());
   const cur = (m.availableDate ?? '').slice(0, 10);
   openModal(`<div class="die-st-pick die-insvc">
     <div class="kpi-trace-head">

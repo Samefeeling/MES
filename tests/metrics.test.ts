@@ -3,8 +3,6 @@ import {
   aggregate,
   cavityGross,
   countSetupEvents,
-  efficiencyColor,
-  scrapColor,
 } from '../src/core/metrics';
 import { partsCoRun, ordersCoRun } from '../src/core/corun';
 import { rec } from './helpers';
@@ -232,21 +230,6 @@ describe('ordersCoRun', () => {
     expect(ordersCoRun(yes('D9'), yes('D9'), -5, -5)).toBe(false);
   });
 });
-
-describe('KPI thresholds (§4.2)', () => {
-  it('OEE colors', () => {
-    expect(efficiencyColor(90)).toBe('green');
-    expect(efficiencyColor(80)).toBe('amber');
-    expect(efficiencyColor(60)).toBe('red');
-    expect(efficiencyColor(null)).toBe('gray');
-  });
-  it('scrap colors', () => {
-    expect(scrapColor(1)).toBe('green');
-    expect(scrapColor(3)).toBe('amber');
-    expect(scrapColor(7)).toBe('red');
-  });
-});
-
 
 describe('complete KPI tuples', () => {
   it('counts the same job on two machines separately', () => {

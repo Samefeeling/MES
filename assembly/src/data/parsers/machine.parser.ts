@@ -1,16 +1,12 @@
 /**
- * Machines from the `resource` sheet (col 5) + the `makeMachine` factory that
- * turns a raw line label into a domain `Machine`. Shared by the mock source.
+ * The `makeMachine` factory that turns a raw line label into a domain
+ * `Machine`. Shared by the mock source.
  */
 
 import { MachineId } from '@/domain/ids';
 import type { WorkCenter } from '@/domain/types';
-import { MACHINE_ORDER, isVisibleMachine } from '@/domain/constants';
+import { MACHINE_ORDER } from '@/domain/constants';
 import { LINES } from '@/domain/assembly';
-import { asStr, dataRows, type Sheet } from './cell';
-import type { ParseOutcome } from './types';
-
-const RESOURCE_MACHINE_COL = 5;
 
 /** Strip "(1000TB)", "PMD Machine" and surrounding whitespace from a label. */
 function cleanName(raw: string): string {
@@ -53,17 +49,4 @@ export function assemblyWorkCenters(): WorkCenter[] {
     short: l.name,
     sortIndex: l.sortIndex,
   }));
-}
-
-/** Visible moulding lines from the routing sheet, plus the assembly areas. */
-export function parseWorkCenters(resource: Sheet): ParseOutcome<WorkCenter> {
-  const byId = new Map<string, WorkCenter>();
-  for (const row of dataRows(resource)) {
-    const raw = asStr(row[RESOURCE_MACHINE_COL]);
-    if (!raw) continue;
-    const m = makeMachine(raw);
-    if (isVisibleMachine(m.id) && !byId.has(m.id)) byId.set(m.id, m);
-  }
-  const machines = [...byId.values()].sort((a, b) => a.sortIndex - b.sortIndex);
-  return { values: [...machines, ...assemblyWorkCenters()], errors: [] };
 }

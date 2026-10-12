@@ -3,7 +3,6 @@
  * in `engine/assembly/dates.ts`.
  */
 
-export const MS_PER_HOUR = 3_600_000;
 export const MS_PER_DAY = 86_400_000;
 
 export const maxDate = (a: Date, b: Date): Date => (a > b ? a : b);

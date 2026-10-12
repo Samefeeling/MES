@@ -47,14 +47,6 @@ export interface WorkCenter {
   sortIndex: number;
 }
 
-/** Shift pattern controlling how many wall-clock hours a day a line runs. */
-export interface ShiftPattern {
-  /** Key used in the workbook, e.g. "3shift". */
-  id: string;
-  /** Running hours per calendar day (3shift → 24, 1shift → 8). */
-  hoursPerDay: number;
-}
-
 /**
  * Routing / capability row: which machine can run a part, with which die,
  * colour and insert. Sourced from the `resource` sheet

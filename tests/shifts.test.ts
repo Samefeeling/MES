@@ -7,7 +7,6 @@ import {
   shiftBounds,
   slotTimeRange,
   slotClock,
-  slotLabel,
   currentShift,
   currentSlotIndex,
   SLOTS_PER_SHIFT,
@@ -72,9 +71,8 @@ describe('slots (§5.1)', () => {
     expect(slotTimeRange('2026-05-15-Day', 16)).toBeNull();
   });
 
-  it('formats slot clock and label', () => {
+  it('formats slot clock', () => {
     expect(slotClock('2026-05-15-Day', 4)).toBe('09:00–09:30');
-    expect(slotLabel('2026-05-15-Day', 4)).toBe('Slot 5/16 · 09:00–09:30');
   });
 });
 

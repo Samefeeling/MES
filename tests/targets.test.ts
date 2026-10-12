@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { hoursUnavailableFor, shiftTargetFor } from '../src/core/targets';
-import { expectedShiftOutputFromTargets } from '../src/core/standards';
 import { order, rec } from './helpers';
 
 // The operator-stated Shift Target rule:
@@ -117,55 +116,5 @@ describe('shiftTargetFor with consumed hours', () => {
     expect(shiftTargetFor(o, 500, 8)).toBe(0);
     expect(shiftTargetFor(o, 500, 12)).toBe(0);
     expect(shiftTargetFor(o, 1000, -3)).toBe(160);
-  });
-});
-
-describe('expectedShiftOutputFromTargets — KPI Output vs plan / vs Plan', () => {
-  // The floor-stated recurrence, straight from the recorded shift:
-  //   expected = JobLeft(prev, finishes inside the shift)
-  //            + (8h − prev hours − changeover) ÷ ProdStandard(next)
-  it('sums per-order Shift Targets across a two-order shift with a die change', () => {
-    const recs = [
-      // Order A: 2 h of running, finished (Job Left at start = 40).
-      rec({ jobNumber: 'A', slotIndex: 0, statusCode: 'R', jobLeft: 40, cycleTime: 0.05 }),
-      rec({ jobNumber: 'A', slotIndex: 1, statusCode: 'R' }),
-      rec({ jobNumber: 'A', slotIndex: 2, statusCode: 'R' }),
-      rec({ jobNumber: 'A', slotIndex: 3, statusCode: 'R' }),
-      // Die change logged on its own pseudo-order: 1 h.
-      rec({ jobNumber: 'DC_A_B', slotIndex: 0, statusCode: '', jobLeft: 0 }),
-      rec({ jobNumber: 'DC_A_B', slotIndex: 4, statusCode: 'D' }),
-      rec({ jobNumber: 'DC_A_B', slotIndex: 5, statusCode: 'D' }),
-      // Order B: big job, runs out the shift.
-      rec({ jobNumber: 'B', slotIndex: 0, statusCode: '', jobLeft: 2000, cycleTime: 0.005 }),
-      rec({ jobNumber: 'B', slotIndex: 6, statusCode: 'R' }),
-    ];
-    // A: later orders held 1.5 h → capacity floor(6.5 / 0.05) = 130;
-    //    Job Left 40 < 130 → target 40 (the job finishes).
-    // B: (8 − 2 h prev order − 1 h changeover) = 5 h ÷ 0.005 = 1000 < 2000 → 1000.
-    expect(expectedShiftOutputFromTargets(recs, new Map())).toBe(1040);
-  });
-
-  it('falls back (null) when any demanded order lacks JobLeft or a cycle time', () => {
-    const missingJobLeft = [
-      rec({ jobNumber: 'A', slotIndex: 0, statusCode: 'R', cycleTime: 0.05 }),
-    ];
-    expect(expectedShiftOutputFromTargets(missingJobLeft, new Map())).toBeNull();
-    const missingCt = [
-      rec({ jobNumber: 'A', slotIndex: 0, statusCode: 'R', jobLeft: 500 }),
-    ];
-    expect(expectedShiftOutputFromTargets(missingCt, new Map())).toBeNull();
-  });
-
-  it('uses the planning cycle time when the row was signed without one', () => {
-    const recs = [rec({ jobNumber: 'A', slotIndex: 0, statusCode: 'R', jobLeft: 500 })];
-    expect(expectedShiftOutputFromTargets(recs, new Map([['A', 0.05]]))).toBe(160);
-  });
-
-  it('returns null when nothing was demanded (die-change-only shift / no rows)', () => {
-    expect(expectedShiftOutputFromTargets([], new Map())).toBeNull();
-    const dcOnly = [
-      rec({ jobNumber: 'DC_A_B', slotIndex: 0, statusCode: 'D', jobLeft: 0 }),
-    ];
-    expect(expectedShiftOutputFromTargets(dcOnly, new Map())).toBeNull();
   });
 });

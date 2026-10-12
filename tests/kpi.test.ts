@@ -6,7 +6,6 @@ import {
   isHotStampMachine,
   lastRunAt,
   paretoRelativeBarWidth,
-  rejectActionContext,
   rejectCell,
   REJECT_PER_SHIFT_MAX,
   sortHandoversNewest,
@@ -128,13 +127,6 @@ describe('KPI Reject Pareto labels', () => {
     expect(out[0].byShift).toEqual({ Day: 0, Afternoon: 2, Night: 13 });
     // Status is preserved as a separate analytical dimension.
     expect(out[0].byStatus).toEqual({ R: 12, S: 3 });
-    expect(rejectActionContext(out[0])).toEqual({
-      runningQty: 12,
-      startupQty: 3,
-      unknownQty: 0,
-      statusTotal: 15,
-      runningPct: 80,
-    });
   });
 
   it('falls back to RejectCode rather than exposing a status letter', () => {
@@ -143,22 +135,6 @@ describe('KPI Reject Pareto labels', () => {
       new Map(),
     );
     expect(out[0].label).toBe('D10');
-  });
-
-  it('distinguishes startup-only scrap from rejects recorded while Running', () => {
-    expect(
-      rejectActionContext({ code: 'D05', label: 'Short shot', value: 7, byStatus: { S: 7 } }),
-    ).toEqual({
-      runningQty: 0,
-      startupQty: 7,
-      unknownQty: 0,
-      statusTotal: 7,
-      runningPct: 0,
-    });
-    expect(
-      rejectActionContext({ code: 'D05', label: 'Short shot', value: 7, byStatus: { R: 7 } })
-        .runningPct,
-    ).toBe(100);
   });
 });
 

@@ -67,7 +67,6 @@ export class MemoryDataLayer implements PmdDataLayer {
   private dieMaintenance: DieMaintenanceRequest[];
   private dieChangeLogs: DieChangeLog[] = [];
   private nextDclId = 1;
-  private nextMaintId: number;
   private nextProdId: number;
   /** Tuples currently unlocked from a signed-off state (parity with the
    *  SharePoint DAL so the operator UI's force-load works in dev too). */
@@ -99,7 +98,6 @@ export class MemoryDataLayer implements PmdDataLayer {
     this.dieMaintenance = seedDieMaintenance(now);
     this.dieChangeLogs = seedDieChangeLogs(now);
     this.nextDclId = Math.max(0, ...this.dieChangeLogs.map((r) => r.id)) + 1;
-    this.nextMaintId = Math.max(0, ...this.dieMaintenance.map((r) => r.id)) + 1;
     this.nextProdId = Math.max(0, ...this.production.map((r) => r.id)) + 1;
   }
 
@@ -189,23 +187,6 @@ export class MemoryDataLayer implements PmdDataLayer {
     );
   }
 
-  async createDieMaintenance(
-    req: Omit<DieMaintenanceRequest, 'id' | 'createdAt' | 'closedAt'>,
-  ): Promise<DieMaintenanceRequest> {
-    const created: DieMaintenanceRequest = MemoryDataLayer.clone({
-      ...req,
-      id: this.nextMaintId++,
-      createdAt: new Date().toISOString(),
-      closedAt: '',
-    });
-    this.dieMaintenance.push(created);
-    return MemoryDataLayer.clone(created);
-  }
-
-  workOrderSource(): 'mango-csv' | 'list' | null {
-    return 'list';
-  }
-
   async listDieChangeLog(): Promise<DieChangeLog[]> {
     return MemoryDataLayer.clone(
       [...this.dieChangeLogs].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
@@ -243,17 +224,6 @@ export class MemoryDataLayer implements PmdDataLayer {
     });
     this.dieChangeLogs.push(created);
     return MemoryDataLayer.clone(created);
-  }
-
-  async updateDieMaintenance(
-    id: number,
-    patch: Partial<Pick<DieMaintenanceRequest, 'status' | 'mangoTicket' | 'closedAt'>>,
-  ): Promise<void> {
-    const row = this.dieMaintenance.find((r) => r.id === id);
-    if (!row) throw new Error(`Die maintenance request ${id} not found`);
-    if (patch.status) row.status = patch.status;
-    if (patch.mangoTicket !== undefined) row.mangoTicket = patch.mangoTicket;
-    if (patch.closedAt !== undefined) row.closedAt = patch.closedAt;
   }
 
   async createManualOrder(o: {
@@ -445,10 +415,6 @@ export class MemoryDataLayer implements PmdDataLayer {
     });
     this.production.push(created);
     return MemoryDataLayer.clone(created);
-  }
-
-  async deleteProductionRecord(id: number): Promise<void> {
-    this.production = this.production.filter((r) => r.id !== id);
   }
 
   /** Contract parity with the SharePoint backend: forget a tuple's

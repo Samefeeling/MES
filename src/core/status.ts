@@ -30,24 +30,7 @@ export const STATUS_MAP: Record<string, StatusDef> = Object.fromEntries(
   STATUSES.map((s) => [s.code, s]),
 );
 
-// §8.2 — regular orders show a green "Confirm running" plus 8 abnormal pills.
-export const ABNORMAL_CODES: StatusCode[] = ['B', 'C', 'D', 'I', 'M', 'O', 'P', 'S'];
-
-// §5.3 / §8.2 — Die Change orders hide Run and only offer these.
-export const DIE_CHANGE_CODES: StatusCode[] = ['B', 'C', 'D', 'I', 'M'];
-
 export function statusKind(code: StatusCode | ''): StatusKind | null {
   if (!code) return null;
   return STATUS_MAP[code]?.kind ?? null;
-}
-
-// §16 Appendix B — priority when a slot is ambiguous (lower number wins).
-const DECISION_PRIORITY: StatusCode[] = ['R', 'B', 'D', 'C', 'I', 'M', 'P', 'S', 'O'];
-
-/** Given the set of plausible codes for a slot, return the one to record. */
-export function resolveAmbiguousStatus(candidates: StatusCode[]): StatusCode | null {
-  for (const code of DECISION_PRIORITY) {
-    if (candidates.includes(code)) return code;
-  }
-  return null;
 }

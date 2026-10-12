@@ -92,21 +92,6 @@ export interface PmdDataLayer {
     machineCode: string,
     patch: Partial<Omit<MachineMaster, 'machineCode'>>,
   ): Promise<void>;
-  /** Persist a new request (id/createdAt assigned by the backend). */
-  createDieMaintenance?(
-    req: Omit<DieMaintenanceRequest, 'id' | 'createdAt' | 'closedAt'>,
-  ): Promise<DieMaintenanceRequest>;
-  /** Advance a request's lifecycle (open → in-progress → done) and/or
-   *  attach the Mango ticket id once it exists there. */
-  updateDieMaintenance?(
-    id: number,
-    patch: Partial<Pick<DieMaintenanceRequest, 'status' | 'mangoTicket' | 'closedAt'>>,
-  ): Promise<void>;
-  /** Which source the most recent listDieMaintenance() actually served:
-   *  'mango-csv' (report mirror) or 'list' (PMD_DieMaintenance
-   *  fallback); null before the first read. Diagnostics only — the Die
-   *  tab's chip uses it to say why history might be missing. */
-  workOrderSource?(): 'mango-csv' | 'list' | null;
 
   // Die change log (PMD_DieChangeLog) — the operator's die-change
   // condition report, popped up on the first D/I status of a tuple.
@@ -167,7 +152,6 @@ export interface PmdDataLayer {
    *  live/signed split (memory DAL). */
   listSignedOffProduction?(filter: ProductionFilter): Promise<ProductionRecord[]>;
   upsertProductionRecord(record: ProductionRecord): Promise<ProductionRecord>;
-  deleteProductionRecord(id: number): Promise<void>;
   /** Signs off records for a (machine, shift). When jobNumber is
    *  supplied, ONLY that job's records are signed off — other orders
    *  on the same shift (e.g. the next job an operator already started

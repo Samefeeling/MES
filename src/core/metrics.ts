@@ -240,19 +240,3 @@ export function countSetupEvents(records: ProductionRecord[]): {
   const of = (kind: ChangeoverKind): number => events.filter((e) => e.kind === kind).length;
   return { dieChanges: of('die'), colorChanges: of('color'), insertChanges: of('insert') };
 }
-
-// §4.2 KPI color thresholds.
-export function efficiencyColor(
-  efficiency: number | null,
-): 'green' | 'amber' | 'red' | 'gray' {
-  if (efficiency == null) return 'gray';
-  if (efficiency >= 85) return 'green';
-  if (efficiency >= 70) return 'amber';
-  return 'red';
-}
-
-export function scrapColor(pct: number): 'green' | 'amber' | 'red' {
-  if (pct < 2) return 'green';
-  if (pct <= 5) return 'amber';
-  return 'red';
-}

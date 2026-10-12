@@ -3236,3 +3236,79 @@ describe('PMD_Machine maintenance columns', () => {
     expect(spDay('')).toBe('');
   });
 });
+
+describe('SharePoint reads the KPI and Maint pages share', () => {
+  const site = 'https://example.sharepoint.com/sites/x';
+  const realFetch = globalThis.fetch;
+  afterAll(() => {
+    globalThis.fetch = realFetch;
+  });
+  /** Answers every list read with `rows`, and logs what was asked. */
+  const serve = (rows: (url: string) => unknown[]): string[] => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (input: unknown, init?: { method?: string }) => {
+      const url = decodeURIComponent(String(input));
+      urls.push(`${init?.method ?? 'GET'} ${url}`);
+      const body = url.includes('/contextinfo')
+        ? { d: { GetContextWebInformation: { FormDigestValue: 'x', FormDigestTimeoutSeconds: 1800 } } }
+        : { d: { results: rows(url) } };
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    return urls;
+  };
+
+  it('reads PMD_Rejects once for the floor and every press, and keeps each press to its own', async () => {
+    const MARK = '2026-06-20T00:00:00.000Z';
+    const urls = serve((url) =>
+      url.includes('PMD_Rejects')
+        ? [
+            { Title: '320T', Shift: 'Day', Date: MARK, RejectCode: 'D05', RejectCategory: 'R', RejectNumber: 5 },
+            { Title: '850t', Shift: 'Day', Date: MARK, RejectCode: 'D05', RejectCategory: 'R', RejectNumber: 2 },
+            { Title: '850T', Shift: 'Night', Date: MARK, RejectCode: 'D09', RejectCategory: 'S', RejectNumber: 4 },
+          ]
+        : [],
+    );
+    const dal = new SharePointDataLayer({ siteUrl: site });
+    const range = { from: '2026-06-20', to: '2026-06-20' };
+    const [floor, p320, p850] = await Promise.all([
+      dal.listRejectPareto(range),
+      dal.listRejectPareto({ ...range, machineCode: '320T' }),
+      dal.listRejectPareto({ ...range, machineCode: '850T' }),
+    ]);
+    expect(urls.filter((u) => u.includes("getbytitle('PMD_Rejects')"))).toHaveLength(1);
+    expect(urls.find((u) => u.includes('PMD_Rejects'))).toMatch(/Date ge datetime'.*' and Date le datetime'/);
+    expect(floor.reduce((n, s) => n + s.value, 0)).toBe(11);
+    expect(p320.map((s) => [s.code, s.value])).toEqual([['D05', 5]]);
+    // SharePoint's own `eq` ignores case, so '850t' is still the 850T.
+    expect(p850.map((s) => [s.code, s.value])).toEqual([['D09', 4], ['D05', 2]]);
+  });
+
+  it('asks PMD_Rejects for the date range a ranged production read covers, not every reject ever', async () => {
+    const urls = serve(() => []);
+    const dal = new SharePointDataLayer({ siteUrl: site });
+    await dal.listProduction({ shiftIdFrom: '2026-06-01-', shiftIdTo: '2026-06-30-￿' });
+    const rejects = urls.find((u) => u.includes("getbytitle('PMD_Rejects')"))!;
+    expect(rejects).toContain("Date ge datetime'2026-05-31T00:00:00.000Z'");
+    expect(rejects).toContain("Date le datetime'2026-07-02T00:00:00.000Z'");
+  });
+
+  it('shares a read already on the wire, but not one that started before a write', async () => {
+    const urls = serve((url) => (url.includes('PMD_Operator') ? [{ Title: 'Ann', Shift: 'Day', Supervisor: 'Sue' }] : []));
+    const dal = new SharePointDataLayer({ siteUrl: site });
+    const [ops, sups] = await Promise.all([dal.listOperators(), dal.listSupervisors()]);
+    expect(ops.map((o) => o.operatorName)).toEqual(['Ann']);
+    expect(sups.map((s) => s.operatorName)).toEqual(['Sue']);
+    expect(urls.filter((u) => u.includes("getbytitle('PMD_Operator')/items"))).toHaveLength(1);
+
+    // A write between two reads: the second read must go to SharePoint.
+    urls.length = 0;
+    const first = dal.listOperators();
+    const o = dal as unknown as { post: (url: string, body: unknown) => Promise<Response> };
+    await o.post(`${site}/_api/web/lists/getbytitle('PMD_Operator')/items`, { Title: 'Bob' });
+    await Promise.all([first, dal.listOperators()]);
+    expect(urls.filter((u) => u.startsWith("GET") && u.includes("getbytitle('PMD_Operator')/items"))).toHaveLength(2);
+    // Settled reads are not kept: a later read asks again.
+    await dal.listOperators();
+    expect(urls.filter((u) => u.startsWith("GET") && u.includes("getbytitle('PMD_Operator')/items"))).toHaveLength(3);
+  });
+});

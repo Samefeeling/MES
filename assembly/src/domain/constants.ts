@@ -4,15 +4,6 @@
  * The assembly department's own rules live in `domain/assembly.ts`.
  */
 
-import type { ShiftPattern } from './types';
-
-/** Shift patterns referenced by the workbook's `no of shift` column. */
-export const SHIFT_PATTERNS: Record<string, ShiftPattern> = {
-  '1shift': { id: '1shift', hoursPerDay: 8 },
-  '2shift': { id: '2shift', hoursPerDay: 16 },
-  '3shift': { id: '3shift', hoursPerDay: 24 },
-};
-
 /**
  * The moulding lines whose jobs are loaded. Kept in floor order. Assembly no
  * longer schedules moulding, but the PMD row on the board mirrors its plan, so

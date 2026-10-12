@@ -10,7 +10,7 @@
 //            work orders and PM, with whether it is due.
 
 import type { DieMaintenanceRequest, MachineMaster, MachinePmEvent, ToolStatus } from '../types';
-import { TOOL_STATUS_META } from '../core/die';
+import { TOOL_STATUS_META, addDays } from '../core/die';
 import {
   UNASSIGNED,
   bucketDone,
@@ -548,12 +548,6 @@ interface TeamState {
   pick: string | null;
 }
 let team: TeamState | null = null;
-
-const addDays = (day: string, n: number): string => {
-  const d = new Date(`${day}T00:00:00`);
-  d.setDate(d.getDate() + n);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
 
 function teamState(ctx: MaintCtx): TeamState {
   if (!team) {

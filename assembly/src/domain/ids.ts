@@ -27,15 +27,9 @@ const norm = (s: string): string => s.trim();
 export const WorkCenterId = (s: string): WorkCenterId =>
   norm(s).toUpperCase() as WorkCenterId;
 
-/**
- * A moulding machine is a work centre; an assembly area is a work centre.
- * These aliases keep each department's code reading in its own vocabulary
- * while staying interchangeable where the board treats them uniformly.
- */
+/** A moulding machine is a work centre, named in its own vocabulary. */
 export type MachineId = WorkCenterId;
 export const MachineId = WorkCenterId;
-export type AreaId = WorkCenterId;
-export const AreaId = WorkCenterId;
 
 /** A person on the assembly shift roster. */
 export type WorkerId = Brand<string, 'WorkerId'>;
@@ -53,6 +47,3 @@ export const JobId = (s: string): JobId => norm(s) as JobId;
 
 export const ColorId = (s: string): ColorId =>
   norm(s).toLowerCase() as ColorId;
-
-/** Read the raw string back out of any branded id. */
-export const idValue = (id: { toString(): string }): string => String(id);

@@ -377,12 +377,3 @@ export function scheduleTuplesForShift(
   }
   return out;
 }
-
-export function combineAttainment(values: ReadonlyArray<KpiAttainment>): KpiAttainment {
-  return result(
-    values.reduce((sum, value) => sum + value.actual, 0),
-    values.reduce((sum, value) => sum + value.expected, 0),
-    values.reduce((sum, value) => sum + value.covered, 0),
-    values.reduce((sum, value) => sum + value.total, 0),
-  );
-}

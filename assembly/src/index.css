@@ -922,7 +922,7 @@ button {
 }
 /*
  * Every frozen column's width is pushed in from the store as a custom property
- * (see COLUMN_VAR); the values here are only what the board falls back to if a
+ * (AssemblyGantt sets them inline); the values here are only what the board falls back to if a
  * variable is ever missing, and must match DEFAULT_COLUMN_WIDTHS.
  */
 .assy {

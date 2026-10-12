@@ -10,14 +10,12 @@ import {
   findImpwRecord,
   foldBreakdowns,
   impwApiPayload,
-  impwDepartmentOf,
   impwEndpoint,
   impwDraftIssues,
   impwFindingKey,
   impwIsoToFormDate,
   impwMangoDate,
   impwOccurrenceDate,
-  impwOccurrenceIso,
   impwParts,
   impwPartsSummary,
   impwPlainText,
@@ -30,7 +28,6 @@ import {
   parseImpwOptions,
   parseImpwRecord,
   parseImpwRecords,
-  suggestImpwDepartment,
   yieldPctOf,
   EMPTY_IMPW_SITE,
   EMPTY_OPTION,
@@ -354,35 +351,9 @@ describe('impwOccurrenceDate', () => {
   });
 });
 
-describe('impwOccurrenceIso', () => {
-  it("is the shift's own start instant, not midnight", () => {
-    // A Night shift's ShiftId carries its START date and it begins at 23:00,
-    // so dating it 00:00 would file a Tuesday-night stoppage as Tuesday
-    // morning. Compared against a locally-built Date so the assertion holds
-    // in any site timezone.
-    expect(impwOccurrenceIso('2026-08-26-Night')).toBe(
-      new Date(2026, 7, 26, 23, 0, 0, 0).toISOString(),
-    );
-    expect(impwOccurrenceIso('2026-08-26-Day')).toBe(
-      new Date(2026, 7, 26, 7, 0, 0, 0).toISOString(),
-    );
-    expect(impwOccurrenceIso('2026-08-26-Afternoon')).toBe(
-      new Date(2026, 7, 26, 15, 0, 0, 0).toISOString(),
-    );
-  });
-
-  it('is ISO 8601 UTC, which is what the API takes — not the form’s dd/mm/yyyy', () => {
-    expect(impwOccurrenceIso('2026-08-26-Day')).toMatch(
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
-    );
-  });
-
-  it('is empty for an unparseable id', () => {
-    expect(impwOccurrenceIso('rubbish')).toBe('');
-  });
-
+describe('impwIsoToFormDate', () => {
   it('converts back to the form’s date for the paste-in path', () => {
-    expect(impwIsoToFormDate(impwOccurrenceIso('2026-08-26-Night'))).toBe('26/08/2026');
+    expect(impwIsoToFormDate(new Date(2026, 7, 26, 23).toISOString())).toBe('26/08/2026');
     expect(impwIsoToFormDate('')).toBe('');
     expect(impwIsoToFormDate('not a date')).toBe('');
   });
@@ -467,33 +438,6 @@ describe('buildImpwDraft', () => {
     const d = buildImpwDraft(wordy, raiser, SITE);
     expect(d.improvementDetails.length).toBeLessThanOrEqual(4096);
     expect(overlongImpwFields(d)).toEqual([]);
-  });
-
-  it('reduces a taxonomy owner to one Mango department', () => {
-    // "Operator → Maintenance" is an escalation path and "Maintenance /
-    // Setter" a shared job; Mango's Department is one existing name.
-    expect(impwDepartmentOf('Operator → Maintenance')).toBe('Maintenance');
-    expect(impwDepartmentOf('Maintenance / Setter')).toBe('Maintenance');
-    expect(impwDepartmentOf('Setter / Maintenance')).toBe('Setter');
-    expect(impwDepartmentOf('Toolroom')).toBe('Toolroom');
-    expect(impwDepartmentOf('')).toBe('');
-  });
-
-  it('routes a breakdown to the department that owns the biggest cause', () => {
-    const f = finding({
-      breakdownHrs: 2.5,
-      breakdowns: [
-        { code: 'ELE-02', label: 'Motor fault', owner: 'Maintenance', hours: 0.5, notes: [] },
-        { code: 'TOOL-02', label: 'Mould damage', owner: 'Toolroom', hours: 2, notes: [] },
-      ],
-    });
-    expect(suggestImpwDepartment(f)).toBe('Toolroom');
-    expect(buildImpwDraft(f, raiser, SITE).department).toBe('Manufacturing - AU');
-  });
-
-  it('routes a quality-only finding to Production', () => {
-    const f = finding({ output: 900, reject: 100, yieldPct: 90 });
-    expect(suggestImpwDepartment(f)).toBe('Production');
   });
 
   it('names the press inside Details — the API has no Plant/Equipment to put it in', () => {

@@ -29,9 +29,9 @@ UI (src/ui/*)  ──depends-on──►  Core logic (src/core/*)   pure, tested
      │                          Domain types (src/types.ts)
      └──────────depends-on──►  DAL interface (src/dal/types.ts: PmdDataLayer)
                                        ▲
-                  ┌────────────────────┼─────────────────────┐
-              MemoryDataLayer    SharePointDataLayer    Sql/AzureDataLayer
-              (seeded mock)      (real, 11 SP lists)    (skeletons)
+                  ┌────────────────────┤
+              MemoryDataLayer    SharePointDataLayer
+              (seeded mock)      (real, SP lists)
 ```
 
 - **UI and core never import a concrete backend.** They only touch
@@ -46,16 +46,13 @@ UI (src/ui/*)  ──depends-on──►  Core logic (src/core/*)   pure, tested
 | `src/types.ts` | Domain model (Machine, ProductionRecord, RejectCategory, BdCode, …) |
 | `src/core/shifts.ts` | Shift/slot time math: 3 shifts × 16 slots; shiftId `YYYY-MM-DD-Day\|Afternoon\|Night` |
 | `src/core/status.ts` | 9 status codes (R/B/C/D/I/M/O/P/S) + colours + decision table |
-| `src/core/conflicts.ts` | Same-slot-two-orders conflict detection (§5.4) |
 | `src/core/metrics.ts` | OEE / scrap% / downtime / setup rollups + KPI colour thresholds |
-| `src/core/lock.ts` | Shift sign-off / lock rules |
 | `src/core/planning.ts` | Gantt in-slot region + auto die-change. **NOT** the Excel sync |
 | `src/core/breakdown.ts` | 11-category / 91-code breakdown taxonomy + helpers |
 | `src/dal/types.ts` | `PmdDataLayer` interface + filter types |
 | `src/dal/memory.ts` | In-memory backend (seeded), the contract reference |
 | `src/dal/seed.ts` | Demo/reference seed data |
 | `src/dal/sharepoint.ts` | **Real backend.** 11 lists, field map, save-on-signoff, Excel sync |
-| `src/dal/sql.ts`, `azure.ts` | Documented skeletons (throw NotImplemented) |
 | `src/dal/index.ts` | `createDataLayer(env)` factory (reads `VITE_BACKEND`) |
 | `src/ui/operator.ts` | The Excel-style operator sheet (biggest UI module) |
 | `src/ui/trace.ts` | `#/trace` traceability search view |
