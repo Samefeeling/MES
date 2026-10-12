@@ -40,7 +40,12 @@ import {
 } from '../core/breakdown';
 import { parseShiftPattern, shiftBounds, slotClock } from '../core/shifts';
 import { hoursUnavailableFor, shiftTargetFor } from '../core/targets';
-import { scheduleAdherenceForShift } from '../core/kpi-attainment';
+import {
+  savedScheduleSnapshot,
+  scheduleAdherenceForShift,
+  scheduleSnapshotForShift,
+  snapshotToSave,
+} from '../core/kpi-attainment';
 import { retroJobLeftFixes, sumGoodStartedBefore } from '../core/jobgood';
 import {
   DIE_COMPONENTS,
@@ -205,6 +210,14 @@ const DEFAULT_FIELDS = {
      *  reproduced on Friday. Optional column; stripRejectedFields tolerates
      *  absence. */
     vsPlan: 'VSPLAN',
+    /** The machine-shift's Schedule Adherence (%) and the pieces its plan
+     *  asked for, saved at sign-off — see scheduleSnapshotForShift. A
+     *  percentage alone cannot be summed over a week, so the plan rides
+     *  beside it. ScheduleAttain may be a plain number (87.5) or a number
+     *  column shown as a percentage (0.875); scheduleAttainAsFraction tells
+     *  which. Optional columns; stripRejectedFields tolerates absence. */
+    scheduleAttain: 'ScheduleAttain',
+    schedulePlan: 'SchedulePlan',
     countStart: 'CountStart',
     countEnd: 'CountEnd',
     /** Identical cavities on the die (pieces per press cycle). Actual
@@ -566,6 +579,10 @@ export class SharePointDataLayer implements PmdDataLayer {
   private dieMasterMaintenanceLevelReady: Promise<void> | null = null;
   private dieMasterNotesReady: Promise<void> | null = null;
   private dieMasterChangeOverMedianReady: Promise<void> | null = null;
+  /** PMD_Production.ScheduleAttain is a number column formatted as a
+   *  percentage (stores 0.875 for 87.5 %). Asked once per session (scheduleAttainAsFraction). */
+  private scheduleAttainFraction: Promise<boolean> | null = null;
+
   /**
    * Short-TTL `jobNumber → partNumber` map used by pushLiveSnapshot to
    * stamp PartNum onto every PMD_LiveStatus mirror. Without the cache,
@@ -2728,7 +2745,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (fromTo) parts.push(fromTo);
     const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
     const rows = await this.getAllItems(list, qs);
-    return rows.map((r) => ({
+    const headers: HeaderRow[] = rows.map((r) => ({
       id: getId(r),
       machineCode: str(r[F.machine]),
       date: dateOnly(r[F.date]),
@@ -2776,10 +2793,34 @@ export class SharePointDataLayer implements PmdDataLayer {
       jobLeft: F.jobLeft && r[F.jobLeft] != null ? num(r[F.jobLeft]) : -1,
       shiftTarget: F.shiftTarget && r[F.shiftTarget] != null ? num(r[F.shiftTarget]) : -1,
       vsPlan: F.vsPlan && r[F.vsPlan] != null ? num(r[F.vsPlan]) : -1,
+      scheduleAttain: F.scheduleAttain ? nullOrNum(r[F.scheduleAttain]) ?? -1 : -1,
+      schedulePlan: F.schedulePlan ? nullOrNum(r[F.schedulePlan]) ?? -1 : -1,
       plannedStart: F.plannedStart ? str(r[F.plannedStart]) : '',
       // Built-in SP column, always present in the verbose payload.
       modified: str(r['Modified']),
     }));
+    // A ScheduleAttain column shown as a percentage stores 0.875 for 87.5 %.
+    // Only asked once there is a value to scale.
+    if (headers.some((h) => h.scheduleAttain >= 0) && (await this.scheduleAttainAsFraction())) {
+      for (const h of headers) {
+        if (h.scheduleAttain >= 0) h.scheduleAttain = Math.round(h.scheduleAttain * 10_000) / 100;
+      }
+    }
+    return headers;
+  }
+
+  /** A missing column, or a tenant that does not expose the flag, reads as
+   *  a plain number. */
+  private scheduleAttainAsFraction(): Promise<boolean> {
+    const field = this.F.production.scheduleAttain;
+    if (!field) return Promise.resolve(false);
+    this.scheduleAttainFraction ??= this.getJson<{ d: { ShowAsPercentage?: boolean } }>(
+      `${this.listUrl(LISTS.production)}/fields/getbyinternalnameortitle('${odataString(field)}')`,
+    ).then(
+      (f) => f.d.ShowAsPercentage === true,
+      () => false,
+    );
+    return this.scheduleAttainFraction;
   }
 
   /**
@@ -3034,6 +3075,9 @@ export class SharePointDataLayer implements PmdDataLayer {
     // The shift's Schedule % as it stood at sign-off — 0 is a real answer
     // ("nothing scheduled was made"), so the sentinel is -1, not falsy.
     if (h.vsPlan >= 0) slots[0].vsPlan = h.vsPlan;
+    // Same sentinel rule: 0 is a real answer for both.
+    if (h.scheduleAttain >= 0) slots[0].scheduleAttain = h.scheduleAttain;
+    if (h.schedulePlan >= 0) slots[0].schedulePlan = h.schedulePlan;
     // Planned start denormalised at sign-off: ride the canonical slot so
     // KPI Schedule Adherence and a re-sign-off (cache-first) can read it
     // after Epicor drops the order from planning.
@@ -3263,10 +3307,12 @@ export class SharePointDataLayer implements PmdDataLayer {
     // to this device's cached tuples for the shift rather than aborting
     // the sign-off.
     let shiftRows: ProductionRecord[];
+    let shiftReadOk = true;
     try {
       shiftRows = await this.listProduction({ machineCode, shiftId });
     } catch (e) {
       console.warn('[pmd] shift-wide read for Shift Target failed, using cache:', e);
+      shiftReadOk = false;
       shiftRows = [];
       for (const [key, list] of this.editCache) {
         if (key.startsWith(`${machineCode}|${shiftId}|`)) shiftRows.push(...list);
@@ -3304,6 +3350,29 @@ export class SharePointDataLayer implements PmdDataLayer {
     } catch (e) {
       // A KPI snapshot must never cost somebody the shift they just signed.
       console.warn('[pmd] Schedule % snapshot failed, signing off without it:', e);
+    }
+    /*
+     * ScheduleAttain / SchedulePlan: the shift's Last 24h Schedule Adherence
+     * and the pieces its plan asked for, kept for the weeks after Planning.csv
+     * has moved on (scheduleSnapshotForShift). Credited from signed output
+     * only, as the KPI page credits it — the orders already signed plus the
+     * ones signing now.
+     *
+     * Not written when the shift could not be read: a snapshot that misses
+     * the orders signed before would be the newest one, and the one the KPI
+     * page believes. Nor when Planning.csv has dropped every order of the
+     * shift by now (a re-sign-off a week later): the plan saved the first time
+     * is kept, rather than one rebuilt from ShiftTargets.
+     */
+    let schedule: { pct: number | null; plan: number } | null = null;
+    if (shiftReadOk) {
+      try {
+        const signedAlready = shiftRows.filter((r) => r.locked && !signingJobs.has(r.jobNumber));
+        const snap = scheduleSnapshotForShift([...signedAlready, ...signedNow], orders, machineCode, shiftId, new Date());
+        schedule = snapshotToSave(snap, savedScheduleSnapshot(shiftRows));
+      } catch (e) {
+        console.warn('[pmd] ScheduleAttain snapshot failed, signing off without it:', e);
+      }
     }
 
     for (const slots of myTuples) {
@@ -3436,6 +3505,8 @@ export class SharePointDataLayer implements PmdDataLayer {
           plannedStart: plannedStartOf(job, slots),
           shiftTarget: shiftTargetSnap,
           vsPlan: vsPlanSnap,
+          scheduleAttain: schedule?.pct ?? null,
+          schedulePlan: schedule?.plan ?? null,
           timeline: agg.timeline,
           countStart: agg.countStart,
           countEnd: agg.countEnd,
@@ -3911,6 +3982,18 @@ export class SharePointDataLayer implements PmdDataLayer {
     // scheduled at all — there is no adherence to a plan that does not exist,
     // and writing 0 would read as "made none of what was planned".
     if (F.vsPlan && h.vsPlan != null) body[F.vsPlan] = h.vsPlan;
+    // Schedule snapshot (sign-off only). The plan is written whenever there
+    // is a snapshot — 0 says "nothing planned" — and the % only when there
+    // was a plan to adhere to.
+    if (F.schedulePlan && h.schedulePlan != null) body[F.schedulePlan] = h.schedulePlan;
+    if (F.scheduleAttain && h.scheduleAttain != null) {
+      body[F.scheduleAttain] = (await this.scheduleAttainAsFraction())
+        ? Math.round(h.scheduleAttain * 100) / 10_000
+        : h.scheduleAttain;
+    } else if (F.scheduleAttain && h.schedulePlan === 0) {
+      // A re-sign-off that now finds nothing planned clears the old %.
+      body[F.scheduleAttain] = null;
+    }
     if (F.downTime) body[F.downTime] = h.downTime;
     if (F.runTime) body[F.runTime] = h.runTime;
     if (F.handover) body[F.handover] = formatHandover(h.handover);
@@ -4052,6 +4135,8 @@ export class SharePointDataLayer implements PmdDataLayer {
       F.cycleTime,
       F.shiftTarget,
       F.vsPlan,
+      F.scheduleAttain,
+      F.schedulePlan,
       F.cavities,
       F.runTime,
       F.downTime,
@@ -5067,6 +5152,11 @@ interface HeaderRow {
    *  -1 when the column is absent or was never written. 0 is a real answer
    *  ("none of what was scheduled was made"), so the sentinel cannot be 0. */
   vsPlan: number;
+  /** The machine-shift's Schedule Adherence (%, already scaled from a
+   *  percentage-format column) and plan pieces saved at sign-off; -1 when
+   *  absent or never written. */
+  scheduleAttain: number;
+  schedulePlan: number;
   /** Shift Target frozen at job start from PMD_Production.ShiftTarget; -1
    *  when absent. Round-tripped onto the canonical record for Trace. */
   shiftTarget: number;
@@ -5100,6 +5190,10 @@ interface HeaderInput {
   /** The machine-shift's Schedule % at sign-off; null when nothing on the
    *  shift was scheduled, which is not the same as having made none of it. */
   vsPlan?: number | null;
+  /** The machine-shift's schedule snapshot (scheduleSnapshotForShift):
+   *  % and plan pieces. null/undefined skips the column write. */
+  scheduleAttain?: number | null;
+  schedulePlan?: number | null;
   /** Identical cavities on the die (pieces per cycle). 1 (or 0/undefined)
    *  leaves the column at its default; written when > 1. */
   cavities?: number;

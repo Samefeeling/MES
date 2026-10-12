@@ -1,4 +1,9 @@
-import { scheduleAdherenceForShift } from '../core/kpi-attainment';
+import {
+  savedScheduleSnapshot,
+  scheduleAdherenceForShift,
+  scheduleSnapshotForShift,
+  snapshotToSave,
+} from '../core/kpi-attainment';
 import { appendHandoverLine } from '../core/handover';
 import type {
   BdCode,
@@ -505,6 +510,18 @@ export class MemoryDataLayer implements PmdDataLayer {
       shiftId,
       new Date(),
     ).pct;
+    // ScheduleAttain / SchedulePlan, by the SharePoint DAL's rule: signed
+    // output only, and the first plan kept once Planning.csv has dropped the
+    // shift.
+    const signing = new Set(rows);
+    const snap = scheduleSnapshotForShift(
+      shiftRows.filter((r) => signing.has(r) || r.locked),
+      this.planning,
+      machineCode,
+      shiftId,
+      new Date(),
+    );
+    const schedule = snapshotToSave(snap, savedScheduleSnapshot(shiftRows));
 
     for (const r of rows) {
       r.locked = true;
@@ -514,6 +531,11 @@ export class MemoryDataLayer implements PmdDataLayer {
       r.supervisor = supervisor;
       if (operator) r.operator = operator;
       if (r.slotIndex === 0 && vsPlan != null) r.vsPlan = vsPlan;
+      if (r.slotIndex === 0 && schedule) {
+        r.schedulePlan = schedule.plan;
+        if (schedule.pct == null) delete r.scheduleAttain;
+        else r.scheduleAttain = schedule.pct;
+      }
       r.updatedAt = now;
       this.unlockedTuples.delete(`${r.machineCode}|${r.shiftId}|${r.jobNumber}`);
     }

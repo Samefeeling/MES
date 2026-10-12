@@ -18,14 +18,20 @@ export interface KpiAttainment {
   total: number;
 }
 
-export type KpiComparisonMode = 'schedule' | 'target';
+/**
+ * Where a period's Schedule Adherence comes from. Last 24h plans live from
+ * Planning.csv; a wider period reads the plan each shift saved when it was
+ * signed off (`savedScheduleTuples`), because Planning.csv is overwritten on
+ * every export and no longer holds last week's plan.
+ */
+export type KpiComparisonMode = 'schedule' | 'saved';
 
 export function kpiComparisonMode(period: string): KpiComparisonMode {
-  return period === 'last3' ? 'schedule' : 'target';
+  return period === 'last3' ? 'schedule' : 'saved';
 }
 
-export function kpiComparisonLabel(mode: KpiComparisonMode): 'Schedule Adherence' | 'Vs Target' {
-  return mode === 'schedule' ? 'Schedule Adherence' : 'Vs Target';
+export function kpiComparisonLabel(_mode: KpiComparisonMode): 'Schedule Adherence' {
+  return 'Schedule Adherence';
 }
 
 function result(actual: number, expected: number, covered: number, total: number): KpiAttainment {
@@ -153,8 +159,11 @@ export function scheduleAdherenceForShift(
  *   - `pending`      planned, but the shift has not been signed off yet. Kept
  *                    out of both sides until it is, so a shift still waiting
  *                    for its supervisor is not scored as a shift that never ran.
+ *   - `saved`        a whole machine-shift, from the plan its sign-off saved
+ *                    (ScheduleAttain / SchedulePlan). `jobNumber` is blank:
+ *                    the plan is the press's, not one order's.
  */
-export type AttainmentSource = 'schedule' | 'shiftTarget' | 'unscheduled' | 'pending';
+export type AttainmentSource = 'schedule' | 'shiftTarget' | 'unscheduled' | 'pending' | 'saved';
 
 export interface AttainmentTuple {
   machineCode: string;
@@ -169,6 +178,10 @@ export interface AttainmentTuple {
    *  capped, 0 when there is no plan to credit it against. */
   credited: number;
   source: AttainmentSource;
+  /** `saved` lines only: the order that made most of the shift's Good. A
+   *  shift's plan cannot be split between its orders after the fact, so this
+   *  is the order whose part category the whole line is counted under. */
+  leadJob?: string;
 }
 
 /** The comparison over a set of lines. Unscheduled and pending lines are
@@ -374,6 +387,217 @@ export function scheduleTuplesForShift(
     } else {
       out.push(...targetTuplesForRecords(group, true));
     }
+  }
+  return out;
+}
+
+/**
+ * The machine-shift's Schedule Adherence as its sign-off saves it to
+ * PMD_Production.ScheduleAttain (%) and SchedulePlan (pieces).
+ *
+ * Planning.csv is overwritten on every export, so last week's plan is gone by
+ * the time anybody asks for last week's adherence. Sign-off is the last moment
+ * the plan for the shift is still on hand: this is the Last 24h figure for the
+ * press and shift — the same `scheduleTuplesForShift` lines — frozen then.
+ *
+ * Both numbers are kept because a percentage alone cannot be added up: a 95%
+ * shift asked for 20 pieces and a 60% shift asked for 5,000 are not 77.5%
+ * together. Credited = ScheduleAttain × SchedulePlan, and a period is
+ * Σ credited ÷ Σ plan — the Last 24h formula over more shifts.
+ *
+ *   - `records` are the shift's signed rows as sign-off will leave them; only
+ *     signed output is credited, as on the KPI page.
+ *   - The shift is judged whole, up to its end, even when it is signed before
+ *     the end: a press that stops early has stopped against the full plan.
+ *   - `plan` 0 with `pct` null: nothing was planned on the press in the shift.
+ *     There is nothing to adhere to, which is not the same as 0%.
+ *   - `fromPlanning` false when Planning.csv no longer has the shift at all
+ *     (every order dropped by Epicor). Whatever was saved before is the
+ *     better record then, and `snapshotToSave` keeps it.
+ *   - `complete` false when a planned order has no rate, or a run order no
+ *     saved ShiftTarget, so a quantity is unknown — the KPI page shows "—"
+ *     for such a shift, and a guess saved now would outlive the gap.
+ */
+export interface ScheduleSnapshot {
+  /** % to two decimals, so Σ credited rebuilt from it is within 0.005% of a
+   *  piece per piece planned. */
+  pct: number | null;
+  plan: number;
+  fromPlanning: boolean;
+  complete: boolean;
+}
+
+export function scheduleSnapshotForShift(
+  records: ReadonlyArray<ProductionRecord>,
+  orders: ReadonlyArray<PlanningOrder>,
+  machineCode: string,
+  shiftId: string,
+  asOf: Date = new Date(),
+): ScheduleSnapshot | null {
+  const bounds = shiftBounds(shiftId);
+  if (!bounds) return null;
+  const judgedAt = new Date(Math.max(asOf.getTime(), bounds.end.getTime()));
+  const lines = scheduleTuplesForShift(records, orders, machineCode, shiftId, judgedAt);
+  const a = attainmentOfTuples(lines);
+  return {
+    pct: a.expected > 0 ? Math.round((a.actual / a.expected) * 10_000) / 100 : null,
+    plan: a.expected,
+    fromPlanning: lines.some((line) => line.source === 'schedule'),
+    complete: a.covered === a.total,
+  };
+}
+
+/**
+ * What a sign-off writes: the snapshot just worked out, unless Planning.csv
+ * has forgotten the shift and an earlier sign-off saved its plan — then that
+ * one again. null writes nothing.
+ */
+export function snapshotToSave(
+  snap: ScheduleSnapshot | null,
+  prior: SavedSnapshot | null,
+): { pct: number | null; plan: number } | null {
+  if (!snap) return null;
+  if (!snap.fromPlanning && prior?.plan != null) return { pct: prior.pct, plan: prior.plan };
+  return snap.complete ? { pct: snap.pct, plan: snap.plan } : null;
+}
+
+export interface SavedSnapshot {
+  pct: number | null;
+  /** null on a tenant without the SchedulePlan column. */
+  plan: number | null;
+}
+
+/**
+ * The snapshot a machine-shift carries. Each sign-off writes the whole
+ * shift's figure onto the orders it signs, so a shift whose orders were
+ * signed at different times holds several; the last one saw the most of the
+ * shift signed and is the answer. Signed together (or no Signoff time to
+ * tell them apart), the one crediting most is the later picture.
+ */
+export function savedScheduleSnapshot(records: ReadonlyArray<ProductionRecord>): SavedSnapshot | null {
+  let best: SavedSnapshot | null = null;
+  let bestAt = -Infinity;
+  let bestCredit = -Infinity;
+  for (const r of records) {
+    if (r.slotIndex !== 0) continue;
+    const pct = r.scheduleAttain != null && r.scheduleAttain >= 0 ? r.scheduleAttain : null;
+    const plan = r.schedulePlan != null && r.schedulePlan >= 0 ? r.schedulePlan : null;
+    if (pct == null && plan == null) continue;
+    const parsed = Date.parse(r.lockedAt);
+    const at = Number.isFinite(parsed) ? parsed : 0;
+    const credit = (pct ?? 0) * (plan ?? 1);
+    if (at > bestAt || (at === bestAt && credit > bestCredit)) {
+      best = { pct, plan };
+      bestAt = at;
+      bestCredit = credit;
+    }
+  }
+  return best;
+}
+
+/** True when some shift in the records saved its % but not its plan — the
+ *  SchedulePlan column was not there yet when it was signed. */
+export function savedPlanMissing(records: ReadonlyArray<ProductionRecord>): boolean {
+  for (const group of machineShifts(records).values()) {
+    const snap = savedScheduleSnapshot(group);
+    if (snap && snap.plan == null && snap.pct != null) return true;
+  }
+  return false;
+}
+
+function machineShifts(records: ReadonlyArray<ProductionRecord>): Map<string, ProductionRecord[]> {
+  const out = new Map<string, ProductionRecord[]>();
+  for (const r of records) {
+    const machine = r.machineCode.trim().toUpperCase();
+    if (!machine || !r.shiftId) continue;
+    const key = `${machine}|${r.shiftId}`;
+    const group = out.get(key) ?? [];
+    group.push(r);
+    out.set(key, group);
+  }
+  return out;
+}
+
+/** The order that made most of the shift's Good; the first order when none
+ *  made any. */
+function leadJobOf(group: ReadonlyArray<ProductionRecord>): string {
+  const byJob = new Map<string, ProductionRecord[]>();
+  for (const r of group) {
+    const job = r.jobNumber.trim();
+    if (!job || jobKey(job).startsWith('DC_')) continue;
+    const arr = byJob.get(job) ?? [];
+    arr.push(r);
+    byJob.set(job, arr);
+  }
+  let lead = '';
+  let most = -1;
+  for (const [job, recs] of byJob) {
+    const good = aggregate(recs).output;
+    if (good > most) {
+      lead = job;
+      most = good;
+    }
+  }
+  return lead;
+}
+
+/**
+ * Schedule Adherence lines for a period wider than the last 24 h, one per
+ * machine-shift, from the plans sign-off saved (`scheduleSnapshotForShift`).
+ *
+ * A shift with no snapshot — signed before the columns existed, or with an
+ * order Planning.csv could not price — falls back to the rule Last 24h uses
+ * for an order Epicor has dropped: the ShiftTarget saved when it ran, capped
+ * per order.
+ *
+ * `equalWeight` is for the time before SchedulePlan exists: with only a
+ * percentage per shift there is nothing to weight by, so every machine-shift
+ * becomes one line of 100 asked and its % credited — Σ credited ÷ Σ asked is
+ * then the plain mean of the shifts. It has to be all or nothing over
+ * everything summed together (`savedPlanMissing`), or pieces and shares
+ * would be added to each other.
+ *
+ * Shifts that ran nothing are not here: they have no row to have saved a plan
+ * on. A press planned for a shift and left idle shows in Last 24h, and drops
+ * out of a wider period.
+ */
+export function savedScheduleTuples(
+  records: ReadonlyArray<ProductionRecord>,
+  equalWeight = false,
+): AttainmentTuple[] {
+  const out: AttainmentTuple[] = [];
+  for (const group of machineShifts(records).values()) {
+    const machineCode = group[0].machineCode.trim();
+    const shiftId = group[0].shiftId;
+    const good = aggregate(group.filter((r) => !jobKey(r.jobNumber).startsWith('DC_'))).output;
+    const line = (planned: number | null, credited: number, source: AttainmentSource = 'saved'): AttainmentTuple => ({
+      machineCode, shiftId, jobNumber: '', planned, good, credited, source, leadJob: leadJobOf(group),
+    });
+    const snap = savedScheduleSnapshot(group);
+    if (snap && snap.plan != null) {
+      if (snap.plan === 0) {
+        if (good > 0) out.push(line(0, 0, 'unscheduled'));
+        continue;
+      }
+      if (snap.pct == null) out.push(line(null, 0));
+      else if (equalWeight) out.push(line(100, snap.pct));
+      else out.push(line(snap.plan, Math.round((snap.pct * snap.plan) / 100)));
+      continue;
+    }
+    if (snap && snap.pct != null) {
+      // % without its plan: only meaningful as an equal share.
+      out.push(equalWeight ? line(100, snap.pct) : line(null, 0));
+      continue;
+    }
+    const fallback = targetTuplesForRecords(group, true);
+    if (!equalWeight) {
+      out.push(...fallback);
+      continue;
+    }
+    const a = attainmentOfTuples(fallback);
+    if (a.total === 0) continue;
+    if (a.covered < a.total) out.push(line(null, 0, 'shiftTarget'));
+    else if (a.expected > 0) out.push(line(100, (a.actual / a.expected) * 100, 'shiftTarget'));
   }
   return out;
 }

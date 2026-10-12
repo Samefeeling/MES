@@ -1,19 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
+  attainmentOfTuples,
   kpiComparisonLabel,
   kpiComparisonMode,
+  savedPlanMissing,
+  savedScheduleTuples,
   scheduleAdherenceForShift,
+  scheduleSnapshotForShift,
+  snapshotToSave,
   targetAttainmentForRecords,
 } from '../src/core/kpi-attainment';
 import { order, rec } from './helpers';
 
 describe('KPI comparison modes', () => {
-  it('uses schedule only for Last 24h and target for wider/custom ranges', () => {
+  it('plans live for Last 24h and from the saved plans for wider/custom ranges', () => {
     expect(kpiComparisonMode('last3')).toBe('schedule');
     expect(kpiComparisonLabel(kpiComparisonMode('last3'))).toBe('Schedule Adherence');
     for (const period of ['thisWeek', 'lastWeek', 'thisMonth', 'lastMonth', 'custom']) {
-      expect(kpiComparisonMode(period)).toBe('target');
-      expect(kpiComparisonLabel(kpiComparisonMode(period))).toBe('Vs Target');
+      expect(kpiComparisonMode(period)).toBe('saved');
+      expect(kpiComparisonLabel(kpiComparisonMode(period))).toBe('Schedule Adherence');
     }
   });
 
@@ -209,5 +214,101 @@ describe('ShiftTarget as the KPI plan', () => {
       rec({ jobNumber: 'DC_1', slotIndex: 0, statusCode: 'D' }),
     ];
     expect(targetAttainmentForRecords(records, true)).toEqual({ actual: 0, expected: 0, pct: null, covered: 1, total: 1 });
+  });
+});
+
+describe('the schedule snapshot sign-off saves', () => {
+  // 07:00–11:00 at 25 an hour: 100 planned in the Day shift.
+  const plan = [order({ jobNumber: 'A', machineCode: '125T', qtyPerHr: 1 / 25 })];
+  const made = (good: number) => [rec({ jobNumber: 'A', slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: good })];
+
+  it('judges the whole shift, even when it is signed before the end', () => {
+    const snap = scheduleSnapshotForShift(made(50), plan, '125T', '2026-05-15-Day', new Date('2026-05-15T08:00:00'));
+    expect(snap).toEqual({ pct: 50, plan: 100, fromPlanning: true, complete: true });
+  });
+
+  it('saves a plan of 0 and no % when nothing was planned on the press', () => {
+    // The order is planned, on another press: output here is unscheduled.
+    const elsewhere = [order({ jobNumber: 'A', machineCode: '1600T', qtyPerHr: 1 / 25 })];
+    const snap = scheduleSnapshotForShift(made(50), elsewhere, '125T', '2026-05-15-Day', new Date('2026-05-16T00:00:00'));
+    expect(snapshotToSave(snap, null)).toEqual({ pct: null, plan: 0 });
+  });
+
+  it('saves nothing while a planned order has no rate', () => {
+    const noRate = [order({ jobNumber: 'A', machineCode: '125T', qtyPerHr: 0 })];
+    const snap = scheduleSnapshotForShift(made(50), noRate, '125T', '2026-05-15-Day', new Date('2026-05-16T00:00:00'));
+    expect(snap?.complete).toBe(false);
+    expect(snapshotToSave(snap, null)).toBeNull();
+  });
+
+  it('keeps the plan saved first once Planning.csv has dropped the shift', () => {
+    const snap = scheduleSnapshotForShift(made(50), [], '125T', '2026-05-15-Day', new Date('2026-05-22T00:00:00'));
+    expect(snapshotToSave(snap, { pct: 50, plan: 100 })).toEqual({ pct: 50, plan: 100 });
+  });
+});
+
+describe('Schedule Adherence over a wider period, from the saved plans', () => {
+  const shift = (
+    shiftId: string,
+    saved: { pct?: number; plan?: number; at?: string },
+    good = 0,
+    job = 'A',
+    extra: Partial<Parameters<typeof rec>[0]> = {},
+  ) =>
+    rec({
+      jobNumber: job,
+      shiftId,
+      slotIndex: 0,
+      statusCode: 'R',
+      countStart: 0,
+      countEnd: good,
+      locked: true,
+      lockedAt: saved.at ?? '',
+      scheduleAttain: saved.pct,
+      schedulePlan: saved.plan,
+      ...extra,
+    });
+
+  it('weights each shift by its plan: 95% of 20 and 60% of 5,000 are 60%, not 77.5%', () => {
+    const lines = savedScheduleTuples([
+      shift('2026-05-11-Day', { pct: 95, plan: 20 }, 19),
+      shift('2026-05-12-Day', { pct: 60, plan: 5000 }, 3000),
+    ]);
+    expect(attainmentOfTuples(lines)).toEqual({ actual: 3019, expected: 5020, pct: 60, covered: 2, total: 2 });
+    expect(lines.every((l) => l.source === 'saved' && l.jobNumber === '' && l.leadJob === 'A')).toBe(true);
+  });
+
+  it('reads one snapshot per machine-shift: the last one signed', () => {
+    const lines = savedScheduleTuples([
+      shift('2026-05-11-Day', { pct: 40, plan: 100, at: '2026-05-11T15:10:00Z' }, 40, 'A'),
+      shift('2026-05-11-Day', { pct: 70, plan: 100, at: '2026-05-11T15:40:00Z' }, 30, 'B'),
+    ]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ planned: 100, credited: 70, good: 70, leadJob: 'A' });
+  });
+
+  it('falls back to ShiftTarget, capped per order, for a shift signed before the plan was saved', () => {
+    const lines = savedScheduleTuples([
+      shift('2026-05-11-Day', {}, 120, 'A', { shiftTarget: 100 }),
+      shift('2026-05-12-Day', { pct: 50, plan: 100 }, 50),
+    ]);
+    expect(lines.map((l) => l.source).sort()).toEqual(['saved', 'shiftTarget']);
+    expect(attainmentOfTuples(lines).pct).toBe(75); // (100 + 50) ÷ 200
+  });
+
+  it('leaves output out of a shift that had nothing planned', () => {
+    const [line] = savedScheduleTuples([shift('2026-05-11-Day', { plan: 0 }, 80)]);
+    expect(line).toMatchObject({ source: 'unscheduled', good: 80 });
+    expect(attainmentOfTuples([line]).total).toBe(0);
+  });
+
+  it('averages the shifts when some saved a % and no plan', () => {
+    const recs = [
+      shift('2026-05-11-Day', { pct: 95 }, 19),
+      shift('2026-05-12-Day', { pct: 60, plan: 5000 }, 3000),
+    ];
+    expect(savedPlanMissing(recs)).toBe(true);
+    const lines = savedScheduleTuples(recs, true);
+    expect(attainmentOfTuples(lines).pct).toBe(78); // (95 + 60) ÷ 2 = 77.5
   });
 });

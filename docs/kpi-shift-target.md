@@ -7,9 +7,11 @@ the period:
   finished shift of the window, whether the press ran or not. A press
   planned for a shift and left idle (no crew, no material) shows 0 against
   its plan instead of dropping out of the denominator.
-- **Wider periods — Vs Target** use the saved PMD_Production.ShiftTarget of
-  what ran, grouped by Machine + Shift + Job. Planning.csv is overwritten on
-  every export, so it is not a historical plan source for weeks and months.
+- **Wider periods — Schedule Adherence from the saved plans.** Planning.csv
+  is overwritten on every export, so it is not a historical plan source for
+  weeks and months. Each sign-off saves the shift's Last 24h figure instead
+  (PMD_Production.ScheduleAttain and SchedulePlan), and a wider period adds
+  those up.
 
 Every figure is a sum of Machine + Shift + Job plan lines
 (`AttainmentTuple` in `src/core/kpi-attainment.ts`), so machine, shift,
@@ -63,13 +65,51 @@ Known limit: Planning.csv is the latest export. If the planner reschedules a
 missed order before the page is read, the old window is gone and so is that
 shift's plan.
 
-## Vs Target (wider periods)
+## Wider periods — the plans saved at sign-off
 
-Σ Good ÷ Σ ShiftTarget, uncapped. Count each snapshot once, even when
-repeated across slots. A canonical zero target overrides a stale positive
-slot value. Missing targets are not zero. Incomplete totals show /— and no
-percentage; the tooltip reports coverage and the known subtotal. Die-change
-pseudo-orders have no piece plan and do not reduce coverage.
+Two optional Number columns on PMD_Production, written at every sign-off onto
+each order row it signs:
+
+- **ScheduleAttain** — the machine-shift's Schedule Adherence %, exactly as
+  Last 24h works it out (`scheduleSnapshotForShift`), to two decimals. Blank
+  when nothing was planned on the press in the shift. The column may be a
+  plain number (87.5) or one shown as a percentage (0.875); the app reads
+  which from the column's settings.
+- **SchedulePlan** — the pieces that plan asked for. 0 = nothing planned.
+
+Both are the whole machine-shift's figures, not the order's: a shift with
+three orders carries the same two numbers on all three rows (Power BI: take
+one row per machine-shift, never sum them).
+
+A percentage alone cannot be added up — 95% of a 20-piece plan and 60% of a
+5,000-piece plan are 60% together, not 77.5% — hence the plan beside it:
+
+  Adherence = Σ (ScheduleAttain × SchedulePlan) ÷ Σ SchedulePlan
+
+which is the Last 24h formula over more shifts.
+
+Rules:
+
+- The shift is judged whole, up to its end, even when signed before it ends.
+- Only signed output is credited, as on the KPI page: the orders already
+  signed plus the ones signing now. Orders signed at different times each
+  carry the figure as it stood then; the KPI page reads the last-signed one.
+- Not written when the shift could not be read at sign-off, or when a planned
+  order has no rate (its quantity, and so the plan, is unknown).
+- A re-sign-off after Epicor has dropped every order of the shift from
+  Planning.csv keeps the plan saved the first time.
+- Shifts signed before the columns existed use their ShiftTarget, capped per
+  order — the rule Last 24h uses for an order Epicor has dropped.
+- Before SchedulePlan exists on the tenant, shifts save only their %. The
+  page then averages the machine-shifts (each counts once) and says so in
+  the tooltip, all or nothing across the page.
+- Order rows show output only: a shift's plan cannot be shared out between
+  its orders after the fact. A shift's plan counts in the category of the
+  order that made most of it.
+
+Known limit: a press planned for a shift and never run has no row to save a
+plan on. Last 24h counts it as 0 against its plan; a wider period cannot see
+it.
 
 ## Efficiency
 
@@ -83,5 +123,5 @@ own output and runtime. Machine identity is part of every quantity tuple, so
 the same job on two presses is never collapsed into one set of counters.
 
 Legacy VSPLAN sign-off snapshots retain their existing write behaviour for
-compatibility. The KPI page does not read VSPLAN as its comparison source.
-No historical SharePoint rows are rewritten.
+compatibility (an older formula). The KPI page does not read VSPLAN; it reads
+ScheduleAttain / SchedulePlan. No historical SharePoint rows are rewritten.

@@ -482,6 +482,8 @@ this set:
 | `QualityChecks` | Multi-line | Y | Per-slot QC sign-off JSON `{"<slotIndex>":"<name>"}` |
 | `RejectsBySlot` | Multi-line | Y | Per-slot per-code reject JSON; powers per-slot rebuild on unlock when PMD_Rejects events have been wiped |
 | `TotalGood` | Number | Y | Convenience column: `CountEnd − CountStart − Reject` |
+| `ScheduleAttain` | Number (plain, or shown as a percentage) | **N (add when ready)** | The machine-shift's Last 24h Schedule Adherence %, saved at sign-off. The KPI page adds wider periods up from it. Same value on every order row of the machine-shift. Blank when nothing was planned. |
+| `SchedulePlan` | Number | **N (add when ready)** | The pieces that shift's plan asked for (0 = nothing planned). The weight ScheduleAttain needs: a period is Σ(ScheduleAttain × SchedulePlan) ÷ Σ SchedulePlan. Without it the KPI page can only average the shifts. See `docs/kpi-shift-target.md`. |
 
 PMD_LiveStatus mirrors PMD_Production's schema (same field map). The
 list re-uses the same DEFAULT_FIELDS section.

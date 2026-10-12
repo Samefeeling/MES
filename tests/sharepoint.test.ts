@@ -1787,6 +1787,79 @@ describe('PMD_Production denormalisation: jobRequired + partDescription survive 
     expect(prod.body.vsPlan).toBe(29); // 46 of 160
   });
 
+  /*
+   * ScheduleAttain / SchedulePlan: the Last 24h Schedule Adherence of the
+   * press and shift, and the pieces its plan asked for — what a week or a
+   * month is added up from once Planning.csv has moved on.
+   */
+  const signOffWith = async (
+    planning: unknown[],
+    header: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> => {
+    store.clear();
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+    });
+    const writes: Array<{ list: string; body: Record<string, unknown> }> = [];
+    const o = dal as unknown as {
+      fetchHeaders: (list: string) => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownTimelines: () => Promise<Map<string, string>>;
+      upsertHeaderInto: (list: string, h: Record<string, unknown>) => Promise<void>;
+      replaceBreakdownEvents: () => Promise<void>;
+      replaceRejectEvents: () => Promise<void>;
+      deleteLiveRow: () => Promise<void>;
+      listPlanning: () => Promise<unknown[]>;
+    };
+    o.fetchHeaders = async (list: string): Promise<unknown[]> =>
+      list === 'PMD_Production' ? [header] : [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
+    o.upsertHeaderInto = async (list: string, h: Record<string, unknown>): Promise<void> => {
+      writes.push({ list, body: h });
+    };
+    o.replaceBreakdownEvents = async (): Promise<void> => { /* noop */ };
+    o.replaceRejectEvents = async (): Promise<void> => { /* noop */ };
+    o.deleteLiveRow = async (): Promise<void> => { /* noop */ };
+    o.listPlanning = async (): Promise<unknown[]> => planning;
+    await dal.unlockShift('1300T', '2026-06-15-Day', '507071');
+    await dal.lockShift('1300T', '2026-06-15-Day', 'Bounpanh', 'Heng', '507071');
+    return writes.find((w) => w.list === 'PMD_Production')!.body;
+  };
+  const dayShiftPlan = [
+    {
+      jobNumber: '507071',
+      machineCode: '1300T',
+      orderQty: 176,
+      qtyPerHr: 0.05,
+      isDieChange: false,
+      plannedStart: '2026-06-15T07:00:00',
+      plannedEnd: '2026-06-15T15:00:00',
+    },
+  ];
+
+  it('saves the shift’s Schedule Adherence and the plan it is a share of', async () => {
+    // Eight planned hours at 0.05 h a piece ask for 160; 46 good were made.
+    const body = await signOffWith(dayShiftPlan, existing507071());
+    expect(body.schedulePlan).toBe(160);
+    expect(body.scheduleAttain).toBe(28.75);
+  });
+
+  it('keeps the first plan when Planning.csv has since dropped the shift', async () => {
+    // Re-signed a week later: Epicor has dropped the order, so the plan
+    // could only be rebuilt from ShiftTarget. The one saved first stands.
+    const body = await signOffWith([], { ...existing507071(), scheduleAttain: 28.75, schedulePlan: 160 });
+    expect(body.schedulePlan).toBe(160);
+    expect(body.scheduleAttain).toBe(28.75);
+  });
+
+  it('saves a plan of 0 and no % when nothing was planned on the press', async () => {
+    const elsewhere = [{ ...dayShiftPlan[0], machineCode: '1600T' }];
+    const body = await signOffWith(elsewhere, existing507071());
+    expect(body.schedulePlan).toBe(0);
+    expect(body.scheduleAttain).toBeNull();
+  });
+
   // A planning row with no machine code must not take the sign-off down with
   // it: losing a signed shift to a blank column is not a trade anybody made.
   it('signs off anyway when the Schedule % cannot be worked out', async () => {
@@ -3061,6 +3134,61 @@ describe('listProduction carries Cavities onto the canonical slot', () => {
     const canon = rows.find((r) => r.slotIndex === 0)!;
     expect(canon.cavities).toBe(2);
     expect(aggregate(rows).output).toBe(212);
+  });
+});
+
+describe('ScheduleAttain as a percentage column', () => {
+  // A number column "shown as a percentage" stores 0.875 for 87.5 %.
+  const dalWithPercentColumn = () => {
+    const dal = new SharePointDataLayer({
+      siteUrl: 'https://example.sharepoint.com/sites/x',
+      canWrite: () => true,
+    });
+    const o = dal as unknown as {
+      getJson: (url: string) => Promise<unknown>;
+      itemType: (list: string) => Promise<string>;
+      getAllItems: () => Promise<Record<string, unknown>[]>;
+      postWithFieldRetry: (list: string, url: string, body: Record<string, unknown>) => Promise<void>;
+      upsertHeaderInto: (list: string, h: Record<string, unknown>) => Promise<void>;
+      fetchHeaders: (list: string, filter: object) => Promise<Array<Record<string, unknown>>>;
+    };
+    o.getJson = async (url: string) => {
+      expect(url).toContain("getbyinternalnameortitle('ScheduleAttain')");
+      return { d: { ShowAsPercentage: true } };
+    };
+    return o;
+  };
+
+  it('writes the fraction', async () => {
+    const o = dalWithPercentColumn();
+    let sent: Record<string, unknown> = {};
+    o.itemType = async () => 'SP.Data.PMD_ProductionListItem';
+    o.getAllItems = async () => [];
+    o.postWithFieldRetry = async (_list, _url, body) => {
+      sent = body;
+    };
+    await o.upsertHeaderInto('PMD_Production', {
+      machineCode: '550T', date: '2026-10-08', shift: 'Day', jobNumber: 'J1', partNumber: 'P1',
+      partDescription: '', jobRequired: 0, cycleTime: 0, timeline: '', countStart: 100, countEnd: 200,
+      reject: 0, operator: '', supervisor: '', handover: { machine: '', mold: '', material: '', method: '' },
+      qcChecks: '', rejectsBySlot: '', downTime: 0, runTime: 0,
+      scheduleAttain: 87.53, schedulePlan: 400,
+    });
+    expect(sent.ScheduleAttain).toBe(0.8753);
+    expect(sent.SchedulePlan).toBe(400);
+  });
+
+  it('reads it back as a percentage', async () => {
+    const o = dalWithPercentColumn();
+    o.getAllItems = async () => [
+      { Id: 1, Title: '550T', Shift: 'Day', JobNumber: 'J1', ScheduleAttain: 0.8753, SchedulePlan: 400 },
+      { Id: 2, Title: '550T', Shift: 'Day', JobNumber: 'J2' },
+    ];
+    const [a, b] = await o.fetchHeaders('PMD_Production', {});
+    expect(a.scheduleAttain).toBe(87.53);
+    expect(a.schedulePlan).toBe(400);
+    expect(b.scheduleAttain).toBe(-1);
+    expect(b.schedulePlan).toBe(-1);
   });
 });
 

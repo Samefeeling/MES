@@ -24,7 +24,8 @@ import {
   kpiComparisonLabel,
   kpiComparisonMode,
   scheduleTuplesForShift,
-  targetTuplesForRecords,
+  savedPlanMissing,
+  savedScheduleTuples,
   type AttainmentTuple,
   type KpiAttainment,
 } from '../core/kpi-attainment';
@@ -194,11 +195,11 @@ interface ShiftAgg {
   unratedRunHrs: number;
   stdHours: number;
   ratedJobs: number;
-  /** Comparison numerator. For Schedule Adherence this is per-order Good
-   *  capped at that order's expectation; for Vs Target it is Good only
-   *  from tuples carrying a valid persisted ShiftTarget. */
+  /** Comparison numerator: Good capped at each order's plan (Last 24h), or
+   *  the credited pieces each signed shift saved (wider periods). In the
+   *  equal-weight fallback (no SchedulePlan yet) it is a sum of shift %s. */
   attainedOutput: number | null;
-  /** Comparison denominator: persisted ShiftTarget, summed once per tuple. */
+  /** Comparison denominator: the pieces planned, summed once per line. */
   expOutput: number | null;
   comparisonCovered: number;
   comparisonTotal: number;
@@ -208,6 +209,10 @@ interface ShiftAgg {
   /** Plan lines of shifts still waiting for sign-off — outside the
    *  comparison until they are signed. */
   pendingLines: number;
+  /** Wider periods: machine-shifts read from the plan sign-off saved, and
+   *  order-shifts signed before it was saved, which use their ShiftTarget. */
+  savedLines: number;
+  fallbackLines: number;
   /** Standard changeover allowances (changeovers × standard duration,
    *  one changeover per order — see countSetupEvents).
    *  null = not computed for this slice; numbers colour the Die / Colour /
@@ -396,6 +401,9 @@ interface KpiState {
   /** The supervisor-only operator tables: per-operator output and the
    *  stoppages over their limits, plus which operator is charted. */
   ops: OperatorView;
+  /** Wider periods, before PMD_Production.SchedulePlan existed: some signed
+   *  shift saved only its %, so every shift counts once (savedScheduleTuples). */
+  equalWeight: boolean;
   /** Yes / No already recorded against a finding, by its key. */
   impwDecisions: Map<string, ImpwDecision>;
   /** The plant's answers to Mango's placement fields and option lists,
@@ -720,6 +728,8 @@ function toAgg(k: Kpi): ShiftAgg {
     comparisonTotal: 0,
     unscheduledOutput: 0,
     pendingLines: 0,
+    savedLines: 0,
+    fallbackLines: 0,
     dieStdHrs: null,
     colorStdHrs: null,
     insertStdHrs: null,
@@ -747,6 +757,8 @@ function emptyAgg(): ShiftAgg {
     comparisonTotal: 0,
     unscheduledOutput: 0,
     pendingLines: 0,
+    savedLines: 0,
+    fallbackLines: 0,
     dieStdHrs: null,
     colorStdHrs: null,
     insertStdHrs: null,
@@ -771,6 +783,8 @@ function addTuples(a: ShiftAgg, lines: ReadonlyArray<AttainmentTuple>): void {
   for (const line of lines) {
     if (line.source === 'unscheduled') a.unscheduledOutput += line.good;
     if (line.source === 'pending') a.pendingLines++;
+    if (line.source === 'saved') a.savedLines++;
+    if (line.source === 'shiftTarget') a.fallbackLines++;
   }
 }
 
@@ -1088,6 +1102,10 @@ async function compute(now = new Date()): Promise<void> {
     );
   });
   const periodShifts = comparisonMode === 'schedule' ? finishedShiftsInPeriod(from, to, shiftIds, now) : [];
+  // All or nothing over the page, so the floor and category totals never
+  // add pieces to shares (see savedScheduleTuples).
+  const equalWeight = comparisonMode === 'saved' && perMachineProd.some((recs) => savedPlanMissing(recs));
+  state.equalWeight = equalWeight;
   const dieColors = new Map(
     dieColorList.map((c) => [
       c.partNumber.trim().toUpperCase(),
@@ -1192,17 +1210,22 @@ async function compute(now = new Date()): Promise<void> {
       if (r.partDescription) partDescByJob.set(r.jobNumber, r.partDescription);
     }
     // Every plan line of this press in the window (see AttainmentTuple).
-    // Schedule Adherence plans from Planning.csv for every finished shift of
-    // the window, run or not; Vs Target from the ShiftTarget of what ran.
+    // Last 24h plans from Planning.csv for every finished shift of the
+    // window, run or not; a wider period reads the plan each signed shift
+    // saved, since Planning.csv no longer holds it.
     const lines: AttainmentTuple[] =
       comparisonMode === 'schedule'
         ? [...new Set([...periodShifts, ...all.map((r) => r.shiftId)])].flatMap((sid) =>
             scheduleTuplesForShift(all, planning, m.machineCode, sid, now, awaitingSignOff[i].has(sid)),
           )
-        : targetTuplesForRecords(all, false);
+        : savedScheduleTuples(all, equalWeight);
     linesByMachine[i] = lines;
     const linesFor = (code: ShiftCode): AttainmentTuple[] =>
       lines.filter((line) => parseShiftId(line.shiftId)?.code === code);
+    // A saved plan is the press's for the shift, not any one order's: it
+    // cannot be shared out between the orders after the fact, so the order
+    // rows of a wider period show what they made and no plan.
+    const orderLines = (l: AttainmentTuple[]): AttainmentTuple[] => (comparisonMode === 'saved' ? [] : l);
     // Single pass per machine: partition into byShift × byDateBucket, then
     // aggregate each slice once at the end. Avoids re-filtering `all` 3×
     // and re-walking each shift slice to bucket by date.
@@ -1294,7 +1317,7 @@ async function compute(now = new Date()): Promise<void> {
         arr.push(r);
         byJob.set(r.jobNumber, arr);
       }
-      jobsByShift[code] = jobRollup(byJob, linesFor(code));
+      jobsByShift[code] = jobRollup(byJob, orderLines(linesFor(code)));
     }
     const total = toAgg(aggregate(all, ctByJob));
     // Machine total = Σ of its shift standards, and every plan line it has.
@@ -1320,7 +1343,7 @@ async function compute(now = new Date()): Promise<void> {
       arr.push(r);
       allByJob.set(r.jobNumber, arr);
     }
-    const byJobTotal: JobAgg[] = jobRollup(allByJob, lines);
+    const byJobTotal: JobAgg[] = jobRollup(allByJob, orderLines(lines));
 
     return {
       machineCode: m.machineCode,
@@ -1414,7 +1437,9 @@ async function compute(now = new Date()): Promise<void> {
   const linesByCategory = new Map<string, AttainmentTuple[]>();
   S!.machines.forEach((machine, i) => {
     for (const line of linesByMachine[i] ?? []) {
-      const cat = categoryFor(machine, partByJobKey.get(line.jobNumber.trim().toUpperCase()) ?? '');
+      // A saved shift's plan goes with the order that made most of it.
+      const job = line.leadJob ?? line.jobNumber;
+      const cat = categoryFor(machine, partByJobKey.get(job.trim().toUpperCase()) ?? '');
       const arr = linesByCategory.get(cat) ?? [];
       arr.push(line);
       linesByCategory.set(cat, arr);
@@ -1470,7 +1495,7 @@ function colourClass(v: number | null, green: number, amber: number): string {
   return 'red';
 }
 
-function comparisonLabel(): 'Schedule Adherence' | 'Vs Target' {
+function comparisonLabel(): 'Schedule Adherence' {
   return kpiComparisonLabel(kpiComparisonMode(S!.period));
 }
 
@@ -1482,6 +1507,8 @@ type ComparisonSlice = Pick<
   | 'comparisonTotal'
   | 'unscheduledOutput'
   | 'pendingLines'
+  | 'savedLines'
+  | 'fallbackLines'
 >;
 
 function comparisonPct(a: ComparisonSlice): number | null {
@@ -1508,16 +1535,42 @@ function comparisonTitle(a: ComparisonSlice): string {
           + ' still awaiting sign-off, left out until signed.'
         : '');
   }
-  const coverage = a.comparisonCovered + '/' + a.comparisonTotal + ' job-shifts have ShiftTarget';
-  return 'Sum of Good / sum of ShiftTarget. Each Machine + Shift + Job snapshot is counted once. ' + coverage
-    + (missing ? '. Incomplete plan: percentage and full plan total are unavailable.' : '')
-    + ' Known targets: ' + (a.expOutput ?? 0) + ' pcs; credited output: ' + (a.attainedOutput ?? 0) + ' pcs.';
+  const plural = (n: number, one: string): string => n + ' ' + one + (n === 1 ? '' : 's');
+  return 'Plan = what each shift\'s sign-off saved: its Last 24h Schedule Adherence (PMD_Production.ScheduleAttain)'
+    + ' and the pieces its plan asked for (SchedulePlan). Credited = ScheduleAttain × SchedulePlan.'
+    + (S!.equalWeight
+      ? ' Some shifts were signed before SchedulePlan existed, so there is nothing to weight by:'
+        + ' this is the plain average of ' + plural(a.comparisonTotal, 'machine-shift') + ', each counted once.'
+      : ' Adherence = Σ credited ÷ Σ plan over ' + plural(a.savedLines, 'machine-shift') + '.'
+        + ' Planned ' + (a.expOutput ?? 0) + ' pcs; credited ' + (a.attainedOutput ?? 0) + ' pcs.')
+    + (a.fallbackLines > 0
+      ? ' ' + plural(a.fallbackLines, S!.equalWeight ? 'machine-shift' : 'order-shift')
+        + ' signed before the plan was saved use the ShiftTarget saved when they ran, capped per order.'
+      : '')
+    + (missing
+      ? ' ' + (a.comparisonTotal - a.comparisonCovered) + ' of ' + a.comparisonTotal
+        + ' have no known plan quantity — percentage and plan total are unavailable.'
+      : '')
+    + (a.unscheduledOutput > 0
+      ? ' ' + a.unscheduledOutput + ' pcs made in shifts with nothing planned on the press — not credited.'
+      : '')
+    + ' A press planned for a shift and never run has no row to save its plan on, so it is counted in Last 24h only.';
 }
 
 /** Output and plan come from the same signed machine-shift-job tuples. */
 function outputCell(a: ComparisonSlice & { output: number }): string {
   const hasData = a.comparisonTotal > 0 || a.output > 0;
   if (!hasData) return '<td class="num">—</td>';
+  // Wider periods: an order row has no share of its shift's saved plan, and
+  // the equal-weight average has no pieces to show beside the output.
+  if (kpiComparisonMode(S!.period) === 'saved' && (a.comparisonTotal === 0 || S!.equalWeight)) {
+    const pct = comparisonPct(a);
+    const cls = pct == null ? '' : planColourClass(pct, S!.thresholds);
+    const title = a.comparisonTotal === 0
+      ? 'A shift\'s plan is saved for the press, not for each order — orders show what they made.'
+      : comparisonTitle(a);
+    return '<td class="num ' + cls + '" title="' + escapeHtml(title) + '">' + a.output + '</td>';
+  }
   const complete = a.comparisonCovered === a.comparisonTotal && a.expOutput != null;
   const plan = complete ? String(a.expOutput) : '—';
   const pct = comparisonPct(a);
@@ -2779,6 +2832,8 @@ function render(): void {
       a.comparisonTotal += r.total.comparisonTotal;
       a.unscheduledOutput += r.total.unscheduledOutput;
       a.pendingLines += r.total.pendingLines;
+      a.savedLines += r.total.savedLines;
+      a.fallbackLines += r.total.fallbackLines;
       a.dieStdHrs = (a.dieStdHrs ?? 0) + (r.total.dieStdHrs ?? 0);
       a.colorStdHrs = (a.colorStdHrs ?? 0) + (r.total.colorStdHrs ?? 0);
       a.insertStdHrs = (a.insertStdHrs ?? 0) + (r.total.insertStdHrs ?? 0);
@@ -2803,6 +2858,8 @@ function render(): void {
       comparisonTotal: 0,
       unscheduledOutput: 0,
       pendingLines: 0,
+      savedLines: 0,
+      fallbackLines: 0,
       dieStdHrs: null as number | null,
       colorStdHrs: null as number | null,
       insertStdHrs: null as number | null,
@@ -3149,7 +3206,7 @@ function render(): void {
   const activeRange = periodRange(S!.period, new Date());
   const fromVal = S!.period === 'custom' ? S!.customFrom : dateKey(activeRange.from);
   const toVal = S!.period === 'custom' ? S!.customTo : dateKey(activeRange.to);
-  const comparisonHelp = '<div><b>Schedule Adherence</b> (Last 24h) plans from Planning.csv: every order planned on a press in a finished shift — in the shifts its “no of shift” (M/A/N) is crewed for — is asked for its share of the planned runtime × JobOper_ProdStandard, up to its quantity, whether the press ran or not. A press left idle for want of a crew shows 0 against its plan. Good is capped per order, so over-producing one order cannot hide another; output on orders not planned there is not credited. Orders Epicor has already dropped from Planning.csv use the ShiftTarget saved when they ran. Shifts not yet signed off are left out until signed. <b>Vs Target</b> (wider periods) uses the saved PMD_Production.ShiftTarget of what ran, without capping. Missing plan quantities show “—”; hover for coverage.</div>';
+  const comparisonHelp = '<div><b>Schedule Adherence</b> (Last 24h) plans from Planning.csv: every order planned on a press in a finished shift — in the shifts its “no of shift” (M/A/N) is crewed for — is asked for its share of the planned runtime × JobOper_ProdStandard, up to its quantity, whether the press ran or not. A press left idle for want of a crew shows 0 against its plan. Good is capped per order, so over-producing one order cannot hide another; output on orders not planned there is not credited. Orders Epicor has already dropped from Planning.csv use the ShiftTarget saved when they ran. Shifts not yet signed off are left out until signed. <b>Wider periods</b> add up what each shift saved when it was signed off — its Last 24h Schedule Adherence (PMD_Production.ScheduleAttain) and the pieces its plan asked for (SchedulePlan): Σ (ScheduleAttain × SchedulePlan) ÷ Σ SchedulePlan, the same formula over more shifts. Shifts signed before the plan was saved use their ShiftTarget, capped per order. A press planned for a shift and never run has no row to save a plan on, so only Last 24h counts it. Order rows show output only: the plan is saved per press per shift. Missing plan quantities show “—”; hover for coverage.</div>';
   app.innerHTML = `
     <div class="kpi">
       <div class="kpi-head">
@@ -3829,6 +3886,7 @@ export async function renderKpi(dal: PmdDataLayer, assemblyDal?: AssemblyDataLay
     impwSlices: [],
     impwFindings: [],
     ops: { perf: [], weekly: false, machineOrder: [], thresholds: DEFAULT_KPI_THRESHOLDS, pick: '', open: new Set() },
+    equalWeight: false,
     impwDecisions: loadImpwDecisions(),
     impwSite: loadImpwSite(),
     impwOptions: null,

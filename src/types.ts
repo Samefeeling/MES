@@ -424,6 +424,15 @@ export interface ProductionRecord {
    *  the same question the KPI page's Schedule Adherence column answers for
    *  the row. Canonical on slot 0; undefined on tenants without the column. */
   vsPlan?: number;
+  /** The machine-shift's Schedule Adherence (%) and the pieces its plan asked
+   *  for, saved at sign-off to PMD_Production.ScheduleAttain / SchedulePlan
+   *  (`scheduleSnapshotForShift`) — what the KPI page reads for any period
+   *  wider than the last 24 h, after Planning.csv has moved on. The whole
+   *  shift's figures, on each header row it signed; canonical on slot 0.
+   *  ScheduleAttain is undefined when nothing was planned (SchedulePlan 0);
+   *  both are undefined on rows signed before the columns existed. */
+  scheduleAttain?: number;
+  schedulePlan?: number;
   /** Planned start of the order (JobHead_StartDate + StartHour, local ISO
    *  '2026-07-01T18:40:00'), denormalised onto PMD_Production.PlannedStart
    *  at sign-off so KPI Schedule Adherence still knows when the job was
