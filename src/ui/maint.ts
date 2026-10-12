@@ -723,8 +723,10 @@ export function renderTeam(ctx: MaintCtx): string {
     </section>
 
     <section class="tm-card">
-      <h3>📋 Open maintenance requests and PM</h3>
-      <div class="die-chips">${(['overdue', 'soon', 'ok', 'none'] as const).map(levelChip).join('')}</div>
+      <div class="tm-open-head">
+        <h3>📋 Open maintenance requests and PM</h3>
+        <div class="die-chips">${(['overdue', 'soon', 'ok', 'none'] as const).map(levelChip).join('')}</div>
+      </div>
       ${
         openRows
           ? `<div class="die-table-wrap"><table class="kpi-table tm-open-table"><thead><tr>

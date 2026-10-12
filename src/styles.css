@@ -1595,7 +1595,12 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .tm-done-table th,.tm-done-table td{padding:4px 8px;height:auto}
 .tm-done-table td{line-height:17px}
 .tm-done-table .num{text-align:right}
-.tm-done-table th{position:sticky;top:0;z-index:1;background:#f8fafc}
+/* Filled, opaque headers: the rows scroll under them. */
+.tm-done-table thead th,.tm-open-table thead th{position:sticky;top:0;z-index:2;background:#e2e8f0;color:#1e293b;font-weight:700;box-shadow:0 1px 0 #94a3b8}
+.tm-open-table thead th{height:34px}
+.tm-open-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px}
+.tm-open-head h3{margin:0}
+.tm-open-head .die-chips{margin-top:0}
 .tm-done-table td{vertical-align:top}
 .tm-done-table .tm-text{min-width:150px;white-space:normal}
 .tm-done-table .tm-text div{color:var(--mu);margin-top:2px;font-size:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
