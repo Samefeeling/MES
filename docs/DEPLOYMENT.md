@@ -558,17 +558,36 @@ for the Plant/Equipment module):
    next PM (Event Due Date / Event Detail), its open requests and dies, and
    MTBF / MTTR worked out from the report's `2. Breakdown` orders and their
    `Downtime` (calendar time, last 12 months or since the export begins).
-   `Downtime` is read as hours. Site is `Branch` (`Resero - Minto` /
-   `Resero - Hastings`); `Region` is the raiser's and is not used.
+   `Downtime` is read as hours. Maint covers Minto only for now: rows
+   whose `Branch` is another site (`Resero - Hastings`) are left out of
+   Tool, Machine and Team; `Region` is the raiser's and is not used.
    Team charts closed orders and `Labour Hours` per `Assign to Action`, and
    lists every open request and live PM with whether it is due. Many
    orders close without `Labour Hours`, so the hours tile says how many
    carry them. What was done is `Summary of work completed`, else
    `Summary`, else `Corrective action taken`, with `Preventative action
-   taken` underneath unless it is N/A (Hastings fills only those two).
+   taken` underneath unless it is N/A, then the `Comment:` entries of
+   `Actions taken` — only those; its Created / Completed / Change Stage
+   lines are workflow noise and are not shown (the closing "… to Stage 4
+   Closed" line is still what dates the close).
    Mango leaves `To be completed by` empty until the coordinator assesses
    a request, so an undated request shows how long ago it was raised,
    longest-waiting first.
+   **`PMD_Machine`** (Title = machine code, "1600T") carries each press's
+   maintenance record. Machine's **Status** column is
+   `PMD_Machine.Status`, set by tapping the badge exactly like a die's
+   ToolStatus — Problems / To be Serviced / In service / Serviced, written
+   as those labels; Serviced also stamps `LastService` = today. A ⚠ beside
+   it flags an open breakdown in Mango. After each load the page saves
+   what it works out for every press to `LastService` (the later of that
+   stamp and Mango's last preventive or calibration order), `Breakdowns`,
+   `MTBF` and `MTTR` (hours, 1 dp) and `Available` (availability %,
+   98.7; a Number column formatted as a percentage gets 0.987) — only the
+   values that changed, and nothing at all when the Mango report wasn't
+   read. Columns are matched by display or internal name and any that
+   are missing are added on the first save (text Status, date LastService,
+   number for the rest — Manage Lists needed once). A hand-made Choice
+   Status column must offer the four labels.
 3. Without `VITE_MANGO_CSV_PATH` (or while the file doesn't exist yet)
    the tab falls back to the legacy `PMD_DieMaintenance` list, whose
    schema stays documented below for the sync-less transition period:

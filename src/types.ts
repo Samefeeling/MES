@@ -240,6 +240,28 @@ export interface MachinePmEvent {
   superseded: boolean;
 }
 
+/**
+ * A press's maintenance record on PMD_Machine (Title = machine code). Status
+ * is set by hand on Maint → Machine, with the same four values as a die's
+ * ToolStatus; the rest is what the Machine page works out from Mango, saved
+ * so it can be read straight from the list.
+ */
+export interface MachineMaster {
+  machineCode: string;
+  /** PMD_Machine.Status. '' when empty or unrecognised. */
+  status: ToolStatus | '';
+  /** PMD_Machine.LastService, YYYY-MM-DD ('' when none). */
+  lastService: string;
+  /** PMD_Machine.MTBF, hours. */
+  mtbf: number | null;
+  /** PMD_Machine.MTTR, hours. */
+  mttr: number | null;
+  /** PMD_Machine.Breakdowns, in the reliability window. */
+  breakdowns: number | null;
+  /** PMD_Machine.Available — availability, as a percentage (98.7). */
+  available: number | null;
+}
+
 /** Condition of one die component at die-change time, mapping the
  *  PMD_DieChangeLog choice values: "1. Good work order" / "2. Operational
  *  but worn" / "3. Damaged or can't be used". '' = not assessed. */

@@ -3,6 +3,7 @@ import type {
   BreakdownLogDetail,
   DieChangeLog,
   DieMaintenanceRequest,
+  MachineMaster,
   MachinePmEvent,
   DieMaster,
   Machine,
@@ -81,6 +82,16 @@ export interface PmdDataLayer {
    *  from beside the Planning CSV. [] when the file isn't configured or
    *  can't be read. */
   listMachinePm?(): Promise<MachinePmEvent[]>;
+  /** PMD_Machine's maintenance columns, one row per machine code. [] when
+   *  the list can't be read. */
+  listMachineMaster?(): Promise<MachineMaster[]>;
+  /** Write a press's Status and/or the figures the Machine page works out.
+   *  Columns the list lacks are added on first write (Manage Lists needed
+   *  once). Optional — without it the Machine Status is display-only. */
+  updateMachineMaster?(
+    machineCode: string,
+    patch: Partial<Omit<MachineMaster, 'machineCode'>>,
+  ): Promise<void>;
   /** Persist a new request (id/createdAt assigned by the backend). */
   createDieMaintenance?(
     req: Omit<DieMaintenanceRequest, 'id' | 'createdAt' | 'closedAt'>,

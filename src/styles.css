@@ -1541,8 +1541,6 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .mt-pm-table{width:100%;margin-top:4px}
 .tm{display:flex;flex-direction:column;gap:12px;margin-top:10px}
 .tm-head{gap:10px}
-.tm-branch{font-size:13px;font-weight:700;color:var(--mu);display:flex;align-items:center;gap:6px}
-.tm-branch select{font:inherit;font-size:14px;padding:5px 8px;border:1px solid var(--bd);border-radius:8px;background:#fff;color:var(--tx)}
 .tm-owners{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .tm-lbl{font-size:13px;font-weight:700;color:var(--mu);margin-right:2px}
 .tm-card{background:#fff;border:1px solid var(--bd);border-radius:12px;padding:12px 14px}
@@ -1584,3 +1582,6 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .tm-done-table td{vertical-align:top}
 .tm-done-table .tm-text{min-width:200px;max-width:420px;white-space:normal}
 .tm-done-table .tm-text div{color:var(--mu);margin-top:2px}
+.tm-done-table .tm-note time{font-weight:700;font-variant-numeric:tabular-nums}
+.mt-flag{color:var(--rd);font-weight:800;cursor:help;margin-left:4px}
+.mt-table td.mt-st{white-space:nowrap}

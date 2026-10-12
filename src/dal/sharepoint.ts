@@ -7,7 +7,9 @@ import type {
   DieChangeLog,
   DieComponentCondition,
   DieMaintenanceRequest,
+  MachineMaster,
   MachinePmEvent,
+  ToolStatus,
   DieMaster,
   Machine,
   MaintPriority,
@@ -50,6 +52,7 @@ import {
   parseToolStatus,
   TOOL_STATUS_META,
 } from '../core/die';
+import { machineKey } from '../core/maint';
 
 // =====================================================================
 // SharePointDataLayer — Resero Operations AU site.
@@ -115,6 +118,14 @@ const DEFAULT_FIELDS = {
     code: 'Title', // machine code (e.g. "1600T") lives in Title
     active: 'IsActive_x003a_Yes_x002f_No', // display is literally "IsActive: Yes/No"
     displayOrder: 'DisplayOrder',
+    // Maint → Machine. Resolved against the list's own field map at read
+    // time (display name or internal name), and added if missing.
+    status: 'Status',
+    lastService: 'LastService',
+    mtbf: 'MTBF',
+    mttr: 'MTTR',
+    breakdowns: 'Breakdowns',
+    available: 'Available',
   },
   operator: {
     // Title = operator name; `Supervisor` (internal) displays as
@@ -541,6 +552,15 @@ export class SharePointDataLayer implements PmdDataLayer {
     maintenanceLevelExists: boolean;
     notesExists: boolean;
     changeOverMedianExists: boolean;
+  } | null = null;
+  /** PMD_Machine's maintenance columns, resolved on the first read: the
+   *  internal name and type of each, and the item id of every machine. */
+  private machineMasterMeta: {
+    keys: Record<MachineMasterField, string>;
+    types: Partial<Record<MachineMasterField, string>>;
+    /** Number column formatted as a percentage: stores 0.987 for 98.7 %. */
+    availableAsFraction: boolean;
+    idByCode: Map<string, number>;
   } | null = null;
   private dieMasterMaintenanceLevelReady: Promise<void> | null = null;
   private dieMasterNotesReady: Promise<void> | null = null;
@@ -1844,6 +1864,124 @@ export class SharePointDataLayer implements PmdDataLayer {
       console.warn('[pmd] Mango machine work orders unavailable:', e);
       return [];
     }
+  }
+
+  // ---- PMD_Machine maintenance columns (Maint → Machine) -----------------
+
+  /** Field name → internal name + type, read from the list itself. A column
+   *  is matched on its internal name, else its display name. */
+  private async readMachineFields(): Promise<{
+    keys: Record<MachineMasterField, string>;
+    types: Partial<Record<MachineMasterField, string>>;
+  }> {
+    const env = await this.getJson<{
+      d: { results: Array<{ Title: string; InternalName: string; TypeAsString?: string }> };
+    }>(`${this.listUrl(LISTS.machine)}/fields?$filter=Hidden eq false&$select=Title,InternalName,TypeAsString`);
+    const fields = env.d.results;
+    const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const keys = {} as Record<MachineMasterField, string>;
+    const types: Partial<Record<MachineMasterField, string>> = {};
+    for (const k of MACHINE_MASTER_FIELDS) {
+      const wanted = this.F.machine[k];
+      const f =
+        fields.find((x) => x.InternalName === wanted) ?? fields.find((x) => norm(x.Title) === norm(wanted));
+      keys[k] = f?.InternalName ?? wanted;
+      if (f) types[k] = f.TypeAsString ?? 'Text';
+    }
+    return { keys, types };
+  }
+
+  async listMachineMaster(): Promise<MachineMaster[]> {
+    const { keys, types } = await this.readMachineFields();
+    let availableAsFraction = false;
+    if (types.available === 'Number') {
+      try {
+        const f = await this.getJson<{ d: { ShowAsPercentage?: boolean } }>(
+          `${this.listUrl(LISTS.machine)}/fields/getbyinternalnameortitle('${odataString(keys.available)}')`,
+        );
+        availableAsFraction = f.d.ShowAsPercentage === true;
+      } catch {
+        /* older tenants don't expose it — a plain number column */
+      }
+    }
+    const rows = await this.getAllItems<Record<string, unknown>>(LISTS.machine);
+    const code = (r: Record<string, unknown>): string => str(r[this.F.machine.code]).trim();
+    this.machineMasterMeta = {
+      keys,
+      types,
+      availableAsFraction,
+      idByCode: new Map(rows.filter((r) => code(r)).map((r) => [machineKey(code(r)), getId(r)])),
+    };
+    const cell = (r: Record<string, unknown>, k: MachineMasterField): unknown => (types[k] ? r[keys[k]] : undefined);
+    const available = (r: Record<string, unknown>): number | null => {
+      const n = looseNum(cell(r, 'available'));
+      return n == null ? null : availableAsFraction ? Math.round(n * 1000) / 10 : n;
+    };
+    const missing = MACHINE_MASTER_FIELDS.filter((k) => !types[k]);
+    if (missing.length) {
+      console.info('[pmd] PMD_Machine has no', missing.map((k) => this.F.machine[k]).join(', '), '— added on the first save');
+    }
+    return rows
+      .filter((r) => code(r))
+      .map((r) => ({
+        machineCode: code(r),
+        status: parseToolStatus(str(cell(r, 'status'))),
+        lastService: spDay(cell(r, 'lastService')),
+        mtbf: looseNum(cell(r, 'mtbf')),
+        mttr: looseNum(cell(r, 'mttr')),
+        breakdowns: looseNum(cell(r, 'breakdowns')),
+        available: available(r),
+      }));
+  }
+
+  async updateMachineMaster(
+    machineCode: string,
+    patch: Partial<Omit<MachineMaster, 'machineCode'>>,
+  ): Promise<void> {
+    if (!this.machineMasterMeta) await this.listMachineMaster();
+    const meta = this.machineMasterMeta!;
+    const id = meta.idByCode.get(machineKey(machineCode));
+    if (!id) throw new Error(`No PMD_Machine row for ${machineCode}`);
+    const fields = MACHINE_MASTER_FIELDS.filter((k) => patch[k] !== undefined);
+    if (fields.length === 0) return;
+    await this.ensureMachineFields(fields.filter((k) => !meta.types[k]));
+    const body: Record<string, unknown> = { __metadata: { type: await this.itemType(LISTS.machine) } };
+    for (const k of fields) body[meta.keys[k]] = machineCell(k, patch[k], meta.types[k] ?? 'Text', meta.availableAsFraction);
+    await this.post(`${this.listUrl(LISTS.machine)}/items(${id})`, body, '*');
+  }
+
+  /** Add the maintenance columns PMD_Machine lacks: Status as text (the four
+   *  ToolStatus labels), LastService as a date, the figures as numbers. */
+  private async ensureMachineFields(missing: MachineMasterField[]): Promise<void> {
+    if (missing.length === 0) return;
+    const meta = this.machineMasterMeta!;
+    const fieldsUrl = `${this.listUrl(LISTS.machine)}/fields`;
+    for (const k of missing) {
+      const Title = this.F.machine[k];
+      const def =
+        k === 'status'
+          ? { __metadata: { type: 'SP.Field' }, Title, FieldTypeKind: 2 }
+          : k === 'lastService'
+            ? { __metadata: { type: 'SP.FieldDateTime' }, Title, FieldTypeKind: 4, DisplayFormat: 0 }
+            : { __metadata: { type: 'SP.Field' }, Title, FieldTypeKind: 9 };
+      try {
+        await this.post(fieldsUrl, def);
+      } catch (e) {
+        // Another device may have added it in between; only a column that is
+        // still missing after a re-read is a real failure.
+        const again = await this.readMachineFields();
+        if (!again.types[k]) {
+          throw new Error(
+            `PMD_Machine needs a '${Title}' column (${(e as Error).message}). ` +
+              'Add it in List settings or grant Manage Lists once.',
+          );
+        }
+      }
+    }
+    const { keys, types } = await this.readMachineFields();
+    meta.keys = keys;
+    meta.types = types;
+    console.info('[pmd] PMD_Machine columns ready:', keys);
   }
 
   async listMachinePm(): Promise<MachinePmEvent[]> {
@@ -4739,6 +4877,59 @@ function num(v: unknown): number {
   if (v == null) return 0;
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
+}
+
+type MachineMasterField = 'status' | 'lastService' | 'mtbf' | 'mttr' | 'breakdowns' | 'available';
+const MACHINE_MASTER_FIELDS: readonly MachineMasterField[] = [
+  'status', 'lastService', 'mtbf', 'mttr', 'breakdowns', 'available',
+];
+
+/** A number from a Number cell or from text someone typed ("98.7 %", "1,234"). */
+function looseNum(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  const t = str(v).replace(/[^0-9.-]/g, '');
+  if (!t) return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * The calendar day of a SharePoint date cell. A date-only column comes back
+ * as the UTC instant of the site's local midnight (Sydney: the 12th is
+ * "…-11T13:00:00Z"), one the app wrote as that day's UTC midnight — the
+ * nearest UTC midnight is the day in both cases. Text cells take an ISO or
+ * d/m/yyyy date.
+ */
+export function spDay(v: unknown): string {
+  const s = str(v).trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}T.*(Z|[+-]\d{2}:?\d{2})$/.test(s)) {
+    const t = Date.parse(s);
+    if (!Number.isFinite(t)) return '';
+    return new Date(Math.round(t / 86_400_000) * 86_400_000).toISOString().slice(0, 10);
+  }
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  return csvDateToIso(s).slice(0, 10);
+}
+
+/** A PMD_Machine value as its column's type takes it. */
+export function machineCell(
+  k: MachineMasterField,
+  v: unknown,
+  type: string,
+  availableAsFraction: boolean,
+): string | number | null {
+  if (v == null || v === '') return null;
+  const numeric = ['Number', 'Currency', 'Integer'].includes(type);
+  if (k === 'status') return TOOL_STATUS_META[v as ToolStatus]?.label ?? null;
+  if (k === 'lastService') return type === 'DateTime' ? `${String(v).slice(0, 10)}T00:00:00Z` : String(v).slice(0, 10);
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  if (k === 'available') {
+    if (numeric) return availableAsFraction ? Math.round(n * 10) / 1000 : n;
+    return `${n}%`;
+  }
+  return numeric ? n : String(n);
 }
 
 function nullOrNum(v: unknown): number | null {

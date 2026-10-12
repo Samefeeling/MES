@@ -9,9 +9,9 @@
 //            owner on a zoomable time axis — and everything still open,
 //            work orders and PM, with whether it is due.
 
-import type { DieMaintenanceRequest, MachinePmEvent } from '../types';
+import type { DieMaintenanceRequest, MachineMaster, MachinePmEvent, ToolStatus } from '../types';
+import { TOOL_STATUS_META } from '../core/die';
 import {
-  MACHINE_STATE_META,
   UNASSIGNED,
   bucketDone,
   bucketEnd,
@@ -20,6 +20,8 @@ import {
   doneOrders,
   dueLevel,
   earliestOrder,
+  isBreakdown,
+  machineFigures,
   openWork,
   unitFor,
   type BucketUnit,
@@ -54,6 +56,12 @@ export interface MaintCtx {
   /** The Tool page's work-order card, for the machine popup. */
   woRow(r: DieMaintenanceRequest): string;
   rerender(): void;
+  /** The press's row on PMD_Machine, if the list has one. */
+  machineMaster(code: string): MachineMaster | undefined;
+  /** Set a press's Status on PMD_Machine; undefined when the backend can't write it. */
+  setMachineStatus?(code: string, status: ToolStatus): void;
+  /** What the last save of the figures to PMD_Machine did, for the page's note. */
+  machineSyncNote: string;
 }
 
 const MANGO_HOME = 'https://my.mangolive.com/';
@@ -113,7 +121,11 @@ const MACHINE_COLS = [
 const MACHINE_COLW_KEY = 'pmd.machine.colw';
 let machineSort: MachineSort = 'default';
 let machineDir: 1 | -1 = 1;
-let machineState: MachineRow['state'] | '' = '';
+/** Status chip filter — '' shows every machine. */
+let machineStatus: ToolStatus | '' = '';
+
+/** The order of the four statuses, worst first — the Tool page's. */
+const STATUS_ORDER: ToolStatus[] = ['problems', 'to-be-serviced', 'in-service', 'serviced'];
 
 function machineRows(ctx: MaintCtx): MachineRow[] {
   return buildMachineRows(ctx.pm, ctx.machineOrders, ctx.today, earliestOrder([...ctx.machineOrders, ...ctx.dieOrders]));
@@ -130,9 +142,12 @@ function machineAccess(
     case 'name':
       return (r) => (r.code ? r.asset : r.description || r.department || r.asset).toUpperCase() || null;
     case 'state':
-      return (r) => MACHINE_STATE_META[r.state].rank;
+      return (r) => {
+        const st = r.code ? ctx.machineMaster(r.code)?.status : '';
+        return st ? TOOL_STATUS_META[st].rank : null;
+      };
     case 'lastService':
-      return (r) => r.lastService || null;
+      return (r) => lastServiceOf(r, ctx) || null;
     case 'dies':
       return (r) => (r.code ? ctx.diesFor(r.code).length : 0);
     case 'open':
@@ -152,12 +167,46 @@ function machineAccess(
   }
 }
 
+/** Last service: PMD_Machine's (stamped when someone sets Serviced) or the
+ *  last preventive / calibration order Mango closed, whichever is later. */
+function lastServiceOf(r: MachineRow, ctx: MaintCtx): string {
+  const m = r.code ? ctx.machineMaster(r.code) : undefined;
+  return m ? machineFigures(r, m).lastService : r.lastService;
+}
+
+/** The Status cell: PMD_Machine.Status as the Tool page shows a die's, a
+ *  button that opens the picker where the list can be written. Equipment
+ *  without a PMD_Machine row has none. An open breakdown in Mango is
+ *  flagged beside it, whatever the status says. */
+function statusCell(r: MachineRow, ctx: MaintCtx): string {
+  const m = r.code ? ctx.machineMaster(r.code) : undefined;
+  const breakdowns = r.orders
+    .filter((o) => o.status !== 'done' && isBreakdown(o))
+    .map((o) => o.mangoTicket)
+    .filter(Boolean);
+  const flag =
+    r.state === 'breakdown'
+      ? ` <span class="mt-flag" title="${escapeHtml(`Open breakdown in Mango${breakdowns.length ? `: ${breakdowns.join(', ')}` : ''}`)}">⚠</span>`
+      : '';
+  if (!m) {
+    return `<span class="die-tstat none" title="${r.code ? 'No PMD_Machine row for this press' : 'Not on PMD_Machine'}">—</span>${flag}`;
+  }
+  const meta = m.status ? TOOL_STATUS_META[m.status] : null;
+  const inner = meta ? `● ${meta.label}` : '— set';
+  const cls = meta ? `die-tstat ${meta.cls}` : 'die-tstat none';
+  if (ctx.setMachineStatus) {
+    return `<button class="${cls} die-tstat-btn" data-mt-status="${escapeHtml(r.code)}" title="PMD_Machine.Status — tap to change">${inner} ▾</button>${flag}`;
+  }
+  return `<span class="${cls}" title="PMD_Machine.Status">${inner}</span>${flag}`;
+}
+
 export function renderMachineBoard(ctx: MaintCtx): string {
   const all = machineRows(ctx);
   const f = ctx.filter.trim().toUpperCase();
+  const statusOf = (r: MachineRow): ToolStatus | '' => (r.code ? ctx.machineMaster(r.code)?.status ?? '' : '');
   let rows = all.filter(
     (r) =>
-      (!machineState || r.state === machineState) &&
+      (!machineStatus || statusOf(r) === machineStatus) &&
       (!f ||
         r.asset.toUpperCase().includes(f) ||
         r.code.toUpperCase().includes(f) ||
@@ -175,15 +224,18 @@ export function renderMachineBoard(ctx: MaintCtx): string {
       return av < bv ? -machineDir : av > bv ? machineDir : 0;
     });
   }
-  const chip = (st: MachineRow['state']): string => {
-    const n = all.filter((r) => r.state === st).length;
-    const on = machineState === st;
-    return `<button type="button" class="die-chip mt-chip ${MACHINE_STATE_META[st].cls}${on ? ' on' : ''}" data-mt-state="${st}" aria-pressed="${on}">${MACHINE_STATE_META[st].label} <b>${n}</b></button>`;
+  // One chip per status, as on the Tool page: tap to show only those.
+  const chip = (st: ToolStatus): string => {
+    const meta = TOOL_STATUS_META[st];
+    const n = all.filter((r) => statusOf(r) === st).length;
+    const on = machineStatus === st;
+    return `<button type="button" class="die-chip die-chip-st ${meta.cls}${on ? ' on' : ''}" data-mt-state="${st}" aria-pressed="${on}"
+      title="${on ? 'Showing' : 'Show'} only machines whose PMD_Machine Status is ${meta.label}${on ? ' — tap again to show all' : ''}">${meta.label} <b>${n}</b></button>`;
   };
   const noPm = ctx.pm.length === 0;
   const chips = `<div class="die-chips">
     <span class="die-chip">Equipment <b>${rows.length === all.length ? all.length : `${rows.length} of ${all.length}`}</b></span>
-    ${(['breakdown', 'overdue', 'soon', 'ok'] as const).map(chip).join('')}
+    ${STATUS_ORDER.map(chip).join('')}
     <a class="die-chip die-chip-btn" href="${MANGO_HOME}" target="_blank" rel="noopener">🥭 Mango</a>
   </div>${
     noPm
@@ -216,8 +268,8 @@ export function renderMachineBoard(ctx: MaintCtx): string {
       return `<tr class="${r.code ? 'mt-press' : ''}">
         <td class="die-num"><button class="die-link mt-link" data-mt-machine="${escapeHtml(r.asset)}" title="PM plan and work orders">${escapeHtml(r.code || r.asset)}</button></td>
         <td class="die-desc" title="${escapeHtml(r.asset)}">${escapeHtml(r.code ? r.asset : r.description || r.department || '—')}</td>
-        <td><span class="mt-state ${MACHINE_STATE_META[r.state].cls}">${MACHINE_STATE_META[r.state].label}</span></td>
-        <td>${r.lastService ? ddmmyyyy(r.lastService) : '<span class="die-tstat none">—</span>'}</td>
+        <td class="mt-st">${statusCell(r, ctx)}</td>
+        <td>${lastServiceOf(r, ctx) ? ddmmyyyy(lastServiceOf(r, ctx)) : '<span class="die-tstat none">—</span>'}</td>
         <td class="mt-dies">${dieCell}</td>
         <td class="num">${
           open.length
@@ -238,8 +290,8 @@ export function renderMachineBoard(ctx: MaintCtx): string {
     <thead><tr>
       ${th('machine', 'Machine')}
       ${th('name', 'Name', "MachinePM.csv's Name — the same as Mango's Plant/Equipment")}
-      ${th('state', 'Status', '🔴 an open breakdown · 🟠 a PM or work order overdue · 🟡 one due within 7 days · 🟢 nothing due')}
-      ${th('lastService', 'Last service', 'The last preventive or calibration work order closed in Mango')}
+      ${th('state', 'Status', 'PMD_Machine.Status: 🔴 Problems · 🟠 To be Serviced · 🔵 In service · 🟢 Serviced — tap a badge to change it. ⚠ = an open breakdown in Mango')}
+      ${th('lastService', 'Last service', 'PMD_Machine.LastService — stamped when Status is set to Serviced — or the last preventive or calibration order closed in Mango, whichever is later')}
       ${th('dies', 'Die #', 'Dies that ran on the press in the last 90 days or are planned on it — ▶ = running now. Tap a die for its detail')}
       ${th('open', 'Open MR', 'Open Mango maintenance requests — tap for the machine’s PM plan and work orders')}
       ${th('next', 'Next service', "MachinePM.csv Event Due Date — the soonest live PM event")}
@@ -251,14 +303,14 @@ export function renderMachineBoard(ctx: MaintCtx): string {
     </tr></thead>
     <tbody>${body || '<tr><td colspan="12" class="trace-empty">No equipment matches.</td></tr>'}</tbody>
   </table></div>
-  <p class="kpi-note">The nine presses first, then the rest of the equipment in MachinePM.csv, worst first. <b>Next service</b> and <b>Event detail</b> come from MachinePM.csv; work orders from MangoWorkOrders.csv, joined on the equipment's name. <b>MTBF</b> and <b>MTTR</b> are from the Mango breakdowns over the last 12 months (or since the export begins) on calendar time — they read high against running hours, but compare machine to machine.</p>`;
+  <p class="kpi-note"><b>Status</b> is set by hand and saved to PMD_Machine; Last service, Breakdowns, MTBF, MTTR and Avail. are saved there too whenever they change.${ctx.machineSyncNote ? ` <i>${escapeHtml(ctx.machineSyncNote)}</i>` : ''}<br>The nine presses first, then the rest of the equipment in MachinePM.csv, worst first. <b>Next service</b> and <b>Event detail</b> come from MachinePM.csv; work orders from MangoWorkOrders.csv, joined on the equipment's name. <b>MTBF</b> and <b>MTTR</b> are from the Mango breakdowns over the last 12 months (or since the export begins) on calendar time — they read high against running hours, but compare machine to machine.</p>`;
 }
 
 export function wireMachineBoard(root: HTMLElement, ctx: MaintCtx): void {
   root.querySelectorAll<HTMLButtonElement>('[data-mt-state]').forEach((b) =>
     b.addEventListener('click', () => {
-      const st = b.dataset.mtState as MachineRow['state'];
-      machineState = machineState === st ? '' : st;
+      const st = b.dataset.mtState as ToolStatus;
+      machineStatus = machineStatus === st ? '' : st;
       ctx.rerender();
     }),
   );
@@ -284,6 +336,12 @@ export function wireMachineBoard(root: HTMLElement, ctx: MaintCtx): void {
     });
     syncStickyOffset(table);
   }
+  root.querySelectorAll<HTMLButtonElement>('[data-mt-status]').forEach((b) =>
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openMachineStatusPicker(b.dataset.mtStatus!, ctx);
+    }),
+  );
   root.querySelectorAll<HTMLButtonElement>('[data-mt-die]').forEach((b) =>
     b.addEventListener('click', () => ctx.openDie(b.dataset.mtDie!)),
   );
@@ -291,6 +349,39 @@ export function wireMachineBoard(root: HTMLElement, ctx: MaintCtx): void {
     b.addEventListener('click', () => {
       const row = machineRows(ctx).find((r) => r.asset === b.dataset.mtMachine);
       if (row) openMachineDetail(row, ctx);
+    }),
+  );
+}
+
+/** Pick a press's Status — the Tool page's picker, writing PMD_Machine. */
+function openMachineStatusPicker(code: string, ctx: MaintCtx): void {
+  const m = ctx.machineMaster(code);
+  if (!m || !ctx.setMachineStatus) return;
+  const opts = (['serviced', 'in-service', 'to-be-serviced', 'problems'] as ToolStatus[])
+    .map((st) => {
+      const meta = TOOL_STATUS_META[st];
+      const current = m.status === st;
+      return `<button class="die-st-opt${current ? ' cur' : ''}" data-mt-st="${st}">
+        <span class="die-tstat ${meta.cls}">● ${meta.label}</span>
+        ${st === 'serviced' ? '<em>stamps Last service = today</em>' : ''}
+        ${current ? '<b>current</b>' : ''}
+      </button>`;
+    })
+    .join('');
+  openModal(`<div class="die-st-pick">
+    <div class="kpi-trace-head">
+      <h3>🏭 ${escapeHtml(code)} — Status</h3>
+      <button class="btn-ghost-big" data-mod="close">Cancel</button>
+    </div>
+    <p class="die-req-note">Writes to PMD_Machine.Status.</p>
+    ${opts}
+  </div>`);
+  const mc = document.getElementById('mc')!;
+  mc.querySelector('[data-mod="close"]')?.addEventListener('click', () => closeModal());
+  mc.querySelectorAll<HTMLButtonElement>('[data-mt-st]').forEach((b) =>
+    b.addEventListener('click', () => {
+      closeModal();
+      ctx.setMachineStatus?.(code, b.dataset.mtSt as ToolStatus);
     }),
   );
 }
@@ -325,7 +416,10 @@ function openMachineDetail(row: MachineRow, ctx: MaintCtx): void {
       </div>
     </div>
     <div class="mt-stats">
-      ${stat('Status', MACHINE_STATE_META[row.state].label)}
+      ${stat('Status', (() => {
+        const st = row.code ? ctx.machineMaster(row.code)?.status : '';
+        return st ? TOOL_STATUS_META[st].label : '—';
+      })(), 'PMD_Machine.Status')}
       ${stat('Breakdowns', String(rel.breakdowns), `In the last ${rel.windowDays} days`)}
       ${stat('Downtime', `${rel.downtimeH.toFixed(1)} h`)}
       ${stat('MTBF', rel.breakdowns ? fmtH(rel.mtbfH) : `> ${rel.windowDays} d`, 'Calendar time between breakdowns')}
@@ -350,7 +444,6 @@ function openMachineDetail(row: MachineRow, ctx: MaintCtx): void {
 // Team
 
 interface TeamState {
-  branch: string;
   /** Owners shown; empty = everyone. */
   owners: Set<string>;
   from: string;
@@ -369,11 +462,9 @@ const addDays = (day: string, n: number): string => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
-function teamState(ctx: MaintCtx, branches: string[]): TeamState {
+function teamState(ctx: MaintCtx): TeamState {
   if (!team) {
     team = {
-      // The export covers every site; the MES is Minto's, so start there.
-      branch: branches.find((b) => /minto/i.test(b)) ?? '',
       owners: new Set(),
       from: addDays(ctx.today, -89),
       to: ctx.today,
@@ -385,29 +476,26 @@ function teamState(ctx: MaintCtx, branches: string[]): TeamState {
 }
 
 function teamData(ctx: MaintCtx) {
+  // Minto only: the other sites' orders were left out at load.
   const orders = [...ctx.dieOrders, ...ctx.machineOrders];
-  const branches = [...new Set([...orders.map((o) => o.branch ?? ''), ...ctx.pm.map((e) => e.branch)].filter(Boolean))].sort();
-  const st = teamState(ctx, branches);
-  const inBranch = (b: string | undefined): boolean => !st.branch || !b || b === st.branch;
-  const scoped = orders.filter((o) => inBranch(o.branch));
-  const pm = ctx.pm.filter((e) => inBranch(e.branch));
-  const done = doneOrders(scoped);
-  const open = openWork(scoped, pm, ctx.today);
+  const st = teamState(ctx);
+  const done = doneOrders(orders);
+  const open = openWork(orders, ctx.pm, ctx.today);
   const owners = [...new Set([...done.map((d) => d.owner), ...open.map((o) => o.owner)])].sort((a, b) =>
     a === UNASSIGNED ? 1 : b === UNASSIGNED ? -1 : a.localeCompare(b),
   );
-  // An owner picked under another branch may not exist under this one.
+  // An owner picked before a reload may no longer have any orders.
   for (const o of [...st.owners]) if (!owners.includes(o)) st.owners.delete(o);
   const picked = (owner: string): boolean => st.owners.size === 0 || st.owners.has(owner);
-  return { st, branches, owners, done, open, picked };
+  return { st, owners, done, open, picked };
 }
 
 export function renderTeam(ctx: MaintCtx): string {
-  const { st, branches, owners, done, open, picked } = teamData(ctx);
+  const { st, owners, done, open, picked } = teamData(ctx);
   const f = ctx.filter.trim().toUpperCase();
   const match = (...v: string[]): boolean => !f || v.some((x) => x.toUpperCase().includes(f));
   const doneShown = done.filter(
-    (d) => picked(d.owner) && match(d.asset, d.title, d.detail, d.summary, d.prevention, d.ticket, d.owner),
+    (d) => picked(d.owner) && match(d.asset, d.title, d.detail, d.summary, d.prevention, ...d.notes.map((n) => n.comment), d.ticket, d.owner),
   );
   const inRange = doneShown.filter((d) => d.day >= st.from && d.day <= st.to);
   const unit = unitFor(st.from, st.to);
@@ -468,10 +556,6 @@ export function renderTeam(ctx: MaintCtx): string {
     .join('');
   return `<div class="tm">
     <div class="kpi-head tm-head">
-      <label class="tm-branch">Branch <select data-tm-branch>
-        <option value=""${st.branch ? '' : ' selected'}>All</option>
-        ${branches.map((b) => `<option${b === st.branch ? ' selected' : ''}>${escapeHtml(b)}</option>`).join('')}
-      </select></label>
       <div class="tm-owners"><span class="tm-lbl">Owner</span>
         <button type="button" class="die-chip tm-owner${st.owners.size === 0 ? ' on' : ''}" data-tm-owner="">Everyone</button>
         ${owners.map(ownerChip).join('')}
@@ -536,9 +620,9 @@ function doneTable(rows: DoneOrder[], from: string, to: string): string {
         <td>${escapeHtml(d.ticket || '—')}</td>
         <td title="${escapeHtml(d.asset)}">${escapeHtml(d.asset || '—')}</td>
         <td class="tm-text"><b>${escapeHtml(d.title || '—')}</b>${d.detail ? `<div>${escapeHtml(d.detail)}</div>` : ''}</td>
-        <td class="tm-text">${escapeHtml(d.summary || '—')}${
+        <td class="tm-text">${escapeHtml(d.summary || (d.notes.length ? '' : '—'))}${
           d.prevention ? `<div>Prevent: ${escapeHtml(d.prevention)}</div>` : ''
-        }</td>
+        }${d.notes.map((n) => `<div class="tm-note"><time>${escapeHtml(n.date.slice(0, 5))}</time> ${escapeHtml(n.comment)}</div>`).join('')}</td>
         <td>${escapeHtml(d.owner)}</td>
         <td class="num">${d.hours ? d.hours.toFixed(2).replace(/\.?0+$/, '') : '—'}</td>
       </tr>`,
@@ -634,10 +718,6 @@ export function wireTeam(root: HTMLElement, ctx: MaintCtx): void {
     st.pick = null;
     ctx.rerender();
   };
-  root.querySelector<HTMLSelectElement>('[data-tm-branch]')?.addEventListener('change', (e) => {
-    st.branch = (e.target as HTMLSelectElement).value;
-    ctx.rerender();
-  });
   root.querySelectorAll<HTMLButtonElement>('[data-tm-owner]').forEach((b) =>
     b.addEventListener('click', () => {
       const o = b.dataset.tmOwner ?? '';

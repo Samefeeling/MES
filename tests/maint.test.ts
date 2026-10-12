@@ -7,6 +7,10 @@ import {
   doneOrders,
   dueLevel,
   isBreakdown,
+  machineFigures,
+  machineFiguresPatch,
+  machineKey,
+  onSite,
   openWork,
   pressCodeOf,
   reliability,
@@ -14,7 +18,7 @@ import {
 } from '../src/core/maint';
 import { parseMachinePmCsv, parseMangoMachineWorkOrdersCsv, parseMangoWorkOrdersCsv } from '../src/dal/sharepoint';
 import { resolveMachinePmCsvPath } from '../src/dal';
-import type { DieMaintenanceRequest, MachinePmEvent } from '../src/types';
+import type { DieMaintenanceRequest, MachineMaster, MachinePmEvent } from '../src/types';
 
 const wo = (over: Partial<DieMaintenanceRequest>): DieMaintenanceRequest => ({
   id: 1,
@@ -195,12 +199,103 @@ describe('the Mango export as it comes out of Mango (sample of 12/10/2026)', () 
     });
   });
 
+  it('keeps only the Comment entries of the Actions taken log, and dates the close by its stage change', () => {
+    // As Mango writes it (sample of 01/10/2025), plus the closing step.
+    const log = [
+      'Wed, 01/10/2025, Steven Brough (): Created',
+      ' Wed, 01/10/2025, Wisam Istefo (Stage 2 Being Investigated):',
+      'Comment: System running as normal.',
+      ' Wed, 01/10/2025, Wisam Istefo (Stage 2 Being Investigated): Completed',
+      ' Wed, 01/10/2025, Aryan Apte (Stage 2 Being Investigated):',
+      'Comment: Opened the panel on the shredder for cleaning',
+      ' Wed, 01/10/2025, Aryan Apte (Stage 2 Being Investigated): Completed',
+      ' Wed, 01/10/2025, Aryan Apte (Stage 2 Being Investigated): Change Stage from Stage 2 Being Investigated to Stage 3 Coordinator Reviewing',
+      ' Thu, 02/10/2025, Anil Pattarath (Stage 3 Coordinator Reviewing): Change Stage from Stage 3 Coordinator Reviewing to Stage 4 Closed',
+    ].join('\n');
+    const [r] = parseMangoMachineWorkOrdersCsv(
+      [
+        COLS.map(q).join(','),
+        line({
+          Number: 'MWO 02500', 'Current Stage': 'Stage 4 Closed', 'Plant/Equipment': 'AU - Shredder',
+          'Brief Description': 'Shredder stopped', 'Created Date': '1/10/2025', Branch: 'Resero - Minto',
+          'Type of Maintenance': '2. Breakdown', 'Actions taken': log, 'Assign to Action': 'Wisam Istefo',
+        }),
+      ].join('\r\n'),
+    );
+    expect(r.closedAt).toBe('2025-10-02');
+    const [d] = doneOrders([r]);
+    expect(d.notes).toEqual([
+      { date: '01/10/2025', comment: 'Opened the panel on the shredder for cleaning' },
+      { date: '01/10/2025', comment: 'System running as normal.' },
+    ]);
+    expect(d.summary).toBe('');
+  });
+
   it('puts the longest-waiting undated request first among the undated', () => {
     const undated = openWork(machine, [], '2026-10-12').filter((o) => o.level === 'none');
     expect(undated.map((o) => [o.ticket, o.raised])).toEqual([
       ['MWO 02797', '2026-10-06'],
       ['MWO 02801', '2026-10-11'],
     ]);
+  });
+});
+
+describe('Minto only', () => {
+  it('keeps Minto and rows with no branch, and leaves the other sites out', () => {
+    expect(onSite('Resero - Minto')).toBe(true);
+    expect(onSite(undefined)).toBe(true);
+    expect(onSite('')).toBe(true);
+    expect(onSite('Resero - Hastings')).toBe(false);
+  });
+});
+
+describe('the figures saved to PMD_Machine', () => {
+  const stored = (over: Partial<MachineMaster> = {}): MachineMaster => ({
+    machineCode: '1600T',
+    status: 'serviced',
+    lastService: '',
+    mtbf: null,
+    mttr: null,
+    breakdowns: null,
+    available: null,
+    ...over,
+  });
+  const row = buildMachineRows(
+    [],
+    [
+      wo({ createdAt: '2026-09-01', downtime: '10' }),
+      wo({ createdAt: '2026-10-01', downtime: '2' }),
+      wo({ maintType: 'inspection', maintTypeRaw: '3. Preventive Maintenance', closedAt: '2026-09-20' }),
+    ],
+    today,
+    '2026-07-14',
+  ).find((r) => r.code === '1600T')!;
+
+  it('rounds hours to one decimal and gives availability as a percentage', () => {
+    const f = machineFigures(row);
+    expect(f).toMatchObject({ breakdowns: 2, mttr: 6, lastService: '2026-09-20' });
+    expect(f.mtbf).toBe(Math.round(((90 * 24 - 12) / 2) * 10) / 10);
+    expect(f.available).toBe(Math.round((f.mtbf! / (f.mtbf! + 6)) * 1000) / 10);
+  });
+
+  it('keeps the later last service: a press set to Serviced by hand, or Mango\'s last PM', () => {
+    expect(machineFigures(row, stored({ lastService: '2026-10-05' })).lastService).toBe('2026-10-05');
+    expect(machineFigures(row, stored({ lastService: '2026-08-01' })).lastService).toBe('2026-09-20');
+  });
+
+  it('writes only what changed', () => {
+    const f = machineFigures(row);
+    expect(machineFiguresPatch(stored(), f)).toEqual(f);
+    expect(machineFiguresPatch(stored({ ...f, mtbf: f.mtbf! + 0.04 }), f)).toEqual({});
+    expect(machineFiguresPatch(stored({ ...f, breakdowns: 1 }), f)).toEqual({ breakdowns: 2 });
+    // A figure that no longer exists is cleared; a date is never wiped.
+    expect(machineFiguresPatch(stored({ ...f, mttr: 3 }), { ...f, mttr: null })).toEqual({ mttr: null });
+    expect(machineFiguresPatch(stored({ ...f, lastService: '2026-10-01' }), { ...f, lastService: '' })).toEqual({});
+  });
+
+  it('matches PMD_Machine titles however the press is written', () => {
+    expect(machineKey('Batt-1')).toBe(machineKey('BATT1'));
+    expect(machineKey(' 1600t ')).toBe('1600T');
   });
 });
 

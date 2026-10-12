@@ -14,6 +14,7 @@ import type { PmdDataLayer } from '../dal';
 import type {
   DieMaintenanceRequest,
   DieMaster,
+  MachineMaster,
   MachinePmEvent,
   MaintPriority,
   MaintStatus,
@@ -57,6 +58,15 @@ import { toast } from './toast';
 import { isSupervisor } from './supervisor-auth';
 import { peekDieNoteContext } from './nav-context';
 import { STATUS_MAP } from '../core/status';
+import {
+  buildMachineRows,
+  earliestOrder,
+  machineFigures,
+  machineFiguresPatch,
+  machineKey,
+  onSite,
+  parseMangoActionComments,
+} from '../core/maint';
 import { dateKey } from '../core/shifts';
 import {
   renderMachineBoard,
@@ -95,6 +105,10 @@ interface DieState {
   tab: MaintTab;
   /** MachinePM.csv — equipment and its PM events (Machine and Team pages). */
   machinePm: MachinePmEvent[];
+  /** PMD_Machine rows by machineKey — each press's Status and saved figures. */
+  machineMaster: Map<string, MachineMaster>;
+  /** What the last save of the figures to PMD_Machine did. */
+  machineSync: string;
   from: string; // YYYY-MM-DD inclusive
   to: string;
   filter: string;
@@ -268,45 +282,8 @@ export function isWorkOrderOverdue(
   return request.status !== 'done' && due !== '' && due < today;
 }
 
-export interface MangoActionComment {
-  date: string;
-  comment: string;
-}
-
-/** Turn Mango's verbose audit trail into the useful operator comments.
- *  Lifecycle noise (Created / Completed / Change Stage and the stage in
- *  parentheses) has no Comment: marker, so it is deliberately omitted. */
-export function parseMangoActionComments(actionsTaken?: string): MangoActionComment[] {
-  if (!actionsTaken?.trim()) return [];
-  const entryHeader = /(?:^|\r?\n)\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s*(\d{1,2})\/(\d{1,2})\/(\d{4}),[^\r\n]*?:[ \t]*/gi;
-  const headers = Array.from(actionsTaken.matchAll(entryHeader));
-  return headers
-    .map((header, index) => {
-      const bodyStart = (header.index ?? 0) + header[0].length;
-      const bodyEnd = headers[index + 1]?.index ?? actionsTaken.length;
-      const body = actionsTaken.slice(bodyStart, bodyEnd);
-      const marker = /(?:^|\r?\n)\s*Comment:\s*/i.exec(body);
-      if (!marker) return null;
-      const comment = body
-        .slice(marker.index + marker[0].length)
-        .replace(/\s+/g, ' ')
-        .trim();
-      if (!comment) return null;
-      const day = Number(header[1]);
-      const month = Number(header[2]);
-      const year = Number(header[3]);
-      if (day < 1 || day > 31 || month < 1 || month > 12) return null;
-      return {
-        date: `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`,
-        comment,
-        sortKey: year * 10_000 + month * 100 + day,
-        sourceIndex: index,
-      };
-    })
-    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-    .sort((a, b) => b.sortKey - a.sortKey || b.sourceIndex - a.sourceIndex)
-    .map(({ date, comment }) => ({ date, comment }));
-}
+// Mango's Actions taken log is read in core/maint (Team uses it too).
+export { parseMangoActionComments, type MangoActionComment } from '../core/maint';
 
 function actionCommentsHtml(actionsTaken?: string): string {
   const comments = parseMangoActionComments(actionsTaken);
@@ -588,6 +565,8 @@ export async function mountDieTab(
   S = {
     tab: openDie ? 'tool' : tab,
     machinePm: [],
+    machineMaster: new Map(),
+    machineSync: '',
     from: isoDay(from),
     to: isoDay(to),
     filter: '',
@@ -667,7 +646,7 @@ async function loadAll(): Promise<void> {
             .then((rows) => rows.filter((r) => r.slotIndex === 0)),
           [],
         );
-  const [dieColors, requests, machineRequests, rejCats, records, planning, master, changeLogs, serviceCounters, machinePm] = await Promise.all([
+  const [dieColors, requests, machineRequests, rejCats, records, planning, master, changeLogs, serviceCounters, machinePm, machineMaster] = await Promise.all([
     dalRef.listProductDieColors
       ? safe('Die/part mapping', dalRef.listProductDieColors(), [])
       : Promise.resolve([]),
@@ -692,6 +671,7 @@ async function loadAll(): Promise<void> {
       : Promise.resolve([]),
     serviceCountersPromise,
     dalRef.listMachinePm ? safe('MachinePM.csv', dalRef.listMachinePm(), []) : Promise.resolve([]),
+    dalRef.listMachineMaster ? safe('PMD_Machine', dalRef.listMachineMaster(), []) : Promise.resolve([]),
   ]);
   // A slower response for an old date range must never overwrite the range
   // the user picked afterwards (or a newly-mounted tab instance).
@@ -702,11 +682,13 @@ async function loadAll(): Promise<void> {
   state.serviceUsageByDie = aggregateDieServiceUsage(dieColors, serviceCounters);
   state.serviceHistoryFrom = serviceFrom;
   state.serviceHistoryAvailable = !errors.some((e) => e.startsWith('Service shot history:'));
-  state.requests = requests;
-  state.machineRequests = machineRequests;
-  state.machinePm = machinePm;
+  // Mango's export covers every site; Maint is Minto's for now.
+  state.requests = requests.filter((r) => onSite(r.branch));
+  state.machineRequests = machineRequests.filter((r) => onSite(r.branch));
+  state.machinePm = machinePm.filter((e) => onSite(e.branch));
+  state.machineMaster = new Map(machineMaster.map((m) => [machineKey(m.machineCode), m]));
   state.rejectLabels = new Map(rejCats.map((c) => [c.code, c.label]));
-  state.dies = aggregateDies(dieColors, records, requests);
+  state.dies = aggregateDies(dieColors, records, state.requests);
   // Description: PMD_DieMaster's DieDescription is the toolroom's own name
   // for the tool — prefer it wherever a master row exists. The
   // PMD_ProductDieColor Die text stays as the fallback for dies the
@@ -747,6 +729,74 @@ async function loadAll(): Promise<void> {
   }
   state.loading = false;
   render();
+  void saveMachineFigures(state);
+}
+
+/**
+ * Save what the Machine page works out for each press — Last service,
+ * Breakdowns, MTBF, MTTR, availability — to its PMD_Machine row, but only
+ * the figures that changed, so a reload writes nothing new. Without the
+ * Mango report every figure would read zero: then nothing is written.
+ */
+async function saveMachineFigures(state: DieState): Promise<void> {
+  if (!dalRef.updateMachineMaster || state.machineMaster.size === 0) return;
+  if (state.machineRequests.length === 0) {
+    state.machineSync = 'PMD_Machine not updated: the Mango work-order report was not read.';
+    if (S === state) render();
+    return;
+  }
+  const today = isoDay(new Date());
+  const rows = buildMachineRows(
+    state.machinePm,
+    state.machineRequests,
+    today,
+    earliestOrder([...state.machineRequests, ...state.requests]),
+  );
+  let saved = 0;
+  for (const row of rows) {
+    const m = row.code ? state.machineMaster.get(machineKey(row.code)) : undefined;
+    if (!m) continue;
+    const patch = machineFiguresPatch(m, machineFigures(row, m));
+    if (Object.keys(patch).length === 0) continue;
+    try {
+      await dalRef.updateMachineMaster(m.machineCode, patch);
+      Object.assign(m, patch);
+      saved += 1;
+    } catch (e) {
+      // A missing column or a missing permission fails every press alike:
+      // say so once instead of trying the rest.
+      console.warn('[pmd] PMD_Machine figures not saved:', e);
+      state.machineSync = `PMD_Machine not updated: ${e instanceof Error ? e.message : e}`;
+      if (S === state) render();
+      return;
+    }
+  }
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  state.machineSync = saved
+    ? `PMD_Machine updated for ${saved} press${saved === 1 ? '' : 'es'} at ${time}.`
+    : 'PMD_Machine is up to date.';
+  if (S === state) render();
+}
+
+/** Set a press's Status on PMD_Machine; Serviced also stamps Last service =
+ *  today. The row updates at once and rolls back if the write fails. */
+async function setMachineStatus(code: string, status: ToolStatus): Promise<void> {
+  const m = S?.machineMaster.get(machineKey(code));
+  if (!m || !dalRef.updateMachineMaster) return;
+  const patch: Partial<Omit<MachineMaster, 'machineCode'>> = { status };
+  if (status === 'serviced') patch.lastService = isoDay(new Date());
+  const prev = { status: m.status, lastService: m.lastService };
+  Object.assign(m, patch);
+  render();
+  try {
+    await dalRef.updateMachineMaster(m.machineCode, patch);
+    toast(`${code} → ${TOOL_STATUS_META[status].label}`, 'ok');
+  } catch (e) {
+    Object.assign(m, prev);
+    render();
+    console.error('[pmd] PMD_Machine Status update failed:', e);
+    toast(`Could not update: ${e instanceof Error ? e.message : e}`, 'err');
+  }
 }
 
 function rejLabel(code: string): string {
@@ -788,6 +838,11 @@ function maintCtx(): MaintCtx {
     openDie: (die) => openDieDetail(die),
     woRow,
     rerender: render,
+    machineMaster: (code) => S!.machineMaster.get(machineKey(code)),
+    setMachineStatus: dalRef.updateMachineMaster
+      ? (code, status) => void setMachineStatus(code, status)
+      : undefined,
+    machineSyncNote: S!.machineSync,
   };
 }
 

@@ -8,10 +8,14 @@
 // and "Moulding"), so a name that resolves to one of the nine presses joins
 // on the press as well.
 
-import type { DieMaintenanceRequest, MachinePmEvent } from '../types';
+import type { DieMaintenanceRequest, MachineMaster, MachinePmEvent } from '../types';
 import { MACHINE_ASSET_TO_CODE, machineCodeForAsset } from './die';
 
 const DAY_MS = 86_400_000;
+
+/** The MES is Minto's. Mango's export covers every site; the other sites
+ *  (Hastings) are left out for now. Rows with no branch are kept. */
+export const onSite = (branch: string | undefined): boolean => !branch?.trim() || /minto/i.test(branch);
 
 /** The injection moulding presses, in the order the Machine page lists them first. */
 export const PRESS_CODES: readonly string[] = [...new Set(MACHINE_ASSET_TO_CODE.map(([, code]) => code))].sort(
@@ -156,6 +160,49 @@ export function earliestOrder(orders: readonly DieMaintenanceRequest[]): string 
 }
 
 // ---------------------------------------------------------------------
+// Mango's Actions taken log
+
+export interface MangoActionComment {
+  date: string;
+  comment: string;
+}
+
+/** Turn Mango's verbose audit trail into the useful operator comments.
+ *  Lifecycle noise (Created / Completed / Change Stage and the stage in
+ *  parentheses) has no Comment: marker, so it is deliberately omitted. */
+export function parseMangoActionComments(actionsTaken?: string): MangoActionComment[] {
+  if (!actionsTaken?.trim()) return [];
+  const entryHeader = /(?:^|\r?\n)\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s*(\d{1,2})\/(\d{1,2})\/(\d{4}),[^\r\n]*?:[ \t]*/gi;
+  const headers = Array.from(actionsTaken.matchAll(entryHeader));
+  return headers
+    .map((header, index) => {
+      const bodyStart = (header.index ?? 0) + header[0].length;
+      const bodyEnd = headers[index + 1]?.index ?? actionsTaken.length;
+      const body = actionsTaken.slice(bodyStart, bodyEnd);
+      const marker = /(?:^|\r?\n)\s*Comment:\s*/i.exec(body);
+      if (!marker) return null;
+      const comment = body
+        .slice(marker.index + marker[0].length)
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!comment) return null;
+      const day = Number(header[1]);
+      const month = Number(header[2]);
+      const year = Number(header[3]);
+      if (day < 1 || day > 31 || month < 1 || month > 12) return null;
+      return {
+        date: `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`,
+        comment,
+        sortKey: year * 10_000 + month * 100 + day,
+        sourceIndex: index,
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .sort((a, b) => b.sortKey - a.sortKey || b.sourceIndex - a.sourceIndex)
+    .map(({ date, comment }) => ({ date, comment }));
+}
+
+// ---------------------------------------------------------------------
 // the Machine page
 
 export type MachineState = 'breakdown' | 'overdue' | 'soon' | 'ok';
@@ -291,6 +338,48 @@ export function buildMachineRows(
 }
 
 // ---------------------------------------------------------------------
+// PMD_Machine
+
+/** How a machine code is matched against PMD_Machine's Title: "Batt-1",
+ *  "BATT1" and "Batt1" are the same press. */
+export const machineKey = (code: string): string => code.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+/** The figures the Machine page saves to PMD_Machine. */
+export type MachineFigures = Pick<MachineMaster, 'lastService' | 'mtbf' | 'mttr' | 'breakdowns' | 'available'>;
+
+const round1 = (n: number): number => Math.round(n * 10) / 10;
+
+/**
+ * A press's figures as PMD_Machine keeps them: hours to one decimal,
+ * availability as a percentage. Last service is the later of the date on
+ * the list (stamped when someone sets the press to Serviced) and the last
+ * preventive or calibration order Mango closed on it.
+ */
+export function machineFigures(row: MachineRow, stored?: MachineMaster): MachineFigures {
+  const rel = row.reliability;
+  return {
+    lastService: [row.lastService, stored?.lastService ?? ''].sort().pop() ?? '',
+    mtbf: rel.mtbfH == null ? null : round1(rel.mtbfH),
+    mttr: rel.mttrH == null ? null : round1(rel.mttrH),
+    breakdowns: rel.breakdowns,
+    available: rel.availability == null ? null : round1(rel.availability * 100),
+  };
+}
+
+/** The figures that differ from what PMD_Machine holds; {} when nothing
+ *  needs writing. A stored date is never wiped. */
+export function machineFiguresPatch(stored: MachineMaster, figures: MachineFigures): Partial<MachineFigures> {
+  const patch: Partial<MachineFigures> = {};
+  if (figures.lastService && figures.lastService !== stored.lastService) patch.lastService = figures.lastService;
+  for (const k of ['mtbf', 'mttr', 'breakdowns', 'available'] as const) {
+    const a = figures[k];
+    const b = stored[k];
+    if (a == null ? b != null : b == null || Math.abs(a - b) >= 0.05) patch[k] = a;
+  }
+  return patch;
+}
+
+// ---------------------------------------------------------------------
 // the Team page
 
 export const UNASSIGNED = 'Unassigned';
@@ -312,6 +401,9 @@ export interface DoneOrder {
   /** "Preventative action taken", unless it is N/A or already said above.
    *  Some sites leave the work summary empty and put the fix here. */
   prevention: string;
+  /** The Comment: entries of Mango's Actions taken log, newest first —
+   *  the technicians' own notes; the stage changes around them are left out. */
+  notes: MangoActionComment[];
   owner: string;
   /** When it closed (Mango's Stage 4 date), else when it was raised. YYYY-MM-DD. */
   day: string;
@@ -342,6 +434,7 @@ export function doneOrders(orders: readonly DieMaintenanceRequest[]): DoneOrder[
         detail: addsNothing(r.issueDetail, r.description) ? '' : (r.issueDetail ?? ''),
         summary,
         prevention: addsNothing(r.preventativeAction, summary) ? '' : (r.preventativeAction ?? ''),
+        notes: parseMangoActionComments(r.actionsTaken),
         owner: orderOwner(r),
         day: (r.closedAt || r.createdAt).slice(0, 10),
         hours: hours(r.labourHours),

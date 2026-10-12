@@ -5,6 +5,7 @@ import type {
   BreakdownLogDetail,
   DieChangeLog,
   DieMaintenanceRequest,
+  MachineMaster,
   MachinePmEvent,
   DieMaster,
   Machine,
@@ -53,6 +54,8 @@ import {
  */
 export class MemoryDataLayer implements PmdDataLayer {
   private machines: Machine[];
+  /** PMD_Machine's maintenance columns, one row per machine. */
+  private machineMaster: MachineMaster[] = [];
   private operators: Operator[];
   private supervisors: Supervisor[];
   private rejectCategories: RejectCategory[];
@@ -75,6 +78,15 @@ export class MemoryDataLayer implements PmdDataLayer {
 
   constructor(now: Date = new Date()) {
     this.machines = seedMachines();
+    this.machineMaster = this.machines.map((m) => ({
+      machineCode: m.machineCode,
+      status: '',
+      lastService: '',
+      mtbf: null,
+      mttr: null,
+      breakdowns: null,
+      available: null,
+    }));
     this.operators = seedOperators();
     this.supervisors = seedSupervisors();
     this.rejectCategories = seedRejectCategories();
@@ -154,6 +166,20 @@ export class MemoryDataLayer implements PmdDataLayer {
 
   async listMachinePm(): Promise<MachinePmEvent[]> {
     return MemoryDataLayer.clone(seedMachinePm(new Date()));
+  }
+
+  async listMachineMaster(): Promise<MachineMaster[]> {
+    return MemoryDataLayer.clone(this.machineMaster);
+  }
+
+  async updateMachineMaster(
+    machineCode: string,
+    patch: Partial<Omit<MachineMaster, 'machineCode'>>,
+  ): Promise<void> {
+    const key = machineCode.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const row = this.machineMaster.find((m) => m.machineCode.toUpperCase().replace(/[^A-Z0-9]/g, '') === key);
+    if (!row) throw new Error(`No PMD_Machine row for ${machineCode}`);
+    Object.assign(row, MemoryDataLayer.clone(patch));
   }
 
   async listDieMaintenance(): Promise<DieMaintenanceRequest[]> {

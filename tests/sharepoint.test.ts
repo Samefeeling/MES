@@ -11,6 +11,7 @@ import {
   sanitizeBodyStrings,
   sharePointDateTimeIso,
   SharePointDataLayer,
+  spDay,
   shiftEndedLongAgo,
   toServerRelativePath,
 } from '../src/dal/sharepoint';
@@ -3125,5 +3126,104 @@ describe('Cavities on the header write', () => {
     const body = await bodyFor(undefined);
     expect('Cavities' in body).toBe(false);
     expect(body.TotalGood).toBe(100);
+  });
+});
+
+describe('PMD_Machine maintenance columns', () => {
+  type Field = { Title: string; InternalName: string; TypeAsString: string };
+  const stub = (fields: Field[], rows: Record<string, unknown>[], percent = false) => {
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const posts: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const o = dal as unknown as {
+      getJson: (url: string) => Promise<unknown>;
+      getAllItems: () => Promise<unknown[]>;
+      itemType: () => Promise<string>;
+      post: (url: string, body: unknown, ifMatch?: string) => Promise<unknown>;
+    };
+    o.getJson = async (url: string): Promise<unknown> =>
+      url.includes('getbyinternalnameortitle') ? { d: { ShowAsPercentage: percent } } : { d: { results: fields } };
+    o.getAllItems = async (): Promise<unknown[]> => rows;
+    o.itemType = async (): Promise<string> => 'SP.Data.PMD_x005f_MachineListItem';
+    o.post = async (url: string, body: unknown): Promise<unknown> => {
+      const b = body as Record<string, unknown>;
+      posts.push({ url, body: b });
+      // Creating a column: the list now has it.
+      if (url.endsWith('/fields')) {
+        const kind = b.FieldTypeKind as number;
+        fields.push({
+          Title: b.Title as string,
+          InternalName: b.Title as string,
+          TypeAsString: kind === 4 ? 'DateTime' : kind === 9 ? 'Number' : 'Text',
+        });
+      }
+      return {};
+    };
+    return { dal, posts };
+  };
+  const base = (): Field[] => [
+    { Title: 'Title', InternalName: 'Title', TypeAsString: 'Text' },
+    { Title: 'DisplayOrder', InternalName: 'DisplayOrder', TypeAsString: 'Number' },
+  ];
+
+  it('reads Status like a die\'s, and adds the missing columns on the first save', async () => {
+    const fields = [
+      ...base(),
+      { Title: 'Status', InternalName: 'Status', TypeAsString: 'Choice' },
+      // Made by hand as text.
+      { Title: 'MTBF', InternalName: 'field_5', TypeAsString: 'Text' },
+    ];
+    const { dal, posts } = stub(fields, [
+      { Id: 3, Title: '1600T', Status: 'To be Serviced', field_5: '120.5' },
+      { Id: 4, Title: 'Batt-1', Status: '' },
+    ]);
+    const list = await dal.listMachineMaster();
+    expect(list[0]).toMatchObject({ machineCode: '1600T', status: 'to-be-serviced', mtbf: 120.5, lastService: '', mttr: null });
+    expect(list[1].status).toBe('');
+
+    await dal.updateMachineMaster('1600t', {
+      status: 'serviced',
+      lastService: '2026-10-12',
+      mtbf: 130.2,
+      mttr: 2.5,
+      breakdowns: 3,
+      available: 98.1,
+    });
+    const created = posts.filter((p) => p.url.endsWith('/fields')).map((p) => [p.body.Title, p.body.FieldTypeKind]);
+    expect(created).toEqual([
+      ['LastService', 4],
+      ['MTTR', 9],
+      ['Breakdowns', 9],
+      ['Available', 9],
+    ]);
+    const write = posts[posts.length - 1];
+    expect(write.url).toMatch(/items\(3\)$/);
+    expect(write.body).toMatchObject({
+      Status: 'Serviced',
+      LastService: '2026-10-12T00:00:00Z',
+      field_5: '130.2',
+      MTTR: 2.5,
+      Breakdowns: 3,
+      Available: 98.1,
+    });
+    // "Batt1" finds the "Batt-1" row.
+    await dal.updateMachineMaster('Batt1', { status: 'problems' });
+    expect(posts[posts.length - 1].url).toMatch(/items\(4\)$/);
+    await expect(dal.updateMachineMaster('999T', { status: 'problems' })).rejects.toThrow(/No PMD_Machine row/);
+  });
+
+  it('keeps a percentage column as a fraction', async () => {
+    const fields = [...base(), { Title: 'Available', InternalName: 'Available', TypeAsString: 'Number' }];
+    const { dal, posts } = stub(fields, [{ Id: 9, Title: '850T', Available: 0.987 }], true);
+    expect((await dal.listMachineMaster())[0].available).toBe(98.7);
+    await dal.updateMachineMaster('850T', { available: 99.1 });
+    expect(posts[posts.length - 1].body.Available).toBe(0.991);
+  });
+
+  it('reads the day of a date cell, date-only or written by the app', () => {
+    expect(spDay('2026-10-11T13:00:00Z')).toBe('2026-10-12'); // Sydney midnight of the 12th
+    expect(spDay('2026-10-12T00:00:00Z')).toBe('2026-10-12');
+    expect(spDay('12/10/2026')).toBe('2026-10-12');
+    expect(spDay('2026-10-12')).toBe('2026-10-12');
+    expect(spDay('')).toBe('');
   });
 });
