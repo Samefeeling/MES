@@ -10,6 +10,7 @@ import {
   isBreakdown,
   isDieAsset,
   isEquipmentTitle,
+  isProductionMachine,
   lastWeek,
   machineFigures,
   machineFiguresPatch,
@@ -288,6 +289,16 @@ describe('dies on the Machine page', () => {
 });
 
 describe('PMD_Machine rows for all the plant', () => {
+  it('lists only the nine presses and hot stamp as production machines', () => {
+    for (const code of [...PRESS_CODES, 'Batt-1', 'batt 2', '1600 T', '850C', '1300T', 'Hstamp', 'HStamp', 'Hot Stamp', 'HS']) {
+      expect(isProductionMachine(code)).toBe(true);
+    }
+    for (const code of ['3D Scanner', '3D-Scanner', 'AU - Encore Cold Saw', 'AU - Hot Stamping Machine', 'Robot 1', '900T', 'Batt3', 'Chiller', '']) {
+      expect(isProductionMachine(code)).toBe(false);
+    }
+    expect(PRESS_CODES).toHaveLength(9);
+  });
+
   it('tells plant titled the Mango way from production machine codes', () => {
     expect(isEquipmentTitle('AU - Encore Cold Saw')).toBe(true);
     expect(isEquipmentTitle('NZ - Hastings Forklift 3')).toBe(true);

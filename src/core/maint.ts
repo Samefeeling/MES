@@ -20,10 +20,25 @@ export const onSite = (branch: string | undefined, asset = ''): boolean =>
   !/^\s*NZ/i.test(asset) && (!branch?.trim() || /minto/i.test(branch));
 
 /** A PMD_Machine Title that names a piece of plant the way Mango does
- *  ("AU - Encore Cold Saw"), not a production machine code ("1600T"). The
- *  list holds both: the Machine page reads every row, the operator sheet and
- *  the KPIs only the production machines. */
+ *  ("AU - Encore Cold Saw"), not a production machine code ("1600T"). */
 export const isEquipmentTitle = (title: string): boolean => /^\s*(AU|NZ)\s*-/i.test(title);
+
+/**
+ * The machines that run orders: the nine injection presses and the hot-stamp
+ * press. PMD_Machine also holds the rest of the plant maintenance looks after
+ * (a 3D scanner, a cold saw…): the Machine page reads every row, the operator
+ * sheet, Live Status, KPIs and Trace only these. A press is known by its code
+ * however it is written ("Batt-1", "1600 T", "850C"); hot stamp as "Hstamp",
+ * "Hot Stamp" or Planning's "HS".
+ */
+export function isProductionMachine(code: string): boolean {
+  if (isEquipmentTitle(code)) return false;
+  const k = machineKey(code);
+  if (k === 'HS' || k.includes('HSTAMP') || k.includes('HOTSTAMP')) return true;
+  if (PRESS_CODES.some((p) => machineKey(p) === k)) return true;
+  const ton = /^(\d{3,4})(T|C|TON|TONNE)?$/.exec(k);
+  return !!ton && PRESS_CODES.includes(`${ton[1]}T`);
+}
 
 /** Equipment named for a die ("AU - Die 280", "DIE-3597", "Trim Dies") —
  *  the tools, which the Tool page already manages, so the Machine page

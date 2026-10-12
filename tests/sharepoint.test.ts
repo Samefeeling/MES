@@ -3173,6 +3173,7 @@ describe('PMD_Machine maintenance columns', () => {
         { ID: 2, Title: 'Hstamp', DisplayOrder: 2 },
         { ID: 3, Title: 'AU - Encore Cold Saw', Status: 'Problems' },
         { ID: 4, Title: 'NZ - Hastings Forklift 3' },
+        { ID: 5, Title: '3D Scanner' },
       ],
     );
     expect((await dal.listMachines()).map((m) => m.machineCode)).toEqual(['1600T', 'Hstamp']);
@@ -3182,6 +3183,7 @@ describe('PMD_Machine maintenance columns', () => {
       ['Hstamp', ''],
       ['AU - Encore Cold Saw', 'problems'],
       ['NZ - Hastings Forklift 3', ''],
+      ['3D Scanner', ''],
     ]);
   });
 

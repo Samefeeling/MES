@@ -583,9 +583,12 @@ for the Plant/Equipment module):
    **`PMD_Machine`** carries each machine's maintenance record: the
    production machines titled by code ("1600T"), the rest of the plant by
    its Mango `Plant/Equipment` name ("AU - Encore Cold Saw"; also found
-   without the "AU - ", or by asset number). Rows titled "AU - …" or
-   "NZ - …" are plant only: the operator sheet, KPIs and Trace leave them
-   out of their machine list. Equipment whose name starts with "NZ" is
+   without the "AU - ", or by asset number). Only the nine injection
+   presses (125T, 150T, 320T, 550T, 850T, 1300T, 1600T, Batt1, Batt2 — also
+   written "Batt-1", "850C"…) and the hot-stamp press ("Hstamp", "Hot
+   Stamp", "HS") are production machines: the operator sheet, Live Status,
+   KPIs and Trace list those and leave every other row (a 3D scanner, "AU -
+   …" / "NZ - …" plant) to Maint. Equipment whose name starts with "NZ" is
    left out of Maint altogether, and the Machine page leaves out anything
    named for a die ("Die" or "Dies" as a word — "AU - Die 280", "DIE-3597";
    not "Diesel"): dies are managed on the Tool page. Machine's **Status** column is

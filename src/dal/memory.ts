@@ -30,7 +30,7 @@ import {
   encodeBreakdownCauseMap,
 } from '../core/breakdown';
 import { dieChangeEventKey, dieSignOffStatus } from '../core/die';
-import { pressCodeOf } from '../core/maint';
+import { isProductionMachine, pressCodeOf } from '../core/maint';
 import {
   seedBdCodes,
   seedDieChangeLogs,
@@ -113,7 +113,7 @@ export class MemoryDataLayer implements PmdDataLayer {
   }
 
   async listMachines(): Promise<Machine[]> {
-    return MemoryDataLayer.clone(this.machines.filter((m) => m.active));
+    return MemoryDataLayer.clone(this.machines.filter((m) => m.active && isProductionMachine(m.machineCode)));
   }
   async listOperators(): Promise<Operator[]> {
     return MemoryDataLayer.clone(this.operators.filter((o) => o.active));
