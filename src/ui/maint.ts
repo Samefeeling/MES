@@ -70,6 +70,14 @@ const LEVEL_TEXT: Record<DueLevel, string> = {
   none: 'No date',
 };
 
+/** An open request with no due date yet: when it was raised, and how long ago. */
+function undatedBadge(raised: string, today: string): string {
+  if (!raised) return '<span class="mt-due none">No date</span>';
+  const ago = -daysUntil(raised, today);
+  const rel = ago <= 0 ? 'today' : `${ago} d ago`;
+  return `<span class="mt-due none" title="No &quot;To be completed by&quot; date yet">Raised ${ddmmyyyy(raised)} · ${rel}</span>`;
+}
+
 function dueBadge(due: string, today: string): string {
   const level = dueLevel(due, today);
   if (level === 'none') return '<span class="mt-due none">No date</span>';
@@ -399,12 +407,13 @@ export function renderTeam(ctx: MaintCtx): string {
   const f = ctx.filter.trim().toUpperCase();
   const match = (...v: string[]): boolean => !f || v.some((x) => x.toUpperCase().includes(f));
   const doneShown = done.filter(
-    (d) => picked(d.owner) && match(d.asset, d.title, d.detail, d.summary, d.ticket, d.owner),
+    (d) => picked(d.owner) && match(d.asset, d.title, d.detail, d.summary, d.prevention, d.ticket, d.owner),
   );
   const inRange = doneShown.filter((d) => d.day >= st.from && d.day <= st.to);
   const unit = unitFor(st.from, st.to);
   const buckets = bucketDone(doneShown, st.from, st.to, unit);
   const totalH = inRange.reduce((n, d) => n + d.hours, 0);
+  const booked = inRange.filter((d) => d.booked).length;
   // A tapped bar whose bucket the range or its unit no longer has is dropped.
   if (st.pick && st.pick !== 'all' && !buckets.some((b) => b.start === st.pick)) st.pick = null;
   const listFrom = st.pick === 'all' ? st.from : st.pick ?? '';
@@ -448,7 +457,7 @@ export function renderTeam(ctx: MaintCtx): string {
     .map(
       (o: OpenItem) => `<tr class="tm-${o.level}">
         <td><span class="tm-kind ${o.kind}">${o.kind}</span></td>
-        <td>${o.due ? dueBadge(o.due, ctx.today) : '<span class="mt-due none">No date</span>'}</td>
+        <td>${o.due ? dueBadge(o.due, ctx.today) : undatedBadge(o.raised, ctx.today)}</td>
         <td><span class="mt-due ${o.level}">${LEVEL_TEXT[o.level]}</span></td>
         <td title="${escapeHtml(o.asset)}">${escapeHtml(o.asset)}</td>
         <td>${escapeHtml(o.title)}</td>
@@ -483,8 +492,12 @@ export function renderTeam(ctx: MaintCtx): string {
       </div>
       <div class="tm-tiles">
         <div class="mt-stat"><span>Orders closed</span><b>${inRange.length}</b></div>
-        <div class="mt-stat"><span>Labour hours</span><b>${totalH.toFixed(1)}</b></div>
-        <div class="mt-stat"><span>Hours / order</span><b>${inRange.length ? (totalH / inRange.length).toFixed(1) : '—'}</b></div>
+        <div class="mt-stat"><span>Labour hours</span><b>${totalH.toFixed(1)}</b>${
+          booked < inRange.length ? `<em class="tm-cov">booked on ${booked} of ${inRange.length} orders</em>` : ''
+        }</div>
+        <div class="mt-stat"><span>Hours / order</span><b>${booked ? (totalH / booked).toFixed(1) : '—'}</b>${
+          booked < inRange.length ? '<em class="tm-cov">of the orders with hours</em>' : ''
+        }</div>
       </div>
       ${teamChart(buckets, unit, st.pick)}
       <p class="kpi-note">Bars: labour hours booked on the orders closed in each ${unit}; line: how many orders closed. <b>Tap a bar</b> to list its orders below. ＋ / － zoom, ◀ ▶ move. An order's day is the day Mango closed it (Stage 4), else the day it was raised. Owner is Mango's "Assign to Action".
@@ -507,7 +520,7 @@ export function renderTeam(ctx: MaintCtx): string {
             </tr></thead><tbody>${openRows}</tbody></table></div>`
           : '<div class="trace-empty">Nothing open for this selection.</div>'
       }
-      <p class="kpi-note"><b>MR</b> = an open Mango maintenance request, due by its "To be completed by"; <b>PM</b> = a live event in MachinePM.csv, due by its Event Due Date. Due ≤ 7 d is within the coming week.</p>
+      <p class="kpi-note"><b>MR</b> = an open Mango maintenance request, due by its "To be completed by"; <b>PM</b> = a live event in MachinePM.csv, due by its Event Due Date. Due ≤ 7 d is within the coming week. Mango leaves "To be completed by" empty until the coordinator assesses a request, so an undated request shows how long ago it was raised, the longest-waiting first.</p>
     </section>
   </div>`;
 }
@@ -523,7 +536,9 @@ function doneTable(rows: DoneOrder[], from: string, to: string): string {
         <td>${escapeHtml(d.ticket || '—')}</td>
         <td title="${escapeHtml(d.asset)}">${escapeHtml(d.asset || '—')}</td>
         <td class="tm-text"><b>${escapeHtml(d.title || '—')}</b>${d.detail ? `<div>${escapeHtml(d.detail)}</div>` : ''}</td>
-        <td class="tm-text">${escapeHtml(d.summary || '—')}</td>
+        <td class="tm-text">${escapeHtml(d.summary || '—')}${
+          d.prevention ? `<div>Prevent: ${escapeHtml(d.prevention)}</div>` : ''
+        }</td>
         <td>${escapeHtml(d.owner)}</td>
         <td class="num">${d.hours ? d.hours.toFixed(2).replace(/\.?0+$/, '') : '—'}</td>
       </tr>`,

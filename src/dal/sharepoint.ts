@@ -4623,7 +4623,8 @@ function normaliseMaintStatus(raw: string): MaintStatus {
   // "Stage 3 Coordinator Reviewing" → in-progress · "Stage 1
   // Coordinator Assessing" (just raised) → open.
   if (/closed|complete|done/.test(s)) return 'done';
-  if (/^in|investigat|review|started|wip|progress/.test(s)) return 'in-progress';
+  // Whatever Mango names its middle stages, 2 and 3 are under way.
+  if (/^in|investigat|review|started|wip|progress|\bstage\s*[23]\b/.test(s)) return 'in-progress';
   return 'open';
 }
 function normaliseMaintType(raw: string): MaintType {
@@ -5586,7 +5587,7 @@ const MANGO_REQUIRED = new Set(['asset', 'status']);
  * in-progress · Stage 4 Closed → done); cancelled/declined orders are
  * skipped. The Minto export carries no completion-date column, so for
  * closed orders the date is recovered from the "Actions taken" log — the
- * newest "… to Stage 4 Closed" line, else the log's last date. Ids are
+ * newest "… to Stage 4 Closed" line, else its latest dated entry. Ids are
  * synthetic (the UI is read-only against this source).
  */
 export function parseMangoWorkOrdersCsv(text: string): DieMaintenanceRequest[] {
@@ -5685,16 +5686,26 @@ function parseMangoReport(text: string, mode: 'die' | 'machine'): DieMaintenance
     const status = normaliseMaintStatus(rawStatus);
     // Closure date: a real completed column when the layout has one,
     // else the newest "to Stage 4 Closed" line of the actions log, else
-    // the log's last date (entries are chronological).
+    // the latest entry of the log, else the log's last date of any kind.
+    // Each entry opens "Fri, 02/10/2026, Chris Buckley (Stage 1 …): …";
+    // a date typed inside a note ("parts due 15/10/2026") opens none.
     let closedAt = csvDateToIso(cell(row, 'closedAt'));
     if (!closedAt && status === 'done') {
       const log = cell(row, 'actionsTaken');
       const toClosed = Array.from(
         log.matchAll(/(\d{1,2}\/\d{1,2}\/\d{4})[^\n]*to\s+stage\s*4\s*closed/gi),
       ).pop();
+      const latestEntry = Array.from(
+        log.matchAll(/\b(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s*(\d{1,2}\/\d{1,2}\/\d{4})/gi),
+        (m) => csvDateToIso(m[1]),
+      )
+        .filter(Boolean)
+        .sort()
+        .pop();
       const anyDates = log.match(/\d{1,2}\/\d{1,2}\/\d{4}/g);
-      const pick = toClosed?.[1] ?? anyDates?.[anyDates.length - 1] ?? '';
-      if (pick) closedAt = csvDateToIso(pick);
+      if (toClosed) closedAt = csvDateToIso(toClosed[1]);
+      else if (latestEntry) closedAt = latestEntry;
+      else if (anyDates) closedAt = csvDateToIso(anyDates[anyDates.length - 1]);
     }
     out.push({
       id: 1_000_000 + r, // synthetic — this source is read-only in the UI

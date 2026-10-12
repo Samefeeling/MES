@@ -309,26 +309,45 @@ export interface DoneOrder {
   /** What was done: "Summary of work completed", else "Summary", else
    *  "Corrective action taken". */
   summary: string;
+  /** "Preventative action taken", unless it is N/A or already said above.
+   *  Some sites leave the work summary empty and put the fix here. */
+  prevention: string;
   owner: string;
   /** When it closed (Mango's Stage 4 date), else when it was raised. YYYY-MM-DD. */
   day: string;
   hours: number;
+  /** Labour Hours was filled in. Many orders close without it, so the
+   *  hours total only covers these. */
+  booked: boolean;
+}
+
+const plain = (s: string | undefined): string => (s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+/** `extra` adds nothing to `text`: empty, N/A, or already inside it. */
+function addsNothing(extra: string | undefined, text: string | undefined): boolean {
+  const e = plain(extra);
+  return !e || /^(n ?a|none|nil|no)$/.test(e) || plain(text).includes(e);
 }
 
 /** Closed work orders with the day they closed and the labour booked on them. */
 export function doneOrders(orders: readonly DieMaintenanceRequest[]): DoneOrder[] {
   return orders
     .filter((r) => r.status === 'done')
-    .map((r) => ({
-      ticket: r.mangoTicket,
-      asset: r.asset || r.dieNumber,
-      title: r.description,
-      detail: r.issueDetail && r.issueDetail !== r.description ? r.issueDetail : '',
-      summary: r.workSummary || r.summary || r.correctiveAction || '',
-      owner: orderOwner(r),
-      day: (r.closedAt || r.createdAt).slice(0, 10),
-      hours: hours(r.labourHours),
-    }))
+    .map((r) => {
+      const summary = r.workSummary || r.summary || r.correctiveAction || '';
+      return {
+        ticket: r.mangoTicket,
+        asset: r.asset || r.dieNumber,
+        title: r.description,
+        detail: addsNothing(r.issueDetail, r.description) ? '' : (r.issueDetail ?? ''),
+        summary,
+        prevention: addsNothing(r.preventativeAction, summary) ? '' : (r.preventativeAction ?? ''),
+        owner: orderOwner(r),
+        day: (r.closedAt || r.createdAt).slice(0, 10),
+        hours: hours(r.labourHours),
+        booked: (r.labourHours ?? '').trim() !== '',
+      };
+    })
     .filter((o) => o.day !== '')
     .sort((a, b) => (a.day < b.day ? 1 : -1));
 }
@@ -407,12 +426,16 @@ export interface OpenItem {
   ticket: string;
   /** Mango stage, MR; the frequency, PM. */
   note: string;
+  /** When the request was raised, YYYY-MM-DD; '' for PM. Mango leaves "To be
+   *  completed by" empty until the coordinator assesses a request, so for
+   *  those its age is what says how urgent it is. */
+  raised: string;
 }
 
 /**
  * Everything still to do: every open work order and every live PM event,
  * each with how its due date stands. Overdue first, then due soon, then by
- * date; undated last.
+ * date; undated last, the oldest request first.
  */
 export function openWork(
   orders: readonly DieMaintenanceRequest[],
@@ -431,6 +454,7 @@ export function openWork(
         level: dueLevel(r.dueDate, today),
         ticket: r.mangoTicket,
         note: r.status === 'open' ? 'Raised' : 'In progress',
+        raised: r.createdAt.slice(0, 10),
       })),
     ...pm.filter(isLivePm).map((e) => ({
       kind: 'PM' as const,
@@ -441,10 +465,15 @@ export function openWork(
       level: dueLevel(e.dueDate, today),
       ticket: '',
       note: e.frequency ? `every ${e.frequency}` : '',
+      raised: '',
     })),
   ];
   const rank: Record<DueLevel, number> = { overdue: 0, soon: 1, ok: 2, none: 3 };
   return items.sort(
-    (a, b) => rank[a.level] - rank[b.level] || (a.due || '9999').localeCompare(b.due || '9999'),
+    (a, b) =>
+      rank[a.level] - rank[b.level] ||
+      (a.due || '9999').localeCompare(b.due || '9999') ||
+      // Undated: the longest-waiting request first.
+      (a.raised || '9999').localeCompare(b.raised || '9999'),
   );
 }

@@ -6,12 +6,13 @@ import {
   buildMachineRows,
   doneOrders,
   dueLevel,
+  isBreakdown,
   openWork,
   pressCodeOf,
   reliability,
   unitFor,
 } from '../src/core/maint';
-import { parseMachinePmCsv, parseMangoMachineWorkOrdersCsv } from '../src/dal/sharepoint';
+import { parseMachinePmCsv, parseMangoMachineWorkOrdersCsv, parseMangoWorkOrdersCsv } from '../src/dal/sharepoint';
 import { resolveMachinePmCsvPath } from '../src/dal';
 import type { DieMaintenanceRequest, MachinePmEvent } from '../src/types';
 
@@ -94,6 +95,112 @@ describe('MachinePM.csv', () => {
       [header2, 'MWO 02795,10,0.25,Stage 4 Closed,AU - 1300T LS Mtron Injection Molding Machine,Motor lock alarm,Joe,30/09/2026,Resero - Minto,,2. Breakdown,Wisam Istefo'].join('\n'),
     );
     expect(r).toMatchObject({ maintTypeRaw: '2. Breakdown', branch: 'Resero - Minto', downtime: '10', labourHours: '0.25' });
+  });
+});
+
+describe('the Mango export as it comes out of Mango (sample of 12/10/2026)', () => {
+  // The full column layout of MangoWorkOrders.csv, in order.
+  const COLS = [
+    'Number', 'Downtime', 'Labour Hours', 'Current Stage', 'Plant/Equipment', 'Brief Description', 'Employee',
+    'Created Date', 'Branch', 'To be completed by', 'Type of Maintenance', 'Identified By', 'Date identified', 'Time',
+    'AM/PM', 'Work shift', 'Describe the issue', 'Actions taken', 'Region', 'Department', 'Assign to Action',
+    'Work can be done to', 'Summary of work completed', 'Cost (parts, labour)', 'Corrective action taken',
+    'Preventative action taken', 'Summary',
+  ];
+  const q = (v: string): string => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  const line = (r: Record<string, string>): string => COLS.map((c) => q(r[c] ?? '')).join(',');
+  const csv = [
+    COLS.map(q).join(','),
+    line({
+      Number: 'MWO 02801', 'Current Stage': 'Stage 1 Coordinator Assessing',
+      'Plant/Equipment': 'AU - 1600T Toshiba Injection Molding Machine', 'Brief Description': 'Nozzle leak, material stuck',
+      Employee: 'Joe Talamaivao', 'Created Date': '11/10/2026', Branch: 'Resero - Minto', 'Type of Maintenance': '2. Breakdown',
+      'Date identified': '10/10/2026', Time: '11', 'AM/PM': 'PM', 'Work shift': 'Night', 'Describe the issue': 'nozzle leak',
+      'Actions taken': 'Sun, 11/10/2026, Joe Talamaivao (): Created', Region: 'Minto (AU)', Department: 'Manufacturing - AU',
+    }),
+    line({
+      Number: 'MWO 02800', 'Current Stage': 'Stage 1 Coordinator Assessing',
+      'Plant/Equipment': 'AU Die 326 Formware Oval End Cal AXMS5-291', 'Brief Description': 'New tool inspection for trial',
+      'Created Date': '8/10/2026', Branch: 'Resero - Minto', 'Type of Maintenance': '5. Employee Suggestion',
+    }),
+    line({
+      Number: 'MWO 02799', Downtime: '1', 'Labour Hours': '1', 'Current Stage': 'Stage 4 Closed',
+      'Plant/Equipment': 'AU - 1600T Toshiba Injection Molding Machine', 'Brief Description': 'robot light curtain not working',
+      'Created Date': '7/10/2026', Branch: 'Resero - Minto', 'To be completed by': '9/10/2026',
+      'Type of Maintenance': '2. Breakdown',
+      'Actions taken': 'Wed, 07/10/2026, Tin Maung (): Created\nThu, 08/10/2026, Wisam Istefo (Stage 2 Being Investigated): Power restored',
+      // Region is the raiser's, not the plant's: Minto orders say ACT or NSW.
+      Region: 'Australian Capital Territory (AU)', 'Assign to Action': 'Wisam Istefo',
+      'Summary of work completed': 'Restore Power to the light curtain transmitter.',
+      'Corrective action taken': 'Restore power.', 'Preventative action taken': 'N/A',
+    }),
+    line({
+      Number: 'MWO 02797', 'Current Stage': 'Stage 1 Coordinator Assessing', 'Plant/Equipment': 'NZ - General Warehouse',
+      'Brief Description': 'Mobile stairs', 'Created Date': '6/10/2026', Branch: 'Resero - Hastings',
+      'Type of Maintenance': '4. Safety-related Maintenance',
+    }),
+    line({
+      Number: 'MWO 02796', 'Current Stage': 'Stage 4 Closed', 'Plant/Equipment': 'NZ - Office Lighting',
+      'Brief Description': 'Faulty light', 'Created Date': '1/10/2026', Branch: 'Resero - Hastings',
+      'To be completed by': '2/10/2026', 'Type of Maintenance': '2. Breakdown', 'Describe the issue': 'Faulty light.',
+      'Actions taken': 'Thu, 01/10/2026, Kim Ross (): Created\nFri, 02/10/2026, Chris Buckley (Stage 1 Coordinator Assessing): Starter ordered, fit by 20/10/2026',
+      'Assign to Action': 'Chris Buckley',
+      // Hastings closes with these two and leaves the work summary empty.
+      'Corrective action taken': 'Light replaced', 'Preventative action taken': 'New starter installed.',
+    }),
+    line({
+      Number: 'MWO 02802', 'Current Stage': 'Stage 3 Awaiting Parts', 'Plant/Equipment': 'AU - Encore Cold Saw',
+      'Brief Description': 'Blade guard', 'Created Date': '5/10/2026', Branch: 'Resero - Minto',
+      'To be completed by': '20/10/2026', 'Type of Maintenance': '4. Safety-related Maintenance', 'Assign to Action': 'Wisam Istefo',
+    }),
+  ].join('\r\n');
+
+  const machine = parseMangoMachineWorkOrdersCsv(csv);
+  const byTicket = (t: string): DieMaintenanceRequest => machine.find((r) => r.mangoTicket === t)!;
+
+  it('sends a die to the Tool page and every other asset to the Machine side, whatever the branch', () => {
+    expect(machine.map((r) => r.mangoTicket).sort()).toEqual(['MWO 02796', 'MWO 02797', 'MWO 02799', 'MWO 02801', 'MWO 02802']);
+    expect(parseMangoWorkOrdersCsv(csv).map((r) => [r.mangoTicket, r.dieNumber])).toEqual([['MWO 02800', '326']]);
+    expect(byTicket('MWO 02799').branch).toBe('Resero - Minto');
+    expect(byTicket('MWO 02797').branch).toBe('Resero - Hastings');
+    expect(pressCodeOf(byTicket('MWO 02799').asset ?? '')).toBe('1600T');
+  });
+
+  it('reads the stage, type, owner and day-first dates', () => {
+    expect(byTicket('MWO 02801')).toMatchObject({ status: 'open', contact: '', createdAt: '2026-10-11', closedAt: '' });
+    expect(byTicket('MWO 02802').status).toBe('in-progress'); // any Stage 2 or 3
+    expect(byTicket('MWO 02799')).toMatchObject({ status: 'done', contact: 'Wisam Istefo', dueDate: '2026-10-09', downtime: '1' });
+    expect(machine.filter(isBreakdown).map((r) => r.mangoTicket).sort()).toEqual(['MWO 02796', 'MWO 02799', 'MWO 02801']);
+  });
+
+  it('dates a closed order by the last entry of its actions log, not a date typed in a note', () => {
+    expect(byTicket('MWO 02799').closedAt).toBe('2026-10-08');
+    expect(byTicket('MWO 02796').closedAt).toBe('2026-10-02'); // not the 20/10 in the note
+  });
+
+  it('says what was done from whichever columns the site fills, and which orders booked hours', () => {
+    const done = doneOrders(machine);
+    expect(done.find((d) => d.ticket === 'MWO 02799')).toMatchObject({
+      summary: 'Restore Power to the light curtain transmitter.',
+      prevention: '', // N/A
+      hours: 1,
+      booked: true,
+    });
+    expect(done.find((d) => d.ticket === 'MWO 02796')).toMatchObject({
+      detail: '', // "Faulty light." says no more than "Faulty light"
+      summary: 'Light replaced',
+      prevention: 'New starter installed.',
+      hours: 0,
+      booked: false,
+    });
+  });
+
+  it('puts the longest-waiting undated request first among the undated', () => {
+    const undated = openWork(machine, [], '2026-10-12').filter((o) => o.level === 'none');
+    expect(undated.map((o) => [o.ticket, o.raised])).toEqual([
+      ['MWO 02797', '2026-10-06'],
+      ['MWO 02801', '2026-10-11'],
+    ]);
   });
 });
 

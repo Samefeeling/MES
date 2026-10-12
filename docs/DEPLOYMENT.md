@@ -532,7 +532,9 @@ for the Plant/Equipment module):
    PMD_ProductDieColor.DieNumber). Stages map to open ("Stage 1") /
    in-progress ("Stage 2/3") / done ("Stage 4 Closed"); the closure
    date is recovered from the "Actions taken" log's "to Stage 4 Closed"
-   line since the export has no completion-date column. Columns are
+   line, else the date of its latest entry ("Fri, 02/10/2026, Chris
+   Buckley (Stage 1 …): …" — a date typed inside a note doesn't count),
+   since the export has no completion-date column. Columns are
    mapped DIRECTLY to their exact header names (`MANGO_HEADERS` in
    `src/dal/sharepoint.ts`): `Plant/Equipment` → die number,
    `Brief Description` / `Describe the issue` → issue, `Employee` →
@@ -556,8 +558,17 @@ for the Plant/Equipment module):
    next PM (Event Due Date / Event Detail), its open requests and dies, and
    MTBF / MTTR worked out from the report's `2. Breakdown` orders and their
    `Downtime` (calendar time, last 12 months or since the export begins).
+   `Downtime` is read as hours. Site is `Branch` (`Resero - Minto` /
+   `Resero - Hastings`); `Region` is the raiser's and is not used.
    Team charts closed orders and `Labour Hours` per `Assign to Action`, and
-   lists every open request and live PM with whether it is due.
+   lists every open request and live PM with whether it is due. Many
+   orders close without `Labour Hours`, so the hours tile says how many
+   carry them. What was done is `Summary of work completed`, else
+   `Summary`, else `Corrective action taken`, with `Preventative action
+   taken` underneath unless it is N/A (Hastings fills only those two).
+   Mango leaves `To be completed by` empty until the coordinator assesses
+   a request, so an undated request shows how long ago it was raised,
+   longest-waiting first.
 3. Without `VITE_MANGO_CSV_PATH` (or while the file doesn't exist yet)
    the tab falls back to the legacy `PMD_DieMaintenance` list, whose
    schema stays documented below for the sync-less transition period:
