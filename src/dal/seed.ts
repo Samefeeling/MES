@@ -649,6 +649,7 @@ export function seedMachineMaintenance(now: Date): DieMaintenanceRequest[] {
     labourHours: labour ? String(labour) : undefined,
     dueDate: dueInDays == null ? undefined : iso(-dueInDays),
     branch: 'Resero - Minto',
+    workSummary: closedDaysAgo == null ? undefined : `${description} — fixed and tested, back in production.`,
   });
   const press1600 = 'AU - 1600T Toshiba Injection Molding Machine';
   const press1300 = 'AU - 1300T LS Mtron Injection Molding Machine';

@@ -14,6 +14,7 @@ import {
   MACHINE_STATE_META,
   UNASSIGNED,
   bucketDone,
+  bucketEnd,
   buildMachineRows,
   daysUntil,
   doneOrders,
@@ -22,11 +23,13 @@ import {
   openWork,
   unitFor,
   type BucketUnit,
+  type DoneOrder,
   type DueLevel,
   type MachineRow,
   type OpenItem,
 } from '../core/maint';
 import { closeModal, escapeHtml, openModal } from './modal';
+import { RESIZE_HANDLE, syncStickyOffset, wireColumnResize } from './col-resize';
 
 export interface MachineDie {
   die: string;
@@ -81,7 +84,25 @@ const fmtH = (h: number | null): string =>
 // ---------------------------------------------------------------------
 // Machine
 
-type MachineSort = 'default' | 'machine' | 'state' | 'next' | 'open' | 'breakdowns' | 'mtbf' | 'mttr';
+type MachineSort =
+  | 'default'
+  | 'machine'
+  | 'name'
+  | 'state'
+  | 'lastService'
+  | 'dies'
+  | 'open'
+  | 'next'
+  | 'detail'
+  | 'breakdowns'
+  | 'mtbf'
+  | 'mttr'
+  | 'avail';
+/** Column keys of the Machine table, in order: its <colgroup> and the saved widths. */
+const MACHINE_COLS = [
+  'machine', 'name', 'state', 'lastService', 'dies', 'open', 'next', 'detail', 'breakdowns', 'mtbf', 'mttr', 'avail',
+] as const;
+const MACHINE_COLW_KEY = 'pmd.machine.colw';
 let machineSort: MachineSort = 'default';
 let machineDir: 1 | -1 = 1;
 let machineState: MachineRow['state'] | '' = '';
@@ -90,15 +111,38 @@ function machineRows(ctx: MaintCtx): MachineRow[] {
   return buildMachineRows(ctx.pm, ctx.machineOrders, ctx.today, earliestOrder([...ctx.machineOrders, ...ctx.dieOrders]));
 }
 
-const MACHINE_ACCESS: Record<Exclude<MachineSort, 'default'>, (r: MachineRow) => string | number | null> = {
-  machine: (r) => r.asset.toUpperCase(),
-  state: (r) => MACHINE_STATE_META[r.state].rank,
-  next: (r) => r.nextPm?.dueDate || null,
-  open: (r) => r.openOrders,
-  breakdowns: (r) => r.reliability.breakdowns,
-  mtbf: (r) => r.reliability.mtbfH,
-  mttr: (r) => r.reliability.mttrH,
-};
+function machineAccess(
+  key: Exclude<MachineSort, 'default'>,
+  ctx: MaintCtx,
+): (r: MachineRow) => string | number | null {
+  switch (key) {
+    // The code for a press ("125T" before "1300T" by tonnage), the name for the rest.
+    case 'machine':
+      return (r) => (r.code ? `0|${r.code.replace(/\d+/g, (n) => n.padStart(6, '0'))}` : `1|${r.asset.toUpperCase()}`);
+    case 'name':
+      return (r) => (r.code ? r.asset : r.description || r.department || r.asset).toUpperCase() || null;
+    case 'state':
+      return (r) => MACHINE_STATE_META[r.state].rank;
+    case 'lastService':
+      return (r) => r.lastService || null;
+    case 'dies':
+      return (r) => (r.code ? ctx.diesFor(r.code).length : 0);
+    case 'open':
+      return (r) => r.openOrders;
+    case 'next':
+      return (r) => r.nextPm?.dueDate || null;
+    case 'detail':
+      return (r) => r.nextPm?.detail.toUpperCase() || null;
+    case 'breakdowns':
+      return (r) => r.reliability.breakdowns;
+    case 'mtbf':
+      return (r) => r.reliability.mtbfH;
+    case 'mttr':
+      return (r) => r.reliability.mttrH;
+    case 'avail':
+      return (r) => r.reliability.availability;
+  }
+}
 
 export function renderMachineBoard(ctx: MaintCtx): string {
   const all = machineRows(ctx);
@@ -113,7 +157,7 @@ export function renderMachineBoard(ctx: MaintCtx): string {
         (r.code && ctx.diesFor(r.code).some((d) => d.die.toUpperCase().includes(f)))),
   );
   if (machineSort !== 'default') {
-    const get = MACHINE_ACCESS[machineSort];
+    const get = machineAccess(machineSort, ctx);
     rows = [...rows].sort((a, b) => {
       const av = get(a);
       const bv = get(b);
@@ -138,11 +182,12 @@ export function renderMachineBoard(ctx: MaintCtx): string {
       ? '<div class="data-error-banner">MachinePM.csv was not read — Next service is empty. It is read from the Planning.csv folder (or VITE_MACHINE_PM_CSV_PATH).</div>'
       : ''
   }`;
-  const th = (key: MachineSort | '', label: string, title = ''): string => {
+  // Every column sorts (tap again to reverse) and resizes (drag a header's
+  // right edge; double-tap the edge to reset), like the Tool table.
+  const th = (key: Exclude<MachineSort, 'default'>, label: string, title = ''): string => {
     const t = title ? ` title="${escapeHtml(title)}"` : '';
-    if (!key) return `<th${t}>${label}</th>`;
     const on = machineSort === key;
-    return `<th class="die-sort${on ? ' a' : ''}" data-mt-sort="${key}"${t}>${label}${on ? (machineDir === 1 ? ' ▲' : ' ▼') : ''}</th>`;
+    return `<th class="die-sort${on ? ' a' : ''}" data-mt-sort="${key}"${t}>${label}${on ? (machineDir === 1 ? ' ▲' : ' ▼') : ''}${RESIZE_HANDLE}</th>`;
   };
   const body = rows
     .map((r) => {
@@ -181,19 +226,20 @@ export function renderMachineBoard(ctx: MaintCtx): string {
     })
     .join('');
   return `${chips}<div class="die-table-wrap"><table class="kpi-table die-table mt-table">
+    <colgroup>${MACHINE_COLS.map((k) => `<col data-ck="${k}">`).join('')}</colgroup>
     <thead><tr>
       ${th('machine', 'Machine')}
-      ${th('', 'Name', "MachinePM.csv's Name — the same as Mango's Plant/Equipment")}
+      ${th('name', 'Name', "MachinePM.csv's Name — the same as Mango's Plant/Equipment")}
       ${th('state', 'Status', '🔴 an open breakdown · 🟠 a PM or work order overdue · 🟡 one due within 7 days · 🟢 nothing due')}
-      ${th('', 'Last service', 'The last preventive or calibration work order closed in Mango')}
-      ${th('', 'Die #', 'Dies that ran on the press in the last 90 days or are planned on it — ▶ = running now. Tap a die for its detail')}
+      ${th('lastService', 'Last service', 'The last preventive or calibration work order closed in Mango')}
+      ${th('dies', 'Die #', 'Dies that ran on the press in the last 90 days or are planned on it — ▶ = running now. Tap a die for its detail')}
       ${th('open', 'Open MR', 'Open Mango maintenance requests — tap for the machine’s PM plan and work orders')}
       ${th('next', 'Next service', "MachinePM.csv Event Due Date — the soonest live PM event")}
-      ${th('', 'Event detail', 'MachinePM.csv Event Detail of that event')}
+      ${th('detail', 'Event detail', 'MachinePM.csv Event Detail of that event')}
       ${th('breakdowns', 'Breakdowns', 'Mango "2. Breakdown" orders raised in the last 12 months (or since the export begins)')}
       ${th('mtbf', 'MTBF', 'Mean time between failures: calendar hours in the window, less downtime, ÷ breakdowns')}
       ${th('mttr', 'MTTR', 'Mean time to repair: Mango Downtime ÷ breakdowns that recorded it')}
-      ${th('', 'Avail.', 'MTBF ÷ (MTBF + MTTR)')}
+      ${th('avail', 'Avail.', 'MTBF ÷ (MTBF + MTTR)')}
     </tr></thead>
     <tbody>${body || '<tr><td colspan="12" class="trace-empty">No equipment matches.</td></tr>'}</tbody>
   </table></div>
@@ -214,12 +260,22 @@ export function wireMachineBoard(root: HTMLElement, ctx: MaintCtx): void {
       if (machineSort === key) machineDir = machineDir === 1 ? -1 : 1;
       else {
         machineSort = key;
-        // Worst first: soonest due, most open, most breakdowns, shortest MTBF, longest MTTR.
-        machineDir = key === 'open' || key === 'breakdowns' || key === 'mttr' ? -1 : 1;
+        // Worst first: soonest due, most open, most breakdowns, shortest MTBF,
+        // longest MTTR, lowest availability; names A→Z.
+        machineDir = key === 'open' || key === 'breakdowns' || key === 'mttr' || key === 'dies' ? -1 : 1;
       }
       ctx.rerender();
     }),
   );
+  const table = root.querySelector<HTMLTableElement>('.mt-table');
+  if (table) {
+    wireColumnResize(table, {
+      storageKey: MACHINE_COLW_KEY,
+      onReset: ctx.rerender,
+      onResize: () => syncStickyOffset(table),
+    });
+    syncStickyOffset(table);
+  }
   root.querySelectorAll<HTMLButtonElement>('[data-mt-die]').forEach((b) =>
     b.addEventListener('click', () => ctx.openDie(b.dataset.mtDie!)),
   );
@@ -293,6 +349,9 @@ interface TeamState {
   to: string;
   /** Overdue / due-soon filter on the open-work table ('' = all). */
   level: DueLevel | '';
+  /** The orders listed under the chart: a tapped bar's bucket (its first
+   *  day), 'all' for the whole range, null for none. */
+  pick: string | null;
 }
 let team: TeamState | null = null;
 
@@ -311,6 +370,7 @@ function teamState(ctx: MaintCtx, branches: string[]): TeamState {
       from: addDays(ctx.today, -89),
       to: ctx.today,
       level: '',
+      pick: null,
     };
   }
   return team;
@@ -338,11 +398,18 @@ export function renderTeam(ctx: MaintCtx): string {
   const { st, branches, owners, done, open, picked } = teamData(ctx);
   const f = ctx.filter.trim().toUpperCase();
   const match = (...v: string[]): boolean => !f || v.some((x) => x.toUpperCase().includes(f));
-  const doneShown = done.filter((d) => picked(d.owner) && match(d.asset, d.title, d.ticket, d.owner));
+  const doneShown = done.filter(
+    (d) => picked(d.owner) && match(d.asset, d.title, d.detail, d.summary, d.ticket, d.owner),
+  );
   const inRange = doneShown.filter((d) => d.day >= st.from && d.day <= st.to);
   const unit = unitFor(st.from, st.to);
   const buckets = bucketDone(doneShown, st.from, st.to, unit);
   const totalH = inRange.reduce((n, d) => n + d.hours, 0);
+  // A tapped bar whose bucket the range or its unit no longer has is dropped.
+  if (st.pick && st.pick !== 'all' && !buckets.some((b) => b.start === st.pick)) st.pick = null;
+  const listFrom = st.pick === 'all' ? st.from : st.pick ?? '';
+  const listTo = st.pick === 'all' ? st.to : st.pick ? bucketEnd(st.pick, unit) : '';
+  const listed = st.pick ? inRange.filter((d) => d.day >= listFrom && d.day <= listTo) : [];
   const earliest = done.length ? done[done.length - 1].day : addDays(ctx.today, -364);
   const preset = (days: number | 'all', label: string): string => {
     const from = days === 'all' ? earliest : addDays(ctx.today, -(days - 1));
@@ -419,8 +486,10 @@ export function renderTeam(ctx: MaintCtx): string {
         <div class="mt-stat"><span>Labour hours</span><b>${totalH.toFixed(1)}</b></div>
         <div class="mt-stat"><span>Hours / order</span><b>${inRange.length ? (totalH / inRange.length).toFixed(1) : '—'}</b></div>
       </div>
-      ${teamChart(buckets, unit)}
-      <p class="kpi-note">Bars: labour hours booked on the orders closed in each ${unit}; line: how many orders closed. Scroll on the chart, or ＋ / －, to zoom; ◀ ▶ to move. An order's day is the day Mango closed it (Stage 4), else the day it was raised. Owner is Mango's "Assign to Action".</p>
+      ${teamChart(buckets, unit, st.pick)}
+      <p class="kpi-note">Bars: labour hours booked on the orders closed in each ${unit}; line: how many orders closed. <b>Tap a bar</b> to list its orders below. ＋ / － zoom, ◀ ▶ move. An order's day is the day Mango closed it (Stage 4), else the day it was raised. Owner is Mango's "Assign to Action".
+        <button type="button" class="die-chip die-chip-btn" data-tm-pick="all">📋 List all ${inRange.length} in range</button></p>
+      ${st.pick ? doneTable(listed, listFrom, listTo) : ''}
       ${
         ownerRows
           ? `<table class="kpi-table tm-owner-table"><thead><tr><th>Owner</th><th>Orders</th><th>Hours</th><th></th></tr></thead><tbody>${ownerRows}</tbody></table>`
@@ -443,8 +512,46 @@ export function renderTeam(ctx: MaintCtx): string {
   </div>`;
 }
 
-/** Hours as bars, order count as a line, on one time axis. */
-function teamChart(buckets: { start: string; count: number; hours: number }[], unit: BucketUnit): string {
+/** The closed orders behind a tapped bar (or the whole range). */
+function doneTable(rows: DoneOrder[], from: string, to: string): string {
+  const hoursSum = rows.reduce((n, d) => n + d.hours, 0);
+  const span = from === to ? ddmmyyyy(from) : `${ddmmyyyy(from)} – ${ddmmyyyy(to)}`;
+  const body = rows
+    .map(
+      (d) => `<tr>
+        <td>${ddmmyyyy(d.day)}</td>
+        <td>${escapeHtml(d.ticket || '—')}</td>
+        <td title="${escapeHtml(d.asset)}">${escapeHtml(d.asset || '—')}</td>
+        <td class="tm-text"><b>${escapeHtml(d.title || '—')}</b>${d.detail ? `<div>${escapeHtml(d.detail)}</div>` : ''}</td>
+        <td class="tm-text">${escapeHtml(d.summary || '—')}</td>
+        <td>${escapeHtml(d.owner)}</td>
+        <td class="num">${d.hours ? d.hours.toFixed(2).replace(/\.?0+$/, '') : '—'}</td>
+      </tr>`,
+    )
+    .join('');
+  return `<div class="tm-picked" data-tm-picked>
+    <div class="tm-picked-head">
+      <b>Orders closed ${span}</b> · ${rows.length} order${rows.length === 1 ? '' : 's'} · ${hoursSum.toFixed(1)} h
+      <button type="button" class="die-detail-close" data-tm-pick="" title="Close the list">✕</button>
+    </div>
+    ${
+      rows.length
+        ? `<div class="die-table-wrap"><table class="kpi-table tm-done-table"><thead><tr>
+            <th>Closed</th><th>Ticket</th><th>Machine</th><th>Detail</th><th>Summary</th><th>Owner</th><th>Hours</th>
+          </tr></thead><tbody>${body}</tbody></table></div>`
+        : '<div class="trace-empty">No orders closed in this period for this selection.</div>'
+    }
+  </div>`;
+}
+
+/** Hours as bars, order count as a line, on one time axis. Each period is a
+ *  tap target the full height of the chart, so a short bar is as easy to hit
+ *  as a tall one. */
+function teamChart(
+  buckets: { start: string; count: number; hours: number }[],
+  unit: BucketUnit,
+  pick: string | null,
+): string {
   if (buckets.length === 0) return '';
   const W = 1000;
   const H = 240;
@@ -466,9 +573,14 @@ function teamChart(buckets: { start: string; count: number; hours: number }[], u
   const bars = buckets
     .map((b, i) => {
       const h = (b.hours / maxH) * ih;
-      return `<rect class="tm-hbar" x="${x(i) + bw * 0.12}" y="${T + ih - h}" width="${Math.max(1, bw * 0.76)}" height="${h}"><title>${escapeHtml(
-        `${ddmmyyyy(b.start)}${unit === 'day' ? '' : ` (${unit})`} · ${b.count} order${b.count === 1 ? '' : 's'} · ${b.hours.toFixed(1)} h`,
-      )}</title></rect>`;
+      const tip = escapeHtml(
+        `${ddmmyyyy(b.start)}${unit === 'day' ? '' : ` (${unit})`} · ${b.count} order${b.count === 1 ? '' : 's'} · ${b.hours.toFixed(1)} h — tap to list`,
+      );
+      return `<g class="tm-col${b.start === pick ? ' on' : ''}" data-tm-pick="${b.start}" role="button" tabindex="0">
+        <rect class="tm-hit" x="${x(i)}" y="${T}" width="${bw}" height="${ih}"></rect>
+        <rect class="tm-hbar" x="${x(i) + bw * 0.12}" y="${T + ih - h}" width="${Math.max(1, bw * 0.76)}" height="${h}"></rect>
+        <title>${tip}</title>
+      </g>`;
     })
     .join('');
   const pts = buckets.map((b, i) => `${x(i) + bw / 2},${T + ih - (b.count / maxN) * ih}`).join(' ');
@@ -504,6 +616,7 @@ export function wireTeam(root: HTMLElement, ctx: MaintCtx): void {
     if (daysUntil(to, from) < 6) from = addDays(to, -6);
     st.from = from;
     st.to = to;
+    st.pick = null;
     ctx.rerender();
   };
   root.querySelector<HTMLSelectElement>('[data-tm-branch]')?.addEventListener('change', (e) => {
@@ -549,15 +662,21 @@ export function wireTeam(root: HTMLElement, ctx: MaintCtx): void {
       setRange(addDays(st.from, shift), addDays(st.to, shift));
     }),
   );
-  const chart = root.querySelector<HTMLElement>('[data-tm-chart]');
-  chart?.addEventListener(
-    'wheel',
-    (e) => {
-      e.preventDefault();
-      const box = chart.getBoundingClientRect();
-      const at = Math.min(1, Math.max(0, (e.clientX - box.left) / Math.max(1, box.width)));
-      zoom(e.deltaY < 0 ? 0.7 : 1 / 0.7, at);
-    },
-    { passive: false },
-  );
+  // A tapped bar lists its orders; tapping it again (or ✕) closes the list.
+  root.querySelectorAll<Element>('[data-tm-pick]').forEach((el) => {
+    const pick = (): void => {
+      const v = el.getAttribute('data-tm-pick') || null;
+      st.pick = st.pick === v ? null : v;
+      ctx.rerender();
+      if (st.pick) root.querySelector('[data-tm-picked]')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    };
+    el.addEventListener('click', pick);
+    el.addEventListener('keydown', (e) => {
+      const k = (e as KeyboardEvent).key;
+      if (k === 'Enter' || k === ' ') {
+        e.preventDefault();
+        pick();
+      }
+    });
+  });
 }

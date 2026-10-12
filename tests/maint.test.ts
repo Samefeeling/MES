@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   PRESS_CODES,
   bucketDone,
+  bucketEnd,
   buildMachineRows,
   doneOrders,
   dueLevel,
@@ -185,7 +186,13 @@ describe('the machine rows', () => {
 
 describe('the team page', () => {
   const orders = [
-    wo({ closedAt: '2026-10-05', labourHours: '2', contact: 'Wisam Istefo' }),
+    wo({
+      closedAt: '2026-10-05',
+      labourHours: '2',
+      contact: 'Wisam Istefo',
+      issueDetail: 'Burst under load at the clamp',
+      workSummary: 'Replaced the hose',
+    }),
     wo({ closedAt: '2026-10-06', labourHours: '1.5', contact: '' }),
     wo({ closedAt: '2026-08-01', labourHours: '4', contact: 'Chris Buckley' }),
     wo({ status: 'open', closedAt: '', dueDate: '2026-10-09', contact: 'Chris Buckley', mangoTicket: 'MWO 9' }),
@@ -198,6 +205,9 @@ describe('the team page', () => {
       ['2026-10-05', 'Wisam Istefo', 2],
       ['2026-08-01', 'Chris Buckley', 4],
     ]);
+    expect(done[1]).toMatchObject({ summary: 'Replaced the hose', detail: 'Burst under load at the clamp' });
+    expect(bucketEnd('2026-10-05', 'week')).toBe('2026-10-11');
+    expect(bucketEnd('2026-02-01', 'month')).toBe('2026-02-28');
     const weeks = bucketDone(done, '2026-09-28', today, 'week');
     expect(weeks.map((b) => b.start)).toEqual(['2026-09-28', '2026-10-05']);
     expect(weeks[1]).toMatchObject({ count: 2, hours: 3.5 });

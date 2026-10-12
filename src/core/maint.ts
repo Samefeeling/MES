@@ -300,8 +300,15 @@ export const orderOwner = (r: DieMaintenanceRequest): string => r.contact.trim()
 
 export interface DoneOrder {
   ticket: string;
+  /** The machine (or die) the order was on: Mango's Plant/Equipment. */
   asset: string;
+  /** Brief Description. */
   title: string;
+  /** "Describe the issue", where it says more than the brief description. */
+  detail: string;
+  /** What was done: "Summary of work completed", else "Summary", else
+   *  "Corrective action taken". */
+  summary: string;
   owner: string;
   /** When it closed (Mango's Stage 4 date), else when it was raised. YYYY-MM-DD. */
   day: string;
@@ -316,6 +323,8 @@ export function doneOrders(orders: readonly DieMaintenanceRequest[]): DoneOrder[
       ticket: r.mangoTicket,
       asset: r.asset || r.dieNumber,
       title: r.description,
+      detail: r.issueDetail && r.issueDetail !== r.description ? r.issueDetail : '',
+      summary: r.workSummary || r.summary || r.correctiveAction || '',
       owner: orderOwner(r),
       day: (r.closedAt || r.createdAt).slice(0, 10),
       hours: hours(r.labourHours),
@@ -349,6 +358,13 @@ function nextBucket(start: string, unit: BucketUnit): string {
   if (unit === 'day') d.setDate(d.getDate() + 1);
   else if (unit === 'week') d.setDate(d.getDate() + 7);
   else d.setMonth(d.getMonth() + 1);
+  return ymd(d);
+}
+
+/** The last day of the bucket starting `start`. */
+export function bucketEnd(start: string, unit: BucketUnit): string {
+  const d = new Date(`${nextBucket(start, unit)}T00:00:00`);
+  d.setDate(d.getDate() - 1);
   return ymd(d);
 }
 

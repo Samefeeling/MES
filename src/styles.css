@@ -1550,7 +1550,7 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .tm-zoom{display:flex;gap:6px}
 .tm-zoom .shift-btn{min-height:0;padding:6px 12px;font-size:14px;border-width:1px;border-radius:8px}
 .tm-span{font-size:13px;color:var(--mu);font-variant-numeric:tabular-nums}
-.tm-chart{width:100%;height:240px;touch-action:pan-y;cursor:zoom-in}
+.tm-chart{width:100%;height:240px}
 .tm-chart svg{width:100%;height:100%;display:block}
 .tm-hbar{fill:var(--theme-accent);opacity:.85}
 .tm-hbar:hover{opacity:1}
@@ -1572,3 +1572,14 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .tm .kpi-table th,.mt-modal .kpi-table th{font-size:12px}
 .mt-modal .mt-pm-wrap{overflow-x:auto}
 .tm-owner-table{width:auto;min-width:420px}
+.tm-col{cursor:pointer;outline:none}
+.tm-hit{fill:transparent}
+.tm-col:hover .tm-hit,.tm-col:focus-visible .tm-hit{fill:rgba(7,89,133,.08)}
+.tm-col.on .tm-hit{fill:rgba(7,89,133,.14)}
+.tm-col.on .tm-hbar{fill:var(--theme-dark);opacity:1}
+.tm-picked{margin-top:10px;border:1px solid var(--theme-accent);border-radius:10px;padding:8px 10px;background:#f8fafc}
+.tm-picked-head{display:flex;align-items:center;gap:8px;font-size:14px;margin-bottom:6px}
+.tm-picked-head .die-detail-close{margin-left:auto}
+.tm-done-table td{vertical-align:top}
+.tm-done-table .tm-text{min-width:200px;max-width:420px;white-space:normal}
+.tm-done-table .tm-text div{color:var(--mu);margin-top:2px}

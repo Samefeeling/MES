@@ -52,6 +52,7 @@ import {
   type DieServiceStatus,
 } from '../core/die';
 import { closeModal, escapeHtml, openModal } from './modal';
+import { RESIZE_HANDLE, syncStickyOffset, wireColumnResize } from './col-resize';
 import { toast } from './toast';
 import { isSupervisor } from './supervisor-auth';
 import { peekDieNoteContext } from './nav-context';
@@ -963,112 +964,18 @@ const DIE_COL_KEYS = [
 ] as const;
 const COLW_KEY = 'pmd.die.colw';
 
-function savedColWidths(): Record<string, number> | null {
-  try {
-    const raw = localStorage.getItem(COLW_KEY);
-    if (!raw) return null;
-    const obj = JSON.parse(raw) as Record<string, number>;
-    return obj && typeof obj === 'object' ? obj : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Re-apply saved widths after a render. Fixed layout only kicks in once
- *  the user has resized something — before that the browser's automatic
- *  layout stays in charge. */
-function applyColWidths(table: HTMLTableElement): void {
-  const saved = savedColWidths();
-  if (!saved) return;
-  const cols = Array.from(table.querySelectorAll<HTMLTableColElement>('colgroup col'));
-  let total = 0;
-  let allSaved = true;
-  for (const c of cols) {
-    const w = saved[c.dataset.ck ?? ''];
-    if (typeof w === 'number' && w > 0) {
-      c.style.width = `${Math.round(w)}px`;
-      total += Math.round(w);
-    } else {
-      allSaved = false;
-    }
-  }
-  if (total > 0) {
-    table.style.tableLayout = 'fixed';
-    table.classList.add('resized');
-    // With every column pinned the table's own width must be the sum,
-    // otherwise fixed layout re-squeezes to the container.
-    if (allSaved) table.style.width = `${total}px`;
-  }
-}
-
-/** Description is the second pinned column, so its `left` offset must
- * follow the rendered Die # width. That first column is user-resizable
- * and can also change with viewport / font sizing. */
-function syncStickyColumnOffset(table: HTMLTableElement): void {
-  const first = table.querySelector<HTMLTableCellElement>('thead th:first-child');
-  const width = first?.getBoundingClientRect().width ?? 0;
-  if (width > 0) table.style.setProperty('--die-sticky-first-width', `${width}px`);
-}
-
 function wireColResize(table: HTMLTableElement): void {
-  applyColWidths(table);
-  const ths = Array.from(table.querySelectorAll<HTMLTableCellElement>('thead th'));
-  const cols = Array.from(table.querySelectorAll<HTMLTableColElement>('colgroup col'));
-  syncStickyColumnOffset(table);
-  if (ths[0] && typeof ResizeObserver !== 'undefined') {
-    stickyColumnObserver = new ResizeObserver(() => syncStickyColumnOffset(table));
-    stickyColumnObserver.observe(ths[0]);
-  }
-  table.querySelectorAll<HTMLElement>('[data-die-rz]').forEach((rz) => {
-    // The handle lives inside a sortable <th> — swallow clicks so a
-    // resize never doubles as a sort.
-    rz.addEventListener('click', (e) => e.stopPropagation());
-    rz.addEventListener('dblclick', (e) => {
-      e.stopPropagation();
-      localStorage.removeItem(COLW_KEY);
-      render();
-    });
-    rz.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const th = rz.closest('th');
-      const idx = th ? ths.indexOf(th as HTMLTableCellElement) : -1;
-      if (idx < 0 || !cols[idx]) return;
-      // Freeze every column at its current rendered width first — under
-      // automatic layout, growing one column would rebalance the rest.
-      const widths = ths.map((t) => Math.round(t.getBoundingClientRect().width));
-      cols.forEach((c, i) => (c.style.width = `${widths[i]}px`));
-      table.style.tableLayout = 'fixed';
-      table.classList.add('resized');
-      const totalRest = widths.reduce((a, b) => a + b, 0) - widths[idx];
-      table.style.width = `${totalRest + widths[idx]}px`;
-      const startX = e.clientX;
-      const startW = widths[idx];
-      rz.setPointerCapture(e.pointerId);
-      const move = (ev: PointerEvent): void => {
-        const w = Math.max(40, startW + (ev.clientX - startX));
-        cols[idx].style.width = `${w}px`;
-        table.style.width = `${totalRest + w}px`;
-        syncStickyColumnOffset(table);
-      };
-      const up = (): void => {
-        rz.removeEventListener('pointermove', move);
-        const out: Record<string, number> = {};
-        cols.forEach((c, i) => {
-          out[c.dataset.ck ?? String(i)] =
-            Math.round(parseFloat(c.style.width)) || widths[i];
-        });
-        try {
-          localStorage.setItem(COLW_KEY, JSON.stringify(out));
-        } catch {
-          /* storage full / private mode — the resize still applies for this page */
-        }
-      };
-      rz.addEventListener('pointermove', move);
-      rz.addEventListener('pointerup', up, { once: true });
-      rz.addEventListener('pointercancel', up, { once: true });
-    });
+  wireColumnResize(table, {
+    storageKey: COLW_KEY,
+    onReset: render,
+    onResize: () => syncStickyOffset(table),
   });
+  syncStickyOffset(table);
+  const first = table.querySelector<HTMLTableCellElement>('thead th:first-child');
+  if (first && typeof ResizeObserver !== 'undefined') {
+    stickyColumnObserver = new ResizeObserver(() => syncStickyOffset(table));
+    stickyColumnObserver.observe(first);
+  }
 }
 
 /** Defect-trend sparkline: one bar per day (per week on >35-day windows),
@@ -1198,7 +1105,7 @@ function renderDieTable(): string {
   // Drag the right edge of any header to resize that column (widths are
   // remembered per device — the PC monitor wants a wider table than the
   // iPad); double-tap an edge to reset every column back to automatic.
-  const rz = `<span class="die-rz" data-die-rz title="Drag to resize · double-tap to reset all columns"></span>`;
+  const rz = RESIZE_HANDLE;
   const th = (key: DieSortKey | '', label: string, title = ''): string => {
     if (!key)
       return `<th${title ? ` title="${escapeHtml(title)}"` : ''}>${label}${rz}</th>`;
