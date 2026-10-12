@@ -580,18 +580,23 @@ for the Plant/Equipment module):
    long it has been open and whether it is due. Mango leaves `To be
    completed by` empty until the coordinator assesses a request; those
    come last, the longest-open first.
-   **`PMD_Machine`** (Title = machine code, "1600T") carries each press's
-   maintenance record. Machine's **Status** column is
+   **`PMD_Machine`** carries each machine's maintenance record: the
+   production machines titled by code ("1600T"), the rest of the plant by
+   its Mango `Plant/Equipment` name ("AU - Encore Cold Saw"; also found
+   without the "AU - ", or by asset number). Rows titled "AU - …" or
+   "NZ - …" are plant only: the operator sheet, KPIs and Trace leave them
+   out of their machine list. Equipment whose name starts with "NZ" is
+   left out of Maint altogether. Machine's **Status** column is
    `PMD_Machine.Status`, set by tapping the badge exactly like a die's
    ToolStatus — Problems / To be Serviced / In service / Serviced, written
    as those labels; Serviced also stamps `LastService` = today, and In
-   service asks — as for a die — when maintenance will have the press back
+   service asks — as for a die — when maintenance will have it back
    (required, today or later, with the Mango-ticket reminder) and writes it
    to `AvailableDate`. The **Available** column reads like the Tool page's:
    Available · the return date (⚠ once passed) · In maint (In service with
    no date) · Unavailable (Problems). A ⚠ beside the Status flags an open
    breakdown in Mango. After each load the page saves
-   what it works out for every press to `LastService` (the later of that
+   what it works out for every machine with a row to `LastService` (the later of that
    stamp and Mango's last preventive or calibration order), `Breakdowns`,
    `MTBF` and `MTTR` (hours, 1 dp) and `Available` (availability %,
    98.7; a Number column formatted as a percentage gets 0.987) — only the

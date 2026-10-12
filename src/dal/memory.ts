@@ -30,6 +30,7 @@ import {
   encodeBreakdownCauseMap,
 } from '../core/breakdown';
 import { dieChangeEventKey, dieSignOffStatus } from '../core/die';
+import { pressCodeOf } from '../core/maint';
 import {
   seedBdCodes,
   seedDieChangeLogs,
@@ -77,8 +78,13 @@ export class MemoryDataLayer implements PmdDataLayer {
 
   constructor(now: Date = new Date()) {
     this.machines = seedMachines();
-    this.machineMaster = this.machines.map((m) => ({
-      machineCode: m.machineCode,
+    // PMD_Machine as the site keeps it: the production machines by code, the
+    // rest of the plant under its Mango name (listMachines leaves those out).
+    this.machineMaster = [
+      ...this.machines.map((m) => m.machineCode),
+      ...new Set(seedMachinePm(now).map((e) => e.asset).filter((a) => !pressCodeOf(a))),
+    ].map((machineCode) => ({
+      machineCode,
       status: '',
       lastService: '',
       mtbf: null,

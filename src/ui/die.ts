@@ -64,6 +64,7 @@ import {
   machineFigures,
   machineFiguresPatch,
   machineKey,
+  machineMasterKeys,
   onSite,
   parseMangoActionComments,
 } from '../core/maint';
@@ -676,9 +677,9 @@ async function loadAll(): Promise<void> {
   state.serviceHistoryFrom = serviceFrom;
   state.serviceHistoryAvailable = !errors.some((e) => e.startsWith('Service shot history:'));
   // Mango's export covers every site; Maint is Minto's for now.
-  state.requests = requests.filter((r) => onSite(r.branch));
-  state.machineRequests = machineRequests.filter((r) => onSite(r.branch));
-  state.machinePm = machinePm.filter((e) => onSite(e.branch));
+  state.requests = requests.filter((r) => onSite(r.branch, r.asset));
+  state.machineRequests = machineRequests.filter((r) => onSite(r.branch, r.asset));
+  state.machinePm = machinePm.filter((e) => onSite(e.branch, e.asset));
   state.machineMaster = new Map(machineMaster.map((m) => [machineKey(m.machineCode), m]));
   state.rejectLabels = new Map(rejCats.map((c) => [c.code, c.label]));
   state.dies = aggregateDies(dieColors, records, state.requests);
@@ -726,7 +727,7 @@ async function loadAll(): Promise<void> {
 }
 
 /**
- * Save what the Machine page works out for each press — Last service,
+ * Save what the Machine page works out for each machine — Last service,
  * Breakdowns, MTBF, MTTR, availability — to its PMD_Machine row, but only
  * the figures that changed, so a reload writes nothing new. Without the
  * Mango report every figure would read zero: then nothing is written.
@@ -747,7 +748,7 @@ async function saveMachineFigures(state: DieState): Promise<void> {
   );
   let saved = 0;
   for (const row of rows) {
-    const m = row.code ? state.machineMaster.get(machineKey(row.code)) : undefined;
+    const m = machineMasterKeys(row).map((k) => state.machineMaster.get(k)).find(Boolean);
     if (!m) continue;
     const patch = machineFiguresPatch(m, machineFigures(row, m));
     if (Object.keys(patch).length === 0) continue;
@@ -756,7 +757,7 @@ async function saveMachineFigures(state: DieState): Promise<void> {
       Object.assign(m, patch);
       saved += 1;
     } catch (e) {
-      // A missing column or a missing permission fails every press alike:
+      // A missing column or a missing permission fails every row alike:
       // say so once instead of trying the rest.
       console.warn('[pmd] PMD_Machine figures not saved:', e);
       state.machineSync = `PMD_Machine not updated: ${e instanceof Error ? e.message : e}`;
@@ -766,12 +767,12 @@ async function saveMachineFigures(state: DieState): Promise<void> {
   }
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   state.machineSync = saved
-    ? `PMD_Machine updated for ${saved} press${saved === 1 ? '' : 'es'} at ${time}.`
+    ? `PMD_Machine updated for ${saved} machine${saved === 1 ? '' : 's'} at ${time}.`
     : 'PMD_Machine is up to date.';
   if (S === state) render();
 }
 
-/** Set a press's Status on PMD_Machine; Serviced also stamps Last service =
+/** Set a machine's Status on PMD_Machine; Serviced also stamps Last service =
  *  today, In service carries the return date (AvailableDate). The row
  *  updates at once and rolls back if the write fails. */
 async function setMachineStatus(code: string, status: ToolStatus, availableDate?: string): Promise<void> {

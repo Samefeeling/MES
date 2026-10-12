@@ -52,7 +52,7 @@ import {
   parseToolStatus,
   TOOL_STATUS_META,
 } from '../core/die';
-import { machineKey } from '../core/maint';
+import { isEquipmentTitle, machineKey } from '../core/maint';
 
 // =====================================================================
 // SharePointDataLayer — Resero Operations AU site.
@@ -980,7 +980,10 @@ export class SharePointDataLayer implements PmdDataLayer {
 
   async listMachines(): Promise<Machine[]> {
     const F = this.F.machine;
-    const rows = await this.getAllItems(LISTS.machine);
+    // PMD_Machine also lists the plant maintenance looks after, under its
+    // Mango name ("AU - Encore Cold Saw"); the production pages want only
+    // the machines that run orders.
+    const rows = (await this.getAllItems(LISTS.machine)).filter((r) => !isEquipmentTitle(str(r[F.code])));
     return rows.map((r, i) => ({
       id: getId(r),
       machineCode: str(r[F.code]),

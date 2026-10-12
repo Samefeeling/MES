@@ -3165,6 +3165,36 @@ describe('PMD_Machine maintenance columns', () => {
     { Title: 'DisplayOrder', InternalName: 'DisplayOrder', TypeAsString: 'Number' },
   ];
 
+  it('keeps the plant on PMD_Machine for Maint but out of the production machine list', async () => {
+    const { dal } = stub(
+      [...base(), { Title: 'Status', InternalName: 'Status', TypeAsString: 'Text' }],
+      [
+        { ID: 1, Title: '1600T', DisplayOrder: 1, Status: 'Serviced' },
+        { ID: 2, Title: 'Hstamp', DisplayOrder: 2 },
+        { ID: 3, Title: 'AU - Encore Cold Saw', Status: 'Problems' },
+        { ID: 4, Title: 'NZ - Hastings Forklift 3' },
+      ],
+    );
+    expect((await dal.listMachines()).map((m) => m.machineCode)).toEqual(['1600T', 'Hstamp']);
+    const master = await dal.listMachineMaster!();
+    expect(master.map((m) => [m.machineCode, m.status])).toEqual([
+      ['1600T', 'serviced'],
+      ['Hstamp', ''],
+      ['AU - Encore Cold Saw', 'problems'],
+      ['NZ - Hastings Forklift 3', ''],
+    ]);
+  });
+
+  it('writes the Status of plant that is not a press', async () => {
+    const { dal, posts } = stub(
+      [...base(), { Title: 'Status', InternalName: 'Status', TypeAsString: 'Text' }],
+      [{ ID: 7, Title: 'AU - Encore Cold Saw' }],
+    );
+    await dal.listMachineMaster!();
+    await dal.updateMachineMaster!('AU - Encore Cold Saw', { status: 'in-service' });
+    expect(posts.at(-1)).toMatchObject({ url: expect.stringContaining('/items(7)'), body: { Status: 'In service' } });
+  });
+
   it('reads Status like a die\'s, and adds the missing columns on the first save', async () => {
     const fields = [
       ...base(),

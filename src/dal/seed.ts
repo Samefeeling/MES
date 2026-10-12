@@ -602,6 +602,9 @@ export function seedMachinePm(now: Date): MachinePmEvent[] {
     ev('AU - 1600T Toshiba Injection Molding Machine', 'Check screw and barrel wear', 15, 'Aryan Apte', '6 months'),
     ev('AU - 1600T Toshiba Injection Molding Machine', 'Check screw and barrel wear', -200, 'Aryan Apte', '6 months', { superseded: true }),
     ev('AU - Batt-1 BattenFeld Injection Molding Machine (1000T)', 'Safety gate interlock test', 9, 'Wisam Istefo', '3 months'),
+    // The export carries other sites' plant too; NZ equipment is left out
+    // of Maint whatever its branch says.
+    ev('NZ - Hastings Forklift 3', 'Service forks and chains', 6, 'Erin Toman', '3 months', { branch: '' }),
     ev('AU - Encore Cold Saw', 'Blade and guard check', 2, 'Erin Toman', '1 months', {
       description: 'Cold saw',
       department: 'Manufacturing - AU',

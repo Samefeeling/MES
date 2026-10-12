@@ -8,10 +8,12 @@ import {
   doneOrders,
   dueLevel,
   isBreakdown,
+  isEquipmentTitle,
   lastWeek,
   machineFigures,
   machineFiguresPatch,
   machineKey,
+  machineMasterKeys,
   onSite,
   openWork,
   orderOwner,
@@ -249,6 +251,42 @@ describe('Minto only', () => {
     expect(onSite(undefined)).toBe(true);
     expect(onSite('')).toBe(true);
     expect(onSite('Resero - Hastings')).toBe(false);
+  });
+
+  it('leaves out equipment named for New Zealand, whatever its branch says', () => {
+    expect(onSite('', 'NZ - Hastings Forklift 3')).toBe(false);
+    expect(onSite('Resero - Minto', 'NZ Dock Leveller')).toBe(false);
+    expect(onSite('', ' nz - Compressor')).toBe(false);
+    expect(onSite('', 'AU - Encore Cold Saw')).toBe(true);
+    expect(onSite('Resero - Minto', 'AU - Die 280 Postura Max')).toBe(true);
+  });
+});
+
+describe('PMD_Machine rows for all the plant', () => {
+  it('tells plant titled the Mango way from production machine codes', () => {
+    expect(isEquipmentTitle('AU - Encore Cold Saw')).toBe(true);
+    expect(isEquipmentTitle('NZ - Hastings Forklift 3')).toBe(true);
+    for (const code of ['1600T', 'Batt1', 'Batt-1', 'HS', 'HS-2', 'Hstamp', 'Hot Stamp']) {
+      expect(isEquipmentTitle(code)).toBe(false);
+    }
+  });
+
+  it('finds a row by press code, by Mango name with or without "AU - ", or by asset number', () => {
+    const [press, saw] = buildMachineRows(
+      [],
+      [wo({ asset: 'AU - Encore Cold Saw', branch: 'Resero - Minto' })],
+      '2026-10-12',
+      '',
+    ).filter((r) => r.code === '125T' || r.asset === 'AU - Encore Cold Saw');
+    expect(machineMasterKeys(press)[0]).toBe('125T');
+    expect(machineMasterKeys(saw)).toEqual(['AUENCORECOLDSAW', 'ENCORECOLDSAW']);
+    expect(machineMasterKeys({ code: '', asset: 'AU - Air Compressor', assetNumber: 'AC-07' })).toEqual([
+      'AUAIRCOMPRESSOR',
+      'AIRCOMPRESSOR',
+      'AC07',
+    ]);
+    // Whatever spelling the row was given, machineKey reads it alike.
+    expect(machineMasterKeys(saw)).toContain(machineKey('Encore cold saw'));
   });
 });
 

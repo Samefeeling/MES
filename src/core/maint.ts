@@ -14,8 +14,16 @@ import { MACHINE_ASSET_TO_CODE, machineCodeForAsset, normaliseAsset } from './di
 const DAY_MS = 86_400_000;
 
 /** The MES is Minto's. Mango's export covers every site; the other sites
- *  (Hastings) are left out for now. Rows with no branch are kept. */
-export const onSite = (branch: string | undefined): boolean => !branch?.trim() || /minto/i.test(branch);
+ *  (Hastings) are left out for now, and so is equipment named for New
+ *  Zealand ("NZ …"), whatever its branch says. Rows with no branch are kept. */
+export const onSite = (branch: string | undefined, asset = ''): boolean =>
+  !/^\s*NZ/i.test(asset) && (!branch?.trim() || /minto/i.test(branch));
+
+/** A PMD_Machine Title that names a piece of plant the way Mango does
+ *  ("AU - Encore Cold Saw"), not a production machine code ("1600T"). The
+ *  list holds both: the Machine page reads every row, the operator sheet and
+ *  the KPIs only the production machines. */
+export const isEquipmentTitle = (title: string): boolean => /^\s*(AU|NZ)\s*-/i.test(title);
 
 /** The injection moulding presses, in the order the Machine page lists them first. */
 export const PRESS_CODES: readonly string[] = [...new Set(MACHINE_ASSET_TO_CODE.map(([, code]) => code))].sort(
@@ -341,6 +349,15 @@ export function buildMachineRows(
 /** How a machine code is matched against PMD_Machine's Title: "Batt-1",
  *  "BATT1" and "Batt1" are the same press. */
 export const machineKey = (code: string): string => code.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+/** The PMD_Machine Titles a Machine page row may be listed under, best
+ *  first: the press code, then Mango's name for it with and without its
+ *  site prefix ("AU - Encore Cold Saw" / "Encore Cold Saw"), then the
+ *  asset number. As machineKey()s. */
+export function machineMasterKeys(row: Pick<MachineRow, 'code' | 'asset' | 'assetNumber'>): string[] {
+  const keys = [row.code, row.asset, row.asset.replace(/^\s*[A-Z]{2}\s*-\s*/i, ''), row.assetNumber].map((k) => machineKey(k ?? ''));
+  return [...new Set(keys.filter(Boolean))];
+}
 
 /** The figures the Machine page saves to PMD_Machine. */
 export type MachineFigures = Pick<MachineMaster, 'lastService' | 'mtbf' | 'mttr' | 'breakdowns' | 'available'>;

@@ -26,6 +26,7 @@ import {
   isBreakdown,
   lastWeek,
   machineFigures,
+  machineMasterKeys,
   openWork,
   pressCodeOf,
   unitFor,
@@ -63,9 +64,9 @@ export interface MaintCtx {
   /** The Tool page's work-order card, for the machine popup. */
   woRow(r: DieMaintenanceRequest): string;
   rerender(): void;
-  /** The press's row on PMD_Machine, if the list has one. */
+  /** The PMD_Machine row titled `code` (any spelling machineKey reads alike), if any. */
   machineMaster(code: string): MachineMaster | undefined;
-  /** Set a press's Status on PMD_Machine — with its return date when it
+  /** Set a machine's Status on PMD_Machine — with its return date when it
    *  goes In service; undefined when the backend can't write it. */
   setMachineStatus?(code: string, status: ToolStatus, availableDate?: string): void;
   /** What the last save of the figures to PMD_Machine did, for the page's note. */
@@ -145,7 +146,7 @@ function machineAccess(
       return (r) => (r.code ? r.asset : r.description || r.department || r.asset).toUpperCase() || null;
     case 'state':
       return (r) => {
-        const st = r.code ? ctx.machineMaster(r.code)?.status : '';
+        const st = masterOf(r, ctx)?.status;
         return st ? TOOL_STATUS_META[st].rank : null;
       };
     case 'lastService':
@@ -171,24 +172,34 @@ function machineAccess(
   }
 }
 
+/** The equipment's PMD_Machine row: by press code, else by its Mango name
+ *  (with or without "AU - "), else by asset number. */
+function masterOf(r: MachineRow, ctx: MaintCtx): MachineMaster | undefined {
+  for (const k of machineMasterKeys(r)) {
+    const m = ctx.machineMaster(k);
+    if (m) return m;
+  }
+  return undefined;
+}
+
 /** Last service: PMD_Machine's (stamped when someone sets Serviced) or the
  *  last preventive / calibration order Mango closed, whichever is later. */
 function lastServiceOf(r: MachineRow, ctx: MaintCtx): string {
-  const m = r.code ? ctx.machineMaster(r.code) : undefined;
+  const m = masterOf(r, ctx);
   return m ? machineFigures(r, m).lastService : r.lastService;
 }
 
 /**
- * Whether the press can run, as the Tool page says it of a die, from its
+ * Whether the machine can run, as the Tool page says it of a die, from its
  * PMD_Machine Status: Problems → Unavailable; In service → the return date
  * maintenance gave (AvailableDate), "In maint" without one, ⚠ once it has
  * passed; otherwise Available. Sorts unavailable last.
  */
 function availableOf(r: MachineRow, ctx: MaintCtx, today: string): { html: string; sort: string | null } {
-  const m = r.code ? ctx.machineMaster(r.code) : undefined;
+  const m = masterOf(r, ctx);
   if (!m || !m.status) return { html: '<span class="die-tstat none">—</span>', sort: null };
   if (m.status === 'problems') {
-    return { html: '<span class="die-avail late" title="Status is Problems — the press cannot run">Unavailable</span>', sort: '9999-99-99' };
+    return { html: '<span class="die-avail late" title="Status is Problems — it cannot run">Unavailable</span>', sort: '9999-99-99' };
   }
   if (m.status === 'in-service') {
     const back = m.availableDate;
@@ -204,7 +215,7 @@ function availableOf(r: MachineRow, ctx: MaintCtx, today: string): { html: strin
       sort: back,
     };
   }
-  return { html: '<span class="die-avail now" title="Status is not In service / Problems — the press can run">Available</span>', sort: '0000-00-00' };
+  return { html: '<span class="die-avail now" title="Status is not In service / Problems — it can run">Available</span>', sort: '0000-00-00' };
 }
 
 /** The Status cell: PMD_Machine.Status as the Tool page shows a die's, a
@@ -212,7 +223,7 @@ function availableOf(r: MachineRow, ctx: MaintCtx, today: string): { html: strin
  *  without a PMD_Machine row has none. An open breakdown in Mango is
  *  flagged beside it, whatever the status says. */
 function statusCell(r: MachineRow, ctx: MaintCtx): string {
-  const m = r.code ? ctx.machineMaster(r.code) : undefined;
+  const m = masterOf(r, ctx);
   const breakdowns = r.orders
     .filter((o) => o.status !== 'done' && isBreakdown(o))
     .map((o) => o.mangoTicket)
@@ -222,13 +233,14 @@ function statusCell(r: MachineRow, ctx: MaintCtx): string {
       ? ` <span class="mt-flag" title="${escapeHtml(`Open breakdown in Mango${breakdowns.length ? `: ${breakdowns.join(', ')}` : ''}`)}">⚠</span>`
       : '';
   if (!m) {
-    return `<span class="die-tstat none" title="${r.code ? 'No PMD_Machine row for this press' : 'Not on PMD_Machine'}">—</span>${flag}`;
+    const title = `No PMD_Machine row for this equipment — add one titled "${r.code || r.asset}" to set its Status`;
+    return `<span class="die-tstat none" title="${escapeHtml(title)}">—</span>${flag}`;
   }
   const meta = m.status ? TOOL_STATUS_META[m.status] : null;
   const inner = meta ? `● ${meta.label}` : '— set';
   const cls = meta ? `die-tstat ${meta.cls}` : 'die-tstat none';
   if (ctx.setMachineStatus) {
-    return `<button class="${cls} die-tstat-btn" data-mt-status="${escapeHtml(r.code)}" title="PMD_Machine.Status — tap to change">${inner} ▾</button>${flag}`;
+    return `<button class="${cls} die-tstat-btn" data-mt-status="${escapeHtml(m.machineCode)}" title="PMD_Machine.Status — tap to change">${inner} ▾</button>${flag}`;
   }
   return `<span class="${cls}" title="PMD_Machine.Status">${inner}</span>${flag}`;
 }
@@ -236,7 +248,7 @@ function statusCell(r: MachineRow, ctx: MaintCtx): string {
 export function renderMachineBoard(ctx: MaintCtx): string {
   const all = machineRows(ctx);
   const f = ctx.filter.trim().toUpperCase();
-  const statusOf = (r: MachineRow): ToolStatus | '' => (r.code ? ctx.machineMaster(r.code)?.status ?? '' : '');
+  const statusOf = (r: MachineRow): ToolStatus | '' => masterOf(r, ctx)?.status ?? '';
   let rows = all.filter(
     (r) =>
       (!machineStatus || statusOf(r) === machineStatus) &&
@@ -388,7 +400,7 @@ export function wireMachineBoard(root: HTMLElement, ctx: MaintCtx): void {
   );
 }
 
-/** Pick a press's Status — the Tool page's picker, writing PMD_Machine. */
+/** Pick a machine's Status — the Tool page's picker, writing PMD_Machine. */
 function openMachineStatusPicker(code: string, ctx: MaintCtx): void {
   const m = ctx.machineMaster(code);
   if (!m || !ctx.setMachineStatus) return;
@@ -428,9 +440,9 @@ function openMachineStatusPicker(code: string, ctx: MaintCtx): void {
 }
 
 /** Second step of In service, as for a die: the date maintenance will have
- *  the press back is required — it fills the Available column and
+ *  the machine back is required — it fills the Available column and
  *  PMD_Machine.AvailableDate — and the Mango work order comes first.
- *  Picking In service again on a press already in service changes the date. */
+ *  Picking In service again on a machine already in service changes the date. */
 function openMachineInServiceStep(code: string, ctx: MaintCtx): void {
   const m = ctx.machineMaster(code);
   if (!m || !ctx.setMachineStatus) return;
@@ -443,12 +455,12 @@ function openMachineInServiceStep(code: string, ctx: MaintCtx): void {
       <button class="btn-ghost-big" data-mod="close">Cancel</button>
     </div>
     <div class="die-insvc-mango" role="alert">🥭 <b>Mango Ticket Required</b> — raise the maintenance
-      work order in Mango before the press goes in. <a href="${MANGO_HOME}" target="_blank" rel="noopener">Open Mango</a></div>
-    <label class="die-insvc-date">Available — when will maintenance have the press back?
+      work order in Mango before the machine goes in. <a href="${MANGO_HOME}" target="_blank" rel="noopener">Open Mango</a></div>
+    <label class="die-insvc-date">Available — when will maintenance have it back?
       <input type="date" data-insvc-date min="${today}" value="${escapeHtml(cur >= today ? cur : '')}" required>
     </label>
     <p class="die-req-note">Required. The Machine page's <b>Available</b> column shows this date so
-      planning knows when the press returns (writes PMD_Machine Status + AvailableDate).</p>
+      planning knows when it returns (writes PMD_Machine Status + AvailableDate).</p>
     <div class="bd-actions">
       <button class="btn-ghost-big" data-insvc-back>← Back</button>
       <button class="btn-primary-big" data-insvc-save>✓ Set In service</button>
@@ -462,7 +474,7 @@ function openMachineInServiceStep(code: string, ctx: MaintCtx): void {
   mc.querySelector('[data-insvc-save]')?.addEventListener('click', () => {
     const date = input.value;
     if (!date) {
-      toast('Enter the Available date — when maintenance will have the press back.', 'err');
+      toast('Enter the Available date — when maintenance will have it back.', 'err');
       input.focus();
       return;
     }
@@ -507,7 +519,7 @@ function openMachineDetail(row: MachineRow, ctx: MaintCtx): void {
     </div>
     <div class="mt-stats">
       ${stat('Status', (() => {
-        const m = row.code ? ctx.machineMaster(row.code) : undefined;
+        const m = masterOf(row, ctx);
         if (!m?.status) return '—';
         const back = m.status === 'in-service' && m.availableDate ? ` · back ${ddmmyyyy(m.availableDate)}` : '';
         return `${TOOL_STATUS_META[m.status].label}${back}`;
