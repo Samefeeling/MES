@@ -605,6 +605,8 @@ export function seedMachinePm(now: Date): MachinePmEvent[] {
     // The export carries other sites' plant too; NZ equipment is left out
     // of Maint whatever its branch says.
     ev('NZ - Hastings Forklift 3', 'Service forks and chains', 6, 'Erin Toman', '3 months', { branch: '' }),
+    // Dies are the Tool page's; the Machine page leaves them out.
+    ev('AU - Die 280 Postura Max', 'Clean and grease slides', 5, 'Erin Toman', '3 months'),
     ev('AU - Encore Cold Saw', 'Blade and guard check', 2, 'Erin Toman', '1 months', {
       description: 'Cold saw',
       department: 'Manufacturing - AU',

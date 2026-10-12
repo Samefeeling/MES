@@ -25,6 +25,11 @@ export const onSite = (branch: string | undefined, asset = ''): boolean =>
  *  the KPIs only the production machines. */
 export const isEquipmentTitle = (title: string): boolean => /^\s*(AU|NZ)\s*-/i.test(title);
 
+/** Equipment named for a die ("AU - Die 280", "DIE-3597", "Trim Dies") —
+ *  the tools, which the Tool page already manages, so the Machine page
+ *  leaves them out. "Die" must stand as its own word: "Diesel" is plant. */
+export const isDieAsset = (asset: string): boolean => /(^|[^a-z])dies?(?![a-z])/i.test(asset);
+
 /** The injection moulding presses, in the order the Machine page lists them first. */
 export const PRESS_CODES: readonly string[] = [...new Set(MACHINE_ASSET_TO_CODE.map(([, code]) => code))].sort(
   (a, b) => pressRank(a) - pressRank(b),
@@ -247,7 +252,8 @@ const byDue = (a: MachinePmEvent, b: MachinePmEvent): number =>
 /**
  * One row per piece of equipment: every name in MachinePM.csv, every press
  * (so the nine are there even before Mango lists them), and any machine in
- * the work-order report from a branch MachinePM covers. Presses first, in
+ * the work-order report from a branch MachinePM covers — dies aside, which
+ * are the Tool page's. Presses first, in
  * tonnage order; the rest worst state first, then by name.
  */
 export function buildMachineRows(
@@ -287,6 +293,7 @@ export function buildMachineRows(
   const branches = new Set(pm.map((e) => e.branch.trim().toUpperCase()).filter(Boolean));
   const named = new Set<MachineRow>();
   for (const e of pm) {
+    if (isDieAsset(e.asset)) continue;
     const row = ensure(e.asset);
     // MachinePM's own spelling wins over the built-in press name.
     if (!named.has(row)) {
@@ -300,7 +307,7 @@ export function buildMachineRows(
   }
   for (const r of orders) {
     const asset = (r.asset ?? '').trim();
-    if (!asset) continue;
+    if (!asset || isDieAsset(asset)) continue;
     const known = rows.has(keyOf(asset));
     const sameBranch =
       branches.size === 0 || !r.branch || branches.has(r.branch.trim().toUpperCase());

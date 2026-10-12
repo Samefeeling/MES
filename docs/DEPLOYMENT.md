@@ -586,7 +586,9 @@ for the Plant/Equipment module):
    without the "AU - ", or by asset number). Rows titled "AU - …" or
    "NZ - …" are plant only: the operator sheet, KPIs and Trace leave them
    out of their machine list. Equipment whose name starts with "NZ" is
-   left out of Maint altogether. Machine's **Status** column is
+   left out of Maint altogether, and the Machine page leaves out anything
+   named for a die ("Die" or "Dies" as a word — "AU - Die 280", "DIE-3597";
+   not "Diesel"): dies are managed on the Tool page. Machine's **Status** column is
    `PMD_Machine.Status`, set by tapping the badge exactly like a die's
    ToolStatus — Problems / To be Serviced / In service / Serviced, written
    as those labels; Serviced also stamps `LastService` = today, and In

@@ -8,6 +8,7 @@ import {
   doneOrders,
   dueLevel,
   isBreakdown,
+  isDieAsset,
   isEquipmentTitle,
   lastWeek,
   machineFigures,
@@ -259,6 +260,30 @@ describe('Minto only', () => {
     expect(onSite('', ' nz - Compressor')).toBe(false);
     expect(onSite('', 'AU - Encore Cold Saw')).toBe(true);
     expect(onSite('Resero - Minto', 'AU - Die 280 Postura Max')).toBe(true);
+  });
+});
+
+describe('dies on the Machine page', () => {
+  it('knows a die by the word, not by the letters', () => {
+    for (const name of ['AU - Die 280 Postura Max', 'DIE-3597', 'AU - Trim Dies', 'Die280', 'au - die rack']) {
+      expect(isDieAsset(name)).toBe(true);
+    }
+    for (const name of ['AU - Diesel Forklift', 'AU - Encore Cold Saw', 'AU - Studies Room', 'AU - 1600T Toshiba Injection Molding Machine']) {
+      expect(isDieAsset(name)).toBe(false);
+    }
+  });
+
+  it('leaves them to the Tool page', () => {
+    const rows = buildMachineRows(
+      [pm({ asset: 'AU - Die 280 Postura Max' }), pm({ asset: 'AU - Diesel Forklift' })],
+      [wo({ asset: 'DIE-3597', branch: 'Resero - Minto' }), wo({ asset: 'AU - Encore Cold Saw', branch: 'Resero - Minto' })],
+      '2026-10-12',
+      '',
+    );
+    const names = rows.map((r) => r.asset);
+    expect(names).toContain('AU - Diesel Forklift');
+    expect(names).toContain('AU - Encore Cold Saw');
+    expect(names.some(isDieAsset)).toBe(false);
   });
 });
 
