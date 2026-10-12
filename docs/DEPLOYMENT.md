@@ -561,18 +561,25 @@ for the Plant/Equipment module):
    `Downtime` is read as hours. Maint covers Minto only for now: rows
    whose `Branch` is another site (`Resero - Hastings`) are left out of
    Tool, Machine and Team; `Region` is the raiser's and is not used.
-   Team charts closed orders and `Labour Hours` per `Assign to Action`, and
-   lists every open request and live PM with whether it is due. Many
-   orders close without `Labour Hours`, so the hours tile says how many
-   carry them. What was done is `Summary of work completed`, else
-   `Summary`, else `Corrective action taken`, with `Preventative action
-   taken` underneath unless it is N/A, then the `Comment:` entries of
-   `Actions taken` — only those; its Created / Completed / Change Stage
-   lines are workflow noise and are not shown (the closing "… to Stage 4
-   Closed" line is still what dates the close).
-   Mango leaves `To be completed by` empty until the coordinator assesses
-   a request, so an undated request shows how long ago it was raised,
-   longest-waiting first.
+   Team charts the `Labour Hours` of the orders closed each day (week,
+   month on a long range) stacked by owner, over Last Week (Monday to
+   Sunday) or a From–To range, with those orders listed beside the chart.
+   The owner is `Assign to Action`; with two or more people in it
+   (separated by `,` `;` `/` `&` or "and"), the first who is not the
+   coordinator Avila Pushparaj. Each order shows its `Created Date`, the
+   day it closed and its cycle time (days between the two); the tile
+   gives the median and mean. Many orders close without `Labour Hours`,
+   so the hours tile says how many carry them. The list's description
+   cell carries `Describe the issue`; hovering it also shows what was done
+   (`Summary of work completed`, else `Summary`, else `Corrective action
+   taken`), `Preventative action taken` unless it is N/A, and the
+   `Comment:` entries of `Actions taken` — only those; its Created /
+   Completed / Change Stage lines are workflow noise (the closing "… to
+   Stage 4 Closed" line is still what dates the close).
+   Below, every open request and live PM with its `Created Date`, how
+   long it has been open and whether it is due. Mango leaves `To be
+   completed by` empty until the coordinator assesses a request; those
+   come last, the longest-open first.
    **`PMD_Machine`** (Title = machine code, "1600T") carries each press's
    maintenance record. Machine's **Status** column is
    `PMD_Machine.Status`, set by tapping the badge exactly like a die's

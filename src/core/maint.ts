@@ -382,8 +382,23 @@ export function machineFiguresPatch(stored: MachineMaster, figures: MachineFigur
 
 export const UNASSIGNED = 'Unassigned';
 
-/** Who owns a work order: Mango's "Assign to Action". */
-export const orderOwner = (r: DieMaintenanceRequest): string => r.contact.trim() || UNASSIGNED;
+/** Mango's maintenance coordinator. She is put on most work orders to assess
+ *  them, so on an order with more than one person the work is the other's. */
+export const MAINT_COORDINATOR = 'Avila Pushparaj';
+
+/** Who owns a work order: Mango's "Assign to Action" — with two or more
+ *  people on it, the first who is not the coordinator. */
+export function orderOwner(r: DieMaintenanceRequest): string {
+  const people = r.contact
+    .split(/[;,\n|/&]|\s+and\s+/i)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (people.length > 1) {
+    const coordinator = plain(MAINT_COORDINATOR);
+    return people.find((p) => plain(p) !== coordinator) ?? people[0];
+  }
+  return people[0] ?? UNASSIGNED;
+}
 
 export interface DoneOrder {
   ticket: string;
@@ -403,7 +418,13 @@ export interface DoneOrder {
    *  the technicians' own notes; the stage changes around them are left out. */
   notes: MangoActionComment[];
   owner: string;
-  /** When it closed (Mango's Stage 4 date), else when it was raised. YYYY-MM-DD. */
+  /** When it was raised (Mango's Created Date), YYYY-MM-DD; '' if blank. */
+  created: string;
+  /** When it closed (Mango's Stage 4 date), YYYY-MM-DD; '' when the log never says. */
+  closed: string;
+  /** Days from raised to closed — the order's cycle time. null without both dates. */
+  cycleDays: number | null;
+  /** When it closed, else when it was raised. YYYY-MM-DD. */
   day: string;
   hours: number;
   /** Labour Hours was filled in. Many orders close without it, so the
@@ -425,6 +446,9 @@ export function doneOrders(orders: readonly DieMaintenanceRequest[]): DoneOrder[
     .filter((r) => r.status === 'done')
     .map((r) => {
       const summary = r.workSummary || r.summary || r.correctiveAction || '';
+      const created = r.createdAt.slice(0, 10);
+      const closed = r.closedAt.slice(0, 10);
+      const cycle = created && closed ? daysUntil(closed, created) : null;
       return {
         ticket: r.mangoTicket,
         asset: r.asset || r.dieNumber,
@@ -434,7 +458,10 @@ export function doneOrders(orders: readonly DieMaintenanceRequest[]): DoneOrder[
         prevention: addsNothing(r.preventativeAction, summary) ? '' : (r.preventativeAction ?? ''),
         notes: parseMangoActionComments(r.actionsTaken),
         owner: orderOwner(r),
-        day: (r.closedAt || r.createdAt).slice(0, 10),
+        created,
+        closed,
+        cycleDays: cycle != null && cycle >= 0 ? cycle : null,
+        day: closed || created,
         hours: hours(r.labourHours),
         booked: (r.labourHours ?? '').trim() !== '',
       };
@@ -450,6 +477,8 @@ export interface Bucket {
   start: string;
   count: number;
   hours: number;
+  /** The same per owner. */
+  byOwner: Map<string, { count: number; hours: number }>;
 }
 
 const ymd = (d: Date): string =>
@@ -493,7 +522,7 @@ export function bucketDone(
 ): Bucket[] {
   const out = new Map<string, Bucket>();
   for (let s = bucketStart(from, unit); s <= to; s = nextBucket(s, unit)) {
-    out.set(s, { start: s, count: 0, hours: 0 });
+    out.set(s, { start: s, count: 0, hours: 0, byOwner: new Map() });
   }
   for (const o of done) {
     if (o.day < from || o.day > to) continue;
@@ -501,8 +530,31 @@ export function bucketDone(
     if (!b) continue;
     b.count += 1;
     b.hours += o.hours;
+    const p = b.byOwner.get(o.owner) ?? { count: 0, hours: 0 };
+    p.count += 1;
+    p.hours += o.hours;
+    b.byOwner.set(o.owner, p);
   }
   return [...out.values()];
+}
+
+/** Monday to Sunday of the week before the one `today` is in. */
+export function lastWeek(today: string): { from: string; to: string } {
+  const monday = bucketStart(today, 'week');
+  const d = new Date(`${monday}T00:00:00`);
+  d.setDate(d.getDate() - 7);
+  const from = ymd(d);
+  d.setDate(d.getDate() + 6);
+  return { from, to: ymd(d) };
+}
+
+/** Median and mean cycle time, in days, of the orders that have one. */
+export function cycleTime(done: readonly DoneOrder[]): { median: number | null; mean: number | null; n: number } {
+  const days = done.map((d) => d.cycleDays).filter((d): d is number => d != null).sort((a, b) => a - b);
+  if (days.length === 0) return { median: null, mean: null, n: 0 };
+  const mid = days.length >> 1;
+  const median = days.length % 2 ? days[mid] : (days[mid - 1] + days[mid]) / 2;
+  return { median, mean: days.reduce((a, b) => a + b, 0) / days.length, n: days.length };
 }
 
 export interface OpenItem {

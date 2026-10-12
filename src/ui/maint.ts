@@ -5,25 +5,31 @@
 //   Machine  one row per piece of equipment (MachinePM.csv's Name, the nine
 //            presses first): its dies, open work orders, next PM from
 //            MachinePM.csv, and MTBF / MTTR from the Mango breakdowns.
-//   Team     what the maintenance team closed — orders and labour hours per
-//            owner on a zoomable time axis — and everything still open,
-//            work orders and PM, with whether it is due.
+//   Team     what the maintenance team closed — labour hours per owner over
+//            Last Week or a From–To range, the orders beside the chart with
+//            their cycle time — and everything still open, work orders and
+//            PM, with when it was raised and whether it is due.
 
 import type { DieMaintenanceRequest, MachineMaster, MachinePmEvent, ToolStatus } from '../types';
-import { TOOL_STATUS_META, addDays } from '../core/die';
+import { TOOL_STATUS_META } from '../core/die';
 import {
+  MAINT_COORDINATOR,
   UNASSIGNED,
   bucketDone,
   bucketEnd,
   buildMachineRows,
+  cycleTime,
   daysUntil,
   doneOrders,
   dueLevel,
   earliestOrder,
   isBreakdown,
+  lastWeek,
   machineFigures,
   openWork,
+  pressCodeOf,
   unitFor,
+  type Bucket,
   type BucketUnit,
   type DoneOrder,
   type DueLevel,
@@ -81,13 +87,6 @@ const LEVEL_TEXT: Record<DueLevel, string> = {
 };
 
 /** An open request with no due date yet: when it was raised, and how long ago. */
-function undatedBadge(raised: string, today: string): string {
-  if (!raised) return '<span class="mt-due none">No date</span>';
-  const ago = -daysUntil(raised, today);
-  const rel = ago <= 0 ? 'today' : `${ago} d ago`;
-  return `<span class="mt-due none" title="No &quot;To be completed by&quot; date yet">Raised ${ddmmyyyy(raised)} · ${rel}</span>`;
-}
-
 function dueBadge(due: string, today: string): string {
   const level = dueLevel(due, today);
   if (level === 'none') return '<span class="mt-due none">No date</span>';
@@ -543,22 +542,14 @@ interface TeamState {
   to: string;
   /** Overdue / due-soon filter on the open-work table ('' = all). */
   level: DueLevel | '';
-  /** The orders listed under the chart: a tapped bar's bucket (its first
-   *  day), 'all' for the whole range, null for none. */
+  /** A tapped bar's bucket (its first day): the list beside the chart
+   *  narrows to it. null lists the whole range. */
   pick: string | null;
 }
 let team: TeamState | null = null;
 
 function teamState(ctx: MaintCtx): TeamState {
-  if (!team) {
-    team = {
-      owners: new Set(),
-      from: addDays(ctx.today, -89),
-      to: ctx.today,
-      level: '',
-      pick: null,
-    };
-  }
+  if (!team) team = { owners: new Set(), ...lastWeek(ctx.today), level: '', pick: null };
   return team;
 }
 
@@ -577,6 +568,48 @@ function teamData(ctx: MaintCtx) {
   return { st, owners, done, open, picked };
 }
 
+/** Categorical slots, in their validated order (adjacent pairs stay apart
+ *  for colour-blind readers when stacked). */
+const OWNER_HUES = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
+const OTHER_OWNERS = 'Other';
+const OTHER_HUE = '#cbd5e1';
+const UNASSIGNED_HUE = '#94a3b8';
+
+interface OwnerPaint {
+  /** The series an owner is drawn in: itself, or "Other" past the eighth. */
+  series(owner: string): string;
+  colour(series: string): string;
+  /** Stack order, bottom first. */
+  rank(series: string): number;
+}
+
+/** Each owner's colour for the page, ranked by every hour they have closed —
+ *  so a filter or another range never repaints anyone. Past eight named
+ *  owners the rest share "Other"; Unassigned is grey, on top. */
+function ownerPaint(done: readonly DoneOrder[]): OwnerPaint {
+  const total = new Map<string, number>();
+  for (const d of done) if (d.owner !== UNASSIGNED) total.set(d.owner, (total.get(d.owner) ?? 0) + d.hours + 1e-6);
+  const named = [...total.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([o]) => o);
+  const slot = new Map(named.slice(0, OWNER_HUES.length).map((o, i) => [o, i]));
+  return {
+    series: (o) => (o === UNASSIGNED || slot.has(o) ? o : OTHER_OWNERS),
+    colour: (s) => (s === UNASSIGNED ? UNASSIGNED_HUE : s === OTHER_OWNERS ? OTHER_HUE : OWNER_HUES[slot.get(s) ?? 0]),
+    rank: (s) => (s === UNASSIGNED ? 1e3 + 1 : s === OTHER_OWNERS ? 1e3 : slot.get(s) ?? 999),
+  };
+}
+
+/** A machine as the list has room for it: the press code, else the Mango
+ *  name without its "AU - ". */
+const shortAsset = (a: string): string => pressCodeOf(a) || a.replace(/^AU\s*-\s*/i, '') || '—';
+
+/** dd/mm/yy — the list beside the chart is narrow. */
+const ddmmyy = (iso: string): string => {
+  const m = /^\d{2}(\d{2})-(\d{2})-(\d{2})/.exec(iso);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : '—';
+};
+
+const swatch = (colour: string): string => `<i class="tm-sw" style="background:${colour}"></i>`;
+
 export function renderTeam(ctx: MaintCtx): string {
   const { st, owners, done, open, picked } = teamData(ctx);
   const f = ctx.filter.trim().toUpperCase();
@@ -587,37 +620,34 @@ export function renderTeam(ctx: MaintCtx): string {
   const inRange = doneShown.filter((d) => d.day >= st.from && d.day <= st.to);
   const unit = unitFor(st.from, st.to);
   const buckets = bucketDone(doneShown, st.from, st.to, unit);
+  const paint = ownerPaint(done);
   const totalH = inRange.reduce((n, d) => n + d.hours, 0);
   const booked = inRange.filter((d) => d.booked).length;
+  const cycle = cycleTime(inRange);
   // A tapped bar whose bucket the range or its unit no longer has is dropped.
-  if (st.pick && st.pick !== 'all' && !buckets.some((b) => b.start === st.pick)) st.pick = null;
-  const listFrom = st.pick === 'all' ? st.from : st.pick ?? '';
-  const listTo = st.pick === 'all' ? st.to : st.pick ? bucketEnd(st.pick, unit) : '';
-  const listed = st.pick ? inRange.filter((d) => d.day >= listFrom && d.day <= listTo) : [];
-  const earliest = done.length ? done[done.length - 1].day : addDays(ctx.today, -364);
-  const preset = (days: number | 'all', label: string): string => {
-    const from = days === 'all' ? earliest : addDays(ctx.today, -(days - 1));
-    const on = st.to === ctx.today && st.from === from;
-    return `<button class="shift-btn${on ? ' a' : ''}" data-tm-range="${days}">${label}</button>`;
-  };
+  if (st.pick && !buckets.some((b) => b.start === st.pick)) st.pick = null;
+  const listFrom = st.pick ?? st.from;
+  const listTo = st.pick ? bucketEnd(st.pick, unit) : st.to;
+  const listed = inRange.filter((d) => d.day >= listFrom && d.day <= listTo);
+  const week = lastWeek(ctx.today);
+  const isLastWeek = st.from === week.from && st.to === week.to;
   const ownerChip = (o: string): string => {
     const on = st.owners.has(o);
     return `<button type="button" class="die-chip tm-owner${on ? ' on' : ''}" data-tm-owner="${escapeHtml(o)}" aria-pressed="${on}">${escapeHtml(o)}</button>`;
   };
-  // Per owner in range.
+  // Legend: every owner with an order closed in range, in stack order.
   const per = new Map<string, { n: number; h: number }>();
   for (const d of inRange) {
-    const p = per.get(d.owner) ?? { n: 0, h: 0 };
+    const k = paint.series(d.owner);
+    const p = per.get(k) ?? { n: 0, h: 0 };
     p.n += 1;
     p.h += d.hours;
-    per.set(d.owner, p);
+    per.set(k, p);
   }
-  const maxH = Math.max(1, ...[...per.values()].map((p) => p.h));
-  const ownerRows = [...per.entries()]
-    .sort((a, b) => b[1].h - a[1].h || b[1].n - a[1].n)
+  const legend = [...per.entries()]
+    .sort((a, b) => paint.rank(a[0]) - paint.rank(b[0]))
     .map(
-      ([o, p]) => `<tr><td>${escapeHtml(o)}</td><td class="num">${p.n}</td><td class="num">${p.h.toFixed(1)}</td>
-        <td class="tm-barcell"><span class="tm-bar" style="width:${Math.round((p.h / maxH) * 100)}%"></span></td></tr>`,
+      ([o, p]) => `<li title="${escapeHtml(`${o}: ${p.h.toFixed(1)} h on ${p.n} order${p.n === 1 ? '' : 's'} closed`)}">${swatch(paint.colour(o))}<span>${escapeHtml(o)}</span><b>${p.h.toFixed(1)} h</b><em>${p.n} order${p.n === 1 ? '' : 's'}</em></li>`,
     )
     .join('');
   const openShown = open.filter(
@@ -629,18 +659,22 @@ export function renderTeam(ctx: MaintCtx): string {
     return `<button type="button" class="die-chip tm-level ${l}${on ? ' on' : ''}" data-tm-level="${l}" aria-pressed="${on}">${LEVEL_TEXT[l]} <b>${levelCount(l)}</b></button>`;
   };
   const openRows = openShown
-    .map(
-      (o: OpenItem) => `<tr class="tm-${o.level}">
+    .map((o: OpenItem) => {
+      const age = o.raised ? -daysUntil(o.raised, ctx.today) : null;
+      return `<tr class="tm-${o.level}">
         <td><span class="tm-kind ${o.kind}">${o.kind}</span></td>
-        <td>${o.due ? dueBadge(o.due, ctx.today) : undatedBadge(o.raised, ctx.today)}</td>
+        <td class="tm-date">${o.raised ? `${ddmmyyyy(o.raised)}<div class="tm-sub">${age! <= 0 ? 'today' : `${age} d open`}</div>` : '—'}</td>
+        <td>${o.due ? dueBadge(o.due, ctx.today) : '<span class="mt-due none">Not set</span>'}</td>
         <td><span class="mt-due ${o.level}">${LEVEL_TEXT[o.level]}</span></td>
         <td title="${escapeHtml(o.asset)}">${escapeHtml(o.asset)}</td>
         <td>${escapeHtml(o.title)}</td>
         <td>${escapeHtml(o.owner)}</td>
         <td>${escapeHtml(o.ticket || o.note)}</td>
-      </tr>`,
-    )
+      </tr>`;
+    })
     .join('');
+  const cov = (shown: number, of: number, what: string): string =>
+    shown < of ? `<em class="tm-cov">${what} ${shown} of ${of} orders</em>` : '';
   return `<div class="tm">
     <div class="kpi-head tm-head">
       <div class="tm-owners"><span class="tm-lbl">Owner</span>
@@ -650,35 +684,30 @@ export function renderTeam(ctx: MaintCtx): string {
     </div>
 
     <section class="tm-card">
-      <h3>✅ Completed work orders</h3>
       <div class="kpi-head tm-range">
-        <div class="shift-tabs">${preset(28, '4 weeks')}${preset(91, '3 months')}${preset(182, '6 months')}${preset(365, '12 months')}${preset('all', 'All')}</div>
-        <div class="tm-zoom">
-          <button class="shift-btn" data-tm-pan="-1" title="Earlier">◀</button>
-          <button class="shift-btn" data-tm-zoom="in" title="Zoom in">＋</button>
-          <button class="shift-btn" data-tm-zoom="out" title="Zoom out">－</button>
-          <button class="shift-btn" data-tm-pan="1" title="Later">▶</button>
+        <h3>✅ Completed work orders</h3>
+        <div class="shift-tabs"><button type="button" class="shift-btn${isLastWeek ? ' a' : ''}" data-tm-lastweek>Last Week</button></div>
+        <div class="kpi-range">
+          <label>From <input type="date" data-tm-date="from" value="${st.from}"></label>
+          <label>To <input type="date" data-tm-date="to" value="${st.to}"></label>
         </div>
-        <span class="tm-span">${ddmmyyyy(st.from)} – ${ddmmyyyy(st.to)} · per ${unit}</span>
       </div>
       <div class="tm-tiles">
         <div class="mt-stat"><span>Orders closed</span><b>${inRange.length}</b></div>
-        <div class="mt-stat"><span>Labour hours</span><b>${totalH.toFixed(1)}</b>${
-          booked < inRange.length ? `<em class="tm-cov">booked on ${booked} of ${inRange.length} orders</em>` : ''
-        }</div>
-        <div class="mt-stat"><span>Hours / order</span><b>${booked ? (totalH / booked).toFixed(1) : '—'}</b>${
-          booked < inRange.length ? '<em class="tm-cov">of the orders with hours</em>' : ''
-        }</div>
+        <div class="mt-stat"><span>Labour hours</span><b>${totalH.toFixed(1)}</b>${cov(booked, inRange.length, 'booked on')}</div>
+        <div class="mt-stat"><span>Hours / order</span><b>${booked ? (totalH / booked).toFixed(1) : '—'}</b>${booked < inRange.length ? '<em class="tm-cov">of the orders with hours</em>' : ''}</div>
+        <div class="mt-stat" title="Days from Mango's Created Date to the day it closed"><span>Cycle time (median)</span><b>${
+          cycle.median == null ? '—' : `${cycle.median.toFixed(cycle.median % 1 ? 1 : 0)} d`
+        }</b>${cycle.mean == null ? '' : `<em class="tm-cov">mean ${cycle.mean.toFixed(1)} d${cycle.n < inRange.length ? ` · ${cycle.n} of ${inRange.length} orders` : ''}</em>`}</div>
       </div>
-      ${teamChart(buckets, unit, st.pick)}
-      <p class="kpi-note">Bars: labour hours booked on the orders closed in each ${unit}; line: how many orders closed. <b>Tap a bar</b> to list its orders below. ＋ / － zoom, ◀ ▶ move. An order's day is the day Mango closed it (Stage 4), else the day it was raised. Owner is Mango's "Assign to Action".
-        <button type="button" class="die-chip die-chip-btn" data-tm-pick="all">📋 List all ${inRange.length} in range</button></p>
-      ${st.pick ? doneTable(listed, listFrom, listTo) : ''}
-      ${
-        ownerRows
-          ? `<table class="kpi-table tm-owner-table"><thead><tr><th>Owner</th><th>Orders</th><th>Hours</th><th></th></tr></thead><tbody>${ownerRows}</tbody></table>`
-          : '<div class="trace-empty">No closed work orders in this range.</div>'
-      }
+      <div class="tm-split">
+        <div class="tm-left">
+          ${legend ? `<ul class="tm-legend" aria-label="Labour hours by owner">${legend}</ul>` : ''}
+          ${teamChart(buckets, unit, st.pick, paint)}
+          <p class="kpi-note">Labour hours booked on the orders closed each ${unit}, by owner. <b>Tap a bar</b> to list its orders; tap it again for the whole range. An order counts on the day Mango closed it (Stage 4). Owner is Mango's "Assign to Action" — with two or more people on it, the first who is not ${escapeHtml(MAINT_COORDINATOR)}. Cycle time is the days from its Created Date to that close.</p>
+        </div>
+        <div class="tm-right">${doneTable(listed, listFrom, listTo, !!st.pick, paint)}</div>
+      </div>
     </section>
 
     <section class="tm-card">
@@ -687,119 +716,164 @@ export function renderTeam(ctx: MaintCtx): string {
       ${
         openRows
           ? `<div class="die-table-wrap"><table class="kpi-table tm-open-table"><thead><tr>
-              <th>Type</th><th>Due</th><th>Status</th><th>Equipment</th><th>What</th><th>Owner</th><th>Ticket / frequency</th>
+              <th>Type</th><th>Created</th><th>Due</th><th>Status</th><th>Equipment</th><th>What</th><th>Owner</th><th>Ticket / frequency</th>
             </tr></thead><tbody>${openRows}</tbody></table></div>`
           : '<div class="trace-empty">Nothing open for this selection.</div>'
       }
-      <p class="kpi-note"><b>MR</b> = an open Mango maintenance request, due by its "To be completed by"; <b>PM</b> = a live event in MachinePM.csv, due by its Event Due Date. Due ≤ 7 d is within the coming week. Mango leaves "To be completed by" empty until the coordinator assesses a request, so an undated request shows how long ago it was raised, the longest-waiting first.</p>
+      <p class="kpi-note"><b>MR</b> = an open Mango maintenance request: Created is its Created Date, due by its "To be completed by"; <b>PM</b> = a live event in MachinePM.csv, due by its Event Due Date. Due ≤ 7 d is within the coming week. Mango leaves "To be completed by" empty until the coordinator assesses a request; those come last, the longest-open first.</p>
     </section>
   </div>`;
 }
 
-/** The closed orders behind a tapped bar (or the whole range). */
-function doneTable(rows: DoneOrder[], from: string, to: string): string {
+/** The orders closed in the range, or in a tapped bar's period. */
+function doneTable(rows: DoneOrder[], from: string, to: string, narrowed: boolean, paint: OwnerPaint): string {
   const hoursSum = rows.reduce((n, d) => n + d.hours, 0);
   const span = from === to ? ddmmyyyy(from) : `${ddmmyyyy(from)} – ${ddmmyyyy(to)}`;
   const body = rows
-    .map(
-      (d) => `<tr>
-        <td>${ddmmyyyy(d.day)}</td>
-        <td>${escapeHtml(d.ticket || '—')}</td>
-        <td title="${escapeHtml(d.asset)}">${escapeHtml(d.asset || '—')}</td>
-        <td class="tm-text"><b>${escapeHtml(d.title || '—')}</b>${d.detail ? `<div>${escapeHtml(d.detail)}</div>` : ''}</td>
-        <td class="tm-text">${escapeHtml(d.summary || (d.notes.length ? '' : '—'))}${
-          d.prevention ? `<div>Prevent: ${escapeHtml(d.prevention)}</div>` : ''
-        }${d.notes.map((n) => `<div class="tm-note"><time>${escapeHtml(n.date.slice(0, 5))}</time> ${escapeHtml(n.comment)}</div>`).join('')}</td>
-        <td>${escapeHtml(d.owner)}</td>
+    .map((d) => {
+      const more = [
+        d.detail,
+        d.summary && `Done: ${d.summary}`,
+        d.prevention && `Prevent: ${d.prevention}`,
+        ...d.notes.map((n) => `${n.date} ${n.comment}`),
+      ].filter(Boolean);
+      return `<tr>
+        <td class="tm-nowrap">${escapeHtml(d.ticket || '—')}<div class="tm-sub tm-asset" title="${escapeHtml(d.asset)}">${escapeHtml(shortAsset(d.asset))}</div></td>
+        <td class="tm-text" title="${escapeHtml([d.title, ...more].join('\n'))}"><b>${escapeHtml(d.title || '—')}</b>${
+          d.detail ? `<div>${escapeHtml(d.detail)}</div>` : ''
+        }</td>
+        <td class="tm-nowrap">${swatch(paint.colour(paint.series(d.owner)))}${escapeHtml(d.owner)}</td>
+        <td class="tm-date">${ddmmyy(d.created)}</td>
+        <td class="tm-date">${ddmmyy(d.closed)}</td>
+        <td class="num">${d.cycleDays == null ? '—' : d.cycleDays}</td>
         <td class="num">${d.hours ? d.hours.toFixed(2).replace(/\.?0+$/, '') : '—'}</td>
-      </tr>`,
-    )
+      </tr>`;
+    })
     .join('');
-  return `<div class="tm-picked" data-tm-picked>
-    <div class="tm-picked-head">
-      <b>Orders closed ${span}</b> · ${rows.length} order${rows.length === 1 ? '' : 's'} · ${hoursSum.toFixed(1)} h
-      <button type="button" class="die-detail-close" data-tm-pick="" title="Close the list">✕</button>
+  return `<div class="tm-list">
+    <div class="tm-list-head">
+      <b>Closed ${span}</b><span>${rows.length} order${rows.length === 1 ? '' : 's'} · ${hoursSum.toFixed(1)} h</span>
+      ${narrowed ? '<button type="button" class="die-chip die-chip-btn" data-tm-pick="" title="List the whole range again">Whole range</button>' : ''}
     </div>
     ${
       rows.length
-        ? `<div class="die-table-wrap"><table class="kpi-table tm-done-table"><thead><tr>
-            <th>Closed</th><th>Ticket</th><th>Machine</th><th>Detail</th><th>Summary</th><th>Owner</th><th>Hours</th>
+        ? `<div class="tm-list-wrap"><table class="kpi-table tm-done-table"><thead><tr>
+            <th>Ticket</th><th>What</th><th>Owner</th><th>Created</th><th>Closed</th>
+            <th class="num" title="Days from Created to Closed">Cycle d</th><th class="num">Hours</th>
           </tr></thead><tbody>${body}</tbody></table></div>`
         : '<div class="trace-empty">No orders closed in this period for this selection.</div>'
     }
   </div>`;
 }
 
-/** Hours as bars, order count as a line, on one time axis. Each period is a
- *  tap target the full height of the chart, so a short bar is as easy to hit
- *  as a tall one. */
-function teamChart(
-  buckets: { start: string; count: number; hours: number }[],
-  unit: BucketUnit,
-  pick: string | null,
-): string {
+/** Clean axis steps (1, 2, 2.5, 5 × 10ⁿ), about four of them. */
+function niceTop(max: number): { top: number; step: number } {
+  if (max <= 0) return { top: 4, step: 1 };
+  const raw = max / 4;
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((v) => v >= raw)!;
+  return { top: Math.ceil(max / step) * step, step };
+}
+
+const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** Labour hours per period as columns stacked by owner, on one axis. Each
+ *  period is a tap target the full height of the plot; hovering one shows
+ *  its owners in a tooltip (wireTeam). */
+function teamChart(buckets: Bucket[], unit: BucketUnit, pick: string | null, paint: OwnerPaint): string {
   if (buckets.length === 0) return '';
-  const W = 1000;
-  const H = 240;
-  const L = 44;
-  const R = 36;
-  const T = 12;
-  const B = 34;
+  const W = 560;
+  const H = 280;
+  const L = 38;
+  const R = 8;
+  const T = 16;
+  const B = unit === 'day' && buckets.length <= 8 ? 34 : 22;
   const iw = W - L - R;
   const ih = H - T - B;
-  const maxH = Math.max(1, ...buckets.map((b) => b.hours));
-  const maxN = Math.max(1, ...buckets.map((b) => b.count));
+  const { top, step } = niceTop(Math.max(0, ...buckets.map((b) => b.hours)));
+  const y = (v: number): number => T + ih - (v / top) * ih;
   const bw = iw / buckets.length;
-  const x = (i: number): number => L + i * bw;
-  const label = (s: string): string => {
-    const [y, m, d] = s.split('-');
-    return unit === 'month' ? `${m}/${y.slice(2)}` : `${d}/${m}`;
-  };
-  const every = Math.max(1, Math.ceil(buckets.length / 12));
-  const bars = buckets
+  const barW = Math.max(3, Math.min(24, bw * 0.62));
+  const GAP = 2;
+  const grid: string[] = [];
+  for (let v = 0; v <= top + 1e-9; v += step) {
+    grid.push(
+      `<line class="${v === 0 ? 'tm-base' : 'tm-grid'}" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"></line>` +
+        `<text class="tm-tick" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${+v.toFixed(1)}${v + step > top + 1e-9 ? ' h' : ''}</text>`,
+    );
+  }
+  const every = Math.max(1, Math.ceil(buckets.length / 10));
+  const cols = buckets
     .map((b, i) => {
-      const h = (b.hours / maxH) * ih;
-      const tip = escapeHtml(
-        `${ddmmyyyy(b.start)}${unit === 'day' ? '' : ` (${unit})`} · ${b.count} order${b.count === 1 ? '' : 's'} · ${b.hours.toFixed(1)} h — tap to list`,
-      );
-      return `<g class="tm-col${b.start === pick ? ' on' : ''}" data-tm-pick="${b.start}" role="button" tabindex="0">
-        <rect class="tm-hit" x="${x(i)}" y="${T}" width="${bw}" height="${ih}"></rect>
-        <rect class="tm-hbar" x="${x(i) + bw * 0.12}" y="${T + ih - h}" width="${Math.max(1, bw * 0.76)}" height="${h}"></rect>
-        <title>${tip}</title>
+      const cx = L + i * bw + bw / 2;
+      const x0 = cx - barW / 2;
+      const series = new Map<string, { hours: number; count: number }>();
+      for (const [o, p] of b.byOwner) {
+        const k = paint.series(o);
+        const q = series.get(k) ?? { hours: 0, count: 0 };
+        q.hours += p.hours;
+        q.count += p.count;
+        series.set(k, q);
+      }
+      const stack = [...series.entries()].sort((a, z) => paint.rank(a[0]) - paint.rank(z[0]));
+      const drawn = stack.filter(([, p]) => p.hours > 0);
+      let cum = 0;
+      const segs = drawn
+        .map(([o, p], j) => {
+          const y1 = y(cum + p.hours);
+          const y0 = y(cum) - (j === 0 ? 0 : GAP);
+          cum += p.hours;
+          const h = y0 - y1;
+          if (h < 0.5) return '';
+          const fill = paint.colour(o);
+          if (j < drawn.length - 1) return `<rect class="tm-seg" x="${x0}" y="${y1}" width="${barW}" height="${h}" fill="${fill}"></rect>`;
+          const r = Math.min(4, h, barW / 2);
+          return `<path class="tm-seg" fill="${fill}" d="M${x0},${y0}V${y1 + r}Q${x0},${y1} ${x0 + r},${y1}H${x0 + barW - r}Q${x0 + barW},${y1} ${x0 + barW},${y1 + r}V${y0}Z"></path>`;
+        })
+        .join('');
+      const [yy, mm, dd] = b.start.split('-');
+      const period =
+        unit === 'day'
+          ? `${WEEKDAY[new Date(`${b.start}T00:00:00`).getDay()]} ${dd}/${mm}/${yy}`
+          : unit === 'week'
+            ? `Week of ${dd}/${mm}/${yy}`
+            : new Date(`${b.start}T00:00:00`).toLocaleDateString('en-AU', { month: 'long', year: 'numeric' });
+      const tip = {
+        period,
+        total: `${b.hours.toFixed(1)} h · ${b.count} order${b.count === 1 ? '' : 's'}`,
+        rows: stack.reverse().map(([o, p]) => [o, paint.colour(o), `${p.hours.toFixed(1)} h`, String(p.count)]),
+      };
+      const tick =
+        i % every !== 0
+          ? ''
+          : unit === 'day' && buckets.length <= 8
+            ? `<text class="tm-tick" x="${cx}" y="${H - 20}" text-anchor="middle">${WEEKDAY[new Date(`${b.start}T00:00:00`).getDay()]}</text><text class="tm-tick" x="${cx}" y="${H - 6}" text-anchor="middle">${dd}/${mm}</text>`
+            : `<text class="tm-tick" x="${cx}" y="${H - 6}" text-anchor="middle">${unit === 'month' ? `${mm}/${yy.slice(2)}` : `${dd}/${mm}`}</text>`;
+      return `<g class="tm-col${b.start === pick ? ' on' : ''}" data-tm-pick="${b.start}" data-tm-tip="${escapeHtml(JSON.stringify(tip))}" role="button" tabindex="0" aria-label="${escapeHtml(`${period}: ${tip.total}`)}">
+        <rect class="tm-hit" x="${L + i * bw}" y="${T}" width="${bw}" height="${ih}"></rect>
+        ${segs}${tick}
       </g>`;
     })
     .join('');
-  const pts = buckets.map((b, i) => `${x(i) + bw / 2},${T + ih - (b.count / maxN) * ih}`).join(' ');
-  const dots = buckets
-    .map((b, i) => (b.count ? `<circle class="tm-dot" cx="${x(i) + bw / 2}" cy="${T + ih - (b.count / maxN) * ih}" r="3"></circle>` : ''))
-    .join('');
-  const ticks = buckets
-    .map((b, i) => (i % every === 0 ? `<text class="tm-tick" x="${x(i) + bw / 2}" y="${H - 12}" text-anchor="middle">${label(b.start)}</text>` : ''))
-    .join('');
-  return `<div class="tm-chart" data-tm-chart>
-    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Labour hours and orders closed over time">
-      <line class="tm-axis" x1="${L}" y1="${T + ih}" x2="${W - R}" y2="${T + ih}"></line>
-      <text class="tm-tick" x="${L - 6}" y="${T + 10}" text-anchor="end">${maxH.toFixed(0)} h</text>
-      <text class="tm-tick tm-n" x="${W - R + 6}" y="${T + 10}">${maxN}</text>
-      ${bars}
-      <polyline class="tm-line" points="${pts}"></polyline>
-      ${dots}
-      ${ticks}
+  const empty = buckets.every((b) => b.hours === 0)
+    ? `<text class="tm-empty" x="${L + iw / 2}" y="${T + ih / 2}" text-anchor="middle">${
+        buckets.some((b) => b.count) ? 'No labour hours booked on these orders' : 'No orders closed'
+      }</text>`
+    : '';
+  return `<div class="tm-chart${pick ? ' has-pick' : ''}" data-tm-chart>
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Labour hours by owner, per ${unit}">
+      ${grid.join('')}
+      ${cols}
+      ${empty}
     </svg>
+    <div class="tm-tip" hidden></div>
   </div>`;
 }
 
 export function wireTeam(root: HTMLElement, ctx: MaintCtx): void {
   if (!team) return;
   const st = team;
-  const span = (): number => Math.max(1, daysUntil(st.to, st.from));
   const setRange = (from: string, to: string): void => {
-    // Never past today, never under a week.
-    if (to > ctx.today) {
-      from = addDays(from, -daysUntil(to, ctx.today));
-      to = ctx.today;
-    }
-    if (daysUntil(to, from) < 6) from = addDays(to, -6);
     st.from = from;
     st.to = to;
     st.pick = null;
@@ -821,36 +895,26 @@ export function wireTeam(root: HTMLElement, ctx: MaintCtx): void {
       ctx.rerender();
     }),
   );
-  root.querySelectorAll<HTMLButtonElement>('[data-tm-range]').forEach((b) =>
-    b.addEventListener('click', () => {
-      const v = b.dataset.tmRange!;
-      const { done } = teamData(ctx);
-      const from = v === 'all' ? (done.length ? done[done.length - 1].day : addDays(ctx.today, -364)) : addDays(ctx.today, -(Number(v) - 1));
-      setRange(from, ctx.today);
+  root.querySelector<HTMLButtonElement>('[data-tm-lastweek]')?.addEventListener('click', () => {
+    const w = lastWeek(ctx.today);
+    setRange(w.from, w.to);
+  });
+  root.querySelectorAll<HTMLInputElement>('[data-tm-date]').forEach((el) =>
+    el.addEventListener('change', () => {
+      const v = el.value;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return;
+      // Keep From ≤ To: moving one past the other drags it along.
+      if (el.dataset.tmDate === 'from') setRange(v, st.to < v ? v : st.to);
+      else setRange(st.from > v ? v : st.from, v);
     }),
   );
-  const zoom = (factor: number, at = 0.5): void => {
-    const s = span();
-    const next = Math.max(6, Math.round(s * factor));
-    const pivot = addDays(st.from, Math.round(s * at));
-    setRange(addDays(pivot, -Math.round(next * at)), addDays(pivot, next - Math.round(next * at)));
-  };
-  root.querySelectorAll<HTMLButtonElement>('[data-tm-zoom]').forEach((b) =>
-    b.addEventListener('click', () => zoom(b.dataset.tmZoom === 'in' ? 0.5 : 2)),
-  );
-  root.querySelectorAll<HTMLButtonElement>('[data-tm-pan]').forEach((b) =>
-    b.addEventListener('click', () => {
-      const shift = Math.round(span() / 2) * Number(b.dataset.tmPan);
-      setRange(addDays(st.from, shift), addDays(st.to, shift));
-    }),
-  );
-  // A tapped bar lists its orders; tapping it again (or ✕) closes the list.
+  // A tapped bar lists its orders beside the chart; tapping it again (or
+  // "Whole range") lists the range again.
   root.querySelectorAll<Element>('[data-tm-pick]').forEach((el) => {
     const pick = (): void => {
       const v = el.getAttribute('data-tm-pick') || null;
       st.pick = st.pick === v ? null : v;
       ctx.rerender();
-      if (st.pick) root.querySelector('[data-tm-picked]')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     };
     el.addEventListener('click', pick);
     el.addEventListener('keydown', (e) => {
@@ -860,5 +924,49 @@ export function wireTeam(root: HTMLElement, ctx: MaintCtx): void {
         pick();
       }
     });
+  });
+  // Hover: the period's owners, largest on top as in the stack.
+  const chart = root.querySelector<HTMLElement>('[data-tm-chart]');
+  const tip = chart?.querySelector<HTMLElement>('.tm-tip');
+  if (!chart || !tip) return;
+  const show = (col: Element): void => {
+    let data: { period: string; total: string; rows: string[][] };
+    try {
+      data = JSON.parse(col.getAttribute('data-tm-tip') ?? '');
+    } catch {
+      return;
+    }
+    tip.replaceChildren();
+    const head = document.createElement('div');
+    head.className = 'tm-tip-head';
+    head.textContent = data.period;
+    const total = document.createElement('div');
+    total.className = 'tm-tip-total';
+    total.textContent = data.total;
+    tip.append(head, total);
+    for (const [owner, colour, hours, count] of data.rows) {
+      const row = document.createElement('div');
+      row.className = 'tm-tip-row';
+      const sw = document.createElement('i');
+      sw.className = 'tm-sw';
+      sw.style.background = colour;
+      const name = document.createElement('span');
+      name.textContent = owner;
+      const val = document.createElement('b');
+      val.textContent = `${hours} (${count})`;
+      row.append(sw, name, val);
+      tip.append(row);
+    }
+    tip.hidden = false;
+    const box = chart.getBoundingClientRect();
+    const hit = (col.querySelector('.tm-hit') ?? col).getBoundingClientRect();
+    const left = Math.min(Math.max(0, hit.left - box.left + hit.width / 2 - tip.offsetWidth / 2), box.width - tip.offsetWidth);
+    tip.style.left = `${left}px`;
+  };
+  chart.querySelectorAll('.tm-col').forEach((col) => {
+    col.addEventListener('pointerenter', () => show(col));
+    col.addEventListener('focus', () => show(col));
+    col.addEventListener('pointerleave', () => (tip.hidden = true));
+    col.addEventListener('blur', () => (tip.hidden = true));
   });
 }

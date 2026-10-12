@@ -655,7 +655,10 @@ export function seedMachineMaintenance(now: Date): DieMaintenanceRequest[] {
   const press1300 = 'AU - 1300T LS Mtron Injection Molding Machine';
   return [
     wo(press1600, '2. Breakdown', 1, null, 'Wisam Istefo', 0, 0, 'Nozzle leak, material stuck', 2),
-    wo(press1600, '2. Breakdown', 40, 39, 'Wisam Istefo', 6, 4, 'Robot light curtain not working'),
+    wo(press1600, '2. Breakdown', 40, 39, 'Avila Pushparaj, Wisam Istefo', 6, 4, 'Robot light curtain not working'),
+    wo(press1300, '2. Breakdown', 11, 6, 'Avila Pushparaj, Chris Buckley', 2, 1.5, 'Barrel heater zone 3 not heating'),
+    wo('AU - 320T Macosys Injection Molding Machine', '2. Breakdown', 8, 5, 'Erin Toman', 1, 0.75, 'Mould safety door switch'),
+    wo('AU - Encore Cold Saw', '3. Preventive Maintenance', 9, 4, 'Aryan Apte', 0, 2, 'Blade change'),
     wo(press1600, '2. Breakdown', 120, 118, 'Chris Buckley', 10, 6, 'Hydraulic hose burst'),
     wo(press1300, '2. Breakdown', 9, 8, 'Wisam Istefo', 10, 0.25, 'Motor lock alarm, unable to start'),
     wo(press1300, '3. Preventive Maintenance', 30, 28, 'Aryan Apte', 0, 3, 'Six-monthly service'),

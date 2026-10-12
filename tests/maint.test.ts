@@ -4,14 +4,17 @@ import {
   bucketDone,
   bucketEnd,
   buildMachineRows,
+  cycleTime,
   doneOrders,
   dueLevel,
   isBreakdown,
+  lastWeek,
   machineFigures,
   machineFiguresPatch,
   machineKey,
   onSite,
   openWork,
+  orderOwner,
   pressCodeOf,
   reliability,
   unitFor,
@@ -428,5 +431,53 @@ describe('the team page', () => {
       ['MR', 'overdue', 'Chris Buckley'],
       ['PM', 'soon', 'Aryan Apte'],
     ]);
+  });
+});
+
+describe('the team page: owners, cycle time and the week', () => {
+  it('names the first person on the order who is not the coordinator', () => {
+    const owner = (contact: string): string => orderOwner(wo({ contact }));
+    expect(owner('Avila Pushparaj, Wisam Istefo')).toBe('Wisam Istefo');
+    expect(owner('Avila Pushparaj; Aryan Apte; Wisam Istefo')).toBe('Aryan Apte');
+    expect(owner('Wisam Istefo, Avila Pushparaj')).toBe('Wisam Istefo');
+    expect(owner(' avila  pushparaj ,Chris Buckley')).toBe('Chris Buckley');
+    // On her own she is the owner; nobody at all is Unassigned.
+    expect(owner('Avila Pushparaj')).toBe('Avila Pushparaj');
+    expect(owner('  ')).toBe('Unassigned');
+  });
+
+  it('times each order from its Created Date to the day it closed', () => {
+    const done = doneOrders([
+      wo({ mangoTicket: 'A', createdAt: '2026-09-28T09:15:00', closedAt: '2026-10-05' }),
+      wo({ mangoTicket: 'B', createdAt: '2026-10-05', closedAt: '2026-10-05' }),
+      // Closed, but the log never says when: it counts on its raised day, untimed.
+      wo({ mangoTicket: 'C', createdAt: '2026-10-01', closedAt: '' }),
+    ]);
+    const by = (t: string) => done.find((d) => d.ticket === t)!;
+    expect(by('A')).toMatchObject({ created: '2026-09-28', closed: '2026-10-05', cycleDays: 7, day: '2026-10-05' });
+    expect(by('B').cycleDays).toBe(0);
+    expect(by('C')).toMatchObject({ closed: '', cycleDays: null, day: '2026-10-01' });
+    expect(cycleTime(done)).toEqual({ median: 3.5, mean: 3.5, n: 2 });
+    expect(cycleTime([])).toEqual({ median: null, mean: null, n: 0 });
+  });
+
+  it('splits each bar by owner', () => {
+    const done = doneOrders([
+      wo({ closedAt: '2026-10-06', labourHours: '2', contact: 'Avila Pushparaj, Wisam Istefo' }),
+      wo({ closedAt: '2026-10-07', labourHours: '1', contact: 'Wisam Istefo' }),
+      wo({ closedAt: '2026-10-07', labourHours: '3', contact: 'Aryan Apte' }),
+    ]);
+    const [week] = bucketDone(done, '2026-10-05', '2026-10-11', 'week');
+    expect(week).toMatchObject({ count: 3, hours: 6 });
+    expect(Object.fromEntries(week.byOwner)).toEqual({
+      'Wisam Istefo': { count: 2, hours: 3 },
+      'Aryan Apte': { count: 1, hours: 3 },
+    });
+  });
+
+  it('takes Last Week as Monday to Sunday of the week before', () => {
+    expect(lastWeek('2026-10-12')).toEqual({ from: '2026-10-05', to: '2026-10-11' }); // a Monday
+    expect(lastWeek('2026-10-18')).toEqual({ from: '2026-10-05', to: '2026-10-11' }); // its Sunday
+    expect(lastWeek('2026-01-01')).toEqual({ from: '2025-12-22', to: '2025-12-28' });
   });
 });
