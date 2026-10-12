@@ -3211,6 +3211,15 @@ describe('PMD_Machine maintenance columns', () => {
     await expect(dal.updateMachineMaster('999T', { status: 'problems' })).rejects.toThrow(/No PMD_Machine row/);
   });
 
+  it('reads and writes the return date of a press in service', async () => {
+    const fields = [...base(), { Title: 'Available Date', InternalName: 'AvailableDate', TypeAsString: 'DateTime' }];
+    const { dal, posts } = stub(fields, [{ Id: 5, Title: '550T', AvailableDate: '2026-10-13T13:00:00Z' }]);
+    expect((await dal.listMachineMaster())[0].availableDate).toBe('2026-10-14');
+    await dal.updateMachineMaster('550T', { status: 'in-service', availableDate: '2026-10-20' });
+    expect(posts.filter((p) => p.url.endsWith('/fields'))).toHaveLength(1); // only Status was missing
+    expect(posts[posts.length - 1].body).toMatchObject({ Status: 'In service', AvailableDate: '2026-10-20T00:00:00Z' });
+  });
+
   it('keeps a percentage column as a fraction', async () => {
     const fields = [...base(), { Title: 'Available', InternalName: 'Available', TypeAsString: 'Number' }];
     const { dal, posts } = stub(fields, [{ Id: 9, Title: '850T', Available: 0.987 }], true);

@@ -86,6 +86,7 @@ export class MemoryDataLayer implements PmdDataLayer {
       mttr: null,
       breakdowns: null,
       available: null,
+      availableDate: '',
     }));
     this.operators = seedOperators();
     this.supervisors = seedSupervisors();

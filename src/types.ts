@@ -260,6 +260,9 @@ export interface MachineMaster {
   breakdowns: number | null;
   /** PMD_Machine.Available — availability, as a percentage (98.7). */
   available: number | null;
+  /** PMD_Machine.AvailableDate, YYYY-MM-DD — when maintenance will have the
+   *  press back, given when it is set to In service ('' when none). */
+  availableDate: string;
 }
 
 /** Condition of one die component at die-change time, mapping the

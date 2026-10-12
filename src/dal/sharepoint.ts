@@ -126,6 +126,7 @@ const DEFAULT_FIELDS = {
     mttr: 'MTTR',
     breakdowns: 'Breakdowns',
     available: 'Available',
+    availableDate: 'AvailableDate',
   },
   operator: {
     // Title = operator name; `Supervisor` (internal) displays as
@@ -1931,6 +1932,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         mttr: looseNum(cell(r, 'mttr')),
         breakdowns: looseNum(cell(r, 'breakdowns')),
         available: available(r),
+        availableDate: spDay(cell(r, 'availableDate')),
       }));
   }
 
@@ -1951,7 +1953,7 @@ export class SharePointDataLayer implements PmdDataLayer {
   }
 
   /** Add the maintenance columns PMD_Machine lacks: Status as text (the four
-   *  ToolStatus labels), LastService as a date, the figures as numbers. */
+   *  ToolStatus labels), LastService and AvailableDate as dates, the figures as numbers. */
   private async ensureMachineFields(missing: MachineMasterField[]): Promise<void> {
     if (missing.length === 0) return;
     const meta = this.machineMasterMeta!;
@@ -1961,7 +1963,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       const def =
         k === 'status'
           ? { __metadata: { type: 'SP.Field' }, Title, FieldTypeKind: 2 }
-          : k === 'lastService'
+          : k === 'lastService' || k === 'availableDate'
             ? { __metadata: { type: 'SP.FieldDateTime' }, Title, FieldTypeKind: 4, DisplayFormat: 0 }
             : { __metadata: { type: 'SP.Field' }, Title, FieldTypeKind: 9 };
       try {
@@ -4879,9 +4881,9 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-type MachineMasterField = 'status' | 'lastService' | 'mtbf' | 'mttr' | 'breakdowns' | 'available';
+type MachineMasterField = 'status' | 'lastService' | 'mtbf' | 'mttr' | 'breakdowns' | 'available' | 'availableDate';
 const MACHINE_MASTER_FIELDS: readonly MachineMasterField[] = [
-  'status', 'lastService', 'mtbf', 'mttr', 'breakdowns', 'available',
+  'status', 'lastService', 'mtbf', 'mttr', 'breakdowns', 'available', 'availableDate',
 ];
 
 /** A number from a Number cell or from text someone typed ("98.7 %", "1,234"). */
@@ -4922,7 +4924,9 @@ export function machineCell(
   if (v == null || v === '') return null;
   const numeric = ['Number', 'Currency', 'Integer'].includes(type);
   if (k === 'status') return TOOL_STATUS_META[v as ToolStatus]?.label ?? null;
-  if (k === 'lastService') return type === 'DateTime' ? `${String(v).slice(0, 10)}T00:00:00Z` : String(v).slice(0, 10);
+  if (k === 'lastService' || k === 'availableDate') {
+    return type === 'DateTime' ? `${String(v).slice(0, 10)}T00:00:00Z` : String(v).slice(0, 10);
+  }
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
   if (k === 'available') {

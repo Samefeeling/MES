@@ -577,15 +577,20 @@ for the Plant/Equipment module):
    maintenance record. Machine's **Status** column is
    `PMD_Machine.Status`, set by tapping the badge exactly like a die's
    ToolStatus — Problems / To be Serviced / In service / Serviced, written
-   as those labels; Serviced also stamps `LastService` = today. A ⚠ beside
-   it flags an open breakdown in Mango. After each load the page saves
+   as those labels; Serviced also stamps `LastService` = today, and In
+   service asks — as for a die — when maintenance will have the press back
+   (required, today or later, with the Mango-ticket reminder) and writes it
+   to `AvailableDate`. The **Available** column reads like the Tool page's:
+   Available · the return date (⚠ once passed) · In maint (In service with
+   no date) · Unavailable (Problems). A ⚠ beside the Status flags an open
+   breakdown in Mango. After each load the page saves
    what it works out for every press to `LastService` (the later of that
    stamp and Mango's last preventive or calibration order), `Breakdowns`,
    `MTBF` and `MTTR` (hours, 1 dp) and `Available` (availability %,
    98.7; a Number column formatted as a percentage gets 0.987) — only the
    values that changed, and nothing at all when the Mango report wasn't
    read. Columns are matched by display or internal name and any that
-   are missing are added on the first save (text Status, date LastService,
+   are missing are added on the first save (text Status, date LastService and AvailableDate,
    number for the rest — Manage Lists needed once). A hand-made Choice
    Status column must offer the four labels.
 3. Without `VITE_MANGO_CSV_PATH` (or while the file doesn't exist yet)

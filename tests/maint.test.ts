@@ -258,6 +258,7 @@ describe('the figures saved to PMD_Machine', () => {
     mttr: null,
     breakdowns: null,
     available: null,
+    availableDate: '',
     ...over,
   });
   const row = buildMachineRows(

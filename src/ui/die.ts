@@ -779,18 +779,21 @@ async function saveMachineFigures(state: DieState): Promise<void> {
 }
 
 /** Set a press's Status on PMD_Machine; Serviced also stamps Last service =
- *  today. The row updates at once and rolls back if the write fails. */
-async function setMachineStatus(code: string, status: ToolStatus): Promise<void> {
+ *  today, In service carries the return date (AvailableDate). The row
+ *  updates at once and rolls back if the write fails. */
+async function setMachineStatus(code: string, status: ToolStatus, availableDate?: string): Promise<void> {
   const m = S?.machineMaster.get(machineKey(code));
   if (!m || !dalRef.updateMachineMaster) return;
   const patch: Partial<Omit<MachineMaster, 'machineCode'>> = { status };
   if (status === 'serviced') patch.lastService = isoDay(new Date());
-  const prev = { status: m.status, lastService: m.lastService };
+  if (availableDate !== undefined) patch.availableDate = availableDate;
+  const prev = { status: m.status, lastService: m.lastService, availableDate: m.availableDate };
   Object.assign(m, patch);
   render();
   try {
     await dalRef.updateMachineMaster(m.machineCode, patch);
-    toast(`${code} → ${TOOL_STATUS_META[status].label}`, 'ok');
+    const back = availableDate ? ` · back ${ddmmyyyy(availableDate)}` : '';
+    toast(`${code} → ${TOOL_STATUS_META[status].label}${back}`, 'ok');
   } catch (e) {
     Object.assign(m, prev);
     render();
@@ -840,7 +843,7 @@ function maintCtx(): MaintCtx {
     rerender: render,
     machineMaster: (code) => S!.machineMaster.get(machineKey(code)),
     setMachineStatus: dalRef.updateMachineMaster
-      ? (code, status) => void setMachineStatus(code, status)
+      ? (code, status, availableDate) => void setMachineStatus(code, status, availableDate)
       : undefined,
     machineSyncNote: S!.machineSync,
   };
