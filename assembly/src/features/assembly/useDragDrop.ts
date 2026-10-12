@@ -7,7 +7,8 @@
 
 import { useState } from 'react';
 import {
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   closestCenter,
   pointerWithin,
   useSensor,
@@ -62,8 +63,13 @@ export function useDragDrop() {
   const [activeBar, setActiveBar] = useState(false);
   const [activeLineName, setActiveLineName] = useState<string | null>(null);
 
+  // A mouse drags at once; a finger has to hold first. On an iPad the bars
+  // cover most of the timeline, and with one pointer rule for both a swipe to
+  // scroll the board picked up whatever bar it started on. Holding a quarter
+  // second is the iPad's own gesture for "pick this up"; a quick swipe scrolls.
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
   );
 
   const onDragStart = (e: DragStartEvent) => {

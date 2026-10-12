@@ -13,14 +13,22 @@
   --muted: #46566c;
   --faint: #64748b;
 
-  --accent: #5b8cff;
-  --ok: #34d399;
+  /* One accent, the MES top bar's own blue family: selection, focus and the
+     control that is doing something. The status colours are the ink values —
+     each clears 4.5:1 as text on white and still reads as a fill. */
+  --accent: #0369a1;
+  --ok: #15803d;
   --ok-dim: #dcfce7;
-  --warn: #fbbf24;
+  --warn: #b45309;
   --warn-dim: #fef3c7;
-  --error: #f87171;
+  --error: #b91c1c;
   --error-dim: #fee2e2;
-  --info: #60a5fa;
+  --info: #1d4ed8;
+  /* The same three as fills — a dot, a meter — where the ink values above
+     would read brown and heavy. Each clears 3:1 on white. */
+  --ok-fill: #16a34a;
+  --warn-fill: #d97706;
+  --error-fill: #dc2626;
 
   /* A line's row, kept clear of every colour an order row can take.
      Two bands, well apart, so the eye sorts the board's two levels at a
@@ -28,10 +36,10 @@
      indented under it is barely tinted. --line-band is the generic line
      colour, worn by a line being dragged rather than by any row. */
   --line-name: #075985;
-  --line-band-main: #c0e6f5;
-  --line-band-bench: #f3faff;
-  --line-band: #e0f2fe;
-  --line-band-bd: #bae6fd;
+  --line-band-main: #e3eef9;
+  --line-band-bench: #f6f9fc;
+  --line-band: #eaf3fc;
+  --line-band-bd: #c6dbef;
 
   /*
    * Chrome, in two tiers — not three — and each one lighter than the last.
@@ -47,17 +55,23 @@
    * be a second dark blue, which put two heavy bars across the top of a page
    * whose subject is underneath them; this way the weight falls off as you
    * read down and the work is the brightest thing on the screen.
+   *
+   * The block is a cool grey, not a sky blue. A saturated blue block put the
+   * lines' own blue band, the load cells and the controls all on one hue, so
+   * nothing on the top of the board stood above anything else; on grey the
+   * line bands read as the board's one blue, and white controls read as
+   * controls.
    */
   --chrome-rule: #075985; /* the top bar's blue, closing the block */
-  --head-bg: #83CCEB;
+  --head-bg: #eef3f8;
   --head-tx: #0c4a6e;
   --head-dim: #075985;
-  --head-rule: rgb(7 89 133 / 28%);
+  --head-rule: rgb(7 89 133 / 18%);
   /* A control sitting on the block, and one under the pointer. White, because
      the ground is pale: on the old dark block these were translucent white,
      which is the same idea read the other way up. */
-  --chrome-tint: rgb(255 255 255 / 62%);
-  --chrome-tint-hi: #ffffff;
+  --chrome-tint: #ffffff;
+  --chrome-tint-hi: #e0f2fe;
   /*
    * The load bands, for the pale block only.
    *
@@ -70,14 +84,14 @@
   --head-ok: #166534;
   --head-warn: #92400e;
   --head-error: #991b1b;
-  --head-ok-bar: #16a34a;
-  --head-warn-bar: #d97706;
-  --head-error-bar: #dc2626;
+  --head-ok-bar: #15803d;
+  --head-warn-bar: #c2410c;
+  --head-error-bar: #b91c1c;
   /* The unfilled part of a load bar. A white track cut a white stripe down
-     every column of the block; this is the block's own blue a few steps
-     lighter, so an empty day reads as empty rather than as a gap in the
-     heading. The fills above still clear 3:1 on it. */
-  --day-bar-track: #CAEDFB;
+     every column of the block; this is the block's own grey a few steps
+     darker, so an empty day reads as empty rather than as a gap in the
+     heading. The fills above clear 3.8:1 on it. */
+  --day-bar-track: #d9e3ee;
 
   --tool: #c084fc; /* die / tool change */
   --color: #fb923c; /* colour change */
@@ -201,6 +215,18 @@ button {
   .app-header { flex-wrap: wrap; }
   .board-tools > .show-group { flex: 1 0 100%; }
   .head-side.end { flex-wrap: wrap; }
+}
+/*
+ * …but the header itself stays one row from a small iPad up: the board tools
+ * take what is left and Refresh / Save sit at the right, on the line of the
+ * figures — level with the second line, a whole row from New support order.
+ * Wrapping the header put Refresh on a third line of its own, 50px of chrome
+ * for two buttons on a screen with none to spare.
+ */
+@media (min-width: 740px) and (max-width: 1500px) {
+  .app-header { flex-wrap: nowrap; align-items: flex-end; }
+  .app-header > .board-tools { flex: 1 1 0; }
+  .app-header > .head-side.end { flex: 0 0 auto; flex-wrap: nowrap; }
 }
 /*
  * Standalone only — inside MES the top bar's own Assembly button is lit, and
@@ -395,16 +421,16 @@ button {
 /* The row's own edge, in the same blue as the word it belongs to. */
 .arow.new-order { box-shadow: inset 3px 0 #2563eb; }
 .badge.tool {
-  background: #2c1f44;
-  color: var(--tool);
+  background: #f3e8ff;
+  color: #6d28d9;
 }
 .badge.color {
-  background: #41260f;
-  color: var(--color);
+  background: #ffedd5;
+  color: #c2410c;
 }
 .badge.insert {
-  background: #103833;
-  color: var(--insert);
+  background: #ccfbf1;
+  color: #0f766e;
 }
 .badge.neutral {
   background: var(--surface-3);
@@ -1003,7 +1029,7 @@ button {
   padding: 0 9px;
   border: 1px solid var(--accent);
   border-radius: 999px;
-  background: rgba(91, 140, 255, 0.16);
+  background: rgb(3 105 161 / 0.16);
   color: var(--accent);
   font-size: 10px;
   font-weight: 700;
@@ -1011,7 +1037,7 @@ button {
   white-space: nowrap;
 }
 .marked-set:hover {
-  background: rgba(91, 140, 255, 0.28);
+  background: rgb(3 105 161 / 0.28);
 }
 /*
  * A picking sheet, so it is set like one: part numbers in a mono column that
@@ -1022,7 +1048,9 @@ button {
 .pick-list { display: grid; }
 .pick-list-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) repeat(4, minmax(46px, auto)) minmax(74px, auto);
+  /* The part number keeps room for its heading: at 0 it gave its width to
+     the figures and PART ran into REQUIRED. */
+  grid-template-columns: minmax(10ch, 1fr) repeat(4, minmax(46px, auto)) minmax(74px, auto);
   gap: 12px;
   align-items: baseline;
   padding: 3px 0;
@@ -1339,7 +1367,7 @@ body.col-resizing {
   background: var(--surface-2);
 }
 .arow.selected {
-  background: rgba(91, 140, 255, 0.07);
+  background: rgb(3 105 161 / 0.07);
 }
 .arow.completed-today {
   filter: grayscale(1);
@@ -1482,7 +1510,7 @@ body.col-resizing {
   font-weight: 400;
   white-space: nowrap;
 }
-.order-id.movable { cursor: grab; touch-action: none; }
+.order-id.movable { cursor: grab; touch-action: manipulation; }
 .order-id.movable:hover {
   text-decoration: underline;
   text-decoration-style: dotted;
@@ -1656,9 +1684,9 @@ body.col-resizing {
   background: var(--head-tx);
 }
 .day-load { font-style: normal; font-variant-numeric: tabular-nums; }
-.day-meter.green .crewed { background: var(--ok); }
-.day-meter.orange .crewed { background: var(--warn); }
-.day-meter.red .crewed { background: var(--error); }
+.day-meter.green .crewed { background: var(--ok-fill); }
+.day-meter.orange .crewed { background: var(--warn-fill); }
+.day-meter.red .crewed { background: var(--error-fill); }
 .day-load { font-weight: 700; }
 .day-load.green { color: var(--ok); }
 .day-load.orange { color: var(--warn); }
@@ -1700,8 +1728,8 @@ body.col-resizing {
  */
 .stripe.today {
   box-shadow:
-    inset 1px 0 0 rgba(37, 99, 235, 0.35),
-    inset -1px 0 0 rgba(37, 99, 235, 0.35);
+    inset 1px 0 0 rgb(3 105 161 / 0.35),
+    inset -1px 0 0 rgb(3 105 161 / 0.35);
 }
 
 .crew-window-editor {
@@ -1766,10 +1794,10 @@ body.col-resizing {
   color: var(--faint);
 }
 .daycol.today {
-  background: rgba(37, 99, 235, 0.09);
+  background: rgb(3 105 161 / 0.09);
   box-shadow:
-    inset 1px 0 0 rgba(37, 99, 235, 0.35),
-    inset -1px 0 0 rgba(37, 99, 235, 0.35);
+    inset 1px 0 0 rgb(3 105 161 / 0.35),
+    inset -1px 0 0 rgb(3 105 161 / 0.35);
 }
 .today-tag {
   margin-left: 4px;
@@ -1957,7 +1985,7 @@ body.col-resizing {
 .aline-day.idle { border-style: dashed; }
 /* Picked with Ctrl for level loading: ringed, and ticked in the corner so it
    still reads as picked when the load colour is the same either side of it. */
-.aline-day.picked { box-shadow: 0 0 0 2px var(--accent), 0 0 0 4px rgb(37 99 235 / 28%); }
+.aline-day.picked { box-shadow: 0 0 0 2px var(--accent), 0 0 0 4px rgb(3 105 161 / 28%); }
 .aline-day.picked::after {
   content: '✓';
   position: absolute;
@@ -2061,7 +2089,7 @@ body.col-resizing {
   flex: 0 0 auto;
   min-width: 0;
 }
-.agroup-label.arrangeable { cursor: grab; touch-action: none; }
+.agroup-label.arrangeable { cursor: grab; touch-action: manipulation; }
 .agroup-label.arranging { opacity: 0.45; cursor: grabbing; }
 /*
  * Takes the whole line off the board; the header offers it back.
@@ -2274,10 +2302,10 @@ body.col-resizing {
   cursor: default;
 }
 .bar.selected .bar-piece {
-  box-shadow: 0 0 0 2px rgba(91, 140, 255, 0.55);
+  box-shadow: 0 0 0 2px rgb(3 105 161 / 0.55);
 }
 .bar.dependency-related .bar-piece {
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.42);
+  box-shadow: 0 0 0 2px rgb(3 105 161 / 0.42);
 }
 .bar.dragging {
   opacity: 0.6;
@@ -2871,9 +2899,9 @@ body.col-resizing {
   border-radius: 2px;
   border: 1px solid transparent;
 }
-.wl-dot.green { background: var(--ok); }
-.wl-dot.orange { background: var(--warn); }
-.wl-dot.red { background: var(--error); }
+.wl-dot.green { background: var(--ok-fill); }
+.wl-dot.orange { background: var(--warn-fill); }
+.wl-dot.red { background: var(--error-fill); }
 .wl-dot.idle {
   background: transparent;
   border-color: #93c5fd;
@@ -2984,9 +3012,9 @@ body.col-resizing {
   height: 100%;
   background: var(--surface-3);
 }
-.wl-meter i.green { background: var(--ok); }
-.wl-meter i.orange { background: var(--warn); }
-.wl-meter i.red { background: var(--error); }
+.wl-meter i.green { background: var(--ok-fill); }
+.wl-meter i.orange { background: var(--warn-fill); }
+.wl-meter i.red { background: var(--error-fill); }
 .wl-hours { font-weight: 650; text-align: right; }
 .wl-hours.over { color: var(--error); }
 /* Every order on the day, wrapped — never one of them and an ellipsis. */
@@ -3257,7 +3285,7 @@ body.col-resizing {
    or onto a line to move them to that bench. */
 .team-name.grippable {
   cursor: grab;
-  touch-action: none;
+  touch-action: manipulation;
 }
 .team-name.lifted { opacity: 0.4; }
 .team-names.none {
@@ -3378,7 +3406,7 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
   gap: 2px;
 }
 .ord:hover { border-color: var(--accent); }
-.ord.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(91,140,255,.35); }
+.ord.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgb(3 105 161 / .35); }
 .ord.dragging { opacity: 0.35; }
 /* Reading the pile is not filing it: the card still opens for inspection, it
    just no longer offers to be dropped on a line. */
@@ -3420,7 +3448,7 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .reopen-gone { color: #b45309; font-size: 12px; font-style: normal; }
 .reopen-list li .btn { margin-left: auto; }
 
-.worker-name:not(.drag-locked) { touch-action: none; }
+.worker-name:not(.drag-locked) { touch-action: manipulation; }
 /* Not in today, above the line move: it is the more urgent of the two, and
    the only one with an Expect Date going wrong behind it. */
 .wl-on-leave {
@@ -3448,7 +3476,11 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
    side. It used to be one button over a line of small type giving the time of
    the last read; the type is gone and the space it held is the Save button. */
 .refresh-control { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
-.bar { touch-action: none; }
+/* Drag handles leave the swipe to the browser: a finger picks one up by
+   holding it (the touch sensor's delay), and a quick swipe that starts on one
+   scrolls the board. With the browser's panning switched off, a board that is
+   mostly bars could hardly be scrolled at all. */
+.bar { touch-action: manipulation; }
 /* Overlay only: the alignment aid never moves rows or catches the pointer. */
 .drag-time-guide { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed #0869ad; z-index: 12; pointer-events: none; }
 .drag-time-guide span { position: sticky; top: 58px; display: block; width: max-content; margin-left: 5px; padding: 3px 6px; border-radius: 3px; background: #075985; color: #fff; font-size: 11px; font-variant-numeric: tabular-nums; box-shadow: 0 1px 4px #0003; }
@@ -3510,7 +3542,7 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 /* The day's load in the banner lists its orders when pressed. */
 .assy-head .daycol { cursor: pointer; }
 .assy-head .daycol:hover { box-shadow: inset 0 0 0 2px var(--accent); }
-.assy-head .daycol.picked { box-shadow: inset 0 0 0 2px var(--accent), inset 0 0 0 4px rgb(37 99 235 / 28%); }
+.assy-head .daycol.picked { box-shadow: inset 0 0 0 2px var(--accent), inset 0 0 0 4px rgb(3 105 161 / 28%); }
 
 /* The orders behind one day's load. */
 .day-detail {
@@ -3861,12 +3893,12 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 /* Nothing planned: blank until pointed at, but there to be picked as room to
    level into — tinted once it is. */
 .aline-day.empty:hover { box-shadow: inset 0 0 0 1px var(--accent); }
-.aline-day.empty.picked { background: rgb(37 99 235 / 8%); }
+.aline-day.empty.picked { background: rgb(3 105 161 / 8%); }
 /* A weekend on the board is there to plan overtime: its empty block is drawn,
    hatched, so it reads as a place work can be levelled onto. */
 .aline-day.empty.weekend { box-shadow: inset 0 0 0 1px rgb(217 119 6 / 45%); background: repeating-linear-gradient(-45deg, transparent 0 4px, rgb(217 119 6 / 8%) 4px 8px); }
 .aline-day.empty.weekend:hover { box-shadow: inset 0 0 0 1px #d97706; }
-.aline-day.empty.weekend.picked { background: rgb(37 99 235 / 12%); box-shadow: inset 0 0 0 1px var(--accent); }
+.aline-day.empty.weekend.picked { background: rgb(3 105 161 / 12%); box-shadow: inset 0 0 0 1px var(--accent); }
 
 .day-detail-filter {
   margin: 0 0 6px;
@@ -3905,3 +3937,75 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .bar.product.tagged { color: var(--text); }
 .bar.product .bar-progress { background: rgba(0, 0, 0, 0.22); }
 .bar.product.red .bar-piece { box-shadow: inset 0 0 0 2px #dc2626; }
+
+/* ---- touch: an iPad on the floor --------------------------------------- */
+/*
+ * The board is drawn for a mouse: 18–22px controls and 9.5px labels, which a
+ * pointer finds and a finger does not. On a touch screen (`pointer: coarse` —
+ * an iPad, not a laptop with a touch bar) the controls grow to a size a finger
+ * can hit and the smallest type to a size that reads at arm's length. Rows
+ * stand taller so a bar is a target too. The layout and the colours are the
+ * same board; only the sizes move.
+ */
+button,
+[role='button'],
+.bar,
+.aline-day {
+  -webkit-tap-highlight-color: transparent;
+}
+button {
+  /* No double-tap zoom wait on a button: a tap is a tap. */
+  touch-action: manipulation;
+}
+
+@media (pointer: coarse) {
+  .app { height: 100dvh; }
+  .board-pane { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  .assy { font-size: 13px; }
+
+  /* The controls row: every one a 36px target. */
+  .app-header { gap: 10px 14px; padding: 6px 12px; }
+  .btn { min-height: 36px; padding: 6px 14px; font-size: 13px; }
+  .board-tools .zoom-step { width: 36px; height: 36px; font-size: 18px; }
+  .board-tools .date-restore,
+  .board-tools .show-all,
+  .board-tools .day-filter-clear,
+  .marked-set { min-height: 32px; padding: 4px 12px; font-size: 12.5px; }
+  .board-tools button.metric { padding: 4px 10px; margin: -4px -10px; }
+  .metric-label { font-size: 10.5px; }
+  .metric-value { font-size: 15px; }
+
+  /* The column heading. */
+  .assy-head { min-height: 60px; font-size: 12px; }
+  .date-head button,
+  .date-head .date-hide { min-width: 28px; min-height: 26px; font-size: 12px; }
+  .day-order-filter { min-height: 28px; }
+  .assy-head .week-fold { padding: 2px 6px; font-size: 11px; line-height: 16px; }
+  /* A finger cannot find a 8px edge: the grips widen, still invisible. */
+  .col-resize { width: 18px; }
+
+  /* Rows: taller, so a bar is a target and a line's buttons are too. */
+  .arow { min-height: 44px; }
+  .agroup-head.has-load .agroup-head-in { min-height: 44px; }
+  .agroup-name { font-size: 13.5px; }
+  .agroup.bench .agroup-name { font-size: 12.5px; }
+  .agroup-count,
+  .agroup-load { font-size: 11.5px; padding: 1px 9px; }
+  .agroup-fold,
+  .agroup-hide,
+  .agroup-close { min-width: 32px; min-height: 32px; }
+  .bar { font-size: 12px; }
+  .aline-day { font-size: 11px; }
+
+  /* Team chips, the + that adds one, and the picker it opens. */
+  .chip { min-height: 30px; padding: 4px 7px; font-size: 12px; }
+  .picker { max-height: 360px; }
+  .picker-item { min-height: 40px; }
+
+  /* The smallest type on the board, raised to read at arm's length. */
+  .qty-left,
+  .date-hour,
+  .order-tag,
+  .agroup-note,
+  .badge { font-size: 11px; }
+}

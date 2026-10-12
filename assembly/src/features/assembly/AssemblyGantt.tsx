@@ -160,6 +160,61 @@ function frozenLefts(
   };
 }
 
+/** Below this width the frozen columns give way to the timeline. */
+const FIT_BELOW_PX = 1280;
+/** The share of a narrow screen the frozen columns may take. */
+const FIT_SHARE = 0.6;
+/** How narrow the Order column goes to make room — still the number and the
+ *  start of the description. */
+const FIT_ORDER_MIN = 160;
+/** How narrow Team goes: two people and the + on one line. Any narrower and
+ *  the chips stack, and every row stands three chips tall. */
+const FIT_TEAM_MIN = 160;
+
+/**
+ * The frozen columns as a narrow screen can afford them.
+ *
+ * At the widths a desktop reader leaves them the frozen block is some 870px,
+ * and an iPad held upright is 820: the timeline — what the board is for — was
+ * pushed entirely off the screen, with no way to scroll to it because the
+ * frozen block scrolls with it. Below FIT_BELOW_PX the block is held to
+ * FIT_SHARE of the width as far as it can be: the Order column gives first,
+ * down to FIT_ORDER_MIN, then Team down to FIT_TEAM_MIN. The stored widths are not touched, so a
+ * wider window, or the iPad turned, gets the reader's own widths back.
+ */
+export function fitFrozenWidths(
+  w: ColumnWidths,
+  cols: ColVis,
+  visible: DateCols,
+  viewport: number,
+): ColumnWidths {
+  if (viewport >= FIT_BELOW_PX) return w;
+  let over = frozenLefts(visible, shownWidths(w, cols)).total - Math.floor(viewport * FIT_SHARE);
+  if (over <= 0) return w;
+  const out = { ...w };
+  const give = (key: 'order' | 'team', floor: number): void => {
+    if (over <= 0 || (key === 'team' && !cols.team)) return;
+    const room = Math.max(0, out[key] - floor);
+    const take = Math.min(room, over);
+    out[key] -= take;
+    over -= take;
+  };
+  give('order', Math.max(COLUMN_LIMITS.order.min, Math.min(FIT_ORDER_MIN, w.order)));
+  give('team', Math.max(COLUMN_LIMITS.team.min, Math.min(FIT_TEAM_MIN, w.team)));
+  return out;
+}
+
+/** The frame's width, kept current through a resize or an iPad turning. */
+function useViewportWidth(): number {
+  const [width, setWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return width;
+}
+
 /**
  * The grip on a column's right-hand edge.
  *
@@ -168,8 +223,11 @@ function frozenLefts(
  * board for each of them would put seven props on every row that never uses
  * them.
  */
-function ColumnGrip({ column, label }: { column: ColumnKey; label: string }) {
-  const width = useUiStore((s) => s.colWidths[column]);
+function ColumnGrip({ column, label, shown }: { column: ColumnKey; label: string; shown?: number }) {
+  // Drag from the width on screen: on a narrow screen that can be less than
+  // the stored one, and a drag from the stored width would not move at first.
+  const stored = useUiStore((s) => s.colWidths[column]);
+  const width = shown ?? stored;
   const setColumnWidth = useUiStore((s) => s.setColumnWidth);
   const limits = COLUMN_LIMITS[column];
 
@@ -1439,10 +1497,15 @@ export function AssemblyGantt({
   const selectedJobId = useUiStore((s) => s.selectedJobId);
   const dayWidth = useUiStore((s) => s.dayWidth);
   const dayWidths = useUiStore((s) => s.dayWidths);
-  const colWidths = useUiStore((s) => s.colWidths);
+  const storedWidths = useUiStore((s) => s.colWidths);
   const cols = useUiStore((s) => s.cols);
   const toggleCol = useUiStore((s) => s.toggleCol);
   const visibleDates = useUiStore((s) => s.dateCols);
+  const viewport = useViewportWidth();
+  const colWidths = useMemo(
+    () => fitFrozenWidths(storedWidths, cols, visibleDates, viewport),
+    [storedWidths, cols, visibleDates, viewport],
+  );
   const toggleDate = useUiStore((s) => s.toggleDateCol);
   const hiddenLines = useUiStore((s) => s.hiddenLines);
   const toggleLine = useUiStore((s) => s.toggleLine);
@@ -2060,7 +2123,7 @@ export function AssemblyGantt({
         >
           −
         </button>
-        <ColumnGrip column={key} label={label} />
+        <ColumnGrip column={key} label={label} shown={laidOut[key]} />
       </div>
     );
 
@@ -2173,7 +2236,7 @@ export function AssemblyGantt({
             {/* The roster's two rolls, moved here off the Team column. */}
             {crewRolls}
             {/* Grab the edge to give the description more room. */}
-            <ColumnGrip column="order" label="Order" />
+            <ColumnGrip column="order" label="Order" shown={laidOut.order} />
           </div>
           {cols.qty && (
             <div className="acell qty frozen" style={{ left: headLefts.qty }}>
@@ -2185,7 +2248,7 @@ export function AssemblyGantt({
               >
                 −
               </button>
-              <ColumnGrip column="qty" label="Qty" />
+              <ColumnGrip column="qty" label="Qty" shown={laidOut.qty} />
             </div>
           )}
           {cols.hours && (
@@ -2201,7 +2264,7 @@ export function AssemblyGantt({
               >
                 −
               </button>
-              <ColumnGrip column="hours" label="Hours" />
+              <ColumnGrip column="hours" label="Hours" shown={laidOut.hours} />
             </div>
           )}
           {dateHead('start', DATE_COL_LABEL.start, true)}
@@ -2225,7 +2288,7 @@ export function AssemblyGantt({
               >
                 −
               </button>
-              <ColumnGrip column="team" label="Team" />
+              <ColumnGrip column="team" label="Team" shown={laidOut.team} />
             </div>
           )}
           {/* Load histogram: one column per day, coloured by band. */}
