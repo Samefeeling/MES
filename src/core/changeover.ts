@@ -60,6 +60,9 @@ export interface ChangeoverEvent {
   startedAt: number;
   shiftId: string;
   slotIndex: number;
+  /** The slots that make it up, oldest first — who logged each one is on
+   *  its order's canonical row, so a stoppage can be put to an operator. */
+  records: ProductionRecord[];
 }
 
 interface Slot {
@@ -83,6 +86,7 @@ function eventFrom(
     startedAt: first.at,
     shiftId: first.rec.shiftId,
     slotIndex: first.rec.slotIndex,
+    records: slots.map((s) => s.rec),
   };
 }
 

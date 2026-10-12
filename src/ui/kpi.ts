@@ -119,6 +119,8 @@ import {
 } from './mango-api';
 import { STATUS_MAP } from '../core/status';
 import { isSupervisor } from './supervisor-auth';
+import { renderOperatorSection, wireOperatorSection, type OperatorView } from './kpi-operators';
+import { operatorPerformance } from '../core/operator-perf';
 import {
   mountTracePanel,
   renderJobTraceCards,
@@ -391,6 +393,9 @@ interface KpiState {
   impwSlices: ImpwSlice[];
   /** Shifts that broke a rule, worst first. One per (machine, shift). */
   impwFindings: ImpwFinding[];
+  /** The supervisor-only operator tables: per-operator output and the
+   *  stoppages over their limits, plus which operator is charted. */
+  ops: OperatorView;
   /** Yes / No already recorded against a finding, by its key. */
   impwDecisions: Map<string, ImpwDecision>;
   /** The plant's answers to Mango's placement fields and option lists,
@@ -1347,6 +1352,11 @@ async function compute(now = new Date()): Promise<void> {
   // thing between them, and mixed into the floor-wide boxes they widened
   // the die / insert distributions with work that is not a die change.
   S!.hstampCodes = new Set(S!.machines.filter(isHotStampMachine).map((m) => m.machineCode));
+  // Per operator, signed-off work only like everything else here. The
+  // hot-stamp press's setups are not judged against the injection limits.
+  S!.ops.perf = operatorPerformance(perMachineProd.flat(), ctByJob, (mc) => !S!.hstampCodes.has(mc));
+  S!.ops.weekly = to.getTime() - from.getTime() > 31 * 86_400_000;
+  S!.ops.machineOrder = S!.machines.map((m) => m.machineCode);
   S!.hstampSetupEvents = collectSetupEvents(
     perMachineProd.filter((_, i) => S!.hstampCodes.has(S!.machines[i].machineCode)).flat(),
   );
@@ -3205,6 +3215,7 @@ function render(): void {
       </div>
       ${buildImpwPanel()}
       ${charts}
+      ${isSupervisor() && !S!.loading ? renderOperatorSection({ ...S!.ops, thresholds: S!.thresholds }) : ''}
       <div class="kpi-note">
         <div>Every metric uses one traffic-light language: <b>🟢 met · 🟡 close · 🔴 short</b>.</div>
         <div><b>Output 🟢🟡🔴</b> shows Total Good; the small “/n” is the saved ShiftTarget total; “/—” means target data is missing. Its colour matches the comparison percentage beside it.</div>
@@ -3370,7 +3381,7 @@ function render(): void {
     else S!.expandedMonths.add(m);
     render();
   };
-  app.querySelectorAll<SVGElement>('.chart-hit[data-bucket]').forEach((hit) => {
+  app.querySelectorAll<SVGElement>('.kpi-charts .chart-hit[data-bucket]').forEach((hit) => {
     hit.addEventListener('click', () => toggleMonth(hit.dataset.bucket ?? ''));
     hit.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -3381,6 +3392,7 @@ function render(): void {
   app
     .querySelectorAll<HTMLButtonElement>('[data-collapse-month]')
     .forEach((b) => b.addEventListener('click', () => toggleMonth(b.dataset.collapseMonth!)));
+  if (isSupervisor()) wireOperatorSection(app, S!.ops, render);
 
   restoreView(app, anchor);
 }
@@ -3816,6 +3828,7 @@ export async function renderKpi(dal: PmdDataLayer, assemblyDal?: AssemblyDataLay
     dieByJob: new Map(),
     impwSlices: [],
     impwFindings: [],
+    ops: { perf: [], weekly: false, machineOrder: [], thresholds: DEFAULT_KPI_THRESHOLDS, pick: '', open: new Set() },
     impwDecisions: loadImpwDecisions(),
     impwSite: loadImpwSite(),
     impwOptions: null,

@@ -865,6 +865,37 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 @media (max-width:1100px){
   .kpi-charts{grid-template-columns:1fr}
 }
+/* Operator output and stoppages — supervisor only, under the charts. */
+.kpi-ops{display:grid;gap:16px;margin-top:16px}
+.kpi-ops-card{background:#fff;border:1px solid var(--bd);border-radius:10px;padding:12px;display:grid;gap:10px;min-width:0}
+.kpi-ops-card>h3{margin:0;font-size:16px;color:var(--theme-dark)}
+.kpi-ops-split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:1100px){.kpi-ops-split{grid-template-columns:minmax(0,1fr)}}
+.kpi-ops-scroll{max-height:420px;overflow:auto;border:1px solid var(--bd);border-radius:8px}
+.kpi-ops-table{width:100%;border-collapse:collapse;font-size:13px}
+.kpi-ops-table th,.kpi-ops-table td{padding:5px 8px;border-bottom:1px solid #eef2f7;text-align:left;white-space:nowrap}
+.kpi-ops-table td.num{text-align:right;font-variant-numeric:tabular-nums}
+.kpi-ops-table thead th{position:sticky;top:0;z-index:2;background:#e2e8f0;color:#1e293b;font-weight:700;box-shadow:0 1px 0 #94a3b8}
+.kpi-ops-table tbody th{font-weight:600}
+.kpi-ops-table tbody tr[data-op-pick],.kpi-ops-table tbody tr[data-op-open]{cursor:pointer}
+.kpi-ops-table tbody tr[data-op-pick]:hover,.kpi-ops-table tbody tr[data-op-open]:hover{background:#f8fafc}
+.kpi-ops-table tr.is-picked{background:#eff6ff;box-shadow:inset 3px 0 0 #2a78d6}
+.kpi-ops-table td:nth-child(3){max-width:160px;overflow:hidden;text-overflow:ellipsis}
+.kpi-ops-table td.green{color:#15803d;font-weight:700}
+.kpi-ops-table td.amber{color:#b45309;font-weight:700}
+.kpi-ops-table td.red{color:#b91c1c;font-weight:700}
+.kpi-ops-table .muted{color:var(--mu);font-weight:400}
+.kpi-ops-chev{display:inline-block;width:12px;color:var(--mu)}
+.kpi-ops-detail>td{background:#f8fafc;padding:6px 10px 10px 28px}
+.kpi-ops-stops{border-collapse:collapse;font-size:12px}
+.kpi-ops-stops th,.kpi-ops-stops td{padding:3px 10px 3px 0;text-align:left;border-bottom:1px solid #e2e8f0}
+.kpi-ops-stops thead th{color:var(--mu);font-weight:600;background:none;box-shadow:none;position:static}
+.kpi-ops-stops td.num{text-align:right}
+.kpi-ops-legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--tx);margin:0 0 4px}
+.kpi-ops-legend span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.kpi-ops-sw{display:inline-block;width:10px;height:10px;border-radius:3px;flex:none;margin-right:5px;vertical-align:-1px}
+.kpi-ops-legend .kpi-ops-sw{margin-right:0}
+.kpi-ops-ln{display:inline-block;width:14px;height:3px;border-radius:2px}
 /* Reject number → click to drill into the per-defect-code Pareto. Looks
    like the red number it replaces but underlined-on-hover to signal it's
    actionable. */

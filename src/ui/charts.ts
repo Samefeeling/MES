@@ -111,7 +111,7 @@ export interface StackBucket {
   title?: string;
 }
 
-interface DualOpts {
+export interface DualOpts {
   segmentColors: string[];
   segmentLabels: string[];
   overlayLabel: string;
@@ -120,6 +120,13 @@ interface DualOpts {
   /** Print each segment's own value inside it. Segments too short to fit
    *  the text are left bare. */
   labelSegments?: boolean;
+  /** false leaves the legend to the page — an HTML legend wraps where an
+   *  SVG one runs off the chart. */
+  legend?: boolean;
+  /** Bars only: no line and no right axis. */
+  noOverlay?: boolean;
+  /** Colour of the segment labels — white on saturated fills. */
+  segmentLabelColor?: string;
 }
 
 function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
@@ -162,10 +169,10 @@ function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
       if (o.labelSegments && h >= 12) {
         bars += `<text x="${cx.toFixed(1)}" y="${(cumY + h / 2 + 3).toFixed(
           1,
-        )}" font-size="9" fill="#1e293b" text-anchor="middle">${v}</text>`;
+        )}" font-size="9" fill="${o.segmentLabelColor ?? '#1e293b'}" text-anchor="middle">${v}</text>`;
       }
     }
-    if (b.overlay != null) {
+    if (b.overlay != null && !o.noOverlay) {
       const y = PT + innerH - (b.overlay / niceRight) * innerH;
       linePts.push(`${cx.toFixed(1)},${y.toFixed(1)}`);
     }
@@ -200,7 +207,7 @@ function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
   let grid = '';
   for (let g = 0; g <= 4; g++) {
     const y = PT + innerH - (g / 4) * innerH;
-    const vL = Math.round((g / 4) * niceLeft);
+    const vL = +((g / 4) * niceLeft).toFixed(1);
     const vR = +((g / 4) * niceRight).toFixed(1);
     grid += `<line x1="${PL}" y1="${y.toFixed(1)}" x2="${(width - PR).toFixed(
       1,
@@ -208,11 +215,12 @@ function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
     grid += `<text x="${PL - 6}" y="${(y + 3).toFixed(
       1,
     )}" font-size="10" fill="#64748b" text-anchor="end">${vL}</text>`;
-    grid += `<text x="${(width - PR + 6).toFixed(1)}" y="${(y + 3).toFixed(
-      1,
-    )}" font-size="10" fill="${o.overlayColor}" text-anchor="start">${vR}${
-      o.overlayAsPercent ? '%' : ''
-    }</text>`;
+    if (!o.noOverlay)
+      grid += `<text x="${(width - PR + 6).toFixed(1)}" y="${(y + 3).toFixed(
+        1,
+      )}" font-size="10" fill="${o.overlayColor}" text-anchor="start">${vR}${
+        o.overlayAsPercent ? '%' : ''
+      }</text>`;
   }
 
   // legend
@@ -228,8 +236,11 @@ function renderDualAxis(buckets: StackBucket[], o: DualOpts): string {
     `<g transform="translate(${legendX},${PT - 10})"><line x1="0" y1="-4" x2="14" y2="-4" stroke="${o.overlayColor}" stroke-width="2.5"/><circle cx="7" cy="-4" r="3" fill="${o.overlayColor}"/><text x="20" y="0" font-size="11" fill="#1e293b">${escAttr(o.overlayLabel)}</text></g>`,
   );
 
-  return `<svg viewBox="0 0 ${width} ${H2}" width="100%" height="${H2}" role="img" preserveAspectRatio="xMidYMid meet">${grid}${bars}${line}${legend.join('')}</svg>`;
+  return `<svg viewBox="0 0 ${width} ${H2}" width="100%" height="${H2}" role="img" preserveAspectRatio="xMidYMid meet">${grid}${bars}${line}${o.legend === false ? '' : legend.join('')}</svg>`;
 }
+
+/** Any stacked series on the left axis with one line on the right. */
+export const renderStackedLineChart = renderDualAxis;
 
 // Exported so any chart split by shift speaks the same colour language as
 // the stacked Output chart — a reader learns "green = Afternoon" once.
