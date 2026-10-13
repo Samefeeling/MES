@@ -96,6 +96,29 @@ describe('operator section machine pick', () => {
     expect(html).not.toMatch(/\bPress(es)?\b/);
   });
 
+  it('puts each table under its chart: output on the left, stoppages on the right', () => {
+    const html = renderOperatorSection(view(floor));
+    const at = (s: string) => html.indexOf(s);
+    expect(at('class="kpi-ops-grid"')).toBeGreaterThan(-1);
+    expect(at('Operator output by machine')).toBeLessThan(at('Operator output &amp; yield'));
+    expect(at('Operator output &amp; yield')).toBeLessThan(at('Stoppages over the limit'));
+    expect(at('Stoppages over the limit')).toBeLessThan(at('Operator setups, startups'));
+    // The stoppage table leaves Shifts to the output table beside it.
+    const limits = html.slice(at('kpi-ops-limits'));
+    expect(limits).not.toContain('>Shifts<');
+  });
+
+  it('every machine is in the cell, with a "+n" for each width step', () => {
+    const recs = ['1600T', '1300T', '320T', '550T'].flatMap((mc) => order(mc, 'Ann', 'RR', 10));
+    const html = renderOperatorSection({ ...view(recs), machineOrder: ['1600T', '1300T', '320T', '550T'] });
+    const cell = html.slice(html.indexOf('kpi-ops-mcs'), html.indexOf('</div>', html.indexOf('kpi-ops-mcs')));
+    expect(cell.match(/class="kpi-ops-press"/g)).toHaveLength(4);
+    expect(cell).toContain('data-k="3"><i');
+    expect(cell).toContain('<span class="kpi-ops-more" data-k="2">+2</span>');
+    expect(cell).toContain('<span class="kpi-ops-more" data-k="3">+1</span>');
+    expect(cell).not.toContain('data-k="4">+');
+  });
+
   it('no chips with one machine in the window, nothing at all with none', () => {
     expect(renderOperatorSection(view(order('1600T', 'Ann', 'RR', 5)))).not.toContain('data-op-machine');
     expect(renderOperatorSection(view([]))).toBe('');

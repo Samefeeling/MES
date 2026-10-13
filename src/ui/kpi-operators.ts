@@ -255,11 +255,29 @@ function stoppageChart(v: OperatorView): string {
 // Tables
 // ---------------------------------------------------------------------------
 
+/** Fixed column widths in px; null takes what is left. Each table sits
+ *  under its chart at half the page width, so they add up to 650 — what a
+ *  1366 px screen gives each half (see .kpi-ops-grid). */
+const colgroup = (widths: Array<number | null>): string =>
+  `<colgroup>${widths.map((w) => (w == null ? '<col>' : `<col style="width:${w}px">`)).join('')}</colgroup>`;
+
+/**
+ * Every machine, as many as the cell has room for and "+n" for the rest:
+ * the third and later chips carry the cell width they need to show
+ * (data-k, see .kpi-ops-mcs), and there is one "+n" per width step. The
+ * cell's title lists them all.
+ */
 function pressChips(v: OperatorView, machines: string[]): string {
-  return [...machines]
-    .sort((a, b) => pressRank(v, a) - pressRank(v, b) || a.localeCompare(b))
-    .map((mc) => `<span class="kpi-ops-press"><i style="background:${pressColor(v, mc)}"></i>${escapeHtml(mc)}</span>`)
+  const sorted = [...machines].sort((a, b) => pressRank(v, a) - pressRank(v, b) || a.localeCompare(b));
+  const chips = sorted
+    .map(
+      (mc, i) =>
+        `<span class="kpi-ops-press"${i >= 2 ? ` data-k="${i + 1}"` : ''}><i style="background:${pressColor(v, mc)}"></i>${escapeHtml(mc)}</span>`,
+    )
     .join('');
+  let more = '';
+  for (let k = 2; k < sorted.length; k++) more += `<span class="kpi-ops-more" data-k="${k}">+${sorted.length - k}</span>`;
+  return `<div class="kpi-ops-mcs">${chips}${more}</div>`;
 }
 
 function outputTable(v: OperatorView, pick: OperatorPerf | undefined): string {
@@ -271,7 +289,7 @@ function outputTable(v: OperatorView, pick: OperatorPerf | undefined): string {
       const y = yieldOf(k.output, k.scrap);
       const picked = p === pick;
       return `<tr class="${picked ? 'is-picked' : ''}" data-op-pick="${escapeHtml(p.operator)}" tabindex="0" aria-selected="${picked}" title="Chart ${escapeHtml(nameOf(p.operator))}">
-        <th class="${p.operator ? '' : 'muted'}">${escapeHtml(nameOf(p.operator))}</th>
+        <th class="${p.operator ? '' : 'muted'}" title="${escapeHtml(nameOf(p.operator))}">${escapeHtml(nameOf(p.operator))}</th>
         <td class="num">${k.shifts}</td>
         <td class="kpi-ops-presses" title="${escapeHtml(p.machines.join(', '))}">${pressChips(v, p.machines)}</td>
         <td class="num">${hrs(k.runHrs)}</td>
@@ -301,7 +319,7 @@ function outputTable(v: OperatorView, pick: OperatorPerf | undefined): string {
     <div class="kpi-ops-caption"><h4>Operator output &amp; yield 🔒</h4><span>Click a row to chart that operator</span></div>
     <div class="kpi-ops-wrap">
       <table class="kpi-ops-table kpi-ops-output">
-        <colgroup><col class="c-name"><col class="c-n"><col><col class="c-n"><col class="c-n"><col class="c-n"><col class="c-n"><col class="c-e"></colgroup>
+        ${colgroup([150, 56, null, 58, 64, 60, 58, 64])}
         <thead><tr>
           <th>Operator</th>
           <th class="num" title="Shifts they are named on">Shifts</th>
@@ -310,7 +328,7 @@ function outputTable(v: OperatorView, pick: OperatorPerf | undefined): string {
           <th class="num">Output</th>
           <th class="num">Reject</th>
           <th class="num">Yield</th>
-          <th class="num" title="Standard hours of the output ÷ run hours, as in the machine table">Efficiency</th>
+          <th class="num" title="Efficiency: standard hours of the output ÷ run hours, as in the machine table">Effic.</th>
         </tr></thead>
         <tbody>${rows}</tbody>
         ${foot}
@@ -323,7 +341,7 @@ function outputTable(v: OperatorView, pick: OperatorPerf | undefined): string {
 function stopDetail(p: OperatorPerf): string {
   const flagged = p.stops.filter((s) => s.flagged);
   if (!flagged.length) {
-    return '<tr class="kpi-ops-detail"><td colspan="11"><span class="muted">Nothing over its limit and no breakdowns.</span></td></tr>';
+    return '<tr class="kpi-ops-detail"><td colspan="10"><span class="muted">Nothing over its limit and no breakdowns.</span></td></tr>';
   }
   const row = (s: OperatorStop): string => {
     const limit = s.kind === 'breakdown' ? null : STOP_LIMIT_HRS[s.kind];
@@ -337,7 +355,7 @@ function stopDetail(p: OperatorPerf): string {
       <td class="num red">${limit == null ? s.hours.toFixed(1) : `+${(s.hours - limit).toFixed(1)}`}</td>
     </tr>`;
   };
-  return `<tr class="kpi-ops-detail"><td colspan="11">
+  return `<tr class="kpi-ops-detail"><td colspan="10">
     <table class="kpi-ops-stops">
       <thead><tr><th>Started</th><th>Machine</th><th>Order</th><th>Stoppage</th><th class="num">Hours</th><th class="num">Limit h</th><th class="num">Over h</th></tr></thead>
       <tbody>${flagged.map(row).join('')}</tbody>
@@ -365,8 +383,7 @@ function stopsTable(v: OperatorView): string {
       const k = p.kpi;
       const bd = p.tally.breakdown;
       return `<tr class="kpi-ops-row${open ? ' is-open' : ''}" data-op-open="${escapeHtml(p.operator)}" tabindex="0" aria-expanded="${open}" title="${open ? 'Hide' : 'List'} the stoppages over their limit">
-        <th class="${p.operator ? '' : 'muted'}"><span class="kpi-ops-chev" aria-hidden="true">${open ? '▾' : '▸'}</span>${escapeHtml(nameOf(p.operator))}</th>
-        <td class="num">${k.shifts}</td>
+        <th class="${p.operator ? '' : 'muted'}" title="${escapeHtml(nameOf(p.operator))}"><span class="kpi-ops-chev" aria-hidden="true">${open ? '▾' : '▸'}</span>${escapeHtml(nameOf(p.operator))}</th>
         <td class="num kpi-ops-grp" title="Die ${hrs(k.dieHrs)} · colour ${hrs(k.colorHrs)} · insert ${hrs(k.insertHrs)}">${hrs(k.setupHrs)}</td>
         <td class="num">${hrs(k.startupHrs)}</td>
         <td class="num" title="Breakdown and smoko, as Down h in the machine table">${hrs(k.downtimeHrs)}</td>
@@ -384,7 +401,6 @@ function stopsTable(v: OperatorView): string {
   const foot = tot
     ? `<tfoot><tr class="kpi-ops-total">
         <th>TOTAL</th>
-        <td class="num">${v.perf.reduce((n, p) => n + p.kpi.shifts, 0)}</td>
         <td class="num kpi-ops-grp">${hrs(tot.setupHrs)}</td>
         <td class="num">${hrs(tot.startupHrs)}</td>
         <td class="num">${hrs(tot.downtimeHrs)}</td>
@@ -398,13 +414,12 @@ function stopsTable(v: OperatorView): string {
     <div class="kpi-ops-caption"><h4>Operator setups, startups &amp; downtime against the limits 🔒</h4><span>Click a row to list the stoppages over their limit</span></div>
     <div class="kpi-ops-wrap">
       <table class="kpi-ops-table kpi-ops-limits">
-        <colgroup><col class="c-name"><col class="c-n">${'<col class="c-n">'.repeat(3)}${'<col class="c-w">'.repeat(3)}${'<col class="c-n">'.repeat(3)}</colgroup>
+        ${colgroup([150, 52, 52, 52, 62, 60, 62, 48, 52, 60])}
         <thead>
           <tr class="kpi-ops-groups">
             <th rowspan="2">Operator</th>
-            <th rowspan="2" class="num">Shifts</th>
             <th colspan="3" class="kpi-ops-grp">Hours logged</th>
-            <th colspan="3" class="kpi-ops-grp" title="Over the limit / all of that kind">Over the limit · over / all</th>
+            <th colspan="3" class="kpi-ops-grp" title="Over the limit / all of that kind">Over the limit</th>
             <th colspan="2" class="kpi-ops-grp">Breakdowns</th>
             <th rowspan="2" class="num kpi-ops-grp" title="Hours past the limits on the stoppages over them, plus every breakdown hour">Hours over</th>
           </tr>
@@ -412,9 +427,9 @@ function stopsTable(v: OperatorView): string {
             <th class="num kpi-ops-grp" title="D + C + I — C/O hours in the machine table">Setup</th>
             <th class="num" title="S">Startup</th>
             <th class="num" title="B + M">Down</th>
-            <th class="num kpi-ops-grp">Startup &gt; 1 h</th>
-            <th class="num">Die setup &gt; 4 h</th>
-            <th class="num">Insert / colour &gt; 0.5 h</th>
+            <th class="num kpi-ops-grp" title="Startups over 1 h / all startups">Startup<small>&gt; 1 h</small></th>
+            <th class="num" title="Die setups over 4 h / all die setups">Die<small>&gt; 4 h</small></th>
+            <th class="num" title="Insert and colour changes over 0.5 h / all of them">Ins / col<small>&gt; 0.5 h</small></th>
             <th class="num kpi-ops-grp">Count</th>
             <th class="num">Hours</th>
           </tr>
@@ -424,7 +439,7 @@ function stopsTable(v: OperatorView): string {
       </table>
     </div>
     <div class="kpi-chart-note">
-      A die / colour / insert change is one per order however many half-hours the sheet logged it in; a startup runs until the machine runs; a breakdown is each unbroken run of B — the same events as the duration chart.
+      Over the limit reads over / all of that kind; each operator's shifts are in the output table. A die / colour / insert change is one per order however many half-hours the sheet logged it in; a startup runs until the machine runs; a breakdown is each unbroken run of B — the same events as the duration chart.
       One that crosses a shift change goes to the operator who logged most of it, while the hours columns count each half-hour under whoever logged it.
       The hot-stamp machine keys its setups its own way and is left out of the limits.
     </div>
@@ -450,7 +465,8 @@ function machineFilter(v: OperatorView, present: string[]): string {
   </div>`;
 }
 
-/** Both charts and both tables, or nothing when the range has no signed-off work. */
+/** Both charts, each with its table under it, or nothing when the range
+ *  has no signed-off work. Output on the left, stoppages on the right. */
 export function renderOperatorSection(v: OperatorView): string {
   if (!v.records.length) return '';
   const pick = pickedOperator(v);
@@ -463,12 +479,12 @@ export function renderOperatorSection(v: OperatorView): string {
       <span>${named} operator${named === 1 ? '' : 's'} · ${scope} · signed-off shifts · supervisors only</span>
     </div>
     ${machineFilter(v, present)}
-    <div class="kpi-charts kpi-ops-charts">
+    <div class="kpi-ops-grid">
       ${outputChart(v, pick)}
+      ${outputTable(v, pick)}
       ${stoppageChart(v)}
+      ${stopsTable(v)}
     </div>
-    ${outputTable(v, pick)}
-    ${stopsTable(v)}
   </section>`;
 }
 

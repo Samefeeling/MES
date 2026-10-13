@@ -3509,8 +3509,8 @@ function render(): void {
     else S!.expandedMonths.add(m);
     render();
   };
-  // The operator charts sit in the same grid and wire their own bars.
-  app.querySelectorAll<SVGElement>('.kpi-charts:not(.kpi-ops-charts) .chart-hit[data-bucket]').forEach((hit) => {
+  // The operator charts are outside this grid and wire their own bars.
+  app.querySelectorAll<SVGElement>('.kpi-charts .chart-hit[data-bucket]').forEach((hit) => {
     hit.addEventListener('click', () => toggleMonth(hit.dataset.bucket ?? ''));
     hit.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
