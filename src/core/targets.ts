@@ -95,7 +95,7 @@ export function hoursUnavailableFor(
  * Rule (operator-stated):
  *   avail    = 8 h − hours consumed by previous order(s), if any
  *                  − changeover time, if any        (`unavailableHrs`)
- *   capacity = floor(avail ÷ ProdStandard)
+ *   capacity = floor(avail ÷ ProdStandard)   (`wholePieces`)
  *   if  JobLeft < capacity  →  target = JobLeft     (job finishes)
  *   else                    →  target = capacity    (what the press can
  *                                                    still make today)
@@ -113,8 +113,19 @@ export function shiftTargetFor(
   if (!o.qtyPerHr || o.qtyPerHr <= 0) return null;
   const ct = o.qtyPerHr; // hours per piece
   const avail = Math.max(0, SHIFT_HOURS - Math.max(0, unavailableHrs));
-  const capacity = Math.floor(avail / ct);
+  const capacity = wholePieces(avail / ct);
   return jobLeft < capacity ? jobLeft : capacity;
+}
+
+/**
+ * Whole pieces in a planned quantity: rounded down, since a part is made or
+ * it is not, except that a hundredth of a piece short of a whole one is that
+ * piece. Epicor keeps the cycle as hours per piece to four to eight decimals,
+ * so 18 an hour reads back as 17.99999856 and four hours of it as 71.99999 —
+ * a plain floor asked for 71.
+ */
+export function wholePieces(exact: number): number {
+  return Math.floor(exact + 0.01);
 }
 
 /** A count more than 30% above the shift target is much more likely to be

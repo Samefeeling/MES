@@ -44,7 +44,9 @@ import {
   savedScheduleSnapshot,
   scheduleAdherenceForShift,
   scheduleSnapshotForShift,
+  shiftPlanChanges,
   snapshotToSave,
+  type SavedShiftPlan,
 } from '../core/kpi-attainment';
 import { retroJobLeftFixes, sumGoodStartedBefore } from '../core/jobgood';
 import {
@@ -105,6 +107,10 @@ const LISTS = {
    *  writes here when a Die/Insert Change is first marked. */
   dieChangeLog: 'PMD_DieChangeLog',
   rdoRoster: 'RDO Roster 2026-2030',
+  /** The plan of each press with no signed production in a shift, kept by
+   *  that shift's sign-offs (SavedShiftPlan). Auto-provisioned on the first
+   *  one that has a plan to keep (see ensureShiftPlanList). */
+  shiftPlan: 'PMD_ShiftPlan',
 } as const;
 
 // SharePoint's internal column names are baked in at creation time. These
@@ -2153,6 +2159,143 @@ export class SharePointDataLayer implements PmdDataLayer {
     this.manualOrdersEnsured = true;
   }
 
+  // ---- PMD_ShiftPlan -----------------------------------------------------
+
+  /** PMD_ShiftPlan rows matching an OData filter on ShiftId; null when the
+   *  list cannot be read (not created yet, or the read failed). */
+  private async readShiftPlans(
+    filter: string,
+  ): Promise<Array<SavedShiftPlan & { id: number }> | null> {
+    let rows: Record<string, unknown>[];
+    try {
+      rows = await this.getAllItems(LISTS.shiftPlan, '$filter=' + encodeURIComponent(filter));
+    } catch {
+      return null;
+    }
+    const out: Array<SavedShiftPlan & { id: number }> = [];
+    for (const r of rows) {
+      const machineCode = str(r['MachineCode']).trim();
+      const shiftId = str(r['ShiftId']).trim();
+      const plan = num(r['SchedulePlan']);
+      if (!machineCode || !shiftBounds(shiftId) || !(plan > 0)) continue;
+      let jobs: SavedShiftPlan['jobs'] = [];
+      try {
+        const parsed = JSON.parse(str(r['PlanJobs']) || '[]') as unknown;
+        if (Array.isArray(parsed)) {
+          jobs = parsed
+            .filter((j): j is Record<string, unknown> => !!j && typeof j === 'object')
+            .map((j) => ({
+              jobNumber: str(j['jobNumber']).trim(),
+              partNumber: str(j['partNumber']).trim(),
+              pieces: num(j['pieces']),
+            }))
+            .filter((j) => j.jobNumber);
+        }
+      } catch {
+        /* the plan total still stands without its order detail */
+      }
+      out.push({ id: getId(r), machineCode, shiftId, plan, jobs });
+    }
+    return out;
+  }
+
+  async listShiftPlans(filter: { from: string; to: string }): Promise<SavedShiftPlan[]> {
+    const rows = await this.readShiftPlans(
+      `ShiftId ge '${odataString(filter.from)}-' and ShiftId le '${odataString(filter.to)}-z'`,
+    );
+    return (rows ?? [])
+      .filter((p) => p.shiftId.slice(0, 10) >= filter.from && p.shiftId.slice(0, 10) <= filter.to)
+      .map(({ id: _id, ...plan }) => plan);
+  }
+
+  private shiftPlanListReady = false;
+
+  private async shiftPlanListExists(): Promise<boolean> {
+    if (this.shiftPlanListReady) return true;
+    try {
+      await this.getJson(`${this.listUrl(LISTS.shiftPlan)}?$select=Title`);
+      this.shiftPlanListReady = true;
+    } catch {
+      /* not there */
+    }
+    return this.shiftPlanListReady;
+  }
+
+  private async ensureShiftPlanList(): Promise<void> {
+    if (await this.shiftPlanListExists()) return;
+    await this.post(`${this.siteUrl}/_api/web/lists`, {
+      __metadata: { type: 'SP.List' },
+      Title: LISTS.shiftPlan,
+      BaseTemplate: 100, // generic list
+      Description:
+        'The plan of each press planned for a shift with no signed production, kept by that shift\'s sign-offs for the KPI Schedule Adherence. Title = MachineCode|ShiftId.',
+    });
+    const fieldsUrl = `${this.listUrl(LISTS.shiftPlan)}/fields`;
+    const field = (Title: string, FieldTypeKind: number) =>
+      this.post(fieldsUrl, { __metadata: { type: 'SP.Field' }, Title, FieldTypeKind });
+    await field('MachineCode', 2); // single-line text
+    await field('ShiftId', 2);
+    await field('SchedulePlan', 9); // number
+    await field('PlanJobs', 3); // multi-line text (JSON)
+    // Indexed, so the KPI page's ShiftId range filter keeps working past
+    // SharePoint's 5,000-item view threshold.
+    await this.post(
+      `${fieldsUrl}/getbyinternalnameortitle('ShiftId')`,
+      { __metadata: { type: 'SP.Field' }, Indexed: true },
+      '*',
+    ).catch((e) => console.warn('[pmd] PMD_ShiftPlan: could not index ShiftId:', e));
+    console.info('[pmd] PMD_ShiftPlan list created (auto-provisioned)');
+    this.shiftPlanListReady = true;
+  }
+
+  /**
+   * After a sign-off of `shiftId`: keep the plan of every press planned in
+   * the shift with nothing signed, and drop a row kept for a press that has
+   * signed since (shiftPlanChanges). Best-effort — the caller never lets it
+   * cost a sign-off.
+   */
+  private async saveShiftPlans(shiftId: string, signingMachine: string): Promise<void> {
+    const [machines, orders, headers] = await Promise.all([
+      this.listMachines(),
+      this.listPlanning({}),
+      this.fetchHeaders(LISTS.production, { shiftId }),
+    ]);
+    const signed = new Set([
+      signingMachine,
+      ...headers.filter((h) => `${h.date}-${h.shift}` === shiftId).map((h) => h.machineCode),
+    ]);
+    let saved = await this.readShiftPlans(`ShiftId eq '${odataString(shiftId)}'`);
+    if (saved == null) {
+      // A list that exists and could not be read: writing now could
+      // duplicate a row already kept. Leave it to the next sign-off.
+      if (await this.shiftPlanListExists()) return;
+      saved = [];
+    }
+    const { save, remove } = shiftPlanChanges(
+      machines.filter((m) => m.active).map((m) => m.machineCode),
+      signed,
+      saved,
+      orders,
+      shiftId,
+      new Date(),
+    );
+    for (const row of remove) {
+      await this.del(`${this.listUrl(LISTS.shiftPlan)}/items(${row.id})`);
+    }
+    if (!save.length) return;
+    await this.ensureShiftPlanList();
+    for (const row of save) {
+      await this.post(`${this.listUrl(LISTS.shiftPlan)}/items`, {
+        __metadata: { type: await this.itemType(LISTS.shiftPlan) },
+        Title: `${row.machineCode}|${row.shiftId}`,
+        MachineCode: row.machineCode,
+        ShiftId: row.shiftId,
+        SchedulePlan: row.plan,
+        PlanJobs: JSON.stringify(row.jobs),
+      });
+    }
+  }
+
   async createManualOrder(o: {
     jobNumber: string;
     partNumber: string;
@@ -3547,6 +3690,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
     this.persistEditCache();
     this.persistUnlockedTuples();
+    // The presses nobody signed in this shift keep their plan too.
+    await this.saveShiftPlans(shiftId, machineCode).catch((e) => {
+      console.warn('[pmd] PMD_ShiftPlan save failed (the next sign-off of the shift retries):', e);
+    });
   }
 
   /**

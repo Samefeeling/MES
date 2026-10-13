@@ -109,10 +109,13 @@ describe('Schedule Adherence plans from Planning.csv, run or not', () => {
     });
   });
 
-  it('leaves a shift still waiting for sign-off out on both sides', () => {
+  it('counts the plan of a shift still waiting for sign-off, crediting nothing until it is signed', () => {
+    // Leaving it out let an unsigned shift take its plan out of the
+    // denominator with it: a press nobody signed read as a press with no plan.
     const lines = scheduleTuplesForShift([], orders, '850T', '2026-09-22-Night', AFTER, true);
-    expect(lines.every((l) => l.source === 'pending')).toBe(true);
-    expect(attainmentOfTuples(lines)).toEqual({ actual: 0, expected: 0, pct: null, covered: 0, total: 0 });
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.every((l) => l.source === 'schedule' && l.unsigned)).toBe(true);
+    expect(attainmentOfTuples(lines)).toEqual({ actual: 0, expected: 226, pct: 0, covered: 3, total: 3 });
   });
 
   it('does not judge a shift that has not started', () => {

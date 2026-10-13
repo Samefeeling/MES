@@ -1,5 +1,6 @@
 import type { PlanningOrder } from '../types';
 import { SHIFTS, buildShiftId, dateKey, parseShiftId, shiftBounds } from './shifts';
+import { wholePieces } from './targets';
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -280,7 +281,7 @@ export interface PlannedRun {
   /** Hours of this shift the order was planned to be RUNNING in, after the
    *  press's single timeline has been shared out. */
   hours: number;
-  /** hours × JobOper_ProdStandard, floored to whole pieces. */
+  /** hours × JobOper_ProdStandard in whole pieces (`wholePieces`). */
   pieces: number;
 }
 
@@ -361,7 +362,7 @@ export function plannedRuntimeForShift(
   return {
     runs: demand.map(({ order, hours }) => {
       const mine = hours * share;
-      return { order, hours: mine, pieces: Math.floor(mine / order.qtyPerHr) };
+      return { order, hours: mine, pieces: wholePieces(mine / order.qtyPerHr) };
     }),
     elapsedHours,
     unavailableHours,
@@ -389,7 +390,7 @@ export function expectedScheduledOutputForShift(
     scheduledHours += run.hours;
   }
   return {
-    pieces: Math.floor(exactPieces),
+    pieces: wholePieces(exactPieces),
     scheduledHours,
     jobsUsed: Array.from(new Set(planned.runs.map((run) => run.order.jobNumber))),
   };

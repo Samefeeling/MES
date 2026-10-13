@@ -6,12 +6,22 @@ the period:
 - **Last 24h — Schedule Adherence** plans from Planning.csv, for every
   finished shift of the window, whether the press ran or not. A press
   planned for a shift and left idle (no crew, no material) shows 0 against
-  its plan instead of dropping out of the denominator.
+  its plan instead of dropping out of the denominator — and so does one
+  that booked work nobody has signed off yet.
 - **Wider periods — Schedule Adherence from the saved plans.** Planning.csv
   is overwritten on every export, so it is not a historical plan source for
   weeks and months. Each sign-off saves the shift's Last 24h figure instead
-  (PMD_Production.ScheduleAttain and SchedulePlan), and a wider period adds
-  those up.
+  (PMD_Production.ScheduleAttain and SchedulePlan), and the plan of every
+  press in the shift with nothing signed (PMD_ShiftPlan); a wider period
+  adds those up.
+
+**The plan never leaves the denominator.** Whatever happened on the floor —
+press idle, operator never booked, supervisor never signed — the pieces the
+plan asked for stay in Σ plan, and only signed Good is credited against them.
+Example, Monday 12 Oct 2026: MES had rows for 902 planned pieces, but the plan
+was 1,231 — 1300T's night (128, booked and not signed) and 320T's night (200,
+nothing booked) were missing. Credited 615: 50%, not the 68% the page showed
+before.
 
 Every figure is a sum of Machine + Shift + Job plan lines
 (`AttainmentTuple` in `src/core/kpi-attainment.ts`), so machine, shift,
@@ -41,6 +51,10 @@ For each finished shift and each order Planning.csv has on the press in it:
   the order quantity after the earlier shifts of its window were asked for
   theirs. Epicor's window includes setup time, so hours × rate alone would
   ask for more pieces than the order holds.
+- **Whole pieces** (`wholePieces`): rounded down, except that within a
+  hundredth of a piece of a whole one is that piece. Epicor keeps the cycle as
+  hours per piece to 4–8 decimals, so 18/h comes back as 17.99999856/h and
+  four hours of it as 71.99999 — 72, not 71. ShiftTarget uses the same rule.
 - **Credited** = min(Good, plan) per order, so over-producing one order
   cannot hide missing another.
 - Adherence = Σ credited ÷ Σ plan.
@@ -52,8 +66,10 @@ Lines outside the comparison:
 - Output of an order Planning.csv no longer holds (Epicor drops finished
   jobs) uses the ShiftTarget saved when it ran.
 - A shift with unsigned records and no signed ones is *awaiting sign-off*:
-  its plan stays out until it is signed, so a shift waiting for its
-  supervisor is not scored as a shift that never ran.
+  its plan counts and nothing is credited until it is signed — the KPI page
+  credits signed output only. The row is tagged **UNSIGNED** so it is not
+  read as a press that never ran. (It used to be left out of both sides,
+  which let a shift nobody signed take its plan out of the comparison.)
 - A planned order with no rate, or a run order with no saved ShiftTarget,
   has no known quantity: the total shows /— and no percentage; hover for
   coverage.
@@ -61,9 +77,13 @@ Lines outside the comparison:
 Example (850T, 22 Sept 2026, planned 18:14 → 08:33 at 33/h, not run):
 Afternoon asks 30 + 60 + 34 = 124, Night 66 + 100 + 60 = 226 — 0 / 350, 0%.
 
-Known limit: Planning.csv is the latest export. If the planner reschedules a
-missed order before the page is read, the old window is gone and so is that
-shift's plan.
+A press with nothing signed whose plan a sign-off of the shift kept in
+PMD_ShiftPlan (see below) is planned from that row, order by order, rather
+than from Planning.csv as it stands now.
+
+Known limit: otherwise Planning.csv is the latest export. If the planner
+reschedules a missed order before any press of that shift is signed off and
+before the page is read, the old window is gone and so is that shift's plan.
 
 ## Wider periods — the plans saved at sign-off
 
@@ -107,9 +127,30 @@ Rules:
   its orders after the fact. A shift's plan counts in the category of the
   order that made most of it.
 
-Known limit: a press planned for a shift and never run has no row to save a
-plan on. Last 24h counts it as 0 against its plan; a wider period cannot see
-it.
+## Presses with nothing signed — PMD_ShiftPlan
+
+A press planned for a shift and never run (or run and never signed) has no
+PMD_Production row to carry ScheduleAttain / SchedulePlan. Every sign-off of
+a shift therefore also looks at the other presses (`shiftPlanChanges`):
+
+- a press planned in the shift with nothing signed gets a PMD_ShiftPlan row:
+  its Last 24h plan, judged to the end of the shift (`shiftPlanFor`), and the
+  orders it is made of;
+- the row is never rewritten — it is the plan as it stood when the shift was
+  first closed, before Epicor drops a finished order or moves a missed one
+  forward;
+- it is deleted when the press is signed: its own snapshot takes over.
+
+A wider period counts each machine-shift with nothing signed once, at its
+plan, nothing credited (`idleShiftTuples`): the PMD_ShiftPlan row, or — for a
+shift before the list, or one nobody signed anything in — what Planning.csv
+still holds, the Last 24h rule. That fallback loses plans the further back
+the shift is (finished orders leave Planning.csv), which is why the row is
+kept at sign-off.
+
+Known limits: a shift in which nobody signed anything at all keeps no plan,
+so after Epicor has moved on it is gone from wider periods. Order rows of a
+wider period still show output only.
 
 ## Efficiency
 

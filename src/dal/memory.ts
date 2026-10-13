@@ -2,7 +2,9 @@ import {
   savedScheduleSnapshot,
   scheduleAdherenceForShift,
   scheduleSnapshotForShift,
+  shiftPlanChanges,
   snapshotToSave,
+  type SavedShiftPlan,
 } from '../core/kpi-attainment';
 import { appendHandoverLine } from '../core/handover';
 import type {
@@ -72,6 +74,8 @@ export class MemoryDataLayer implements PmdDataLayer {
   private dieMaster: DieMaster[];
   private dieMaintenance: DieMaintenanceRequest[];
   private dieChangeLogs: DieChangeLog[] = [];
+  /** PMD_ShiftPlan (see SavedShiftPlan). */
+  private shiftPlans: SavedShiftPlan[] = [];
   private nextDclId = 1;
   private nextProdId: number;
   /** Tuples currently unlocked from a signed-off state (parity with the
@@ -119,6 +123,33 @@ export class MemoryDataLayer implements PmdDataLayer {
 
   async listMachines(): Promise<Machine[]> {
     return MemoryDataLayer.clone(this.machines.filter((m) => m.active && isProductionMachine(m.machineCode)));
+  }
+
+  async listShiftPlans(filter: { from: string; to: string }): Promise<SavedShiftPlan[]> {
+    return MemoryDataLayer.clone(
+      this.shiftPlans.filter((p) => {
+        const date = p.shiftId.slice(0, 10);
+        return date >= filter.from && date <= filter.to;
+      }),
+    );
+  }
+
+  /** The SharePoint DAL's saveShiftPlans: after a sign-off, keep the plan of
+   *  every press in the shift with nothing signed. */
+  private saveShiftPlans(shiftId: string, now: Date): void {
+    const machines = this.machines.filter((m) => m.active && isProductionMachine(m.machineCode));
+    const signed = new Set(
+      this.production.filter((r) => r.shiftId === shiftId && r.locked).map((r) => r.machineCode),
+    );
+    const { save, remove } = shiftPlanChanges(
+      machines.map((m) => m.machineCode),
+      signed,
+      this.shiftPlans.filter((p) => p.shiftId === shiftId),
+      this.planning,
+      shiftId,
+      now,
+    );
+    this.shiftPlans = this.shiftPlans.filter((p) => !remove.includes(p)).concat(save);
   }
   async listOperators(): Promise<Operator[]> {
     return MemoryDataLayer.clone(this.operators.filter((o) => o.active));
@@ -539,6 +570,7 @@ export class MemoryDataLayer implements PmdDataLayer {
       r.updatedAt = now;
       this.unlockedTuples.delete(`${r.machineCode}|${r.shiftId}|${r.jobNumber}`);
     }
+    this.saveShiftPlans(shiftId, new Date());
   }
 
   async unlockShift(

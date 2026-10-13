@@ -241,6 +241,7 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-table td.red .kpi-reject-drill{color:inherit}
 /* The small "/expected" companion on a judged Output cell. */
 .kpi-exp{font-size:10px;font-weight:600;color:var(--mu)}
+.kpi-unsigned{display:inline-block;margin-left:6px;font-style:normal;padding:0 4px;border:1px solid currentColor;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;line-height:13px;color:#b45309;vertical-align:1px;white-space:nowrap}
 .kpi-total th,.kpi-total td{border-top:2px solid var(--theme-dark);font-weight:800;background:#f8fafc}
 /* Per-category subtotal block (PMD_ProductDieColor.Category) sitting at
    the end of the body, directly above the sticky TOTAL footer. Same

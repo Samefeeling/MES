@@ -1,3 +1,4 @@
+import type { SavedShiftPlan } from '../core/kpi-attainment';
 import type {
   BdCode,
   BreakdownLogDetail,
@@ -135,6 +136,12 @@ export interface PmdDataLayer {
   /** Slot-level BDCode/Cause from PMD_BreakDownLog.BDCause. Live Status
    *  uses this list as the breakdown tooltip source of truth. */
   listBreakdownDetails?(filter: ProductionFilter): Promise<BreakdownLogDetail[]>;
+
+  /** PMD_ShiftPlan: the plan kept for each press with no signed production
+   *  in a shift, saved by the sign-offs of that shift (see SavedShiftPlan).
+   *  `from` / `to` are YYYY-MM-DD shift dates. Optional — [] / absent means
+   *  wider KPI periods fall back to what Planning.csv still holds. */
+  listShiftPlans?(filter: { from: string; to: string }): Promise<SavedShiftPlan[]>;
 
   // Production (hot path)
   listProduction(filter: ProductionFilter): Promise<ProductionRecord[]>;

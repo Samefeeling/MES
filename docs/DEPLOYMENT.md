@@ -488,6 +488,34 @@ this set:
 PMD_LiveStatus mirrors PMD_Production's schema (same field map). The
 list re-uses the same DEFAULT_FIELDS section.
 
+## PMD_ShiftPlan (plans of presses nobody signed)
+
+ScheduleAttain / SchedulePlan ride on the rows a sign-off writes, so a press
+planned for a shift and left idle — or run and never signed — has nowhere to
+keep its plan. Every sign-off of a shift therefore also saves, here, the plan
+of each press planned in that shift with nothing signed; the KPI page counts
+it at 0 in every period. A row is deleted when its press is signed, and never
+rewritten otherwise (it is the plan as it stood when the shift was first
+closed). See `docs/kpi-shift-target.md`.
+
+The app creates the list on the first sign-off that has a plan to keep, if
+the signing account may create lists (Manage Lists). If not, create it by
+hand — a generic list with:
+
+| SP column | Type | Purpose |
+|---|---|---|
+| `Title` | Single line | `MachineCode|ShiftId`, e.g. `320T|2026-10-12-Night` |
+| `MachineCode` | Single line | Press, as PMD_Machine names it |
+| `ShiftId` | Single line, **indexed** | `YYYY-MM-DD-Day/Afternoon/Night`. Indexed so the KPI page's date filter keeps working past 5,000 rows |
+| `SchedulePlan` | Number | Pieces the plan asked for (always > 0) |
+| `PlanJobs` | Multi-line (plain text) | The planned orders as JSON: `[{"jobNumber","partNumber","pieces"}]`, most pieces first |
+
+Without the list, sign-off works as before and wider KPI periods fall back to
+what Planning.csv still holds for those shifts. Power BI: a period's Schedule
+Adherence is Σ(ScheduleAttain × SchedulePlan) over PMD_Production (one row per
+machine-shift) ÷ [Σ SchedulePlan over PMD_Production (one row per
+machine-shift) + Σ SchedulePlan over PMD_ShiftPlan].
+
 ---
 
 ## Die Management work orders — Mango is the system of record
