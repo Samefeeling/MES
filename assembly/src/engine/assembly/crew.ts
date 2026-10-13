@@ -17,7 +17,6 @@
 
 import {
   MAX_WORKERS_PER_ORDER,
-  PRODUCTIVE_HOURS_PER_PERSON,
   canWorkKind,
   onSameLane,
   worksLine,
@@ -25,6 +24,14 @@ import {
   type LineKey,
   type Worker,
 } from '@/domain/assembly';
+import {
+  DEFAULT_CREW_RULES,
+  crewSizeFor,
+  lineRule,
+  skippedPrefix,
+  type CrewRules,
+} from '@/domain/crewRules';
+import { jobNumOf } from '@/domain/routing';
 import { durationDays, remainingHours, remainingQty } from './duration';
 import { addDays, addWorkingDays, startOfDay } from './dates';
 import { planVariableCrew, type CrewDayPlan } from './crewSchedule';
@@ -32,29 +39,64 @@ import type { AssemblyGanttView, OrderRow } from './board';
 import { toDayKey } from '@/lib/time';
 import { isOnLeave } from './attendance';
 
+/** Why the rules keep Crew orders off an order nobody is on. */
+export type CrewSkipReason = 'prefix' | 'unreleased' | 'line' | 'horizon';
+
 export interface CrewSuggestion {
   /** Job id → worker ids, for the orders that had nobody on them. */
   allocations: Record<string, string[]>;
   /** How many orders were given a crew. */
   staffed: number;
-  /** Orders left alone because their current line roster has nobody available. */
+  /** Orders the rules allow that were left alone: nobody on their line's roster was free. */
   unstaffed: number;
+  /** Those orders' ids, so the supervisor can be told which. */
+  left: string[];
+  /** Orders the rules kept the button off, by reason. */
+  skipped: Record<CrewSkipReason, string[]>;
+}
+
+let activeRules: CrewRules = DEFAULT_CREW_RULES;
+
+/**
+ * The rules the board is drawn by, set by the plan store whenever the plan's
+ * change — like `setFactoryCalendar`. The box an order with nobody on it is
+ * drawn as is the stretch it needs at the crew Crew orders would give it, so
+ * it has to be that crew and not the one the code started with.
+ */
+export function setActiveCrewRules(rules: CrewRules): void {
+  activeRules = rules;
 }
 
 /**
- * How many people to put on one order.
+ * How many people to put on one order: the line's fixed team if the rules
+ * give it one, else the band its remaining hours fall in.
  *
  * These are preferences, not minimum staffing gates. A smaller available
  * line roster still produces a crew; manual allocations remain untouched.
  */
-export function preferredCrewSize(row: OrderRow): number {
-  const hours = remainingHours(row.job);
-  if (hours <= 0) return 0;
-  if (row.line.key === 'TABLE' || hours > 50) return 3;
-  return hours > PRODUCTIVE_HOURS_PER_PERSON ? 2 : 1;
+export function preferredCrewSize(row: OrderRow, rules: CrewRules = activeRules): number {
+  return crewSizeFor(rules, row.line.key, remainingHours(row.job));
 }
 
-/** Skills rank within the supervisor's current line allocation. */
+/**
+ * Why the rules keep the button off this order, or null if they do not.
+ * Checked in this order, so an order is counted once, under the first.
+ */
+export function crewSkipReason(row: OrderRow, rules: CrewRules, today: Date): CrewSkipReason | null {
+  if (skippedPrefix(rules, jobNumOf(String(row.job.id)))) return 'prefix';
+  if (rules.releasedOnly && row.job.released === false) return 'unreleased';
+  if (!lineRule(rules, row.line.key).auto) return 'line';
+  if (rules.horizonDays != null) {
+    const due = row.job.dueDate;
+    if (!due) return 'horizon';
+    const days = Math.round((startOfDay(due).getTime() - startOfDay(today).getTime()) / 86_400_000);
+    if (days > rules.horizonDays) return 'horizon';
+  }
+  return null;
+}
+
+/** Skills rank within the supervisor's current line allocation. With
+ *  `requireTrade` a person without the bench's trade is not ranked at all. */
 function skillRank(worker: Worker, row: OrderRow): number {
   if (!worksLine(worker, row.line.key)) return 2;
   return canWorkKind(worker, row.kind) ? 0 : 1;
@@ -308,12 +350,16 @@ export const CREW_DUE_TIERS_DAYS = [14, 28, 56] as const;
  * weeks (late included), 1 within four, 2 within eight, 3 beyond, 4 with no
  * Due Date — nothing says that one is urgent.
  */
-export function dueTier(row: OrderRow, today: Date): number {
+export function dueTier(
+  row: OrderRow,
+  today: Date,
+  tiers: readonly number[] = CREW_DUE_TIERS_DAYS,
+): number {
   const due = row.job.dueDate;
-  if (!due) return CREW_DUE_TIERS_DAYS.length + 1;
+  if (!due) return tiers.length + 1;
   const days = Math.round((startOfDay(due).getTime() - startOfDay(today).getTime()) / 86_400_000);
-  const tier = CREW_DUE_TIERS_DAYS.findIndex((limit) => days <= limit);
-  return tier < 0 ? CREW_DUE_TIERS_DAYS.length : tier;
+  const tier = tiers.findIndex((limit) => days <= limit);
+  return tier < 0 ? tiers.length : tier;
 }
 
 /**
@@ -321,32 +367,50 @@ export function dueTier(row: OrderRow, today: Date): number {
  * the least slack to its Due Date — the last day it can start and still make
  * it — then the earlier Due Date.
  */
-const byUrgency = (today: Date) => (a: OrderRow, b: OrderRow): number => {
+const byUrgency = (today: Date, tiers: readonly number[]) => (a: OrderRow, b: OrderRow): number => {
   const slack = (row: OrderRow) => (row.mustStartBy ?? row.job.dueDate)?.getTime() ?? Number.MAX_SAFE_INTEGER;
   const due = (row: OrderRow) => row.job.dueDate?.getTime() ?? Number.MAX_SAFE_INTEGER;
-  return dueTier(a, today) - dueTier(b, today) ||
+  return dueTier(a, today, tiers) - dueTier(b, today, tiers) ||
     slack(a) - slack(b) || due(a) - due(b) || a.plannedStart.getTime() - b.plannedStart.getTime();
 };
 
 /** Orders on a schedulable line with nobody on them and work left to do. */
-const waitingRows = (board: AssemblyGanttView): OrderRow[] =>
+export const unstaffedRows = (board: AssemblyGanttView): OrderRow[] =>
   board.groups
-    .filter((g) => g.line.schedulable)
+    .filter((g) => g.line.schedulable && g.line.key !== 'FACTORY_GENERAL')
     .flatMap((g) => g.rows)
     .filter(
       (r) =>
         r.workers.length === 0 && !r.completedToday && remainingQty(r.job) > 0 && remainingHours(r.job) > 0,
     );
 
-/** How many orders are waiting for a crew — the number on the button. */
-export const countUnstaffed = (board: AssemblyGanttView): number =>
-  waitingRows(board).length;
+/** The unstaffed orders the rules let the button crew. */
+const waitingRows = (board: AssemblyGanttView, rules: CrewRules): OrderRow[] =>
+  unstaffedRows(board).filter((r) => !crewSkipReason(r, rules, board.today));
 
-/**
- * How many waves to run. Each one re-derives the board, so this bounds the
- * work; whatever is left over is simply offered again next time.
- */
-const MAX_WAVES = 40;
+/** How many orders are waiting for a crew — the number on the button. */
+export const countUnstaffed = (board: AssemblyGanttView, rules: CrewRules = activeRules): number =>
+  waitingRows(board, rules).length;
+
+/** The unstaffed orders the rules keep the button off, by reason. */
+export function skippedByRules(board: AssemblyGanttView, rules: CrewRules): Record<CrewSkipReason, string[]> {
+  const out: Record<CrewSkipReason, string[]> = { prefix: [], unreleased: [], line: [], horizon: [] };
+  for (const row of unstaffedRows(board)) {
+    const reason = crewSkipReason(row, rules, board.today);
+    if (reason) out[reason].push(String(row.job.id));
+  }
+  return out;
+}
+
+/** Days from `from` up to (not including) `to` this person is marked away. */
+function leaveDaysIn(board: AssemblyGanttView, worker: Worker, from: Date, to: Date): number {
+  const todayKey = toDayKey(board.today);
+  let n = 0;
+  for (let day = startOfDay(from); day < to; day = addDays(day, 1)) {
+    if (isOnLeave(worker, toDayKey(day), board.workerOnLeave, todayKey)) n++;
+  }
+  return n;
+}
 
 /**
  * Staff the earliest waiting order on each line, and say who went where.
@@ -360,6 +424,7 @@ function staffOneWave(
   board: AssemblyGanttView,
   into: Record<string, string[]>,
   workerLines: ReadonlyMap<string, LineKey>,
+  rules: CrewRules,
 ): number {
   // Who is committed when, from the board as it stands.
   const booked = new Map<string, Span[]>();
@@ -406,7 +471,8 @@ function staffOneWave(
           !r.completedToday &&
           remainingQty(r.job) > 0 &&
           remainingHours(r.job) > 0 &&
-          !into[String(r.job.id)],
+          !into[String(r.job.id)] &&
+          !crewSkipReason(r, rules, board.today),
       )
       // Forward, by urgency: every waiting order asks to start as soon as it
       // can (`plannedStart` — today, or when its parts are ready), so what
@@ -414,16 +480,18 @@ function staffOneWave(
       // — two weeks, then four, then eight — and within that how little slack
       // it has. This used to sort on `plannedStart` alone, which is the same
       // day for nearly every order nobody is on, and left it to row order.
-      .sort(byUrgency(board.today));
+      .sort(byUrgency(board.today, rules.dueTiersDays));
 
     // The earliest order the line can actually crew. One that nobody is free
     // for is skipped rather than stalling the line behind it — the schedule
     // will have moved it out by the next round, and if it never becomes
     // staffable it is left for the supervisor, which is the honest answer.
     for (const next of waiting) {
-      const pool = onLine;
+      // With `requireTrade`, only people who have the bench's trade: a cutter
+      // is a whole ASSY hand, but not a gluer.
+      const pool = rules.requireTrade ? onLine.filter((w) => canWorkKind(w, next.kind)) : onLine;
       if (pool.length === 0) continue;
-      const size = Math.min(preferredCrewSize(next), pool.length, MAX_WORKERS_PER_ORDER);
+      const size = Math.min(preferredCrewSize(next, rules), pool.length, MAX_WORKERS_PER_ORDER);
 
       // Build the team one at a time. Each person added shortens the bar, so
       // the window the next has to be free across only ever narrows.
@@ -439,8 +507,13 @@ function staffOneWave(
         // merely anyone who is free at some point. Then someone with no
         // overlap at all, the lighter queue, and roster order to break ties.
         const freeDay = (w: Worker) => dayOf(freeFrom(booked.get(String(w.id)), want.from));
+        // Days marked away inside the stretch the order would run: somebody
+        // booked off on Thursday is not the person to start it on Wednesday.
+        const away = new Map(rest.map((w) => [String(w.id), leaveDaysIn(board, w, want.from, want.to)]));
+        const awayOf = (w: Worker) => away.get(String(w.id)) ?? 0;
         const pick = [...rest].sort((a, b) =>
           skillRank(a, next) - skillRank(b, next) ||
+          awayOf(a) - awayOf(b) ||
           freeDay(a).localeCompare(freeDay(b)) ||
           Number(clashesWith(booked.get(String(a.id)), want)) -
             Number(clashesWith(booked.get(String(b.id)), want)) ||
@@ -486,12 +559,17 @@ export function suggestCrew(
       worker.skills[0] ? [[String(worker.id), worker.skills[0]]] : [],
     ),
   ),
+  rules: CrewRules = activeRules,
 ): CrewSuggestion {
   const allocations: Record<string, string[]> = {};
   let view = board;
+  // Every wave crews at least one order or ends the run, so this many waves
+  // reach every order the rules allow. It used to stop at forty: a line with
+  // more waiting than that was left part-crewed, and nothing said so.
+  const waves = waitingRows(board, rules).length + 1;
 
-  for (let wave = 0; wave < MAX_WAVES; wave++) {
-    if (staffOneWave(view, allocations, workerLines) === 0) break;
+  for (let wave = 0; wave < waves; wave++) {
+    if (staffOneWave(view, allocations, workerLines, rules) === 0) break;
     if (!recompute) break;
     view = recompute(allocations);
   }
@@ -501,7 +579,7 @@ export function suggestCrew(
   // suggestion in any pair until no person occupies two orders on one day.
   if (recompute) {
     view = recompute(allocations);
-    for (let guard = 0; guard < MAX_WAVES * 3; guard++) {
+    for (let guard = 0; guard < waves * 3; guard++) {
       const jobIds = Object.keys(allocations).reverse();
       const bad = jobIds.find((jobId) => {
         const row = view.rowsByJob.get(jobId);
@@ -516,9 +594,14 @@ export function suggestCrew(
   }
 
   const staffed = Object.keys(allocations).length;
+  const left = waitingRows(board, rules)
+    .map((row) => String(row.job.id))
+    .filter((id) => !allocations[id]);
   return {
     allocations,
     staffed,
-    unstaffed: countUnstaffed(board) - staffed,
+    unstaffed: left.length,
+    left,
+    skipped: skippedByRules(board, rules),
   };
 }

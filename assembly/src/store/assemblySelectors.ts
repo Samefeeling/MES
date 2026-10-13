@@ -38,6 +38,9 @@ function useGanttInputs(): GanttInputs | null {
   // Not read here: the engine's calendar already carries them (see
   // `calendarStore`). A dependency, so the board is worked out again round them.
   const closedDays = useCalendarStore((s) => s.rows);
+  // Likewise the crew rules (see `setActiveCrewRules`): an order with nobody
+  // on it is drawn for as long as the crew they would give it needs.
+  const crewRules = usePlanStore((s) => s.crewRules);
 
   return useMemo(
     () =>
@@ -78,6 +81,7 @@ function useGanttInputs(): GanttInputs | null {
       virtualLines,
       lineNames,
       closedDays,
+      crewRules,
     ],
   );
 }

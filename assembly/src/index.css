@@ -2801,6 +2801,23 @@ body.col-resizing {
 .review-panel ul { margin: 8px 0 0; padding: 0; list-style: none; }
 .review-panel li { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
 .review-panel li span { flex: 1; min-width: 0; }
+.review-panel li.is-skipped span { color: var(--muted); }
+.review-panel li span i { font-style: normal; color: var(--muted); }
+.review-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.review-report { color: var(--text); }
+/* The rules open inside the panel; it widens and stops scrolling in a box. */
+.metric-panel.review-panel:has(.crew-rules) { width: min(520px, calc(100vw - 32px)); max-height: 70vh; }
+
+/* Crew orders rules — see CrewRulesEditor. */
+.crew-rules { display: grid; gap: 6px; font-size: 12px; }
+.crew-rules-head { margin: 12px 0 4px; font-size: 12.5px; }
+.crew-rules-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.crew-rules input:not([type='checkbox']),
+.crew-rules select { font: inherit; padding: 1px 4px; }
+.crew-rules-table { width: 100%; border-collapse: collapse; margin-top: 2px; }
+.crew-rules-table th { text-align: left; font-weight: 700; padding: 3px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.crew-rules-table td { padding: 3px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.crew-rules-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; }
 
 /* Opening a line that is not one of the eight. Supervisor only. */
 .board-tools .add-line { border-style: dashed; }

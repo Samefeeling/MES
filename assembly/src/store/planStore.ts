@@ -13,6 +13,8 @@ import { bookedLabourHours } from '@/engine/assembly/shift';
 import { fromDayKey, toDayKey } from '@/lib/time';
 import { withLeave } from '@/engine/assembly/attendance';
 import { manualJob, type ManualOrder } from '@/domain/manualOrder';
+import { DEFAULT_CREW_RULES, readCrewRules, type CrewRules } from '@/domain/crewRules';
+import { setActiveCrewRules } from '@/engine/assembly/crew';
 import type { JobId } from '@/domain/ids';
 import type { Job, JobMaterialLink, WorkCenter } from '@/domain/types';
 import { expandRouting } from '@/engine/assembly/routing';
@@ -205,6 +207,13 @@ interface PlanState {
   crewPools: CrewPool[];
   setCrewPools: (pools: CrewPool[]) => void;
   /**
+   * What Crew orders works by: which orders it leaves alone, how big a team,
+   * who may be on it. In the plan, like the crews: every screen that presses
+   * the button has to crew the same way. See `domain/crewRules`.
+   */
+  crewRules: CrewRules;
+  setCrewRules: (rules: CrewRules) => void;
+  /**
    * Put one line where another currently is, the way a dragged list item lands:
    * dropped on a line below, it comes to rest under that line; dropped on one
    * above, it takes that line's place and pushes it down.
@@ -359,6 +368,8 @@ interface PlanState {
     lineNames?: Record<string, string>;
     lineOrder?: LineKey[];
     crewPools?: CrewPool[];
+    /** Read through `readCrewRules`, so a stored plan cannot hand the engine nonsense. */
+    crewRules?: unknown;
     orderCrewAssignments?: Record<string, CrewAssignment[]>;
     orderStarts?: Record<string, string>;
     orderActualStarts?: Record<string, ActualStartRecord>;
@@ -505,6 +516,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   lineNames: {},
   lineOrder: [],
   crewPools: DEFAULT_CREW_POOLS,
+  crewRules: DEFAULT_CREW_RULES,
   orderCrewAssignments: {},
   orderStarts: {},
   orderActualStarts: {},
@@ -1037,6 +1049,10 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     });
   },
 
+  setCrewRules(rules) {
+    set({ crewRules: readCrewRules(rules) });
+  },
+
   removeVirtualLine(key) {
     set((state) => {
       if (!state.virtualLines.some((line) => line.key === key)) return state;
@@ -1088,6 +1104,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         // reads as the built-in order rather than as an empty board.
         lineOrder: plan.lineOrder ?? state.lineOrder,
         crewPools: plan.crewPools ?? state.crewPools,
+        crewRules: plan.crewRules !== undefined ? readCrewRules(plan.crewRules) : state.crewRules,
         orderCrewAssignments,
         orderStarts: plan.orderStarts ?? state.orderStarts,
         orderActualStarts: plan.orderActualStarts ?? state.orderActualStarts,
@@ -1123,3 +1140,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   },
 }));
 
+// The engine draws an unstaffed order's box at the crew the rules give it.
+usePlanStore.subscribe((state, previous) => {
+  if (state.crewRules !== previous.crewRules) setActiveCrewRules(state.crewRules);
+});

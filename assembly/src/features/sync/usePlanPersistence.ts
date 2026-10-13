@@ -67,6 +67,7 @@ const planningNow = (): PlanningPart => {
       lineNames: p.lineNames,
       lineOrder: p.lineOrder,
       crewPools: p.crewPools,
+      crewRules: p.crewRules,
       orderCrewAssignments: p.orderCrewAssignments,
       orderStarts: p.orderStarts,
       orderOvertime: p.orderOvertime,
@@ -116,6 +117,14 @@ export type StoredState = 'reading' | 'loaded' | 'failed';
 
 export interface PlanPersistence {
   stored: StoredState;
+  /**
+   * What `failed` failed at. A plan that could not be read and a plan that
+   * could not be written leave the board in the same state — nothing more is
+   * written until it is read again — but they are different things to tell
+   * the person looking at it: one board is showing the export alone, the
+   * other is showing everything and simply could not store it.
+   */
+  failure: 'read' | 'write' | null;
   /** Why the last read or write failed, for the banner. */
   error: string | null;
   /** Kept apart from `error`: the plan saving is not the history filing. */
@@ -149,6 +158,7 @@ export function usePlanPersistence(): PlanPersistence {
   const lineNames = usePlanStore((s) => s.lineNames);
   const lineOrder = usePlanStore((s) => s.lineOrder);
   const crewPools = usePlanStore((s) => s.crewPools);
+  const crewRules = usePlanStore((s) => s.crewRules);
   const orderCrewAssignments = usePlanStore((s) => s.orderCrewAssignments);
   const orderStarts = usePlanStore((s) => s.orderStarts);
   const orderOvertime = usePlanStore((s) => s.orderOvertime);
@@ -175,6 +185,7 @@ export function usePlanPersistence(): PlanPersistence {
       lineNames,
       lineOrder,
       crewPools,
+      crewRules,
       orderCrewAssignments,
       orderStarts,
       orderOvertime,
@@ -201,6 +212,7 @@ export function usePlanPersistence(): PlanPersistence {
   const published = useRef<PlanningPart | null>(null);
 
   const [stored, setStored] = useState<StoredState>('reading');
+  const [failure, setFailure] = useState<'read' | 'write' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -305,6 +317,7 @@ export function usePlanPersistence(): PlanPersistence {
         plan.reconcile(dataset.workCenters, dataset.jobs, undefined, dataset.jobLinks);
         markClean();
         setStored('loaded');
+        setFailure(null);
         setError(null);
       })
       .catch((e) => {
@@ -312,6 +325,7 @@ export function usePlanPersistence(): PlanPersistence {
         // repository is unreachable — but say so, and write nothing.
         plan.reconcile(dataset.workCenters, dataset.jobs, undefined, dataset.jobLinks);
         setStored('failed');
+        setFailure('read');
         setError(reason(e));
       });
   }, [status, dataset, attempt, adopt, markClean]);
@@ -362,6 +376,7 @@ export function usePlanPersistence(): PlanPersistence {
       } catch (e) {
         setError(reason(e));
         setStored('failed');
+        setFailure('write');
       }
     };
 
@@ -423,6 +438,7 @@ export function usePlanPersistence(): PlanPersistence {
   const retry = useCallback(() => {
     bootstrapped.current = false;
     setStored('reading');
+    setFailure(null);
     setError(null);
     setAttempt((n) => n + 1);
   }, []);
@@ -430,5 +446,5 @@ export function usePlanPersistence(): PlanPersistence {
   const dirty =
     stored === 'loaded' && clean !== null && planningFingerprint(planning) !== clean;
 
-  return { stored, error, archiveError, dirty, saving, settled, save, pull, retry };
+  return { stored, failure, error, archiveError, dirty, saving, settled, save, pull, retry };
 }

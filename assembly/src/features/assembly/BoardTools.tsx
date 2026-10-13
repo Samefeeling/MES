@@ -56,6 +56,7 @@ import { ManualOrderButton } from './ManualOrders';
 import { Metric, MetricNote } from './Metric';
 import { FactoryCalendar } from './FactoryCalendar';
 import { ReviewOrders } from './SuggestCrew';
+import { CrewRulesEditor } from './CrewRulesEditor';
 import { formatShortDay, fromDayKey, toDayKey } from '@/lib/time';
 
 export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
@@ -537,6 +538,12 @@ function CrewPoolsEditor({ board }: { board: AssemblyGanttView }) {
       ) : (
         <MetricNote>Sign in as supervisor to change the crews.</MetricNote>
       )}
+      <h4 className="crew-rules-head">Crew orders rules</h4>
+      <MetricNote>
+        What the Crew orders button under Review orders goes by. Orders it leaves alone are still
+        crewed by hand as before.
+      </MetricNote>
+      <CrewRulesEditor lines={lines.filter((line) => line.key !== 'FACTORY_GENERAL')} />
       <FactoryCalendar today={board.today} />
     </div>
   );

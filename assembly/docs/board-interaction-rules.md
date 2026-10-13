@@ -15,7 +15,12 @@ line leaves a **+ TBP** / **+ PMD** chip in the header, which is where it
 comes back from, and every line carries a **×** on its own row to fold it —
 sized to the Qty column and standing under that heading, so the board has one
 straight edge of them rather than a mark that lands wherever each line's name
-and totals happen to end.
+and totals happen to end. What is folded is kept on that screen across reloads
+(browser storage, `assembly.hiddenLines.v1`): a line folded with its × stays
+folded the next time the board opens there, and **Show all** clears it. It is
+per screen, not in the plan — folding a line on one supervisor's board does not
+take it off the floor display. A screen with nothing kept opens with TBP and PMD
+folded.
 
 **Whatever column widths the reader last dragged.** All seven frozen columns
 — Order, Qty, Hours, the three dates and Team — are dragged by

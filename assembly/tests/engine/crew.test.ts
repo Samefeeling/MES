@@ -480,8 +480,9 @@ describe('crew size and selection policy', () => {
 
   it('leaves an order without a line roster waiting and ignores zero work', () => {
     const waiting = fixture('TABLE', 20, [person('OtherLine')]);
-    expect(suggestCrew(waiting)).toEqual({ allocations: {}, staffed: 0, unstaffed: 1 });
+    const id = String(waiting.groups[0].rows[0].job.id);
+    expect(suggestCrew(waiting)).toMatchObject({ allocations: {}, staffed: 0, unstaffed: 1, left: [id] });
     const empty = fixture('ASSY', 0, [person('Available')]);
-    expect(suggestCrew(empty)).toEqual({ allocations: {}, staffed: 0, unstaffed: 0 });
+    expect(suggestCrew(empty)).toMatchObject({ allocations: {}, staffed: 0, unstaffed: 0, left: [] });
   });
 });

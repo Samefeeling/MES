@@ -156,6 +156,38 @@ export type ColVis = Record<HideableCol, boolean>;
 export const LINES_HIDDEN_BY_DEFAULT: readonly LineKey[] = ['TBP', 'PMD'];
 
 /**
+ * Lines folded away on this screen, kept across reloads.
+ *
+ * A line folded with its × came back on every reload, so a screen that only
+ * ever looks at Assembly and Table had to be folded down again each morning.
+ * It is kept per screen, not in the plan: what one supervisor folds away is
+ * not taken off the floor display or anybody else's board. A screen with
+ * nothing stored opens with the defaults above.
+ */
+export const HIDDEN_LINES_KEY = 'assembly.hiddenLines.v1';
+
+export function storedHiddenLines(): LineKey[] {
+  try {
+    const raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(HIDDEN_LINES_KEY);
+    if (raw != null) {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.filter((key): key is LineKey => typeof key === 'string');
+    }
+  } catch {
+    /* blocked or unreadable storage: the defaults */
+  }
+  return [...LINES_HIDDEN_BY_DEFAULT];
+}
+
+function keepHiddenLines(lines: readonly LineKey[]): void {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(HIDDEN_LINES_KEY, JSON.stringify(lines));
+  } catch {
+    /* a private window or full storage: folded for this visit only */
+  }
+}
+
+/**
  * How far ahead "due soon" reaches, in working days. Two, because that is the
  * window production asked for: what has to go out before they next sit down
  * with this board.
@@ -382,7 +414,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   colWidths: { ...DEFAULT_COLUMN_WIDTHS },
   dateCols: { start: true, due: true, expect: true },
   cols: { qty: true, hours: true, team: true },
-  hiddenLines: [...LINES_HIDDEN_BY_DEFAULT],
+  hiddenLines: storedHiddenLines(),
   orderDay: null,
   dueSoon: false,
   releasedOnly: true,
@@ -514,3 +546,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   clearClash: () => set({ clashRequest: null }),
   setLastRefresh: (lastRefresh) => set({ lastRefresh }),
 }));
+
+useUiStore.subscribe((state, previous) => {
+  if (state.hiddenLines !== previous.hiddenLines) keepHiddenLines(state.hiddenLines);
+});

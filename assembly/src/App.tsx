@@ -160,7 +160,17 @@ export default function App() {
         two has happened, because the board looks identical either way, and
         make it plain that nothing is being written until it is read.
       */}
-      {plan.stored === 'failed' ? (
+      {plan.stored === 'failed' && plan.failure === 'write' ? (
+        <div className="banner">
+          Plan not saved ({plan.error}). Nothing on SharePoint was written
+          over — it still holds the plan as last saved, without what was
+          changed on this screen since. This screen saves nothing more until it
+          reads the plan again.{' '}
+          <button className="banner-action" onClick={plan.retry}>
+            Reload saved plan
+          </button>
+        </div>
+      ) : plan.stored === 'failed' ? (
         <div className="banner">
           Saved plan not loaded ({plan.error}). The board is showing the export
           on its own — crew, dragged starts and shift entries are still in the

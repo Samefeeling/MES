@@ -1,10 +1,12 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LINES } from '@/domain/assembly';
 import {
   COLUMN_KEYS,
   COLUMN_LIMITS,
   DEFAULT_COLUMN_WIDTHS,
+  HIDDEN_LINES_KEY,
   LINES_HIDDEN_BY_DEFAULT,
+  storedHiddenLines,
   useUiStore,
 } from '@/store/uiStore';
 
@@ -267,6 +269,49 @@ describe('folded-away lines', () => {
   it('folds a line the board opened with', () => {
     state().toggleLine('UPL_GLUING');
     expect(state().hiddenLines).toContain('UPL_GLUING');
+  });
+});
+
+/*
+ * A line folded with its × used to come back on every reload. The screen
+ * keeps what it folded; a screen with nothing kept opens with the defaults.
+ */
+describe('folded lines kept across reloads', () => {
+  const state = () => useUiStore.getState();
+  let kept: Record<string, string>;
+  beforeEach(() => {
+    kept = {};
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => kept[key] ?? null,
+      setItem: (key: string, value: string) => { kept[key] = value; },
+    });
+    useUiStore.setState({ hiddenLines: [...LINES_HIDDEN_BY_DEFAULT] });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('stores every fold and unfold, and reads it back on the next open', () => {
+    state().toggleLine('UPL_GLUING');
+    expect(JSON.parse(kept[HIDDEN_LINES_KEY])).toEqual(['TBP', 'PMD', 'UPL_GLUING']);
+    state().toggleLine('PMD');
+    expect(storedHiddenLines()).toEqual(['TBP', 'UPL_GLUING']);
+    state().showEverything();
+    expect(storedHiddenLines()).toEqual([]);
+  });
+
+  it('opens with the defaults when nothing is kept or what is kept is unreadable', () => {
+    expect(storedHiddenLines()).toEqual(['TBP', 'PMD']);
+    kept[HIDDEN_LINES_KEY] = '{not json';
+    expect(storedHiddenLines()).toEqual(['TBP', 'PMD']);
+  });
+
+  it('still folds when the screen cannot store anything', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => { throw new Error('blocked'); },
+      setItem: () => { throw new Error('blocked'); },
+    });
+    expect(storedHiddenLines()).toEqual(['TBP', 'PMD']);
+    state().toggleLine('TABLE');
+    expect(state().hiddenLines).toContain('TABLE');
   });
 });
 

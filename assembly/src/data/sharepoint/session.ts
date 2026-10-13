@@ -88,10 +88,29 @@ export async function sessionRowsWhere(
   column: string,
   value: string,
 ): Promise<ListItem[]> {
+  return rowsFiltered(cfg, list, column, (name) => `${name} eq '${value.replace(/'/g, "''")}'`);
+}
+
+/** The rows whose `column` starts with `prefix`, newest first, up to fifty. */
+export async function sessionRowsStartingWith(
+  cfg: SharePointConfig,
+  list: string,
+  column: string,
+  prefix: string,
+): Promise<ListItem[]> {
+  return rowsFiltered(cfg, list, column, (name) => `startswith(${name},'${prefix.replace(/'/g, "''")}')`);
+}
+
+async function rowsFiltered(
+  cfg: SharePointConfig,
+  list: string,
+  column: string,
+  where: (internalName: string) => string,
+): Promise<ListItem[]> {
   const schema = await listFields(cfg, list);
   const field = resolveField(schema, column);
   if (!field) throw new SharePointHttpError(400, `Missing SharePoint column: ${column}.`);
-  const filter = `${field.InternalName} eq '${value.replace(/'/g, "''")}'`;
+  const filter = where(field.InternalName);
   /*
    * Newest first, because the page is capped.
    *
@@ -160,4 +179,13 @@ export async function sessionUpdate(cfg: SharePointConfig, list: string, id: str
   }
   if (!etag) throw new SharePointHttpError(409, 'SharePoint did not return a record version.');
   await sessionRequest(cfg, url, { method: 'POST', headers: { 'X-HTTP-Method': 'MERGE', 'IF-MATCH': etag }, body: JSON.stringify(mapped) });
+}
+
+/** Remove one row, whatever version it is at. */
+export async function sessionDelete(cfg: SharePointConfig, list: string, id: string): Promise<void> {
+  if (!/^\d+$/.test(id)) throw new SharePointHttpError(400, 'Invalid SharePoint item ID.');
+  await sessionRequest(cfg, `${restList(cfg, list)}/items(${id})`, {
+    method: 'POST',
+    headers: { 'X-HTTP-Method': 'DELETE', 'IF-MATCH': '*' },
+  });
 }

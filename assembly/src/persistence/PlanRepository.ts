@@ -54,6 +54,8 @@ export interface PersistedPlan {
     lineOrder?: LineKey[];
     /** Crews and the lines they share — the board's daily capacity. */
     crewPools?: import('@/domain/assembly').CrewPool[];
+    /** What Crew orders works by. Read through `readCrewRules`. */
+    crewRules?: import('@/domain/crewRules').CrewRules;
     /** Date-bounded crew plan; supersedes static `orderWorkers`. */
     orderCrewAssignments?: Record<string, CrewAssignment[]>;
     orderStarts?: Record<string, string>;
