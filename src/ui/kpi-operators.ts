@@ -5,20 +5,30 @@
 // same header bar, row height and colour verdicts as the machine table.
 
 import type { KpiThresholds } from '../core/kpi-thresholds';
-import type { Kpi } from '../core/metrics';
+import { aggregate, type Kpi } from '../core/metrics';
 import {
   STOP_KINDS,
   STOP_LIMIT_HRS,
+  operatorPerformance,
   outputByTime,
   type OperatorPerf,
   type OperatorStop,
   type StopKind,
 } from '../core/operator-perf';
 import { yieldPctOf } from '../core/impw';
+import type { ProductionRecord } from '../types';
 import { renderStackedBarsH, renderStackedLineChart, type BarRow, type StackBucket } from './charts';
 import { escapeHtml } from './modal';
 
 export interface OperatorView {
+  /** Every signed-off record in the window, before the machine filter. */
+  records: ProductionRecord[];
+  ctByJob?: ReadonlyMap<string, number>;
+  /** Machines whose stoppages are judged against the limits. */
+  stopsOn: (machineCode: string) => boolean;
+  /** Machines the section is narrowed to; empty means every machine. */
+  machines: Set<string>;
+  /** Derived from `records` and `machines` by applyMachineFilter. */
   perf: OperatorPerf[];
   /** Weekly bars instead of daily — the range runs past a month. */
   weekly: boolean;
@@ -30,7 +40,7 @@ export interface OperatorView {
   pick: string;
   /** Operators whose stoppage list is open under their row. */
   open: Set<string>;
-  /** Everything in the slice, for the TOTAL rows. */
+  /** Everything in the slice, for the TOTAL rows. Derived like `perf`. */
   total: Kpi | null;
   /** Row to bring into view after the next render (a bar was clicked). */
   scrollTo?: string;
@@ -100,6 +110,37 @@ export const pickedOperator = (v: OperatorView): OperatorPerf | undefined => {
   );
 };
 
+/** The machines with signed-off work in the window, in the page's order. */
+const machinesIn = (v: OperatorView): string[] =>
+  [...new Set(v.records.map((r) => r.machineCode))].sort((a, b) => pressRank(v, a) - pressRank(v, b) || a.localeCompare(b));
+
+/**
+ * The machine pick after a chip is pressed. From All, a machine narrows
+ * the section to it; after that each press adds or takes one away. '' is
+ * All, and so is every machine picked or the last one taken away.
+ */
+export function nextMachinePick(picked: ReadonlySet<string>, mc: string, present: readonly string[]): Set<string> {
+  if (!mc) return new Set();
+  const next = new Set(picked);
+  if (next.has(mc)) next.delete(mc);
+  else next.add(mc);
+  return present.every((m) => next.has(m)) ? new Set() : next;
+}
+
+/**
+ * Operators and TOTAL over the picked machines. Every stoppage and every
+ * operator's order belongs to one machine, so narrowing the records gives
+ * the same figures as the whole floor's, restricted to those machines. A
+ * machine with no signed-off work in the window drops out of the pick.
+ */
+export function applyMachineFilter(v: OperatorView): void {
+  const present = new Set(v.records.map((r) => r.machineCode));
+  for (const mc of v.machines) if (!present.has(mc)) v.machines.delete(mc);
+  const recs = v.machines.size ? v.records.filter((r) => v.machines.has(r.machineCode)) : v.records;
+  v.perf = operatorPerformance(recs, v.ctByJob, v.stopsOn);
+  v.total = recs.length ? aggregate(recs, v.ctByJob) : null;
+}
+
 const byOutput = (a: OperatorPerf, b: OperatorPerf): number =>
   !a.operator ? 1 : !b.operator ? -1 : b.kpi.output - a.kpi.output;
 const byStoppages = (a: OperatorPerf, b: OperatorPerf): number =>
@@ -118,7 +159,7 @@ function outputChart(v: OperatorView, p: OperatorPerf | undefined): string {
     )
     .join('');
   const head = `<div class="kpi-chart-head">
-      <h4>Operator output by press (stacked) vs Yield — by ${v.weekly ? 'week' : 'day'} 🔒</h4>
+      <h4>Operator output by machine (stacked) vs Yield — by ${v.weekly ? 'week' : 'day'} 🔒</h4>
       <label class="kpi-ops-pick">Operator <select data-op-select>${options}</select></label>
     </div>`;
   if (!p) return `<div class="kpi-chart">${head}</div>`;
@@ -173,7 +214,7 @@ function outputChart(v: OperatorView, p: OperatorPerf | undefined): string {
   return `<div class="kpi-chart">
     ${head}
     ${body}
-    <div class="kpi-chart-note">Good pieces on the orders ${escapeHtml(nameOf(p.operator))} is named on, by press${
+    <div class="kpi-chart-note">Good pieces on the orders ${escapeHtml(nameOf(p.operator))} is named on, by machine${
       floor > 0 ? `; Yield axis from ${floor}%` : ''
     }. Pick an operator here or in the table below.</div>
   </div>`;
@@ -248,7 +289,7 @@ function outputTable(v: OperatorView, pick: OperatorPerf | undefined): string {
     ? `<tfoot><tr class="kpi-ops-total">
         <th>TOTAL</th>
         <td class="num">${v.perf.reduce((n, p) => n + p.kpi.shifts, 0)}</td>
-        <td class="muted">${allPresses.length} press${allPresses.length === 1 ? '' : 'es'}</td>
+        <td class="muted">${allPresses.length} machine${allPresses.length === 1 ? '' : 's'}</td>
         <td class="num">${hrs(tot.runHrs)}</td>
         <td class="num">${tot.output || '—'}</td>
         <td class="num ${tot.scrap ? 'red' : ''}">${tot.scrap || '—'}</td>
@@ -264,7 +305,7 @@ function outputTable(v: OperatorView, pick: OperatorPerf | undefined): string {
         <thead><tr>
           <th>Operator</th>
           <th class="num" title="Shifts they are named on">Shifts</th>
-          <th>Presses</th>
+          <th>Machines</th>
           <th class="num">Run h</th>
           <th class="num">Output</th>
           <th class="num">Reject</th>
@@ -298,7 +339,7 @@ function stopDetail(p: OperatorPerf): string {
   };
   return `<tr class="kpi-ops-detail"><td colspan="11">
     <table class="kpi-ops-stops">
-      <thead><tr><th>Started</th><th>Press</th><th>Order</th><th>Stoppage</th><th class="num">Hours</th><th class="num">Limit h</th><th class="num">Over h</th></tr></thead>
+      <thead><tr><th>Started</th><th>Machine</th><th>Order</th><th>Stoppage</th><th class="num">Hours</th><th class="num">Limit h</th><th class="num">Over h</th></tr></thead>
       <tbody>${flagged.map(row).join('')}</tbody>
     </table>
   </td></tr>`;
@@ -383,23 +424,45 @@ function stopsTable(v: OperatorView): string {
       </table>
     </div>
     <div class="kpi-chart-note">
-      A die / colour / insert change is one per order however many half-hours the sheet logged it in; a startup runs until the press runs; a breakdown is each unbroken run of B — the same events as the duration chart.
+      A die / colour / insert change is one per order however many half-hours the sheet logged it in; a startup runs until the machine runs; a breakdown is each unbroken run of B — the same events as the duration chart.
       One that crosses a shift change goes to the operator who logged most of it, while the hours columns count each half-hour under whoever logged it.
-      The hot-stamp press keys its setups its own way and is left out of the limits.
+      The hot-stamp machine keys its setups its own way and is left out of the limits.
     </div>
+  </div>`;
+}
+
+/** One chip per machine, coloured as on the output chart, plus All. */
+function machineFilter(v: OperatorView, present: string[]): string {
+  if (present.length < 2) return '';
+  const all = v.machines.size === 0;
+  const chip = (mc: string, on: boolean, title: string, swatch: string): string =>
+    `<button type="button" class="kpi-ops-chip${on ? ' is-on' : ''}" data-op-machine="${escapeHtml(mc)}" aria-pressed="${on}" title="${escapeHtml(title)}">${swatch}${escapeHtml(mc || 'All')}</button>`;
+  return `<div class="kpi-ops-filter${all ? '' : ' is-narrowed'}" role="group" aria-label="Machines">
+    <span class="kpi-ops-filter-label">Machine</span>
+    ${chip('', all, 'Every machine', '')}
+    ${present
+      .map((mc) => {
+        const on = v.machines.has(mc);
+        const title = all ? `Only ${mc}` : on ? `Leave out ${mc}` : `Add ${mc}`;
+        return chip(mc, on, title, `<i style="background:${pressColor(v, mc)}"></i>`);
+      })
+      .join('')}
   </div>`;
 }
 
 /** Both charts and both tables, or nothing when the range has no signed-off work. */
 export function renderOperatorSection(v: OperatorView): string {
-  if (!v.perf.length) return '';
+  if (!v.records.length) return '';
   const pick = pickedOperator(v);
   const named = v.perf.filter((p) => p.operator).length;
+  const present = machinesIn(v);
+  const scope = v.machines.size ? `${v.machines.size} of ${present.length} machines` : 'all machines';
   return `<section class="kpi-ops" aria-label="Operator performance">
     <div class="kpi-ops-head">
       <h3>Operator performance 🔒</h3>
-      <span>${named} operator${named === 1 ? '' : 's'} · signed-off shifts · supervisors only</span>
+      <span>${named} operator${named === 1 ? '' : 's'} · ${scope} · signed-off shifts · supervisors only</span>
     </div>
+    ${machineFilter(v, present)}
     <div class="kpi-charts kpi-ops-charts">
       ${outputChart(v, pick)}
       ${stoppageChart(v)}
@@ -423,6 +486,16 @@ export function wireOperatorSection(app: HTMLElement, v: OperatorView, rerender:
     onActivate(tr, () => {
       v.pick = tr.dataset.opPick ?? '';
       rerender();
+    }),
+  );
+  app.querySelectorAll<HTMLButtonElement>('.kpi-ops [data-op-machine]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const mc = b.dataset.opMachine ?? '';
+      v.machines = nextMachinePick(v.machines, mc, machinesIn(v));
+      applyMachineFilter(v);
+      rerender();
+      // The page is drawn afresh; keep the keyboard on the chip just pressed.
+      app.querySelector<HTMLElement>(`.kpi-ops [data-op-machine="${CSS.escape(mc)}"]`)?.focus({ preventScroll: true });
     }),
   );
   app.querySelector<HTMLSelectElement>('.kpi-ops [data-op-select]')?.addEventListener('change', (e) => {

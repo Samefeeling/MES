@@ -123,8 +123,7 @@ import {
 } from './mango-api';
 import { STATUS_MAP } from '../core/status';
 import { isSupervisor } from './supervisor-auth';
-import { renderOperatorSection, wireOperatorSection, type OperatorView } from './kpi-operators';
-import { operatorPerformance } from '../core/operator-perf';
+import { applyMachineFilter, renderOperatorSection, wireOperatorSection, type OperatorView } from './kpi-operators';
 import {
   mountTracePanel,
   renderJobTraceCards,
@@ -1421,10 +1420,14 @@ async function compute(now = new Date()): Promise<void> {
   S!.hstampCodes = new Set(S!.machines.filter(isHotStampMachine).map((m) => m.machineCode));
   // Per operator, signed-off work only like everything else here. The
   // hot-stamp press's setups are not judged against the injection limits.
-  S!.ops.perf = operatorPerformance(perMachineProd.flat(), ctByJob, (mc) => !S!.hstampCodes.has(mc));
+  // The supervisor's machine pick carries over to the new window.
+  const hstampCodes = S!.hstampCodes;
+  S!.ops.records = perMachineProd.flat();
+  S!.ops.ctByJob = ctByJob;
+  S!.ops.stopsOn = (mc) => !hstampCodes.has(mc);
   S!.ops.weekly = to.getTime() - from.getTime() > 31 * 86_400_000;
   S!.ops.machineOrder = S!.machines.filter((m) => !isHotStampMachine(m)).map((m) => m.machineCode);
-  S!.ops.total = perMachineProd.some((recs) => recs.length) ? aggregate(perMachineProd.flat(), ctByJob) : null;
+  applyMachineFilter(S!.ops);
   S!.hstampSetupEvents = collectSetupEvents(
     perMachineProd.filter((_, i) => S!.hstampCodes.has(S!.machines[i].machineCode)).flat(),
   );
@@ -3954,7 +3957,18 @@ export async function renderKpi(dal: PmdDataLayer, assemblyDal?: AssemblyDataLay
     dieByJob: new Map(),
     impwSlices: [],
     impwFindings: [],
-    ops: { perf: [], weekly: false, machineOrder: [], thresholds: DEFAULT_KPI_THRESHOLDS, pick: '', open: new Set(), total: null },
+    ops: {
+      records: [],
+      stopsOn: () => true,
+      machines: new Set(),
+      perf: [],
+      weekly: false,
+      machineOrder: [],
+      thresholds: DEFAULT_KPI_THRESHOLDS,
+      pick: '',
+      open: new Set(),
+      total: null,
+    },
     equalWeight: false,
     impwDecisions: loadImpwDecisions(),
     impwSite: loadImpwSite(),

@@ -875,6 +875,17 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-ops-head h3{margin:0;font-size:17px;font-weight:800;color:var(--theme-dark)}
 .kpi-ops-head span{font-size:12.5px;color:var(--mu)}
 .kpi-ops-charts{margin-top:0}
+/* Machine filter: one chip per machine in its chart colour. From All a
+   chip narrows the section to that machine; then chips add or take away. */
+.kpi-ops-filter{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:-6px}
+.kpi-ops-filter-label{font-size:12px;font-weight:700;color:var(--mu);margin-right:2px}
+.kpi-ops-chip{display:inline-flex;align-items:center;gap:5px;min-height:28px;padding:2px 11px;border:1px solid #cbd5e1;border-radius:999px;background:#fff;color:#334155;font:inherit;font-size:12px;font-weight:600;line-height:1;cursor:pointer}
+.kpi-ops-chip i{width:9px;height:9px;border-radius:2px;flex:none}
+.kpi-ops-chip:hover{background:#f1f5f9}
+.kpi-ops-chip.is-on{background:#e0f2fe;border-color:var(--theme-dark);color:var(--theme-dark);box-shadow:inset 0 0 0 1px var(--theme-dark);font-weight:700}
+.kpi-ops-chip:focus-visible{outline:2px solid var(--theme-dark);outline-offset:2px}
+.kpi-ops-filter.is-narrowed .kpi-ops-chip:not(.is-on){color:#64748b}
+.kpi-ops-filter.is-narrowed .kpi-ops-chip:not(.is-on) i{opacity:.4}
 .kpi-chart-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:0 0 6px}
 .kpi-chart-head h4{margin:0}
 .kpi-ops-pick{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--mu)}
