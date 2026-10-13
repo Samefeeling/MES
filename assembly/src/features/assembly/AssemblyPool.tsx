@@ -12,6 +12,7 @@
  * waiting on its parts is held with no date at all until it is placed.
  */
 
+import { useEffect, useRef } from 'react';
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core';
 import type { AssemblyGanttView } from '@/engine/assembly/board';
 import type { Job } from '@/domain/types';
@@ -21,6 +22,7 @@ import { useUiStore } from '@/store/uiStore';
 import { useIgnoredOrders } from '@/store/ignoredOrders';
 import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { DRAG_TYPE_BAR } from './OrderBar';
+import { jobNumOf } from '@/domain/routing';
 import { formatDay } from '@/lib/time';
 
 function PoolCard({
@@ -33,6 +35,14 @@ function PoolCard({
   onSelect: (id: string, at?: { x: number; y: number }) => void;
 }) {
   const id = String(job.id);
+  // Asked for in the Order heading's finder: picked out, and brought into view
+  // along the strip each time it is asked for.
+  const found = useUiStore((s) => s.foundOrder !== null && s.foundOrder === jobNumOf(id));
+  const findCount = useUiStore((s) => s.findCount);
+  const card = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (found) card.current?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+  }, [found, findCount]);
   const ignore = useIgnoredOrders((s) => s.ignore);
   const unlocked = useSupervisorStore((s) => s.unlocked);
   const gate = signInAt(useSupervisorStore((s) => s.hosted));
@@ -45,8 +55,11 @@ function PoolCard({
   });
   return (
     <div
-      ref={setNodeRef}
-      className={`ord ${selected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${
+      ref={(node) => {
+        setNodeRef(node);
+        card.current = node;
+      }}
+      className={`ord ${selected ? 'selected' : ''} ${found ? 'found' : ''} ${isDragging ? 'dragging' : ''} ${
         unlocked ? '' : 'locked'
       }`}
       title={unlocked ? undefined : `Sign in as ${gate} to put this order on a line`}

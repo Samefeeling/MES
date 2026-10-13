@@ -251,6 +251,13 @@ interface UiState {
    */
   marked: string[];
   /**
+   * The order number the Order heading's finder was last asked for, whose
+   * rows stay picked out until it is cleared — or null. `findCount` goes up
+   * on every find, so asking for the same order again scrolls to it again.
+   */
+  foundOrder: string | null;
+  findCount: number;
+  /**
    * Load blocks picked with Ctrl held, for level loading, as `line|day` —
    * see `loadPickKey`. A week's block is its days, so what is picked survives
    * the timeline being zoomed or a week being folded open.
@@ -382,6 +389,9 @@ interface UiState {
    * "show me everything".
    */
   showEverything: () => void;
+  /** Pick out an order's rows and ask the board to scroll to them. */
+  findOrder: (order: string) => void;
+  clearFound: () => void;
   toggleDueSoon: () => void;
   setReleasedOnly: (releasedOnly: boolean) => void;
   setOrderDay: (day: string | null) => void;
@@ -402,6 +412,8 @@ interface UiState {
 export const useUiStore = create<UiState>((set, get) => ({
   selectedJobId: null,
   marked: [],
+  foundOrder: null,
+  findCount: 0,
   loadPicks: [],
   selectedAt: null,
   overtimeRequest: null,
@@ -466,7 +478,9 @@ export const useUiStore = create<UiState>((set, get) => ({
       (state.workerLoadId && { workerLoadId: null }) ||
       (state.selectedJobId && { selectedJobId: null }) ||
       (state.marked.length > 0 && { marked: [] }) ||
-      (state.loadPicks.length > 0 && { loadPicks: [] });
+      (state.loadPicks.length > 0 && { loadPicks: [] }) ||
+      // The finder's pick last of all: it marks a row, it does not cover one.
+      (state.foundOrder !== null && { foundOrder: null });
     if (!top) return false;
     set(top);
     return true;
@@ -520,6 +534,8 @@ export const useUiStore = create<UiState>((set, get) => ({
       orderDay: null,
       dueSoon: false,
     }),
+  findOrder: (foundOrder) => set((state) => ({ foundOrder, findCount: state.findCount + 1 })),
+  clearFound: () => set({ foundOrder: null }),
   toggleDueSoon: () => set((state) => ({ dueSoon: !state.dueSoon })),
   setReleasedOnly: (releasedOnly) => set({ releasedOnly }),
   setOrderDay: (orderDay) => set({ orderDay }),

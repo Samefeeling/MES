@@ -82,6 +82,9 @@ import { useStableBoardOrder } from './useStableBoardOrder';
 import { earliestStart, markedSet, type MarkedMove } from './groupMove';
 import { toDayKey } from '@/lib/time';
 import { rowIndex } from './rowIndex';
+import { OrderFinder, revealRows } from './OrderFinder';
+import { findEntries, type FindEntry } from './orderFinder';
+import { useIgnoredOrders } from '@/store/ignoredOrders';
 import { BulkActions } from './BulkActions';
 import { LevelLoading } from './LevelLoading';
 import { loadPickKey, overtimeDays, pickedOverload } from './levelLoad';
@@ -432,6 +435,10 @@ function OrderRowView({
     // whichever of its operations is being worked.
     state.newOrderIds.includes(jobNumOf(String(row.job.id))),
   );
+  // Picked out by the Order heading's finder: every row of the order asked for.
+  const found = useUiStore(
+    (state) => state.foundOrder !== null && state.foundOrder === jobNumOf(String(row.job.id)),
+  );
   const isContext = !row.line.schedulable;
   const lefts = frozenLefts(visibleDates, shownWidths(colWidths, cols));
   const at = (key: DateCol): React.CSSProperties | undefined =>
@@ -447,7 +454,7 @@ function OrderRowView({
   return (
     <div
       data-row-id={String(row.job.id)}
-      className={`arow ${row.line.parent ? 'bench' : ''} ${selected ? 'selected' : ''} ${isContext ? 'context' : ''} ${row.job.press?.change ? `changeover ${row.job.press.change.kind}` : ''} ${row.completedToday ? 'completed-today' : ''} ${isNew ? 'new-order' : ''} ${over ? 'overdue' : ''}`}
+      className={`arow ${row.line.parent ? 'bench' : ''} ${selected ? 'selected' : ''} ${isContext ? 'context' : ''} ${row.job.press?.change ? `changeover ${row.job.press.change.kind}` : ''} ${row.completedToday ? 'completed-today' : ''} ${isNew ? 'new-order' : ''} ${over ? 'overdue' : ''} ${found ? 'found' : ''}`}
     >
       <div className="acell order">
         {/* A manual support order belongs to Factory General and the plan
@@ -1484,9 +1491,12 @@ function DayDetail({
 
 export function AssemblyGantt({
   board,
+  planBoard = null,
   unreleasedHidden = 0,
 }: {
   board: AssemblyGanttView;
+  /** Every order in the export, Released Only or not — for the order finder. */
+  planBoard?: AssemblyGanttView | null;
   /** Orders Released Only is keeping off this board, for the switch's title. */
   unreleasedHidden?: number;
 }) {
@@ -1717,6 +1727,88 @@ export function AssemblyGantt({
     () => visibleGroups.flatMap((group) => group.rows),
     [visibleGroups],
   );
+
+  /*
+   * The order finder in the Order heading. Taking the reader to an order
+   * undoes whatever is keeping its row off the screen — its line folded or
+   * hidden, a date filter, Released Only — and says which, because each of
+   * those was somebody's choice. The rows stay picked out until cleared.
+   */
+  const findList = useMemo(() => findEntries(board, planBoard), [board, planBoard]);
+  const foundOrder = useUiStore((s) => s.foundOrder);
+  const findCount = useUiStore((s) => s.findCount);
+  /** The find still waiting for its row to be drawn, and when it was asked. */
+  const findPending = useRef<{ count: number; at: number } | null>(null);
+  const takeToOrder = useCallback(
+    (entry: FindEntry): string[] => {
+      const ui = useUiStore.getState();
+      const notes: string[] = [];
+      const lineName = (key: string) =>
+        (planBoard ?? board).groups.find((group) => group.line.key === key)?.line.name ?? key;
+      if (entry.status === 'unreleased') {
+        ui.setReleasedOnly(false);
+        notes.push('not released, so the board now plans with All orders');
+      }
+      if (entry.rowIds.length === 0) {
+        // Ignoring an order only takes it out of the strip; asking for it by
+        // number is asking to see it.
+        const ignored = useIgnoredOrders.getState();
+        const back = ignored.ids.filter((id) => jobNumOf(id) === entry.order);
+        for (const id of back) ignored.restore(id);
+        notes.push(
+          back.length
+            ? 'on no line yet, and was ignored; it is back in the Unassigned strip'
+            : 'on no line yet; it is in the Unassigned strip',
+        );
+      }
+      const hidden = entry.lines.filter((key) => ui.hiddenLines.includes(key));
+      for (const key of hidden) ui.toggleLine(key);
+      if (hidden.length) notes.push(`${hidden.map(lineName).join(', ')} was hidden and is shown again`);
+      // A day filter also takes the plan-only PMD lane off the board.
+      const contextRows = new Set(
+        board.groups.filter((group) => !group.line.schedulable).flatMap((group) => group.rows.map((row) => String(row.job.id))),
+      );
+      const filteredOut =
+        entry.rowIds.length > 0 &&
+        (ui.orderDay !== null || ui.dueSoon) &&
+        (entry.status === 'unreleased' ||
+          !visibleIds ||
+          !entry.rowIds.some((id) => visibleIds.has(id) && !(ui.orderDay !== null && contextRows.has(id))));
+      if (filteredOut) {
+        ui.setOrderDay(null);
+        if (ui.dueSoon) ui.toggleDueSoon();
+        notes.push('it was outside the date filter, which is cleared');
+      }
+      if (entry.lines.length) {
+        setOpened((current) => ({ ...current, ...Object.fromEntries(entry.lines.map((key) => [key, true])) }));
+      }
+      findPending.current = { count: ui.findCount + 1, at: Date.now() };
+      ui.findOrder(entry.order);
+      return notes;
+    },
+    [board, planBoard, visibleIds],
+  );
+  // Once the row is drawn — a line opened, the board re-planned with All —
+  // scroll it into the middle of the screen with its bar in view. A find whose
+  // row never comes (an order on no line) gives up rather than jumping the
+  // board later, when something else happens to draw it.
+  useEffect(() => {
+    const pending = findPending.current;
+    if (!foundOrder || !pending || pending.count !== findCount) return;
+    if (Date.now() - pending.at > 3000) {
+      findPending.current = null;
+      return;
+    }
+    const host = root.current;
+    const pane = host?.parentElement;
+    if (!host || !pane) return;
+    const rows = [...host.querySelectorAll<HTMLElement>('[data-row-id]')].filter(
+      (el) => jobNumOf(el.dataset.rowId ?? '') === foundOrder,
+    );
+    if (rows.length === 0) return;
+    findPending.current = null;
+    revealRows(pane, rows, labelWidth, dayWidth * 2);
+  }, [foundOrder, findCount, visibleGroups, board, labelWidth, dayWidth]);
   // Whether the master triangle in the Order block is offering to open the
   // board or to fold it. An empty board offers to fold, which does nothing and
   // says nothing false.
@@ -2178,60 +2270,63 @@ export function AssemblyGantt({
       <div className="assy-sticky">
         <div className="assy-head">
           <div className="acell order order-head">
-            <div className="order-head-line">
-              <span className="head-name">Order</span>
-              {/* One press for the whole board. Each line has its own triangle
-                  on its own row, which is the right size of control for one
-                  line and eight presses for the question a supervisor actually
-                  asks — "show me the lines, not the orders" — on the way to
-                  finding which line a job is on. */}
-              <button
-                type="button"
-                className="fold-all"
-                onClick={() =>
-                  // Opening opens the benches under a lane too, which are
-                  // not on screen while their lane is folded.
-                  setOpened(
-                    Object.fromEntries(
-                      orderedGroups.map((group) => [group.line.key, allFolded]),
-                    ),
-                  )
-                }
-                aria-expanded={!allFolded}
-                aria-label={allFolded ? 'Show every line’s orders' : 'Fold every line’s orders away'}
-                title={allFolded ? 'Show every line’s orders' : 'Fold every line’s orders away'}
-              >
-                <span aria-hidden="true">{allFolded ? '▶' : '▼'}</span>
-              </button>
-              {/* Which orders the board plans with. Not a view filter: the
-                  board is planned again from the orders it keeps, so line and
-                  day loads are the capacity that work needs. */}
-              <div className="release-scope" role="group" aria-label="Orders to plan with">
+            <div className="order-head-stack">
+              <div className="order-head-line">
+                <span className="head-name">Order</span>
+                {/* One press for the whole board. Each line has its own triangle
+                    on its own row, which is the right size of control for one
+                    line and eight presses for the question a supervisor actually
+                    asks — "show me the lines, not the orders" — on the way to
+                    finding which line a job is on. */}
                 <button
                   type="button"
-                  className={releasedOnly ? '' : 'on'}
-                  aria-pressed={!releasedOnly}
-                  onClick={() => setReleasedOnly(false)}
-                  title="Plan with every order in the export, released or not — what the lines would carry once the rest is released"
-                >
-                  All
-                </button>
-                <button
-                  type="button"
-                  className={releasedOnly ? 'on' : ''}
-                  aria-pressed={releasedOnly}
-                  onClick={() => setReleasedOnly(true)}
-                  title={
-                    'Plan with released orders only (JobHead_JobReleased). An unreleased order stays if it has ' +
-                    'begun on the floor or a released order waits for it.' +
-                    (releasedOnly && unreleasedHidden > 0
-                      ? ` ${unreleasedHidden} unreleased order${unreleasedHidden === 1 ? ' is' : 's are'} off the board.`
-                      : '')
+                  className="fold-all"
+                  onClick={() =>
+                    // Opening opens the benches under a lane too, which are
+                    // not on screen while their lane is folded.
+                    setOpened(
+                      Object.fromEntries(
+                        orderedGroups.map((group) => [group.line.key, allFolded]),
+                      ),
+                    )
                   }
+                  aria-expanded={!allFolded}
+                  aria-label={allFolded ? 'Show every line’s orders' : 'Fold every line’s orders away'}
+                  title={allFolded ? 'Show every line’s orders' : 'Fold every line’s orders away'}
                 >
-                  Released Only
+                  <span aria-hidden="true">{allFolded ? '▶' : '▼'}</span>
                 </button>
+                {/* Which orders the board plans with. Not a view filter: the
+                    board is planned again from the orders it keeps, so line and
+                    day loads are the capacity that work needs. */}
+                <div className="release-scope" role="group" aria-label="Orders to plan with">
+                  <button
+                    type="button"
+                    className={releasedOnly ? '' : 'on'}
+                    aria-pressed={!releasedOnly}
+                    onClick={() => setReleasedOnly(false)}
+                    title="Plan with every order in the export, released or not — what the lines would carry once the rest is released"
+                  >
+                    All
+                  </button>
+                  <button
+                    type="button"
+                    className={releasedOnly ? 'on' : ''}
+                    aria-pressed={releasedOnly}
+                    onClick={() => setReleasedOnly(true)}
+                    title={
+                      'Plan with released orders only (JobHead_JobReleased). An unreleased order stays if it has ' +
+                      'begun on the floor or a released order waits for it.' +
+                      (releasedOnly && unreleasedHidden > 0
+                        ? ` ${unreleasedHidden} unreleased order${unreleasedHidden === 1 ? ' is' : 's are'} off the board.`
+                        : '')
+                    }
+                  >
+                    Released Only
+                  </button>
+                </div>
               </div>
+              <OrderFinder entries={findList} onFind={takeToOrder} />
             </div>
             {/* The roster's two rolls, moved here off the Team column. */}
             {crewRolls}

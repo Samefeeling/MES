@@ -217,6 +217,30 @@ describe('what Escape closes', () => {
   });
 });
 
+describe('the order the finder was asked for', () => {
+  it('counts every find, so asking for the same order again scrolls to it again', () => {
+    useUiStore.setState({ foundOrder: null, findCount: 0 });
+    useUiStore.getState().findOrder('ASM80412');
+    useUiStore.getState().findOrder('ASM80412');
+    expect(useUiStore.getState()).toMatchObject({ foundOrder: 'ASM80412', findCount: 2 });
+    useUiStore.getState().clearFound();
+    expect(useUiStore.getState().foundOrder).toBeNull();
+  });
+
+  it('is the last thing Escape lets go of: it marks a row, it covers nothing', () => {
+    useUiStore.setState({ selectedJobId: 'ASM8005', marked: ['ASM8006'], loadPicks: [], foundOrder: 'ASM80412' });
+    const dismiss = () => useUiStore.getState().dismissTop();
+    expect(dismiss()).toBe(true);
+    expect(useUiStore.getState().selectedJobId).toBeNull();
+    expect(dismiss()).toBe(true);
+    expect(useUiStore.getState().marked).toEqual([]);
+    expect(useUiStore.getState().foundOrder).toBe('ASM80412');
+    expect(dismiss()).toBe(true);
+    expect(useUiStore.getState().foundOrder).toBeNull();
+    expect(dismiss()).toBe(false);
+  });
+});
+
 describe('the two popups over the board', () => {
   it('never has both open at once', () => {
     useUiStore.getState().setCrewPicker('ASM8001');

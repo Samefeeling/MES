@@ -231,7 +231,7 @@ export default function App() {
         <div className="app-body">
           <div className="board-pane assembly-pane">
             {board ? (
-              <AssemblyGantt board={board} unreleasedHidden={unreleasedHidden} />
+              <AssemblyGantt board={board} planBoard={planBoard} unreleasedHidden={unreleasedHidden} />
             ) : (
               <div className="center-fill">
                 <Spinner />

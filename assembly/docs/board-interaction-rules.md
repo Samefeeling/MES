@@ -182,6 +182,28 @@ built-in order rather than as an empty board; a bench opened after one was made
 joins at the end until somebody moves it; and a bench that closes takes its key
 with it.
 
+## Finding an order
+
+**The box under "Order" finds an order by its number.** Type it, or press ▾
+and pick it off the list of every order on the board; part of a number lists
+the orders holding it, the number first and the description after. Enter takes
+the order typed in full, or the one the list has lit; a number that names
+nothing, or several with the list shut, says so instead of guessing.
+
+Finding it **opens the board to it**: the row — both rows, for an order at two
+benches — turns highlighter yellow with a bar down its left edge and an outline
+on its bar, and the board scrolls it into the middle of the screen with the bar
+clear of the frozen columns. It stays picked out until × in the box or Escape
+lets go of it; Escape takes everything else on the board first, because the
+pick covers nothing.
+
+Whatever was keeping the row off the screen is undone, and **the box says
+which**, because each was somebody's choice: a folded line or lane is opened, a
+hidden line is shown again (and stays shown), a day or Due-soon filter is
+cleared, and an order Released Only keeps off the board switches the board to
+All. An order on no line is picked out in the Unassigned strip instead — and
+brought back into it if it had been ignored.
+
 ## Filing an order onto another line
 
 **Drag the order number in the Order column.** It changes the order's line and

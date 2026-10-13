@@ -1378,6 +1378,18 @@ body.col-resizing {
 .arow.completed-today .acell.order {
   background: var(--surface-3);
 }
+/*
+ * The order the finder was asked for: highlighter yellow across the whole row
+ * and a bar down its left edge, kept until the finder is cleared. Stronger
+ * than hover and selection on purpose — it is the one row being looked for.
+ */
+.arow.found,
+.arow.found .acell.order,
+.arow.found .acell.frozen {
+  background: #fef9c3;
+}
+.arow.found .acell.order { box-shadow: inset 4px 0 var(--warn-fill); }
+.arow.found .bar { outline: 2px solid var(--warn-fill); outline-offset: 1px; }
 .arow.context {
   opacity: 0.72;
 }
@@ -1495,6 +1507,116 @@ body.col-resizing {
 .release-scope button:focus-visible {
   background: var(--chrome-tint-hi);
   outline: none;
+}
+
+/* The title line over the order finder, on the left of the Order heading. */
+.order-head-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+/* Find an order: type its number or open the list (▾). */
+.order-finder {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 150px;
+}
+.order-finder input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 20px;
+  /* Room on the right for × and ▾. */
+  padding: 0 36px 0 6px;
+  border: 1px solid rgb(12 74 110 / 45%);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+}
+.order-finder input::placeholder { color: var(--faint); font-weight: 400; }
+.order-finder input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.order-finder-clear,
+.order-finder-list {
+  position: absolute;
+  top: 1px;
+  width: 16px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.order-finder-list { right: 2px; }
+.order-finder-clear { right: 18px; }
+.order-finder-clear:hover,
+.order-finder-list:hover { color: var(--accent); }
+/* Drawn over the board, so the heading cell does not clip it. */
+.order-finder-pop {
+  position: fixed;
+  z-index: 88;
+  max-width: calc(100vw - 16px);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.order-finder-options {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  max-height: min(360px, 60vh);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(15 23 42 / 18%);
+  font-size: 12px;
+}
+.order-finder-options li[role='option'] {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 8px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.order-finder-options li.active { background: var(--chrome-tint-hi); }
+.of-order { font-weight: 700; font-variant-numeric: tabular-nums; }
+.of-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.of-where {
+  grid-column: 1 / -1;
+  color: var(--faint);
+  font-size: 11px;
+}
+.of-where.pool,
+.of-where.unreleased { color: var(--warn); }
+.order-finder-none {
+  padding: 4px 10px;
+  color: var(--faint);
+  font-size: 11px;
+}
+.order-finder-note {
+  padding: 6px 10px;
+  border: 1px solid #f3d38a;
+  border-radius: 6px;
+  background: var(--warn-dim);
+  color: var(--text);
+  font-size: 12px;
+  box-shadow: 0 6px 18px rgb(15 23 42 / 14%);
 }
 
 /*
@@ -3425,6 +3547,7 @@ textarea.production-input { min-height: 38px; resize: vertical; margin: 4px 0; }
 .ord:hover { border-color: var(--accent); }
 .ord.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgb(3 105 161 / .35); }
 .ord.dragging { opacity: 0.35; }
+.ord.found { background: #fef9c3; border-color: var(--warn-fill); box-shadow: 0 0 0 2px rgb(217 119 6 / 0.45); }
 /* Reading the pile is not filing it: the card still opens for inspection, it
    just no longer offers to be dropped on a line. */
 .ord.locked { cursor: default; }
