@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AssemblyGanttView } from '@/engine/assembly/board';
-import { findEntries, matchEntries, normalOrder, pickedEntry } from '@/features/assembly/orderFinder';
+import { findEntries, matchEntries, normalOrder, pickedEntry } from '@/features/assembly/orderSearch';
 
 /** Only what the finder reads off a board: its lines, their rows, the pool. */
 function boardOf(

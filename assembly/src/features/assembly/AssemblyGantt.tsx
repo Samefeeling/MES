@@ -83,7 +83,7 @@ import { earliestStart, markedSet, type MarkedMove } from './groupMove';
 import { toDayKey } from '@/lib/time';
 import { rowIndex } from './rowIndex';
 import { OrderFinder, revealRows } from './OrderFinder';
-import { findEntries, type FindEntry } from './orderFinder';
+import { findEntries, type FindEntry } from './orderSearch';
 import { useIgnoredOrders } from '@/store/ignoredOrders';
 import { BulkActions } from './BulkActions';
 import { LevelLoading } from './LevelLoading';

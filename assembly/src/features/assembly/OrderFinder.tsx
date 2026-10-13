@@ -1,6 +1,6 @@
 /**
  * The order finder in the Order heading: type an order number, or pick it off
- * the list, and the board opens to its row — see `orderFinder`.
+ * the list, and the board opens to its row — see `orderSearch`.
  *
  * The list is drawn over the board rather than inside the heading cell, which
  * clips whatever overflows it, and is closed by leaving the box.
@@ -9,7 +9,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useUiStore } from '@/store/uiStore';
-import { matchEntries, pickedEntry, type FindEntry } from './orderFinder';
+import { matchEntries, pickedEntry, type FindEntry } from './orderSearch';
 
 /** Rows drawn in the list at once; typing narrows the rest. */
 const LIST_LIMIT = 80;
