@@ -115,14 +115,24 @@ column (by spreadsheet letter) each field was read from.
 
 ## Input: the cubics sheet (optional, more precise)
 
-`Cubics.csv` is "Drews Cubics and Freight Calc" saved as CSV, read from the
-export folder with the waybill. Without it orders are sized from their freight
-lines, and the page says it was not read. Excel saves only the sheet that is
-open as CSV: save the cubics sheet itself, not the freight calculator. The
-header row is found however far down the title rows go; UTF-8, Unicode
+`Cubics.csv` is read from the export folder with the waybill. Without it
+orders are sized from their freight lines, and the page says it was not read.
+It may be either of two layouts, told apart by the header row:
+
+- **A part list** — a part column (`Part`, `CODE` or `PartNum`) and
+  `Volume`, the m³ of **one piece** (`0.25` or `0.25 m3`). A line of ten is
+  ten times its volume: a part list has no stack sizes, so nothing is
+  stacked. A blank volume is worked out from `Length` × `Width` × `Height`
+  (mm) when the list has them; a `Weight` column is read as kg per piece;
+  `Description` is shown. Other columns are ignored.
+- **The cubics sheet**, "Drews Cubics and Freight Calc", below.
+
+The header row is found however far down the title rows go; UTF-8, Unicode
 (UTF-16) and plain "CSV (Comma delimited)" saves all read. When the file is
-not the sheet the page says what its first row holds. One row per part and
-stack size:
+neither, the page says what its first row holds — Excel saves only the sheet
+that is open as CSV. The page header shows how many parts were read.
+
+The cubics sheet has one row per part and stack size:
 
 | Column | Used for |
 | --- | --- |

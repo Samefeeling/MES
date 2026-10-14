@@ -67,7 +67,7 @@ describe('parseCubicsCsv', () => {
   });
 
   it('refuses a file that is not the sheet', () => {
-    expect(parseCubicsCsv('Order,Part\n1,A\n').error).toMatch(/Not a cubics sheet/);
+    expect(parseCubicsCsv('Order,Part\n1,A\n').error).toMatch(/Not a cube master/);
   });
 });
 
@@ -171,7 +171,7 @@ describe('Cubics.csv from the folder', () => {
     const calc = 'Freight Calculator,,\nDestination,Pallets,Cost\nMEL,2,180';
     expect(looksLikeCubics(calc)).toBe(false);
     expect(whyNotCubics(calc)).toContain('"Freight Calculator"');
-    expect(whyNotCubics(calc)).toContain('save the cubics sheet itself');
+    expect(whyNotCubics(calc)).toContain('Excel saves only the sheet that is open');
     expect(whyNotCubics('PK\u0003\u0004…')).toContain('Excel workbook');
   });
 
@@ -181,5 +181,37 @@ describe('Cubics.csv from the folder', () => {
     // "m³" saved as Windows-1252 (CSV (Comma delimited)) rather than UTF-8.
     expect(decodeText(new Uint8Array([0x6d, 0xb3]).buffer)).toBe('m³');
     expect(decodeText(new TextEncoder().encode('\ufeffm³').buffer)).toBe('m³');
+  });
+});
+
+describe('a part list: Part, and Volume per piece', () => {
+  // Part in column A, the m³ of one piece in column I.
+  const list = [
+    'Part,Description,Class,Length,Width,Height,Weight,UOM,Volume',
+    'CHAIR-A,Chair,SS,,,,5.5,EA,0.25',
+    'TABLE-B,Table,TB,,,,,EA,0.4 m3',
+    'DESK-1,Desk,DK,1200,600,750,30,EA,',
+    'NOVOL,No volume,XX,,,,,EA,',
+  ].join('\n');
+  const parsed = parseCubicsCsv(list);
+
+  it('is told from the sheet and from a waybill by its header', () => {
+    expect(looksLikeCubics(list)).toBe(true);
+    expect(looksLikeCubics(read('waybill.sample.csv'))).toBe(false);
+    expect(parsed.error).toBeNull();
+  });
+
+  it('takes Volume as one piece, with its unit or without, and the size where it is blank', () => {
+    const vol = (code: string) => parsed.items.find((i) => i.code === code)?.stacks;
+    expect(vol('CHAIR-A')).toEqual([{ qty: 1, volumeM3: 0.25, lengthMm: null, depthMm: null, heightMm: null }]);
+    expect(vol('TABLE-B')?.[0].volumeM3).toBe(0.4);
+    expect(vol('DESK-1')?.[0].volumeM3).toBeCloseTo(0.54);
+    expect(parsed.items.find((i) => i.code === 'CHAIR-A')?.weightKg).toBe(5.5);
+    expect(parsed.warnings).toEqual(['Row 5: NOVOL has no volume, skipped']);
+  });
+
+  it('sizes a line as pieces × volume', () => {
+    const m = cubicMaster(parsed.items);
+    expect(stackedVolume(10, m.get(cubicKey('chair-a'))!.stacks)).toBeCloseTo(2.5);
   });
 });

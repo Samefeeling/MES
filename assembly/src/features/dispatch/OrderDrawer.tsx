@@ -223,7 +223,7 @@ export function OrderDrawer({
                 {order.packedM3 !== null ? m3(order.packedM3) : '—'}
                 {order.pickListComment && <span className="od-hint">“{order.pickListComment}”</span>}
               </Fact>
-              <Fact label="Cubics sheet">
+              <Fact label="Cubics.csv">
                 {order.cube
                   ? `${m3(order.cube.volumeM3)} · ${order.cube.matchedLines}/${order.cube.goodsLines} lines`
                   : model.cubics

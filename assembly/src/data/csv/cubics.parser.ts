@@ -1,8 +1,16 @@
 /**
- * The cubics sheet (saved from Excel as CSV) → cube master.
+ * `Cubics.csv` → cube master. Two layouts are read, told apart by the header:
  *
- *   (category), CODE, Name, Quantity, Volume per STACK, Length, Depth,
- *   Height, (blank), Volume, Weight Per Unit, Quantity, (blank), Per 20', Per 40'
+ * - **The cubics sheet** ("Drews Cubics and Freight Calc"), one row per part
+ *   and stack size:
+ *
+ *     (category), CODE, Name, Quantity, Volume per STACK, Length, Depth,
+ *     Height, (blank), Volume, Weight Per Unit, Quantity, (blank), Per 20', Per 40'
+ *
+ * - **A part list**: a part column (`Part`, `CODE`, `PartNum`) and `Volume`,
+ *   the m³ of one piece, with no stack sizes — each piece counts whole, so an
+ *   order line of 10 is 10 × its volume. Length, depth and height in mm stand
+ *   in for a blank volume; a weight column is read when there is one.
  *
  * The header row is found by its names, so title rows above it are skipped.
  * Rows with nothing but a heading (`SOFT SEATING`) start a section. The
@@ -27,7 +35,9 @@ export interface CubicsParseResult {
 const num = (raw: string | undefined): number | null => {
   const s = (raw ?? '').replace(/,/g, '').trim();
   if (!s) return null;
-  const n = Number(s);
+  // A figure written with its unit: `0.25 m3`, `12 kg`.
+  const withUnit = /^(-?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:m3|m³|cbm|kg|mm)$/i.exec(s);
+  const n = Number(withUnit ? withUnit[1] : s);
   return Number.isFinite(n) ? n : null;
 };
 
@@ -39,22 +49,40 @@ function delimiterOf(text: string): string {
   return tabs > commas ? '\t' : ',';
 }
 
-/** The product code's header, as the sheet or a copy of it may name it. */
-const CODE_NAMES = ['code', 'partnum', 'partnumber', 'partno', 'itemcode', 'productcode'];
+/** The product code's header, as the sheet or a part list may name it. */
+const CODE_NAMES = ['code', 'part', 'partnum', 'partnumber', 'partno', 'itemcode', 'productcode'];
 /** The stack's volume: `Volume per STACK`, perhaps with its unit after it. */
 const isStackVolume = (name: string): boolean => name.startsWith('volumeperstack') || name === 'stackvolume';
+/** One piece's volume in m³, in a part list. */
+const UNIT_VOLUME_NAMES = [
+  'volume',
+  'volumem3',
+  'unitvolume',
+  'volumeperunit',
+  'cbm',
+  'm3',
+  'cube',
+  'cubic',
+  'cubicmetres',
+  'cubicmeters',
+];
 
-/** Where the header row is — however far down, below title rows — or -1. */
-function headerRow(rows: readonly string[][]): number {
-  return rows.findIndex((row) => {
-    const names = row.map(normalizeHeader);
-    return names.some((n) => CODE_NAMES.includes(n)) && names.some(isStackVolume);
-  });
+type Layout = 'sheet' | 'parts';
+
+/** Where the header row is — however far down, below title rows — and which layout it heads. */
+function headerRow(rows: readonly string[][]): { at: number; layout: Layout } | null {
+  for (let at = 0; at < rows.length; at++) {
+    const names = rows[at].map(normalizeHeader);
+    if (!names.some((n) => CODE_NAMES.includes(n))) continue;
+    if (names.some(isStackVolume)) return { at, layout: 'sheet' };
+    if (names.some((n) => UNIT_VOLUME_NAMES.includes(n))) return { at, layout: 'parts' };
+  }
+  return null;
 }
 
-/** Does this text look like the cubics sheet rather than another export? */
+/** Does this text look like a cube master rather than another export? */
 export function looksLikeCubics(text: string): boolean {
-  return headerRow(parseCsv(text, delimiterOf(text))) >= 0;
+  return headerRow(parseCsv(text, delimiterOf(text))) !== null;
 }
 
 /**
@@ -70,22 +98,23 @@ export function whyNotCubics(text: string): string {
   if (!first) return 'it is empty';
   const shown = first.slice(0, 6).join(', ') + (first.length > 6 ? ', …' : '');
   return (
-    `no header row with CODE and Volume per STACK; its first row reads "${shown.slice(0, 120)}". ` +
-    'Excel saves only the sheet that is open as CSV: save the cubics sheet itself'
+    `no header row with a part column (Part or CODE) and a volume (Volume or Volume per STACK); ` +
+    `its first row reads "${shown.slice(0, 120)}". Excel saves only the sheet that is open as CSV`
   );
 }
 
 export function parseCubicsCsv(text: string): CubicsParseResult {
   const rows = parseCsv(text, delimiterOf(text));
-  const headerAt = headerRow(rows);
-  if (headerAt < 0) {
+  const found = headerRow(rows);
+  if (!found) {
     return {
       items: [],
       withoutCode: [],
       warnings: [],
-      error: 'Not a cubics sheet: no "CODE" and "Volume per STACK" header row.',
+      error: 'Not a cube master: no header row with a part column (Part or CODE) and a volume (Volume or Volume per STACK).',
     };
   }
+  const { at: headerAt, layout } = found;
 
   // First occurrence wins: the sheet has a second `Quantity` (calculator input).
   const header = rows[headerAt].map(normalizeHeader);
@@ -98,13 +127,13 @@ export function parseCubicsCsv(text: string): CubicsParseResult {
   };
   const col = {
     code: at(...CODE_NAMES),
-    name: at('name', 'description'),
+    name: at('name', 'description', 'partdescription', 'partdesc'),
     qty: at('quantity', 'qty'),
     stack: header.findIndex(isStackVolume),
     length: at('length'),
     depth: at('depth', 'width'),
     height: at('height'),
-    unitVolume: at('volume'),
+    unitVolume: at(...UNIT_VOLUME_NAMES),
     weight: at('weightperunit', 'weight'),
   };
   // The category sits in an unnamed first column.
@@ -120,12 +149,13 @@ export function parseCubicsCsv(text: string): CubicsParseResult {
     const line = headerAt + i + 2;
     const code = cell(row, col.code);
     const name = cell(row, col.name);
-    const qty = num(cell(row, col.qty));
+    // A part list has no stack sizes: every piece is a stack of one.
+    const qty = layout === 'parts' ? 1 : num(cell(row, col.qty));
     const lengthMm = num(cell(row, col.length));
     const depthMm = num(cell(row, col.depth));
     const heightMm = num(cell(row, col.height));
 
-    if (!code && qty === null) {
+    if (!code && (layout === 'parts' || qty === null)) {
       // A heading row: the only text is the section name.
       const text = row.map((c) => c.trim()).filter((c) => c && Number.isNaN(Number(c)));
       if (text.length === 1) section = text[0];
@@ -140,9 +170,11 @@ export function parseCubicsCsv(text: string): CubicsParseResult {
       return;
     }
 
-    let volume = num(cell(row, col.stack));
+    let volume = num(cell(row, layout === 'parts' ? col.unitVolume : col.stack));
     if ((volume === null || volume <= 0) && lengthMm && depthMm && heightMm) {
-      volume = (lengthMm * depthMm * heightMm) / 1e9;
+      // Millimetres, as the sheet gives them; a product under 1,000 can only be metres.
+      const product = lengthMm * depthMm * heightMm;
+      volume = product >= 1000 ? product / 1e9 : product;
     }
     if ((volume === null || volume <= 0) && qty > 0) {
       const unit = num(cell(row, col.unitVolume));

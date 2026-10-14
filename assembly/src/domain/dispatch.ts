@@ -151,9 +151,9 @@ export type VolumeSource = 'entered' | 'packed' | 'cubics' | 'freight' | 'cubics
 export const VOLUME_SOURCE_LABEL: Record<VolumeSource, string> = {
   entered: 'Entered by the planner',
   packed: 'Packed — from the pick-list comment',
-  cubics: 'Cubics sheet (stacked)',
+  cubics: 'Cubics.csv',
   freight: 'Freight CBM line',
-  'cubics-partial': 'Cubics sheet — some parts missing',
+  'cubics-partial': 'Cubics.csv — some parts missing',
   none: 'Unknown',
 };
 

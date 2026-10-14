@@ -167,7 +167,7 @@ async function load(opts: { sync: boolean }): Promise<void> {
   const cub = await cubics;
   if (cub.ok && cub.value) {
     if (looksLikeCubics(cub.value)) useWaybillStore.setState({ cubicsText: cub.value, cubicsSource: 'Cubics.csv' });
-    else notes.push(`Cubics.csv is not the cubics sheet: ${whyNotCubics(cub.value)}. Orders are sized from their freight lines meanwhile.`);
+    else notes.push(`Cubics.csv is not a cube master: ${whyNotCubics(cub.value)}. Orders are sized from their freight lines meanwhile.`);
   } else if (!cub.ok) {
     notes.push(`Cubics.csv not read (${cub.error}) — orders are sized from their freight lines.`);
   }
