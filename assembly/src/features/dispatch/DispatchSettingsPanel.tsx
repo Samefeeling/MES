@@ -546,7 +546,7 @@ export function DispatchSettingsPanel({ orders = [] }: { orders?: readonly Shipm
                 set((s) => ({ ...s, preferVolume: e.target.value as DispatchSettings['preferVolume'] }))
               }
             >
-              <option value="cubics">Cubics sheet (stacked, per part)</option>
+              <option value="cubics">Cubics.csv (per part)</option>
               <option value="freight">Freight CBM line on the order</option>
             </select>
           </label>
