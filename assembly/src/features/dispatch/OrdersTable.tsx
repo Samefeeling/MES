@@ -11,7 +11,7 @@ import type { DispatchModel } from './useDispatchPlan';
 import { EXCEPTION_FLAGS } from './ExceptionsList';
 import { READINESS, money, shortDay } from './format';
 import { SOURCE_MARK } from './LoadCard';
-import { BuildChip, buildCheckOf, useAssemblyLink } from './assemblyLink';
+import { BuildChip, SupplyChip, buildCheckOf, supplyCheckOf, useAssemblyLink } from './assemblyLink';
 import { orderKey } from '@/domain/orderLink';
 
 type SortKey = 'due' | 'planned' | 'volume' | 'order';
@@ -175,7 +175,11 @@ export function OrdersTable({
               <th title="ExpDeliveryDt">Deliver</th>
               <th>Ship By</th>
               <th>Goods</th>
-              {link.loaded && <th title="When the Assembly board expects the order off the line">Assembly</th>}
+              {link.loaded && (
+                <th title="When the Assembly board expects the order off the line, and when its stock and bought-in goods are in">
+                  Assembly · Goods
+                </th>
+              )}
               {head('Planned', 'planned')}
               <th>Flags</th>
             </tr>
@@ -208,6 +212,7 @@ export function OrdersTable({
                 {link.loaded && (
                   <td>
                     <BuildChip check={op.day ? buildCheckOf(link, order.id, op.day) : null} />
+                    <SupplyChip check={op.day ? supplyCheckOf(link, order.id, op.day) : null} />
                   </td>
                 )}
                 <td>{shortDay(op.day)}</td>

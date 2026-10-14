@@ -15,7 +15,7 @@ import { recommendation } from './equipment';
 import { READINESS, dayLabel, m3, pct, shortDay } from './format';
 import { SOURCE_MARK } from './LoadCard';
 import { equipmentMix } from './summary';
-import { BuildChip, buildCheckOf, buildText, useAssemblyLink } from './assemblyLink';
+import { BuildChip, SupplyChip, buildCheckOf, buildText, supplyCheckOf, useAssemblyLink } from './assemblyLink';
 
 export function BookingSheet({
   day,
@@ -142,6 +142,7 @@ export function BookingSheet({
                       {o ? READINESS[o.readiness].label : ''}
                       {o?.inPicking ? ' · Picking' : ''}
                       <BuildChip check={buildCheckOf(link, d.orderId, load.day)} />
+                      <SupplyChip check={supplyCheckOf(link, d.orderId, load.day)} />
                     </td>
                   </tr>
                 );

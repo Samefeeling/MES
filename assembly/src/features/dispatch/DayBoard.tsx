@@ -22,7 +22,7 @@ import { loadValue } from '@/engine/dispatch/shipments';
 import { useDispatchStore } from '@/store/dispatchStore';
 import { LoadCard } from './LoadCard';
 import { BookingSheet } from './BookingSheet';
-import { buildCheckOf, buildIssues, useAssemblyLink, type BuildIssue } from './assemblyLink';
+import { buildCheckOf, buildIssues, supplyIssues, useAssemblyLink, type BuildIssue, type SupplyIssue } from './assemblyLink';
 import { MODES, equipmentMix } from './summary';
 import { dayLabel, dollars, m3, pct, shortDay, stagingTone, weekdayOf } from './format';
 
@@ -100,6 +100,11 @@ export function DayBoard({
   const assyLate = assy.filter((x) => x.check.verdict === 'late');
   const assySameDay = assy.filter((x) => x.check.verdict === 'same-day');
   const assyUnknown = assy.filter((x) => x.check.verdict === 'unknown');
+  // …and of the stock and bought-in lines still short: whether their goods
+  // are in before the load leaves (see `lineSupply`).
+  const goods = supplyIssues(link, pending);
+  const goodsLate = goods.filter((x) => x.check.verdict === 'late');
+  const goodsUnknown = goods.filter((x) => x.check.verdict === 'unknown');
   const builtToOrder = new Set(
     pending.flatMap((l) => l.drops.filter((d) => buildCheckOf(link, d.orderId, l.day)).map((d) => d.orderId)),
   ).size;
@@ -240,6 +245,8 @@ export function DayBoard({
           total?.overStaging ||
           levelled > 0 ||
           assy.length > 0 ||
+          goodsLate.length > 0 ||
+          goodsUnknown.length > 0 ||
           notReady.length > 0) && (
           <ul className="dayboard-alerts">
             {behind.length > 0 && (
@@ -287,6 +294,19 @@ export function DayBoard({
               <li>
                 No Assembly date yet (no crew, or on no line):{' '}
                 <BuildList items={assyUnknown} onOpenOrder={onOpenOrder} />.
+              </li>
+            )}
+            {goodsLate.length > 0 && (
+              <li>
+                Stock or bought-in goods arrive after the load leaves:{' '}
+                <SupplyList items={goodsLate} onOpenOrder={onOpenOrder} /> — move them to a later load, or chase
+                the PO.
+              </li>
+            )}
+            {goodsUnknown.length > 0 && (
+              <li>
+                Goods short with no stock, open PO or stock job to cover them, or a PO with no date:{' '}
+                <SupplyList items={goodsUnknown} onOpenOrder={onOpenOrder} />.
               </li>
             )}
             {warned > 0 && (
@@ -421,6 +441,24 @@ function BuildList({ items, onOpenOrder }: { items: BuildIssue[]; onOpenOrder: (
             {x.orderId}
           </button>
           {x.check.finish && ` (${weekdayOf(x.check.finish)} ${shortDay(x.check.finish)})`}
+        </span>
+      ))}
+      {items.length > 12 && ` +${items.length - 12} more`}
+    </>
+  );
+}
+
+/** Order numbers with the day their stock and bought-in goods are in, each opening the order. */
+function SupplyList({ items, onOpenOrder }: { items: SupplyIssue[]; onOpenOrder: (id: string) => void }) {
+  return (
+    <>
+      {items.slice(0, 12).map((x, i) => (
+        <span key={x.orderId}>
+          {i > 0 && ', '}
+          <button type="button" className="link" onClick={() => onOpenOrder(x.orderId)}>
+            {x.orderId}
+          </button>
+          {x.check.readyBy && ` (${weekdayOf(x.check.readyBy)} ${shortDay(x.check.readyBy)})`}
         </span>
       ))}
       {items.length > 12 && ` +${items.length - 12} more`}

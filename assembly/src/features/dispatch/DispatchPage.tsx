@@ -25,6 +25,7 @@
 
 import { useMemo, useState } from 'react';
 import { useDispatchStore } from '@/store/dispatchStore';
+import { useDataStore } from '@/store/dataStore';
 import { dispatchKpis } from '@/engine/dispatch/shipments';
 import { formatDay, formatTime } from '@/lib/time';
 import { useDispatchPlan } from './useDispatchPlan';
@@ -60,8 +61,15 @@ const TONE: Record<'good' | 'mid' | 'bad', Tone> = { good: 'green', mid: 'amber'
 
 export function DispatchPage({ assembly = null }: { assembly?: AssemblyGanttView | null }) {
   const model = useDispatchPlan();
-  // Orders built on the Assembly board, read by every view that shows one.
-  const link = useAssemblyLinkValue(assembly, model.linesByOrder);
+  // On-hand stock and open POs, as the board's data load read them.
+  const dataset = useDataStore((s) => s.dataset);
+  const stock = useMemo(
+    () => (dataset ? { inventory: dataset.inventory, po: dataset.po } : null),
+    [dataset],
+  );
+  // Orders built on the Assembly board, and where the goods for the rest come
+  // from, read by every view that shows one.
+  const link = useAssemblyLinkValue(assembly, model.linesByOrder, stock, model.plan?.today ?? '');
   const { parsed, plan } = model;
   const fileName = useDispatchStore((s) => s.fileName);
   const loadedAt = useDispatchStore((s) => s.loadedAt);

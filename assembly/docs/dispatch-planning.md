@@ -178,6 +178,49 @@ The board's dates are only as good as its crew. Without the `ASSY_Operator`
 roster (no SharePoint), nobody is on any order and every order reads *no
 date*.
 
+## Input: stock and open purchase orders
+
+Lines that are not built to order — `Stock` and `BTO` — get a date too, from
+the two exports the Assembly board already reads beside `Planning1.csv`:
+`OnHandInventory.csv` (on hand by part) and `PODetail.csv` (open PO
+releases by part), plus the **stock jobs** on the board (`ASM…`, `SFM…`:
+jobs built for no order, on their Expect Date).
+
+Neither export carries a sales order number, so supply is shared out **by
+part**, the way MRP pegs it:
+
+1. On hand less what the waybill already has allocated is **free stock**,
+   ready today.
+2. Then the open supply, earliest first: a PO release on the later of its
+   due date and the supplier's promise (an overdue release counts as today),
+   a stock job on its Expect Date. Undated supply comes last.
+3. The lines short of goods (left to ship less allocated) take from it in
+   the order they are due — `Need By`, then `Ship By`, then order number —
+   first due, first served. A line covered by two releases is in when the
+   second arrives.
+
+| Chip | Meaning |
+| --- | --- |
+| `Goods in stock` amber | free stock covers it but it is not allocated — allocate and pick it the day it leaves |
+| `Goods 22/10` green | everything short is in before the load leaves |
+| `Goods 22/10` amber / red | in the day the load leaves / after it has left |
+| `Goods no date` amber | some of it has no stock, PO or stock job — or its PO has no date |
+
+The chip sits beside the Assembly one on load cards, the booking sheet and
+the Orders table (*Assembly · Goods*). The Day board lists the orders whose
+goods arrive after their load leaves, and those with no supply. An order's
+detail has a **Stock and bought-in goods** table — each short line, where its
+goods come from (`20 from stock · 30 on PO 504290 (Acme) 22/10`,
+`10 from job ASM8008 23/10`) and when they are in — and its *Lines* table
+says the same per line, or *Allocated*, or the job building it.
+
+It is an estimate, and says so: a release bought for one customer is
+credited to whichever line is due first, which is also what the warehouse
+does with it on arrival. Without `OnHandInventory.csv` nothing is shown — a
+stock line would otherwise read *no supply* with the shelf full. Without
+`PODetail.csv` only stock and stock jobs count, and the order's detail says
+so.
+
 ## Who it is for, and the page
 
 Three readers: the **warehouse manager** (space, labour, what is not ready),

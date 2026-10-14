@@ -1,7 +1,8 @@
 /**
  * One order in full: its window and where the plan put it, the Assembly jobs
- * building it, the planner's three levers (pin a day, hold it back, correct
- * its cube), and its lines.
+ * building it, where the goods for its stock and bought-in lines are coming
+ * from, the planner's three levers (pin a day, hold it back, correct its
+ * cube), and its lines — each saying where its goods are.
  */
 
 import { useEffect, useState } from 'react';
@@ -12,7 +13,18 @@ import { useDispatchStore } from '@/store/dispatchStore';
 import { Badge, Button } from '@/ui';
 import type { DispatchModel } from './useDispatchPlan';
 import { READINESS, dayLabel, m3, money } from './format';
-import { BuildChip, buildCheckOf, useAssemblyLink } from './assemblyLink';
+import {
+  BuildChip,
+  SupplyChip,
+  buildCheckOf,
+  lineSupplyText,
+  supplyCheckOf,
+  useAssemblyLink,
+  type AssemblyLink,
+} from './assemblyLink';
+import type { WaybillLine } from '@/domain/dispatch';
+import { lineKey, orderKey } from '@/domain/orderLink';
+import { isGoodsLine, isLineReady } from '@/data/csv/waybill.parser';
 import { formatShortDay, formatTime, toDayKey } from '@/lib/time';
 
 export function OrderDrawer({
@@ -37,6 +49,7 @@ export function OrderDrawer({
   const override = decisions.volumeOverrides[orderId];
   const [volume, setVolumeText] = useState(override !== undefined ? String(override) : '');
   const held = decisions.holds[orderId];
+  const link = useAssemblyLink();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -124,6 +137,7 @@ export function OrderDrawer({
       </dl>
 
       <AssemblySection orderId={order.id} day={op.day} due={dueDate(order, model.plan!.deadline)} />
+      <GoodsSection orderId={order.id} day={op.day} due={dueDate(order, model.plan!.deadline)} />
 
       {op.flags.length > 0 && (
         <ul className="order-flags">
@@ -257,6 +271,7 @@ export function OrderDrawer({
                 <th>UOM</th>
                 <th>Method</th>
                 <th>Status</th>
+                <th>Goods</th>
               </tr>
             </thead>
             <tbody>
@@ -271,6 +286,7 @@ export function OrderDrawer({
                   <td>{l.uom}</td>
                   <td>{l.fulfillment}</td>
                   <td>{l.status}</td>
+                  <td className="goods-from">{goodsFrom(link, orderId, l)}</td>
                 </tr>
               ))}
             </tbody>
@@ -333,6 +349,82 @@ function AssemblySection({ orderId, day, due }: { orderId: string; day: string |
               <td>{j.start ? formatShortDay(j.start) : '—'}</td>
               <td className={j.expect && day && toDayKey(j.expect) > day ? 'tone-bad' : undefined}>
                 {j.expect ? `${formatShortDay(j.expect)} ${formatTime(j.expect)}` : j.state === 'done' ? '—' : 'no date'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+/**
+ * Where one line's goods are: allocated, the job building it, or the stock,
+ * PO or stock job it was credited (see `lineSupply`).
+ */
+function goodsFrom(link: AssemblyLink, orderId: string, l: WaybillLine): string {
+  if (!isGoodsLine(l)) return '—';
+  if (isLineReady(l)) return 'Allocated';
+  const key = orderKey(orderId);
+  if (l.fulfillment.trim().toLowerCase() === 'job') {
+    const job = link.builds
+      .get(key)
+      ?.jobs.find((j) => j.orderLine === lineKey(l.line) && (j.rel === null || j.rel === lineKey(l.rel)));
+    if (!job) return link.loaded ? 'No job on the board' : '—';
+    if (job.state === 'done') return `Job ${job.jobId} done`;
+    return job.expect ? `Job ${job.jobId} · expect ${formatShortDay(job.expect)}` : `Job ${job.jobId} · no date`;
+  }
+  const supply = link.supply.get(key)?.find((x) => x.line === lineKey(l.line) && x.rel === lineKey(l.rel));
+  if (supply) return lineSupplyText(supply) || '—';
+  return link.stockRead.inventory ? '—' : 'OnHandInventory.csv not read';
+}
+
+/**
+ * The stock and bought-in lines still short of goods, and when what covers
+ * them is in: free stock, open PO releases, stock jobs on the board — shared
+ * out by part, first due first served, because neither export says which
+ * order a quantity is for.
+ */
+function GoodsSection({ orderId, day, due }: { orderId: string; day: string | null; due: string | null }) {
+  const link = useAssemblyLink();
+  if (!link.stockRead.inventory) return null;
+  const check = supplyCheckOf(link, orderId, day ?? due ?? '9999-12-31');
+  if (!check) return null;
+  const afterDue = check.readyBy !== null && due !== null && check.readyBy > due;
+  return (
+    <section className="order-assembly">
+      <h3>
+        Stock and bought-in goods <SupplyChip check={day ? check : null} />
+      </h3>
+      <p className="muted-note">
+        {check.verdict === 'unknown'
+          ? 'A line short of goods has no stock, open PO or stock job to cover it, or its PO has no date.'
+          : `All in by ${dayLabel(check.readyBy)}${day ? `; planned to leave ${dayLabel(day)}` : ''}.`}
+        {afterDue && ` That is after its due date (${dayLabel(due)}).`}
+        {!link.stockRead.po && ' PODetail.csv was not read, so no purchase order is counted.'}
+        {' '}An estimate: stock and POs carry no order number, so they go to the line due first.
+      </p>
+      <table className="summary-table assembly-jobs">
+        <thead>
+          <tr>
+            <th>Line</th>
+            <th>Part</th>
+            <th className="num">Short</th>
+            <th>From</th>
+            <th>In by</th>
+          </tr>
+        </thead>
+        <tbody>
+          {check.lines.map((l) => (
+            <tr key={`${l.line}-${l.rel}`}>
+              <td>
+                {l.line}/{l.rel}
+              </td>
+              <td className="mono">{l.part}</td>
+              <td className="num">{l.shortQty}</td>
+              <td>{lineSupplyText(l)}</td>
+              <td className={l.readyBy === null || (day && l.readyBy > day) ? 'tone-bad' : undefined}>
+                {l.readyBy ? dayLabel(l.readyBy) : 'no date'}
               </td>
             </tr>
           ))}

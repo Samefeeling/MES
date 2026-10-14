@@ -151,10 +151,10 @@ const ZONE_LIKE = /^(NSW|ACT|QLD|VIC|SA|WA|TAS|NT|NZ|Export|Hong Kong)\b/i;
 export const isFreightVolumeLine = (line: WaybillLine): boolean =>
   FREIGHT.has(line.part.trim().toUpperCase()) && line.uom.trim().toUpperCase() === 'CBM';
 
-const isGoodsLine = (line: WaybillLine): boolean =>
+export const isGoodsLine = (line: WaybillLine): boolean =>
   line.fulfillment.trim().toLowerCase() !== 'other';
 
-const isLineReady = (line: WaybillLine): boolean =>
+export const isLineReady = (line: WaybillLine): boolean =>
   line.status.trim().toLowerCase() === 'ready' ||
   (line.leftToShip > 0 && line.allocatedQty >= line.leftToShip);
 

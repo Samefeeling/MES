@@ -29,7 +29,7 @@ import type { PlannedLoad } from '@/engine/dispatch/plan';
 import { useDispatchStore } from '@/store/dispatchStore';
 import { Badge } from '@/ui';
 import { contractorOf, fullAddress, shipToNames } from './booking';
-import { BuildChip, buildCheckOf, useAssemblyLink } from './assemblyLink';
+import { BuildChip, SupplyChip, buildCheckOf, supplyCheckOf, useAssemblyLink } from './assemblyLink';
 import { recommendation, sizeLadder } from './equipment';
 import { LIMIT_LABEL, READINESS, dollars, dollarsFull, fillTone, m3, pct, shortDay, weekdayOf } from './format';
 import { loadValue } from '@/engine/dispatch/shipments';
@@ -315,6 +315,7 @@ export function LoadCard({
                     )}
                     {o?.inPicking && <span className="tag">Picking</span>}
                     <BuildChip check={buildCheckOf(link, d.orderId, load.day)} />
+                    <SupplyChip check={supplyCheckOf(link, d.orderId, load.day)} />
                   </td>
                   {isEditing && (
                     <td>

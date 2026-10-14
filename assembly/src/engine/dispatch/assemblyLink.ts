@@ -24,6 +24,7 @@ import { lineKey, orderKey, salesOrderOfJob } from '@/domain/orderLink';
 import { jobNumOf } from '@/domain/routing';
 import type { Job } from '@/domain/types';
 import type { AssemblyGanttView, OrderRow } from '@/engine/assembly/board';
+import type { StockJob } from './lineSupply';
 import { toDayKey } from '@/lib/time';
 
 /** Where an Assembly job stands. */
@@ -76,10 +77,13 @@ interface Placed {
 
 const unique = (names: readonly string[]): string[] => [...new Set(names)];
 
-/** The job, read off every row the board draws it as; `pooled` when it is on none. */
-function buildJob(jobNum: string, rows: readonly Placed[], pooled: Job | null): BuildJob | null {
+/**
+ * The job, read off every row the board draws it as; `pooled` when it is on
+ * none. Only a job built for a sales order, unless `stock` asks for the others.
+ */
+function buildJob(jobNum: string, rows: readonly Placed[], pooled: Job | null, stock = false): BuildJob | null {
   const ref = salesOrderOfJob(jobNum);
-  if (!ref) return null;
+  if (!ref && !stock) return null;
   const job = rows[0]?.row.job ?? pooled;
   if (!job) return null;
   const pending = rows.filter((p) => !isDone(p.row));
@@ -98,8 +102,8 @@ function buildJob(jobNum: string, rows: readonly Placed[], pooled: Job | null): 
   const starts = rows.flatMap((p) => (p.row.start ? [p.row.start.getTime()] : []));
   return {
     jobId: jobNum,
-    orderLine: ref.line,
-    rel: ref.rel,
+    orderLine: ref?.line ?? null,
+    rel: ref?.rel ?? null,
     lineName: rows.length > 0 ? unique(open.map((p) => p.place)).join(' · ') : null,
     partNum: String(job.partNum),
     description: job.description,
@@ -119,8 +123,11 @@ function buildJob(jobNum: string, rows: readonly Placed[], pooled: Job | null): 
   };
 }
 
-/** Every job on the board built for a sales order, filed under that order. */
-export function buildsByOrder(view: AssemblyGanttView): Map<string, OrderBuild> {
+/**
+ * Every job on the board, by job number: the rows it is drawn as, and the
+ * place each is in. A job in the pool and on no line is in `pooled` instead.
+ */
+function jobsOnBoard(view: AssemblyGanttView): { rowsOf: Map<string, Placed[]>; pooled: Map<string, Job> } {
   const names = new Map(view.groups.map((g) => [g.line.key, g.line.name]));
   const rowsOf = new Map<string, Placed[]>();
   for (const group of view.groups) {
@@ -130,7 +137,6 @@ export function buildsByOrder(view: AssemblyGanttView): Map<string, OrderBuild> 
       // A press changeover is a row between orders, not an order.
       if (row.job.press?.change) continue;
       const jobNum = jobNumOf(String(row.job.id));
-      if (!salesOrderOfJob(jobNum)) continue;
       const held = rowsOf.get(jobNum);
       if (held) held.push({ row, place });
       else rowsOf.set(jobNum, [{ row, place }]);
@@ -141,7 +147,12 @@ export function buildsByOrder(view: AssemblyGanttView): Map<string, OrderBuild> 
     const jobNum = jobNumOf(String(job.id));
     if (!rowsOf.has(jobNum) && !pooled.has(jobNum)) pooled.set(jobNum, job);
   }
+  return { rowsOf, pooled };
+}
 
+/** Every job on the board built for a sales order, filed under that order. */
+export function buildsByOrder(view: AssemblyGanttView): Map<string, OrderBuild> {
+  const { rowsOf, pooled } = jobsOnBoard(view);
   const out = new Map<string, OrderBuild>();
   const add = (job: BuildJob | null) => {
     if (!job) return;
@@ -153,6 +164,22 @@ export function buildsByOrder(view: AssemblyGanttView): Map<string, OrderBuild> 
   for (const [jobNum, rows] of rowsOf) add(buildJob(jobNum, rows, null));
   for (const [jobNum, job] of pooled) add(buildJob(jobNum, [], job));
   for (const b of out.values()) b.jobs.sort((a, b2) => a.jobId.localeCompare(b2.jobId, undefined, { numeric: true }));
+  return out;
+}
+
+/**
+ * The jobs on the board built for no order — `ASM…`, `SFM…` — still making
+ * something: the stock a waybill line short of that part can wait for.
+ */
+export function stockJobsOf(view: AssemblyGanttView): StockJob[] {
+  const { rowsOf, pooled } = jobsOnBoard(view);
+  const out: StockJob[] = [];
+  const add = (job: BuildJob | null) => {
+    if (!job || job.state === 'done' || job.remainingQty <= 0) return;
+    out.push({ jobId: job.jobId, partNum: job.partNum, qty: job.remainingQty, expect: job.expect, place: job.lineName });
+  };
+  for (const [jobNum, rows] of rowsOf) if (!salesOrderOfJob(jobNum)) add(buildJob(jobNum, rows, null, true));
+  for (const [jobNum, job] of pooled) if (!salesOrderOfJob(jobNum)) add(buildJob(jobNum, [], job, true));
   return out;
 }
 
