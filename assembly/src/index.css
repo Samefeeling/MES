@@ -458,6 +458,32 @@ button {
 }
 /* The row's own edge, in the same blue as the word it belongs to. */
 .arow.new-order { box-shadow: inset 3px 0 #2563eb; }
+/*
+ * The order's planned dispatch day (the waybill's Ship By): quiet when the job
+ * is off the line before it, amber when it is the same day or undated, red
+ * when after. LAST, filled, when every other line of the order is ready first.
+ */
+.order-tag.ship {
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #334155;
+}
+.order-tag.ship.tight {
+  border-color: #fcd34d;
+  background: #fef3c7;
+  color: #92400e;
+}
+.order-tag.ship.late {
+  border-color: #fca5a5;
+  background: #fee2e2;
+  color: #b91c1c;
+}
+.order-tag.holds {
+  background: #334155;
+  color: #fff;
+}
+.order-tag.holds.tight { background: #b45309; }
+.order-tag.holds.late { background: #b91c1c; }
 .badge.tool {
   background: #f3e8ff;
   color: #6d28d9;

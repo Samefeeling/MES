@@ -84,6 +84,7 @@ import { toDayKey } from '@/lib/time';
 import { rowIndex } from './rowIndex';
 import { OrderFinder, revealRows } from './OrderFinder';
 import { findEntries, type FindEntry } from './orderSearch';
+import { ShipByContext, ShipTag, useShipByValue } from './shipBy';
 import { useIgnoredOrders } from '@/store/ignoredOrders';
 import { BulkActions } from './BulkActions';
 import { LevelLoading } from './LevelLoading';
@@ -504,6 +505,9 @@ function OrderRowView({
           </span>
         )}
         {isNew && <span className="order-tag new">NEW</span>}
+        {/* The order's planned dispatch day, from the waybill — see shipBy.
+            On a press row too: a moulded part sold as it is ships the same way. */}
+        {!row.job.press?.change && <ShipTag jobNum={jobNumOf(String(row.job.id))} />}
         {/* The trade badge — but not on a routed order. There the bench it
             sits under (Foaming / Sewing / Stapling) and the "1/3 Foaming"
             step beside it already say both which trade and which step, so
@@ -1512,6 +1516,8 @@ export function AssemblyGantt({
   const toggleCol = useUiStore((s) => s.toggleCol);
   const visibleDates = useUiStore((s) => s.dateCols);
   const viewport = useViewportWidth();
+  // Each job's order and its Ship By, from the plan of every order.
+  const shipBy = useShipByValue(planBoard ?? board);
   const colWidths = useMemo(
     () => fitFrozenWidths(storedWidths, cols, visibleDates, viewport),
     [storedWidths, cols, visibleDates, viewport],
@@ -2220,264 +2226,266 @@ export function AssemblyGantt({
     );
 
   return (
-    <div
-      ref={root}
-      className="assy"
-      // Right-click on an order: its menu, acting on every Ctrl-marked order
-      // when the one pressed is among them.
-      onContextMenu={(e) => {
-        const id = (e.target as Element).closest?.('[data-row-id]')?.getAttribute('data-row-id');
-        if (!id) return;
-        e.preventDefault();
-        setBulk({ ids: bulkTargets(id, marked), at: { x: e.clientX, y: e.clientY } });
-      }}
-      style={
-        {
-          minWidth: labelWidth + gridWidth,
-          '--order-w': `${laidOut.order}px`,
-          '--qty-w': `${laidOut.qty}px`,
-          '--hours-w': `${laidOut.hours}px`,
-          '--start-w': `${laidOut.start}px`,
-          '--due-w': `${laidOut.due}px`,
-          '--expect-w': `${laidOut.expect}px`,
-          '--team-w': `${laidOut.team}px`,
-        } as React.CSSProperties
-      }
-    >
-      {/*
-        Day backgrounds for the whole board, drawn once behind the rows rather
-        than per row: today is picked out and days already gone are faded.
-        Saturday and Sunday are greyed when their optional columns are visible.
-      */}
-      <div className="day-stripes" style={{ left: labelWidth, width: gridWidth }}>
-        {dayLoads.map((load, i) => (
-          <div
-            key={load.key}
-            className={`stripe ${load.working ? '' : 'closed'} ${load.isToday ? 'today' : ''} ${load.past ? 'past' : ''}`}
-            style={{ left: axis.offsets[i], width: axis.widths[i] }}
-          />
-        ))}
-      </div>
+    <ShipByContext.Provider value={shipBy}>
+      <div
+        ref={root}
+        className="assy"
+        // Right-click on an order: its menu, acting on every Ctrl-marked order
+        // when the one pressed is among them.
+        onContextMenu={(e) => {
+          const id = (e.target as Element).closest?.('[data-row-id]')?.getAttribute('data-row-id');
+          if (!id) return;
+          e.preventDefault();
+          setBulk({ ids: bulkTargets(id, marked), at: { x: e.clientX, y: e.clientY } });
+        }}
+        style={
+          {
+            minWidth: labelWidth + gridWidth,
+            '--order-w': `${laidOut.order}px`,
+            '--qty-w': `${laidOut.qty}px`,
+            '--hours-w': `${laidOut.hours}px`,
+            '--start-w': `${laidOut.start}px`,
+            '--due-w': `${laidOut.due}px`,
+            '--expect-w': `${laidOut.expect}px`,
+            '--team-w': `${laidOut.team}px`,
+          } as React.CSSProperties
+        }
+      >
+        {/*
+          Day backgrounds for the whole board, drawn once behind the rows rather
+          than per row: today is picked out and days already gone are faded.
+          Saturday and Sunday are greyed when their optional columns are visible.
+        */}
+        <div className="day-stripes" style={{ left: labelWidth, width: gridWidth }}>
+          {dayLoads.map((load, i) => (
+            <div
+              key={load.key}
+              className={`stripe ${load.working ? '' : 'closed'} ${load.isToday ? 'today' : ''} ${load.past ? 'past' : ''}`}
+              style={{ left: axis.offsets[i], width: axis.widths[i] }}
+            />
+          ))}
+        </div>
 
-      <DragTimeGuide horizonStart={board.horizonStart} labelWidth={labelWidth} />
-      <DependencyArrows
-        root={root}
-        rows={visibleRows}
-        focusJobId={dependencyFocusId}
-        labelWidth={labelWidth}
-      />
+        <DragTimeGuide horizonStart={board.horizonStart} labelWidth={labelWidth} />
+        <DependencyArrows
+          root={root}
+          rows={visibleRows}
+          focusJobId={dependencyFocusId}
+          labelWidth={labelWidth}
+        />
 
-      <div className="assy-sticky">
-        <div className="assy-head">
-          <div className="acell order order-head">
-            <div className="order-head-stack">
-              <div className="order-head-line">
-                <span className="head-name">Order</span>
-                {/* One press for the whole board. Each line has its own triangle
-                    on its own row, which is the right size of control for one
-                    line and eight presses for the question a supervisor actually
-                    asks — "show me the lines, not the orders" — on the way to
-                    finding which line a job is on. */}
-                <button
-                  type="button"
-                  className="fold-all"
-                  onClick={() =>
-                    // Opening opens the benches under a lane too, which are
-                    // not on screen while their lane is folded.
-                    setOpened(
-                      Object.fromEntries(
-                        orderedGroups.map((group) => [group.line.key, allFolded]),
-                      ),
-                    )
-                  }
-                  aria-expanded={!allFolded}
-                  aria-label={allFolded ? 'Show every line’s orders' : 'Fold every line’s orders away'}
-                  title={allFolded ? 'Show every line’s orders' : 'Fold every line’s orders away'}
-                >
-                  <span aria-hidden="true">{allFolded ? '▶' : '▼'}</span>
-                </button>
-                {/* Which orders the board plans with. Not a view filter: the
-                    board is planned again from the orders it keeps, so line and
-                    day loads are the capacity that work needs. */}
-                <div className="release-scope" role="group" aria-label="Orders to plan with">
+        <div className="assy-sticky">
+          <div className="assy-head">
+            <div className="acell order order-head">
+              <div className="order-head-stack">
+                <div className="order-head-line">
+                  <span className="head-name">Order</span>
+                  {/* One press for the whole board. Each line has its own triangle
+                      on its own row, which is the right size of control for one
+                      line and eight presses for the question a supervisor actually
+                      asks — "show me the lines, not the orders" — on the way to
+                      finding which line a job is on. */}
                   <button
                     type="button"
-                    className={releasedOnly ? '' : 'on'}
-                    aria-pressed={!releasedOnly}
-                    onClick={() => setReleasedOnly(false)}
-                    title="Plan with every order in the export, released or not — what the lines would carry once the rest is released"
-                  >
-                    All
-                  </button>
-                  <button
-                    type="button"
-                    className={releasedOnly ? 'on' : ''}
-                    aria-pressed={releasedOnly}
-                    onClick={() => setReleasedOnly(true)}
-                    title={
-                      'Plan with released orders only (JobHead_JobReleased). An unreleased order stays if it has ' +
-                      'begun on the floor or a released order waits for it.' +
-                      (releasedOnly && unreleasedHidden > 0
-                        ? ` ${unreleasedHidden} unreleased order${unreleasedHidden === 1 ? ' is' : 's are'} off the board.`
-                        : '')
+                    className="fold-all"
+                    onClick={() =>
+                      // Opening opens the benches under a lane too, which are
+                      // not on screen while their lane is folded.
+                      setOpened(
+                        Object.fromEntries(
+                          orderedGroups.map((group) => [group.line.key, allFolded]),
+                        ),
+                      )
                     }
+                    aria-expanded={!allFolded}
+                    aria-label={allFolded ? 'Show every line’s orders' : 'Fold every line’s orders away'}
+                    title={allFolded ? 'Show every line’s orders' : 'Fold every line’s orders away'}
                   >
-                    Released Only
+                    <span aria-hidden="true">{allFolded ? '▶' : '▼'}</span>
                   </button>
+                  {/* Which orders the board plans with. Not a view filter: the
+                      board is planned again from the orders it keeps, so line and
+                      day loads are the capacity that work needs. */}
+                  <div className="release-scope" role="group" aria-label="Orders to plan with">
+                    <button
+                      type="button"
+                      className={releasedOnly ? '' : 'on'}
+                      aria-pressed={!releasedOnly}
+                      onClick={() => setReleasedOnly(false)}
+                      title="Plan with every order in the export, released or not — what the lines would carry once the rest is released"
+                    >
+                      All
+                    </button>
+                    <button
+                      type="button"
+                      className={releasedOnly ? 'on' : ''}
+                      aria-pressed={releasedOnly}
+                      onClick={() => setReleasedOnly(true)}
+                      title={
+                        'Plan with released orders only (JobHead_JobReleased). An unreleased order stays if it has ' +
+                        'begun on the floor or a released order waits for it.' +
+                        (releasedOnly && unreleasedHidden > 0
+                          ? ` ${unreleasedHidden} unreleased order${unreleasedHidden === 1 ? ' is' : 's are'} off the board.`
+                          : '')
+                      }
+                    >
+                      Released Only
+                    </button>
+                  </div>
                 </div>
+                <OrderFinder entries={findList} onFind={takeToOrder} />
               </div>
-              <OrderFinder entries={findList} onFind={takeToOrder} />
+              {/* The roster's two rolls, moved here off the Team column. */}
+              {crewRolls}
+              {/* Grab the edge to give the description more room. */}
+              <ColumnGrip column="order" label="Order" shown={laidOut.order} />
             </div>
-            {/* The roster's two rolls, moved here off the Team column. */}
-            {crewRolls}
-            {/* Grab the edge to give the description more room. */}
-            <ColumnGrip column="order" label="Order" shown={laidOut.order} />
-          </div>
-          {cols.qty && (
-            <div className="acell qty frozen" style={{ left: headLefts.qty }}>
-              Qty
-              <button
-                className="date-hide"
-                onClick={() => toggleCol('qty')}
-                title="Hide Qty"
-              >
-                −
-              </button>
-              <ColumnGrip column="qty" label="Qty" shown={laidOut.qty} />
-            </div>
-          )}
-          {cols.hours && (
-            <div
-              className="acell hours frozen"
-              style={{ left: headLefts.hours }}
-            >
-              Hours
-              <button
-                className="date-hide"
-                onClick={() => toggleCol('hours')}
-                title="Hide Hours"
-              >
-                −
-              </button>
-              <ColumnGrip column="hours" label="Hours" shown={laidOut.hours} />
-            </div>
-          )}
-          {dateHead('start', DATE_COL_LABEL.start, true)}
-          {dateHead('due', DATE_COL_LABEL.due, true)}
-          {dateHead('expect', DATE_COL_LABEL.expect, false)}
-          {/* The per-order crew chips. The Free / On Leave rolls that used to
-              head this column now sit in the Order heading, so this is a plain
-              titled column again — and one the reader can hide, since with the
-              rolls gone it carries only the names already on each order's bar
-              menu. */}
-          {cols.team && (
-            <div
-              className="acell team frozen"
-              style={{ left: headLefts.team }}
-            >
-              <span className="head-name">Team</span>
-              <button
-                className="date-hide"
-                onClick={() => toggleCol('team')}
-                title="Hide Team"
-              >
-                −
-              </button>
-              <ColumnGrip column="team" label="Team" shown={laidOut.team} />
-            </div>
-          )}
-          {/* Load histogram: one column per day, coloured by band. */}
-          <div className="acell track" style={{ width: gridWidth }}>
-            {spans.flatMap((span) =>
-              span.folded
-                ? [weekHead(span)]
-                : range(span.from, span.to).map((i) => dayHead(days[i], i, span)),
+            {cols.qty && (
+              <div className="acell qty frozen" style={{ left: headLefts.qty }}>
+                Qty
+                <button
+                  className="date-hide"
+                  onClick={() => toggleCol('qty')}
+                  title="Hide Qty"
+                >
+                  −
+                </button>
+                <ColumnGrip column="qty" label="Qty" shown={laidOut.qty} />
+              </div>
             )}
+            {cols.hours && (
+              <div
+                className="acell hours frozen"
+                style={{ left: headLefts.hours }}
+              >
+                Hours
+                <button
+                  className="date-hide"
+                  onClick={() => toggleCol('hours')}
+                  title="Hide Hours"
+                >
+                  −
+                </button>
+                <ColumnGrip column="hours" label="Hours" shown={laidOut.hours} />
+              </div>
+            )}
+            {dateHead('start', DATE_COL_LABEL.start, true)}
+            {dateHead('due', DATE_COL_LABEL.due, true)}
+            {dateHead('expect', DATE_COL_LABEL.expect, false)}
+            {/* The per-order crew chips. The Free / On Leave rolls that used to
+                head this column now sit in the Order heading, so this is a plain
+                titled column again — and one the reader can hide, since with the
+                rolls gone it carries only the names already on each order's bar
+                menu. */}
+            {cols.team && (
+              <div
+                className="acell team frozen"
+                style={{ left: headLefts.team }}
+              >
+                <span className="head-name">Team</span>
+                <button
+                  className="date-hide"
+                  onClick={() => toggleCol('team')}
+                  title="Hide Team"
+                >
+                  −
+                </button>
+                <ColumnGrip column="team" label="Team" shown={laidOut.team} />
+              </div>
+            )}
+            {/* Load histogram: one column per day, coloured by band. */}
+            <div className="acell track" style={{ width: gridWidth }}>
+              {spans.flatMap((span) =>
+                span.folded
+                  ? [weekHead(span)]
+                  : range(span.from, span.to).map((i) => dayHead(days[i], i, span)),
+              )}
+            </div>
           </div>
         </div>
-      </div>
 
-      {visibleGroups.map((group, i) => (
-        <LineGroupView
-          key={group.line.key}
-          group={group}
-          total={group.total}
-          board={board}
-          allRows={allRows}
-          gridWidth={gridWidth}
-          rosterLoads={rosterLoads}
-          todayLine={todayLine}
-          selectedJobId={selectedJobId}
-          onSelect={select}
-          axis={axis}
-          colWidths={colWidths}
-          visibleDates={visibleDates}
-          showWeekends={showWeekends}
-          collapsed={isFolded(group.line.key)}
-          lineRows={rowsByLine.get(group.line.key) ?? []}
-          dates={days}
-          capacity={capacity}
-          spans={spans}
-          labelWidth={labelWidth}
-          onOpenDay={openDay}
-          onToggle={() => setOpened((current) => ({ ...current, [group.line.key]: isFolded(group.line.key) }))}
-          onHide={() => toggleLine(group.line.key)}
-          onClose={
-            unlocked && isVirtualLine(group.line.key)
-              ? () => removeVirtualLine(group.line.key as VirtualLineKey)
-              : undefined
-          }
-          neighbours={{
-            before: visibleGroups[i - 1]?.line.key ?? null,
-            after: visibleGroups[i + 1]?.line.key ?? null,
-          }}
-          onArrange={(onto) => moveLine(group.line.key, onto)}
-          filtered={orderDay !== null || dueSoon}
-          unlocked={unlocked}
-          relatedJobIds={relatedJobIds}
-          markedIds={markedIds}
-          moveWith={moveWith}
-          rowFloors={rowFloors}
-          onMark={toggleMark}
-          onDependencyHover={setHoveredJobId}
-          loadPicks={pickedLoads}
-          onPickLoad={toggleLoadPicks}
-          onLevel={openLevel}
-        />
-      ))}
-      {level && (
-        <LevelLoading
-          keys={level.keys}
-          at={level.at}
-          rows={allRows}
-          pools={crewPools}
-          today={board.today}
-          lineName={(line) => board.groups.find((g) => g.line.key === line)?.line.name ?? line}
-          verify={verifyLevel}
-          onClose={closeLevel}
-        />
-      )}
-      {bulk && (
-        <BulkActions ids={bulk.ids} at={bulk.at} rows={allRows} onClose={closeBulk} />
-      )}
-      {dayDetail && (
-        <DayDetail
-          detail={dayDetail.detail}
-          at={dayDetail.at}
-          onClose={closeDay}
-          filteredDay={orderDay}
-          onFilter={(day) => {
-            setOrderDay(day);
-            closeDay();
-          }}
-          onPick={(jobId) => {
-            // Centred: the list it was picked from is closing, and the order's
-            // own row may be folded away or off screen.
-            select(jobId, null);
-            closeDay();
-          }}
-        />
-      )}
-    </div>
+        {visibleGroups.map((group, i) => (
+          <LineGroupView
+            key={group.line.key}
+            group={group}
+            total={group.total}
+            board={board}
+            allRows={allRows}
+            gridWidth={gridWidth}
+            rosterLoads={rosterLoads}
+            todayLine={todayLine}
+            selectedJobId={selectedJobId}
+            onSelect={select}
+            axis={axis}
+            colWidths={colWidths}
+            visibleDates={visibleDates}
+            showWeekends={showWeekends}
+            collapsed={isFolded(group.line.key)}
+            lineRows={rowsByLine.get(group.line.key) ?? []}
+            dates={days}
+            capacity={capacity}
+            spans={spans}
+            labelWidth={labelWidth}
+            onOpenDay={openDay}
+            onToggle={() => setOpened((current) => ({ ...current, [group.line.key]: isFolded(group.line.key) }))}
+            onHide={() => toggleLine(group.line.key)}
+            onClose={
+              unlocked && isVirtualLine(group.line.key)
+                ? () => removeVirtualLine(group.line.key as VirtualLineKey)
+                : undefined
+            }
+            neighbours={{
+              before: visibleGroups[i - 1]?.line.key ?? null,
+              after: visibleGroups[i + 1]?.line.key ?? null,
+            }}
+            onArrange={(onto) => moveLine(group.line.key, onto)}
+            filtered={orderDay !== null || dueSoon}
+            unlocked={unlocked}
+            relatedJobIds={relatedJobIds}
+            markedIds={markedIds}
+            moveWith={moveWith}
+            rowFloors={rowFloors}
+            onMark={toggleMark}
+            onDependencyHover={setHoveredJobId}
+            loadPicks={pickedLoads}
+            onPickLoad={toggleLoadPicks}
+            onLevel={openLevel}
+          />
+        ))}
+        {level && (
+          <LevelLoading
+            keys={level.keys}
+            at={level.at}
+            rows={allRows}
+            pools={crewPools}
+            today={board.today}
+            lineName={(line) => board.groups.find((g) => g.line.key === line)?.line.name ?? line}
+            verify={verifyLevel}
+            onClose={closeLevel}
+          />
+        )}
+        {bulk && (
+          <BulkActions ids={bulk.ids} at={bulk.at} rows={allRows} onClose={closeBulk} />
+        )}
+        {dayDetail && (
+          <DayDetail
+            detail={dayDetail.detail}
+            at={dayDetail.at}
+            onClose={closeDay}
+            filteredDay={orderDay}
+            onFilter={(day) => {
+              setOrderDay(day);
+              closeDay();
+            }}
+            onPick={(jobId) => {
+              // Centred: the list it was picked from is closing, and the order's
+              // own row may be folded away or off screen.
+              select(jobId, null);
+              closeDay();
+            }}
+          />
+        )}
+      </div>
+    </ShipByContext.Provider>
   );
 }

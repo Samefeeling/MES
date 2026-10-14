@@ -174,6 +174,13 @@ unless Assembly brings it forward). **Assembly link** on the Orders tab says
 how many of the waybill's built-to-order orders the board has a job for, and
 lists the ones it does not. The plan itself is not moved by it: it flags.
 
+The other way round, the Assembly board shows each job's order **Ship By**
+— `SHIP 21/10`, red when the job finishes after it, `LAST` when it is the one
+line the order is waiting for (see *Ship By on an order* in
+`board-interaction-rules.md`). For that, every screen needs the waybill: set
+`VITE_WAYBILL_CSV_URL` or `VITE_WAYBILL_CSV_PATH` and the board fetches it
+with its own exports.
+
 The board's dates are only as good as its crew. Without the `ASSY_Operator`
 roster (no SharePoint), nobody is on any order and every order reads *no
 date*.

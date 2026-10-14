@@ -387,6 +387,37 @@ that press — moves back by the difference, and says so on hover; an assembly
 order waiting for it waits that much longer. The times are the floor's
 standards, the same the PMD KPIs judge a changeover against.
 
+## Ship By on an order
+
+A job built for a sales order (`018532-5-1`: order 18532, line 5, release 1)
+carries its order's **Ship By** beside the number — `SHIP 21/10` — read from
+the waybill export:
+
+- **Ship By** is the planned dispatch day. **Need By** is when the customer
+  is to have it (and `ExpDeliveryDt` the same day unless the order is running
+  late) — typically 7 days after Ship By in NSW, 14 interstate, 4 weeks
+  overseas. The job's own **Due** is the manufacturing due date, a week
+  before Ship By.
+- The tag is quiet when the job comes off the line before Ship By, **amber**
+  the same day or with no Expect Date, **red** after — the order misses its
+  truck unless the job comes forward.
+- **LAST** beside it: every other goods line of the order (allocated stock,
+  other jobs, stock and POs — see *Input: stock and open purchase orders* in
+  `dispatch-planning.md`) is ready before this job. The whole order is
+  waiting on this one line.
+- The hover says all of it: the order and line, Ship By, Need By, the zone,
+  when the job finishes, and how many of the other lines are ready by Ship
+  By.
+
+A routed order shows it on each bench it is at; a press run on a PMD
+sub-line shows it too. Nothing on the board moves for it — it is there to be
+read.
+
+The waybill comes from Dispatch: fetched from `VITE_WAYBILL_CSV_URL` /
+`VITE_WAYBILL_CSV_PATH` each time the board reads its own exports, so every
+screen has it; without either, it is whatever was last loaded by hand on the
+Dispatch page in this browser. No waybill, no tags.
+
 ## Closed days
 
 **The factory is shut at the weekend and on the days in the SharePoint list

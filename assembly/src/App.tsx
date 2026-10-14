@@ -25,6 +25,7 @@ import { RefreshControl } from '@/features/refresh/RefreshControl';
 import { usePlanSync } from '@/features/sync/usePlanSync';
 import { usePlanPersistence } from '@/features/sync/usePlanPersistence';
 import { DispatchGate } from '@/features/dispatch/DispatchGate';
+import { useWaybillRefresh } from '@/features/dispatch/useWaybillRefresh';
 import { ORDER_TYPE_SHORT } from '@/domain/assembly';
 import { Spinner } from '@/ui';
 
@@ -32,6 +33,7 @@ export default function App() {
   const error = useDataStore((s) => s.error);
   const load = useDataStore((s) => s.load);
   const warnings = useDataStore((s) => s.warnings);
+  const readAt = useDataStore((s) => s.dataset?.fetchedAt);
   const hosted = useSupervisorStore((s) => s.hosted);
   const unlocked = useSupervisorStore((s) => s.unlocked);
   const view = useUiStore((s) => s.view);
@@ -91,6 +93,10 @@ export default function App() {
   useEffect(() => {
     if (!hosted && !unlocked && onDispatch) setView('assembly');
   }, [hosted, unlocked, onDispatch, setView]);
+
+  // The waybill from its configured export, each time the board reads its
+  // own: each job's Ship By comes from it (see features/assembly/shipBy).
+  useWaybillRefresh(readAt);
 
   // Initial data load.
   useEffect(() => {
