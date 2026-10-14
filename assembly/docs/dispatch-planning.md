@@ -146,6 +146,16 @@ the jobs building the order lines still open on the waybill: the line each
 is on, what is left to build, and its **Expect Date** (the end of its bar at
 the crew it has). The last one off the line decides:
 
+- **A routed order is one job.** An upholstered order at two benches at once
+  (`018532-5-1#10` foaming beside `#20` sewing) is filed once, as
+  `018532-5-1`, at *UPL-Gluing › Foaming · UPL-Gluing › Sewing*. Each bench's
+  Expect Date already carries the benches still in front of the order, so the
+  latest of them is when the order comes off the line. It is done only once
+  its last operation is.
+- **A press run counts.** A moulded part sold as it is never reaches an
+  Assembly line; its run on a PMD press sub-line (*PMD › M12*) is its
+  forecast, the end of the run in the press plan. Changeovers are not orders.
+
 | Chip | Meaning |
 | --- | --- |
 | `Assy 14/10` green | off the line before the load leaves |

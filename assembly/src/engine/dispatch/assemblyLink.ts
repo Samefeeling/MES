@@ -2,10 +2,18 @@
  * What the Assembly board says about the orders Dispatch is shipping.
  *
  * Every job on the board built for a sales order (see `domain/orderLink`) is
- * filed under that order with the board's own forecast: the line it is on,
- * what is left to build, and its Expect Date — the end of its bar, the moment
- * the goods come off the line at the crew it has. Dispatch then asks one
- * question of a load: does Assembly finish before the truck leaves?
+ * filed under that order with the board's own forecast: where it is, what is
+ * left to build, and its Expect Date — the moment the goods come off the line
+ * at the crew it has. Dispatch then asks one question of a load: does the
+ * factory finish before the truck leaves?
+ *
+ * One job per job number, however many rows the board draws it as. A routed
+ * order (`domain/routing`) is at one or two benches at once — `018532-5-1#20`
+ * sewing beside `#10` foaming — and each of those rows already carries the
+ * benches still in front of it in its Expect Date, so the order is finished
+ * when the latest of them is. A press run on a PMD sub-line counts too: a
+ * moulded part sold as it is has no Assembly row at all, and the press plan's
+ * end of run is the only date there is for it.
  *
  * The answer is only as good as the board. An order on no line, or on a line
  * with nobody on it, has no Expect Date, and says so rather than passing.
@@ -13,6 +21,7 @@
 
 import type { DayKey } from '@/domain/dispatch';
 import { lineKey, orderKey, salesOrderOfJob } from '@/domain/orderLink';
+import { jobNumOf } from '@/domain/routing';
 import type { Job } from '@/domain/types';
 import type { AssemblyGanttView, OrderRow } from '@/engine/assembly/board';
 import { toDayKey } from '@/lib/time';
@@ -29,18 +38,22 @@ export type BuildState =
   | 'unplaced';
 
 export interface BuildJob {
+  /** The job number — never a row key: `018532-5-1`, not `018532-5-1#20`. */
   jobId: string;
   /** Order line and release from the job number. */
   orderLine: string | null;
   rel: string | null;
-  /** The Assembly line it is on; null in the pool. */
+  /**
+   * Where it is: the line, or the lane and bench — `UPL-Gluing › Sewing`,
+   * `PMD › M12` — the ones still to finish first. Null in the pool.
+   */
   lineName: string | null;
   partNum: string;
   description: string;
   remainingQty: number;
   /** Bar start, when it has one. */
   start: Date | null;
-  /** Bar end — the Expect Date. */
+  /** The order's Expect Date: the end of the route, not of one bench. */
   expect: Date | null;
   /** Epicor's required due date for the job. */
   due: Date | null;
@@ -52,30 +65,83 @@ export interface OrderBuild {
   jobs: BuildJob[];
 }
 
-const isDone = (job: Job, row: OrderRow | null): boolean =>
-  job.remainingQty <= 0 || Boolean(row?.completedAt) || Boolean(row?.completedToday);
+const isDone = (row: OrderRow): boolean =>
+  row.job.remainingQty <= 0 || Boolean(row.completedAt) || Boolean(row.completedToday);
 
-const buildJob = (job: Job, row: OrderRow | null, lineName: string | null): BuildJob | null => {
-  const ref = salesOrderOfJob(String(job.id));
+/** A board row and the place it is drawn in, in words. */
+interface Placed {
+  row: OrderRow;
+  place: string;
+}
+
+const unique = (names: readonly string[]): string[] => [...new Set(names)];
+
+/** The job, read off every row the board draws it as; `pooled` when it is on none. */
+function buildJob(jobNum: string, rows: readonly Placed[], pooled: Job | null): BuildJob | null {
+  const ref = salesOrderOfJob(jobNum);
   if (!ref) return null;
-  const done = isDone(job, row);
+  const job = rows[0]?.row.job ?? pooled;
+  if (!job) return null;
+  const pending = rows.filter((p) => !isDone(p.row));
+  // Finished once nothing is left at any operation it is at, and one of those
+  // is the operation that receives: a routed order between benches is not.
+  const done =
+    rows.length > 0 &&
+    pending.length === 0 &&
+    rows.some((p) => !p.row.job.operation || p.row.job.operation.last);
+  // The latest of the operations still open: each one's Expect Date already
+  // carries the benches still in front of it.
+  const open = pending.length > 0 ? pending : rows;
+  const ends = open.map((p) => p.row.expectDate);
+  const expect =
+    ends.length > 0 && ends.every(Boolean) ? new Date(Math.max(...ends.map((d) => d!.getTime()))) : null;
+  const starts = rows.flatMap((p) => (p.row.start ? [p.row.start.getTime()] : []));
   return {
-    jobId: String(job.id),
+    jobId: jobNum,
     orderLine: ref.line,
     rel: ref.rel,
-    lineName,
+    lineName: rows.length > 0 ? unique(open.map((p) => p.place)).join(' · ') : null,
     partNum: String(job.partNum),
     description: job.description,
-    remainingQty: job.remainingQty,
-    start: row?.start ?? null,
-    expect: row?.expectDate ?? null,
+    // What the order still owes, as the export has it: a bench row's own
+    // quantity is that operation's, not the order's.
+    remainingQty: Math.max(
+      0,
+      ...rows.map((p) => p.row.sourceRemainingQty ?? p.row.job.remainingQty),
+      ...(rows.length === 0 && pooled ? [pooled.remainingQty] : []),
+    ),
+    start: starts.length > 0 ? new Date(Math.min(...starts)) : null,
+    expect,
     due: job.dueDate,
-    state: done ? 'done' : row?.expectDate ? 'dated' : row ? 'no-crew' : 'unplaced',
+    state: rows.length === 0
+      ? job.remainingQty <= 0 ? 'done' : 'unplaced'
+      : done ? 'done' : expect ? 'dated' : 'no-crew',
   };
-};
+}
 
 /** Every job on the board built for a sales order, filed under that order. */
 export function buildsByOrder(view: AssemblyGanttView): Map<string, OrderBuild> {
+  const names = new Map(view.groups.map((g) => [g.line.key, g.line.name]));
+  const rowsOf = new Map<string, Placed[]>();
+  for (const group of view.groups) {
+    const line = group.line;
+    const place = line.parent ? `${names.get(line.parent) ?? line.parent} › ${line.name}` : line.name;
+    for (const row of group.rows) {
+      // A press changeover is a row between orders, not an order.
+      if (row.job.press?.change) continue;
+      const jobNum = jobNumOf(String(row.job.id));
+      if (!salesOrderOfJob(jobNum)) continue;
+      const held = rowsOf.get(jobNum);
+      if (held) held.push({ row, place });
+      else rowsOf.set(jobNum, [{ row, place }]);
+    }
+  }
+  const pooled = new Map<string, Job>();
+  for (const job of view.pool) {
+    const jobNum = jobNumOf(String(job.id));
+    if (!rowsOf.has(jobNum) && !pooled.has(jobNum)) pooled.set(jobNum, job);
+  }
+
   const out = new Map<string, OrderBuild>();
   const add = (job: BuildJob | null) => {
     if (!job) return;
@@ -84,11 +150,8 @@ export function buildsByOrder(view: AssemblyGanttView): Map<string, OrderBuild> 
     build.jobs.push(job);
     out.set(order, build);
   };
-  for (const group of view.groups) {
-    if (!group.line.schedulable) continue;
-    for (const row of group.rows) add(buildJob(row.job, row, group.line.name));
-  }
-  for (const job of view.pool) add(buildJob(job, null, null));
+  for (const [jobNum, rows] of rowsOf) add(buildJob(jobNum, rows, null));
+  for (const [jobNum, job] of pooled) add(buildJob(jobNum, [], job));
   for (const b of out.values()) b.jobs.sort((a, b2) => a.jobId.localeCompare(b2.jobId, undefined, { numeric: true }));
   return out;
 }

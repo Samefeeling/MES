@@ -37,8 +37,16 @@ const row = (j: Job, expect: Date | null, patch: Partial<OrderRow> = {}): OrderR
 const view = (rows: OrderRow[], pool: Job[] = []): AssemblyGanttView =>
   ({
     groups: [
-      { line: { name: 'ASSY 1', schedulable: true }, rows },
-      { line: { name: 'PMD', schedulable: false }, rows: [row(job('018140-9-9'), new Date(2026, 11, 1))] },
+      { line: { key: 'ASSY', name: 'ASSY 1', schedulable: true }, rows },
+      { line: { key: 'PMD', name: 'PMD', schedulable: false }, rows: [] },
+      {
+        line: { key: 'PMD_M12', name: 'M12', parent: 'PMD', schedulable: false },
+        rows: [
+          row(job('018150-1-1'), new Date(2026, 10, 20)),
+          // A changeover between two runs is drawn as a row; it is no order.
+          row(job('018150-1-1~DC', { press: { change: {} } } as Partial<Job>), new Date(2026, 10, 21)),
+        ],
+      },
     ],
     pool,
   }) as unknown as AssemblyGanttView;
@@ -57,7 +65,7 @@ describe('buildsByOrder', () => {
   );
 
   it('files every make-to-order job under its order, with the board’s dates', () => {
-    expect([...builds.keys()].sort()).toEqual(['18140', '18200', '18300']);
+    expect([...builds.keys()].sort()).toEqual(['18140', '18150', '18200', '18300']);
     const b = builds.get('18140')!;
     expect(b.jobs.map((j) => [j.jobId, j.lineName, j.state])).toEqual([
       ['018140-1-1', 'ASSY 1', 'dated'],
@@ -67,8 +75,10 @@ describe('buildsByOrder', () => {
     expect(builds.get('18300')!.jobs[0]).toMatchObject({ state: 'unplaced', lineName: null });
   });
 
-  it('leaves the PMD mirror out', () => {
-    expect(builds.get('18140')!.jobs.some((j) => j.jobId === '018140-9-9')).toBe(false);
+  it('counts a press run, under its press, and not the changeover after it', () => {
+    expect(builds.get('18150')!.jobs).toMatchObject([
+      { jobId: '018150-1-1', lineName: 'PMD › M12', state: 'dated', expect: new Date(2026, 10, 20) },
+    ]);
   });
 
   it('checks a load against the last job off the line', () => {
@@ -93,5 +103,72 @@ describe('buildsByOrder', () => {
     const done: OrderBuild = buildsByOrder(view([row(job('018400-1-1', { remainingQty: 0 }), null)])).get('18400')!;
     expect(checkBuild(done, '2026-10-01')!.verdict).toBe('done');
     expect(checkBuild(undefined, '2026-10-01')).toBeNull();
+  });
+});
+
+describe('buildsByOrder on a routed order', () => {
+  const routed = (seq: number, last: boolean, patch: Partial<Job> = {}): Job =>
+    job(`018500-1-1#${seq}`, {
+      operation: { jobNum: '018500-1-1', seq, last } as Job['operation'],
+      remainingQty: 4,
+      ...patch,
+    });
+  const benches = (rows: OrderRow[]): AssemblyGanttView =>
+    ({
+      groups: [
+        { line: { key: 'UPL_GLUING', name: 'UPL-Gluing', schedulable: true }, rows: [] },
+        {
+          line: { key: 'UPL_GLUING_FOAM', name: 'Foaming', parent: 'UPL_GLUING', schedulable: true },
+          rows: rows.filter((r) => String(r.job.id).endsWith('#10')),
+        },
+        {
+          line: { key: 'UPL_GLUING_SEW', name: 'Sewing', parent: 'UPL_GLUING', schedulable: true },
+          rows: rows.filter((r) => String(r.job.id).endsWith('#20')),
+        },
+        {
+          line: { key: 'UPL_GLUING_STAPLE', name: 'Stapling', parent: 'UPL_GLUING', schedulable: true },
+          rows: rows.filter((r) => String(r.job.id).endsWith('#30')),
+        },
+      ],
+      pool: [],
+    }) as unknown as AssemblyGanttView;
+
+  it('is one job, by its job number, finished when the latest bench it is at is', () => {
+    const b = buildsByOrder(
+      benches([
+        row(routed(10, false), new Date(2026, 9, 20), { sourceRemainingQty: 12 }),
+        row(routed(20, false), new Date(2026, 9, 22), { sourceRemainingQty: 12 }),
+      ]),
+    ).get('18500')!;
+    expect(b.jobs).toHaveLength(1);
+    expect(b.jobs[0]).toMatchObject({
+      jobId: '018500-1-1',
+      orderLine: '1',
+      rel: '1',
+      lineName: 'UPL-Gluing › Foaming · UPL-Gluing › Sewing',
+      remainingQty: 12,
+      state: 'dated',
+      expect: new Date(2026, 9, 22),
+    });
+    expect(checkBuild(b, '2026-10-21')!.verdict).toBe('late');
+  });
+
+  it('has no date while a bench it is at has nobody on it', () => {
+    const b = buildsByOrder(
+      benches([row(routed(10, false), new Date(2026, 9, 20)), row(routed(20, false), null)]),
+    ).get('18500')!;
+    expect(b.jobs[0].state).toBe('no-crew');
+    expect(checkBuild(b, '2026-10-30')!.verdict).toBe('unknown');
+  });
+
+  it('is done once its last operation is', () => {
+    const b = buildsByOrder(benches([row(routed(30, true), new Date(2026, 9, 14), { completedToday: true })])).get('18500')!;
+    expect(b.jobs[0]).toMatchObject({ state: 'done', lineName: 'UPL-Gluing › Stapling' });
+    expect(checkBuild(b, '2026-10-14')!.verdict).toBe('done');
+  });
+
+  it('files an operation in the pool once, under its job number', () => {
+    const v = { groups: [], pool: [routed(10, false), routed(20, false)] } as unknown as AssemblyGanttView;
+    expect(buildsByOrder(v).get('18500')!.jobs).toMatchObject([{ jobId: '018500-1-1', state: 'unplaced', lineName: null }]);
   });
 });
