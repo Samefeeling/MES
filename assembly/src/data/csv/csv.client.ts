@@ -48,8 +48,12 @@ export interface CsvSourceConfig {
   pressFilePath?: string;
   /** Direct URL to the dispatch waybill export. */
   waybillUrl?: string;
-  /** SharePoint drive path for the waybill export; empty disables the fetch. */
+  /** Drive path for `Waybill.csv`; it sits in the same folder as Planning1.csv. */
   waybillFilePath?: string;
+  /** Direct URL to the cubics sheet. */
+  cubicsUrl?: string;
+  /** Drive path for `Cubics.csv` (Drews Cubics and Freight Calc as CSV), in the same folder. */
+  cubicsFilePath?: string;
 }
 
 /** The folder a drive path is in, with its trailing slash. */
@@ -63,7 +67,9 @@ export function readCsvConfigFromEnv(): CsvSourceConfig {
     filePath,
     poDetailUrl: env.VITE_PO_DETAIL_CSV_URL ?? '',
     waybillUrl: env.VITE_WAYBILL_CSV_URL ?? '',
-    waybillFilePath: env.VITE_WAYBILL_CSV_PATH ?? '',
+    waybillFilePath: env.VITE_WAYBILL_CSV_PATH ?? `${folderOf(filePath) || '/Shared Documents/'}Waybill.csv`,
+    cubicsUrl: env.VITE_CUBICS_CSV_URL ?? '',
+    cubicsFilePath: env.VITE_CUBICS_CSV_PATH ?? `${folderOf(filePath) || '/Shared Documents/'}Cubics.csv`,
     poDetailFilePath: env.VITE_PO_DETAIL_CSV_PATH ?? `${folderOf(filePath) || '/Shared Documents/'}PODetail.csv`,
     linksUrl: env.VITE_JOB_MATERIAL_CSV_URL ?? '',
     linksFilePath:
@@ -236,6 +242,23 @@ export async function fetchWaybillCsv(
   return fetchText(
     'Waybill CSV',
     sp.authMode === 'session' ? sessionFile(sp, cfg.waybillFilePath!) : graphFile(sp, cfg.waybillFilePath!),
+    sp.token,
+  );
+}
+
+/**
+ * The cubics sheet, or `ok(null)` when there is nowhere to read it from.
+ * Optional: without it orders are sized from their freight CBM lines.
+ */
+export async function fetchCubicsCsv(
+  cfg: CsvSourceConfig,
+  sp: SharePointConfig,
+): Promise<Result<string | null, string>> {
+  if (cfg.cubicsUrl) return fetchText('Cubics.csv', cfg.cubicsUrl, null);
+  if (!cfg.cubicsFilePath || !sp.siteUrl || (!sp.token && sp.authMode !== 'session')) return ok(null);
+  return fetchText(
+    'Cubics.csv',
+    sp.authMode === 'session' ? sessionFile(sp, cfg.cubicsFilePath) : graphFile(sp, cfg.cubicsFilePath),
     sp.token,
   );
 }

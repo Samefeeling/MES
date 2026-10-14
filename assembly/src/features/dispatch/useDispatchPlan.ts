@@ -1,7 +1,7 @@
 /**
  * The waybill and cubics sheet, parsed, and the plan built over them —
  * recomputed only when an export, the settings, the planner's decisions or
- * the day change.
+ * the day change. Both are read by `waybillSource` into `waybillStore`.
  */
 
 import { useMemo } from 'react';
@@ -10,7 +10,9 @@ import { parseCubicsCsv, type CubicsParseResult } from '@/data/csv/cubics.parser
 import type { ShipmentOrder, WaybillLine } from '@/domain/dispatch';
 import { cubicMaster, orderCube } from '@/engine/dispatch/cube';
 import { planDispatch, type DispatchPlan } from '@/engine/dispatch/plan';
-import { useDispatchStore } from '@/store/dispatchStore';
+import { DISPATCHED_RETENTION_DAYS, useDispatchStore } from '@/store/dispatchStore';
+import { useWaybillStore } from '@/store/waybillStore';
+import { addCalendarDays } from '@/engine/dispatch/calendar';
 import { toDayKey } from '@/lib/time';
 
 export interface DispatchModel {
@@ -24,8 +26,8 @@ export interface DispatchModel {
 }
 
 export function useDispatchPlan(): DispatchModel {
-  const csvText = useDispatchStore((s) => s.csvText);
-  const cubicsText = useDispatchStore((s) => s.cubicsText);
+  const csvText = useWaybillStore((s) => s.csvText);
+  const cubicsText = useWaybillStore((s) => s.cubicsText);
   const settings = useDispatchStore((s) => s.settings);
   const decisions = useDispatchStore((s) => s.decisions);
   const today = toDayKey(new Date());
@@ -48,12 +50,22 @@ export function useDispatchPlan(): DispatchModel {
     return { orders, ordersById, linesByOrder };
   }, [parsed, cubics]);
 
+  // Loads that left more than a fortnight ago are history, not plan; the
+  // shipment log keeps them.
+  const recent = useMemo(() => {
+    const from = addCalendarDays(today, -DISPATCHED_RETENTION_DAYS);
+    return {
+      ...decisions,
+      firmLoads: decisions.firmLoads.filter((l) => l.status !== 'dispatched' || l.day >= from),
+    };
+  }, [decisions, today]);
+
   const plan = useMemo(
     () =>
       parsed && !parsed.error
-        ? planDispatch(indexes.orders, settings, decisions, today)
+        ? planDispatch(indexes.orders, settings, recent, today)
         : null,
-    [parsed, indexes, settings, decisions, today],
+    [parsed, indexes, settings, recent, today],
   );
 
   return { parsed, cubics, plan, ...indexes };

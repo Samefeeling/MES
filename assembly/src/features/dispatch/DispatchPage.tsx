@@ -27,9 +27,9 @@ import { useMemo, useState } from 'react';
 import { useDispatchStore } from '@/store/dispatchStore';
 import { useDataStore } from '@/store/dataStore';
 import { dispatchKpis } from '@/engine/dispatch/shipments';
-import { formatDay, formatTime } from '@/lib/time';
 import { useDispatchPlan } from './useDispatchPlan';
-import { WaybillLoader } from './WaybillLoader';
+import { WaybillStatus } from './WaybillStatus';
+import { useWaybillStore } from '@/store/waybillStore';
 import { DayBoard } from './DayBoard';
 import { LookAhead } from './LookAhead';
 import { OrdersTable } from './OrdersTable';
@@ -71,9 +71,10 @@ export function DispatchPage({ assembly = null }: { assembly?: AssemblyGanttView
   // from, read by every view that shows one.
   const link = useAssemblyLinkValue(assembly, model.linesByOrder, stock, model.plan?.today ?? '');
   const { parsed, plan } = model;
-  const fileName = useDispatchStore((s) => s.fileName);
-  const loadedAt = useDispatchStore((s) => s.loadedAt);
-  const cubicsFileName = useDispatchStore((s) => s.cubicsFileName);
+  const waybillError = useWaybillStore((s) => s.error);
+  const waybillNotes = useWaybillStore((s) => s.notes);
+  const writeError = useWaybillStore((s) => s.writeError);
+  const mode = useWaybillStore((s) => s.mode);
   const settings = useDispatchStore((s) => s.settings);
   const log = useDispatchStore((s) => s.shipments);
   const [tab, setTab] = useState<Tab>('day');
@@ -118,23 +119,23 @@ export function DispatchPage({ assembly = null }: { assembly?: AssemblyGanttView
                 ))}
               </div>
               <div className="kpi-range">
-                <span className="dispatch-source">
-                  {fileName && loadedAt && (
-                    <span title="The waybill the plan is built from">
-                      Waybill <b>{fileName}</b> · {formatDay(new Date(loadedAt))} {formatTime(new Date(loadedAt))}
-                    </span>
-                  )}
-                  {model.cubics && (
-                    <span title="The product cube master orders are sized from">
-                      Cubics <b>{cubicsFileName}</b> · {model.cubics.items.length} parts
-                      {model.cubics.withoutCode.length > 0 && ` · ${model.cubics.withoutCode.length} rows without a code`}
-                    </span>
-                  )}
-                </span>
-                <WaybillLoader />
+                <WaybillStatus cubicsParts={model.cubics && !model.cubics.error ? model.cubics.items.length : null} />
               </div>
             </div>
 
+            {waybillError && <div className="banner">Waybill not read: {waybillError}</div>}
+            {writeError && (
+              <div className="banner">
+                Planner changes not saved to the Waybill list: {writeError}. They are kept on this screen and
+                sent again at the next refresh.
+              </div>
+            )}
+            {waybillNotes.length > 0 && (
+              <div className="banner warn">
+                {waybillNotes.slice(0, 3).join(' · ')}
+                {waybillNotes.length > 3 && ` · +${waybillNotes.length - 3} more`}
+              </div>
+            )}
             {parsed?.error && <div className="banner">Waybill not loaded: {parsed.error}</div>}
             {parsed && parsed.warnings.length > 0 && (
               <div className="banner warn">
@@ -202,11 +203,12 @@ export function DispatchPage({ assembly = null }: { assembly?: AssemblyGanttView
               <DispatchSettingsPanel orders={parsed && !parsed.error ? parsed.orders : []} />
             ) : !parsed || parsed.error || !plan ? (
               <div className="dispatch-empty">
-                <h2>No waybill loaded</h2>
+                <h2>No waybill</h2>
                 <p>
-                  Load the waybill export (one row per order line: Order, PickListComment,
-                  ShipToCustName, Ship Via, Description, ExpDeliveryDt, Need By, City, freight CBM
-                  lines, Status) to build the dispatch plan. Settings can be reviewed before loading.
+                  {mode === 'none'
+                    ? 'MES is not on the SharePoint site, and no Waybill.csv address is set (VITE_WAYBILL_CSV_URL), so there is no waybill to plan from.'
+                    : 'The Waybill list has no open rows yet. A supervisor’s screen fills it from Waybill.csv, in the folder with Planning1.csv, each time the board refreshes — press Refresh to do it now.'}{' '}
+                  Settings can be reviewed meanwhile.
                 </p>
               </div>
             ) : tab === 'day' ? (

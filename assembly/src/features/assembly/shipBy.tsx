@@ -3,8 +3,8 @@
  * built for a sales order, red when the job comes off the line after it, and
  * `LAST` when it is the one line the order is still waiting for.
  *
- * Read from the waybill Dispatch holds (`store/dispatchStore`) — loaded there,
- * or fetched from its configured export (`useWaybillRefresh`). With no waybill
+ * Read from the waybill as every screen reads it (`store/waybillStore`, filled
+ * from the Waybill list by `features/dispatch/waybillSource`). With no waybill
  * the board shows nothing of it. Display only: nothing on the board moves for
  * it. See `engine/dispatch/shipBy`.
  */
@@ -17,7 +17,7 @@ import { pegSupply, type LineSupply } from '@/engine/dispatch/lineSupply';
 import { shipByJob, type ShipInfo } from '@/engine/dispatch/shipBy';
 import { formatDay, formatShortDay, fromDayKey, toDayKey } from '@/lib/time';
 import { useDataStore } from '@/store/dataStore';
-import { useDispatchStore } from '@/store/dispatchStore';
+import { useWaybillStore } from '@/store/waybillStore';
 
 const NONE: ReadonlyMap<string, ShipInfo> = new Map();
 
@@ -25,7 +25,7 @@ export const ShipByContext = createContext<ReadonlyMap<string, ShipInfo>>(NONE);
 
 /** Ship By for every job on the plan built for a line still on the waybill. */
 export function useShipByValue(plan: AssemblyGanttView | null): ReadonlyMap<string, ShipInfo> {
-  const csvText = useDispatchStore((s) => s.csvText);
+  const csvText = useWaybillStore((s) => s.csvText);
   const dataset = useDataStore((s) => s.dataset);
   const parsed = useMemo(() => (csvText ? parseWaybillCsv(csvText) : null), [csvText]);
   const today = toDayKey(new Date());

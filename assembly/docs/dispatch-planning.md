@@ -20,6 +20,61 @@ between the two is instant and the board keeps loading, saving and syncing
 behind Dispatch. Dispatch reads the board's plan of every order, released or
 not (see *Input: the Assembly board* below).
 
+## Where the waybill comes from: the Waybill list
+
+There is nothing to load by hand. Epicor's waybill export is `Waybill.csv`
+and the cubics sheet `Cubics.csv`, both in the folder that holds
+`Planning1.csv` (`VITE_WAYBILL_CSV_PATH` / `VITE_CUBICS_CSV_PATH` to put
+them elsewhere). The waybill is kept in the **`Waybill` SharePoint list**
+(`VITE_WAYBILL_LIST` to name another), one row per order release, its
+columns named exactly as `Waybill.csv` names them.
+
+Each time the board reads its own exports — the five-minute refresh, the
+board's Refresh, or **Refresh** on this page:
+
+1. **A supervisor's screen syncs the list.** `Waybill.csv` is compared with
+   the list row by row (`Order` + `Line` + `Rel`): only the cells that differ
+   are written; a release new to the export is added (Title is set to
+   `18532-5-1`); a release gone from it is not deleted but stamped
+   `ClosedAt`. The list's version history is then the record of every
+   change Epicor made — a Need By moved three times is three versions of the
+   row. A screen nobody is signed in on never writes. If the export suddenly
+   lists less than half of the open rows (more than 20 of them), it looks
+   partial and nothing is closed until **Close … gone from the export** is
+   pressed.
+2. **Every screen reads it.** The open rows (`ClosedAt` empty) are the
+   waybill this page plans from and the board reads Ship By off. Rows
+   dispatched in the last 400 days, closed or not, are the shipment log for
+   SIFOT and the Performance tab.
+
+The planner's decisions are columns on the same rows, which the sync never
+touches. Each decision is per order and written to every open line of it,
+a moment after it is made; a write that fails is kept on the screen and sent
+again at the next refresh rather than lost.
+
+| Column to add | Type | Holds |
+| --- | --- | --- |
+| `PlannedDay` | Date | **Pin to day** |
+| `HoldReason` | Single line of text | **Hold back**, with its reason (`Held` when none was given) |
+| `VolumeM3` | Number (2 decimals) | **Volume m³** entered for the order |
+| `LoadId` | Single line of text | the booked, edited or dispatched loads it is on |
+| `LoadDetail` | Multiple lines of text (plain) | those loads as JSON: day, vehicle, status, its volume and split piece, and what left |
+| `DispatchedAt` | Date and time | when its load was marked dispatched |
+| `ClosedAt` | Date and time | when the release left Waybill.csv |
+
+Without the first six the decisions stay on each screen, as before the
+list, and the page says which columns are missing; without `ClosedAt`
+nothing is ever closed. Once the list passes 5,000 rows SharePoint only
+filters on indexed columns: index **`ClosedAt`** and **`DispatchedAt`**
+(List settings → Indexed columns). Until then it is read whole, and the page
+says so.
+
+The **settings** (vehicles, windows, limits, holidays) are still kept per
+browser.
+
+Without a SharePoint session (the dev server) `Waybill.csv` is read straight
+from `VITE_WAYBILL_CSV_URL` and the decisions stay in the browser.
+
 ## Input: the waybill export
 
 One row per order line. Columns are matched by header name, so their order
@@ -44,8 +99,9 @@ column (by spreadsheet letter) each field was read from.
 
 ## Input: the cubics sheet (optional, more precise)
 
-**Load cubics** takes "Drews Cubics and Freight Calc" saved as CSV. One row
-per part and stack size:
+`Cubics.csv` is "Drews Cubics and Freight Calc" saved as CSV, read from the
+export folder with the waybill. Without it orders are sized from their freight
+lines, and the page says it was not read. One row per part and stack size:
 
 | Column | Used for |
 | --- | --- |
@@ -74,8 +130,6 @@ and listed under Exceptions until someone enters its cube. An order carrying
 two freight lines with the same cube (seen once: `FRTTAS` + `FRTSEB`) uses the
 largest rather than the sum.
 
-Load the file with **Load waybill**. Set `VITE_WAYBILL_CSV_URL` or
-`VITE_WAYBILL_CSV_PATH` (SharePoint drive path) to add a **Refresh** button.
 
 ## Routing
 
@@ -177,9 +231,7 @@ lists the ones it does not. The plan itself is not moved by it: it flags.
 The other way round, the Assembly board shows each job's order **Ship By**
 — `SHIP 21/10`, red when the job finishes after it, `LAST` when it is the one
 line the order is waiting for (see *Ship By on an order* in
-`board-interaction-rules.md`). For that, every screen needs the waybill: set
-`VITE_WAYBILL_CSV_URL` or `VITE_WAYBILL_CSV_PATH` and the board fetches it
-with its own exports.
+`board-interaction-rules.md`), read from the Waybill list on every screen.
 
 The board's dates are only as good as its crew. Without the `ASSY_Operator`
 roster (no SharePoint), nobody is on any order and every order reads *no
@@ -366,9 +418,9 @@ which MES keeps for warnings.
 - On an order: **Pin to day**, **Hold back** (with a reason), and **Volume m³**
   to enter or correct its cube.
 
-Decisions, settings and the loaded waybill are kept in this browser
-(`resero.dispatch.v1` in localStorage). They are not yet shared between
-machines.
+Decisions are kept on the Waybill list (see *Where the waybill comes from*),
+so every screen plans from the same ones. The settings are kept in each
+browser (`resero.dispatch.v1` in localStorage).
 
 ## Assumptions to confirm
 

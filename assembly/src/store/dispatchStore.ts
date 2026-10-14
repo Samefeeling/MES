@@ -1,9 +1,14 @@
 /**
- * Dispatch planning state: the loaded waybill, the planner's decisions over
- * it, and the logistics settings the plan is built with.
+ * Dispatch planning state: the planner's decisions over the waybill, the
+ * shipment log, and the logistics settings the plan is built with.
  *
- * Kept in browser storage, separately from the assembly plan, so the
- * dispatch office can work from its own export without touching the board.
+ * The waybill itself is not here — it is read with the board's exports into
+ * `waybillStore`. Where the `Waybill` SharePoint list is in use the decisions
+ * and the log live on it too (`features/dispatch/waybillSource` reads them in
+ * and writes every change back), so every screen plans from the same ones;
+ * this browser keeps only the settings then. Without the list — the dev
+ * server, the demo — the decisions are kept in this browser as before.
+ *
  * The plan itself is never stored: it is rebuilt from these on every change.
  */
 
@@ -24,26 +29,24 @@ import { SHIPMENT_RETENTION_DAYS, shipmentRecord, type ShipmentRecord } from '@/
 import { addCalendarDays } from '@/engine/dispatch/calendar';
 import { toDayKey } from '@/lib/time';
 
-/** Dispatched loads are kept this long for reference, then dropped. */
-const DISPATCHED_RETENTION_DAYS = 14;
+/** Dispatched loads stay on the plan this long for reference. */
+export const DISPATCHED_RETENTION_DAYS = 14;
 
 interface DispatchState {
-  csvText: string | null;
-  fileName: string | null;
-  loadedAt: string | null;
-  /** The cubics sheet (product cube master), as loaded. */
-  cubicsText: string | null;
-  cubicsFileName: string | null;
-  cubicsLoadedAt: string | null;
   settings: DispatchSettings;
   decisions: DispatchDecisions;
   /** What has left, for shipped dollars and SIFOT; kept apart from the waybill. */
   shipments: ShipmentRecord[];
+  /**
+   * The decisions and the log are the Waybill list's: read from it, written
+   * to it, and not kept in this browser.
+   */
+  listBacked: boolean;
 
-  loadWaybill: (text: string, fileName: string) => void;
-  clearWaybill: () => void;
-  loadCubics: (text: string, fileName: string) => void;
-  clearCubics: () => void;
+  /** The decisions and the log as the Waybill list holds them. */
+  fromList: (decisions: DispatchDecisions, shipments: ShipmentRecord[]) => void;
+  /** Keep only what is recent enough to matter; for this browser's own copy. */
+  prune: (today: DayKey) => void;
   pin: (orderId: string, day: DayKey | null) => void;
   hold: (orderId: string, reason: string | null) => void;
   setVolume: (orderId: string, m3: number | null) => void;
@@ -83,35 +86,24 @@ const without = <T,>(record: Record<string, T>, key: string): Record<string, T> 
 export const useDispatchStore = create<DispatchState>()(
   persist(
     (set) => ({
-      csvText: null,
-      fileName: null,
-      loadedAt: null,
-      cubicsText: null,
-      cubicsFileName: null,
-      cubicsLoadedAt: null,
       settings: DEFAULT_DISPATCH_SETTINGS,
       decisions: EMPTY_DECISIONS,
       shipments: [],
+      listBacked: false,
 
-      loadWaybill: (csvText, fileName) =>
+      fromList: (decisions, shipments) => set({ decisions, shipments, listBacked: true }),
+      prune: (today) =>
         set((s) => {
-          const cutoff = addCalendarDays(toDayKey(new Date()), -DISPATCHED_RETENTION_DAYS);
+          const loads = addCalendarDays(today, -DISPATCHED_RETENTION_DAYS);
+          const log = addCalendarDays(today, -SHIPMENT_RETENTION_DAYS);
           return {
-            csvText,
-            fileName,
-            loadedAt: new Date().toISOString(),
             decisions: {
               ...s.decisions,
-              firmLoads: s.decisions.firmLoads.filter(
-                (l) => l.status !== 'dispatched' || l.day >= cutoff,
-              ),
+              firmLoads: s.decisions.firmLoads.filter((l) => l.status !== 'dispatched' || l.day >= loads),
             },
+            shipments: s.shipments.filter((r) => r.day >= log),
           };
         }),
-      clearWaybill: () => set({ csvText: null, fileName: null, loadedAt: null }),
-      loadCubics: (cubicsText, cubicsFileName) =>
-        set({ cubicsText, cubicsFileName, cubicsLoadedAt: new Date().toISOString() }),
-      clearCubics: () => set({ cubicsText: null, cubicsFileName: null, cubicsLoadedAt: null }),
 
       pin: (orderId, day) =>
         set((s) => ({
@@ -193,6 +185,12 @@ export const useDispatchStore = create<DispatchState>()(
     }),
     {
       name: 'resero.dispatch.v1',
+      // The settings always; the decisions and the log only while they are
+      // this browser's own — the Waybill list holds them otherwise.
+      partialize: (s) =>
+        (s.listBacked
+          ? { settings: s.settings }
+          : { settings: s.settings, decisions: s.decisions, shipments: s.shipments }) as DispatchState,
       // v1: NSW runs keep each zone and Ship Via apart. Copies saved before
       // that carry the old default (mixed), which would otherwise win.
       // v2: no own fleet — the small NSW run once called `Carrier` is a

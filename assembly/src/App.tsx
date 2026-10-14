@@ -3,7 +3,7 @@
  * drag-and-drop context, and lays out the assembly board and inspector.
  */
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { DndContext, DragOverlay } from '@dnd-kit/core';
 import { useDataStore } from '@/store/dataStore';
 import { usePlanStore } from '@/store/planStore';
@@ -25,7 +25,7 @@ import { RefreshControl } from '@/features/refresh/RefreshControl';
 import { usePlanSync } from '@/features/sync/usePlanSync';
 import { usePlanPersistence } from '@/features/sync/usePlanPersistence';
 import { DispatchGate } from '@/features/dispatch/DispatchGate';
-import { useWaybillRefresh } from '@/features/dispatch/useWaybillRefresh';
+import { refreshWaybill } from '@/features/dispatch/waybillSource';
 import { ORDER_TYPE_SHORT } from '@/domain/assembly';
 import { Spinner } from '@/ui';
 
@@ -94,9 +94,16 @@ export default function App() {
     if (!hosted && !unlocked && onDispatch) setView('assembly');
   }, [hosted, unlocked, onDispatch, setView]);
 
-  // The waybill from its configured export, each time the board reads its
-  // own: each job's Ship By comes from it (see features/assembly/shipBy).
-  useWaybillRefresh(readAt);
+  // The waybill, each time the board reads its own exports: each job's Ship
+  // By comes from it (see features/assembly/shipBy), and Dispatch plans from
+  // it. A supervisor's screen brings the Waybill list into line with
+  // Waybill.csv first; every other screen only reads it.
+  const readStamp = readAt?.getTime() ?? null;
+  const syncs = useRef(unlocked);
+  syncs.current = unlocked;
+  useEffect(() => {
+    if (readStamp !== null) void refreshWaybill({ sync: syncs.current });
+  }, [readStamp]);
 
   // Initial data load.
   useEffect(() => {

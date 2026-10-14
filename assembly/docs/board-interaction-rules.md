@@ -413,10 +413,9 @@ A routed order shows it on each bench it is at; a press run on a PMD
 sub-line shows it too. Nothing on the board moves for it — it is there to be
 read.
 
-The waybill comes from Dispatch: fetched from `VITE_WAYBILL_CSV_URL` /
-`VITE_WAYBILL_CSV_PATH` each time the board reads its own exports, so every
-screen has it; without either, it is whatever was last loaded by hand on the
-Dispatch page in this browser. No waybill, no tags.
+The waybill is the `Waybill` SharePoint list's open rows, read each time the
+board reads its own exports, so every screen has it (see *Where the waybill
+comes from* in `dispatch-planning.md`). No waybill, no tags.
 
 ## Closed days
 
