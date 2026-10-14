@@ -382,6 +382,20 @@ source (P packed, C cubics sheet, E entered, unmarked freight line),
 `Ship By`, `ExpDeliveryDt` and goods readiness. A drop leaving after its
 `Ship By` or after the customer's delivery date is shown in red.
 
+### An order
+
+Clicking an order number anywhere opens it in a panel on the right, over a
+dimmed page; it closes with ×, Escape or a click anywhere outside it. From
+the top: the order, its readiness and what the planner did to it (Held,
+Pinned, on a fixed load); the four dates that decide a dispatch — `Ship By`,
+`Need By`, `ExpDeliveryDt` and the planned day (red when it leaves after its
+deadline, or has no day); what needs attention; **Delivery** (ship-to and
+address, customer, Ship Via, zone, city, route); **Size and value** (volume
+and where it came from, value, freight line, packed cube from the pick-list
+comment, cubics sheet, weight); the Assembly jobs building it and where its
+stock and bought-in goods come from; **Planner actions** (pin to day, volume
+m³, hold back); and its **Lines**, each with what covers its goods and when.
+
 ## Booking sheet
 
 The day's loads as one table the dock books carriers from: per load, what to
