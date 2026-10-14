@@ -134,7 +134,7 @@ function updateMirrorBadge(): void {
 updateMirrorBadge();
 
 interface Route {
-  view: 'operator' | 'tool' | 'kpi' | 'assembly';
+  view: 'operator' | 'tool' | 'kpi' | 'assembly' | 'dispatch';
   machineCode?: string;
   /** Which page of Maint: the die board, the machine board or the team. */
   maintTab?: MaintTab;
@@ -158,6 +158,7 @@ function parseRoute(): Route {
     return { view: 'tool', maintTab: tab ?? 'tool', openDie: d ? decodeURIComponent(d[1]) : undefined };
   }
   if (h.startsWith('#/assembly')) return { view: 'assembly' };
+  if (h.startsWith('#/dispatch')) return { view: 'dispatch' };
   if (h.startsWith('#/kpi')) return { view: 'kpi' };
   const m = /^#\/op\/(.+)$/.exec(h);
   if (m) return { view: 'operator', machineCode: decodeURIComponent(m[1]) };
@@ -188,6 +189,10 @@ function ensureNav(): void {
     // the sheet" mental model the operator already has.
     '<a href="#/" data-nav data-view="operator">\u{270F}\u{FE0F} PMD</a>' +
     '<a href="#/assembly" data-nav data-view="assembly">Assembly</a>' +
+    // Dispatch is a supervisor's page: the link is there only while signed
+    // in. The page itself also refuses anybody else (the frame's DispatchGate),
+    // which is what a bookmarked #/dispatch meets.
+    (sv ? '<a href="#/dispatch" data-nav data-view="dispatch">\u{1F69A} Dispatch</a>' : '') +
     '<a href="#/maint" data-nav data-view="tool">\u{1F6E0} Maint</a>' +
     '<a href="#/kpi" data-nav data-view="kpi">\u{1F4CA} KPIs</a>' +
     `<button type="button" class="nav-btn sv-toggle${sv ? ' on' : ''}" data-supervisor title="${
@@ -270,6 +275,11 @@ function promptSupervisorPassword(cb: (password: string) => void): void {
 // mode flag) whenever supervisor mode toggles, so the button label and
 // the lock-banner Unlock visibility stay in sync.
 onSupervisorChange(() => {
+  // Signing out on Dispatch leaves for the board: the page is a supervisor's
+  // and its link has just gone from the bar.
+  if (!isSupervisor() && parseRoute().view === 'dispatch') {
+    window.location.hash = '#/assembly';
+  }
   ensureNav();
   // The bottom-right mirror-health pill is supervisor-only diagnostics —
   // show/hide it with the mode.
@@ -300,8 +310,10 @@ async function route(): Promise<void> {
   try {
     const r = parseRoute();
     markNav();
-    showAssembly(r.view === 'assembly');
-    if (r.view === 'assembly') {
+    // Assembly and Dispatch are the two pages of one planning frame.
+    const planning = r.view === 'assembly' || r.view === 'dispatch';
+    showAssembly(planning, r.view === 'dispatch' ? 'dispatch' : 'assembly');
+    if (planning) {
       document.body.className = 'shift-day';
       return;
     }

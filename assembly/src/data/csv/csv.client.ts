@@ -46,6 +46,10 @@ export interface CsvSourceConfig {
   /** Path of the PMD dashboard's Planning.csv — the press plan, one row per
    *  press order with its Machine and No of shift; empty disables the fetch. */
   pressFilePath?: string;
+  /** Direct URL to the dispatch waybill export. */
+  waybillUrl?: string;
+  /** SharePoint drive path for the waybill export; empty disables the fetch. */
+  waybillFilePath?: string;
 }
 
 /** The folder a drive path is in, with its trailing slash. */
@@ -58,6 +62,8 @@ export function readCsvConfigFromEnv(): CsvSourceConfig {
     url: env.VITE_PLANNING_CSV_URL ?? '',
     filePath,
     poDetailUrl: env.VITE_PO_DETAIL_CSV_URL ?? '',
+    waybillUrl: env.VITE_WAYBILL_CSV_URL ?? '',
+    waybillFilePath: env.VITE_WAYBILL_CSV_PATH ?? '',
     poDetailFilePath: env.VITE_PO_DETAIL_CSV_PATH ?? `${folderOf(filePath) || '/Shared Documents/'}PODetail.csv`,
     linksUrl: env.VITE_JOB_MATERIAL_CSV_URL ?? '',
     linksFilePath:
@@ -207,6 +213,29 @@ export async function fetchPressPlanningCsv(
   return fetchText(
     'Planning.csv',
     sp.authMode === 'session' ? sessionFile(sp, cfg.pressFilePath) : graphFile(sp, cfg.pressFilePath),
+    sp.token,
+  );
+}
+
+/** Is a scheduled waybill export configured, so dispatch can refresh on its own? */
+export function hasWaybillSource(cfg: CsvSourceConfig, sp: SharePointConfig): boolean {
+  if (cfg.waybillUrl) return true;
+  return Boolean(cfg.waybillFilePath && sp.siteUrl && (sp.token || sp.authMode === 'session'));
+}
+
+/**
+ * The dispatch waybill export, or `ok(null)` when none is configured. The
+ * dispatch page also takes the file from disk, which needs no configuration.
+ */
+export async function fetchWaybillCsv(
+  cfg: CsvSourceConfig,
+  sp: SharePointConfig,
+): Promise<Result<string | null, string>> {
+  if (cfg.waybillUrl) return fetchText('Waybill CSV', cfg.waybillUrl, null);
+  if (!hasWaybillSource(cfg, sp)) return ok(null);
+  return fetchText(
+    'Waybill CSV',
+    sp.authMode === 'session' ? sessionFile(sp, cfg.waybillFilePath!) : graphFile(sp, cfg.waybillFilePath!),
     sp.token,
   );
 }

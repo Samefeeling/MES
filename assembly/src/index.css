@@ -175,6 +175,44 @@ button {
 .head-side.end {
   justify-content: flex-end;
 }
+/* Standalone only: Assembly | Dispatch. Inside MES the top bar switches. */
+.view-switch {
+  display: inline-flex;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.view-switch button {
+  appearance: none;
+  border: 0;
+  background: var(--surface-2);
+  color: var(--muted);
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.view-switch button + button {
+  border-left: 1px solid var(--border);
+}
+.view-switch button.active {
+  background: var(--accent);
+  color: #fff;
+}
+/* What a Dispatch page opened without the supervisor gate shows instead. */
+.dispatch-locked {
+  max-width: 520px;
+  margin: 64px auto;
+  padding: 0 16px;
+  color: var(--muted);
+  text-align: center;
+}
+.dispatch-locked h2 {
+  margin: 0 0 8px;
+  color: rgb(7, 89, 133);
+  font-size: 20px;
+}
 .barcode-lookup { position: relative; }
 .barcode-popover {
   position: absolute;

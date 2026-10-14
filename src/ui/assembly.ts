@@ -5,8 +5,17 @@ const entry = import.meta.env.DEV
   ? new URL('/assembly/index.html', window.location.origin)
   : new URL('../assembly/index.html', new URL(import.meta.url));
 
-/** Keep the frame mounted across routes so pending saves and inspector edits survive navigation. */
-export function showAssembly(active: boolean): void {
+/** Which page of the planning frame is showing: the board, or Dispatch. */
+export type PlanningPage = 'assembly' | 'dispatch';
+let page: PlanningPage = 'assembly';
+
+/**
+ * Keep the frame mounted across routes so pending saves and inspector edits
+ * survive navigation. Assembly and Dispatch are two pages of the one frame:
+ * switching between them is a message, not a reload.
+ */
+export function showAssembly(active: boolean, view: PlanningPage = page): void {
+  page = view;
   const app = document.getElementById('app')!;
   app.hidden = active;
   if (!frame && active) {
@@ -42,7 +51,7 @@ export function showAssembly(active: boolean): void {
 }
 
 export function notifyAssembly(): void {
-  frame?.contentWindow?.postMessage({ type: 'mes:assembly-state', supervisor: isSupervisor(), active: !frame.hidden }, entry.origin);
+  frame?.contentWindow?.postMessage({ type: 'mes:assembly-state', supervisor: isSupervisor(), active: !frame.hidden, view: page }, entry.origin);
 }
 
 window.addEventListener('message', event => {

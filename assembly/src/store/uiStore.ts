@@ -241,7 +241,18 @@ export interface ClashRequest {
   toDayExclusive?: string | null;
 }
 
+/**
+ * The two pages the board's application holds. Dispatch is the supervisor's
+ * alone: see `DispatchGate`.
+ */
+export type AppView = 'assembly' | 'dispatch';
+
 interface UiState {
+  /**
+   * Which page is showing. Inside MES the top bar's route decides it (see
+   * `mesBridge`); standalone, the switch in the header does.
+   */
+  view: AppView;
   /** Order shown in the inspector. */
   selectedJobId: string | null;
   /**
@@ -364,6 +375,7 @@ interface UiState {
    * one of them.
    */
   dismissTop: () => boolean;
+  setView: (view: AppView) => void;
   setDayWidth: (px: number) => void;
   /** Drag one day column off the zoom. */
   setDayColumnWidth: (day: string, px: number) => void;
@@ -410,6 +422,7 @@ interface UiState {
 }
 
 export const useUiStore = create<UiState>((set, get) => ({
+  view: 'assembly',
   selectedJobId: null,
   marked: [],
   foundOrder: null,
@@ -465,6 +478,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   setCrewPicker: (crewPickerJobId) =>
     set({ crewPickerJobId, workerLoadId: null }),
   setWorkerLoad: (workerLoadId) => set({ workerLoadId, crewPickerJobId: null }),
+
+  setView: (view) => set({ view }),
 
   dismissTop: () => {
     const state = get();

@@ -103,3 +103,11 @@ export function mapHeaders<F extends string>(
   }
   return out;
 }
+
+/** Rows to RFC 4180 CSV: fields with a comma, quote or line break are quoted. */
+export const toCsv = (rows: readonly (readonly string[])[]): string =>
+  rows
+    .map((row) =>
+      row.map((f) => (/[",\r\n]/.test(f) ? `"${f.replace(/"/g, '""')}"` : f)).join(','),
+    )
+    .join('\r\n') + '\r\n';

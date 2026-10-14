@@ -19,6 +19,8 @@ interface ImportMetaEnv {
   readonly VITE_JOB_MATERIAL_CSV_PATH?: string;
   readonly VITE_PO_DETAIL_CSV_URL?: string;
   readonly VITE_PO_DETAIL_CSV_PATH?: string;
+  readonly VITE_WAYBILL_CSV_URL?: string;
+  readonly VITE_WAYBILL_CSV_PATH?: string;
 }
 
 interface ImportMeta {

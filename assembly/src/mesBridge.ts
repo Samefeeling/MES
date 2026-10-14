@@ -1,4 +1,5 @@
 import { useSupervisorStore } from './store/supervisorStore';
+import { useUiStore } from './store/uiStore';
 
 /**
  * MES supplies the operational supervisor gate; SharePoint permissions still enforce access.
@@ -14,6 +15,8 @@ export function connectMes(): void {
   window.addEventListener('message', event => {
     if (event.source !== window.parent || event.origin !== hostOrigin || event.data?.type !== 'mes:assembly-state') return;
     useSupervisorStore.setState({ required: true, unlocked: event.data.supervisor === true });
+    // The top bar's route says which page: #/assembly or #/dispatch.
+    if (event.data.view === 'assembly' || event.data.view === 'dispatch') useUiStore.getState().setView(event.data.view);
     document.documentElement.dataset.mesActive = String(event.data.active === true);
   });
   window.parent.postMessage({ type: 'assembly:ready' }, hostOrigin);

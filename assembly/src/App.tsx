@@ -24,6 +24,7 @@ import { useScheduledRefresh } from '@/features/refresh/useScheduledRefresh';
 import { RefreshControl } from '@/features/refresh/RefreshControl';
 import { usePlanSync } from '@/features/sync/usePlanSync';
 import { usePlanPersistence } from '@/features/sync/usePlanPersistence';
+import { DispatchGate } from '@/features/dispatch/DispatchGate';
 import { ORDER_TYPE_SHORT } from '@/domain/assembly';
 import { Spinner } from '@/ui';
 
@@ -32,6 +33,10 @@ export default function App() {
   const load = useDataStore((s) => s.load);
   const warnings = useDataStore((s) => s.warnings);
   const hosted = useSupervisorStore((s) => s.hosted);
+  const unlocked = useSupervisorStore((s) => s.unlocked);
+  const view = useUiStore((s) => s.view);
+  const setView = useUiStore((s) => s.setView);
+  const onDispatch = view === 'dispatch';
 
   const manualOrders = usePlanStore(s => s.manualOrders);
   const selectedJobId = useUiStore(s => s.selectedJobId);
@@ -80,6 +85,13 @@ export default function App() {
     plan.stored === 'loaded' && plan.settled && !plan.dirty ? planBoard : null,
   );
 
+  // Standalone, the switch to Dispatch goes with the supervisor gate, so
+  // locking it on Dispatch takes the page back to the board. Inside MES the
+  // top bar's route does the same (main.ts).
+  useEffect(() => {
+    if (!hosted && !unlocked && onDispatch) setView('assembly');
+  }, [hosted, unlocked, onDispatch, setView]);
+
   // Initial data load.
   useEffect(() => {
     void load();
@@ -96,6 +108,8 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
+      // Dispatch closes its own layers; the board's are not on screen.
+      if (useUiStore.getState().view !== 'assembly') return;
       if (useUiStore.getState().dismissTop()) e.preventDefault();
     };
     window.addEventListener('keydown', onKey);
@@ -129,144 +143,183 @@ export default function App() {
         one ground — MES's top bar is the other, and the page gets no more
         than the two.
       */}
-      <header className="app-header">
-        {/*
-          Standalone only — the dev server and the mock demo have no top bar
-          above them, and a page with nothing naming it is a page nobody can
-          say they are on.
-        */}
-        {!hosted && <h1>Assembly Board</h1>}
-        <BoardTools board={board} />
-        <div className="head-side end">
-          <SupervisorLock />
-          <BarcodeOrderLookup board={board} />
-          {/* Which export this is has left the row entirely — chip and hover
-              both. The source has not changed since the board was built and
-              never changes while anybody is looking at it, so it was a word in
-              the header that answered a question nobody had. */}
-          <RefreshControl
-            onRefresh={() => void refreshAndSort()}
-            onSave={plan.save}
-            dirty={plan.dirty}
-            saving={plan.saving}
-            canSave={plan.stored === 'loaded'}
-          />
-        </div>
-      </header>
-
-      {error && <div className="banner">Data error: {error}</div>}
       {/*
-        A plan that could not be read is not an empty plan. Say which of the
-        two has happened, because the board looks identical either way, and
-        make it plain that nothing is being written until it is read.
+        Inside MES the top bar names the page and switches it, and Dispatch
+        carries its own toolbar, so on Dispatch there is no row here at all.
       */}
-      {plan.stored === 'failed' && plan.failure === 'write' ? (
-        <div className="banner">
-          Plan not saved ({plan.error}). Nothing on SharePoint was written
-          over — it still holds the plan as last saved, without what was
-          changed on this screen since. This screen saves nothing more until it
-          reads the plan again.{' '}
-          <button className="banner-action" onClick={plan.retry}>
-            Reload saved plan
-          </button>
-        </div>
-      ) : plan.stored === 'failed' ? (
-        <div className="banner">
-          Saved plan not loaded ({plan.error}). The board is showing the export
-          on its own — crew, dragged starts and shift entries are still in the
-          store and nothing is being saved over them.{' '}
-          <button className="banner-action" onClick={plan.retry}>
-            Try again
-          </button>
-        </div>
-      ) : (
-        plan.error && <div className="banner warn">Plan not saved: {plan.error}</div>
-      )}
-      {plan.archiveError && (
-        <div className="banner warn">
-          Yesterday’s plan not filed ({plan.archiveError}). The board is working
-          normally; that day is missing from the history.
-        </div>
-      )}
-      {/*
-        The one thing a planner cannot see by looking at the board: whether
-        what is on it has been published. Unsaved planning lives in this
-        browser only and goes at the next refresh, so say so where the banners
-        are rather than leaving it to the state of a button.
-      */}
-      {plan.dirty && (
-        <div className="banner warn">
-          Unsaved planning — this board is a draft held on this screen. Press
-          Save to make it the current plan; a refresh takes the saved plan back
-          and drops it.
-        </div>
-      )}
-      {sync.errors.length > 0 && (
-        <div className="banner warn">
-          {sync.list} not updated: {sync.errors[0]}
-          {sync.errors.length > 1 && ` · +${sync.errors.length - 1} more`}
-        </div>
-      )}
-      {warnings.length > 0 && (
-        <div className="banner warn">
-          {/* Only the first few; the rest are usually the same problem. */}
-          {warnings.slice(0, 3).join(' · ')}
-          {warnings.length > 3 && ` · +${warnings.length - 3} more`}
-        </div>
-      )}
-
-      <DndContext
-        sensors={dnd.sensors}
-        autoScroll={!dnd.activeBar}
-        collisionDetection={dnd.collisionDetection}
-        onDragStart={dnd.onDragStart}
-        onDragEnd={dnd.onDragEnd}
-        onDragCancel={dnd.onDragCancel}
-      >
-        {/*
-          The schedule has the whole width. An order's detail opens beside the
-          pointer instead of in a column. Unassigned jobs remain in plan state
-          but no pull-job side column is rendered.
-        */}
-        <div className="app-body">
-          <div className="board-pane assembly-pane">
-            {board ? (
-              <AssemblyGantt board={board} planBoard={planBoard} unreleasedHidden={unreleasedHidden} />
-            ) : (
-              <div className="center-fill">
-                <Spinner />
-                <span>Loading assembly orders…</span>
-              </div>
-            )}
-          </div>
+      {(!hosted || !onDispatch) && (
+        <header className="app-header">
           {/*
-            Orders on no line remain reachable in the bottom strip. When empty,
-            its drag target overlays the header without taking board height.
+            Standalone only — the dev server and the mock demo have no top bar
+            above them, and a page with nothing naming it is a page nobody can
+            say they are on. The page switch sits beside the name; Dispatch is in
+            it only while the supervisor gate is open.
           */}
-          {board && <AssemblyPool board={board} />}
-          {board && (selectedJobId && manualOrders[selectedJobId] ? <ManualOrderInspector key={selectedJobId} board={board} id={selectedJobId} /> : <AssemblyInspector board={board} />)}
-        </div>
+          {!hosted && (
+            <div className="head-side">
+              {unlocked && (
+                <nav className="view-switch" aria-label="Pages">
+                  <button type="button" className={onDispatch ? '' : 'active'} onClick={() => setView('assembly')}>
+                    Assembly
+                  </button>
+                  <button type="button" className={onDispatch ? 'active' : ''} onClick={() => setView('dispatch')}>
+                    Dispatch
+                  </button>
+                </nav>
+              )}
+              <h1>{onDispatch ? 'Dispatch Planner' : 'Assembly Board'}</h1>
+            </div>
+          )}
+          {onDispatch ? (
+            <div className="head-side end">
+              <SupervisorLock />
+            </div>
+          ) : (
+            <>
+              <BoardTools board={board} />
+              <div className="head-side end">
+                <SupervisorLock />
+                <BarcodeOrderLookup board={board} />
+                {/* Which export this is has left the row entirely — chip and hover
+                    both. The source has not changed since the board was built and
+                    never changes while anybody is looking at it, so it was a word in
+                    the header that answered a question nobody had. */}
+                <RefreshControl
+                  onRefresh={() => void refreshAndSort()}
+                  onSave={plan.save}
+                  dirty={plan.dirty}
+                  saving={plan.saving}
+                  canSave={plan.stored === 'loaded'}
+                />
+              </div>
+            </>
+          )}
+        </header>
+      )}
 
-        <DragOverlay dropAnimation={null}>
-          {dnd.activeLineName ? (
-            <div className="line-drag-overlay">{dnd.activeLineName}</div>
-          ) : activeWorker ? (
-            <div className="worker-drag-overlay">{activeWorker.name}</div>
-          ) : activeJob ? (
-            <div className="ord" style={{ cursor: 'grabbing', width: 240 }}>
-              <div className="ord-head">
-                <span className="ord-job">{String(activeJob.id)}</span>
-                {activeJob.orderType && (
-                  <span className="ord-type">
-                    {ORDER_TYPE_SHORT[activeJob.orderType]}
-                  </span>
+      {/*
+        Dispatch reads the plan — every order, released or not — and the
+        board keeps loading, saving and syncing behind it, so switching back
+        loses nothing.
+      */}
+      {onDispatch && <DispatchGate assembly={planBoard} />}
+      {!onDispatch && (
+        <>
+          {error && <div className="banner">Data error: {error}</div>}
+          {/*
+            A plan that could not be read is not an empty plan. Say which of the
+            two has happened, because the board looks identical either way, and
+            make it plain that nothing is being written until it is read.
+          */}
+          {plan.stored === 'failed' && plan.failure === 'write' ? (
+            <div className="banner">
+              Plan not saved ({plan.error}). Nothing on SharePoint was written
+              over — it still holds the plan as last saved, without what was
+              changed on this screen since. This screen saves nothing more until it
+              reads the plan again.{' '}
+              <button className="banner-action" onClick={plan.retry}>
+                Reload saved plan
+              </button>
+            </div>
+          ) : plan.stored === 'failed' ? (
+            <div className="banner">
+              Saved plan not loaded ({plan.error}). The board is showing the export
+              on its own — crew, dragged starts and shift entries are still in the
+              store and nothing is being saved over them.{' '}
+              <button className="banner-action" onClick={plan.retry}>
+                Try again
+              </button>
+            </div>
+          ) : (
+            plan.error && <div className="banner warn">Plan not saved: {plan.error}</div>
+          )}
+          {plan.archiveError && (
+            <div className="banner warn">
+              Yesterday’s plan not filed ({plan.archiveError}). The board is working
+              normally; that day is missing from the history.
+            </div>
+          )}
+          {/*
+            The one thing a planner cannot see by looking at the board: whether
+            what is on it has been published. Unsaved planning lives in this
+            browser only and goes at the next refresh, so say so where the banners
+            are rather than leaving it to the state of a button.
+          */}
+          {plan.dirty && (
+            <div className="banner warn">
+              Unsaved planning — this board is a draft held on this screen. Press
+              Save to make it the current plan; a refresh takes the saved plan back
+              and drops it.
+            </div>
+          )}
+          {sync.errors.length > 0 && (
+            <div className="banner warn">
+              {sync.list} not updated: {sync.errors[0]}
+              {sync.errors.length > 1 && ` · +${sync.errors.length - 1} more`}
+            </div>
+          )}
+          {warnings.length > 0 && (
+            <div className="banner warn">
+              {/* Only the first few; the rest are usually the same problem. */}
+              {warnings.slice(0, 3).join(' · ')}
+              {warnings.length > 3 && ` · +${warnings.length - 3} more`}
+            </div>
+          )}
+
+          <DndContext
+            sensors={dnd.sensors}
+            autoScroll={!dnd.activeBar}
+            collisionDetection={dnd.collisionDetection}
+            onDragStart={dnd.onDragStart}
+            onDragEnd={dnd.onDragEnd}
+            onDragCancel={dnd.onDragCancel}
+          >
+            {/*
+              The schedule has the whole width. An order's detail opens beside the
+              pointer instead of in a column. Unassigned jobs remain in plan state
+              but no pull-job side column is rendered.
+            */}
+            <div className="app-body">
+              <div className="board-pane assembly-pane">
+                {board ? (
+                  <AssemblyGantt board={board} planBoard={planBoard} unreleasedHidden={unreleasedHidden} />
+                ) : (
+                  <div className="center-fill">
+                    <Spinner />
+                    <span>Loading assembly orders…</span>
+                  </div>
                 )}
               </div>
-              <div className="ord-desc">{activeJob.description}</div>
+              {/*
+                Orders on no line remain reachable in the bottom strip. When empty,
+                its drag target overlays the header without taking board height.
+              */}
+              {board && <AssemblyPool board={board} />}
+              {board && (selectedJobId && manualOrders[selectedJobId] ? <ManualOrderInspector key={selectedJobId} board={board} id={selectedJobId} /> : <AssemblyInspector board={board} />)}
             </div>
-          ) : null}
-        </DragOverlay>
-      </DndContext>
+
+            <DragOverlay dropAnimation={null}>
+              {dnd.activeLineName ? (
+                <div className="line-drag-overlay">{dnd.activeLineName}</div>
+              ) : activeWorker ? (
+                <div className="worker-drag-overlay">{activeWorker.name}</div>
+              ) : activeJob ? (
+                <div className="ord" style={{ cursor: 'grabbing', width: 240 }}>
+                  <div className="ord-head">
+                    <span className="ord-job">{String(activeJob.id)}</span>
+                    {activeJob.orderType && (
+                      <span className="ord-type">
+                        {ORDER_TYPE_SHORT[activeJob.orderType]}
+                      </span>
+                    )}
+                  </div>
+                  <div className="ord-desc">{activeJob.description}</div>
+                </div>
+              ) : null}
+            </DragOverlay>
+          </DndContext>
+        </>
+      )}
 
       {/* Asks before any work is written into a Saturday or Sunday. */}
       <OvertimePrompt />
