@@ -65,6 +65,8 @@ export interface PersistedPlan {
     orderOvertime?: Record<string, boolean>;
     /** Per order, the people approved to be on it while on another too. */
     orderDoubleBooked?: Record<string, string[]>;
+    /** Orders a person dropped in the pool; the rest of it is filed onto lines. */
+    pooledByHand?: string[];
     progress?: Record<string, { date: string; qty: number }[]>;
     progressBaselines?: Record<string, ProgressBaseline>;
     /** Daily rows persisted by the backend in the ASSY_Production list. */

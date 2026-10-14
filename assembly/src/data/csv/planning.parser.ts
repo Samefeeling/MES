@@ -24,6 +24,7 @@ import { JobId, MachineId, PartId, WorkCenterId } from '@/domain/ids';
 import type { Department, Job } from '@/domain/types';
 import {
   LINE_BY_ID,
+  lineForOrderType,
   readLineKey,
   type MaterialPrepStatus,
   type OrderType,
@@ -329,7 +330,15 @@ export function parsePlanningCsv(
     // ERP column still places the order — an order on a roughly-right line is
     // worth more to the floor than one in the unplaced pool.
     const placed = router.place(partNum, lineCell, description);
-    const placement = readPlacement(placed.line ?? '') ?? readPlacement(lineCell);
+    // Last, the order type: an order that says it is cutting and sewing, or
+    // final assembly, has a line to go to even when nothing else names one —
+    // unfirm (SUNF) orders arrive like that, and leaving them in the pool only
+    // made the supervisor file each by hand.
+    const typed = readOrderType(cell(row, col.orderType), null);
+    const placement =
+      readPlacement(placed.line ?? '') ??
+      readPlacement(lineCell) ??
+      (typed && !placed.excluded ? readPlacement(lineForOrderType(typed, description)) : null);
     if (!placement && lineCell) {
       unknownLines.set(lineCell, (unknownLines.get(lineCell) ?? 0) + 1);
     }

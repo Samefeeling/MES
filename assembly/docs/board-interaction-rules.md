@@ -635,7 +635,24 @@ belongs there, which is why somebody opened it.
 It lives in the **shared plan**, not in one browser: a bench opened this
 morning is a fact about the week. **Close line** on its own row removes it and
 tips whatever is on it back into the unplaced pool — closing a bench is not a
-decision about where its work belongs.
+decision about where its work belongs — and the next refresh files each order
+onto the line the export gives it.
+
+## What stays in the Unassigned strip
+
+Only two kinds of order:
+
+- one a supervisor **dropped there** to take it off the schedule. It stays
+  through every refresh until somebody drags it onto a line again; and
+- one with **nothing to go on** — no line from ERP, the routing table or the
+  BOM, and no order type.
+
+Everything else goes onto a line by itself. An order whose type is all there
+is (an unfirm `SUNF…` order, usually) goes to the line that type runs on —
+C/S to UPL-CUT, UPH to UPL-Gluing (UPL-SSS for Smart Softies), F/A to
+Assembly — and an order that sat in the strip only because no line was known
+when it arrived is filed onto its line as soon as one is. Crew orders still
+leaves `SUNF…` orders without a crew, as its rules say.
 
 ## Why an order has no Expect Date
 

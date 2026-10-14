@@ -511,6 +511,25 @@ export function erpNamedLine(resource: string): LineKey | null {
 
 export const LINE_BY_ID = new Map(LINES.map((l) => [String(l.id), l]));
 
+/**
+ * The line an order goes to when its type is all there is to go on — no line
+ * from ERP, the routing table or the BOM, which is how an unfirm (SUNF) order
+ * usually arrives. Cutting and sewing has only the one line; upholstery is
+ * Gluing, or the Smart Softies bench when the description says so (the same
+ * reading as rule R5 in `lineRules`); final assembly is the Assembly line.
+ * TBP, Table and General are never guessed: ERP names those itself.
+ */
+export function lineForOrderType(type: OrderType, description: string): LineKey {
+  switch (type) {
+    case 'cutting-sewing':
+      return 'UPL_CUT_SEW';
+    case 'upholstery':
+      return /smart soft/i.test(description) ? 'UPL_SOFTIE' : 'UPL_GLUING';
+    case 'final-assembly':
+      return 'ASSY';
+  }
+}
+
 /** Short label for the tight left-hand table. */
 export const ORDER_TYPE_SHORT: Record<OrderType, string> = {
   'cutting-sewing': 'C/S',

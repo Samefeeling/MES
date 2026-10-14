@@ -408,6 +408,11 @@ this file is optional.
 - **Order type** is inferred from the line where that is unambiguous — ASSY and
   TABLE only run Final Assembly. UPL runs both Cutting/Sewing and Upholstery, so
   its orders show no type until the column exists.
+- **An order no line is named for** — not by ERP, the routing table or the BOM,
+  which is how unfirm (`SUNF…`) orders arrive — goes onto the line its type
+  runs on: Cutting/Sewing → UPL-CUT, Upholstery → UPL-Gluing (UPL-SSS when the
+  description says Smart Soft), Final Assembly → Assembly. Only an order with
+  neither a line nor a type is left in the Unassigned strip.
 
 Planning1.csv carries no stock or purchase orders of its own: the shortage
 view reads them from `OnHandInventory.csv` and `PODetail.csv`. Without those

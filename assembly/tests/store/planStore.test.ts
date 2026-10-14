@@ -489,6 +489,61 @@ describe('surviving a twice-daily export', () => {
   });
 });
 
+/**
+ * The pool is for orders a person took off the schedule. One that only sat
+ * there because no line was known when it arrived goes onto its line as soon
+ * as the export gives it one.
+ */
+describe('what stays in the pool', () => {
+  const centres = [
+    { id: 'TBP', name: 'TBP', sortIndex: 1 },
+    { id: 'ASSY', name: 'Assembly', sortIndex: 2 },
+  ] as unknown as Parameters<ReturnType<typeof usePlanStore.getState>['reconcile']>[0];
+  const job = (id: string, line: string | null) =>
+    ({ id: JobId(id), department: 'assembly', line, preferredMachine: null, assignedWorkers: [] }) as unknown as Parameters<
+      ReturnType<typeof usePlanStore.getState>['reconcile']
+    >[1][number];
+  const day = new Date('2026-10-14T09:00:00');
+  const state = () => usePlanStore.getState();
+
+  beforeEach(() => {
+    usePlanStore.setState({ containers: {}, lastSeen: {}, pooledByHand: [], orderStarts: {} });
+  });
+
+  it('files an order the pool held for want of a line onto the line it now has', () => {
+    // A plan saved when SUNF0000000207 had no line: it went to the pool.
+    state().reconcile(centres, [job('SUNF0000000207', null), job('A', 'TBP')], day);
+    expect(state().containers.__pool__.map(String)).toEqual(['SUNF0000000207']);
+    // The next export (or the order type) gives it one.
+    state().reconcile(centres, [job('SUNF0000000207', 'ASSY'), job('A', 'TBP')], day);
+    expect(state().containers.__pool__).toEqual([]);
+    expect(state().containers.ASSY.map(String)).toEqual(['SUNF0000000207']);
+  });
+
+  it('keeps an order a person dropped in the pool there, and lets it go again when moved out', () => {
+    state().reconcile(centres, [job('A', 'TBP'), job('B', 'TBP')], day);
+    state().moveJob(JobId('B'), '__pool__');
+    state().reconcile(centres, [job('A', 'TBP'), job('B', 'TBP')], day);
+    expect(state().containers.__pool__.map(String)).toEqual(['B']);
+    expect(state().pooledByHand).toEqual(['B']);
+
+    state().moveJob(JobId('B'), 'TBP');
+    expect(state().pooledByHand).toEqual([]);
+    state().reconcile(centres, [job('A', 'TBP'), job('B', 'TBP')], day);
+    expect(state().containers.TBP.map(String)).toEqual(['A', 'B']);
+  });
+
+  it('remembers who pooled an order across a save and a reload', () => {
+    state().reconcile(centres, [job('B', 'TBP')], day);
+    state().moveJob(JobId('B'), '__pool__');
+    const saved = state().pooledByHand;
+    usePlanStore.setState({ pooledByHand: [] });
+    state().setAssemblyPlan({ pooledByHand: saved });
+    state().reconcile(centres, [job('B', 'TBP')], day);
+    expect(state().containers.__pool__.map(String)).toEqual(['B']);
+  });
+});
+
 describe('setOrderStarts', () => {
   beforeEach(() => {
     usePlanStore.setState({ orderStarts: { KEEP: '2026-09-14T07:00:00.000Z', GONE: '2026-09-15T07:00:00.000Z' } });

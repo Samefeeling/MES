@@ -38,6 +38,7 @@ export const PLANNING_KEYS = [
   'orderStarts',
   'orderOvertime',
   'orderDoubleBooked',
+  'pooledByHand',
 ] as const satisfies ReadonlyArray<keyof Assembly>;
 
 /** Assembly keys that record what the floor did; written as they happen. */

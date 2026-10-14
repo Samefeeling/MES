@@ -293,3 +293,28 @@ describe('the labour-hours column', () => {
     expect(errors.some((e) => e.includes('SFM507615'))).toBe(false);
   });
 });
+
+describe('an order with no line but a type', () => {
+  const csv = [
+    'JobNum,PartNum,PartDescription,PersonID,ProdQty,OrderType,ReqDueDate,LaborHrs',
+    'SUNF0000000268,CF-BRT,Cut Fabric for Base Rectangle Trolley,,1,Cutting/Sewing,2026-10-29,1',
+    'SUNF0000000207,MH-BLUE,Mindfull Hideaway Hood - Blue,,10,Final Assembly,2027-01-18,20',
+    'SUNF0000000300,SS-BLOC,Smart Softie Bloc - Marine,,4,Upholstery,2026-11-13,4',
+    'SUNF0000000301,UP-SEAT,Upholstered seat,,4,Upholstery,2026-11-13,4',
+    'SUNF0000000302,NOTYPE,Nothing to go on,,4,,2026-11-13,4',
+    'SFM1,7911FR,Encore,TBP,4,Final Assembly,2026-11-13,4',
+  ].join('\n');
+  const jobs = byId(csv);
+
+  it('goes to the line its type runs on', () => {
+    expect(String(jobs.get('SUNF0000000268')!.line)).toBe('UPL_CUT_SEW');
+    expect(String(jobs.get('SUNF0000000207')!.line)).toBe('ASSY');
+    expect(String(jobs.get('SUNF0000000300')!.line)).toBe('UPL_SOFTIE');
+    expect(String(jobs.get('SUNF0000000301')!.line)).toBe('UPL_GLUING');
+  });
+
+  it('leaves a line ERP named alone, and an order with nothing to go on unplaced', () => {
+    expect(String(jobs.get('SFM1')!.line)).toBe('TBP');
+    expect(jobs.get('SUNF0000000302')!.line).toBeNull();
+  });
+});

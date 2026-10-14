@@ -72,6 +72,7 @@ const planningNow = (): PlanningPart => {
       orderStarts: p.orderStarts,
       orderOvertime: p.orderOvertime,
       orderDoubleBooked: p.orderDoubleBooked,
+      pooledByHand: p.pooledByHand,
     },
   };
 };
@@ -163,6 +164,7 @@ export function usePlanPersistence(): PlanPersistence {
   const orderStarts = usePlanStore((s) => s.orderStarts);
   const orderOvertime = usePlanStore((s) => s.orderOvertime);
   const orderDoubleBooked = usePlanStore((s) => s.orderDoubleBooked);
+  const pooledByHand = usePlanStore((s) => s.pooledByHand);
 
   const workerOnLeave = usePlanStore((s) => s.workerOnLeave);
   const orderActualStarts = usePlanStore((s) => s.orderActualStarts);
@@ -190,6 +192,7 @@ export function usePlanPersistence(): PlanPersistence {
       orderStarts,
       orderOvertime,
       orderDoubleBooked,
+      pooledByHand,
     ],
   );
 

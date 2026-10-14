@@ -256,6 +256,12 @@ interface PlanState {
    * has finished from one a bad export left out. See `PLAN_RETENTION_DAYS`.
    */
   lastSeen: Record<string, string>;
+  /**
+   * Orders a person dropped in the pool to take them off the schedule. The
+   * pool keeps these; anything else in it was put there because no line was
+   * known at the time, and is filed onto its line as soon as one is.
+   */
+  pooledByHand: string[];
 
   /**
    * Merge a refreshed dataset into the current layout: keep every placement the
@@ -379,6 +385,7 @@ interface PlanState {
     progressBaselines?: Record<string, ProgressBaseline>;
     production?: Record<string, ProductionEntry[]>;
     lastSeen?: Record<string, string>;
+    pooledByHand?: string[];
   }) => void;
   /** Move a job into `toContainer` at `toIndex` (end if omitted). */
   moveJob: (jobId: JobId, toContainer: string, toIndex?: number) => void;
@@ -526,6 +533,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   progressBaselines: {},
   production: {},
   lastSeen: {},
+  pooledByHand: [],
   initialized: false,
   lineLayoutVersion: 0,
   manualOrders: {},
@@ -581,6 +589,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       }
       for (const id of liveJobs) lastSeen[id] = today;
       const retained = (id: string): boolean => id in lastSeen;
+      const byHand = new Set(state.pooledByHand.filter(retained));
 
       // 1. Carry over existing placements — including an order missing from
       //    this export, which keeps its line and its place in it so that a
@@ -597,6 +606,10 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         for (const id of ids) {
           const sid = String(id);
           if (!retained(sid) || placed.has(sid)) continue;
+          // In the pool only because no line was known when it arrived: filed
+          // below like a new order, onto its line if it now has one. One a
+          // person put there stays, and so does one this export left out.
+          if (key === POOL_ID && !byHand.has(sid) && liveJobs.has(sid)) continue;
           next[target].push(id);
           placed.add(sid);
         }
@@ -640,6 +653,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         progressBaselines: keep(state.progressBaselines),
         production: keep(state.production),
         lastSeen,
+        pooledByHand: [...byHand],
         initialized: true,
         lineLayoutVersion: 1,
       };
@@ -1115,6 +1129,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
           plan.progressBaselines ?? state.progressBaselines,
         production: plan.production ?? state.production,
         lastSeen: plan.lastSeen ?? state.lastSeen,
+        pooledByHand: plan.pooledByHand ?? state.pooledByHand,
       };
     });
   },
@@ -1126,7 +1141,13 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       const target = [...(cleared[toContainer] ?? [])];
       const at = toIndex === undefined ? target.length : Math.max(0, Math.min(toIndex, target.length));
       target.splice(at, 0, jobId);
-      return { containers: { ...cleared, [toContainer]: target } };
+      // Dropped in the pool by a person: it stays there through every refresh.
+      const id = String(jobId);
+      const others = state.pooledByHand.filter((x) => x !== id);
+      return {
+        containers: { ...cleared, [toContainer]: target },
+        pooledByHand: toContainer === POOL_ID ? [...others, id] : others,
+      };
     });
   },
 
