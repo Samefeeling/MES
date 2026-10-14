@@ -49,8 +49,10 @@ board's Refresh, or **Refresh** on this page:
 
 The planner's decisions are columns on the same rows, which the sync never
 touches. Each decision is per order and written to every open line of it,
-a moment after it is made; a write that fails is kept on the screen and sent
-again at the next refresh rather than lost.
+a moment after it is made — only the orders this screen changed, so another
+screen's changes to other orders are not written over. A write that fails is
+kept on the screen and sent again at the next refresh rather than lost. Load
+edits wait for **Save** (see *Planner decisions*).
 
 | Column to add | Type | Holds |
 | --- | --- | --- |
@@ -68,6 +70,20 @@ nothing is ever closed. Once the list passes 5,000 rows SharePoint only
 filters on indexed columns: index **`ClosedAt`** and **`DispatchedAt`**
 (List settings → Indexed columns). Until then it is read whole, and the page
 says so.
+
+**Columns missing?** A supervisor's screen shows **Add N columns to the
+list** whenever the list lacks a planner column above or a column
+`Waybill.csv` has (an export column with nowhere to go is not kept, so floor
+screens never see it). It adds them with the types above — `ClosedAt` and
+`DispatchedAt` indexed — and the export's with a type read off what they
+hold: dates as Date, TRUE/FALSE as Yes/No, quantities as Number, comments
+(or anything over 255 characters) as multiple lines, and identifiers such as
+`WaybillNbr` or `MTOJobNum` as a single line of text, kept exactly as
+exported. It then syncs again so the new columns fill in. The planner's
+changes made on that screen while its columns were missing are kept and
+written to the list; other screens take the list's. Adding columns needs
+edit (Manage Lists) permission on the list; when SharePoint refuses, the
+page says why and the columns can be added by hand.
 
 The **settings** (vehicles, windows, limits, holidays) are still kept per
 browser.
@@ -89,7 +105,7 @@ column (by spreadsheet letter) each field was read from.
 | `Ship By` | **the last day the order may leave** — the planned dispatch day (Australian `d/mm/yyyy`). Settings can switch this to `Need By`; an order without the chosen date uses the other one |
 | `ExpDeliveryDt` | the day the customer receives it — on every load card and the booking sheet |
 | `Need By` | the day the customer is to have it — typically 7 days after Ship By in NSW, 14 interstate, 4 weeks overseas. Shown for reference |
-| `PickListComment` | what the warehouse wrote once packed. A cube in it — `2C`, `1.5 C`, `3CBM`, `0.8 m3` — is the order's **packed volume** and beats every estimate. Shown on every drop |
+| `PickListComment` (`OHPickListComment` in the BAQ) | what the warehouse wrote once packed. A cube in it — `2C`, `1.5 C`, `3CBM`, `0.8 m3` — is the order's **packed volume** and beats every estimate. Shown on every drop |
 | `ShipToCustName` | who the load goes to: on the card's title row, each drop and the booking sheet |
 | `ShipToAddress1-3`, `ShipToState`, `ShipToZip` | ship-to address on the booking sheet, when the export has them |
 | `Part` + `UOM` = `CBM` + `LeftToShip` | **volume**: the freight line (`FRTNSW`, `FRTQLD`, `FRTWAU`, `FRTVIC`, `FRTSA`, `FRTTAS`, `FRTACT`, `FRTSEB`, `FRTEXP`) carries the order's cube in m³. `FRT911` is a charge, not a volume, and is ignored |
@@ -101,7 +117,12 @@ column (by spreadsheet letter) each field was read from.
 
 `Cubics.csv` is "Drews Cubics and Freight Calc" saved as CSV, read from the
 export folder with the waybill. Without it orders are sized from their freight
-lines, and the page says it was not read. One row per part and stack size:
+lines, and the page says it was not read. Excel saves only the sheet that is
+open as CSV: save the cubics sheet itself, not the freight calculator. The
+header row is found however far down the title rows go; UTF-8, Unicode
+(UTF-16) and plain "CSV (Comma delimited)" saves all read. When the file is
+not the sheet the page says what its first row holds. One row per part and
+stack size:
 
 | Column | Used for |
 | --- | --- |
@@ -327,7 +348,7 @@ cannot tell a shipped order from a missing one.
   still over its limits (book extra or move a load by hand), and loads
   brought forward to this day.
 - **To book** and the route filter; **Load cards** or **Booking sheet**;
-  **Edit loads**.
+  **Edit loads**, then **Save** or **Cancel**.
 - Loads by route. **Mark booked** once the contractor has the load;
   **Mark dispatched** when it leaves. Mark dispatched is also on unbooked
   loads leaving today or earlier, for a load booked by phone and not marked.
@@ -397,7 +418,11 @@ which MES keeps for warnings.
 
 - **Edit loads** (on the day) opens every card for hand changes, because a
   proposal can be wrong — two customers who must not share a truck, a site
-  that only receives on Fridays:
+  that only receives on Fridays. The changes show on the plan at once but
+  reach nobody else until **Save**; the bar beside it counts the orders
+  changed. **Cancel** drops every change made since Edit loads — pins, holds
+  and bookings made meanwhile too. On another tab a banner says edits are
+  open; closing or reloading the page drops them, after the browser asks.
   - **Move to** on a drop: onto another load (any day, same route type),
     onto a truck or container of its own, or *take off* and let the
     optimiser place it elsewhere. A split piece moves alone; the rest of the

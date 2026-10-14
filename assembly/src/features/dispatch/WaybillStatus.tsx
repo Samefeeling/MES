@@ -5,16 +5,28 @@
  * supervisor's screen, and every screen reads it (`waybillSource`).
  *
  * **Refresh** syncs and reads again now, instead of at the board's next
- * refresh.
+ * refresh. Where the list lacks columns — the export's or the planner's — a
+ * supervisor can add them from here, each with the right type.
  */
 
 import { useState } from 'react';
 import { formatTime } from '@/lib/time';
 import { useSupervisorStore } from '@/store/supervisorStore';
 import { useWaybillStore } from '@/store/waybillStore';
-import { closeHeld, refreshWaybill } from './waybillSource';
+import type { NewColumnType } from '@/engine/dispatch/waybillList';
+import { addMissingColumns, closeHeld, refreshWaybill } from './waybillSource';
 
 const at = (iso: string | null): string => (iso ? formatTime(new Date(iso)) : '—');
+
+/** The SharePoint column types, as list settings names them. */
+const COLUMN_TYPE: Record<NewColumnType, string> = {
+  day: 'Date',
+  instant: 'Date and time',
+  number: 'Number',
+  boolean: 'Yes/No',
+  text: 'Single line of text',
+  note: 'Multiple lines of text',
+};
 
 export function WaybillStatus({ cubicsParts }: { cubicsParts: number | null }) {
   const source = useWaybillStore((s) => s.source);
@@ -23,6 +35,9 @@ export function WaybillStatus({ cubicsParts }: { cubicsParts: number | null }) {
   const lastSync = useWaybillStore((s) => s.lastSync);
   const saving = useWaybillStore((s) => s.saving);
   const cubicsSource = useWaybillStore((s) => s.cubicsSource);
+  const savedAt = useWaybillStore((s) => s.savedAt);
+  const missingColumns = useWaybillStore((s) => s.missingColumns);
+  const addingColumns = useWaybillStore((s) => s.addingColumns);
   const unlocked = useSupervisorStore((s) => s.unlocked);
   const [closing, setClosing] = useState(false);
 
@@ -38,7 +53,7 @@ export function WaybillStatus({ cubicsParts }: { cubicsParts: number | null }) {
           <span title={lastSync?.errors[0] ?? 'Where the waybill on this page was read from'}>
             Waybill <b>{source}</b> · read {at(readAt)}
             {synced && ` · ${synced}`}
-            {saving > 0 && ` · saving ${saving}…`}
+            {saving > 0 ? ` · saving ${saving}…` : savedAt ? ` · changes saved ${at(savedAt)}` : ''}
           </span>
         ) : (
           <span>No waybill</span>
@@ -49,6 +64,19 @@ export function WaybillStatus({ cubicsParts }: { cubicsParts: number | null }) {
           </span>
         )}
       </span>
+      {unlocked && missingColumns.length > 0 && (
+        <button
+          type="button"
+          className="kpi-btn"
+          disabled={addingColumns || loading}
+          title={`Add to the Waybill list: ${missingColumns.map((c) => `${c.name} (${COLUMN_TYPE[c.type]})`).join(', ')}`}
+          onClick={() => void addMissingColumns()}
+        >
+          {addingColumns
+            ? 'Adding columns…'
+            : `Add ${missingColumns.length} column${missingColumns.length === 1 ? '' : 's'} to the list`}
+        </button>
+      )}
       {lastSync && lastSync.heldCloses > 0 && (
         <button
           type="button"

@@ -10,7 +10,8 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath, URL } from 'node:url';
-import { looksLikeCubics, parseCubicsCsv } from '@/data/csv/cubics.parser';
+import { looksLikeCubics, parseCubicsCsv, whyNotCubics } from '@/data/csv/cubics.parser';
+import { decodeText } from '@/data/csv/csv.client';
 import { parseWaybillCsv } from '@/data/csv/waybill.parser';
 import { cubicMaster, orderCube, stackedVolume } from '@/engine/dispatch/cube';
 import { resolveVolume } from '@/engine/dispatch/plan';
@@ -152,5 +153,33 @@ describe('planning with the cubics sheet', () => {
     expect(liverpool.drops.every((d) => d.volumeSource === 'cubics')).toBe(true);
     expect(liverpool.weightKg).toBe(240 + 240 + 24);
     expect(liverpool.weightComplete).toBe(true);
+  });
+});
+
+describe('Cubics.csv from the folder', () => {
+  it('finds the header however far down the title block goes, unit and all', () => {
+    const titled = [
+      ...Array.from({ length: 30 }, (_, i) => (i === 0 ? 'Drews Cubics and Freight Calc,,,' : ',,,')),
+      ',CODE,Name,Quantity,Volume per STACK (m3)',
+      'SS,ASOT00000G029,ASTRAL OTTOMAN,1,0.41',
+    ].join('\n');
+    expect(looksLikeCubics(titled)).toBe(true);
+    expect(parseCubicsCsv(titled).items.map((i) => [i.code, i.stacks[0].volumeM3])).toEqual([['ASOT00000G029', 0.41]]);
+  });
+
+  it('says what the file holds instead, and what to do', () => {
+    const calc = 'Freight Calculator,,\nDestination,Pallets,Cost\nMEL,2,180';
+    expect(looksLikeCubics(calc)).toBe(false);
+    expect(whyNotCubics(calc)).toContain('"Freight Calculator"');
+    expect(whyNotCubics(calc)).toContain('save the cubics sheet itself');
+    expect(whyNotCubics('PK\u0003\u0004…')).toContain('Excel workbook');
+  });
+
+  it('reads the file however Excel saved it', () => {
+    const utf16 = new Uint8Array([0xff, 0xfe, ...[...',CODE'].flatMap((c) => [c.charCodeAt(0), 0])]);
+    expect(decodeText(utf16.buffer)).toBe(',CODE');
+    // "m³" saved as Windows-1252 (CSV (Comma delimited)) rather than UTF-8.
+    expect(decodeText(new Uint8Array([0x6d, 0xb3]).buffer)).toBe('m³');
+    expect(decodeText(new TextEncoder().encode('\ufeffm³').buffer)).toBe('m³');
   });
 });

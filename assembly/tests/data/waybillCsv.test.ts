@@ -154,3 +154,15 @@ describe('columnLetter', () => {
     expect(columnLetter(22)).toBe('W');
   });
 });
+
+describe('the pick-list comment as the BAQ names it', () => {
+  it('reads OHPickListComment, the order header’s, for the packed cube', () => {
+    const csv = [
+      'Order,Line,Rel,Description,Part,LeftToShip,UOM,Ship By,Need By,FulfillmentMethod,OHPickListComment',
+      '18600,1,1,NSW-Metro-South,CHAIR-A,4,EA,15/10/2026,22/10/2026,Stock,2C packed',
+    ].join('\n');
+    const parsed = parseWaybillCsv(csv);
+    expect(parsed.columns.pickListComment?.header).toBe('OHPickListComment');
+    expect(parsed.orders[0].pickListComment).toBe('2C packed');
+  });
+});

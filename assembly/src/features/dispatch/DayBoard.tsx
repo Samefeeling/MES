@@ -11,7 +11,8 @@
  * 3. **Will it fit?** — the marshalling area against the day's volume, and
  *    what to book.
  *
- * Below, the loads by route as cards (with Edit loads for hand changes), or
+ * Below, the loads by route as cards (with Edit loads for hand changes, kept
+ * with Save or dropped with Cancel — `LoadEditBar`), or
  * as the booking sheet the dock rings carriers from.
  */
 
@@ -20,6 +21,7 @@ import { DISPATCH_MODE_LABEL, stagingCapacity, type DispatchMode } from '@/domai
 import type { DispatchPlan, PlannedLoad } from '@/engine/dispatch/plan';
 import { loadValue } from '@/engine/dispatch/shipments';
 import { useDispatchStore } from '@/store/dispatchStore';
+import { LoadEditBar } from './LoadEditBar';
 import { LoadCard } from './LoadCard';
 import { BookingSheet } from './BookingSheet';
 import { buildCheckOf, buildIssues, supplyIssues, useAssemblyLink, type BuildIssue, type SupplyIssue } from './assemblyLink';
@@ -51,7 +53,7 @@ export function DayBoard({
   const settings = useDispatchStore((s) => s.settings);
   const [mode, setMode] = useState<DispatchMode | 'all'>('all');
   const [view, setView] = useState<'cards' | 'sheet'>('cards');
-  const [editing, setEditing] = useState(false);
+  const editing = useDispatchStore((s) => s.editing !== null);
   const basis = settings.shipmentValue;
 
   const all = useMemo(() => plan.loads.filter((l) => l.day === day), [plan.loads, day]);
@@ -367,25 +369,12 @@ export function DayBoard({
               <button
                 type="button"
                 className={`shift-btn${view === 'sheet' ? ' a' : ''}`}
-                onClick={() => {
-                  setView('sheet');
-                  setEditing(false);
-                }}
+                onClick={() => setView('sheet')}
               >
                 Booking sheet
               </button>
             </div>
-            {view === 'cards' && all.length > 0 && (
-              <button
-                type="button"
-                className={`kpi-btn${editing ? ' primary' : ''}`}
-                aria-pressed={editing}
-                onClick={() => setEditing(!editing)}
-                title="Move orders between loads, pick sizes and days by hand"
-              >
-                {editing ? 'Done editing' : 'Edit loads'}
-              </button>
-            )}
+            <LoadEditBar canBegin={view === 'cards' && all.length > 0} />
           </div>
         </div>
       </section>

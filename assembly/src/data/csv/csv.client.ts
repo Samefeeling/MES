@@ -91,6 +91,22 @@ export function readCsvConfigFromEnv(): CsvSourceConfig {
   };
 }
 
+/**
+ * A file's bytes as text, however Excel saved it: UTF-8 (with or without its
+ * mark), "Unicode Text" (UTF-16), or the plain "CSV (Comma delimited)", which
+ * is Windows-1252 — read as UTF-8 its ³ and other accents would be lost.
+ */
+export function decodeText(buf: ArrayBuffer): string {
+  const b = new Uint8Array(buf);
+  if (b[0] === 0xff && b[1] === 0xfe) return new TextDecoder('utf-16le').decode(b.subarray(2));
+  if (b[0] === 0xfe && b[1] === 0xff) return new TextDecoder('utf-16be').decode(b.subarray(2));
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(b);
+  } catch {
+    return new TextDecoder('windows-1252').decode(b);
+  }
+}
+
 /** GET a file as text, naming it in any error so the banner is actionable. */
 async function fetchText(
   label: string,
@@ -105,7 +121,7 @@ async function fetchText(
     if (!res.ok) {
       return err(`${label} fetch failed: ${res.status} ${res.statusText}`);
     }
-    return ok(await res.text());
+    return ok(typeof res.arrayBuffer === 'function' ? decodeText(await res.arrayBuffer()) : await res.text());
   } catch (e) {
     return err(
       `${label} fetch error: ${e instanceof Error ? e.message : String(e)}`,

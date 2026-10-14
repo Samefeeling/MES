@@ -224,6 +224,80 @@ export function decisionColumns(columns: readonly ListColumn[]): {
   return { found, missing };
 }
 
+// ---- Columns the list lacks ----------------------------------------------------
+
+/** How a column is made. A day and an instant are both SharePoint DateTime. */
+export type NewColumnType = 'day' | 'instant' | 'number' | 'boolean' | 'text' | 'note';
+
+/** A column to add to the list. */
+export interface NewColumn {
+  name: string;
+  type: NewColumnType;
+  /** Filtered on, so indexed: the filter keeps working past 5,000 rows. */
+  indexed?: boolean;
+  /** Shown in the list's default view. */
+  inView?: boolean;
+  /** Decimal places, for a number. */
+  decimals?: number;
+}
+
+/** The planner's columns, as they are made. */
+export const DECISION_COLUMN_SPEC: Record<DecisionColumn, Omit<NewColumn, 'name'>> = {
+  plannedDay: { type: 'day', inView: true },
+  holdReason: { type: 'text', inView: true },
+  volume: { type: 'number', decimals: 2, inView: true },
+  loadId: { type: 'text', inView: true },
+  // JSON, for MES to read back: not for the view.
+  loadDetail: { type: 'note' },
+  dispatchedAt: { type: 'instant', indexed: true, inView: true },
+  closedAt: { type: 'instant', indexed: true, inView: true },
+};
+
+/** A decision column's name as a column to add. */
+export function decisionColumnSpec(name: string): NewColumn | null {
+  const key = (Object.keys(DECISION_COLUMNS) as DecisionColumn[]).find(
+    (k) => DECISION_COLUMNS[k].toLowerCase() === name.toLowerCase(),
+  );
+  return key ? { name: DECISION_COLUMNS[key], ...DECISION_COLUMN_SPEC[key] } : null;
+}
+
+export const isDecisionName = (name: string): boolean => DECISION_NAMES.has(name.toLowerCase());
+
+const nameKey = (value: string): string => value.replace(/[\s_-]+/g, '').toLowerCase();
+
+/**
+ * No column on the list answers to this name — not even a read-only one or
+ * two at once, which would only be made worse by adding a third.
+ */
+export function lacksColumn(columns: readonly ListColumn[], name: string): boolean {
+  const k = nameKey(name);
+  return !columns.some((c) => nameKey(c.name) === k || nameKey(c.internal) === k);
+}
+
+/** Order numbers, job numbers, codes: digits, but not quantities. */
+const ID_LIKE = /(num|nbr|no|id|code|ref|zip|postcode)$/i;
+const LONG_TEXT = /comment|note|memo|instruction/i;
+
+/**
+ * The column an export header would be added as, from what the export holds
+ * under it: dates as a day, TRUE/FALSE as yes/no, quantities as a number,
+ * comments (or anything past 255 characters) as multiple lines; the rest —
+ * identifiers among them, however numeric — as a line of text, kept exactly
+ * as the export writes it.
+ */
+export function inferColumn(header: string, values: readonly (string | undefined)[]): NewColumn {
+  const filled = values.map((v) => (v ?? '').trim()).filter((v) => v !== '');
+  const every = (test: (v: string) => boolean) => filled.length > 0 && filled.every(test);
+  let type: NewColumnType = 'text';
+  if (LONG_TEXT.test(header) || filled.some((v) => v.length > TEXT_MAX || /[\r\n]/.test(v))) type = 'note';
+  else if (every((v) => parseAuDate(v) !== null)) type = 'day';
+  else if (every((v) => /^(true|false)$/i.test(v))) type = 'boolean';
+  else if (!ID_LIKE.test(header.trim()) && every((v) => /\d/.test(v) && /^-?(\d{1,3}(,\d{3})+|\d+)?(\.\d+)?$/.test(v) && !/^-?0\d/.test(v))) {
+    type = 'number';
+  }
+  return { name: header, type, inView: true };
+}
+
 // ---- The export into the list ------------------------------------------------
 
 export interface SyncPlan {
@@ -455,24 +529,58 @@ function rowDecision(row: ListRow, cols: Partial<Record<DecisionColumn, ListColu
   };
 }
 
+const sameDecision = (a: OrderDecision, b: OrderDecision): boolean =>
+  a.plannedDay === b.plannedDay &&
+  a.holdReason === b.holdReason &&
+  sameCell(a.volume, b.volume) &&
+  a.loadId === b.loadId &&
+  a.loadDetail === b.loadDetail &&
+  instant(a.dispatchedAt) === instant(b.dispatchedAt);
+
+/**
+ * The orders whose decisions differ between two sets (`decisionsByOrder`):
+ * what this screen changed since it last read or wrote the list, so only those
+ * are written — another screen's changes to other orders are left as they are.
+ */
+export function changedOrders(
+  before: ReadonlyMap<string, OrderDecision>,
+  after: ReadonlyMap<string, OrderDecision>,
+): Set<string> {
+  const out = new Set<string>();
+  for (const key of new Set([...before.keys(), ...after.keys()])) {
+    if (!sameDecision(before.get(key) ?? EMPTY, after.get(key) ?? EMPTY)) out.add(key);
+  }
+  return out;
+}
+
+/** One row's planner cells to write, and the order it is a line of. */
+export interface DecisionWrite {
+  id: string;
+  order: string;
+  fields: Record<string, unknown>;
+}
+
 /**
  * The cells to write so every open row says what the planner decided for its
  * order — and says nothing where nothing was decided. Only the columns the
- * list has are written.
+ * list has are written; with `only`, only the rows of those orders.
  */
 export function decisionWrites(
   desired: ReadonlyMap<string, OrderDecision>,
   open: readonly ListRow[],
   columns: readonly ListColumn[],
-): { id: string; fields: Record<string, unknown> }[] {
+  only?: ReadonlySet<string>,
+): DecisionWrite[] {
   const { found } = decisionColumns(columns);
   const orderCol = findColumn(columns, 'Order');
   if (!orderCol) return [];
-  const writes: { id: string; fields: Record<string, unknown> }[] = [];
+  const writes: DecisionWrite[] = [];
   for (const row of open) {
     const order = csvText(orderCol.kind, row.values[orderCol.internal]);
     if (!order) continue;
-    const want = desired.get(orderKey(order)) ?? EMPTY;
+    const key = orderKey(order);
+    if (only && !only.has(key)) continue;
+    const want = desired.get(key) ?? EMPTY;
     const has = rowDecision(row, found);
     const fields: Record<string, unknown> = {};
     const put = (k: DecisionColumn, value: unknown) => {
@@ -484,7 +592,7 @@ export function decisionWrites(
     if (has.loadId !== want.loadId) put('loadId', want.loadId ?? '');
     if (has.loadDetail !== want.loadDetail) put('loadDetail', want.loadDetail ?? '');
     if (instant(has.dispatchedAt) !== instant(want.dispatchedAt)) put('dispatchedAt', want.dispatchedAt);
-    if (Object.keys(fields).length > 0) writes.push({ id: row.id, fields });
+    if (Object.keys(fields).length > 0) writes.push({ id: row.id, order: key, fields });
   }
   return writes;
 }

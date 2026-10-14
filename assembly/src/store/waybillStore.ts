@@ -6,6 +6,7 @@
  */
 
 import { create } from 'zustand';
+import type { NewColumn } from '@/engine/dispatch/waybillList';
 
 /**
  * Where the waybill comes from:
@@ -50,6 +51,17 @@ interface WaybillState {
   writeError: string | null;
   /** Planner changes on their way to the list. */
   saving: number;
+  /** When this screen's last planner changes reached the list. */
+  savedAt: string | null;
+  /**
+   * Columns the list lacks — the export's and the planner's — as they would
+   * be added (`addMissingColumns` in waybillSource). The export's are known
+   * only on a screen that syncs.
+   */
+  missingColumns: NewColumn[];
+  addingColumns: boolean;
+  /** Adding them did not work, and why. */
+  columnsError: string | null;
 }
 
 export const useWaybillStore = create<WaybillState>(() => ({
@@ -65,4 +77,8 @@ export const useWaybillStore = create<WaybillState>(() => ({
   lastSync: null,
   writeError: null,
   saving: 0,
+  savedAt: null,
+  missingColumns: [],
+  addingColumns: false,
+  columnsError: null,
 }));

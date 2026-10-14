@@ -8,8 +8,9 @@
  *   AllocatedQty, UOM, ExpDeliveryDt, Ship By, Need By, ReleaseVal,
  *   FulfillmentMethod, Status, City
  *
- Fuller exports add `PickListComment`, `ShipToCustName` and the ship-to
- * address; they are read when present.
+ * Fuller exports add `PickListComment` (the order header's, `OHPickListComment`,
+ * in the BAQ the waybill comes from), `ShipToCustName` and the ship-to address;
+ * they are read when present.
  *
  * Columns are matched by header name, so the BAQ can be reordered. When a
  * name appears twice (a part `Description` beside the ship-via one, a
@@ -59,7 +60,7 @@ const ALIASES = {
   fulfillment: ['FulfillmentMethod', 'Fulfillment Method'],
   status: ['Status'],
   city: ['ShipToCity', 'Ship To City', 'City'],
-  pickListComment: ['PickListComment', 'Pick List Comment', 'PickList Comment'],
+  pickListComment: ['PickListComment', 'OHPickListComment', 'OrderHed_PickListComment', 'Pick List Comment', 'PickList Comment'],
   shipToName: ['ShipToCustName', 'Ship To Cust Name', 'ShipToName', 'Ship To Name'],
   address1: ['ShipToAddress1', 'Ship To Address1', 'Address1', 'Address'],
   address2: ['ShipToAddress2', 'Ship To Address2', 'Address2'],

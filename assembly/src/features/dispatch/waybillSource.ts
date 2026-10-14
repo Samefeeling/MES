@@ -14,9 +14,11 @@
  *    columns are the decisions and the shipment log.
  *
  * Every change the planner makes is then written back to the rows of the
- * orders it touches, a moment after it is made. A change that did not reach
- * the list is kept on this screen and tried again, rather than replaced by
- * the list's older copy at the next refresh.
+ * orders it touches, a moment after it is made — only those orders, so what
+ * another screen changed meanwhile is not written over. A change that did not
+ * reach the list is kept on this screen and tried again, rather than replaced
+ * by the list's older copy at the next refresh. Load edits (Edit loads) are
+ * held back until **Save**, and the list's copy is not taken over them.
  *
  * With no SharePoint session (the dev server) `Waybill.csv` is read straight
  * from its configured URL and the decisions stay in this browser.
@@ -28,23 +30,30 @@ import {
   hasWaybillSource,
   readCsvConfigFromEnv,
 } from '@/data/csv/csv.client';
-import { looksLikeCubics } from '@/data/csv/cubics.parser';
+import { looksLikeCubics, whyNotCubics } from '@/data/csv/cubics.parser';
 import { parseWaybillCsv } from '@/data/csv/waybill.parser';
 import { readConfigFromEnv, type SharePointConfig } from '@/data/sharepoint/site';
-import { waybillColumns, waybillRows, writeDecisions, writeSync } from '@/data/sharepoint/waybill.list';
+import { createColumns, waybillColumns, waybillRows, writeDecisions, writeSync } from '@/data/sharepoint/waybill.list';
 import type { DispatchDecisions } from '@/domain/dispatch';
 import { orderKey } from '@/domain/orderLink';
 import { SHIPMENT_RETENTION_DAYS } from '@/engine/dispatch/shipments';
 import {
   csvTable,
+  decisionColumnSpec,
   decisionColumns,
+  changedOrders,
   decisionWrites,
   decisionsByOrder,
   decisionsFromRows,
+  inferColumn,
+  isDecisionName,
+  lacksColumn,
   planSync,
   rowsToCsv,
   type ListColumn,
   type ListRow,
+  type NewColumn,
+  type OrderDecision,
 } from '@/engine/dispatch/waybillList';
 import { toDayKey } from '@/lib/time';
 import { useDispatchStore } from '@/store/dispatchStore';
@@ -73,8 +82,23 @@ let heldCloses: { ids: string[]; column: string } | null = null;
 let generation = 0;
 /** Set while decisions read from the list are being put in place, so they are not written back. */
 let applying = false;
-/** A planner change has not reached the list yet. */
-let unsaved = false;
+/**
+ * Each order's decisions as the list last said them — read from it, or
+ * written to it by this screen. What differs from it is this screen's to send.
+ */
+let applied: Map<string, OrderDecision> | null = null;
+/** Columns this screen just added: keep the decisions it held while they were missing. */
+let adopt = false;
+/** Export headers the list has no column for, as the last sync found them. */
+let csvMissing: NewColumn[] = [];
+
+/** The decisions this screen wants, and the orders where the list has not got them yet. */
+function pending(): { desired: Map<string, OrderDecision>; dirty: Set<string> } | null {
+  if (!applied) return null;
+  const s = useDispatchStore.getState();
+  const desired = decisionsByOrder(s.decisions, s.shipments);
+  return { desired, dirty: changedOrders(applied, desired) };
+}
 
 let running: Promise<void> | null = null;
 let queued: { sync: boolean } | null = null;
@@ -143,7 +167,7 @@ async function load(opts: { sync: boolean }): Promise<void> {
   const cub = await cubics;
   if (cub.ok && cub.value) {
     if (looksLikeCubics(cub.value)) useWaybillStore.setState({ cubicsText: cub.value, cubicsSource: 'Cubics.csv' });
-    else notes.push('Cubics.csv is not the cubics sheet (no CODE column) — orders are sized from their freight lines.');
+    else notes.push(`Cubics.csv is not the cubics sheet: ${whyNotCubics(cub.value)}. Orders are sized from their freight lines meanwhile.`);
   } else if (!cub.ok) {
     notes.push(`Cubics.csv not read (${cub.error}) — orders are sized from their freight lines.`);
   }
@@ -197,8 +221,14 @@ async function fromList(
             errors: out.errors,
             heldCloses: suspicious ? plan.closes.length : 0,
           };
+          csvMissing = plan.missing
+            .filter((h) => lacksColumn(columns, h))
+            .map((h) => inferColumn(h, table.rows.map((r) => r[h])));
           if (plan.missing.length > 0) {
-            notes.push(`Waybill.csv columns not on the ${list} list, so not kept: ${plan.missing.join(', ')}.`);
+            notes.push(
+              `Waybill.csv columns not on the ${list} list, so not kept: ${plan.missing.join(', ')}` +
+                (csvMissing.length > 0 ? ' — "Add columns to the list" adds them.' : '.'),
+            );
           }
           if (out.done > 0) rows = await waybillRows(sp, list, columns, since);
         }
@@ -214,7 +244,12 @@ async function fromList(
 
   snapshot = { columns, open: rows.open };
   const csvText = rowsToCsv(rows.open, columns);
+  const missingColumns = [
+    ...csvMissing.filter((c) => lacksColumn(columns, c.name)),
+    ...missing.filter((name) => lacksColumn(columns, name)).map((name) => decisionColumnSpec(name)!),
+  ];
   useWaybillStore.setState((s) => ({
+    missingColumns,
     mode: 'list',
     csvText,
     source: `${list} list`,
@@ -229,28 +264,44 @@ async function fromList(
   if (planner.length > 0) {
     notes.push(
       `The ${list} list has no ${missing.join(', ')} column${missing.length === 1 ? '' : 's'}: ` +
-        'planner changes are kept on this screen only until they are added.',
+        'planner changes are kept on this screen only until they are added' +
+        ' (a supervisor\'s "Add columns to the list" adds them, and keeps that screen\'s changes).',
     );
     useDispatchStore.setState({ listBacked: false });
+    applied = null;
     return;
   }
   if (missing.includes('ClosedAt')) {
     notes.push(`The ${list} list has no ClosedAt column: releases gone from Waybill.csv stay open on it.`);
   }
-  if (unsaved) {
+  // Load edits under way: the list's copy waits for Save or Cancel.
+  if (useDispatchStore.getState().editing) return;
+  const { decisions, shipments } = decisionsFromRows(rows.open, rows.dispatched, columns);
+  if (adopt) {
+    // The planner's columns were just added from this screen: what it kept
+    // while they were missing goes to the list instead of being replaced by
+    // the list's empty columns.
+    adopt = false;
+    applied = decisionsByOrder(decisions, shipments);
+    useDispatchStore.setState({ listBacked: true });
+    void flush();
+    return;
+  }
+  if ((pending()?.dirty.size ?? 0) > 0) {
     // This screen holds changes the list has not got: send them again
     // instead of taking the list's older copy over them.
     void flush();
     return;
   }
   if (generation !== started) return;
-  const { decisions, shipments } = decisionsFromRows(rows.open, rows.dispatched, columns);
   applying = true;
   try {
     useDispatchStore.getState().fromList(rekey(decisions, csvText), shipments);
   } finally {
     applying = false;
   }
+  const now = useDispatchStore.getState();
+  applied = decisionsByOrder(now.decisions, now.shipments);
 }
 
 /** Close the rows the guard held back, now somebody has said the export is whole. */
@@ -267,6 +318,37 @@ export async function closeHeld(): Promise<void> {
   await refreshWaybill({ sync: false });
 }
 
+/**
+ * Add the columns the list lacks — the export's, with types read off what it
+ * holds, and the planner's — then sync again so the export's fill in. The
+ * planner's added here keep what this screen decided while they were missing.
+ */
+export async function addMissingColumns(): Promise<void> {
+  const want = useWaybillStore.getState().missingColumns;
+  if (want.length === 0) return;
+  const sp = readConfigFromEnv();
+  const list = waybillListName();
+  useWaybillStore.setState({ addingColumns: true, columnsError: null });
+  try {
+    const columns = await waybillColumns(sp, list);
+    const todo = want.filter((c) => lacksColumn(columns, c.name));
+    const out = await createColumns(sp, list, todo);
+    if (out.added.some(isDecisionName) && !useDispatchStore.getState().listBacked) adopt = true;
+    const problems = [
+      ...out.errors,
+      ...(out.unindexed.length > 0
+        ? [`${out.unindexed.join(' and ')} added but not indexed — index ${out.unindexed.length === 1 ? 'it' : 'them'} in List settings → Indexed columns`]
+        : []),
+    ];
+    useWaybillStore.setState({ columnsError: problems.length > 0 ? problems.join(' · ') : null });
+  } catch (e) {
+    useWaybillStore.setState({ columnsError: message(e) });
+  } finally {
+    useWaybillStore.setState({ addingColumns: false });
+  }
+  await refreshWaybill({ sync: true });
+}
+
 // ---- The planner's changes, back to the list -----------------------------------
 
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -280,10 +362,23 @@ async function flush(): Promise<void> {
   }
   const snap = snapshot;
   const state = useDispatchStore.getState();
-  if (!snap || !state.listBacked) return;
-  const writes = decisionWrites(decisionsByOrder(state.decisions, state.shipments), snap.open, snap.columns);
+  const want = pending();
+  if (!snap || !state.listBacked || state.editing || !want) return;
+  // What went through is now what the list says; an order with a row not
+  // written stays to send again.
+  const settle = (failed: ReadonlySet<string>) => {
+    const next = new Map(applied);
+    for (const key of want.dirty) {
+      if (failed.has(key)) continue;
+      const d = want.desired.get(key);
+      if (d) next.set(key, d);
+      else next.delete(key);
+    }
+    applied = next;
+  };
+  const writes = decisionWrites(want.desired, snap.open, snap.columns, want.dirty);
   if (writes.length === 0) {
-    unsaved = false;
+    settle(new Set());
     useWaybillStore.setState({ writeError: null });
     return;
   }
@@ -291,18 +386,19 @@ async function flush(): Promise<void> {
   flushing = (async () => {
     try {
       const out = await writeDecisions(readConfigFromEnv(), waybillListName(), snap.columns, writes);
-      // What went through is now what the list says.
       const byId = new Map(snap.open.map((r) => [r.id, r]));
+      const failed = new Set<string>();
       writes.forEach((w, i) => {
         const row = byId.get(w.id);
         if (out.ok[i] && row) row.values = { ...row.values, ...w.fields };
+        if (!out.ok[i]) failed.add(w.order);
       });
-      unsaved = out.errors.length > 0;
+      settle(failed);
       useWaybillStore.setState({
         writeError: out.errors.length > 0 ? `${out.errors.length} of ${writes.length} rows not saved: ${out.errors[0]}` : null,
+        ...(out.errors.length === 0 ? { savedAt: new Date().toISOString() } : {}),
       });
     } catch (e) {
-      unsaved = true;
       useWaybillStore.setState({ writeError: message(e) });
     } finally {
       useWaybillStore.setState((s) => ({ saving: Math.max(0, s.saving - writes.length) }));
@@ -316,12 +412,30 @@ async function flush(): Promise<void> {
   }
 }
 
+// Closing or reloading the page drops load edits not saved: ask first.
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', (e) => {
+    const s = useDispatchStore.getState();
+    if (s.editing && (s.editing.decisions !== s.decisions || s.editing.shipments !== s.shipments)) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+}
+
 useDispatchStore.subscribe((s, prev) => {
-  if (s.decisions === prev.decisions && s.shipments === prev.shipments) return;
-  if (applying) return;
-  generation++;
-  if (!s.listBacked) return;
-  unsaved = true;
+  const changed = s.decisions !== prev.decisions || s.shipments !== prev.shipments;
+  const ended = prev.editing !== null && s.editing === null;
+  if ((!changed && !ended) || applying) return;
+  if (changed) generation++;
+  // Load edits are held back until Save.
+  if (!s.listBacked || s.editing) return;
   clearTimeout(timer);
+  if (ended) {
+    // Saved or cancelled: send what is new, then take the list's copy, which
+    // may hold changes other screens made while this one was editing.
+    void flush().then(() => refreshWaybill({ sync: false }));
+    return;
+  }
   timer = setTimeout(() => void flush(), 300);
 });

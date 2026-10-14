@@ -29,6 +29,7 @@ import { useDataStore } from '@/store/dataStore';
 import { dispatchKpis } from '@/engine/dispatch/shipments';
 import { useDispatchPlan } from './useDispatchPlan';
 import { WaybillStatus } from './WaybillStatus';
+import { LoadEditBar } from './LoadEditBar';
 import { useWaybillStore } from '@/store/waybillStore';
 import { DayBoard } from './DayBoard';
 import { LookAhead } from './LookAhead';
@@ -74,6 +75,8 @@ export function DispatchPage({ assembly = null }: { assembly?: AssemblyGanttView
   const waybillError = useWaybillStore((s) => s.error);
   const waybillNotes = useWaybillStore((s) => s.notes);
   const writeError = useWaybillStore((s) => s.writeError);
+  const columnsError = useWaybillStore((s) => s.columnsError);
+  const editing = useDispatchStore((s) => s.editing !== null);
   const mode = useWaybillStore((s) => s.mode);
   const settings = useDispatchStore((s) => s.settings);
   const log = useDispatchStore((s) => s.shipments);
@@ -124,6 +127,19 @@ export function DispatchPage({ assembly = null }: { assembly?: AssemblyGanttView
             </div>
 
             {waybillError && <div className="banner">Waybill not read: {waybillError}</div>}
+            {editing && tab !== 'day' && (
+              <div className="banner warn load-edit-banner">
+                <span>
+                  Load edits are open on the Day board. Everything changed meanwhile — pins and holds too — is saved
+                  with them.
+                </span>
+                <button type="button" className="kpi-btn" onClick={() => setTab('day')}>
+                  Back to the loads
+                </button>
+                <LoadEditBar canBegin={false} />
+              </div>
+            )}
+            {columnsError && <div className="banner">Columns not added to the Waybill list: {columnsError}</div>}
             {writeError && (
               <div className="banner">
                 Planner changes not saved to the Waybill list: {writeError}. They are kept on this screen and

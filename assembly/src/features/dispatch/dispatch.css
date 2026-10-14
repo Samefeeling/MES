@@ -1019,6 +1019,27 @@
 .load-card.firm-edited {
   box-shadow: inset 0 0 0 2px #fcd34d;
 }
+/* Edit loads → Save / Cancel. */
+.load-edit-bar {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.load-edit-bar .edit-count {
+  font-weight: 700;
+  color: #92400e;
+}
+.load-edit-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.load-edit-banner > span:first-child {
+  flex: 1 1 260px;
+}
+
 .edit-bar {
   display: flex;
   flex-wrap: wrap;

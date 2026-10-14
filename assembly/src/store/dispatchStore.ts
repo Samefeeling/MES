@@ -42,6 +42,13 @@ interface DispatchState {
    * to it, and not kept in this browser.
    */
   listBacked: boolean;
+  /**
+   * Load edits under way (Edit loads): the decisions and the log as they were
+   * when editing began. Changes show at once but reach nobody else — not the
+   * list, not this browser's saved copy — until **Save**; **Cancel** puts
+   * these back.
+   */
+  editing: { decisions: DispatchDecisions; shipments: ShipmentRecord[] } | null;
 
   /** The decisions and the log as the Waybill list holds them. */
   fromList: (decisions: DispatchDecisions, shipments: ShipmentRecord[]) => void;
@@ -66,6 +73,11 @@ interface DispatchState {
    * this undoes the dispatch and removes its shipment record.
    */
   releaseLoad: (loadId: string) => void;
+  beginEdit: () => void;
+  /** Keep the load edits: they go to the list (or this browser) now. */
+  saveEdit: () => void;
+  /** Drop every change made since editing began. */
+  cancelEdit: () => void;
   updateSettings: (change: (current: DispatchSettings) => DispatchSettings) => void;
   resetSettings: () => void;
 }
@@ -90,6 +102,7 @@ export const useDispatchStore = create<DispatchState>()(
       decisions: EMPTY_DECISIONS,
       shipments: [],
       listBacked: false,
+      editing: null,
 
       fromList: (decisions, shipments) => set({ decisions, shipments, listBacked: true }),
       prune: (today) =>
@@ -180,17 +193,28 @@ export const useDispatchStore = create<DispatchState>()(
           shipments: s.shipments.filter((r) => r.loadId !== loadId),
         })),
 
+      beginEdit: () =>
+        set((s) => (s.editing ? s : { editing: { decisions: s.decisions, shipments: s.shipments } })),
+      saveEdit: () => set({ editing: null }),
+      cancelEdit: () =>
+        set((s) => (s.editing ? { ...s.editing, editing: null } : s)),
+
       updateSettings: (change) => set((s) => ({ settings: change(s.settings) })),
       resetSettings: () => set({ settings: DEFAULT_DISPATCH_SETTINGS }),
     }),
     {
       name: 'resero.dispatch.v1',
       // The settings always; the decisions and the log only while they are
-      // this browser's own — the Waybill list holds them otherwise.
+      // this browser's own — the Waybill list holds them otherwise — and as
+      // they were before any load edits not yet saved.
       partialize: (s) =>
         (s.listBacked
           ? { settings: s.settings }
-          : { settings: s.settings, decisions: s.decisions, shipments: s.shipments }) as DispatchState,
+          : {
+              settings: s.settings,
+              decisions: s.editing?.decisions ?? s.decisions,
+              shipments: s.editing?.shipments ?? s.shipments,
+            }) as DispatchState,
       // v1: NSW runs keep each zone and Ship Via apart. Copies saved before
       // that carry the old default (mixed), which would otherwise win.
       // v2: no own fleet — the small NSW run once called `Carrier` is a

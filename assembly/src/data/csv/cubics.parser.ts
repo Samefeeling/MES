@@ -39,21 +39,45 @@ function delimiterOf(text: string): string {
   return tabs > commas ? '\t' : ',';
 }
 
+/** The product code's header, as the sheet or a copy of it may name it. */
+const CODE_NAMES = ['code', 'partnum', 'partnumber', 'partno', 'itemcode', 'productcode'];
+/** The stack's volume: `Volume per STACK`, perhaps with its unit after it. */
+const isStackVolume = (name: string): boolean => name.startsWith('volumeperstack') || name === 'stackvolume';
+
+/** Where the header row is — however far down, below title rows — or -1. */
+function headerRow(rows: readonly string[][]): number {
+  return rows.findIndex((row) => {
+    const names = row.map(normalizeHeader);
+    return names.some((n) => CODE_NAMES.includes(n)) && names.some(isStackVolume);
+  });
+}
+
 /** Does this text look like the cubics sheet rather than another export? */
 export function looksLikeCubics(text: string): boolean {
-  const rows = parseCsv(text.slice(0, 8192), delimiterOf(text));
-  return rows.slice(0, 20).some((row) => {
-    const names = new Set(row.map(normalizeHeader));
-    return names.has('code') && names.has('volumeperstack');
-  });
+  return headerRow(parseCsv(text, delimiterOf(text))) >= 0;
+}
+
+/**
+ * Why a file is not the cubics sheet, in words that say what to do: an Excel
+ * workbook renamed, or a sheet with other columns — often the workbook's
+ * other sheet, since Excel saves only the one that is open as CSV.
+ */
+export function whyNotCubics(text: string): string {
+  if (text.startsWith('PK')) return 'it is an Excel workbook renamed to .csv — open it in Excel and save it as CSV';
+  const first = parseCsv(text.slice(0, 8192), delimiterOf(text))
+    .map((row) => row.map((c) => c.trim()).filter(Boolean))
+    .find((cells) => cells.length > 0);
+  if (!first) return 'it is empty';
+  const shown = first.slice(0, 6).join(', ') + (first.length > 6 ? ', …' : '');
+  return (
+    `no header row with CODE and Volume per STACK; its first row reads "${shown.slice(0, 120)}". ` +
+    'Excel saves only the sheet that is open as CSV: save the cubics sheet itself'
+  );
 }
 
 export function parseCubicsCsv(text: string): CubicsParseResult {
   const rows = parseCsv(text, delimiterOf(text));
-  const headerAt = rows.findIndex((row) => {
-    const names = row.map(normalizeHeader);
-    return names.includes('code') && names.includes('volumeperstack');
-  });
+  const headerAt = headerRow(rows);
   if (headerAt < 0) {
     return {
       items: [],
@@ -73,10 +97,10 @@ export function parseCubicsCsv(text: string): CubicsParseResult {
     return -1;
   };
   const col = {
-    code: at('code', 'partnum'),
+    code: at(...CODE_NAMES),
     name: at('name', 'description'),
     qty: at('quantity', 'qty'),
-    stack: at('volumeperstack'),
+    stack: header.findIndex(isStackVolume),
     length: at('length'),
     depth: at('depth', 'width'),
     height: at('height'),

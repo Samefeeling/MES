@@ -13,7 +13,7 @@
  * order to another load or onto one of its own, take it off for the
  * optimiser to place, pick the size from the ladder, or change the day.
  * Every change freezes the load (`Edited`); **Reset to plan** hands it back
- * to the optimiser.
+ * to the optimiser. Nothing is kept until **Save** (`LoadEditBar`).
  */
 
 import {
@@ -228,7 +228,8 @@ export function LoadCard({
             />
           </label>
           <span className="muted">
-            Pick a size above, move orders below. Changes freeze this load; Reset to plan undoes them.
+            Pick a size above, move orders below. Changes freeze this load; Reset to plan undoes them. Nothing
+            is saved until you press Save.
           </span>
         </div>
       )}

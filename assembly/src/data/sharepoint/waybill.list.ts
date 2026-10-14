@@ -22,6 +22,7 @@ import {
   decisionColumns,
   type ListColumn,
   type ListRow,
+  type NewColumn,
 } from '@/engine/dispatch/waybillList';
 
 /** The list's own columns, with how each is written. Hidden ones are left out. */
@@ -206,4 +207,82 @@ export function writeDecisions(
   writes: { id: string; fields: Record<string, unknown> }[],
 ): Promise<WriteOutcome> {
   return run(writes.map((w) => () => update(cfg, list, w.id, wire(w.fields, columns))));
+}
+
+// ---- Adding columns -------------------------------------------------------------
+
+const attr = (v: string): string =>
+  v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/** SharePoint's internal name for a new column: letters, digits and underscores, at most 32. */
+export function internalNameFor(name: string): string {
+  const plain = name.replace(/[^A-Za-z0-9_]/g, '');
+  return (/^[A-Za-z]/.test(plain) ? plain : `C${plain}`).slice(0, 32);
+}
+
+/** The column as SharePoint's field schema, for `createfieldasxml`. */
+export function fieldSchema(c: NewColumn, indexed = Boolean(c.indexed)): string {
+  const id = internalNameFor(c.name);
+  const head = `DisplayName="${attr(c.name)}" Name="${id}" StaticName="${id}"${indexed ? ' Indexed="TRUE"' : ''}`;
+  switch (c.type) {
+    case 'day':
+      return `<Field Type="DateTime" ${head} Format="DateOnly" FriendlyDisplayFormat="Disabled" />`;
+    case 'instant':
+      return `<Field Type="DateTime" ${head} Format="DateTime" FriendlyDisplayFormat="Disabled" />`;
+    case 'number':
+      return `<Field Type="Number" ${head}${c.decimals !== undefined ? ` Decimals="${c.decimals}"` : ''} />`;
+    case 'boolean':
+      return `<Field Type="Boolean" ${head}><Default>0</Default></Field>`;
+    case 'note':
+      return `<Field Type="Note" ${head} NumLines="6" RichText="FALSE" AppendOnly="FALSE" />`;
+    default:
+      return `<Field Type="Text" ${head} MaxLength="255" />`;
+  }
+}
+
+/**
+ * SP.AddFieldOptions: to the default content type (1), named as the schema
+ * names it (8), and in the default view (16) when the column is to be seen.
+ */
+const optionsFor = (c: NewColumn): number => 1 | 8 | (c.inView ? 16 : 0);
+
+export interface ColumnsAdded {
+  added: string[];
+  /** Added, but SharePoint would not index them: index by hand. */
+  unindexed: string[];
+  errors: string[];
+}
+
+/**
+ * Add columns to the list, one at a time so they land in the view in order.
+ * An index SharePoint refuses (a list past its threshold) does not stop the
+ * column: it is added without, and named. A permission refusal stops the rest.
+ */
+export async function createColumns(
+  cfg: SharePointConfig,
+  list: string,
+  columns: readonly NewColumn[],
+): Promise<ColumnsAdded> {
+  const out: ColumnsAdded = { added: [], unindexed: [], errors: [] };
+  const create = (c: NewColumn, indexed: boolean) =>
+    sessionRequest(cfg, `${restList(cfg, list)}/fields/createfieldasxml`, {
+      method: 'POST',
+      body: JSON.stringify({ parameters: { SchemaXml: fieldSchema(c, indexed), Options: optionsFor(c) } }),
+    });
+  for (const c of columns) {
+    try {
+      try {
+        await create(c, Boolean(c.indexed));
+      } catch (e) {
+        if (!c.indexed || (e instanceof SharePointHttpError && (e.status === 401 || e.status === 403))) throw e;
+        await create(c, false);
+        out.unindexed.push(c.name);
+      }
+      out.added.push(c.name);
+    } catch (e) {
+      out.errors.push(`${c.name}: ${e instanceof Error ? e.message : String(e)}`);
+      if (e instanceof SharePointHttpError && (e.status === 401 || e.status === 403)) break;
+    }
+  }
+  return out;
 }

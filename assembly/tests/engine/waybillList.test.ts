@@ -8,10 +8,14 @@ import { describe, expect, it } from 'vitest';
 import {
   cellFromCsv,
   cellFromList,
+  changedOrders,
   csvTable,
+  decisionColumnSpec,
   decisionWrites,
   decisionsByOrder,
   decisionsFromRows,
+  inferColumn,
+  lacksColumn,
   planSync,
   rowsToCsv,
   type CsvTable,
@@ -19,6 +23,7 @@ import {
   type ListRow,
 } from '@/engine/dispatch/waybillList';
 import { parseWaybillCsv } from '@/data/csv/waybill.parser';
+import { fieldSchema, internalNameFor } from '@/data/sharepoint/waybill.list';
 import type { DispatchDecisions, FirmLoad } from '@/domain/dispatch';
 import type { ShipmentRecord } from '@/engine/dispatch/shipments';
 
@@ -265,5 +270,65 @@ describe('decisions on the list', () => {
     const back = decisionsFromRows([], written, COLUMNS);
     expect(back.decisions.firmLoads.map((f) => f.id)).toEqual(['firm-b', 'firm-a']);
     expect(back.shipments.map((s) => s.loadId)).toEqual(['firm-b']);
+  });
+});
+
+describe('writing only what this screen changed', () => {
+  const rows = [listRow('1', 17919, 1), listRow('2', 17919, 2), listRow('3', 17920, 1, { Part: 'DESK' })];
+  const before: DispatchDecisions = { pins: {}, holds: {}, volumeOverrides: {}, firmLoads: [] };
+
+  it('names the orders whose decisions differ, and writes only their rows', () => {
+    const mine = { ...before, pins: { '17919': '2026-10-15' } };
+    // Another screen held 17920 meanwhile: the list says so, this screen does not know.
+    const listed = rows.map((r) => (r.id === '3' ? row(r.id, { ...r.values, HoldReason: 'Customer asked' }) : r));
+    const changed = changedOrders(decisionsByOrder(before, []), decisionsByOrder(mine, []));
+    expect([...changed]).toEqual(['17919']);
+    const writes = decisionWrites(decisionsByOrder(mine, []), listed, COLUMNS, changed);
+    expect(writes.map((w) => [w.id, w.order])).toEqual([
+      ['1', '17919'],
+      ['2', '17919'],
+    ]);
+    // Without the limit the other screen's hold would be cleared.
+    expect(decisionWrites(decisionsByOrder(mine, []), listed, COLUMNS).map((w) => w.id)).toContain('3');
+  });
+
+  it('sees nothing changed when nothing was', () => {
+    expect(changedOrders(decisionsByOrder(before, []), decisionsByOrder({ ...before }, [])).size).toBe(0);
+  });
+});
+
+describe('columns the list lacks', () => {
+  it('knows a column under another spelling, and one missing', () => {
+    expect(lacksColumn(COLUMNS, 'Need By')).toBe(false);
+    expect(lacksColumn(COLUMNS, 'need_by')).toBe(false);
+    expect(lacksColumn(COLUMNS, 'WaybillNbr')).toBe(true);
+  });
+
+  it('types an export column from what it holds, identifiers as text', () => {
+    expect(inferColumn('WaybillNbr', ['', '123456', '']).type).toBe('text');
+    expect(inferColumn('MTOJobNum', ['018600-1-1']).type).toBe('text');
+    expect(inferColumn('OHPickListComment', ['2C']).type).toBe('note');
+    expect(inferColumn('ICPOBTOCust', ['', '']).type).toBe('text');
+    expect(inferColumn('PromiseDate', ['15/10/2026', '']).type).toBe('day');
+    expect(inferColumn('Weight', ['1,200', '3.5']).type).toBe('number');
+    expect(inferColumn('Firm', ['TRUE', 'false']).type).toBe('boolean');
+  });
+
+  it('makes the planner’s columns as the planner writes them', () => {
+    expect(decisionColumnSpec('ClosedAt')).toMatchObject({ type: 'instant', indexed: true });
+    expect(decisionColumnSpec('LoadDetail')).toMatchObject({ type: 'note' });
+    expect(decisionColumnSpec('VolumeM3')).toMatchObject({ type: 'number', decimals: 2 });
+    expect(decisionColumnSpec('Order')).toBeNull();
+  });
+
+  it('describes each to SharePoint', () => {
+    expect(internalNameFor('ICPOBTO_SOPO')).toBe('ICPOBTO_SOPO');
+    expect(internalNameFor('Cust. ID')).toBe('CustID');
+    expect(fieldSchema({ name: 'ClosedAt', type: 'instant', indexed: true })).toBe(
+      '<Field Type="DateTime" DisplayName="ClosedAt" Name="ClosedAt" StaticName="ClosedAt" Indexed="TRUE" Format="DateTime" FriendlyDisplayFormat="Disabled" />',
+    );
+    expect(fieldSchema({ name: 'LoadDetail', type: 'note' })).toContain('Type="Note"');
+    expect(fieldSchema({ name: 'LoadDetail', type: 'note' })).toContain('RichText="FALSE"');
+    expect(fieldSchema({ name: 'A & "B"', type: 'text' })).toContain('DisplayName="A &amp; &quot;B&quot;"');
   });
 });
