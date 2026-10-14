@@ -13,7 +13,7 @@
  *    due date and the supplier's promise (`poAvailableDate`), and each stock
  *    job on its Expect Date from the board.
  * 3. The lines short of goods take from it in the order they are due to leave
- *    — Need By, then Ship By, then order number — so the first to go is the
+ *    — Ship By, then Need By, then order number — so the first to go is the
  *    first served, and a line covered by two releases is ready when the
  *    second arrives.
  *
@@ -95,8 +95,8 @@ interface Lot {
 const byDate = (a: Lot, b: Lot): number =>
   a.date === b.date ? 0 : a.date === null ? 1 : b.date === null ? -1 : a.date < b.date ? -1 : 1;
 
-/** The line's due day for the queue: Need By, else Ship By, else last. */
-const dueOf = (l: WaybillLine): string => l.needBy ?? l.shipBy ?? '9999-12-31';
+/** The line's due day for the queue: Ship By (it leaves then), else Need By, else last. */
+const dueOf = (l: WaybillLine): string => l.shipBy ?? l.needBy ?? '9999-12-31';
 
 /**
  * Does this line wait on supply this module answers for? A goods line that is

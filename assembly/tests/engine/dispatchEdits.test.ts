@@ -58,17 +58,19 @@ const plan = (list: ShipmentOrder[], firmLoads: FirmLoad[] = [], settings: Dispa
 const loadOf = (p: DispatchPlan, id: string) => p.loads.find((l) => l.drops.some((d) => d.orderId === id))!;
 
 describe('due date', () => {
-  it('plans to Need By, not the earlier Ship By', () => {
-    const p = plan([make('a', { shipBy: '2026-10-01', needBy: '2026-10-14' })]);
+  it('plans to Ship By, the dispatch day, not the customer’s later Need By', () => {
+    const p = plan([make('a', { shipBy: '2026-10-14', needBy: '2026-10-21' })]);
     expect(p.orders.get('a')!.flags).not.toContain('overdue');
     expect(loadOf(p, 'a').day).toBe('2026-10-14');
+    const late = plan([make('b', { shipBy: '2026-10-01', needBy: '2026-10-14' })]);
+    expect(late.orders.get('b')!.flags).toContain('overdue');
   });
 
-  it('falls back to Ship By when Need By is blank, and can be switched back', () => {
-    const p = plan([make('a', { shipBy: '2026-10-13', needBy: null })]);
+  it('falls back to Need By when Ship By is blank, and can be switched to Need By', () => {
+    const p = plan([make('a', { shipBy: null, needBy: '2026-10-13' })]);
     expect(loadOf(p, 'a').day).toBe('2026-10-13');
-    const q = plan([make('b', { shipBy: '2026-10-13', needBy: '2026-10-16' })], [], { ...S, deadline: 'shipBy' });
-    expect(loadOf(q, 'b').day).toBe('2026-10-13');
+    const q = plan([make('b', { shipBy: '2026-10-13', needBy: '2026-10-16' })], [], { ...S, deadline: 'needBy' });
+    expect(loadOf(q, 'b').day).toBe('2026-10-16');
   });
 
   it('holds an order with neither date', () => {

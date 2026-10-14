@@ -119,12 +119,12 @@ export function OrderDrawer({
           <Badge variant={READINESS[order.readiness].variant}>{READINESS[order.readiness].label}</Badge>{' '}
           {order.readyLines}/{order.goodsLines} lines ready{order.inPicking ? ' · in picking' : ''}
         </dd>
+        <dt>Ship By</dt>
+        <dd>{dayLabel(order.shipBy)} · planned dispatch</dd>
         <dt>Need By</dt>
-        <dd>{dayLabel(order.needBy)} · last ship day</dd>
+        <dd>{dayLabel(order.needBy)} · customer's date</dd>
         <dt>Customer receives</dt>
         <dd>{dayLabel(order.expDelivery)} · ExpDeliveryDt</dd>
-        <dt>Ship By</dt>
-        <dd>{dayLabel(order.shipBy)}</dd>
         <dt>Window</dt>
         <dd>
           {op.earliest ? `${dayLabel(op.earliest)} → ${dayLabel(op.latest)}` : '—'}

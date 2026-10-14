@@ -197,7 +197,9 @@ export const useDispatchStore = create<DispatchState>()(
       // that carry the old default (mixed), which would otherwise win.
       // v2: no own fleet — the small NSW run once called `Carrier` is a
       // `Part load` booked with the contractor.
-      version: 2,
+      // v3: Ship By is the last day an order may leave. Need By is the
+      // customer's date, and the copies saved before said otherwise.
+      version: 3,
       migrate: (persisted, from) => {
         const p = (persisted ?? {}) as Partial<DispatchState>;
         if (from < 1 && p.settings?.fleet) {
@@ -211,6 +213,7 @@ export const useDispatchStore = create<DispatchState>()(
           }
           if (p.shipments) p.shipments = p.shipments.map(rename);
         }
+        if (from < 3 && p.settings) p.settings = { ...p.settings, deadline: 'shipBy' };
         return p as DispatchState;
       },
       // Settings added in a later release fall back to their defaults rather

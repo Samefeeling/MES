@@ -568,14 +568,16 @@ export function DispatchSettingsPanel({ orders = [] }: { orders?: readonly Shipm
               value={settings.deadline}
               onChange={(e) => set((s) => ({ ...s, deadline: e.target.value as DispatchSettings['deadline'] }))}
             >
-              <option value="needBy">Need By (latest ship date)</option>
-              <option value="shipBy">Ship By</option>
+              <option value="shipBy">Ship By (planned dispatch day)</option>
+              <option value="needBy">Need By (the customer's date)</option>
             </select>
           </label>
         </div>
         <p className="muted-note">
-          ExpDeliveryDt is the day the customer receives the goods and is shown on every load. When
-          an order has no date in the chosen column, the other one is used.
+          Ship By is the planned dispatch day. Need By is when the customer is to have it — about 7
+          days later in NSW, 14 interstate and 4 weeks overseas — and ExpDeliveryDt the same day unless
+          the order is running late; it is shown on every load. When an order has no date in the
+          chosen column, the other one is used.
         </p>
       </section>
 

@@ -10,7 +10,7 @@
  * **SIFOT** (Shipped In Full, On Time) is measured on the orders *due* in the
  * period, the strict form that counts backlog:
  *
- * - **hit** — every piece shipped, on or before the due date (`Need By` by
+ * - **hit** — every piece shipped, on or before the due date (`Ship By` by
  *   default), with every goods line ready when it left;
  * - **late** — shipped in full but after the due date;
  * - **short** — shipped with goods lines not ready (a part shipment);

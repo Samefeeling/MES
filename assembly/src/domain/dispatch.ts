@@ -102,8 +102,12 @@ export interface ShipmentOrder {
   shipVia: string;
   zone: string;
   city: string;
+  /** `Ship By`: the planned dispatch day — the last day the order may leave. */
   shipBy: DayKey | null;
-  /** `Need By`: the last day the order may leave the factory. */
+  /**
+   * `Need By`: the day the customer is to have it — typically 7 days after
+   * Ship By in NSW, 14 interstate and 4 weeks overseas.
+   */
   needBy: DayKey | null;
   /** `ExpDeliveryDt`: the day the customer expects to receive it. */
   expDelivery: DayKey | null;
@@ -258,10 +262,11 @@ export interface DispatchSettings {
    */
   preferVolume: 'cubics' | 'freight';
   /**
-   * Which waybill date is the last day an order may leave. `Need By` is the
-   * latest ship date and `ExpDeliveryDt` the day the customer receives it;
-   * `Ship By` is kept for exports that only fill that one in. Either way the
-   * other date is the fallback when an order has none.
+   * Which waybill date is the last day an order may leave. `Ship By` is the
+   * planned dispatch day; `Need By` is when the customer is to have it, and
+   * `ExpDeliveryDt` the same day unless the order is running late. `Need By`
+   * is kept for exports that only fill that one in. Either way the other date
+   * is the fallback when an order has none.
    */
   deadline: DeadlineField;
   /**
@@ -378,7 +383,7 @@ export const DEFAULT_DISPATCH_SETTINGS: DispatchSettings = {
   },
   pickupZones: ['NSW-Customer Pickup'],
   preferVolume: 'cubics',
-  deadline: 'needBy',
+  deadline: 'shipBy',
   shipmentValue: 'goods',
   sifotTarget: 0.95,
   contractors: {},

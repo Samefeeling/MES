@@ -48,7 +48,7 @@ export function isoWeek(day: DayKey): number {
 export function summarise(
   loads: readonly PlannedLoad[],
   by: 'day' | 'week',
-  deadline: DeadlineField = 'needBy',
+  deadline: DeadlineField = 'shipBy',
 ): Bucket[] {
   const buckets = new Map<DayKey, Bucket & { capacity: number; filled: number; orderIds: Set<string> }>();
   for (const load of loads) {
