@@ -56,6 +56,7 @@ import { sumOtherShiftGood, unsignedEarlierTuples } from '../core/jobgood';
 import { breakdownDetailFor } from '../core/breakdown';
 import { compareOrdersByStart } from '../core/planning';
 import { planningOrderMatchesMachine } from '../core/schedule';
+import { isRerunMachine, nextRerunJob, rerunBase, rerunNumber } from '../core/rerun';
 import {
   type Handover,
   parseHandover as sharedParseHandover,
@@ -909,7 +910,7 @@ function orderForJob(job: string): PlanningOrder | undefined {
     const fromPlanning =
       S!.planning.find((o) => o.jobNumber === job) ??
       S!.planning.find((o) => o.jobNumber.trim() === jt);
-    if (fromPlanning) return fromPlanning;
+    if (fromPlanning) return withOrderCycle(fromPlanning);
   }
   // Synthetic order rebuilt from the PMD_Production rows already in
   // S!.prod. This is the only path for a past shift, and also the
@@ -947,6 +948,15 @@ function orderForJob(job: string): PlanningOrder | undefined {
     manuallyAdded: true,
     source: 'Manual',
   };
+}
+
+/** A second run (…-R2) is a manual order, which carries no cycle time; it
+ *  runs at its order's rate, so Shift Target still works for it. */
+function withOrderCycle(o: PlanningOrder): PlanningOrder {
+  if (o.qtyPerHr > 0 || rerunNumber(o.jobNumber) == null) return o;
+  const base = rerunBase(o.jobNumber);
+  const first = S!.planning.find((p) => p.jobNumber.trim() === base);
+  return first?.qtyPerHr ? { ...o, qtyPerHr: first.qtyPerHr } : o;
 }
 
 function slotRec(slot: number): ProductionRecord | undefined {
@@ -1034,6 +1044,8 @@ function orderQtyForJob(job: string): number | null {
  */
 function coRunsWith(jobA: string, jobB: string): boolean {
   if (!jobA || !jobB || jobA === jobB) return false;
+  // Two runs of one order (…-R2) follow each other, never run together.
+  if (rerunBase(jobA).toUpperCase() === rerunBase(jobB).toUpperCase()) return false;
   return ordersCoRun(
     dieRowForJob(jobA),
     dieRowForJob(jobB),
@@ -2075,9 +2087,21 @@ function buildMeta(): string {
     isSupervisor() && dalRef.createManualOrder
       ? `<button type="button" class="m-add-order" data-add-order title="Add an order that's missing from the Epicor planning extract (supervisor only)">＋</button>`
       : '';
+  // Supervisor-only, hot-stamping press only: run the selected order again
+  // (the other side of the foil, or a rework) under its own Job# …-R2.
+  const selected = S!.selJob ? orderForJob(S!.selJob) : undefined;
+  const rerunBtn =
+    isSupervisor() &&
+    dalRef.createManualOrder &&
+    isRerunMachine(S!.mc) &&
+    !isPastShift() &&
+    selected &&
+    !selected.isDieChange
+      ? `<button type="button" class="m-add-order m-rerun" data-rerun-order title="Run ${escapeHtml(rerunBase(S!.selJob))} again on this press — second side or rework (supervisor only)">↻</button>`
+      : '';
   return `<div class="op-meta">
     <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
-    <label class="m-job">Job# ${jobField}${addOrderBtn}${coRunBadge}${jobWarn}</label>
+    <label class="m-job">Job# ${jobField}${addOrderBtn}${rerunBtn}${coRunBadge}${jobWarn}</label>
     <label class="m-orderqty">Order Qty <input type="text" disabled value="${escapeHtml(String(orderQty))}"></label>
     <label class="m-part"><span class="m-part-title">Part# ${swatch}</span><input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
     <label class="m-desc"><span class="m-desc-title">Product Description${dieNumberLabel}</span><input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
@@ -2903,6 +2927,9 @@ function wire(): void {
   app
     .querySelector<HTMLButtonElement>('[data-add-order]')
     ?.addEventListener('click', () => openAddOrderModal());
+  app
+    .querySelector<HTMLButtonElement>('[data-rerun-order]')
+    ?.addEventListener('click', () => void openRerunModal());
   // ⛓ Co-Run chips — one-tap hop to a co-running order. Switching between
   // co-runners is exempt from the sign-off-before-leaving gate, so this skips
   // straight to the reload that swaps the per-job view.
@@ -3842,6 +3869,84 @@ function openAddOrderModal(): void {
           btn.disabled = false;
           btn.textContent = 'Add order';
         }
+      }
+    })();
+  });
+}
+
+/** Run the selected order again on the hot-stamping press (second side of
+ *  a two-sided foil, or a rework) once a run is signed off. Recorded under
+ *  its own Job# — the order's number plus -R2, -R3 … — as a manual order,
+ *  so it gets a fresh sheet, Job Left and sign-off; see core/rerun.ts. */
+async function openRerunModal(): Promise<void> {
+  if (!isSupervisor() || !dalRef.createManualOrder || !isRerunMachine(S!.mc)) return;
+  const o = orderForJob(S!.selJob);
+  if (!o || o.isDieChange) return;
+  const base = rerunBase(o.jobNumber);
+  // Every Job# of this order already used — planning, manual orders and
+  // production on any shift — so a run whose manual order has expired is
+  // never handed out twice.
+  let used: string[] = [...S!.planning.map((p) => p.jobNumber), ...S!.prod.map((r) => r.jobNumber)];
+  let job = nextRerunJob(base, used);
+  try {
+    for (let i = 0; i < 20; i++) {
+      const rows = await dalRef.listProduction({ jobNumber: job });
+      if (rows.length === 0) break;
+      used = [...used, job];
+      job = nextRerunJob(base, used);
+    }
+  } catch (e) {
+    console.warn('[pmd] re-run Job# check failed:', e);
+  }
+  const qty0 = o.orderQty > 0 ? o.orderQty : o.jobRequired ?? 0;
+  const mc = openModal(`<div class="bd-modal add-ord-modal">
+    <h2 class="bd-title">↻ Run ${escapeHtml(base)} again</h2>
+    <p class="bd-sub">For the second side of a two-sided foil, or a rework, after a run is signed off. It is recorded as <b>${escapeHtml(job)}</b> — its own sheet, counts, Job Left and sign-off — and is in the ${escapeHtml(S!.mc)} Job# list for 48 hours.</p>
+    <div class="dcl-row">
+      <label>Job #<input type="text" disabled value="${escapeHtml(job)}"></label>
+      <label>Part #<input type="text" disabled value="${escapeHtml(o.partNumber)}"></label>
+    </div>
+    <div class="dcl-row">
+      <label>Product description<input type="text" disabled value="${escapeHtml(o.partDescription)}"></label>
+      <label>Qty to run *<input type="number" data-rr="qty" min="1" step="1" inputmode="numeric" value="${qty0 > 0 ? qty0 : ''}"></label>
+    </div>
+    <div class="bd-actions">
+      <button class="btn-primary-big" data-rr-save>Run again</button>
+      <button class="btn-ghost-big" data-rr-cancel>Cancel</button>
+    </div>
+  </div>`);
+  mc.querySelector('[data-rr-cancel]')?.addEventListener('click', () => closeModal());
+  const btn = mc.querySelector<HTMLButtonElement>('[data-rr-save]');
+  btn?.addEventListener('click', () => {
+    void (async () => {
+      const qty = Math.floor(
+        Number(mc.querySelector<HTMLInputElement>('[data-rr="qty"]')?.value) || 0,
+      );
+      if (qty <= 0) {
+        toast('Qty to run must be a positive number', 'warn');
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Adding…';
+      try {
+        const created = await dalRef.createManualOrder!({
+          jobNumber: job,
+          partNumber: o.partNumber,
+          partDescription: o.partDescription,
+          orderQty: qty,
+        });
+        discardIfUnconfirmed();
+        S!.planning.push(created);
+        S!.selJob = created.jobNumber;
+        saveView();
+        closeModal();
+        toast(`${created.jobNumber} ready — confirm and start the run`, 'ok');
+        void reload();
+      } catch (e) {
+        console.error('[pmd] re-run add failed:', e);
+        toast(`Could not add: ${e instanceof Error ? e.message : e}`, 'err');
+        btn.disabled = false;
+        btn.textContent = 'Run again';
       }
     })();
   });
