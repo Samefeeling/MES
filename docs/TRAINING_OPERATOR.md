@@ -438,28 +438,6 @@ button. The signoff dialog confirms.
 
 ---
 
-## Scene 17 — Hstamp only: run an order again
-
-**SHOW**: Machine = Hstamp, the signed-off order picked. Supervisor taps
-the **↻** next to Job#, checks Qty to run, taps **Run again**. The Job#
-now reads the order number with **-R2** on the end.
-
-**NARRATION**
-> Unlock is for fixing a run. When the same order has to go through the
-> hot stamp a second time — the back of a two-sided foil, or a rework —
-> pick the order on Hstamp and tap **↻** next to Job#. The second run gets
-> its own Job#, the order number with -R2 on the end, so it has a fresh
-> sheet, its own counts, Job Left and Shift Target, and its own sign-off.
-> The first run stays exactly as it was signed. A third run would be -R3.
-> Only Hstamp has this button, and only a supervisor can use it.
-
-**ON-SCREEN TEXT**
-> Hstamp → pick the order → **↻** → Run again → Job# …-R2
-
-**PAUSE 4 seconds**
-
----
-
 # Closing
 
 **SHOW**: The full filled-in sheet for a complete shift. Then a fade

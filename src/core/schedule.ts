@@ -1,7 +1,6 @@
 import type { PlanningOrder } from '../types';
 import { SHIFTS, buildShiftId, dateKey, parseShiftId, shiftBounds } from './shifts';
 import { wholePieces } from './targets';
-import { isRerunMachine, rerunNumber } from './rerun';
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -26,11 +25,6 @@ export function planningOrderMatchesMachine(
   includeUniversalManual = false,
 ): boolean {
   const orderMachine = normaliseMachineCode(order.machineCode);
-  // A second run (Job# …-R2) is a manual order too, but it belongs to the
-  // hot-stamping press only — the other presses never see it.
-  if (!orderMachine && order.manuallyAdded && rerunNumber(order.jobNumber) != null) {
-    return includeUniversalManual && isRerunMachine(machineCode);
-  }
   if (!orderMachine) return includeUniversalManual && order.manuallyAdded;
   const selectedMachine = normaliseMachineCode(machineCode);
   // Planning Excel uses "HS" exclusively for the hot-stamping press while
