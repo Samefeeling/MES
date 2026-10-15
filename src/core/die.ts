@@ -1035,6 +1035,11 @@ export function machineWorkOrderLevel(
 // (the meta is captured from the operator sheet the note was raised from).
 // Storing one note per line keeps the log trivially searchable and lets the
 // drilldown filter by any keyword (colour / temperature / speed / pressure…).
+//
+// Photos of a note (the controller screens, the set-up) are attachments on
+// the die's own PMD_DieMaster row; the note names them at the end of its
+// line — `… [photos: SOC_D123_20261015-1432_1.jpg, …]` — so each photo
+// belongs to exactly one note and travels with the die.
 
 /** One parsed SOC note. `raw` is the whole line, kept for keyword search. */
 export interface DieNote {
@@ -1043,6 +1048,8 @@ export interface DieNote {
   machine: string;
   operator: string;
   body: string;
+  /** Attachment file names on the die's PMD_DieMaster row, in shot order. */
+  photos: string[];
   raw: string;
 }
 
@@ -1053,6 +1060,19 @@ export interface DieNoteInput {
   machine: string;
   operator: string;
   body: string;
+  /** Attachment file names already uploaded to the die's row. */
+  photos?: string[];
+}
+
+const PHOTOS_RE = /\s*\[photos:\s*([^\]]*)\]\s*$/i;
+
+/** The attachment name for photo `index` (1-based) of a SOC note on `die`,
+ *  taken at `at`. SharePoint attachment names can't take #%&*:<>?/\{|},
+ *  so everything but word characters, dot and dash becomes '_'. */
+export function dieNotePhotoName(die: string, at: Date, index: number): string {
+  const p = (n: number): string => String(n).padStart(2, '0');
+  const stamp = `${at.getFullYear()}${p(at.getMonth() + 1)}${p(at.getDate())}-${p(at.getHours())}${p(at.getMinutes())}${p(at.getSeconds())}`;
+  return `SOC_${die}_${stamp}_${index}.jpg`.replace(/[^\w.-]+/g, '_');
 }
 
 /** Compose one PMD_DieMaster.Notes line from a note's fields. The meta is
@@ -1065,7 +1085,9 @@ export function formatDieNoteLine(n: DieNoteInput): string {
     .map((s) => (s ?? '').replace(/[/\n\r]+/g, ' ').trim())
     .join('/');
   const body = (n.body ?? '').replace(/\s*[\r\n]+\s*/g, ' ').trim();
-  return `${meta}: ${body}`;
+  const photos = (n.photos ?? []).map((f) => f.replace(/[,\]\r\n]+/g, '_').trim()).filter(Boolean);
+  const tail = photos.length ? `${body ? ' ' : ''}[photos: ${photos.join(', ')}]` : '';
+  return `${meta}: ${body}${tail}`;
 }
 
 /** Split one stored Notes line back into a DieNote. The body may itself
@@ -1074,7 +1096,13 @@ export function parseDieNoteLine(line: string): DieNote {
   const raw = line;
   const idx = line.indexOf(': ');
   const metaStr = idx >= 0 ? line.slice(0, idx) : '';
-  const body = idx >= 0 ? line.slice(idx + 2) : line;
+  let body = idx >= 0 ? line.slice(idx + 2) : line;
+  let photos: string[] = [];
+  const pm = PHOTOS_RE.exec(body);
+  if (pm) {
+    photos = pm[1].split(',').map((f) => f.trim()).filter(Boolean);
+    body = body.slice(0, pm.index);
+  }
   const [date = '', shift = '', machine = '', operator = ''] = metaStr.split('/');
   return {
     date: date.trim(),
@@ -1082,6 +1110,7 @@ export function parseDieNoteLine(line: string): DieNote {
     machine: machine.trim(),
     operator: operator.trim(),
     body: body.trim(),
+    photos,
     raw: raw.trim(),
   };
 }

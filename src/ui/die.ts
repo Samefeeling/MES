@@ -33,6 +33,7 @@ import {
   defaultPmPlanText,
   DIE_CONDITION_META,
   dieHealth,
+  dieNotePhotoName,
   dieServiceStatus,
   formatDieNoteLine,
   goodByJob,
@@ -55,6 +56,7 @@ import {
 import { closeModal, escapeHtml, openModal } from './modal';
 import { RESIZE_HANDLE, syncStickyOffset, wireColumnResize } from './col-resize';
 import { toast } from './toast';
+import { compressPhoto, dataUrlToBlob } from './photo';
 import { isSupervisor } from './supervisor-auth';
 import { peekDieNoteContext } from './nav-context';
 import { STATUS_MAP } from '../core/status';
@@ -1642,9 +1644,59 @@ function renderNoteItem(n: DieNote): string {
   return `<li class="die-note">
       ${meta ? `<div class="die-note-meta">${meta}</div>` : ''}
       <div class="die-note-body">${
-        escapeHtml(n.body) || '<span class="die-note-nobody">(no text)</span>'
+        escapeHtml(n.body) ||
+        (n.photos.length ? '' : '<span class="die-note-nobody">(no text)</span>')
       }</div>
+      ${
+        n.photos.length
+          ? `<div class="die-note-photos">${n.photos
+              .map(
+                (f) =>
+                  `<a class="photo-thumb die-note-photo" data-photo-name="${escapeHtml(f)}" target="_blank" rel="noopener" title="${escapeHtml(f)}">📷</a>`,
+              )
+              .join('')}</div>`
+          : ''
+      }
     </li>`;
+}
+
+// SOC-note photos: the list of a die's PMD_DieMaster attachments, read once
+// per die and page view (dropped when a new photo is uploaded).
+const diePhotoCache = new Map<string, Promise<Map<string, string>>>();
+
+function diePhotoUrls(dieNumber: string): Promise<Map<string, string>> {
+  const key = dieNumber.trim().toUpperCase();
+  let hit = diePhotoCache.get(key);
+  if (!hit) {
+    hit = (dalRef.listDiePhotos ? dalRef.listDiePhotos(dieNumber) : Promise.resolve([]))
+      .then((list) => new Map(list.map((a) => [a.name, a.url])))
+      .catch((e) => {
+        diePhotoCache.delete(key);
+        console.warn('[pmd] die photos unavailable:', e);
+        return new Map<string, string>();
+      });
+    diePhotoCache.set(key, hit);
+  }
+  return hit;
+}
+
+/** Turn every 📷 placeholder under `root` into the photo it names. A name
+ *  with no attachment behind it (deleted in SharePoint) stays a greyed 📷. */
+function fillNotePhotos(root: HTMLElement, dieNumber: string): void {
+  const slots = root.querySelectorAll<HTMLAnchorElement>('a[data-photo-name]:not([href])');
+  if (slots.length === 0) return;
+  void diePhotoUrls(dieNumber).then((urls) => {
+    slots.forEach((a) => {
+      const url = urls.get(a.dataset.photoName ?? '');
+      if (!url) {
+        a.classList.add('missing');
+        a.title = `${a.dataset.photoName} — not found on PMD_DieMaster`;
+        return;
+      }
+      a.href = url;
+      a.innerHTML = `<img src="${escapeHtml(url)}" alt="${escapeHtml(a.dataset.photoName ?? '')}" loading="lazy">`;
+    });
+  });
 }
 
 /** Inner HTML of the notes list — the note items, or an empty-state line
@@ -1654,6 +1706,9 @@ function noteListHtml(notes: DieNote[], emptyMsg: string): string {
     ? notes.map(renderNoteItem).join('')
     : `<li class="die-note-empty">${escapeHtml(emptyMsg)}</li>`;
 }
+
+/** Photos one SOC note may carry — the controller screens of one set-up. */
+const NOTE_PHOTO_MAX = 6;
 
 const NOTES_EMPTY = 'No SOC notes yet — tap “📝 Add note” to log a setting change.';
 
@@ -1688,11 +1743,13 @@ function wireNoteSearch(mc: HTMLElement, dieNumber: string): void {
     const kw = search.value;
     const filtered = parseDieNotes(masterFor(dieNumber)?.notes ?? '', kw);
     const list = mc.querySelector('[data-note-list]');
-    if (list)
+    if (list) {
       list.innerHTML = noteListHtml(
         filtered,
         kw.trim() ? `No notes match “${kw.trim()}”.` : NOTES_EMPTY,
       );
+      fillNotePhotos(list as HTMLElement, dieNumber);
+    }
     const count = mc.querySelector('[data-note-count]');
     if (count) count.textContent = String(filtered.length);
   });
@@ -1802,6 +1859,17 @@ function openAddNoteDialog(dieNumber: string): void {
       <button type="button" class="die-note-mic" data-note-mic title="Voice input — tap and speak, or use the microphone on your keyboard">🎤</button>
     </div>
     ${
+      dalRef.attachDiePhoto
+        ? `<div class="die-note-photo-row">
+      <button type="button" class="btn-ghost-big die-note-photo-add" data-note-photo-add
+        title="Take a photo of the settings screen, or pick one — up to ${NOTE_PHOTO_MAX}">📷 Add photo</button>
+      <input type="file" accept="image/*" multiple hidden data-note-photo-input>
+      <div class="die-note-photos" data-note-photo-pending></div>
+      <span class="die-note-photo-hint">Settings screens, set-up — kept on ${escapeHtml(dieNumber)}</span>
+    </div>`
+        : ''
+    }
+    ${
       past.length
         ? `<div class="die-note-past">
       <div class="die-note-past-head">🔎 Past notes <span class="die-wo-count" data-note-count>${past.length}</span>
@@ -1825,28 +1893,100 @@ function openAddNoteDialog(dieNumber: string): void {
   wireNoteMic(mc.querySelector<HTMLButtonElement>('[data-note-mic]')!, ta, speechRecognitionCtor());
   // Search the die's past SOC notes without leaving the compose dialog.
   wireNoteSearch(mc, dieNumber);
+  fillNotePhotos(mc, dieNumber);
+  // 📷 photos for this note: compressed on the device, held here until Save.
+  const shots: string[] = [];
+  const pending = mc.querySelector<HTMLElement>('[data-note-photo-pending]');
+  const fileIn = mc.querySelector<HTMLInputElement>('[data-note-photo-input]');
+  const paintShots = (): void => {
+    if (!pending) return;
+    pending.innerHTML = shots
+      .map(
+        (u, i) =>
+          `<span class="photo-thumb pending"><img src="${u}" alt=""><button type="button" data-photo-del="${i}" title="Remove this photo">✕</button></span>`,
+      )
+      .join('');
+    pending.querySelectorAll<HTMLButtonElement>('[data-photo-del]').forEach((b) =>
+      b.addEventListener('click', () => {
+        shots.splice(Number(b.dataset.photoDel), 1);
+        paintShots();
+      }),
+    );
+  };
+  mc.querySelector('[data-note-photo-add]')?.addEventListener('click', () => fileIn?.click());
+  fileIn?.addEventListener('change', () => {
+    const files = Array.from(fileIn.files ?? []);
+    fileIn.value = '';
+    void (async () => {
+      for (const f of files) {
+        if (shots.length >= NOTE_PHOTO_MAX) {
+          toast(`Up to ${NOTE_PHOTO_MAX} photos per note`, 'warn');
+          break;
+        }
+        try {
+          shots.push(await compressPhoto(f));
+        } catch (e) {
+          console.warn('[pmd] photo not readable:', e);
+          toast(`${f.name} could not be read as a photo`, 'err');
+        }
+      }
+      paintShots();
+    })();
+  });
   mc.querySelector('[data-note-cancel]')?.addEventListener('click', () => openDieDetail(dieNumber));
-  mc.querySelector('[data-note-save]')?.addEventListener('click', () => {
+  const saveBtn = mc.querySelector<HTMLButtonElement>('[data-note-save]');
+  saveBtn?.addEventListener('click', () => {
     const body = ta.value.trim();
-    if (!body) {
-      toast('Type or dictate the note first', 'err');
+    if (!body && shots.length === 0) {
+      toast('Type or dictate the note, or add a photo, first', 'err');
       ta.focus();
       return;
     }
-    const line = formatDieNoteLine({
-      date: field('date'),
-      shift: field('shift'),
-      machine: field('machine'),
-      operator: field('operator'),
-      body,
-    });
+    if (saveBtn.disabled) return;
+    saveBtn.disabled = true;
+    saveBtn.textContent = shots.length ? 'Uploading photos…' : 'Saving…';
     void (async () => {
+      // Photos first, so the note only ever names photos that landed.
+      const at = new Date();
+      const photos: string[] = [];
+      let failed = 0;
+      let lastErr = '';
+      for (let i = 0; i < shots.length; i++) {
+        const name = dieNotePhotoName(dieNumber, at, i + 1);
+        try {
+          await dalRef.attachDiePhoto!(dieNumber, name, dataUrlToBlob(shots[i]));
+          photos.push(name);
+        } catch (e) {
+          failed++;
+          lastErr = e instanceof Error ? e.message : String(e);
+          console.error('[pmd] SOC photo upload failed:', e);
+        }
+      }
+      if (photos.length) diePhotoCache.delete(dieNumber.trim().toUpperCase());
+      if (!body && photos.length === 0) {
+        toast(`Photo upload failed: ${lastErr}`, 'err');
+        saveBtn.disabled = false;
+        saveBtn.textContent = '💾 Save note';
+        return;
+      }
+      const line = formatDieNoteLine({
+        date: field('date'),
+        shift: field('shift'),
+        machine: field('machine'),
+        operator: field('operator'),
+        body,
+        photos,
+      });
       const prev = m.notes;
       const next = appendDieNote(m.notes ?? '', line);
       m.notes = next; // optimistic — rolled back on failure
       try {
         await dalRef.updateDieMaster!(dieNumber, { notes: next });
-        toast(`Note added to ${dieNumber}`, 'ok');
+        if (failed) {
+          toast(`Note added to ${dieNumber}, but ${failed} photo(s) did not upload: ${lastErr}`, 'warn');
+        } else {
+          toast(`Note added to ${dieNumber}${photos.length ? ` with ${photos.length} photo(s)` : ''}`, 'ok');
+        }
       } catch (e) {
         m.notes = prev;
         console.error('[pmd] SOC note save failed:', e);
@@ -2004,6 +2144,7 @@ function openDieDetail(dieNumber: string): void {
   // SOC-notes keyword search — filter the list in place (re-rendering the
   // whole drilldown would drop the input focus mid-type).
   wireNoteSearch(mc, dieNumber);
+  fillNotePhotos(mc, dieNumber);
   // Supervisor's ✎ Edit plan in the Service Plan section.
   mc.querySelectorAll<HTMLButtonElement>('[data-die-pm]').forEach((b) =>
     b.addEventListener('click', () => openPmPlanEditor(b.dataset.diePm!)),

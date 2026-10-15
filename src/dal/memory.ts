@@ -84,6 +84,7 @@ export class MemoryDataLayer implements PmdDataLayer {
   /** Photos "attached" per signed tuple — object URLs standing in for the
    *  SharePoint attachment URLs, so the 📷 flow is testable in dev. */
   private photos = new Map<string, Array<{ name: string; url: string }>>();
+  private diePhotos = new Map<string, Array<{ name: string; url: string }>>();
 
   constructor(now: Date = new Date()) {
     this.machines = seedMachines();
@@ -197,6 +198,21 @@ export class MemoryDataLayer implements PmdDataLayer {
     if (patch.maintenanceLevel !== undefined) row.maintenanceLevel = patch.maintenanceLevel;
     if (patch.notes !== undefined) row.notes = patch.notes;
     if (patch.changeOverMedian !== undefined) row.changeOverMedian = patch.changeOverMedian;
+  }
+
+  async attachDiePhoto(dieNumber: string, fileName: string, data: Blob): Promise<void> {
+    const key = dieNumber.trim().toUpperCase();
+    if (!this.dieMaster.some((m) => m.dieNumber.trim().toUpperCase() === key))
+      throw new Error(`No PMD_DieMaster row for die ${dieNumber}`);
+    const list = this.diePhotos.get(key) ?? [];
+    if (!list.some((p) => p.name === fileName)) {
+      list.push({ name: fileName, url: URL.createObjectURL(data) });
+    }
+    this.diePhotos.set(key, list);
+  }
+
+  async listDiePhotos(dieNumber: string): Promise<Array<{ name: string; url: string }>> {
+    return [...(this.diePhotos.get(dieNumber.trim().toUpperCase()) ?? [])];
   }
 
   // ---- die maintenance (PMD_DieMaintenance parity) ---------------------

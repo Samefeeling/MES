@@ -11,6 +11,7 @@ import {
   dieHealth,
   dieServiceStatus,
   dieSignOffStatus,
+  dieNotePhotoName,
   formatDieNoteLine,
   goodByJob,
   latestConditionByDie,
@@ -1085,6 +1086,16 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
     await expect(dal.updateDieMaster('NOPE', { toolStatus: 'problems' })).rejects.toThrow();
   });
 
+  it('keeps SOC-note photos on the die they were taken for', async () => {
+    const dal = new MemoryDataLayer();
+    const [a, b] = (await dal.listDieMaster()).map((m) => m.dieNumber);
+    await dal.attachDiePhoto(a, 'SOC_1.jpg', new Blob(['x'], { type: 'image/jpeg' }));
+    await dal.attachDiePhoto(a, 'SOC_1.jpg', new Blob(['x'], { type: 'image/jpeg' }));
+    expect((await dal.listDiePhotos(a)).map((p) => p.name)).toEqual(['SOC_1.jpg']);
+    expect(await dal.listDiePhotos(b)).toEqual([]);
+    await expect(dal.attachDiePhoto('NOPE', 'x.jpg', new Blob(['x']))).rejects.toThrow();
+  });
+
   it('updateDieMaster appends SOC notes to the Notes column', async () => {
     const dal = new MemoryDataLayer();
     const die = (await dal.listDieMaster())[0].dieNumber;
@@ -1120,6 +1131,51 @@ describe('MemoryDataLayer die master (PMD_DieMaster parity)', () => {
 });
 
 describe('SOC note helpers (PMD_DieMaster.Notes)', () => {
+  it('names the photos of a note at the end of its line, and reads them back', () => {
+    const line = formatDieNoteLine({
+      date: '2026-10-15',
+      shift: 'Day',
+      machine: '550T',
+      operator: 'Ann',
+      body: 'Barrel 210°C; hold 60 bar',
+      photos: ['SOC_D1_20261015-143200_1.jpg', 'SOC_D1_20261015-143200_2.jpg'],
+    });
+    expect(line).toBe(
+      '2026-10-15/Day/550T/Ann: Barrel 210°C; hold 60 bar [photos: SOC_D1_20261015-143200_1.jpg, SOC_D1_20261015-143200_2.jpg]',
+    );
+    const [note] = parseDieNotes(line);
+    expect(note.body).toBe('Barrel 210°C; hold 60 bar');
+    expect(note.photos).toEqual(['SOC_D1_20261015-143200_1.jpg', 'SOC_D1_20261015-143200_2.jpg']);
+  });
+
+  it('keeps a photo-only note, and gives a note without photos none', () => {
+    const line = formatDieNoteLine({
+      date: '2026-10-15',
+      shift: 'Night',
+      machine: '850T',
+      operator: 'Bob',
+      body: '',
+      photos: ['a.jpg'],
+    });
+    expect(line).toBe('2026-10-15/Night/850T/Bob: [photos: a.jpg]');
+    expect(parseDieNotes(line)[0]).toMatchObject({ body: '', photos: ['a.jpg'] });
+    expect(parseDieNotes('2026-07-23/Day/550T/Ann: Temp up')[0].photos).toEqual([]);
+  });
+
+  it('finds a note by the machine it was set on', () => {
+    const raw = [
+      formatDieNoteLine({ date: 'd', shift: 'Day', machine: '550T', operator: 'A', body: 'x', photos: ['p.jpg'] }),
+      formatDieNoteLine({ date: 'd', shift: 'Day', machine: '850T', operator: 'A', body: 'y' }),
+    ].join('\n');
+    expect(parseDieNotes(raw, '550T').map((n) => n.photos)).toEqual([['p.jpg']]);
+  });
+
+  it('names a photo after the die and the moment, safe for SharePoint', () => {
+    const at = new Date(2026, 9, 15, 14, 32, 5);
+    expect(dieNotePhotoName('DIE-0091', at, 1)).toBe('SOC_DIE-0091_20261015-143205_1.jpg');
+    expect(dieNotePhotoName('D 12/A#3', at, 2)).toBe('SOC_D_12_A_3_20261015-143205_2.jpg');
+  });
+
   it('formats a note as one Date/Shift/Machine/Operator: body line', () => {
     expect(
       formatDieNoteLine({

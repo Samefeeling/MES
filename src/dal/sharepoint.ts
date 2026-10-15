@@ -1520,6 +1520,47 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
   }
 
+  /** SOC-note photos are attachments on the die's own PMD_DieMaster row:
+   *  no column, no library — they travel with the die. */
+  private async dieMasterItemId(dieNumber: string): Promise<number> {
+    if (!this.dieMasterMeta) await this.listDieMaster();
+    const id = this.dieMasterMeta?.idByDie.get(dieNumber.trim().toUpperCase());
+    if (!id) throw new Error(`No PMD_DieMaster row for die ${dieNumber}`);
+    return id;
+  }
+
+  async attachDiePhoto(dieNumber: string, fileName: string, data: Blob): Promise<void> {
+    const id = await this.dieMasterItemId(dieNumber);
+    this.writesStarted++;
+    const digest = await this.getDigest();
+    // Raw binary body, like attachProductionPhoto — SP stores it verbatim.
+    const url = `${this.listUrl(LISTS.dieMaster)}/items(${id})/AttachmentFiles/add(FileName='${encodeURIComponent(odataString(fileName))}')`;
+    const res = await fetch(url, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { Accept: 'application/json;odata=verbose', 'X-RequestDigest': digest },
+      body: data,
+    });
+    if (res.ok) return;
+    const text = await res.text();
+    // A retry after a dropped response: the photo is already there.
+    if (/already exists/i.test(text)) return;
+    if (/attachments.*(disabled|not enabled)|EnableAttachments/i.test(text)) {
+      throw new Error(
+        'PMD_DieMaster has attachments turned off — List settings → Advanced settings → Attachments: Enabled',
+      );
+    }
+    throw new Error(`Photo upload ${res.status}: ${text.slice(0, 200)}`);
+  }
+
+  async listDiePhotos(dieNumber: string): Promise<Array<{ name: string; url: string }>> {
+    const id = await this.dieMasterItemId(dieNumber);
+    const env = await this.getJson<{
+      d: { results: Array<{ FileName: string; ServerRelativeUrl: string }> };
+    }>(`${this.listUrl(LISTS.dieMaster)}/items(${id})/AttachmentFiles`);
+    return env.d.results.map((a) => ({ name: a.FileName, url: a.ServerRelativeUrl }));
+  }
+
   // ---- die change log (PMD_DieChangeLog) -------------------------------
 
   private dieChangeSchemaReady: Promise<void> | null = null;

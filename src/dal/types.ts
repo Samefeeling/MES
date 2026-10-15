@@ -64,6 +64,13 @@ export interface PmdDataLayer {
       >
     >,
   ): Promise<void>;
+  /** Attach a SOC-note photo (already-compressed JPEG) to the die's
+   *  PMD_DieMaster row. The note that shows it names `fileName` on its
+   *  Notes line (see formatDieNoteLine). Optional — pairs with
+   *  updateDieMaster. */
+  attachDiePhoto?(dieNumber: string, fileName: string, data: Blob): Promise<void>;
+  /** Every photo attached to the die's PMD_DieMaster row. */
+  listDiePhotos?(dieNumber: string): Promise<Array<{ name: string; url: string }>>;
 
   // Die maintenance (Trace → 🛠 Die Management). Backed by the
   // PMD_DieMaintenance list on SharePoint (auto-provisioned on first
