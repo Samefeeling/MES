@@ -1862,8 +1862,8 @@ function openAddNoteDialog(dieNumber: string): void {
       dalRef.attachDiePhoto
         ? `<div class="die-note-photo-row">
       <button type="button" class="btn-ghost-big die-note-photo-add" data-note-photo-add
-        title="Take a photo of the settings screen, or pick one — up to ${NOTE_PHOTO_MAX}">📷 Add photo</button>
-      <input type="file" accept="image/*" multiple hidden data-note-photo-input>
+        title="Opens the camera — photograph the settings screen; tap again for the next one (up to ${NOTE_PHOTO_MAX})">📷 Take photo</button>
+      <input type="file" accept="image/*" capture="environment" hidden data-note-photo-input>
       <div class="die-note-photos" data-note-photo-pending></div>
       <span class="die-note-photo-hint">Settings screens, set-up — kept on ${escapeHtml(dieNumber)}</span>
     </div>`
