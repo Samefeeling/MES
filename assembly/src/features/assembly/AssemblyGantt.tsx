@@ -88,7 +88,7 @@ import { ShipByContext, ShipTag, useShipByValue } from './shipBy';
 import { useIgnoredOrders } from '@/store/ignoredOrders';
 import { BulkActions } from './BulkActions';
 import { LevelLoading } from './LevelLoading';
-import { loadPickKey, overtimeDays, pickedOverload } from './levelLoad';
+import { aheadLoadPicks, loadPickKey, overtimeDays, pickedOverload } from './levelLoad';
 import { recomputeAssemblyGantt } from '@/store/assemblySelectors';
 import { overdueDays } from './overdue';
 import {
@@ -1643,6 +1643,15 @@ export function AssemblyGantt({
       board.today,
     );
   }, [board, crewPools, days]);
+  // Level the week, pressed in the toolbar: the next working days of every
+  // line, in the same panel a right-click on picked days opens.
+  const levelAhead = useUiStore((s) => s.levelAhead);
+  useEffect(() => {
+    if (!levelAhead) return;
+    useUiStore.getState().requestLevelAhead(null);
+    const keys = aheadLoadPicks(capacity);
+    if (keys.length > 0) setLevel({ keys, at: levelAhead });
+  }, [levelAhead, capacity]);
   const rowsByLine = useMemo(
     () => new Map(board.groups.map((g) => [g.line.key, rowsOfLine(board, g.line.key)])),
     [board],

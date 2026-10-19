@@ -253,7 +253,9 @@ plan goes back the other way, into the `ASSY_Production` list.
   gives up first, and is then filled with the next orders that can start on it
   (the panel can turn filling off). With **Weekends** shown, every weekend day
   is a block too — hatched when empty — and work levelled onto a picked weekend
-  goes with weekend overtime approved. See `docs/board-interaction-rules.md`.
+  goes with weekend overtime approved. **⇤ Level the week** in the toolbar
+  picks every line on the next five working days and opens the same panel in
+  one press. See `docs/board-interaction-rules.md`.
 - **Colour by date** — Due is the date the customer asked for, and finishing
   during that day counts as making it:
 
@@ -411,8 +413,10 @@ this file is optional.
 - **An order no line is named for** — not by ERP, the routing table or the BOM,
   which is how unfirm (`SUNF…`) orders arrive — goes onto the line its type
   runs on: Cutting/Sewing → UPL-CUT, Upholstery → UPL-Gluing (UPL-SSS when the
-  description says Smart Soft), Final Assembly → Assembly. Only an order with
-  neither a line nor a type is left in the Unassigned strip.
+  description says Smart Soft), Final Assembly → Assembly. The type is read
+  however it is written — "Final Assembly", "F/A", "FA", "Cut & Sew", "C/S",
+  "UPH". Only an order with neither a line nor a type is left in the Unassigned
+  strip.
 
 Planning1.csv carries no stock or purchase orders of its own: the shortage
 view reads them from `OnHandInventory.csv` and `PODetail.csv`. Without those

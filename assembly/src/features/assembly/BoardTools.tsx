@@ -53,6 +53,7 @@ import { boardHours, type BoardHours } from './crewCapacity';
 import { overdueOrders } from './overdue';
 import { OverdueDetail } from './OverdueDetail';
 import { ManualOrderButton } from './ManualOrders';
+import { AHEAD_DAYS } from './levelLoad';
 import { Metric, MetricNote } from './Metric';
 import { FactoryCalendar } from './FactoryCalendar';
 import { ReviewOrders } from './SuggestCrew';
@@ -233,6 +234,15 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
             the action this board is opened for, and it used to have the
             far corner that says it is. */}
         <ManualOrderButton board={board} />
+        {/* Ctrl-picking a week of days, every line, then right-clicking —
+            in one press. Opens the same panel, which writes nothing until
+            Level is pressed. */}
+        <Button
+          onClick={(e) => useUiStore.getState().requestLevelAhead({ x: e.clientX, y: e.clientY })}
+          title={`Bring later orders forward into the room on the next ${AHEAD_DAYS} working days, every line — shows the moves first; nothing is written until Level`}
+        >
+          ⇤ Level the week
+        </Button>
       </div>
 
       {/* The timeline's zoom: + widens every day up to 200 px, − narrows

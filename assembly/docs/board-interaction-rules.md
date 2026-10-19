@@ -474,6 +474,13 @@ levels that block alone. A day or week with nothing planned on it is still a
 block — blank until pointed at, tinted once picked — because an empty day the
 crew works is room to level into.
 
+**⇤ Level the week**, in the toolbar, is that pick made in one press: every
+line's block on the next five working days, today included — a rolling week,
+passing over weekends, public holidays and RDOs. It opens the same panel at the
+button, so the room on those days is filled with the next orders that can start
+there and anything over gives its surplus to a day with room. Nothing is written
+until **Level**.
+
 The right-click opens a panel and writes nothing. It lists what would move —
 each order with the day it starts on now and the day it would start on — and
 what it would leave, each with the reason, and reads the overload on the picked

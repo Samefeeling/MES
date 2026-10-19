@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { CrewPool, LineKey } from '@/domain/assembly';
 import type { OrderRow } from '@/engine/assembly/board';
-import { overtimeDays, overtimeOf, pickedOverload, pinsOf, planLevelLoad } from '@/features/assembly/levelLoad';
+import {
+  aheadLoadPicks,
+  overtimeDays,
+  overtimeOf,
+  pickedOverload,
+  pinsOf,
+  planLevelLoad,
+} from '@/features/assembly/levelLoad';
 import { setFactoryCalendar } from '@/engine/assembly/dates';
 
 // Monday. Nine working days of 30 h — four people, 7.5 h each — from here.
@@ -408,5 +415,50 @@ describe('level loading', () => {
       if (a) expect(a.toDay >= '2026-09-17').toBe(true);
       expect(plan.after.hours).toBe(0);
     });
+  });
+});
+
+describe('Level the week', () => {
+  const lines = new Map<LineKey, unknown>([
+    ['ASSY' as LineKey, null],
+    ['UPL_CUT_SEW' as LineKey, null],
+  ]);
+  const day = (key: string, working = true, past = false) => ({ key, working, past, lines });
+
+  it('picks every line on the next five working days, today included', () => {
+    const keys = aheadLoadPicks([
+      day('2026-10-16', true, true), // gone
+      day('2026-10-19'), // today, Monday
+      day('2026-10-20'),
+      day('2026-10-21'),
+      day('2026-10-22'),
+      day('2026-10-23'),
+      day('2026-10-24', false), // Saturday
+      day('2026-10-26'),
+    ]);
+    expect(keys).toHaveLength(10);
+    expect(keys).toContain('ASSY|2026-10-19');
+    expect(keys).toContain('UPL_CUT_SEW|2026-10-23');
+    expect(keys.some((k) => k.endsWith('2026-10-16'))).toBe(false);
+    expect(keys.some((k) => k.endsWith('2026-10-26'))).toBe(false);
+  });
+
+  it('passes over a closed day and reaches one further', () => {
+    const keys = aheadLoadPicks([
+      day('2026-10-21'),
+      day('2026-10-22', false), // RDO
+      day('2026-10-23'),
+      day('2026-10-24', false),
+      day('2026-10-25', false),
+      day('2026-10-26'),
+      day('2026-10-27'),
+      day('2026-10-28'),
+    ]);
+    const days = [...new Set(keys.map((k) => k.split('|')[1]))];
+    expect(days).toEqual(['2026-10-21', '2026-10-23', '2026-10-26', '2026-10-27', '2026-10-28']);
+  });
+
+  it('picks nothing when no day ahead is worked', () => {
+    expect(aheadLoadPicks([day('2026-10-24', false)])).toEqual([]);
   });
 });

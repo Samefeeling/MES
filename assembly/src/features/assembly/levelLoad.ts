@@ -917,6 +917,42 @@ export function pinsOf(plan: Pick<LevelPlan, 'moves'>): Record<string, string> {
 /** One load block's day, as the selection stores it: `line|YYYY-MM-DD`. */
 export const loadPickKey = (line: LineKey, day: string): string => `${line}|${day}`;
 
+/** How many working days the one-press level reaches, today included. */
+export const AHEAD_DAYS = 5;
+
+/**
+ * The picks for **Level the week**: every line's block on each of the next
+ * `days` working days, today included — a rolling week, so pressed on a
+ * Wednesday it reaches into next Tuesday. Weekends, public holidays and RDOs
+ * are not working days and are passed over, as is any day already gone.
+ *
+ * It is the same selection as Ctrl-picking those days in the heading, so the
+ * panel it opens is the ordinary one: the room on those days is filled with
+ * the next orders that can start there, and a day that is over gives its
+ * surplus to one with room. Nothing is written until Level is pressed.
+ */
+export function aheadLoadPicks(
+  capacity: readonly {
+    key: string;
+    past?: boolean;
+    working: boolean;
+    lines: ReadonlyMap<LineKey, unknown>;
+  }[],
+  days = AHEAD_DAYS,
+): string[] {
+  const lanes = new Set<LineKey>();
+  for (const day of capacity) for (const lane of day.lines.keys()) lanes.add(lane);
+  const out: string[] = [];
+  let taken = 0;
+  for (const day of capacity) {
+    if (taken >= days) break;
+    if (day.past || !day.working) continue;
+    taken++;
+    for (const lane of lanes) out.push(loadPickKey(lane, day.key));
+  }
+  return out;
+}
+
 /** The stored selection, back into a line → days map. */
 export function parseLoadPicks(keys: readonly string[]): Map<LineKey, Set<string>> {
   const out = new Map<LineKey, Set<string>>();

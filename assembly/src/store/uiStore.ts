@@ -275,6 +275,13 @@ interface UiState {
    */
   loadPicks: string[];
   /**
+   * **Level the week** was pressed, and where: the board answers by opening
+   * the level-loading panel over the next working days (`aheadLoadPicks`).
+   * Asked through here because the button is in the toolbar and the panel
+   * belongs to the board.
+   */
+  levelAhead: ClickPoint | null;
+  /**
    * Where the pointer was when it was picked. The detail opens there rather
    * than in a fixed column: the supervisor is already looking at that row, and
    * the schedule keeps the whole width. Null centres it in the window: an order
@@ -363,6 +370,7 @@ interface UiState {
   /** Pick these load-block days, or — when every one is already picked — let them go. */
   toggleLoadPicks: (keys: string[]) => void;
   clearLoadPicks: () => void;
+  requestLevelAhead: (at: ClickPoint | null) => void;
   setCrewPicker: (jobId: string | null) => void;
   setWorkerLoad: (workerId: string | null) => void;
   /**
@@ -428,6 +436,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   foundOrder: null,
   findCount: 0,
   loadPicks: [],
+  levelAhead: null,
   selectedAt: null,
   overtimeRequest: null,
   clashRequest: null,
@@ -473,6 +482,7 @@ export const useUiStore = create<UiState>((set, get) => ({
       return { loadPicks: [...held] };
     }),
   clearLoadPicks: () => set({ loadPicks: [] }),
+  requestLevelAhead: (levelAhead) => set({ levelAhead }),
   // The two popups that sit over the board are mutually exclusive, the way
   // opening an order's detail already closes the picker.
   setCrewPicker: (crewPickerJobId) =>
