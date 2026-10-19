@@ -105,16 +105,23 @@ const ALIASES: Record<Field, readonly string[]> = {
   priority: ['Priority'],
 };
 
+/**
+ * Order-type values, keyed by their letters alone — case, spaces and
+ * punctuation dropped — so "Final Assembly", "F/A", "FA" and "Final Assy"
+ * are one value, and the short forms the board itself prints (F/A, C/S, UPH)
+ * read back as what they mean.
+ */
 const ORDER_TYPES: Record<string, OrderType> = {
-  'cutting/sewing': 'cutting-sewing',
-  'cutting-sewing': 'cutting-sewing',
   cuttingsewing: 'cutting-sewing',
-  'cut & sew': 'cutting-sewing',
+  cuttingandsewing: 'cutting-sewing',
+  cutsew: 'cutting-sewing',
+  cutandsew: 'cutting-sewing',
+  cs: 'cutting-sewing',
   upholstery: 'upholstery',
   uph: 'upholstery',
-  'final assembly': 'final-assembly',
-  'final-assembly': 'final-assembly',
   finalassembly: 'final-assembly',
+  finalassy: 'final-assembly',
+  fa: 'final-assembly',
 };
 
 const PREP_VALUES = new Set<MaterialPrepStatus>([
@@ -239,7 +246,7 @@ function findLaborColumn(
  * until the column exists.
  */
 function readOrderType(raw: string, line: Job['line']): OrderType | null {
-  const explicit = ORDER_TYPES[raw.trim().toLowerCase()];
+  const explicit = ORDER_TYPES[raw.toLowerCase().replace(/[^a-z]/g, '')];
   if (explicit) return explicit;
   const def = line ? LINE_BY_ID.get(String(line)) : undefined;
   return def && def.types.length === 1 ? def.types[0] : null;

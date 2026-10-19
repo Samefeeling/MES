@@ -317,4 +317,22 @@ describe('an order with no line but a type', () => {
     expect(String(jobs.get('SFM1')!.line)).toBe('TBP');
     expect(jobs.get('SUNF0000000302')!.line).toBeNull();
   });
+  it('reads the short forms of a type, as the board prints them', () => {
+    const short = byId(
+      [
+        'JobNum,PartNum,PartDescription,PersonID,ProdQty,OrderType,ReqDueDate,LaborHrs',
+        'SUNF1,A,A,,1,F/A,2026-10-29,1',
+        'SUNF2,B,B,,1,C/S,2026-10-29,1',
+        'SUNF3,C,C,,1,UPH,2026-10-29,1',
+        'SUNF4,D,D,,1,Cut & Sew,2026-10-29,1',
+        'SUNF5,E,E,,1,final assy,2026-10-29,1',
+      ].join('\n'),
+    );
+    expect(String(short.get('SUNF1')!.line)).toBe('ASSY');
+    expect(short.get('SUNF1')!.orderType).toBe('final-assembly');
+    expect(String(short.get('SUNF2')!.line)).toBe('UPL_CUT_SEW');
+    expect(String(short.get('SUNF3')!.line)).toBe('UPL_GLUING');
+    expect(String(short.get('SUNF4')!.line)).toBe('UPL_CUT_SEW');
+    expect(String(short.get('SUNF5')!.line)).toBe('ASSY');
+  });
 });
