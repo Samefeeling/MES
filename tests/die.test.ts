@@ -12,6 +12,9 @@ import {
   dieServiceStatus,
   dieSignOffStatus,
   dieNotePhotoName,
+  diePartNumbers,
+  dieRecords,
+  knownDieNumbers,
   formatDieNoteLine,
   goodByJob,
   latestConditionByDie,
@@ -1285,5 +1288,33 @@ describe('parsePmPlan (PMD_DieMaster.MaintenanceLevel → PM tiers)', () => {
     expect(pmShotLevel(8_000, 10_000).level).toBe('soon');
     expect(pmShotLevel(10_000, 10_000).level).toBe('due');
     expect(pmShotLevel(5_000, 10_000).pct).toBeCloseTo(0.5);
+  });
+});
+
+describe('KPI Die# filter', () => {
+  const colours = [
+    { partNumber: 'P1', dieNumber: 'DIE-9', hex: '', name: '' },
+    { partNumber: 'p2', dieNumber: ' die-9 ', hex: '', name: '' },
+    { partNumber: 'P3', dieNumber: 'DIE-10', hex: '', name: '' },
+    { partNumber: 'P4', dieNumber: '', hex: '', name: '' },
+  ] as unknown as Parameters<typeof diePartNumbers>[0];
+
+  it('finds the parts a die makes, whatever the case or spacing', () => {
+    expect([...diePartNumbers(colours, 'Die-9')].sort()).toEqual(['P1', 'P2']);
+    expect(diePartNumbers(colours, '').size).toBe(0);
+  });
+
+  it('lists the dies for the picker in natural order, once each', () => {
+    expect(knownDieNumbers(colours)).toEqual(['DIE-9', 'DIE-10']);
+  });
+
+  it('keeps the records made on the die, by the record part or the order part', () => {
+    const recs = [
+      { jobNumber: 'J1', partNumber: 'P1', machineCode: '550T' },
+      { jobNumber: 'J2', partNumber: '', machineCode: '850T' },
+      { jobNumber: 'J3', partNumber: 'P3', machineCode: '550T' },
+    ];
+    const kept = dieRecords(diePartNumbers(colours, 'DIE-9'), recs, new Map([['J2', 'p2']]));
+    expect(kept.map((r) => r.jobNumber)).toEqual(['J1', 'J2']);
   });
 });

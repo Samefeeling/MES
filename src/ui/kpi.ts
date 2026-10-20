@@ -6,10 +6,12 @@ import type {
   Machine,
   ParetoSlice,
   PlanningOrder,
+  ProductDieColor,
   ProductionRecord,
   ShiftCode,
   StatusCode,
 } from '../types';
+import { diePartNumbers, dieRecords, knownDieNumbers } from '../core/die';
 import { planningOrderMatchesMachine } from '../core/schedule';
 import { aggregate, countSetupEvents, type Kpi } from '../core/metrics';
 import {
@@ -431,6 +433,28 @@ interface KpiState {
    *  real zero production/reject/downtime. */
   errors: string[];
   catalogErrors: string[];
+  /** PMD_ProductDieColor as the last computation read it — the parts each
+   *  die makes, for the supervisor's Die# filter. */
+  dieColors: ProductDieColor[];
+  /** The period's signed records, every press, and each order's part from
+   *  planning — what the Die# filter picks from. */
+  periodRecords: ProductionRecord[];
+  periodPartByJob: Map<string, string>;
+  /** `MACHINE|JOB` → planned hours per piece, for records signed without a
+   *  stamped cycle time — the same fallback the machine table uses. */
+  periodCtByJob: Map<string, number>;
+  /** The die asked for in the Die# filter, or null. */
+  dieQuery: string | null;
+  /** Presses whose order rows are open under the Die# filter. */
+  dieOpen: Set<string>;
+}
+
+interface DieHistoryRow {
+  machine: string;
+  agg: ShiftAgg;
+  orders: Array<{ jobNumber: string; part: string; agg: ShiftAgg; first: string; last: string }>;
+  first: string;
+  last: string;
 }
 
 /** A supervisor's answer to one "raise this in Mango?" action. Kept per
@@ -1124,6 +1148,9 @@ async function compute(now = new Date()): Promise<void> {
   // add pieces to shares (see savedScheduleTuples).
   const equalWeight = comparisonMode === 'saved' && perMachineProd.some((recs) => savedPlanMissing(recs));
   state.equalWeight = equalWeight;
+  state.dieColors = dieColorList;
+  state.periodRecords = perMachineProd.flat();
+  state.periodPartByJob = new Map(planning.map((o) => [o.jobNumber.trim(), o.partNumber]));
   const dieColors = new Map(
     dieColorList.map((c) => [
       c.partNumber.trim().toUpperCase(),
@@ -1172,6 +1199,8 @@ async function compute(now = new Date()): Promise<void> {
       }
     }
   }
+
+  state.periodCtByJob = ctByJob;
 
   // One row per order: its signed records and its plan lines. An order the
   // plan asked for that nobody ran still gets its row — 0 made against what
@@ -1891,7 +1920,148 @@ function buildThresholdEditor(): string {
     <div class="kpi-th-group"><b>Yield</b>${field('yieldGreen', '🟢 ≥')}${field('yieldAmber', '🟡 ≥')}</div>
     <div class="kpi-th-group"><b>Output / ${comparisonLabel()}</b>${field('planBlue', '🟢 ≥')}${field('planAmber', '🟡 ≥')}</div>
     <button type="button" class="kpi-th-reset" data-th-reset title="Restore default thresholds">Reset</button>
-  </div>`;
+    <form class="kpi-die-filter" data-die-filter title="This period's production of one die, press by press">
+      <label>Die#
+        <input type="search" list="kpi-die-list" data-die-q value="${escapeHtml(S!.dieQuery ?? '')}" placeholder="e.g. DIE-0091" autocomplete="off">
+      </label>
+      <datalist id="kpi-die-list">${knownDieNumbers(S!.dieColors)
+        .map((d) => `<option value="${escapeHtml(d)}"></option>`)
+        .join('')}</datalist>
+      <button type="submit" class="kpi-th-reset">🔍 Filter</button>
+    </form>
+  </div>
+  ${buildDieHistory()}`;
+}
+
+/** First and last shift date of a set of records, `YYYY-MM-DD`. */
+function shiftSpan(recs: readonly ProductionRecord[]): { first: string; last: string } {
+  let first = '';
+  let last = '';
+  for (const r of recs) {
+    const day = r.shiftId.slice(0, 10);
+    if (!first || day < first) first = day;
+    if (!last || day > last) last = day;
+  }
+  return { first, last };
+}
+
+/**
+ * The Die# filter: the period's signed records of one die, rolled up by the
+ * press they ran on, so one tool can be compared across presses. Read from
+ * what the page already holds for the period — changing the period changes
+ * the answer with it.
+ */
+function dieHistoryRows(die: string): { parts: Set<string>; rows: DieHistoryRow[]; total: ShiftAgg | null } {
+  const parts = diePartNumbers(S!.dieColors, die);
+  const recs = dieRecords(parts, S!.periodRecords, S!.periodPartByJob);
+  const byMachine = new Map<string, ProductionRecord[]>();
+  for (const r of recs) {
+    const held = byMachine.get(r.machineCode);
+    if (held) held.push(r);
+    else byMachine.set(r.machineCode, [r]);
+  }
+  const rows = [...byMachine]
+    .map(([machine, own]) => {
+      const byJob = new Map<string, ProductionRecord[]>();
+      for (const r of own) {
+        const held = byJob.get(r.jobNumber);
+        if (held) held.push(r);
+        else byJob.set(r.jobNumber, [r]);
+      }
+      const orders = [...byJob]
+        .map(([jobNumber, jobRecs]) => ({
+          jobNumber,
+          part: jobRecs.find((r) => r.partNumber)?.partNumber ?? S!.periodPartByJob.get(jobNumber) ?? '',
+          agg: toAgg(aggregate(jobRecs, S!.periodCtByJob)),
+          ...shiftSpan(jobRecs),
+        }))
+        .sort((a, b) => b.last.localeCompare(a.last));
+      return { machine, agg: toAgg(aggregate(own, S!.periodCtByJob)), orders, ...shiftSpan(own) };
+    })
+    .sort((a, b) => b.agg.output - a.agg.output);
+  // Machine-shifts, as the machine table's TOTAL counts them.
+  const total = recs.length ? toAgg(aggregate(recs, S!.periodCtByJob)) : null;
+  if (total) total.shifts = rows.reduce((n, m) => n + m.agg.shifts, 0);
+  return { parts, rows, total };
+}
+
+/** Good pieces per hour the press was running the die. */
+function goodPerRunHour(a: ShiftAgg): string {
+  return a.runHrs > 0 ? (a.output / a.runHrs).toFixed(1) : '—';
+}
+
+/** The Die# filter's table: one row per press, its orders beneath. */
+function buildDieHistory(): string {
+  const die = S!.dieQuery;
+  if (!die || !isSupervisor()) return '';
+  const t = S!.thresholds;
+  const { label } = periodRange(S!.period, new Date());
+  const { parts, rows: machines, total: sum } = dieHistoryRows(die);
+  const orders = machines.reduce((n, m) => n + m.orders.length, 0);
+  const close = `<button type="button" class="kpi-die-close" data-die-close title="Clear the Die# filter">✕</button>`;
+  const head = `<div class="kpi-die-head"><b>🔧 ${escapeHtml(die)}</b> · ${escapeHtml(label)}${
+    orders ? ` · ${orders} order${orders === 1 ? '' : 's'}` : ''
+  }${machines.length ? ` · ${machines.length} press${machines.length === 1 ? '' : 'es'}` : ''}${close}</div>`;
+  if (S!.loading) return `<section class="kpi-die">${head}<div class="kpi-die-note">⏳ Loading the period…</div></section>`;
+  if (parts.size === 0) {
+    return `<section class="kpi-die">${head}<div class="kpi-die-note">${escapeHtml(die)} is not in PMD_ProductDieColor — no part is made on it.</div></section>`;
+  }
+  if (machines.length === 0) {
+    return `<section class="kpi-die">${head}<div class="kpi-die-note">No signed-off production on ${escapeHtml(die)} (parts ${escapeHtml([...parts].join(', '))}) in this period.</div></section>`;
+  }
+  const nums = (a: ShiftAgg): string => {
+    const eff = efficiencyOf(a);
+    return `<td class="num">${a.shifts}</td>
+      <td class="num">${a.output.toLocaleString()}</td>
+      <td class="num">${a.reject.toLocaleString()}</td>
+      <td class="num ${colourClass(a.yieldPct, t.yieldGreen, t.yieldAmber)}">${a.yieldPct.toFixed(1)}%</td>
+      <td class="num">${a.runHrs.toFixed(1)}</td>
+      <td class="num">${goodPerRunHour(a)}</td>
+      <td class="num ${colourClass(eff, t.effGreen, t.effAmber)}">${eff == null ? '—' : `${eff}%`}</td>
+      <td class="num">${(a.dieHrs + a.colorHrs + a.insertHrs).toFixed(1)}</td>
+      <td class="num">${a.startupHrs.toFixed(1)}</td>
+      <td class="num">${a.downHrs.toFixed(1)}</td>`;
+  };
+  const span = (first: string, last: string): string =>
+    first === last ? escapeHtml(first) : `${escapeHtml(first)} → ${escapeHtml(last)}`;
+  const rows = machines
+    .map((m) => {
+      const open = S!.dieOpen.has(m.machine);
+      const orderRows = open
+        ? m.orders
+            .map(
+              (o) => `<tr class="kpi-die-order">
+          <td><button type="button" class="kpi-die-job" data-die-job="${escapeHtml(o.jobNumber)}" title="Trace this order">${escapeHtml(o.jobNumber)}</button> <span class="muted">${escapeHtml(o.part)}</span></td>
+          <td>${span(o.first, o.last)}</td>
+          ${nums(o.agg)}
+        </tr>`,
+            )
+            .join('')
+        : '';
+      return `<tr class="kpi-die-machine">
+        <td><button type="button" class="kpi-die-toggle" data-die-open="${escapeHtml(m.machine)}" title="${open ? 'Hide' : 'Show'} its orders">${open ? '⌄' : '›'}</button> <b>${escapeHtml(m.machine)}</b> <span class="muted">${m.orders.length} order${m.orders.length === 1 ? '' : 's'}</span></td>
+        <td>${span(m.first, m.last)}</td>
+        ${nums(m.agg)}
+      </tr>${orderRows}`;
+    })
+    .join('');
+  const total = sum
+    ? `<tr class="kpi-die-total"><td><b>All presses</b></td><td></td>${nums(sum)}</tr>`
+    : '';
+  return `<section class="kpi-die">${head}
+    <div class="kpi-die-wrap"><table class="summary-table kpi-die-table">
+      <thead><tr>
+        <th>Press</th><th>Ran</th><th>Shifts</th><th>Good</th><th>Reject</th><th>Yield</th>
+        <th title="Hours the press was running (R) on this die">Run h</th>
+        <th title="Good pieces per running hour — the like-for-like rate across presses">Good / run h</th>
+        <th title="Standard hours earned ÷ run hours">Efficiency</th>
+        <th title="Die, colour and insert change hours">Change h</th>
+        <th>Startup h</th><th>Down h</th>
+      </tr></thead>
+      <tbody>${rows}${total}</tbody>
+    </table></div>
+    <div class="kpi-die-note">Signed-off shifts in the period above only. Good / run h is the like-for-like figure: the same die, so a press that makes fewer per running hour is the slower one for this tool.</div>
+  </section>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -3432,6 +3602,29 @@ function render(): void {
     saveKpiThresholds(S!.thresholds);
     render();
   });
+  // Die# filter: all of one die's history, by press.
+  app.querySelector<HTMLFormElement>('[data-die-filter]')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const q = app.querySelector<HTMLInputElement>('[data-die-q]')?.value.trim() ?? '';
+    S!.dieQuery = q || null;
+    S!.dieOpen = new Set();
+    render();
+  });
+  app.querySelector<HTMLButtonElement>('[data-die-close]')?.addEventListener('click', () => {
+    S!.dieQuery = null;
+    render();
+  });
+  app.querySelectorAll<HTMLButtonElement>('[data-die-open]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const mc = b.dataset.dieOpen!;
+      if (S!.dieOpen.has(mc)) S!.dieOpen.delete(mc);
+      else S!.dieOpen.add(mc);
+      render();
+    }),
+  );
+  app.querySelectorAll<HTMLButtonElement>('[data-die-job]').forEach((b) =>
+    b.addEventListener('click', () => void openJobTrace(b.dataset.dieJob!)),
+  );
   app.querySelectorAll<HTMLButtonElement>('[data-toggle]').forEach((b) =>
     b.addEventListener('click', () => {
       const mc = b.dataset.toggle!;
@@ -3973,6 +4166,12 @@ export async function renderKpi(dal: PmdDataLayer, assemblyDal?: AssemblyDataLay
     impwDecisions: loadImpwDecisions(),
     impwSite: loadImpwSite(),
     impwOptions: null,
+    dieColors: [],
+    periodRecords: [],
+    periodPartByJob: new Map(),
+    periodCtByJob: new Map(),
+    dieQuery: null,
+    dieOpen: new Set(),
     impwShowDecided: false,
     mango: loadMangoConnection(),
     who: { name: '' },

@@ -100,6 +100,24 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-th-field input{width:48px;font-size:13px;padding:3px 5px;border:1px solid var(--bd);border-radius:6px;text-align:right}
 .kpi-th-reset{font-size:12px;font-weight:600;color:#475569;background:#f1f5f9;border:1px solid var(--bd);border-radius:8px;padding:4px 10px;cursor:pointer}
 .kpi-th-reset:hover{background:#e2e8f0}
+.kpi-die-filter{display:flex;align-items:center;gap:6px;margin-left:auto}
+.kpi-die-filter label{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:#0c4a6e}
+.kpi-die-filter input{width:130px;font-size:13px;padding:4px 8px;border:1px solid var(--bd);border-radius:8px}
+.kpi-die{margin-top:8px;background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 14px}
+.kpi-die-head{display:flex;align-items:center;gap:6px;font-size:14px;color:#0c4a6e;margin-bottom:8px}
+.kpi-die-close{margin-left:auto;border:1px solid var(--bd);background:#fff;border-radius:8px;padding:2px 9px;cursor:pointer;font-size:13px}
+.kpi-die-wrap{overflow-x:auto}
+.kpi-die-table{width:100%}
+.kpi-die-table td.green{color:#15803d;font-weight:800}
+.kpi-die-table td.amber{color:#FFA500;font-weight:800}
+.kpi-die-table td.red{color:#b91c1c;font-weight:800}
+.kpi-die-table .muted{color:var(--mu);font-size:12px;font-weight:500}
+.kpi-die-toggle,.kpi-die-job{border:0;background:none;cursor:pointer;font:inherit;color:#0369a1;padding:0 2px}
+.kpi-die-job{text-decoration:underline}
+.kpi-die-order td{background:#f8fafc;font-size:13px}
+.kpi-die-order td:first-child{padding-left:28px}
+.kpi-die-total td{border-top:2px solid var(--bd);font-weight:800}
+.kpi-die-note{font-size:12px;color:var(--mu);margin-top:6px}
 /* Headline stat tiles above the table — daily-meeting numbers readable
    from across the room. Top border carries the traffic-light colour. */
 /* Headline tiles: ALWAYS one row (auto-flow column splits the width
