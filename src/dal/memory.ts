@@ -366,9 +366,13 @@ export class MemoryDataLayer implements PmdDataLayer {
   async listProductionCounters(filter: ProductionFilter): Promise<ProductionCounterRecord[]> {
     const rows = await this.listProduction(filter);
     const byTuple = new Map<string, ProductionRecord>();
+    // One per tuple, as SharePoint keeps one header row per tuple: the
+    // canonical slot when there is one, else whichever slot the tuple has —
+    // an order that started mid-shift has no slot 0 here.
     for (const r of rows) {
-      if (r.slotIndex !== 0) continue;
-      byTuple.set(`${r.machineCode}|${r.shiftId}|${r.jobNumber}`, r);
+      const key = `${r.machineCode}|${r.shiftId}|${r.jobNumber}`;
+      const held = byTuple.get(key);
+      if (!held || (r.slotIndex === 0 && held.slotIndex !== 0)) byTuple.set(key, r);
     }
     return [...byTuple.values()].map((r) => ({
       machineCode: r.machineCode,

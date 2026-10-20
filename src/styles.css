@@ -323,6 +323,10 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .trace-corun{display:inline-block;margin-left:6px;padding:2px 9px;border-radius:999px;background:#ede9fe;color:#6d28d9;border:1px solid #c4b5fd;font-size:11px;font-weight:800;letter-spacing:.4px;text-transform:uppercase}
 .trace-card .trace-job{font-size:15px;color:#475569;font-weight:600;margin-left:4px}
 .trace-results{display:flex;flex-direction:column;gap:12px}
+.trace-die-summary{background:#fff;border:1px solid var(--bd);border-radius:12px;padding:10px 14px;margin-bottom:12px;overflow-x:auto}
+.trace-die-head{font-size:14px;color:#0c4a6e;margin-bottom:8px}
+.trace-die-table{width:100%}
+.trace-die-total td{border-top:2px solid var(--bd);font-weight:800}
 /* Cards are packed to ~1/3 of the old height: one merged people+totals
    row (Operator/Supervisor sit inline with Order Qty), a slim rejects
    row, and shorter QC / timeline slots. Padding and gaps tightened. */

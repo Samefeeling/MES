@@ -1135,3 +1135,64 @@ export function appendDieNote(existing: string, line: string): string {
   const base = (existing ?? '').replace(/[\s\r\n]+$/, '');
   return base ? `${base}\n${line}` : line;
 }
+
+// ---------------------------------------------------------------------
+// Die search — Job Search's Die#: the production of the parts one die
+// makes, whichever press ran it, so the tool can be compared across presses.
+
+/** The parts a die makes (PMD_ProductDieColor), upper-cased. */
+export function diePartNumbers(dieColors: readonly ProductDieColor[], die: string): Set<string> {
+  const want = die.trim().toUpperCase();
+  const out = new Set<string>();
+  if (!want) return out;
+  for (const c of dieColors) {
+    if (c.dieNumber.trim().toUpperCase() === want && c.partNumber.trim()) {
+      out.add(c.partNumber.trim().toUpperCase());
+    }
+  }
+  return out;
+}
+
+/** Every die number the part/die mapping knows, sorted, for the picker. */
+export function knownDieNumbers(dieColors: readonly ProductDieColor[]): string[] {
+  const seen = new Map<string, string>();
+  for (const c of dieColors) {
+    const d = c.dieNumber.trim();
+    if (d && !seen.has(d.toUpperCase())) seen.set(d.toUpperCase(), d);
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
+/** Is this record's part one the die makes? A record saved before the part
+ *  was stamped on it is matched through `partByJob` (the planning order). */
+function madeOnDie(
+  parts: ReadonlySet<string>,
+  r: { jobNumber: string; partNumber: string },
+  partByJob: ReadonlyMap<string, string>,
+): boolean {
+  return parts.has((r.partNumber || partByJob.get(r.jobNumber.trim()) || '').trim().toUpperCase());
+}
+
+/** The records made on a die. */
+export function dieRecords<R extends { jobNumber: string; partNumber: string }>(
+  parts: ReadonlySet<string>,
+  records: readonly R[],
+  partByJob: ReadonlyMap<string, string> = new Map(),
+): R[] {
+  return records.filter((r) => madeOnDie(parts, r, partByJob));
+}
+
+/** The orders that ran a die, from production headers: distinct, in the
+ *  order first seen. */
+export function dieJobNumbers(
+  parts: ReadonlySet<string>,
+  headers: ReadonlyArray<{ jobNumber: string; partNumber: string }>,
+  partByJob: ReadonlyMap<string, string> = new Map(),
+): string[] {
+  const out = new Set<string>();
+  for (const h of headers) {
+    const job = h.jobNumber.trim();
+    if (job && madeOnDie(parts, h, partByJob)) out.add(job);
+  }
+  return [...out];
+}

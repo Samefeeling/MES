@@ -1,5 +1,6 @@
 import type { PmdDataLayer } from '../dal';
-import type { BdCode, Machine, PlanningOrder, ProductionRecord } from '../types';
+import type { BdCode, Machine, PlanningOrder, ProductDieColor, ProductionRecord } from '../types';
+import { dieJobNumbers, diePartNumbers, dieRecords, knownDieNumbers } from '../core/die';
 import { STATUS_MAP } from '../core/status';
 import {
   SHIFTS,
@@ -41,8 +42,14 @@ const HOUR_MS = 3600_000;
 
 interface TraceState {
   view: TracePanelView;
-  query: { jobNumber: string; dateFrom: string; dateTo: string; machine: string };
+  query: { jobNumber: string; die: string; dateFrom: string; dateTo: string; machine: string };
   machines: Machine[];
+  /** PMD_ProductDieColor — which parts each die makes — for the Die# search
+   *  and its picker. Read once when Search opens. */
+  dieColors: ProductDieColor[];
+  /** The die the shown results were searched for, or '' — its results open
+   *  with a press-by-press summary. */
+  searchedDie: string;
   /** Search results (populated when view === 'search'). */
   results: TraceRow[];
   /** Per-machine live snapshot (populated when view === 'live'). One row
@@ -303,8 +310,10 @@ export async function mountTracePanel(
   if (version !== mountVersion || !host.isConnected) return;
   S = {
     view,
-    query: { jobNumber: '', dateFrom: '', dateTo: '', machine: '' },
+    query: { jobNumber: '', die: '', dateFrom: '', dateTo: '', machine: '' },
     machines,
+    dieColors: [],
+    searchedDie: '',
     results: [],
     liveRows: [],
     searched: false,
@@ -319,6 +328,18 @@ export async function mountTracePanel(
     await loadLive();
     if (version === mountVersion && host.isConnected) startLivePoll();
   } else {
+    // The Die# picker's list; the search itself never waits on it.
+    if (dalRef.listProductDieColors) {
+      const state = S;
+      void dalRef
+        .listProductDieColors()
+        .then((list) => {
+          if (S !== state || state.dieColors.length > 0) return;
+          state.dieColors = list;
+          if (!state.loading) render();
+        })
+        .catch((e) => console.warn('[pmd] Die# list unavailable:', e));
+    }
     await doSearch();
   }
 }
@@ -436,7 +457,7 @@ function renderLiveBody(): string {
 function showingRecent(): boolean {
   if (!S || S.view !== 'search') return false;
   const q = S.query;
-  return !q.jobNumber && !q.dateFrom && !q.dateTo;
+  return !q.jobNumber && !q.die && !q.dateFrom && !q.dateTo;
 }
 
 function renderSearchBody(): string {
@@ -449,6 +470,10 @@ function renderSearchBody(): string {
     <div class="trace-search">
       <div class="trace-form">
         <label>Job Number<input type="text" data-q="jobNumber" placeholder="SFM…" value="${escapeHtml(S!.query.jobNumber)}"></label>
+        <label title="Every order run on this die — with no dates, its whole history">Die#<input type="search" list="trace-die-list" data-q="die" placeholder="DIE-…" autocomplete="off" value="${escapeHtml(S!.query.die)}"></label>
+        <datalist id="trace-die-list">${knownDieNumbers(S!.dieColors)
+          .map((d) => `<option value="${escapeHtml(d)}"></option>`)
+          .join('')}</datalist>
         <label>Date from<input type="date" data-q="dateFrom" value="${escapeHtml(S!.query.dateFrom)}"></label>
         <label>Date to<input type="date" data-q="dateTo" value="${escapeHtml(S!.query.dateTo)}"></label>
         <label>Machine<select data-q="machine">
@@ -474,7 +499,7 @@ function renderSearchResults(): string {
     return `<div class="trace-empty">${
       S!.loading
         ? 'Reading the last day’s signed-off production…'
-        : 'Enter a job number, a date range, or both — then Search.'
+        : 'Enter a job number, a Die#, a date range, or a mix — then Search.'
     }</div>`;
   }
   if (S!.results.length === 0) {
@@ -502,7 +527,64 @@ function renderSearchResults(): string {
       g.rows,
     );
   });
-  return `<div class="trace-results">${cards.join('')}</div>`;
+  return `${S!.searchedDie ? renderDieSummary(S!.searchedDie, S!.results) : ''}<div class="trace-results">${cards.join('')}</div>`;
+}
+
+/**
+ * A Die# search's results, press by press: the same tool on each press it
+ * ran on, side by side. Run h is the R half-hours of the timelines; Good per
+ * run hour is the like-for-like figure — same die, so the press that makes
+ * fewer per running hour is the slower one for it.
+ */
+function renderDieSummary(die: string, rows: readonly TraceRow[]): string {
+  const by = new Map<string, { jobs: Set<string>; shifts: number; good: number; reject: number; run: number; first: string; last: string }>();
+  for (const r of rows) {
+    const m = by.get(r.machineCode) ?? { jobs: new Set<string>(), shifts: 0, good: 0, reject: 0, run: 0, first: '', last: '' };
+    m.jobs.add(r.jobNumber);
+    m.shifts++;
+    m.good += r.good;
+    m.reject += r.reject;
+    m.run += [...r.timeline].filter((c) => c === 'R').length * 0.5;
+    const day = r.shiftId.slice(0, 10);
+    if (!m.first || day < m.first) m.first = day;
+    if (!m.last || day > m.last) m.last = day;
+    by.set(r.machineCode, m);
+  }
+  const line = (name: string, m: { jobs: Set<string>; shifts: number; good: number; reject: number; run: number; first: string; last: string }, total = false): string => {
+    const made = m.good + m.reject;
+    const yieldPct = made > 0 ? `${((m.good / made) * 100).toFixed(1)}%` : '—';
+    const rate = m.run > 0 ? (m.good / m.run).toFixed(1) : '—';
+    return `<tr${total ? ' class="trace-die-total"' : ''}>
+      <td>${total ? `<b>${escapeHtml(name)}</b>` : `<b>${escapeHtml(name)}</b>`}</td>
+      <td>${m.first === m.last ? escapeHtml(m.first) : `${escapeHtml(m.first)} → ${escapeHtml(m.last)}`}</td>
+      <td class="num">${m.jobs.size}</td><td class="num">${m.shifts}</td>
+      <td class="num">${m.good.toLocaleString()}</td><td class="num">${m.reject.toLocaleString()}</td>
+      <td class="num">${yieldPct}</td><td class="num">${m.run.toFixed(1)}</td><td class="num"><b>${rate}</b></td>
+    </tr>`;
+  };
+  const presses = [...by].sort((a, b) => b[1].good - a[1].good);
+  const all = presses.reduce(
+    (t, [, m]) => {
+      for (const j of m.jobs) t.jobs.add(j);
+      t.shifts += m.shifts;
+      t.good += m.good;
+      t.reject += m.reject;
+      t.run += m.run;
+      if (!t.first || m.first < t.first) t.first = m.first;
+      if (!t.last || m.last > t.last) t.last = m.last;
+      return t;
+    },
+    { jobs: new Set<string>(), shifts: 0, good: 0, reject: 0, run: 0, first: '', last: '' },
+  );
+  return `<div class="trace-die-summary">
+    <div class="trace-die-head">🔧 <b>${escapeHtml(die)}</b> by press</div>
+    <table class="summary-table trace-die-table">
+      <thead><tr><th>Press</th><th>Ran</th><th>Orders</th><th>Shifts</th><th>Good</th><th>Reject</th><th>Yield</th>
+        <th title="Running (R) half-hours on the timelines">Run h</th>
+        <th title="Good pieces per running hour — the like-for-like rate across presses">Good / run h</th></tr></thead>
+      <tbody>${presses.map(([mc, m]) => line(mc, m)).join('')}${presses.length > 1 ? line('All presses', all, true) : ''}</tbody>
+    </table>
+  </div>`;
 }
 
 /**
@@ -866,7 +948,7 @@ function wire(): void {
     }),
   );
   host.querySelector('[data-search]')?.addEventListener('click', () => void doSearch());
-  host.querySelectorAll<HTMLInputElement>('input[data-q="jobNumber"]').forEach((el) =>
+  host.querySelectorAll<HTMLInputElement>('input[data-q="jobNumber"], input[data-q="die"]').forEach((el) =>
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') void doSearch();
     }),
@@ -1461,11 +1543,12 @@ async function doSearch(): Promise<void> {
    * at the end, so a Night shift that began yesterday and ran into this
    * morning is in the window and the one that ended before it is not.
    */
+  const die = q.die.trim();
   const since =
-    !q.jobNumber && !q.dateFrom && !q.dateTo
+    !q.jobNumber && !die && !q.dateFrom && !q.dateTo
       ? new Date(Date.now() - RECENT_HOURS * HOUR_MS)
       : null;
-  if (!since && !q.jobNumber && !q.dateFrom && !q.dateTo) return;
+  if (!since && !q.jobNumber && !die && !q.dateFrom && !q.dateTo) return;
   const version = ++searchLoadVersion;
   state.loading = true;
   state.errors = [];
@@ -1473,8 +1556,34 @@ async function doSearch(): Promise<void> {
 
   try {
     const all: ProductionRecord[] = [];
+    // Die#: the parts it makes, and each order's part from planning for
+    // records saved before the part was stamped on them.
+    let dieParts: Set<string> | null = null;
+    let partByJob = new Map<string, string>();
+    if (die) {
+      if (state.dieColors.length === 0 && dalRef.listProductDieColors) {
+        state.dieColors = await dalRef.listProductDieColors();
+      }
+      dieParts = diePartNumbers(state.dieColors, die);
+      if (dieParts.size === 0) throw new Error(`${die} is not in PMD_ProductDieColor — no part is made on it`);
+      const plan = await dalRef.listPlanning({}).catch(() => [] as PlanningOrder[]);
+      partByJob = new Map(plan.map((o) => [o.jobNumber.trim(), o.partNumber]));
+    }
     if (q.jobNumber) {
       all.push(...(await readSignedOff({ jobNumber: q.jobNumber.trim() })));
+    } else if (dieParts && !q.dateFrom && !q.dateTo) {
+      // A die with no dates: its whole history. The orders are found from
+      // the production headers (one row per press-shift-order, so the read
+      // stays light), then each is read in full, a few at a time.
+      const headers = dalRef.listProductionCounters
+        ? await dalRef.listProductionCounters(q.machine ? { machineCode: q.machine } : {})
+        : (await dalRef.listProduction(q.machine ? { machineCode: q.machine } : {})).filter((r) => r.slotIndex === 0);
+      const jobs = dieJobNumbers(dieParts, headers, partByJob);
+      let next = 0;
+      const readSome = async (): Promise<void> => {
+        while (next < jobs.length) all.push(...(await readSignedOff({ jobNumber: jobs[next++] })));
+      };
+      await Promise.all(Array.from({ length: Math.min(6, jobs.length) }, readSome));
     } else {
       const filter: {
         shiftIdFrom?: string;
@@ -1495,7 +1604,7 @@ async function doSearch(): Promise<void> {
   // Post-filter for machine + date range (in case the backend ignored some hints).
   const dateFrom = q.dateFrom ? `${q.dateFrom}` : '';
   const dateTo = q.dateTo ? `${q.dateTo}` : '';
-  const filtered = all.filter((r) => {
+  const filtered = (dieParts ? dieRecords(dieParts, all, partByJob) : all).filter((r) => {
     if (q.machine && r.machineCode !== q.machine) return false;
     const datePart = r.shiftId.slice(0, 10);
     if (dateFrom && datePart < dateFrom) return false;
@@ -1518,8 +1627,13 @@ async function doSearch(): Promise<void> {
   // directly; a date-range search only sees a window, so fetch each job's
   // full history to keep the numbers job-wide rather than window-wide.
     let jobGoodTotals: Map<string, number>;
-    if (q.jobNumber) {
+    if (q.jobNumber && !dieParts) {
       jobGoodTotals = new Map([[q.jobNumber.trim(), goodForRecords(all)]]);
+    } else if (dieParts && !q.jobNumber && !q.dateFrom && !q.dateTo) {
+      // Every order of the die was read whole above: total it from there.
+      const byJob = new Map<string, ProductionRecord[]>();
+      for (const r of all) byJob.set(r.jobNumber, [...(byJob.get(r.jobNumber) ?? []), r]);
+      jobGoodTotals = new Map([...byJob].map(([job, recs]) => [job, goodForRecords(recs)]));
     } else {
       const totalErrors: string[] = [];
       jobGoodTotals = await loadJobGoodTotals(filtered.map((r) => r.jobNumber), (job, e) => {
@@ -1536,6 +1650,7 @@ async function doSearch(): Promise<void> {
   // here and oldest-first there.)
   rows.sort(chronologically);
     state.results = rows;
+    state.searchedDie = die;
     state.searched = true;
     state.errors = [];
     state.loading = false;
