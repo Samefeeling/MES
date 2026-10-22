@@ -12,6 +12,7 @@ import type {
 } from '../types';
 import { planningOrderMatchesMachine } from '../core/schedule';
 import { aggregate, countSetupEvents, type Kpi } from '../core/metrics';
+import { repairFromHistory } from '../core/order-history';
 import {
   COLOR_CHANGE_STD_HRS,
   DIE_CHANGE_STD_HRS,
@@ -1008,6 +1009,46 @@ function finishedLabel(t: number | null): string {
  *  the `rejects` JSON ({"D01":3,…}); falls back to the flat rejectCount
  *  under an "Unspecified" bucket when the JSON is absent/unparseable so
  *  no scrap silently vanishes from the Pareto. */
+/**
+ * The signed history of every order in `signed` that Planning.csv no longer
+ * holds and that was signed without its part, cycle time or ShiftTarget —
+ * what `repairFromHistory` fills them from. Orders with nothing missing are
+ * not read.
+ */
+async function readHistoryOfDroppedOrders(
+  signed: ReadonlyArray<ReadonlyArray<ProductionRecord>>,
+  planning: ReadonlyArray<PlanningOrder>,
+): Promise<Map<string, ProductionRecord[]>> {
+  const planned = new Set(planning.map((o) => o.jobNumber.trim()));
+  const tuples = new Map<string, ProductionRecord[]>();
+  for (const recs of signed) {
+    for (const r of recs) {
+      if (!r.jobNumber || r.jobNumber.startsWith('DC_') || planned.has(r.jobNumber.trim())) continue;
+      const key = `${r.machineCode}|${r.shiftId}|${r.jobNumber}`;
+      tuples.set(key, [...(tuples.get(key) ?? []), r]);
+    }
+  }
+  const needy = new Set<string>();
+  for (const recs of tuples.values()) {
+    const canon = recs.find((r) => r.slotIndex === 0);
+    const missing =
+      !recs.some((r) => r.partNumber) ||
+      !recs.some((r) => (r.cycleTime ?? 0) > 0) ||
+      (canon != null && !(canon.shiftTarget != null && Number.isFinite(canon.shiftTarget) && canon.shiftTarget >= 0));
+    if (missing) needy.add(recs[0].jobNumber);
+  }
+  const out = new Map<string, ProductionRecord[]>();
+  await Promise.all(
+    [...needy].map(async (job) => {
+      const recs = dalRef.listSignedOffProduction
+        ? await dalRef.listSignedOffProduction({ jobNumber: job })
+        : (await dalRef.listProduction({ jobNumber: job })).filter((r) => r.locked);
+      out.set(job, recs);
+    }),
+  );
+  return out;
+}
+
 async function compute(now = new Date()): Promise<void> {
   if (!S) return;
   const state = S;
@@ -1104,7 +1145,18 @@ async function compute(now = new Date()): Promise<void> {
   // rows count. Excluding unsigned PMD_LiveStatus rows keeps in-progress
   // (and frequently mis-typed) jobs out of the OEE / output / reject totals
   // until the supervisor has reviewed and signed them off.
-  const perMachineProd = perMachineRead.map((recs) => recs.filter((r) => r.locked));
+  const signedProd = perMachineRead.map((recs) => recs.filter((r) => r.locked));
+  // An order Planning.csv no longer holds — Epicor completes an order that
+  // has overrun its quantity while the press is still on it — may have been
+  // signed with no part, no CycleTime and no ShiftTarget, and one such shift
+  // leaves its press's Efficiency and Schedule Adherence at "—". Its own
+  // signed history has all three: fill them from there (core/order-history).
+  const historyByJob = await readHistoryOfDroppedOrders(signedProd, planning).catch((err) => {
+    recordError('Order history', err);
+    return new Map<string, ProductionRecord[]>();
+  });
+  if (version !== computeVersion || S !== state) return;
+  const perMachineProd = signedProd.map((recs) => repairFromHistory(recs, historyByJob));
   // …but an unsigned shift is not a shift that never ran. A machine-shift
   // with unsigned rows and no signed ones is waiting for its supervisor: its
   // plan still counts and nothing is credited until it is signed, and the

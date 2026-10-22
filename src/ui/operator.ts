@@ -53,6 +53,7 @@ export {
   totalGoodExceedsShiftTarget,
 } from '../core/targets';
 import { sumOtherShiftGood, unsignedEarlierTuples } from '../core/jobgood';
+import { orderFactsFromHistory, type OrderFacts } from '../core/order-history';
 import { breakdownDetailFor } from '../core/breakdown';
 import { compareOrdersByStart } from '../core/planning';
 import { planningOrderMatchesMachine } from '../core/schedule';
@@ -127,6 +128,16 @@ interface OpState {
    *  OVERSTATES what's still needed — the ⚠ next to Job Left names the
    *  shift(s) that need signing. */
   unsignedEarlier: string[];
+  /** What the selected order's own signed history says about it (Part #,
+   *  Order Qty, cycle time) — the fallback after Planning.csv, which drops an
+   *  order Epicor has completed (an overrun one included) while the press is
+   *  still running it. Null until read, or for another order. */
+  jobFacts: { job: string; facts: OrderFacts } | null;
+  /** Orders this press ran in the previous shift that Planning.csv no longer
+   *  holds — an order overrun past its quantity is complete in Epicor while
+   *  the press is still on it. Offered in the Job# list as carried over,
+   *  never picked for the worker. `key` is the press and shift they are for. */
+  carried: { key: string; jobs: string[] } | null;
   /** Slots currently highlighted for status entry (tap or hold-and-drag). */
   selSet: Set<number>;
   /** Part # → die / paint hex colour + physical die number, read from
@@ -853,7 +864,12 @@ function shiftOrders(): PlanningOrder[] {
     .sort(compareOrdersByStart);
   const knownIds = new Set(planned.map((o) => o.jobNumber));
   const extras = historicalIds.filter((j) => !knownIds.has(j)).map(historicalOrder);
-  return [...planned, ...extras];
+  for (const j of extras) knownIds.add(j.jobNumber);
+  // Last shift's orders Planning.csv has dropped — still on the press.
+  const carried = (S!.carried?.jobs ?? [])
+    .filter((j) => isCarried(j) && !knownIds.has(j))
+    .map(historicalOrder);
+  return [...planned, ...extras, ...carried];
 }
 
 function selectedOrder(): PlanningOrder | undefined {
@@ -882,7 +898,7 @@ function orderForJob(job: string): PlanningOrder | undefined {
     const fromPlanning =
       S!.planning.find((o) => o.jobNumber === job) ??
       S!.planning.find((o) => o.jobNumber.trim() === jt);
-    if (fromPlanning) return fromPlanning;
+    if (fromPlanning) return withOrderFacts(fromPlanning);
   }
   // Synthetic order rebuilt from the PMD_Production rows already in
   // S!.prod. This is the only path for a past shift, and also the
@@ -894,8 +910,32 @@ function orderForJob(job: string): PlanningOrder | undefined {
     (r) => r.jobNumber === job && r.slotIndex === 0,
   );
   const anySlot = canon ?? S!.prod.find((r) => r.jobNumber === job);
-  if (!anySlot) return undefined;
-  return {
+  // An order Planning.csv no longer holds and this shift has not touched
+  // yet still has its own history to go on — an overrun order the press is
+  // still running is exactly that.
+  if (!anySlot) {
+    const facts = factsFor(job);
+    if (!facts?.partNumber) return undefined;
+    return {
+      id: 0,
+      jobNumber: job,
+      machineCode: S!.mc,
+      originalMachine: '',
+      partNumber: facts.partNumber,
+      partDescription: facts.partDescription,
+      plannedStart: '',
+      plannedEnd: '',
+      orderQty: facts.jobRequired,
+      jobRequired: facts.jobRequired,
+      qtyPerHr: facts.cycleTime,
+      duration: 0,
+      released: false,
+      isDieChange: false,
+      manuallyAdded: true,
+      source: 'Manual',
+    };
+  }
+  return withOrderFacts({
     id: 0,
     jobNumber: job,
     machineCode: anySlot.machineCode,
@@ -919,6 +959,34 @@ function orderForJob(job: string): PlanningOrder | undefined {
     isDieChange: false,
     manuallyAdded: true,
     source: 'Manual',
+  });
+}
+
+/** The selected order's signed history, when it has been read for `job`. */
+function factsFor(job: string): OrderFacts | null {
+  return S!.jobFacts && S!.jobFacts.job === job ? S!.jobFacts.facts : null;
+}
+
+/**
+ * Fill what an order row is missing — Part #, description, Order Qty, cycle
+ * time — from the order's own signed history. A supervisor's manual order
+ * carries no cycle time and often no part; a row rebuilt from this shift's
+ * records has none of them before the shift is signed. Values present are
+ * never replaced.
+ */
+function withOrderFacts(o: PlanningOrder): PlanningOrder {
+  const facts = factsFor(o.jobNumber);
+  if (!facts || o.isDieChange) return o;
+  const qty = o.orderQty > 0 ? o.orderQty : facts.jobRequired;
+  return {
+    ...o,
+    partNumber: o.partNumber || facts.partNumber,
+    partDescription: o.partDescription || facts.partDescription,
+    orderQty: qty,
+    // A planning row's jobRequired is Epicor's remaining qty, which may
+    // rightly be 0; only an order with no quantity at all takes the total.
+    jobRequired: o.jobRequired > 0 || o.orderQty > 0 ? o.jobRequired : qty,
+    qtyPerHr: o.qtyPerHr > 0 ? o.qtyPerHr : facts.cycleTime,
   };
 }
 
@@ -1233,6 +1301,7 @@ function liveActiveJob(): string {
 async function reload(preferLiveJob = false): Promise<void> {
   const id = sid();
   S!.prod = await dalRef.listProduction({ machineCode: S!.mc, shiftId: id });
+  await loadCarriedJobs();
   const orders = shiftOrders();
   if (!S!.selJob) {
     // No selection (fresh view / machine switch): prefer the order the press
@@ -1253,6 +1322,9 @@ async function reload(preferLiveJob = false): Promise<void> {
     const live = liveActiveJob();
     if (!touched && live && live !== S!.selJob) S!.selJob = live;
   }
+  // Before anything writes a row: the order's own history is what stamps
+  // its Part # and cycle time when Planning.csv no longer holds it.
+  await refreshJobTotal();
   // Tuples that already carry real data are confirmed by definition —
   // must run before needsConfirm() gates the automation below.
   autoConfirmExistingWork();
@@ -1271,7 +1343,6 @@ async function reload(preferLiveJob = false): Promise<void> {
     await maybeCarryCountStart();
     await syncCavitiesFromDie();
   }
-  await refreshJobTotal();
   if (!needsConfirm()) await seedStatusFromCoRunner();
   saveView();
   render();
@@ -1431,6 +1502,41 @@ function discardIfUnconfirmed(): void {
     .catch((e) => console.warn('[pmd] unconfirmed-tuple discard failed', e));
   // Keep the in-memory rows consistent with the discarded cache.
   S!.prod = S!.prod.filter((r) => r.locked || r.jobNumber !== S!.selJob);
+}
+
+/**
+ * The orders this press ran last shift that Planning.csv has since dropped.
+ * Read once per press and shift; live shifts only — a past shift lists what
+ * it recorded, and a future one has nothing to carry yet.
+ */
+async function loadCarriedJobs(): Promise<void> {
+  if (isPastShift() || isFutureShift()) return;
+  const prevSid = previousShift(sid());
+  if (!prevSid) return;
+  const key = `${S!.mc}|${prevSid}`;
+  if (S!.carried?.key === key) return;
+  try {
+    const rows = await dalRef.listProduction({ machineCode: S!.mc, shiftId: prevSid });
+    const jobs = [
+      ...new Set(
+        rows
+          .filter((r) => r.statusCode && r.jobNumber && !r.jobNumber.startsWith('DC_'))
+          .map((r) => r.jobNumber),
+      ),
+    ].filter((j) => !jobInPlanning(j));
+    S!.carried = { key, jobs };
+  } catch (e) {
+    console.warn('[pmd] carried-over orders lookup failed', e);
+  }
+}
+
+/** Is this order one the press carried over from last shift (see loadCarriedJobs)? */
+function isCarried(job: string): boolean {
+  return (
+    !!S!.carried &&
+    S!.carried.key === `${S!.mc}|${previousShift(sid()) ?? ''}` &&
+    S!.carried.jobs.includes(job)
+  );
 }
 
 /**
@@ -1759,6 +1865,7 @@ async function refreshJobTotal(): Promise<void> {
       // rows temporarily unlocked for correction — still counted).
       blended.filter((r) => r.locked || r.reopened);
   S!.jobTotalGood = sumOtherShiftGood(signed, currentKey);
+  S!.jobFacts = { job: S!.selJob, facts: orderFactsFromHistory(signed) };
   S!.unsignedEarlier = unsignedEarlierTuples(blended, currentKey);
 }
 
@@ -1931,7 +2038,13 @@ function buildMeta(): string {
         : '';
       // id > 0 = a real PMD_ManualOrders row (supervisor-added); id 0 =
       // the synthetic order rebuilt from PMD_Production history.
-      const tag = ord.manuallyAdded ? (ord.id > 0 ? ' (manual)' : ' (history)') : '';
+      const tag = ord.manuallyAdded
+        ? ord.id > 0
+          ? ' (manual)'
+          : isCarried(ord.jobNumber) && !S!.prod.some((r) => r.jobNumber === ord.jobNumber)
+            ? ' (carried over)'
+            : ' (history)'
+        : '';
       return `<option value="${escapeHtml(ord.jobNumber)}"${
         ord.jobNumber === S!.selJob ? ' selected' : ''
       }>${escapeHtml(`${ord.jobNumber}${when}${tag}`)}</option>`;
@@ -4530,6 +4643,8 @@ export async function renderOperator(
     viewLevel: 1,
     jobTotalGood: 0,
     unsignedEarlier: [],
+    jobFacts: null,
+    carried: null,
     selSet: new Set<number>(),
     dieColors,
     dieCavities,

@@ -49,6 +49,7 @@ import {
   type SavedShiftPlan,
 } from '../core/kpi-attainment';
 import { retroJobLeftFixes, sumGoodStartedBefore } from '../core/jobgood';
+import { orderFactsFromHistory } from '../core/order-history';
 import {
   DIE_COMPONENTS,
   DIE_CONDITION_META,
@@ -3563,9 +3564,22 @@ export class SharePointDataLayer implements PmdDataLayer {
       const job = slots[0]?.jobNumber ?? jobNumber ?? '';
       const agg = aggregateSlots(slots);
       const tag = `${machineCode}|${shiftId}|${job}`;
-      const partNum = partNumOf(job, slots);
-      const partDesc = partDescOf(job, slots);
-      const required = jobRequiredOf(job, slots);
+      // The order's signed history: Job Left below, and the third source of
+      // its part, Order Qty and cycle time after this tuple's own slots and
+      // Planning.csv — an order overrun past its quantity is complete in
+      // Epicor and gone from planning while the press is still running it,
+      // and without this the shift was signed with no part, no CycleTime
+      // and no ShiftTarget (see core/order-history).
+      let history: ProductionRecord[] | null = null;
+      try {
+        history = await this.listSignedOffProduction({ jobNumber: job });
+      } catch (e) {
+        console.warn('[pmd] order history read failed, signing off without it:', e);
+      }
+      const facts = history ? orderFactsFromHistory(history) : null;
+      const partNum = partNumOf(job, slots) || facts?.partNumber || '';
+      const partDesc = partDescOf(job, slots) || facts?.partDescription || '';
+      const required = jobRequiredOf(job, slots) || facts?.jobRequired || 0;
       // PMD_Rejects is the source of truth. agg.reject is by construction
       // Σ agg.rejectEvents (same loop), and those events are what
       // replaceRejectEvents writes below — so whenever per-slot detail
@@ -3584,7 +3598,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       // column is still the only record, so this introduces no drift.
       const canon = slots.find((s) => s.slotIndex === 0);
       const reject = agg.reject || (canon?.rejectCount ?? 0);
-      const cycleTime = cycleTimeOf(job, slots);
+      const cycleTime = cycleTimeOf(job, slots) || facts?.cycleTime || 0;
       const cavities = cavitiesOf(slots);
       // This tuple's own net Good — last-resort Job Left estimate below.
       const tupleGood = Math.max(
@@ -3606,14 +3620,9 @@ export class SharePointDataLayer implements PmdDataLayer {
       // value → UI param → tuple-only estimate remain as fallbacks when
       // the list read itself fails.
       let jobLeftSnap: number | null = null;
-      if (required > 0) {
-        try {
-          const allJob = await this.listSignedOffProduction({ jobNumber: job });
-          const before = sumGoodStartedBefore(allJob, machineCode, shiftId);
-          if (before != null) jobLeftSnap = Math.max(0, required - before);
-        } catch (e) {
-          console.warn('[pmd] JobLeft recompute failed, using frozen fallback:', e);
-        }
+      if (required > 0 && history) {
+        const before = sumGoodStartedBefore(history, machineCode, shiftId);
+        if (before != null) jobLeftSnap = Math.max(0, required - before);
       }
       if (jobLeftSnap == null) {
         jobLeftSnap =
