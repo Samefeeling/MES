@@ -169,6 +169,21 @@ export class MemoryDataLayer implements PmdDataLayer {
   async listProductDieColors(): Promise<ProductDieColor[]> {
     return MemoryDataLayer.clone(this.dieColors);
   }
+  async createProductDieColor(row: ProductDieColor): Promise<void> {
+    const key = row.partNumber.trim().toUpperCase();
+    if (this.dieColors.some((c) => c.partNumber.trim().toUpperCase() === key)) {
+      throw new Error(`${row.partNumber} is already in PMD_ProductDieColor`);
+    }
+    this.dieColors.push(MemoryDataLayer.clone(row));
+  }
+  async listPartDescriptions(): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    for (const r of this.production) {
+      const part = r.partNumber.trim().toUpperCase();
+      if (part && r.partDescription) out.set(part, r.partDescription);
+    }
+    return out;
+  }
   async listDieMaster(): Promise<DieMaster[]> {
     return MemoryDataLayer.clone(this.dieMaster);
   }

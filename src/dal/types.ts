@@ -34,7 +34,14 @@ export interface PmdDataLayer {
   /** Die / paint colour per Part #. Used by the operator's Product
    *  Description swatch and the KPIs Color column. Optional — a tenant
    *  without PMD_ProductDieColor returns an empty list. */
-  listProductDieColors?(): Promise<ProductDieColor[]>;
+  listProductDieColors?(opts?: { fresh?: boolean }): Promise<ProductDieColor[]>;
+  /** Add one part's row to PMD_ProductDieColor — a new part placed on its
+   *  die by description (core/die-match). Optional. */
+  createProductDieColor?(row: ProductDieColor): Promise<void>;
+  /** Part # (upper-cased) → its description, from every PMD_Production row
+   *  that recorded one. PMD_ProductDieColor has no description column, and
+   *  Planning.csv only holds the parts planned now. Optional. */
+  listPartDescriptions?(): Promise<Map<string, string>>;
   /** The die ASSET register (PMD_DieMaster) — one row per physical tool:
    *  cavities, cycle time, weight, changeover minutes, expected life and
    *  the toolroom's ToolStatus verdict. Read-only from the app (the

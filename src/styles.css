@@ -1469,6 +1469,15 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .die-note-photo-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0 0}
 .die-note-photo-row .die-note-photos{margin-top:0}
 .die-note-editor .die-note-photo-add{padding:8px 14px;font-size:14px}
+.die-newparts{background:#fff;border:1px solid var(--bd);border-left:4px solid #6366f1;border-radius:10px;padding:10px 14px;margin:0 0 10px}
+.die-np-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px;color:#0c4a6e}
+.die-np-head .die-chip-btn{margin-left:auto}
+.die-newparts .muted{color:var(--mu);font-size:12px}
+.die-np-block{margin-top:8px}
+.die-np-title{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.03em;color:#475569;margin-bottom:4px}
+.die-np-block.miss .die-np-title{color:#b91c1c}
+.die-np-block.added .die-np-title{color:#15803d}
+.die-np-block ul{margin:0;padding-left:18px;font-size:13px;line-height:1.6}
 .die-note-photo-hint{font-size:12px;color:var(--mu)}
 @keyframes die-mic-pulse{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.5)}50%{box-shadow:0 0 0 5px rgba(239,68,68,0)}}
 /* The print clone lives outside the modal, hidden on screen; only the

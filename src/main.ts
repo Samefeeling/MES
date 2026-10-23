@@ -21,6 +21,8 @@ import {
 import { toast } from './ui/toast';
 import { currentBuildId, startAutoUpdate } from './ui/auto-update';
 import { isTupleConfirmed } from './core/confirm';
+import { isIpadDevice } from './core/device';
+import { syncNewPartDies } from './ui/die-sync';
 
 const assemblyDal = createAssemblyDataLayer(import.meta.env as Record<string, string>);
 
@@ -379,6 +381,16 @@ document.getElementById('refreshBtn')?.addEventListener('click', () => void rout
 
 ensureNav();
 void route();
+
+// New parts in Planning.csv onto their dies (PMD_ProductDieColor), once per
+// page load and after the first view is up. Written only from a device that
+// writes — an iPad, or with a supervisor signed in; anywhere else the parts
+// are only listed on the Tool page.
+setTimeout(() => {
+  syncNewPartDies(dal, { write: isIpadDevice() || isSupervisor() }).catch((e) =>
+    console.warn('[pmd] new-part die check failed:', e),
+  );
+}, 5000);
 
 // Poll for new deploys and self-update the iPad clients without a manual
 // cache clear (which was wiping the SharePoint auth session).

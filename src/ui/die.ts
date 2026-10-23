@@ -57,6 +57,9 @@ import { closeModal, escapeHtml, openModal } from './modal';
 import { RESIZE_HANDLE, syncStickyOffset, wireColumnResize } from './col-resize';
 import { toast } from './toast';
 import { compressPhoto, dataUrlToBlob } from './photo';
+import { lastDieSync, onDieSync, syncNewPartDies, type DieSyncResult } from './die-sync';
+import type { DieMatch, DieMiss, DieMissReason } from '../core/die-match';
+import { isIpadDevice } from '../core/device';
 import { isSupervisor } from './supervisor-auth';
 import { peekDieNoteContext } from './nav-context';
 import { STATUS_MAP } from '../core/status';
@@ -545,6 +548,8 @@ function ddmmyyyy(iso: string): string {
 
 /** Mount (or re-mount) the Die Management board into `host`. Owns its
  *  own state + re-render loop; the Tool route provides the div. */
+let unsubscribeNewParts: (() => void) | null = null;
+
 export async function mountDieTab(
   dal: PmdDataLayer,
   host: HTMLElement,
@@ -553,6 +558,12 @@ export async function mountDieTab(
 ): Promise<void> {
   dalRef = dal;
   hostEl = host;
+  unsubscribeNewParts?.();
+  unsubscribeNewParts = onDieSync(onNewPartSync);
+  void lastDieSync()?.then((r) => {
+    newPartSync = r;
+    render();
+  }).catch(() => undefined);
   // The usage figures cover the last 90 days. The date pickers that set the
   // window gave their place in the bar to the Tool / Machine / Team buttons.
   const to = new Date();
@@ -917,7 +928,55 @@ function renderBody(): string {
       data-die-wo-jump title="Jump to the Maintenance Work Orders list below"
       >Open Work Order <b>${open.length}</b></button>
   </div>`;
-  return `${chips}${renderDieTable()}${renderRequests()}`;
+  return `${renderNewParts()}${chips}${renderDieTable()}${renderRequests()}`;
+}
+
+// --- New parts onto their dies (supervisor) ------------------------------
+
+/** The latest new-part check of this page load (ui/die-sync). */
+let newPartSync: DieSyncResult | null = null;
+let newPartChecking = false;
+
+const MISS_REASON: Record<DieMissReason, (m: DieMiss) => string> = {
+  'no-description': () => 'Planning.csv gives it no description',
+  'no-similar': () => 'no registered part is described like it',
+  'several-dies': (m) => `described like parts on more than one die: ${m.dies.join(', ')}`,
+};
+
+/**
+ * Supervisor-only: the parts Planning.csv runs that PMD_ProductDieColor had
+ * no row for — those added on their die by description, and those that
+ * could not be, with why. The second list is the one to act on: add their
+ * rows in SharePoint.
+ */
+function renderNewParts(): string {
+  const r = newPartSync;
+  if (!isSupervisor() || !r) return '';
+  if (!r.added.length && !r.pending.length && !r.failed.length && !r.misses.length) return '';
+  const time = r.checkedAt.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const placed = (m: DieMatch, tail = ''): string =>
+    `<li><b>${escapeHtml(m.partNumber)}</b> → die <b>${escapeHtml(m.dieNumber)}</b>${m.name ? ` · ${escapeHtml(m.name)}` : ''} <span class="muted">${escapeHtml(m.description)} — like ${escapeHtml(m.siblings.join(', '))}</span>${tail}</li>`;
+  const block = (title: string, cls: string, items: string[]): string =>
+    items.length ? `<div class="die-np-block ${cls}"><div class="die-np-title">${title}</div><ul>${items.join('')}</ul></div>` : '';
+  return `<section class="die-newparts">
+    <div class="die-np-head">🧩 <b>New parts in Planning.csv</b> <span class="muted">checked ${escapeHtml(time)}</span>
+      <button type="button" class="die-chip die-chip-btn" data-np-recheck${newPartChecking ? ' disabled' : ''}>${newPartChecking ? 'Checking…' : 'Check again'}</button>
+    </div>
+    ${block(`Not matched (${r.misses.length}) — add their row to PMD_ProductDieColor by hand`, 'miss', r.misses.map(
+      (m) => `<li><b>${escapeHtml(m.partNumber)}</b> <span class="muted">${escapeHtml(m.description || '—')}</span> — ${escapeHtml(MISS_REASON[m.reason](m))}</li>`,
+    ))}
+    ${block(`Could not be written (${r.failed.length})`, 'miss', r.failed.map((f) => placed(f.match, ` — ${escapeHtml(f.error)}`)))}
+    ${block(`Matched, not written from this device (${r.pending.length})`, 'pending', r.pending.map((m) => placed(m)))}
+    ${block(`Added to PMD_ProductDieColor (${r.added.length})`, 'added', r.added.map((m) => placed(m)))}
+  </section>`;
+}
+
+function onNewPartSync(r: DieSyncResult): void {
+  newPartSync = r;
+  newPartChecking = false;
+  // New rows change which parts each die makes: re-read the board.
+  if (r.added.length && S && !S.loading) void loadAll();
+  else render();
 }
 
 function filteredDies(): DieAgg[] {
@@ -2186,6 +2245,15 @@ function openDieDetail(dieNumber: string): void {
 function wire(): void {
   const h = hostEl;
   if (!h || !S) return;
+  h.querySelector<HTMLButtonElement>('[data-np-recheck]')?.addEventListener('click', () => {
+    newPartChecking = true;
+    render();
+    syncNewPartDies(dalRef, { write: isIpadDevice() || isSupervisor() }).catch((e) => {
+      newPartChecking = false;
+      toast(`New-part check failed: ${(e as Error).message || e}`, 'err');
+      render();
+    });
+  });
   h.querySelectorAll<HTMLButtonElement>('[data-maint-tab]').forEach((b) =>
     b.addEventListener('click', () => {
       const tab = b.dataset.maintTab as MaintTab;

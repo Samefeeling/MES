@@ -1099,12 +1099,14 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
   }
 
-  async listProductDieColors(): Promise<ProductDieColor[]> {
+  async listProductDieColors(opts: { fresh?: boolean } = {}): Promise<ProductDieColor[]> {
     // Cached after the first successful read — the list is small and
-    // read-only at runtime; refetching it on every nav was a 2-3 s
+    // rarely changes at runtime; refetching it on every nav was a 2-3 s
     // round-trip per view. Operators hard-reload the page to pick up
     // colour list edits, which is the established workflow anyway.
-    if (this.dieColorCache) return this.dieColorCache;
+    // `fresh` reads past the cache: the new-part matcher checks the list
+    // as it stands right before it adds a row.
+    if (this.dieColorCache && !opts.fresh) return this.dieColorCache;
     const F = this.F.productDieColor;
     try {
       const rows = await this.getAllItems<Record<string, unknown>>(LISTS.productDieColor);
@@ -1121,6 +1123,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       const dieKey = resolveDieNumberKey(rows[0], F.dieNumber);
       // The `Die` (description) column, same naming-variant tolerance.
       const dieDescKey = resolveDieDescKey(rows[0], F.die);
+      this.dieColorKeys = { dieNumber: dieKey, die: dieDescKey };
       if (!dieKey) {
         console.warn(
           '[pmd] PMD_ProductDieColor: no DieNumber column matched. Keys present on row[0]:',
@@ -1167,6 +1170,48 @@ export class SharePointDataLayer implements PmdDataLayer {
       console.warn('[pmd] PMD_ProductDieColor unavailable, swatches disabled:', e);
       throw e;
     }
+  }
+
+  /** PMD_ProductDieColor's DieNumber / Die internal names, as the last read
+   *  resolved them — the columns a new row is written to. */
+  private dieColorKeys: { dieNumber: string | null; die: string | null } | null = null;
+
+  async createProductDieColor(row: ProductDieColor): Promise<void> {
+    if (!this.dieColorKeys) await this.listProductDieColors({ fresh: true });
+    const keys = this.dieColorKeys;
+    if (!keys?.dieNumber) {
+      throw new Error('PMD_ProductDieColor has no DieNumber column the app can resolve');
+    }
+    const F = this.F.productDieColor;
+    const body: Record<string, unknown> = {
+      __metadata: { type: await this.itemType(LISTS.productDieColor) },
+      Title: row.partNumber,
+      [F.partNum]: row.partNumber,
+      [keys.dieNumber]: row.dieNumber,
+    };
+    if (row.hex) body[F.hex] = row.hex;
+    if (row.name) body[F.name] = row.name;
+    if (row.category) body[F.category] = row.category;
+    if (row.die && keys.die) body[keys.die] = row.die;
+    await this.post(`${this.listUrl(LISTS.productDieColor)}/items`, body);
+    const { partNumber, hex, name, category, dieNumber, die, coRun } = row;
+    this.dieColorCache?.push({ partNumber, hex, name, category, dieNumber, die, coRun });
+  }
+
+  async listPartDescriptions(): Promise<Map<string, string>> {
+    const F = this.F.production;
+    // Two columns of every header: light, however long the history.
+    const rows = await this.getAllItems<Record<string, unknown>>(
+      LISTS.production,
+      `$select=${F.partNum},${F.partDesc}`,
+    );
+    const out = new Map<string, string>();
+    for (const r of rows) {
+      const part = str(r[F.partNum]).trim().toUpperCase();
+      const desc = str(r[F.partDesc]).trim();
+      if (part && desc) out.set(part, desc);
+    }
+    return out;
   }
 
   // ---- die master (PMD_DieMaster) -------------------------------------
