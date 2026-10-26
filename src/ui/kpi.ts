@@ -10,7 +10,7 @@ import type {
   ShiftCode,
   StatusCode,
 } from '../types';
-import { planningOrderMatchesMachine } from '../core/schedule';
+import { dieLookup, planningOrderMatchesMachine } from '../core/schedule';
 import { aggregate, countSetupEvents, type Kpi } from '../core/metrics';
 import { repairFromHistory } from '../core/order-history';
 import {
@@ -1176,6 +1176,9 @@ async function compute(now = new Date()): Promise<void> {
   // add pieces to shares (see savedScheduleTuples).
   const equalWeight = comparisonMode === 'saved' && perMachineProd.some((recs) => savedPlanMissing(recs));
   state.equalWeight = equalWeight;
+  // Which die each part runs on: the plan reads a window that opens on a
+  // new die as a die change first (core/schedule dieChangeLeadHours).
+  const planCtx = { dieOf: dieLookup(dieColorList) };
   const dieColors = new Map(
     dieColorList.map((c) => [
       c.partNumber.trim().toUpperCase(),
@@ -1300,7 +1303,7 @@ async function compute(now = new Date()): Promise<void> {
             const kept = keptFor(sid);
             return kept
               ? keptPlanTuples(kept, awaitingSignOff[i].has(sid))
-              : scheduleTuplesForShift(all, planning, m.machineCode, sid, now, awaitingSignOff[i].has(sid));
+              : scheduleTuplesForShift(all, planning, m.machineCode, sid, now, awaitingSignOff[i].has(sid), planCtx);
           })
         : [
             ...savedScheduleTuples(all, equalWeight),
@@ -1312,6 +1315,7 @@ async function compute(now = new Date()): Promise<void> {
               now,
               awaitingSignOff[i],
               equalWeight,
+              planCtx,
             ),
           ];
     linesByMachine[i] = lines;
@@ -3329,7 +3333,7 @@ function render(): void {
   const activeRange = periodRange(S!.period, new Date());
   const fromVal = S!.period === 'custom' ? S!.customFrom : dateKey(activeRange.from);
   const toVal = S!.period === 'custom' ? S!.customTo : dateKey(activeRange.to);
-  const comparisonHelp = '<div><b>Schedule Adherence</b> (Last 24h) plans from Planning.csv: every order planned on a press in a finished shift — in the shifts its “no of shift” (M/A/N) is crewed for — is asked for its share of the planned runtime × JobOper_ProdStandard, up to its quantity, whether the press ran or not. A press left idle for want of a crew shows 0 against its plan. Good is capped per order, so over-producing one order cannot hide another; output on orders not planned there is not credited. Orders Epicor has already dropped from Planning.csv use the ShiftTarget saved when they ran. A shift not yet signed off still counts its plan and is credited nothing until it is signed (marked “unsigned”). <b>Wider periods</b> add up what each shift saved when it was signed off — its Last 24h Schedule Adherence (PMD_Production.ScheduleAttain) and the pieces its plan asked for (SchedulePlan): Σ (ScheduleAttain × SchedulePlan) ÷ Σ SchedulePlan, the same formula over more shifts. Shifts signed before the plan was saved use their ShiftTarget, capped per order. A press planned for a shift with nothing signed counts its plan with nothing credited: every sign-off of the shift keeps that plan (PMD_ShiftPlan), and a shift with none kept uses what Planning.csv still holds. Order rows show output only: the plan is saved per press per shift. Missing plan quantities show “—”; hover for coverage.</div>';
+  const comparisonHelp = '<div><b>Schedule Adherence</b> (Last 24h) plans from Planning.csv: every order planned on a press in a finished shift — in the shifts its “no of shift” (M/A/N) is crewed for — is asked for its share of the planned runtime × JobOper_ProdStandard, up to its quantity, whether the press ran or not. Die changes get their 4 hours first: where PMD_ProductDieColor puts an order on a different die from the one before it (or does not know the die), the order waits for the change, and a press’s first order in the file starts with one unless it is already under way, starts at the export’s “now”, or the press was last running its die — so a shift that only puts the die on is asked for nothing. A press left idle for want of a crew shows 0 against its plan. Good is capped per order, so over-producing one order cannot hide another; output on orders not planned there is not credited. Orders Epicor has already dropped from Planning.csv use the ShiftTarget saved when they ran. A shift not yet signed off still counts its plan and is credited nothing until it is signed (marked “unsigned”). <b>Wider periods</b> add up what each shift saved when it was signed off — its Last 24h Schedule Adherence (PMD_Production.ScheduleAttain) and the pieces its plan asked for (SchedulePlan): Σ (ScheduleAttain × SchedulePlan) ÷ Σ SchedulePlan, the same formula over more shifts. Shifts signed before the plan was saved use their ShiftTarget, capped per order. A press planned for a shift with nothing signed counts its plan with nothing credited: every sign-off of the shift keeps that plan (PMD_ShiftPlan), and a shift with none kept uses what Planning.csv still holds. Order rows show output only: the plan is saved per press per shift. Missing plan quantities show “—”; hover for coverage.</div>';
   app.innerHTML = `
     <div class="kpi">
       <div class="kpi-head">

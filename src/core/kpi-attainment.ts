@@ -1,6 +1,32 @@
 import type { PlanningOrder, ProductionRecord } from '../types';
 import { aggregate, countSetupEvents } from './metrics';
-import { crewedWindowHoursBefore, plannedOrdersForShift, plannedRuntimeForShift } from './schedule';
+import {
+  crewedWindowHoursBefore,
+  lastPartBefore,
+  plannedOrdersForShift,
+  plannedRuntimeForShift,
+  type ScheduleContext,
+} from './schedule';
+
+/** What the KPI side can tell the plan: which die each part runs on, and —
+ *  when the caller knows better than the records it passes — what each press
+ *  was running before an order's window opened. */
+export type PlanContext = Pick<ScheduleContext, 'dieOf' | 'partBefore'>;
+
+/** The plan's context for one press: the die mapping, and what the press was
+ *  last running before an order's window opened, from its own records. */
+function pressContext(
+  records: ReadonlyArray<ProductionRecord>,
+  machineCode: string,
+  ctx: PlanContext,
+): ScheduleContext {
+  const mine = machineCode.trim().toUpperCase();
+  return {
+    dieOf: ctx.dieOf,
+    partBefore:
+      ctx.partBefore ?? lastPartBefore(records.filter((r) => r.machineCode.trim().toUpperCase() === mine)),
+  };
+}
 import { SLOT_MINUTES, shiftBounds } from './shifts';
 import { setupStandardHours } from './standards';
 import { wholePieces } from './targets';
@@ -111,6 +137,7 @@ export function scheduleAdherenceForShift(
   machineCode: string,
   shiftId: string,
   asOf: Date = new Date(),
+  ctx: PlanContext = {},
 ): KpiAttainment {
   const onShift = records.filter((record) => record.shiftId === shiftId);
   const planned = plannedRuntimeForShift(
@@ -119,6 +146,7 @@ export function scheduleAdherenceForShift(
     machineCode,
     asOf,
     unavailableHoursForShift(onShift),
+    pressContext(records, machineCode, ctx),
   );
   const expectedByJob = new Map<string, number>();
   for (const run of planned.runs) {
@@ -307,16 +335,19 @@ export function scheduleTuplesForShift(
   shiftId: string,
   asOf: Date = new Date(),
   unsigned = false,
+  ctx: PlanContext = {},
 ): AttainmentTuple[] {
   const bounds = shiftBounds(shiftId);
   if (!bounds || asOf <= bounds.start) return [];
   const onShift = records.filter((record) => record.shiftId === shiftId);
+  const press = pressContext(records, machineCode, ctx);
   const planned = plannedRuntimeForShift(
     shiftId,
     orders,
     machineCode,
     asOf,
     unavailableHoursForShift(onShift),
+    press,
   );
 
   const plan = new Map<string, { jobNumber: string; pieces: number | null }>();
@@ -329,6 +360,7 @@ export function scheduleTuplesForShift(
     const quantity = run.order.orderQty > 0
       ? run.order.orderQty
       : run.order.jobRequired > 0 ? run.order.jobRequired : Infinity;
+    // run.order is the order as it runs, after the press's die changes.
     const askedBefore = wholePieces(crewedWindowHoursBefore(run.order, bounds.start) / run.order.qtyPerHr);
     const pieces = Math.min(run.pieces, Math.max(0, quantity - askedBefore));
     const prior = plan.get(key);
@@ -436,11 +468,12 @@ export function scheduleSnapshotForShift(
   machineCode: string,
   shiftId: string,
   asOf: Date = new Date(),
+  ctx: PlanContext = {},
 ): ScheduleSnapshot | null {
   const bounds = shiftBounds(shiftId);
   if (!bounds) return null;
   const judgedAt = new Date(Math.max(asOf.getTime(), bounds.end.getTime()));
-  const lines = scheduleTuplesForShift(records, orders, machineCode, shiftId, judgedAt);
+  const lines = scheduleTuplesForShift(records, orders, machineCode, shiftId, judgedAt, false, ctx);
   const a = attainmentOfTuples(lines);
   return {
     pct: a.expected > 0 ? Math.round((a.actual / a.expected) * 10_000) / 100 : null,
@@ -638,11 +671,12 @@ export function shiftPlanFor(
   machineCode: string,
   shiftId: string,
   asOf: Date = new Date(),
+  ctx: PlanContext = {},
 ): SavedShiftPlan | null {
   const bounds = shiftBounds(shiftId);
   if (!bounds) return null;
   const judgedAt = new Date(Math.max(asOf.getTime(), bounds.end.getTime()));
-  const lines = scheduleTuplesForShift([], orders, machineCode, shiftId, judgedAt);
+  const lines = scheduleTuplesForShift([], orders, machineCode, shiftId, judgedAt, false, ctx);
   if (!lines.length || lines.some((line) => line.planned == null)) return null;
   const plan = lines.reduce((sum, line) => sum + (line.planned ?? 0), 0);
   if (plan <= 0) return null;
@@ -679,6 +713,7 @@ export function shiftPlanChanges<Row extends SavedShiftPlan>(
   orders: ReadonlyArray<PlanningOrder>,
   shiftId: string,
   asOf: Date = new Date(),
+  ctx: PlanContext = {},
 ): { save: SavedShiftPlan[]; remove: Row[] } {
   const key = (code: string): string => code.trim().toUpperCase();
   const signedKeys = new Set([...signed].map(key));
@@ -693,7 +728,7 @@ export function shiftPlanChanges<Row extends SavedShiftPlan>(
   const save: SavedShiftPlan[] = [];
   for (const code of machineCodes) {
     if (signedKeys.has(key(code)) || savedKeys.has(key(code))) continue;
-    const plan = shiftPlanFor(orders, code, shiftId, asOf);
+    const plan = shiftPlanFor(orders, code, shiftId, asOf, ctx);
     if (plan) save.push(plan);
   }
   return { save, remove };
@@ -738,6 +773,7 @@ export function idleShiftTuples(
   asOf: Date = new Date(),
   unsignedShifts: ReadonlySet<string> = new Set(),
   equalWeight = false,
+  ctx: PlanContext = {},
 ): AttainmentTuple[] {
   const asked = (planned: number | null): number | null => (equalWeight && planned != null ? 100 : planned);
   const machine = machineCode.trim();
@@ -757,7 +793,7 @@ export function idleShiftTuples(
       });
       continue;
     }
-    const lines = scheduleTuplesForShift([], orders, machine, shiftId, asOf);
+    const lines = scheduleTuplesForShift([], orders, machine, shiftId, asOf, false, ctx);
     if (!lines.length) continue;
     const known = lines.every((line) => line.planned != null);
     const lead = [...lines].sort((a, b) => (b.planned ?? 0) - (a.planned ?? 0))[0];
