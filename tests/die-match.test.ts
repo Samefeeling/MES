@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { descriptionStem, matchNewParts } from '../src/core/die-match';
+import { descriptionStem, isHotStampPart, matchNewParts } from '../src/core/die-match';
 import type { ProductDieColor } from '../src/types';
 
 const row = (partNumber: string, dieNumber: string, name = '', hex = '', extra: Partial<ProductDieColor> = {}): ProductDieColor => ({
@@ -80,6 +80,14 @@ describe('a new part onto its die by description', () => {
     ]);
   });
 
+  it('knows a hot-stamped chair by its description', () => {
+    expect(isHotStampPart('Postura Plus Linking Chair - 460h - Blue\n\nHot Stamp: Back of Backrest\nStamp Foil Colour: White')).toBe(true);
+    expect(isHotStampPart('Hot Stamp for Postura Plus Sled Stool - Warm Grey frame - 750h - Blue')).toBe(true);
+    expect(isHotStampPart('HOTSTAMP Postura Max Chair')).toBe(true);
+    expect(isHotStampPart('Postura Max Chair - recycled plastics - Size 3 - 350h - Slate')).toBe(false);
+    expect(isHotStampPart('Stamped Bracket Black')).toBe(false);
+  });
+
   it('keeps arms and backs apart', () => {
     const { matches } = matchNewParts([{ partNumber: 'VA-RED', description: 'Viva Armrest Red' }], known, desc);
     expect(matches[0]).toMatchObject({ dieNumber: 'D-300', category: 'Arms', hex: '#b91c1c', name: 'Red' });
@@ -102,6 +110,8 @@ describe('the new-part check against the memory DAL', async () => {
     const stem = sibling.partDescription.trim().split(/\s+/).slice(0, -1).join(' ');
     planning.push({ ...sibling, id: 9999, jobNumber: 'SFM999999', partNumber: 'NEW-PART-1', partDescription: `${stem} Charcoal` });
     planning.push({ ...sibling, id: 9998, jobNumber: 'SFM999998', partNumber: 'NEW-PART-2', partDescription: 'Nothing Like Anything Teal' });
+    // Its siblings' description, hot-stamped: it would match the die, but has none of its own.
+    planning.push({ ...sibling, id: 9997, jobNumber: 'SFM999997', partNumber: 'NEW-PART-HS', partDescription: `${stem} Charcoal\n\nHot Stamp: Back of Backrest` });
     return { dal, die };
   };
 
@@ -110,6 +120,9 @@ describe('the new-part check against the memory DAL', async () => {
     const first = await syncNewPartDies(dal, { write: true });
     expect(first.added.map((m) => [m.partNumber, m.dieNumber])).toEqual([['NEW-PART-1', die]]);
     expect(first.misses.map((m) => m.partNumber)).toContain('NEW-PART-2');
+    // A hot-stamped chair is neither added nor listed for a supervisor.
+    expect(first.misses.map((m) => m.partNumber)).not.toContain('NEW-PART-HS');
+    expect((await dal.listProductDieColors()).some((c) => c.partNumber === 'NEW-PART-HS')).toBe(false);
     expect((await dal.listProductDieColors()).find((c) => c.partNumber === 'NEW-PART-1')).toMatchObject({ dieNumber: die, name: 'Charcoal' });
     const again = await syncNewPartDies(dal, { write: true });
     expect(again.added).toEqual([]);

@@ -35,6 +35,15 @@ export interface DieMiss {
   dies: string[];
 }
 
+/**
+ * A hot-stamped chair: a moulded part sent through the hot-stamp press
+ * for a customer's print ("…\n\nHot Stamp: Back of Backrest"). It runs on
+ * no die of its own, so it is never placed on one.
+ */
+export function isHotStampPart(description: string): boolean {
+  return /\bhot\s*-?\s*stamp/i.test(description);
+}
+
 const tokens = (s: string): string[] => s.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
 
 /**

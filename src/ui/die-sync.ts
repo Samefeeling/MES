@@ -9,7 +9,7 @@
 // page.
 
 import type { PmdDataLayer } from '../dal';
-import { matchNewParts, type DieMatch, type DieMiss, type NewPart } from '../core/die-match';
+import { isHotStampPart, matchNewParts, type DieMatch, type DieMiss, type NewPart } from '../core/die-match';
 
 export interface DieSyncResult {
   checkedAt: Date;
@@ -74,6 +74,8 @@ async function run(dal: PmdDataLayer, opts: { write: boolean }): Promise<DieSync
     // manual order is typed by hand.
     if (!part || o.isDieChange || o.source !== 'ERP' || registered.has(key) || seen.has(key)) continue;
     seen.add(key);
+    // A hot-stamped chair has no die of its own: neither added nor listed.
+    if (isHotStampPart(o.partDescription || descByPart.get(key) || '')) continue;
     newParts.push({ partNumber: part, description: o.partDescription });
   }
   const { matches, misses } = matchNewParts(newParts, known, descByPart);
