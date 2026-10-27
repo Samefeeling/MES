@@ -26,7 +26,7 @@ import {
   kpiComparisonLabel,
   kpiComparisonMode,
   keptPlanTuples,
-  scheduleTuplesForShift,
+  last24hTuplesForShift,
   savedPlanMissing,
   savedScheduleTuples,
   type AttainmentTuple,
@@ -1303,7 +1303,7 @@ async function compute(now = new Date()): Promise<void> {
             const kept = keptFor(sid);
             return kept
               ? keptPlanTuples(kept, awaitingSignOff[i].has(sid))
-              : scheduleTuplesForShift(all, planning, m.machineCode, sid, now, awaitingSignOff[i].has(sid), planCtx);
+              : last24hTuplesForShift(all, planning, m.machineCode, sid, now, awaitingSignOff[i].has(sid), planCtx);
           })
         : [
             ...savedScheduleTuples(all, equalWeight),

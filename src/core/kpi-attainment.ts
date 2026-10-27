@@ -639,6 +639,40 @@ export function savedScheduleTuples(
 }
 
 /**
+ * Last 24h lines for one machine-shift: planned from Planning.csv as it
+ * stands (`scheduleTuplesForShift`), unless Planning.csv no longer plans the
+ * shift at all while its sign-off saved what it was asked.
+ *
+ * Planning.csv is the plan as of its export, and Epicor moves an order that
+ * is under way to start at "now" on every export: by the morning after, the
+ * order a press ran all yesterday has no window in yesterday's shifts, its
+ * output reads as unscheduled, and the press shows no plan at all (1600T on
+ * 26 Oct, SFM507844). Sign-off priced the shift while the order was still
+ * planned in it (ScheduleAttain / SchedulePlan), so that is the plan then —
+ * one line for the press, as a wider period reads it. A shift Planning.csv
+ * still plans keeps its order-by-order lines.
+ */
+export function last24hTuplesForShift(
+  records: ReadonlyArray<ProductionRecord>,
+  orders: ReadonlyArray<PlanningOrder>,
+  machineCode: string,
+  shiftId: string,
+  asOf: Date = new Date(),
+  unsigned = false,
+  ctx: PlanContext = {},
+): AttainmentTuple[] {
+  const live = scheduleTuplesForShift(records, orders, machineCode, shiftId, asOf, unsigned, ctx);
+  if (live.some((line) => line.source === 'schedule')) return live;
+  const press = machineCode.trim().toUpperCase();
+  const signed = records.filter(
+    (r) => r.locked && r.shiftId === shiftId && r.machineCode.trim().toUpperCase() === press,
+  );
+  const snap = savedScheduleSnapshot(signed);
+  if (!snap || snap.plan == null || snap.plan <= 0) return live;
+  return savedScheduleTuples(signed);
+}
+
+/**
  * PMD_ShiftPlan: the plan Planning.csv had for a press in a shift that no
  * signed production covers — the press nobody ran, or nobody signed.
  *

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   attainmentOfTuples,
+  last24hTuplesForShift,
   scheduleTuplesForShift,
   targetAttainmentForRecords,
   type PlanContext,
@@ -369,5 +370,42 @@ describe('a die change at the head of a press plan (Planning.csv, 26 Oct 2026)',
     expect(new Date(a.plannedStart).getTime()).toBeGreaterThanOrEqual(new Date('2026-11-05T22:08:00').getTime());
     const hs = order({ jobNumber: 'HS1', machineCode: 'HS', plannedStart: '2026-10-27T12:00:00', plannedEnd: '2026-10-27T15:00:00' });
     expect(pressRunsAfterDieChanges([...orders, hs], 'Hstamp').get(hs)).toBe(hs);
+  });
+});
+
+describe('Last 24h when Planning.csv has moved on (1600T, 26 Oct 2026)', () => {
+  // The morning after, Epicor's export starts SFM507844 — under way — at
+  // "now", 27 Oct 07:30: nothing of it is planned in the 26th's shifts any more.
+  const MOVED = parsePlanningCsv([
+    'Machine,JobHead_StartDate,JobOper_ProdStandard,JobHead_ReqDueDate,JobHead_JobNum,JobHead_PartNum,JobHead_PartDescription,Calculated_RemainingQty,JobHead_ProdQty,no of shift',
+    '"1600T","2026-10-27 07:30:00","20.8000013312001","2026-11-04 01:36:00","SFM507844","POPL00123","Postura Plus","3696","4176","MAN"',
+  ].join('\n'));
+  const MORNING = new Date('2026-10-27T08:00:00');
+  // What sign-off saved: the Day was asked for 72 and made 51.
+  const day = (saved: Partial<ReturnType<typeof rec>>) => [
+    rec({
+      machineCode: '1600T', shiftId: '2026-10-26-Day', jobNumber: 'SFM507844', partNumber: 'POPL00123',
+      slotIndex: 0, statusCode: 'R', countStart: 0, countEnd: 51, locked: true, ...saved,
+    }),
+  ];
+
+  it('judges the shift by the plan its sign-off saved', () => {
+    const lines = last24hTuplesForShift(day({ schedulePlan: 72, scheduleAttain: 70.83 }), MOVED, '1600T', '2026-10-26-Day', MORNING);
+    expect(lines).toEqual([expect.objectContaining({ source: 'saved', planned: 72, credited: 51 })]);
+    // Planning.csv alone has it as unscheduled: no plan for the press at all.
+    expect(scheduleTuplesForShift(day({ schedulePlan: 72, scheduleAttain: 70.83 }), MOVED, '1600T', '2026-10-26-Day', MORNING))
+      .toEqual([expect.objectContaining({ source: 'unscheduled', planned: 0 })]);
+  });
+
+  it('keeps Planning.csv where it still plans the shift, and says so where nothing was saved', () => {
+    const STILL = parsePlanningCsv([
+      'Machine,JobHead_StartDate,JobOper_ProdStandard,JobHead_ReqDueDate,JobHead_JobNum,JobHead_PartNum,JobHead_PartDescription,Calculated_RemainingQty,JobHead_ProdQty,no of shift',
+      '"1600T","2026-10-26 11:30:00","20.8000013312001","2026-11-04 01:36:00","SFM507844","POPL00123","Postura Plus","3696","4176","MAN"',
+    ].join('\n'));
+    const lines = last24hTuplesForShift(day({ schedulePlan: 999, scheduleAttain: 5 }), STILL, '1600T', '2026-10-26-Day', MORNING);
+    expect(lines).toEqual([expect.objectContaining({ source: 'schedule', planned: 72 })]);
+    // No snapshot to fall back on: Planning.csv's answer stands.
+    expect(last24hTuplesForShift(day({}), MOVED, '1600T', '2026-10-26-Day', MORNING))
+      .toEqual([expect.objectContaining({ source: 'unscheduled' })]);
   });
 });
