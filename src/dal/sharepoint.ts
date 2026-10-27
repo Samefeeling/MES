@@ -38,9 +38,11 @@ import {
   decodeBreakdownCauseMap,
   encodeBreakdownCauseMap,
 } from '../core/breakdown';
-import { parseShiftPattern, shiftBounds, slotClock } from '../core/shifts';
+import { parseShiftPattern, previousShift, shiftBounds, slotClock } from '../core/shifts';
+import { dieLookup } from '../core/schedule';
 import { hoursUnavailableFor, shiftTargetFor } from '../core/targets';
 import {
+  keptPlanSnapshot,
   savedScheduleSnapshot,
   scheduleAdherenceForShift,
   scheduleSnapshotForShift,
@@ -108,9 +110,9 @@ const LISTS = {
    *  writes here when a Die/Insert Change is first marked. */
   dieChangeLog: 'PMD_DieChangeLog',
   rdoRoster: 'RDO Roster 2026-2030',
-  /** The plan of each press with no signed production in a shift, kept by
-   *  that shift's sign-offs (SavedShiftPlan). Auto-provisioned on the first
-   *  one that has a plan to keep (see ensureShiftPlanList). */
+  /** The plan of record of each press in each shift (SavedShiftPlan), kept
+   *  once the shift is under way or at its first sign-off. Auto-provisioned
+   *  on the first keep (see ensureShiftPlanList). */
   shiftPlan: 'PMD_ShiftPlan',
 } as const;
 
@@ -2264,7 +2266,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       const machineCode = str(r['MachineCode']).trim();
       const shiftId = str(r['ShiftId']).trim();
       const plan = num(r['SchedulePlan']);
-      if (!machineCode || !shiftBounds(shiftId) || !(plan > 0)) continue;
+      if (!machineCode || !shiftBounds(shiftId) || !(plan >= 0)) continue;
       let jobs: SavedShiftPlan['jobs'] = [];
       try {
         const parsed = JSON.parse(str(r['PlanJobs']) || '[]') as unknown;
@@ -2275,6 +2277,7 @@ export class SharePointDataLayer implements PmdDataLayer {
               jobNumber: str(j['jobNumber']).trim(),
               partNumber: str(j['partNumber']).trim(),
               pieces: num(j['pieces']),
+              ...(j['hours'] != null && Number.isFinite(Number(j['hours'])) ? { hours: Number(j['hours']) } : {}),
             }))
             .filter((j) => j.jobNumber);
         }
@@ -2290,8 +2293,18 @@ export class SharePointDataLayer implements PmdDataLayer {
     const rows = await this.readShiftPlans(
       `ShiftId ge '${odataString(filter.from)}-' and ShiftId le '${odataString(filter.to)}-z'`,
     );
+    // Two devices keeping one shift at once can leave two rows for a
+    // press until the next keep tidies up: the first one kept stands.
+    const seen = new Set<string>();
     return (rows ?? [])
       .filter((p) => p.shiftId.slice(0, 10) >= filter.from && p.shiftId.slice(0, 10) <= filter.to)
+      .sort((a, b) => a.id - b.id)
+      .filter((p) => {
+        const key = `${p.machineCode.trim().toUpperCase()}|${p.shiftId}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
       .map(({ id: _id, ...plan }) => plan);
   }
 
@@ -2315,7 +2328,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       Title: LISTS.shiftPlan,
       BaseTemplate: 100, // generic list
       Description:
-        'The plan of each press planned for a shift with no signed production, kept by that shift\'s sign-offs for the KPI Schedule Adherence. Title = MachineCode|ShiftId.',
+        'The plan of record of each press in each shift, kept once the shift is under way (or at its first sign-off) for the KPI Schedule Adherence. Title = MachineCode|ShiftId.',
     });
     const fieldsUrl = `${this.listUrl(LISTS.shiftPlan)}/fields`;
     const field = (Title: string, FieldTypeKind: number) =>
@@ -2336,40 +2349,51 @@ export class SharePointDataLayer implements PmdDataLayer {
   }
 
   /**
-   * After a sign-off of `shiftId`: keep the plan of every press planned in
-   * the shift with nothing signed, and drop a row kept for a press that has
-   * signed since (shiftPlanChanges). Best-effort — the caller never lets it
-   * cost a sign-off.
+   * Keep the plan of every press in `shiftId` that has no row yet
+   * (shiftPlanChanges) — the plan of record its Schedule Adherence is judged
+   * by from then on. Called while the shift is under way (main.ts, from a
+   * device that writes) and by every sign-off of the shift. Returns the
+   * shift's rows as they stand after it; null when the list could not be
+   * read, in which case nothing is written — a row may already be kept.
    */
-  private async saveShiftPlans(shiftId: string, signingMachine: string): Promise<void> {
-    const [machines, orders, headers] = await Promise.all([
-      this.listMachines(),
-      this.listPlanning({}),
-      this.fetchHeaders(LISTS.production, { shiftId }),
-    ]);
-    const signed = new Set([
-      signingMachine,
-      ...headers.filter((h) => `${h.date}-${h.shift}` === shiftId).map((h) => h.machineCode),
-    ]);
+  async keepShiftPlans(shiftId: string): Promise<SavedShiftPlan[] | null> {
     let saved = await this.readShiftPlans(`ShiftId eq '${odataString(shiftId)}'`);
     if (saved == null) {
-      // A list that exists and could not be read: writing now could
-      // duplicate a row already kept. Leave it to the next sign-off.
-      if (await this.shiftPlanListExists()) return;
+      if (await this.shiftPlanListExists()) return null;
       saved = [];
     }
+    const machines = (await this.listMachines()).filter((m) => m.active).map((m) => m.machineCode);
+    const keys = new Set(saved.map((row) => row.machineCode.trim().toUpperCase()));
+    if (machines.every((code) => keys.has(code.trim().toUpperCase())) && saved.length === keys.size) {
+      return saved.map(({ id: _id, ...plan }) => plan);
+    }
+    // What each press ran before its first order opens, for that order's
+    // die change: the shift before and this one so far. Not worth failing
+    // the keep over — a press with no record starts on the file's rule.
+    const prevSid = previousShift(shiftId);
+    const [orders, dieColors, history] = await Promise.all([
+      this.listPlanning({}),
+      this.listProductDieColors().catch(() => [] as ProductDieColor[]),
+      Promise.all(
+        [prevSid, shiftId]
+          .filter((sid): sid is string => !!sid)
+          .map((sid) => this.listProduction({ shiftId: sid }).catch(() => [] as ProductionRecord[])),
+      ).then((lists) => lists.flat()),
+    ]);
     const { save, remove } = shiftPlanChanges(
-      machines.filter((m) => m.active).map((m) => m.machineCode),
-      signed,
+      machines,
       saved,
       orders,
       shiftId,
       new Date(),
+      { dieOf: dieLookup(dieColors) },
+      history,
     );
     for (const row of remove) {
       await this.del(`${this.listUrl(LISTS.shiftPlan)}/items(${row.id})`);
     }
-    if (!save.length) return;
+    const kept: SavedShiftPlan[] = saved.filter((row) => !remove.includes(row)).map(({ id: _id, ...plan }) => plan);
+    if (!save.length) return kept;
     await this.ensureShiftPlanList();
     for (const row of save) {
       await this.post(`${this.listUrl(LISTS.shiftPlan)}/items`, {
@@ -2380,7 +2404,9 @@ export class SharePointDataLayer implements PmdDataLayer {
         SchedulePlan: row.plan,
         PlanJobs: JSON.stringify(row.jobs),
       });
+      kept.push(row);
     }
+    return kept;
   }
 
   async createManualOrder(o: {
@@ -3564,19 +3590,45 @@ export class SharePointDataLayer implements PmdDataLayer {
      */
     const signedNow = myTuples.flat();
     const signingJobs = new Set(signedNow.map((r) => r.jobNumber));
+    // The plan needs each part's die and what the press ran just before, to
+    // tell a window that opens with a die change (core/schedule
+    // dieChangeLeadHours). Neither read may cost the sign-off.
+    const planCtx = {
+      dieOf: dieLookup(await this.listProductDieColors().catch(() => [] as ProductDieColor[])),
+    };
+    const prevSid = previousShift(shiftId);
+    const prevShiftRows = prevSid
+      ? await this.listProduction({ machineCode, shiftId: prevSid }).catch(() => [] as ProductionRecord[])
+      : [];
     const shiftAsSigned = [
       ...shiftRows.filter((r) => !signingJobs.has(r.jobNumber)),
       ...signedNow,
     ];
+    // The press's plan of record for the shift (PMD_ShiftPlan), kept now if
+    // nobody kept it while the shift ran. With one, the shift is judged by
+    // it rather than by Planning.csv as it stands at this sign-off — a Night
+    // signed after the morning export has had its in-progress order moved
+    // out of it. Best-effort: never costs the sign-off.
+    let kept: SavedShiftPlan | undefined;
+    try {
+      kept = (await this.keepShiftPlans(shiftId))?.find(
+        (row) => row.machineCode.trim().toUpperCase() === machineCode.trim().toUpperCase(),
+      );
+    } catch (e) {
+      console.warn('[pmd] PMD_ShiftPlan keep failed, judging the shift by Planning.csv:', e);
+    }
     let vsPlanSnap: number | null = null;
     try {
-      vsPlanSnap = scheduleAdherenceForShift(
-        shiftAsSigned,
-        orders,
-        machineCode,
-        shiftId,
-        new Date(),
-      ).pct;
+      vsPlanSnap = kept
+        ? keptPlanSnapshot(kept, shiftAsSigned).pct
+        : scheduleAdherenceForShift(
+            [...prevShiftRows, ...shiftAsSigned],
+            orders,
+            machineCode,
+            shiftId,
+            new Date(),
+            planCtx,
+          ).pct;
     } catch (e) {
       // A KPI snapshot must never cost somebody the shift they just signed.
       console.warn('[pmd] Schedule % snapshot failed, signing off without it:', e);
@@ -3598,7 +3650,9 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (shiftReadOk) {
       try {
         const signedAlready = shiftRows.filter((r) => r.locked && !signingJobs.has(r.jobNumber));
-        const snap = scheduleSnapshotForShift([...signedAlready, ...signedNow], orders, machineCode, shiftId, new Date());
+        const snap = kept
+          ? keptPlanSnapshot(kept, [...signedAlready, ...signedNow])
+          : scheduleSnapshotForShift([...prevShiftRows, ...signedAlready, ...signedNow], orders, machineCode, shiftId, new Date(), planCtx);
         schedule = snapshotToSave(snap, savedScheduleSnapshot(shiftRows));
       } catch (e) {
         console.warn('[pmd] ScheduleAttain snapshot failed, signing off without it:', e);
@@ -3785,10 +3839,6 @@ export class SharePointDataLayer implements PmdDataLayer {
     }
     this.persistEditCache();
     this.persistUnlockedTuples();
-    // The presses nobody signed in this shift keep their plan too.
-    await this.saveShiftPlans(shiftId, machineCode).catch((e) => {
-      console.warn('[pmd] PMD_ShiftPlan save failed (the next sign-off of the shift retries):', e);
-    });
   }
 
   /**

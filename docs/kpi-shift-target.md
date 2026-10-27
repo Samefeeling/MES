@@ -3,17 +3,18 @@
 The KPI page reads signed production records for output. Its plan depends on
 the period:
 
-- **Last 24h — Schedule Adherence** plans from Planning.csv, for every
-  finished shift of the window, whether the press ran or not. A press
-  planned for a shift and left idle (no crew, no material) shows 0 against
-  its plan instead of dropping out of the denominator — and so does one
-  that booked work nobody has signed off yet.
-- **Wider periods — Schedule Adherence from the saved plans.** Planning.csv
-  is overwritten on every export, so it is not a historical plan source for
-  weeks and months. Each sign-off saves the shift's Last 24h figure instead
-  (PMD_Production.ScheduleAttain and SchedulePlan), and the plan of every
-  press in the shift with nothing signed (PMD_ShiftPlan); a wider period
-  adds those up.
+- **The plan of record — PMD_ShiftPlan.** Every press in every shift has its
+  plan kept once the shift is under way (see below), with its die changes
+  given their four hours as on the Assembly board. Last 24h and wider periods
+  alike judge a press-shift by that row, whether the press ran or not: a
+  press planned for a shift and left idle (no crew, no material) shows 0
+  against its plan instead of dropping out of the denominator — and so does
+  one that booked work nobody has signed off yet.
+- **Without a kept plan** (shifts before PMD_ShiftPlan held every press):
+  Last 24h plans from Planning.csv as it stands, and a wider period adds up
+  what each sign-off saved (PMD_Production.ScheduleAttain and SchedulePlan).
+  Planning.csv is overwritten on every export, so it is not a historical plan
+  source — which is why the plan is kept.
 
 **The plan never leaves the denominator.** Whatever happened on the floor —
 press idle, operator never booked, supervisor never signed — the pieces the
@@ -77,13 +78,14 @@ Lines outside the comparison:
 Example (850T, 22 Sept 2026, planned 18:14 → 08:33 at 33/h, not run):
 Afternoon asks 30 + 60 + 34 = 124, Night 66 + 100 + 60 = 226 — 0 / 350, 0%.
 
-A press with nothing signed whose plan a sign-off of the shift kept in
-PMD_ShiftPlan (see below) is planned from that row, order by order, rather
-than from Planning.csv as it stands now.
+A press-shift with a kept plan in PMD_ShiftPlan (see below) is planned from
+that row, order by order, rather than from Planning.csv as it stands now.
 
-Known limit: otherwise Planning.csv is the latest export. If the planner
-reschedules a missed order before any press of that shift is signed off and
-before the page is read, the old window is gone and so is that shift's plan.
+Why: Epicor redraws the past on every export. An order under way is put to
+start at the export's "now", so the 27 Oct 07:00 export moved 1600T's
+SFM507844 out of all three shifts of 26 Oct, and judged by that file the
+1600T's whole day read as unplanned. The kept plan is the plan as it stood
+while the shift ran.
 
 ## Wider periods — the plans saved at sign-off
 
@@ -127,30 +129,47 @@ Rules:
   its orders after the fact. A shift's plan counts in the category of the
   order that made most of it.
 
-## Presses with nothing signed — PMD_ShiftPlan
+## The plan of record — PMD_ShiftPlan
 
-A press planned for a shift and never run (or run and never signed) has no
-PMD_Production row to carry ScheduleAttain / SchedulePlan. Every sign-off of
-a shift therefore also looks at the other presses (`shiftPlanChanges`):
+Every press in every shift gets one row (`shiftPlanChanges`):
 
-- a press planned in the shift with nothing signed gets a PMD_ShiftPlan row:
-  its Last 24h plan, judged to the end of the shift (`shiftPlanFor`), and the
-  orders it is made of;
-- the row is never rewritten — it is the plan as it stood when the shift was
-  first closed, before Epicor drops a finished order or moves a missed one
-  forward;
-- it is deleted when the press is signed: its own snapshot takes over.
+- **When.** Once the shift is under way — 30 minutes in, room for an export
+  made at the shift change to land — by the first device that writes (an
+  iPad, or a supervisor signed in; `ui/shift-plan-keeper.ts`, checked every
+  ten minutes). Every sign-off of the shift keeps the presses still missing
+  a row, for a shift nobody had a device open in — by then Planning.csv may
+  already have moved on, which is why it is not left to sign-off.
+- **What.** The press's plan for the whole shift (`shiftPlanFor`): each order
+  planned there, in the shifts its "no of shift" is crewed for, asked for its
+  share of the shift × JobOper_ProdStandard, up to its quantity, with the
+  hours it was to run. Die changes first, as on the Assembly board
+  (`pressRunsAfterDieChanges`): an order on a different die from the one
+  before it on the press (PMD_ProductDieColor; an unknown die counts as
+  different) waits four hours for the change, and a press's first order in
+  the file starts with one unless it is under way, starts at the export's
+  "now", or the press was last running its die (its records from the shift
+  before). The hot-stamp press has no dies. A press with nothing planned is
+  kept too, at 0 — output there is outside the plan. A press with a planned
+  order that has no rate keeps nothing (its quantity is unknown) and falls
+  back to Planning.csv.
+- **Never rewritten.** Two devices keeping at once can each write a row for
+  a press; the next keep deletes the later one, and readers take the first.
 
-A wider period counts each machine-shift with nothing signed once, at its
-plan, nothing credited (`idleShiftTuples`): the PMD_ShiftPlan row, or — for a
-shift before the list, or one nobody signed anything in — what Planning.csv
-still holds, the Last 24h rule. That fallback loses plans the further back
-the shift is (finished orders leave Planning.csv), which is why the row is
-kept at sign-off.
+Judging a shift by its row (`keptPlanTuples`): per order, credited =
+min(signed Good, plan); output on an order the row does not have is
+unscheduled. The plan is shared down only when the shift booked more
+changeover allowance and smoko than the plan left room for (the rule
+Planning.csv's plan is judged by). Sign-off saves that same figure to
+PMD_Production.ScheduleAttain / SchedulePlan (`keptPlanSnapshot`).
 
-Known limits: a shift in which nobody signed anything at all keeps no plan,
-so after Epicor has moved on it is gone from wider periods. Order rows of a
-wider period still show output only.
+A wider period counts a kept shift the same way (`keptShiftTuples`), a press
+with nothing signed at its plan with nothing credited. Without a row, a
+signed shift uses what its sign-off saved and an idle one what Planning.csv
+still holds (`idleShiftTuples`) — a fallback that loses plans the further
+back the shift is.
+
+Known limits: a shift with no device open and nobody signing keeps no plan.
+Order rows of a wider period still show output only.
 
 ## Efficiency
 

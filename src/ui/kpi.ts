@@ -10,7 +10,7 @@ import type {
   ShiftCode,
   StatusCode,
 } from '../types';
-import { planningOrderMatchesMachine } from '../core/schedule';
+import { dieLookup, planningOrderMatchesMachine } from '../core/schedule';
 import { aggregate, countSetupEvents, type Kpi } from '../core/metrics';
 import { repairFromHistory } from '../core/order-history';
 import {
@@ -26,6 +26,7 @@ import {
   kpiComparisonLabel,
   kpiComparisonMode,
   keptPlanTuples,
+  keptShiftTuples,
   scheduleTuplesForShift,
   savedPlanMissing,
   savedScheduleTuples,
@@ -1129,7 +1130,7 @@ async function compute(now = new Date()): Promise<void> {
             : Promise.resolve([] as ParetoSlice[]),
         ),
       ),
-      // The plans kept for presses nobody signed (PMD_ShiftPlan).
+      // The plan of record of each press-shift (PMD_ShiftPlan).
       dalRef.listShiftPlans
         ? dalRef.listShiftPlans({ from: fromKey, to: toKey }).catch((err) => {
             recordError('Shift plans', err);
@@ -1174,8 +1175,15 @@ async function compute(now = new Date()): Promise<void> {
   const periodShifts = finishedShiftsInPeriod(from, to, shiftIds, now);
   // All or nothing over the page, so the floor and category totals never
   // add pieces to shares (see savedScheduleTuples).
-  const equalWeight = comparisonMode === 'saved' && perMachineProd.some((recs) => savedPlanMissing(recs));
+  // Shifts with a kept plan are weighed by it, not by what they saved.
+  const keptKeys = new Set(shiftPlans.map((p) => `${p.machineCode.trim().toUpperCase()}|${p.shiftId}`));
+  const equalWeight = comparisonMode === 'saved'
+    && perMachineProd.some((recs) =>
+      savedPlanMissing(recs.filter((r) => !keptKeys.has(`${r.machineCode.trim().toUpperCase()}|${r.shiftId}`))));
   state.equalWeight = equalWeight;
+  // Which die each part runs on: the plan reads a window that opens on a
+  // new die as a die change first (core/schedule dieChangeLeadHours).
+  const planCtx = { dieOf: dieLookup(dieColorList) };
   const dieColors = new Map(
     dieColorList.map((c) => [
       c.partNumber.trim().toUpperCase(),
@@ -1283,35 +1291,41 @@ async function compute(now = new Date()): Promise<void> {
       if (r.partDescription) partDescByJob.set(r.jobNumber, r.partDescription);
     }
     // Every plan line of this press in the window (see AttainmentTuple).
-    // Last 24h plans from Planning.csv for every finished shift of the
-    // window, run or not; a wider period reads the plan each signed shift
-    // saved, since Planning.csv no longer holds it, and the plan kept for
-    // each shift the press has nothing signed in.
+    // A shift with a kept plan (PMD_ShiftPlan) is judged by it — Last 24h
+    // and wider periods alike, run or not: it is the plan as it stood while
+    // the shift ran, and Planning.csv has moved on since. A shift with none
+    // falls back: Last 24h to Planning.csv as it stands now, a wider period
+    // to the plan each signed shift saved (ScheduleAttain / SchedulePlan)
+    // and Planning.csv for the presses with nothing signed.
+    const press = m.machineCode.trim().toUpperCase();
+    const keptByShift = new Map(
+      shiftPlans.filter((p) => p.machineCode.trim().toUpperCase() === press).map((p) => [p.shiftId, p] as const),
+    );
     const signedShifts = new Set(all.map((r) => r.shiftId));
-    const keptFor = (sid: string): SavedShiftPlan | undefined =>
-      signedShifts.has(sid)
-        ? undefined
-        : shiftPlans.find((p) => p.shiftId === sid && p.machineCode.trim().toUpperCase() === m.machineCode.trim().toUpperCase());
     const lines: AttainmentTuple[] =
       comparisonMode === 'schedule'
         ? [...new Set([...periodShifts, ...signedShifts])].flatMap((sid) => {
-            // Nothing signed, and the plan kept when the shift was signed
-            // off: that plan, not Planning.csv as it stands now.
-            const kept = keptFor(sid);
+            const kept = keptByShift.get(sid);
             return kept
-              ? keptPlanTuples(kept, awaitingSignOff[i].has(sid))
-              : scheduleTuplesForShift(all, planning, m.machineCode, sid, now, awaitingSignOff[i].has(sid));
+              ? keptPlanTuples(kept, all, awaitingSignOff[i].has(sid))
+              : scheduleTuplesForShift(all, planning, m.machineCode, sid, now, awaitingSignOff[i].has(sid), planCtx);
           })
         : [
-            ...savedScheduleTuples(all, equalWeight),
+            ...keptShiftTuples(
+              [...keptByShift.values()].filter((p) => signedShifts.has(p.shiftId) || periodShifts.includes(p.shiftId)),
+              all,
+              awaitingSignOff[i],
+              equalWeight,
+            ),
+            ...savedScheduleTuples(all.filter((r) => !keptByShift.has(r.shiftId)), equalWeight),
             ...idleShiftTuples(
               m.machineCode,
-              periodShifts.filter((sid) => !signedShifts.has(sid)),
-              shiftPlans,
+              periodShifts.filter((sid) => !signedShifts.has(sid) && !keptByShift.has(sid)),
               planning,
               now,
               awaitingSignOff[i],
               equalWeight,
+              planCtx,
             ),
           ];
     linesByMachine[i] = lines;
@@ -1637,14 +1651,15 @@ function comparisonTitle(a: ComparisonSlice): string {
         : '')
       + (a.savedLines > 0
         ? ' ' + a.savedLines + ' planned order-shift' + (a.savedLines === 1 ? '' : 's')
-          + ' with nothing signed ' + (a.savedLines === 1 ? 'uses' : 'use')
-          + ' the plan kept when the shift was signed off (PMD_ShiftPlan) — Planning.csv may have moved '
+          + ' ' + (a.savedLines === 1 ? 'is' : 'are')
+          + ' judged by the plan kept while the shift ran (PMD_ShiftPlan) — Planning.csv may have moved '
           + (a.savedLines === 1 ? 'it' : 'them') + ' since.'
         : '');
   }
   const plural = (n: number, one: string): string => n + ' ' + one + (n === 1 ? '' : 's');
-  return 'Plan = what each shift\'s sign-off saved: its Last 24h Schedule Adherence (PMD_Production.ScheduleAttain)'
-    + ' and the pieces its plan asked for (SchedulePlan). Credited = ScheduleAttain × SchedulePlan.'
+  return 'Plan = the plan kept for each press-shift while it ran (PMD_ShiftPlan), credited min(Good, plan) per order;'
+    + ' a signed press-shift with no kept plan uses what its sign-off saved: its Last 24h Schedule Adherence'
+    + ' (PMD_Production.ScheduleAttain) and the pieces its plan asked for (SchedulePlan). Credited = ScheduleAttain × SchedulePlan.'
     + (S!.equalWeight
       ? ' Some shifts were signed before SchedulePlan existed, so there is nothing to weight by:'
         + ' this is the plain average of ' + plural(a.comparisonTotal, 'machine-shift') + ', each counted once.'
@@ -1660,7 +1675,7 @@ function comparisonTitle(a: ComparisonSlice): string {
       : '')
     + (a.idleLines > 0
       ? ' ' + plural(a.idleLines, 'machine-shift') + ' planned with nothing signed: the plan counts, nothing is credited.'
-        + ' The plan is the one the shift\'s sign-offs kept for the press (PMD_ShiftPlan), or else what Planning.csv still holds.'
+        + ' The plan is the one kept for the press while the shift ran (PMD_ShiftPlan), or else what Planning.csv still holds.'
         + (a.unsignedLines > 0 ? ' ' + a.unsignedLines + ' of them booked work nobody has signed off yet.' : '')
       : '')
     + (a.unscheduledOutput > 0
@@ -3329,7 +3344,7 @@ function render(): void {
   const activeRange = periodRange(S!.period, new Date());
   const fromVal = S!.period === 'custom' ? S!.customFrom : dateKey(activeRange.from);
   const toVal = S!.period === 'custom' ? S!.customTo : dateKey(activeRange.to);
-  const comparisonHelp = '<div><b>Schedule Adherence</b> (Last 24h) plans from Planning.csv: every order planned on a press in a finished shift — in the shifts its “no of shift” (M/A/N) is crewed for — is asked for its share of the planned runtime × JobOper_ProdStandard, up to its quantity, whether the press ran or not. A press left idle for want of a crew shows 0 against its plan. Good is capped per order, so over-producing one order cannot hide another; output on orders not planned there is not credited. Orders Epicor has already dropped from Planning.csv use the ShiftTarget saved when they ran. A shift not yet signed off still counts its plan and is credited nothing until it is signed (marked “unsigned”). <b>Wider periods</b> add up what each shift saved when it was signed off — its Last 24h Schedule Adherence (PMD_Production.ScheduleAttain) and the pieces its plan asked for (SchedulePlan): Σ (ScheduleAttain × SchedulePlan) ÷ Σ SchedulePlan, the same formula over more shifts. Shifts signed before the plan was saved use their ShiftTarget, capped per order. A press planned for a shift with nothing signed counts its plan with nothing credited: every sign-off of the shift keeps that plan (PMD_ShiftPlan), and a shift with none kept uses what Planning.csv still holds. Order rows show output only: the plan is saved per press per shift. Missing plan quantities show “—”; hover for coverage.</div>';
+  const comparisonHelp = '<div><b>Schedule Adherence</b> judges every press in every finished shift against its <b>plan of record</b>, kept in PMD_ShiftPlan once the shift is under way (or, failing that, at its first sign-off): every order planned on the press in the shift — in the shifts its “no of shift” (M/A/N) is crewed for — is asked for its share of the planned runtime × JobOper_ProdStandard, up to its quantity, whether the press ran or not. Die changes get their 4 hours first, as on the Assembly board: where PMD_ProductDieColor puts an order on a different die from the one before it (or does not know the die), the order waits for the change, and a press’s first order starts with one unless it is already under way, starts at the export’s “now”, or the press was last running its die — so a shift that only puts the die on is asked for nothing. The hot-stamp press has no dies. A kept plan is never rewritten: Planning.csv moves an order under way to the export’s “now” and drops a finished one, so a later file can no longer say what a past shift was asked for. The plan is shared down when the shift booked more changeover and smoko than it left room for. Good is capped per order, so over-producing one order cannot hide another; output on orders the kept plan does not have is not credited. A press left idle shows 0 against its plan. A shift not yet signed off still counts its plan and is credited nothing until it is signed (marked “unsigned”). A press-shift with no kept plan (before PMD_ShiftPlan held every press) uses, for Last 24h, what Planning.csv still holds — orders Epicor has dropped use the ShiftTarget saved when they ran — and for <b>wider periods</b> what its sign-off saved (PMD_Production.ScheduleAttain × SchedulePlan). Wider periods add the shifts up: Σ credited ÷ Σ plan. Order rows of a wider period show output only. Missing plan quantities show “—”; hover for coverage.</div>';
   app.innerHTML = `
     <div class="kpi">
       <div class="kpi-head">

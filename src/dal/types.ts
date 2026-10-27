@@ -151,11 +151,16 @@ export interface PmdDataLayer {
    *  uses this list as the breakdown tooltip source of truth. */
   listBreakdownDetails?(filter: ProductionFilter): Promise<BreakdownLogDetail[]>;
 
-  /** PMD_ShiftPlan: the plan kept for each press with no signed production
-   *  in a shift, saved by the sign-offs of that shift (see SavedShiftPlan).
-   *  `from` / `to` are YYYY-MM-DD shift dates. Optional — [] / absent means
-   *  wider KPI periods fall back to what Planning.csv still holds. */
+  /** PMD_ShiftPlan: the plan of record of each press in each shift (see
+   *  SavedShiftPlan). `from` / `to` are YYYY-MM-DD shift dates. Optional —
+   *  [] / absent means Schedule Adherence falls back to what Planning.csv
+   *  still holds. */
   listShiftPlans?(filter: { from: string; to: string }): Promise<SavedShiftPlan[]>;
+  /** Keep the plan of every press in the shift that has none kept yet, from
+   *  Planning.csv as it stands now; returns the shift's rows after it (null
+   *  when they could not be read, and nothing was written). Rows are never
+   *  rewritten. */
+  keepShiftPlans?(shiftId: string): Promise<SavedShiftPlan[] | null>;
 
   // Production (hot path)
   listProduction(filter: ProductionFilter): Promise<ProductionRecord[]>;

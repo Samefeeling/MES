@@ -1,6 +1,32 @@
 import type { PlanningOrder, ProductionRecord } from '../types';
 import { aggregate, countSetupEvents } from './metrics';
-import { crewedWindowHoursBefore, plannedOrdersForShift, plannedRuntimeForShift } from './schedule';
+import {
+  crewedWindowHoursBefore,
+  lastPartBefore,
+  plannedOrdersForShift,
+  plannedRuntimeForShift,
+  type ScheduleContext,
+} from './schedule';
+
+/** What the KPI side can tell the plan: which die each part runs on, and —
+ *  when the caller knows better than the records it passes — what each press
+ *  was running before an order's window opened. */
+export type PlanContext = Pick<ScheduleContext, 'dieOf' | 'partBefore'>;
+
+/** The plan's context for one press: the die mapping, and what the press was
+ *  last running before an order's window opened, from its own records. */
+function pressContext(
+  records: ReadonlyArray<ProductionRecord>,
+  machineCode: string,
+  ctx: PlanContext,
+): ScheduleContext {
+  const mine = machineCode.trim().toUpperCase();
+  return {
+    dieOf: ctx.dieOf,
+    partBefore:
+      ctx.partBefore ?? lastPartBefore(records.filter((r) => r.machineCode.trim().toUpperCase() === mine)),
+  };
+}
 import { SLOT_MINUTES, shiftBounds } from './shifts';
 import { setupStandardHours } from './standards';
 import { wholePieces } from './targets';
@@ -111,6 +137,7 @@ export function scheduleAdherenceForShift(
   machineCode: string,
   shiftId: string,
   asOf: Date = new Date(),
+  ctx: PlanContext = {},
 ): KpiAttainment {
   const onShift = records.filter((record) => record.shiftId === shiftId);
   const planned = plannedRuntimeForShift(
@@ -119,6 +146,7 @@ export function scheduleAdherenceForShift(
     machineCode,
     asOf,
     unavailableHoursForShift(onShift),
+    pressContext(records, machineCode, ctx),
   );
   const expectedByJob = new Map<string, number>();
   for (const run of planned.runs) {
@@ -307,16 +335,19 @@ export function scheduleTuplesForShift(
   shiftId: string,
   asOf: Date = new Date(),
   unsigned = false,
+  ctx: PlanContext = {},
 ): AttainmentTuple[] {
   const bounds = shiftBounds(shiftId);
   if (!bounds || asOf <= bounds.start) return [];
   const onShift = records.filter((record) => record.shiftId === shiftId);
+  const press = pressContext(records, machineCode, ctx);
   const planned = plannedRuntimeForShift(
     shiftId,
     orders,
     machineCode,
     asOf,
     unavailableHoursForShift(onShift),
+    press,
   );
 
   const plan = new Map<string, { jobNumber: string; pieces: number | null }>();
@@ -329,6 +360,7 @@ export function scheduleTuplesForShift(
     const quantity = run.order.orderQty > 0
       ? run.order.orderQty
       : run.order.jobRequired > 0 ? run.order.jobRequired : Infinity;
+    // run.order is the order as it runs, after the press's die changes.
     const askedBefore = wholePieces(crewedWindowHoursBefore(run.order, bounds.start) / run.order.qtyPerHr);
     const pieces = Math.min(run.pieces, Math.max(0, quantity - askedBefore));
     const prior = plan.get(key);
@@ -436,11 +468,12 @@ export function scheduleSnapshotForShift(
   machineCode: string,
   shiftId: string,
   asOf: Date = new Date(),
+  ctx: PlanContext = {},
 ): ScheduleSnapshot | null {
   const bounds = shiftBounds(shiftId);
   if (!bounds) return null;
   const judgedAt = new Date(Math.max(asOf.getTime(), bounds.end.getTime()));
-  const lines = scheduleTuplesForShift(records, orders, machineCode, shiftId, judgedAt);
+  const lines = scheduleTuplesForShift(records, orders, machineCode, shiftId, judgedAt, false, ctx);
   const a = attainmentOfTuples(lines);
   return {
     pct: a.expected > 0 ? Math.round((a.actual / a.expected) * 10_000) / 100 : null,
@@ -606,158 +639,272 @@ export function savedScheduleTuples(
 }
 
 /**
- * PMD_ShiftPlan: the plan Planning.csv had for a press in a shift that no
- * signed production covers — the press nobody ran, or nobody signed.
+ * PMD_ShiftPlan: the plan of record of one press in one shift — what the
+ * shift is judged by.
  *
- * ScheduleAttain and SchedulePlan ride on the PMD_Production rows a sign-off
- * writes, and a press left idle has none, so its plan used to vanish from
- * every period wider than Last 24h — and from Last 24h too once Epicor
- * rescheduled the missed order. Every sign-off of a shift therefore also
- * saves the plan of each press in that shift with nothing signed: the miss
- * is kept at the moment the plan is still on hand, like the snapshot of a
- * press that ran.
+ * Planning.csv is the plan as Epicor sees it at the export, and every export
+ * redraws the past: an order under way is put to start at the export's
+ * "now", a finished one is dropped. Judged by the file as it stands later, a
+ * shift that ran its plan reads as unplanned — 1600T's SFM507844 lost all
+ * three shifts of 26 Oct when the 27 Oct export moved it to 07:00 that
+ * morning. So the plan of every press, run or not, is kept while it is still
+ * the plan: once the shift is under way (`keepShiftPlans`, from any device
+ * that writes) and, failing that, at the shift's first sign-off. A row is
+ * never rewritten. Schedule Adherence reads it from then on, for Last 24h and
+ * wider periods alike; Planning.csv only for a press-shift nobody kept.
+ *
+ * The plan is kept with the press's die changes given their time
+ * (`pressRunsAfterDieChanges`, the Assembly board's rule), so the hours that
+ * put a die on are not asked for pieces.
  */
 export interface SavedShiftPlan {
   machineCode: string;
   shiftId: string;
-  /** Pieces asked for, judged to the end of the shift. Always > 0. */
+  /** Pieces asked for over the whole shift. 0 = kept, and nothing was
+   *  planned on the press — output there is outside the plan. */
   plan: number;
   /** The planned orders, most pieces first — the first is the order whose
-   *  part category the line is counted under. */
-  jobs: Array<{ jobNumber: string; partNumber: string; pieces: number }>;
+   *  part category an idle press's line is counted under. `hours`: the hours
+   *  of the shift the order was planned to run (absent on rows kept before
+   *  it was recorded). */
+  jobs: Array<{ jobNumber: string; partNumber: string; pieces: number; hours?: number }>;
 }
 
 /**
- * The plan Planning.csv asks of a press in a shift with nothing made — the
- * Last 24h plan of a press that did not run, judged to the end of the shift.
- * null when there is nothing to keep: no planned order, or one with no rate
- * (its quantity unknown, as `scheduleSnapshotForShift` leaves it).
+ * The plan Planning.csv asks of a press in a shift, judged to the end of the
+ * shift, as PMD_ShiftPlan keeps it. `history` is the press's records before
+ * the shift (any presses: filtered here), for what it was last running when
+ * its first order opens. null when an order planned there has no rate — its
+ * quantity unknown, so nothing is kept and the shift falls back to
+ * Planning.csv.
  */
 export function shiftPlanFor(
   orders: ReadonlyArray<PlanningOrder>,
   machineCode: string,
   shiftId: string,
   asOf: Date = new Date(),
+  ctx: PlanContext = {},
+  history: ReadonlyArray<ProductionRecord> = [],
 ): SavedShiftPlan | null {
   const bounds = shiftBounds(shiftId);
   if (!bounds) return null;
   const judgedAt = new Date(Math.max(asOf.getTime(), bounds.end.getTime()));
-  const lines = scheduleTuplesForShift([], orders, machineCode, shiftId, judgedAt);
-  if (!lines.length || lines.some((line) => line.planned == null)) return null;
-  const plan = lines.reduce((sum, line) => sum + (line.planned ?? 0), 0);
-  if (plan <= 0) return null;
+  const press = pressContext(history.filter((r) => r.shiftId !== shiftId), machineCode, ctx);
+  const lines = scheduleTuplesForShift([], orders, machineCode, shiftId, judgedAt, false, press);
+  if (lines.some((line) => line.planned == null)) return null;
+  const hoursByJob = new Map<string, number>();
+  for (const run of plannedRuntimeForShift(shiftId, orders, machineCode, judgedAt, 0, press).runs) {
+    const key = jobKey(run.order.jobNumber);
+    hoursByJob.set(key, (hoursByJob.get(key) ?? 0) + run.hours);
+  }
   const partOf = (job: string): string =>
     orders.find((o) => jobKey(o.jobNumber) === jobKey(job))?.partNumber.trim() ?? '';
+  const jobs = lines
+    .filter((line) => (line.planned ?? 0) > 0)
+    .map((line) => ({
+      jobNumber: line.jobNumber,
+      partNumber: partOf(line.jobNumber),
+      pieces: line.planned ?? 0,
+      hours: Math.round((hoursByJob.get(jobKey(line.jobNumber)) ?? 0) * 100) / 100,
+    }))
+    .sort((a, b) => b.pieces - a.pieces);
   return {
     machineCode: machineCode.trim(),
     shiftId,
-    plan,
-    jobs: lines
-      .map((line) => ({ jobNumber: line.jobNumber, partNumber: partOf(line.jobNumber), pieces: line.planned ?? 0 }))
-      .sort((a, b) => b.pieces - a.pieces),
+    plan: jobs.reduce((sum, job) => sum + job.pieces, 0),
+    jobs,
   };
 }
 
 /**
- * What a sign-off of `shiftId` changes in PMD_ShiftPlan, given the presses,
- * the ones with signed production in the shift (the press signing now among
- * them) and the rows already saved for it.
+ * What keeping the plans of `shiftId` adds to PMD_ShiftPlan and takes out of
+ * it, given the rows already kept for the shift.
  *
- *   - A press with signed production carries its own ScheduleAttain /
- *     SchedulePlan now, so a row saved for it while it had none goes.
- *   - A press with none, planned, and not yet saved is saved. A saved row is
- *     never rewritten: it is the plan as it stood when the shift was first
- *     closed, and Planning.csv only gets further from that — Epicor drops a
- *     finished order and moves a missed one forward.
- *   - Two sign-offs saving at once can each write a row for the same press;
- *     the next sign-off of the shift removes the later one.
+ *   - Every press without a row gets one — run or not, planned or not
+ *     (plan 0) — unless an order planned on it has no rate.
+ *   - A kept row is never rewritten: it is the plan as it stood when the
+ *     shift was first kept, and Planning.csv only gets further from that.
+ *   - Two devices keeping at once can each write a row for the same press;
+ *     the next keep removes the later one.
+ *
+ * `history` is the presses' production before the shift (see shiftPlanFor).
  */
 export function shiftPlanChanges<Row extends SavedShiftPlan>(
   machineCodes: ReadonlyArray<string>,
-  signed: ReadonlySet<string>,
   saved: ReadonlyArray<Row>,
   orders: ReadonlyArray<PlanningOrder>,
   shiftId: string,
   asOf: Date = new Date(),
+  ctx: PlanContext = {},
+  history: ReadonlyArray<ProductionRecord> = [],
 ): { save: SavedShiftPlan[]; remove: Row[] } {
   const key = (code: string): string => code.trim().toUpperCase();
-  const signedKeys = new Set([...signed].map(key));
   const savedKeys = new Set<string>();
   const remove: Row[] = [];
   for (const row of saved) {
-    // Signed since; or a second row for the press, from two sign-offs of
-    // the shift saving at the same moment — the first one stands.
-    if (signedKeys.has(key(row.machineCode)) || savedKeys.has(key(row.machineCode))) remove.push(row);
+    if (savedKeys.has(key(row.machineCode))) remove.push(row);
     savedKeys.add(key(row.machineCode));
   }
   const save: SavedShiftPlan[] = [];
   for (const code of machineCodes) {
-    if (signedKeys.has(key(code)) || savedKeys.has(key(code))) continue;
-    const plan = shiftPlanFor(orders, code, shiftId, asOf);
+    if (savedKeys.has(key(code))) continue;
+    const plan = shiftPlanFor(orders, code, shiftId, asOf, ctx, history);
     if (plan) save.push(plan);
   }
   return { save, remove };
 }
 
 /**
- * Last 24h plan lines of a machine-shift with nothing signed whose plan was
- * kept at the shift's sign-off: order by order, nothing credited. The kept
- * plan beats Planning.csv as it stands now, which may have moved the missed
- * orders forward since.
+ * The share of a kept plan the shift could still be asked for. The plan was
+ * kept before the shift ran, over the whole shift; the hours the shift then
+ * had to run in are its length less the standard changeover allowance and
+ * smoko it booked — the rule Planning.csv's plan is judged by
+ * (`plannedRuntimeForShift`). Scaled down only when the plan wants more
+ * hours than that; a row kept without hours is taken as it is.
  */
-export function keptPlanTuples(row: SavedShiftPlan, unsigned = false): AttainmentTuple[] {
-  const flag = unsigned ? { unsigned: true } : {};
-  const jobs = row.jobs.length ? row.jobs : [{ jobNumber: '', partNumber: '', pieces: row.plan }];
-  return jobs.map((job) => ({
-    machineCode: row.machineCode.trim(), shiftId: row.shiftId, jobNumber: job.jobNumber,
-    planned: job.pieces, good: 0, credited: 0, source: 'saved', ...flag,
-  }));
+function keptPlanShare(row: SavedShiftPlan, onShift: ReadonlyArray<ProductionRecord>): number {
+  const bounds = shiftBounds(row.shiftId);
+  if (!bounds || !row.jobs.length || row.jobs.some((job) => !(job.hours != null && job.hours >= 0))) return 1;
+  const demand = row.jobs.reduce((sum, job) => sum + (job.hours ?? 0), 0);
+  const span = (bounds.end.getTime() - bounds.start.getTime()) / 3_600_000;
+  const runtime = Math.max(0, span - Math.min(span, unavailableHoursForShift(onShift)));
+  return demand > runtime ? runtime / demand : 1;
+}
+
+/**
+ * Plan lines of a machine-shift from its kept plan (PMD_ShiftPlan), order by
+ * order: what each was asked for, what it made and what is credited —
+ * min(Good, plan), as for Planning.csv's plan. Output on an order the kept
+ * plan does not have is `unscheduled`: it was not the plan when the shift
+ * was kept. `records` are signed records (any presses and shifts: filtered
+ * here); none for a press that did not run.
+ */
+export function keptPlanTuples(
+  row: SavedShiftPlan,
+  records: ReadonlyArray<ProductionRecord> = [],
+  unsigned = false,
+): AttainmentTuple[] {
+  const machine = row.machineCode.trim();
+  const onShift = records.filter(
+    (r) => r.shiftId === row.shiftId && r.machineCode.trim().toUpperCase() === machine.toUpperCase(),
+  );
+  const ran = new Map<string, ProductionRecord[]>();
+  for (const r of onShift) {
+    const key = jobKey(r.jobNumber);
+    if (!key || key.startsWith('DC_')) continue;
+    const group = ran.get(key) ?? [];
+    group.push(r);
+    ran.set(key, group);
+  }
+  const share = keptPlanShare(row, onShift);
+  const out: AttainmentTuple[] = [];
+  const line = (jobNumber: string, planned: number, good: number, source: AttainmentSource): AttainmentTuple => ({
+    machineCode: machine, shiftId: row.shiftId, jobNumber, planned, good,
+    credited: source === 'unscheduled' ? 0 : Math.min(good, planned), source,
+  });
+  if (!row.jobs.length) {
+    // A total kept without its orders (or plan 0): the press's output
+    // against it as a whole.
+    const good = aggregate([...ran.values()].flat()).output;
+    if (row.plan > 0) out.push(line('', row.plan, good, 'saved'));
+    else if (good > 0) out.push(line('', 0, good, 'unscheduled'));
+  } else {
+    for (const job of row.jobs) {
+      const pieces = share < 1 ? wholePieces(job.pieces * share) : job.pieces;
+      const good = aggregate(ran.get(jobKey(job.jobNumber)) ?? []).output;
+      if (pieces === 0 && good === 0) continue;
+      out.push(line(job.jobNumber, pieces, good, 'saved'));
+    }
+    const planned = new Set(row.jobs.map((job) => jobKey(job.jobNumber)));
+    for (const [key, group] of ran) {
+      if (!planned.has(key)) out.push(line(group[0].jobNumber.trim(), 0, aggregate(group).output, 'unscheduled'));
+    }
+  }
+  return unsigned ? out.map((l) => ({ ...l, unsigned: true })) : out;
+}
+
+/**
+ * What a sign-off saves to PMD_Production.ScheduleAttain / SchedulePlan when
+ * the press-shift has a kept plan: that plan, credited from the shift's
+ * signed output — the figure the KPI page shows for it.
+ */
+export function keptPlanSnapshot(
+  row: SavedShiftPlan,
+  records: ReadonlyArray<ProductionRecord>,
+): ScheduleSnapshot {
+  const a = attainmentOfTuples(keptPlanTuples(row, records));
+  return {
+    pct: a.expected > 0 ? Math.round((a.actual / a.expected) * 10_000) / 100 : null,
+    plan: a.expected,
+    fromPlanning: true,
+    complete: a.covered === a.total,
+  };
+}
+
+/**
+ * The lines of a wider period for the machine-shifts with a kept plan — the
+ * same lines as Last 24h. `equalWeight` as in `savedScheduleTuples`: each
+ * machine-shift becomes one line of 100 asked and its % credited.
+ */
+export function keptShiftTuples(
+  rows: ReadonlyArray<SavedShiftPlan>,
+  records: ReadonlyArray<ProductionRecord>,
+  unsignedShifts: ReadonlySet<string> = new Set(),
+  equalWeight = false,
+): AttainmentTuple[] {
+  const out: AttainmentTuple[] = [];
+  for (const row of rows) {
+    const lines = keptPlanTuples(row, records, unsignedShifts.has(row.shiftId));
+    const signed = records.some(
+      (r) => r.shiftId === row.shiftId && r.machineCode.trim().toUpperCase() === row.machineCode.trim().toUpperCase(),
+    );
+    if (!equalWeight) {
+      out.push(...(signed ? lines : lines.map((l) => ({ ...l, idle: true }))));
+      continue;
+    }
+    const a = attainmentOfTuples(lines);
+    if (a.expected <= 0) {
+      out.push(...lines.filter((l) => l.source === 'unscheduled'));
+      continue;
+    }
+    out.push({
+      machineCode: row.machineCode.trim(), shiftId: row.shiftId, jobNumber: '', planned: 100,
+      good: lines.reduce((sum, l) => sum + l.good, 0), credited: (a.actual / a.expected) * 100,
+      source: 'saved', leadJob: row.jobs[0]?.jobNumber ?? '',
+      ...(signed ? {} : { idle: true }), ...(unsignedShifts.has(row.shiftId) ? { unsigned: true } : {}),
+    });
+  }
+  return out;
 }
 
 /**
  * Plan lines of a wider period for the machine-shifts with no signed
- * production — one line per machine-shift, nothing credited, as Last 24h
- * counts a press that did not run.
+ * production and no kept plan — one line per machine-shift, nothing
+ * credited, from what Planning.csv still has for it (the Last 24h rule).
+ * Planning.csv forgets a finished order and moves a missed one forward, so
+ * the further back the shift, the more of its plan this misses; a kept plan
+ * (`keptShiftTuples`) is the record wherever there is one.
  *
- * The plan is the one PMD_ShiftPlan saved at the shift's sign-off; failing
- * that (a shift before the list, or one nobody signed anything in), what
- * Planning.csv still has for it — the Last 24h rule. Planning.csv forgets a
- * finished order and moves a missed one forward, so the further back the
- * shift, the more of its plan that fallback misses.
- *
- * `shiftIds` are the finished shifts with no signed record of the press;
- * `unsignedShifts` the ones among them with unsigned records. `equalWeight`
- * as in `savedScheduleTuples`: each machine-shift becomes 100 asked, 0
- * credited.
+ * `shiftIds` are the finished shifts with no signed record of the press and
+ * no kept plan; `unsignedShifts` the ones among them with unsigned records.
+ * `equalWeight` as in `savedScheduleTuples`: each machine-shift becomes 100
+ * asked, 0 credited.
  */
 export function idleShiftTuples(
   machineCode: string,
   shiftIds: ReadonlyArray<string>,
-  saved: ReadonlyArray<SavedShiftPlan>,
   orders: ReadonlyArray<PlanningOrder>,
   asOf: Date = new Date(),
   unsignedShifts: ReadonlySet<string> = new Set(),
   equalWeight = false,
+  ctx: PlanContext = {},
 ): AttainmentTuple[] {
   const asked = (planned: number | null): number | null => (equalWeight && planned != null ? 100 : planned);
   const machine = machineCode.trim();
-  const savedByShift = new Map(
-    saved
-      .filter((row) => row.machineCode.trim().toUpperCase() === machine.toUpperCase())
-      .map((row) => [row.shiftId, row] as const),
-  );
   const out: AttainmentTuple[] = [];
   for (const shiftId of shiftIds) {
     const unsigned = unsignedShifts.has(shiftId) ? { unsigned: true } : {};
-    const row = savedByShift.get(shiftId);
-    if (row) {
-      out.push({
-        machineCode: machine, shiftId, jobNumber: '', planned: asked(row.plan), good: 0, credited: 0,
-        source: 'saved', leadJob: row.jobs[0]?.jobNumber ?? '', idle: true, ...unsigned,
-      });
-      continue;
-    }
-    const lines = scheduleTuplesForShift([], orders, machine, shiftId, asOf);
+    const lines = scheduleTuplesForShift([], orders, machine, shiftId, asOf, false, ctx);
     if (!lines.length) continue;
     const known = lines.every((line) => line.planned != null);
     const lead = [...lines].sort((a, b) => (b.planned ?? 0) - (a.planned ?? 0))[0];

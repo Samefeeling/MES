@@ -1,4 +1,6 @@
+import { dieLookup } from '../core/schedule';
 import {
+  keptPlanSnapshot,
   savedScheduleSnapshot,
   scheduleAdherenceForShift,
   scheduleSnapshotForShift,
@@ -135,22 +137,21 @@ export class MemoryDataLayer implements PmdDataLayer {
     );
   }
 
-  /** The SharePoint DAL's saveShiftPlans: after a sign-off, keep the plan of
-   *  every press in the shift with nothing signed. */
-  private saveShiftPlans(shiftId: string, now: Date): void {
+  /** The SharePoint DAL's keepShiftPlans: keep the plan of every press in
+   *  the shift with none kept yet. */
+  async keepShiftPlans(shiftId: string, now: Date = new Date()): Promise<SavedShiftPlan[]> {
     const machines = this.machines.filter((m) => m.active && isProductionMachine(m.machineCode));
-    const signed = new Set(
-      this.production.filter((r) => r.shiftId === shiftId && r.locked).map((r) => r.machineCode),
-    );
     const { save, remove } = shiftPlanChanges(
       machines.map((m) => m.machineCode),
-      signed,
       this.shiftPlans.filter((p) => p.shiftId === shiftId),
       this.planning,
       shiftId,
       now,
+      { dieOf: dieLookup(this.dieColors) },
+      this.production,
     );
     this.shiftPlans = this.shiftPlans.filter((p) => !remove.includes(p)).concat(save);
+    return MemoryDataLayer.clone(this.shiftPlans.filter((p) => p.shiftId === shiftId));
   }
   async listOperators(): Promise<Operator[]> {
     return MemoryDataLayer.clone(this.operators.filter((o) => o.active));
@@ -569,24 +570,36 @@ export class MemoryDataLayer implements PmdDataLayer {
     const shiftRows = this.production.filter(
       (r) => r.machineCode === machineCode && r.shiftId === shiftId,
     );
-    const vsPlan = scheduleAdherenceForShift(
-      shiftRows,
-      this.planning,
-      machineCode,
-      shiftId,
-      new Date(),
-    ).pct;
+    const planCtx = { dieOf: dieLookup(this.dieColors) };
+    const pressRows = this.production.filter((r) => r.machineCode === machineCode);
+    // The plan of record (PMD_ShiftPlan), kept now if nobody kept it while
+    // the shift ran — the SharePoint DAL's rule.
+    await this.keepShiftPlans(shiftId);
+    const kept = this.shiftPlans.find((p) => p.shiftId === shiftId && p.machineCode === machineCode);
+    const vsPlan = kept
+      ? keptPlanSnapshot(kept, shiftRows).pct
+      : scheduleAdherenceForShift(
+          pressRows,
+          this.planning,
+          machineCode,
+          shiftId,
+          new Date(),
+          planCtx,
+        ).pct;
     // ScheduleAttain / SchedulePlan, by the SharePoint DAL's rule: signed
     // output only, and the first plan kept once Planning.csv has dropped the
     // shift.
     const signing = new Set(rows);
-    const snap = scheduleSnapshotForShift(
-      shiftRows.filter((r) => signing.has(r) || r.locked),
-      this.planning,
-      machineCode,
-      shiftId,
-      new Date(),
-    );
+    const snap = kept
+      ? keptPlanSnapshot(kept, shiftRows.filter((r) => signing.has(r) || r.locked))
+      : scheduleSnapshotForShift(
+          pressRows.filter((r) => r.shiftId !== shiftId || signing.has(r) || r.locked),
+          this.planning,
+          machineCode,
+          shiftId,
+          new Date(),
+          planCtx,
+        );
     const schedule = snapshotToSave(snap, savedScheduleSnapshot(shiftRows));
 
     for (const r of rows) {
@@ -605,7 +618,6 @@ export class MemoryDataLayer implements PmdDataLayer {
       r.updatedAt = now;
       this.unlockedTuples.delete(`${r.machineCode}|${r.shiftId}|${r.jobNumber}`);
     }
-    this.saveShiftPlans(shiftId, new Date());
   }
 
   async unlockShift(

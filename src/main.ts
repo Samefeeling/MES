@@ -23,6 +23,7 @@ import { currentBuildId, startAutoUpdate } from './ui/auto-update';
 import { isTupleConfirmed } from './core/confirm';
 import { isIpadDevice } from './core/device';
 import { syncNewPartDies } from './ui/die-sync';
+import { startShiftPlanKeeper } from './ui/shift-plan-keeper';
 
 const assemblyDal = createAssemblyDataLayer(import.meta.env as Record<string, string>);
 
@@ -391,6 +392,10 @@ setTimeout(() => {
     console.warn('[pmd] new-part die check failed:', e),
   );
 }, 5000);
+
+// Each shift's plan of record (PMD_ShiftPlan) for Schedule Adherence, kept
+// once the shift is under way — from a device that writes, as above.
+startShiftPlanKeeper(dal, () => isIpadDevice() || isSupervisor());
 
 // Poll for new deploys and self-update the iPad clients without a manual
 // cache clear (which was wiping the SharePoint auth session).
