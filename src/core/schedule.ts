@@ -1,147 +1,6 @@
 import type { PlanningOrder } from '../types';
-import { SHIFTS, buildShiftId, dateKey, parseShiftId, shiftBounds, slotTimeRange } from './shifts';
+import { SHIFTS, buildShiftId, dateKey, parseShiftId, shiftBounds } from './shifts';
 import { wholePieces } from './targets';
-import { DIE_CHANGE_STD_HRS } from './standards';
-
-/** What the plan needs to know beyond Planning.csv itself. */
-export interface ScheduleContext {
-  /** The die a part runs on (PMD_ProductDieColor.DieNumber), when known. */
-  dieOf?: (partNumber: string) => string | undefined;
-  /** The part the press was last running before a moment, from its own
-   *  records — what was on it when an order's window opened. */
-  partBefore?: (at: number) => string | undefined;
-}
-
-/** `ScheduleContext.dieOf` from PMD_ProductDieColor: part (any case) → die. */
-export function dieLookup(
-  dieColors: ReadonlyArray<{ partNumber: string; dieNumber: string }>,
-): (partNumber: string) => string | undefined {
-  const byPart = new Map<string, string>();
-  for (const c of dieColors) {
-    const part = c.partNumber.trim().toUpperCase();
-    if (part && c.dieNumber.trim()) byPart.set(part, c.dieNumber.trim());
-  }
-  return (partNumber) => byPart.get(partNumber.trim().toUpperCase());
-}
-
-/** `ScheduleContext.partBefore` over a press's records: the part of the
- *  latest half-hour with a status that began before the moment. */
-export function lastPartBefore(
-  records: ReadonlyArray<{ shiftId: string; slotIndex: number; statusCode: string; partNumber: string; jobNumber: string }>,
-): (at: number) => string | undefined {
-  const runs = records
-    .filter((r) => r.statusCode && r.partNumber && !r.jobNumber.startsWith('DC_'))
-    .map((r) => ({ at: slotTimeRange(r.shiftId, r.slotIndex)?.start.getTime() ?? NaN, part: r.partNumber }))
-    .filter((r) => Number.isFinite(r.at))
-    .sort((a, b) => a.at - b.at);
-  return (at) => {
-    let part: string | undefined;
-    for (const r of runs) {
-      if (r.at >= at) break;
-      part = r.part;
-    }
-    return part;
-  };
-}
-
-/**
- * A press's planned orders as they will actually run once its die changes
- * are given their time — each order's Start–Due window moved later where a
- * die change has to come first, its length kept.
- *
- * The rule is the Assembly board's PMD lane (assembly/src/engine/assembly/
- * pressPlan.ts). Two orders on one press need a die change
- * (DIE_CHANGE_STD_HRS) unless PMD_ProductDieColor puts both parts on the same
- * die; a die it does not know is a die change, because assuming the cheap
- * answer is how a plan comes out four hours optimistic. The change runs
- * straight after the order before as it now runs; where the planner left four
- * hours for it nothing moves, and where it left less, this order and every
- * one behind it on the press move later by the difference. Orders Epicor
- * overlaps on one die are a co-run and move together. On the same die it is a
- * colour or insert change, which Epicor already allows inside the window, so
- * nothing is added for it here.
- *
- * The press's first order in Planning.csv has nobody before it in the file —
- * that order is finished and gone, and its die change went with it, so the
- * window reads as running from its first minute when those hours put the die
- * on (320T's 03:05 start on a Night). It is compared with what the press was
- * last running before it, from the press's records; with no record to go on
- * it starts with a die change unless the press is plainly carrying on: the
- * order is already under way (part of it made), or it starts when the export
- * was scheduled from (Epicor puts the next order on a press at "now", the
- * earliest start in the file).
- *
- * The hot-stamp press has no dies: its orders are returned as they are.
- * The map is from each of the press's orders to the order as it will run.
- */
-export function pressRunsAfterDieChanges(
-  orders: ReadonlyArray<PlanningOrder>,
-  machineCode: string,
-  ctx: ScheduleContext = {},
-): Map<PlanningOrder, PlanningOrder> {
-  const out = new Map<PlanningOrder, PlanningOrder>();
-  const press = normaliseMachineCode(machineCode);
-  const die = (part: string): string => (ctx.dieOf?.(part.trim()) ?? '').trim().toUpperCase();
-  const sameDie = (a: string, b: string): boolean => {
-    if (a.trim().toUpperCase() === b.trim().toUpperCase()) return true;
-    const da = die(a);
-    return da !== '' && da === die(b);
-  };
-  let earliest = Infinity;
-  const planned: Array<{ order: PlanningOrder; start: number; end: number }> = [];
-  for (const o of orders) {
-    if (o.isDieChange) continue;
-    const start = Date.parse(o.plannedStart);
-    if (!Number.isFinite(start)) continue;
-    if (start < earliest) earliest = start;
-    if (!planningOrderMatchesMachine(o, machineCode)) continue;
-    const end = Date.parse(o.plannedEnd);
-    if (!Number.isFinite(end) || end <= start) {
-      out.set(o, o);
-      continue;
-    }
-    planned.push({ order: o, start, end });
-  }
-  if (press === 'HS' || press === 'HSTAMP') {
-    for (const p of planned) out.set(p.order, p.order);
-    return out;
-  }
-  planned.sort((a, b) => a.start - b.start || a.order.jobNumber.localeCompare(b.order.jobNumber));
-  const DIE_CHANGE_MS = DIE_CHANGE_STD_HRS * HOUR_MS;
-  const firstNeedsChange = (o: PlanningOrder, start: number): boolean => {
-    if (o.orderQty > 0 && o.jobRequired >= 0 && o.jobRequired < o.orderQty) return false;
-    const last = ctx.partBefore?.(start)?.trim();
-    if (last) return !sameDie(last, o.partNumber);
-    return (start - earliest) / HOUR_MS >= 1;
-  };
-  let last: { order: PlanningOrder; plannedEnd: number; runEnd: number; pushed: number } | null = null;
-  for (const p of planned) {
-    const length = p.end - p.start;
-    let runStart: number;
-    if (last && p.start < last.plannedEnd && sameDie(last.order.partNumber, p.order.partNumber)) {
-      // A co-run: the same shot, moved as far as the order it runs with.
-      runStart = p.start + last.pushed;
-    } else {
-      let ready = -Infinity;
-      if (last) {
-        ready = last.runEnd + (sameDie(last.order.partNumber, p.order.partNumber) ? 0 : DIE_CHANGE_MS);
-      } else if (firstNeedsChange(p.order, p.start)) {
-        ready = p.start + DIE_CHANGE_MS;
-      }
-      runStart = Math.max(p.start, ready);
-    }
-    const runEnd = runStart + length;
-    const moved =
-      runStart === p.start
-        ? p.order
-        : { ...p.order, plannedStart: new Date(runStart).toISOString(), plannedEnd: new Date(runEnd).toISOString() };
-    out.set(p.order, moved);
-    if (!last || runEnd >= last.runEnd || !(p.start < last.plannedEnd)) {
-      last = { order: p.order, plannedEnd: p.end, runEnd, pushed: runStart - p.start };
-    }
-  }
-  return out;
-}
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -479,7 +338,6 @@ export function plannedRuntimeForShift(
   machineCode: string,
   asOf: Date = new Date(),
   unavailableHrs = 0,
-  ctx: ScheduleContext = {},
 ): PlannedRuntime {
   const bounds = shiftBounds(shiftId);
   if (!bounds || asOf <= bounds.start) return NO_RUNTIME;
@@ -490,23 +348,9 @@ export function plannedRuntimeForShift(
 
   const demand: Array<{ order: PlanningOrder; hours: number }> = [];
   let demandHours = 0;
-  // The press's orders as they run once its die changes have their time.
-  const runs = pressRunsAfterDieChanges(orders, machineCode, ctx);
-  // An order the plan had in this shift stays the shift's order when its die
-  // change has pushed it out: planned for 0, so what it made early is not
-  // "unscheduled".
-  const keep = new Set(
-    plannedOrdersForShift(orders, machineCode, shiftId)
-      .filter((o) => overlapHoursInShift(shiftId, o, machineCode, asOf) > 0)
-      .map((o) => runs.get(o) ?? o),
-  );
-  const here = new Set([...plannedOrdersForShift([...runs.values()], machineCode, shiftId), ...keep]);
-  const sorted = [...here].sort(
-    (a, b) => Date.parse(a.plannedStart) - Date.parse(b.plannedStart) || a.jobNumber.localeCompare(b.jobNumber),
-  );
-  for (const order of sorted) {
+  for (const order of plannedOrdersForShift(orders, machineCode, shiftId)) {
     const hours = overlapHoursInShift(shiftId, order, machineCode, asOf);
-    if (hours <= 0 && !keep.has(order)) continue;
+    if (hours <= 0) continue;
     demand.push({ order, hours });
     demandHours += hours;
   }

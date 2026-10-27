@@ -7,7 +7,6 @@ import {
   shiftPlanChanges,
   shiftPlanFor,
   type AttainmentTuple,
-  type PlanContext,
   type SavedShiftPlan,
 } from '../src/core/kpi-attainment';
 import { MemoryDataLayer } from '../src/dal/memory';
@@ -32,16 +31,6 @@ const PLAN_12_OCT = [
   'HS,12/10/2026 12:00,20.99958001,12/10/2026 18:36,018661-2,MAPSE000,Postura,65,65,MA',
 ].join('\n');
 const orders = parsePlanningCsv(PLAN_12_OCT);
-// PMD_ProductDieColor for these parts: 1300T's two orders are colours of one
-// Postura shell, and 320T's two parts come off one tool.
-const DIES: Record<string, string> = {
-  G1188100: 'D-POSTURA', G1188101: 'D-POSTURA', 'V11582-1': 'D-LUMBA', 'V11582-2': 'D-LUMBA',
-};
-const CTX: PlanContext = { dieOf: (part) => DIES[part.toUpperCase()] };
-/** The same, as PMD_ProductDieColor rows for a DAL to read. */
-const DIE_ROWS = Object.entries(DIES).map(([partNumber, dieNumber]) => ({
-  partNumber, dieNumber, hex: '', name: '', category: '', die: '', coRun: false,
-}));
 const MORNING_AFTER = new Date('2026-10-13T09:00:00');
 const SHIFTS = ['Day', 'Afternoon', 'Night'].map((s) => `2026-10-12-${s}`);
 const PRESSES = ['1600T', '1300T', 'Batt1', 'Batt2', '850T', '550T', '320T', '150T', '125T', 'HStamp'];
@@ -67,7 +56,7 @@ const lastDay = (unsigned: (press: string, shiftId: string) => boolean): Attainm
   PRESSES.flatMap((press) => {
     const own = SIGNED.filter((r) => r.machineCode === press);
     return SHIFTS.flatMap((sid) =>
-      scheduleTuplesForShift(own, orders, press, sid, MORNING_AFTER, unsigned(press, sid), CTX),
+      scheduleTuplesForShift(own, orders, press, sid, MORNING_AFTER, unsigned(press, sid)),
     );
   });
 
@@ -84,26 +73,22 @@ describe('12 Oct 2026: a press planned and not signed stays in the plan', () => 
     expect(plannedOn(lines, '1300T', 'Afternoon')).toBe(0); // "MN": no afternoon crew
     expect(plannedOn(lines, '1300T', 'Night')).toBe(128); // 8 h × 16
     expect(plannedOn(lines, 'Batt1', 'Day')).toBe(106);
-    // 550T's order is its first in the file, not under way, and starts at
-    // 03:00 — long after the export's 07:30 "now": those four hours put its
-    // die on, and the press runs it from 07:00 (core/schedule
-    // pressRunsAfterDieChanges). It made nothing that night either.
-    expect(plannedOn(lines, '550T', 'Night')).toBe(0);
+    // 4 h at 17.99999856 an hour is 71.99999 — Epicor's rounding of 18, not 71.
+    expect(plannedOn(lines, '550T', 'Night')).toBe(72);
     expect(plannedOn(lines, '320T', 'Night')).toBe(200); // two parts off one tool
     // 3 h at 20.99958 is 62.9987: 63, and the 2 left of the order after it.
     expect(plannedOn(lines, 'HStamp', 'Day')).toBe(63);
     expect(plannedOn(lines, 'HStamp', 'Afternoon')).toBe(2);
   });
 
-  it('judges the day against 1,159 pieces, not the 902 MES had rows for', () => {
+  it('judges the day against 1,231 pieces, not the 902 MES had rows for', () => {
     // 1300T's night booked work nobody signed off; 320T booked nothing.
     const lines = lastDay((press, sid) => press === '1300T' && sid.endsWith('Night'));
     const a = attainmentOfTuples(lines);
-    // 1,231 before 550T's die change was given its four hours.
-    expect(a.expected).toBe(1159);
-    // 67 + 184 + 184 + 72 (1300T's first order, capped) + 106 + 0 + 2.
+    expect(a.expected).toBe(1231);
+    // 67 + 184 + 184 + 72 (1300T's first order, capped) + 106 + 0 + 0 + 2.
     expect(a.actual).toBe(615);
-    expect(a.pct).toBe(Math.round((615 / 1159) * 100));
+    expect(a.pct).toBe(50);
     const night1300 = lines.filter((l) => l.machineCode === '1300T' && l.shiftId.endsWith('Night'));
     expect(night1300.every((l) => l.unsigned && l.credited === 0)).toBe(true);
   });
@@ -118,7 +103,7 @@ describe('PMD_ShiftPlan: the plan kept for a press with nothing signed', () => {
   const NIGHT = '2026-10-12-Night';
 
   it('is the Last 24h plan of a press that did not run, order by order', () => {
-    expect(shiftPlanFor(orders, '320T', NIGHT, MORNING_AFTER, CTX)).toEqual({
+    expect(shiftPlanFor(orders, '320T', NIGHT, MORNING_AFTER)).toEqual({
       machineCode: '320T',
       shiftId: NIGHT,
       plan: 200,
@@ -128,12 +113,12 @@ describe('PMD_ShiftPlan: the plan kept for a press with nothing signed', () => {
       ],
     });
     // Judged to the end of the shift even when signed before it.
-    expect(shiftPlanFor(orders, '1300T', NIGHT, new Date('2026-10-13T05:00:00'), CTX)?.plan).toBe(128);
-    expect(shiftPlanFor(orders, 'Batt2', NIGHT, MORNING_AFTER, CTX)).toBeNull();
+    expect(shiftPlanFor(orders, '1300T', NIGHT, new Date('2026-10-13T05:00:00'))?.plan).toBe(128);
+    expect(shiftPlanFor(orders, 'Batt2', NIGHT, MORNING_AFTER)).toBeNull();
   });
 
   it('is kept by any sign-off of the shift, for every planned press with nothing signed', () => {
-    const { save, remove } = shiftPlanChanges(PRESSES, new Set(['1600T', '550T']), [], orders, NIGHT, MORNING_AFTER, CTX);
+    const { save, remove } = shiftPlanChanges(PRESSES, new Set(['1600T', '550T']), [], orders, NIGHT, MORNING_AFTER);
     expect(save.map((p) => `${p.machineCode} ${p.plan}`)).toEqual(['1300T 128', '320T 200']);
     expect(remove).toEqual([]);
   });
@@ -208,21 +193,19 @@ describe('wider periods: machine-shifts with nothing signed', () => {
 describe('sign-off keeps the plan of the presses nobody signed', () => {
   it('memory DAL: saved for each idle planned press, gone once it signs', async () => {
     const dal = new MemoryDataLayer(new Date('2026-10-13T08:00:00'));
-    const internals = dal as unknown as { planning: unknown[]; production: ProductionRecord[]; dieColors: unknown[] };
+    const internals = dal as unknown as { planning: unknown[]; production: ProductionRecord[] };
     internals.planning = orders;
-    internals.dieColors = DIE_ROWS;
     internals.production = [
       rec({ machineCode: '1600T', shiftId: '2026-10-12-Night', jobNumber: 'SFM507571', slotIndex: 2, statusCode: 'R', countStart: 0, countEnd: 205 }),
       rec({ machineCode: '320T', shiftId: '2026-10-12-Night', jobNumber: 'SFM507921', slotIndex: 2, statusCode: 'R', countStart: 0, countEnd: 40 }),
     ];
     await dal.lockShift('1600T', '2026-10-12-Night', 'Sup', 'Op');
     const kept = await dal.listShiftPlans({ from: '2026-10-12', to: '2026-10-12' });
-    // 320T booked work that is not signed yet. 550T's night was its die
-    // change — planned for nothing, so there is no plan to keep.
-    expect(kept.map((p) => `${p.machineCode} ${p.plan}`).sort()).toEqual(['320T 200']);
+    // 320T booked work that is not signed yet; 550T booked nothing.
+    expect(kept.map((p) => `${p.machineCode} ${p.plan}`).sort()).toEqual(['320T 200', '550T 72']);
     await dal.lockShift('320T', '2026-10-12-Night', 'Sup', 'Op');
     const after = await dal.listShiftPlans({ from: '2026-10-12', to: '2026-10-12' });
-    expect(after.map((p) => p.machineCode)).toEqual([]);
+    expect(after.map((p) => p.machineCode)).toEqual(['550T']);
   });
 
   it('SharePoint DAL: creates PMD_ShiftPlan on first use and writes one row per idle press', async () => {
@@ -241,7 +224,6 @@ describe('sign-off keeps the plan of the presses nobody signed', () => {
       saveShiftPlans: (shiftId: string, machine: string) => Promise<void>;
     };
     o.listMachines = async () => PRESSES.map((machineCode) => ({ machineCode, active: true }));
-    (o as unknown as { listProductDieColors: () => Promise<unknown[]> }).listProductDieColors = async () => DIE_ROWS;
     o.listPlanning = async () => orders;
     o.fetchHeaders = async () => [{ machineCode: '1600T', date: '2026-10-12', shift: 'Night' }];
     let listThere = false;

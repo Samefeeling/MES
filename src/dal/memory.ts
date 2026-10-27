@@ -60,8 +60,6 @@ import {
  * page session — used for the demo and as the contract reference for the
  * SharePoint / SQL / Azure adapters.
  */
-import { dieLookup } from '../core/schedule';
-
 export class MemoryDataLayer implements PmdDataLayer {
   private machines: Machine[];
   /** PMD_Machine's maintenance columns, one row per machine. */
@@ -151,7 +149,6 @@ export class MemoryDataLayer implements PmdDataLayer {
       this.planning,
       shiftId,
       now,
-      { dieOf: dieLookup(this.dieColors) },
     );
     this.shiftPlans = this.shiftPlans.filter((p) => !remove.includes(p)).concat(save);
   }
@@ -572,27 +569,23 @@ export class MemoryDataLayer implements PmdDataLayer {
     const shiftRows = this.production.filter(
       (r) => r.machineCode === machineCode && r.shiftId === shiftId,
     );
-    const planCtx = { dieOf: dieLookup(this.dieColors) };
-    const pressRows = this.production.filter((r) => r.machineCode === machineCode);
     const vsPlan = scheduleAdherenceForShift(
-      pressRows,
+      shiftRows,
       this.planning,
       machineCode,
       shiftId,
       new Date(),
-      planCtx,
     ).pct;
     // ScheduleAttain / SchedulePlan, by the SharePoint DAL's rule: signed
     // output only, and the first plan kept once Planning.csv has dropped the
     // shift.
     const signing = new Set(rows);
     const snap = scheduleSnapshotForShift(
-      pressRows.filter((r) => r.shiftId !== shiftId || signing.has(r) || r.locked),
+      shiftRows.filter((r) => signing.has(r) || r.locked),
       this.planning,
       machineCode,
       shiftId,
       new Date(),
-      planCtx,
     );
     const schedule = snapshotToSave(snap, savedScheduleSnapshot(shiftRows));
 

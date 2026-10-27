@@ -38,8 +38,7 @@ import {
   decodeBreakdownCauseMap,
   encodeBreakdownCauseMap,
 } from '../core/breakdown';
-import { parseShiftPattern, previousShift, shiftBounds, slotClock } from '../core/shifts';
-import { dieLookup } from '../core/schedule';
+import { parseShiftPattern, shiftBounds, slotClock } from '../core/shifts';
 import { hoursUnavailableFor, shiftTargetFor } from '../core/targets';
 import {
   savedScheduleSnapshot,
@@ -2366,7 +2365,6 @@ export class SharePointDataLayer implements PmdDataLayer {
       orders,
       shiftId,
       new Date(),
-      { dieOf: dieLookup(await this.listProductDieColors().catch(() => [] as ProductDieColor[])) },
     );
     for (const row of remove) {
       await this.del(`${this.listUrl(LISTS.shiftPlan)}/items(${row.id})`);
@@ -3566,16 +3564,6 @@ export class SharePointDataLayer implements PmdDataLayer {
      */
     const signedNow = myTuples.flat();
     const signingJobs = new Set(signedNow.map((r) => r.jobNumber));
-    // The plan needs each part's die and what the press ran just before, to
-    // tell a window that opens with a die change (core/schedule
-    // dieChangeLeadHours). Neither read may cost the sign-off.
-    const planCtx = {
-      dieOf: dieLookup(await this.listProductDieColors().catch(() => [] as ProductDieColor[])),
-    };
-    const prevSid = previousShift(shiftId);
-    const prevShiftRows = prevSid
-      ? await this.listProduction({ machineCode, shiftId: prevSid }).catch(() => [] as ProductionRecord[])
-      : [];
     const shiftAsSigned = [
       ...shiftRows.filter((r) => !signingJobs.has(r.jobNumber)),
       ...signedNow,
@@ -3583,12 +3571,11 @@ export class SharePointDataLayer implements PmdDataLayer {
     let vsPlanSnap: number | null = null;
     try {
       vsPlanSnap = scheduleAdherenceForShift(
-        [...prevShiftRows, ...shiftAsSigned],
+        shiftAsSigned,
         orders,
         machineCode,
         shiftId,
         new Date(),
-        planCtx,
       ).pct;
     } catch (e) {
       // A KPI snapshot must never cost somebody the shift they just signed.
@@ -3611,7 +3598,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (shiftReadOk) {
       try {
         const signedAlready = shiftRows.filter((r) => r.locked && !signingJobs.has(r.jobNumber));
-        const snap = scheduleSnapshotForShift([...prevShiftRows, ...signedAlready, ...signedNow], orders, machineCode, shiftId, new Date(), planCtx);
+        const snap = scheduleSnapshotForShift([...signedAlready, ...signedNow], orders, machineCode, shiftId, new Date());
         schedule = snapshotToSave(snap, savedScheduleSnapshot(shiftRows));
       } catch (e) {
         console.warn('[pmd] ScheduleAttain snapshot failed, signing off without it:', e);
