@@ -79,7 +79,32 @@ export function pressRunsAfterDieChanges(
   machineCode: string,
   ctx: ScheduleContext = {},
 ): Map<PlanningOrder, PlanningOrder> {
+  return pressPlanAfterDieChanges(orders, machineCode, ctx).runs;
+}
+
+/** A die change on a press, as `pressPlanAfterDieChanges` times it. */
+export interface PlannedDieChange {
+  start: number;
+  end: number;
+  /** The order the change puts the die on for. */
+  order: PlanningOrder;
+  /** The part coming off: the order before, or what the press last ran
+   *  ('' when nothing says). */
+  fromPart: string;
+}
+
+/**
+ * `pressRunsAfterDieChanges`, with the die changes it gave time to. A change
+ * goes straight after the order before as it now runs (the Assembly board's
+ * PressSlot); the press's first order puts its die on from its own start.
+ */
+export function pressPlanAfterDieChanges(
+  orders: ReadonlyArray<PlanningOrder>,
+  machineCode: string,
+  ctx: ScheduleContext = {},
+): { runs: Map<PlanningOrder, PlanningOrder>; changes: PlannedDieChange[] } {
   const out = new Map<PlanningOrder, PlanningOrder>();
+  const changes: PlannedDieChange[] = [];
   const press = normaliseMachineCode(machineCode);
   const die = (part: string): string => (ctx.dieOf?.(part.trim()) ?? '').trim().toUpperCase();
   const sameDie = (a: string, b: string): boolean => {
@@ -104,7 +129,7 @@ export function pressRunsAfterDieChanges(
   }
   if (press === 'HS' || press === 'HSTAMP') {
     for (const p of planned) out.set(p.order, p.order);
-    return out;
+    return { runs: out, changes };
   }
   planned.sort((a, b) => a.start - b.start || a.order.jobNumber.localeCompare(b.order.jobNumber));
   const DIE_CHANGE_MS = DIE_CHANGE_STD_HRS * HOUR_MS;
@@ -124,9 +149,14 @@ export function pressRunsAfterDieChanges(
     } else {
       let ready = -Infinity;
       if (last) {
-        ready = last.runEnd + (sameDie(last.order.partNumber, p.order.partNumber) ? 0 : DIE_CHANGE_MS);
+        ready = last.runEnd;
+        if (!sameDie(last.order.partNumber, p.order.partNumber)) {
+          changes.push({ start: ready, end: ready + DIE_CHANGE_MS, order: p.order, fromPart: last.order.partNumber.trim() });
+          ready += DIE_CHANGE_MS;
+        }
       } else if (firstNeedsChange(p.order, p.start)) {
         ready = p.start + DIE_CHANGE_MS;
+        changes.push({ start: p.start, end: ready, order: p.order, fromPart: ctx.partBefore?.(p.start)?.trim() ?? '' });
       }
       runStart = Math.max(p.start, ready);
     }
@@ -140,7 +170,7 @@ export function pressRunsAfterDieChanges(
       last = { order: p.order, plannedEnd: p.end, runEnd, pushed: runStart - p.start };
     }
   }
-  return out;
+  return { runs: out, changes };
 }
 
 const HOUR_MS = 3_600_000;
@@ -317,6 +347,62 @@ export function plannedOrdersForShift(
       const byStart = new Date(a.plannedStart).getTime() - new Date(b.plannedStart).getTime();
       return byStart || a.jobNumber.localeCompare(b.jobNumber);
     });
+}
+
+/** One piece of a press's plan across a shift, as the Live Status schedule
+ *  bar draws it: an order running, or the die change in front of one. */
+export interface PlanBarItem {
+  kind: 'run' | 'change';
+  /** The order running, or the one the change puts the die on for. */
+  jobNumber: string;
+  partNumber: string;
+  /** A change: the part coming off ('' when nothing says). */
+  fromPart?: string;
+  /** Clipped to the shift (ISO). */
+  start: string;
+  end: string;
+}
+
+/**
+ * A press's plan across one shift once its die changes have their time
+ * (`pressPlanAfterDieChanges`): the orders as they will run, in the shifts
+ * they are crewed for, and the changes, each cut to the shift.
+ */
+export function shiftPlanBar(
+  orders: ReadonlyArray<PlanningOrder>,
+  machineCode: string,
+  shiftId: string,
+  ctx: ScheduleContext = {},
+): PlanBarItem[] {
+  const bounds = shiftBounds(shiftId);
+  if (!bounds) return [];
+  const from = bounds.start.getTime();
+  const to = bounds.end.getTime();
+  const iso = (ms: number): string => new Date(ms).toISOString();
+  const { runs, changes } = pressPlanAfterDieChanges(orders, machineCode, ctx);
+  const out: PlanBarItem[] = [];
+  for (const order of plannedOrdersForShift([...runs.values()], machineCode, shiftId)) {
+    const window = orderWindow(order)!;
+    out.push({
+      kind: 'run',
+      jobNumber: order.jobNumber.trim(),
+      partNumber: order.partNumber.trim(),
+      start: iso(Math.max(window.start.getTime(), from)),
+      end: iso(Math.min(window.end.getTime(), to)),
+    });
+  }
+  for (const c of changes) {
+    if (c.end <= from || c.start >= to) continue;
+    out.push({
+      kind: 'change',
+      jobNumber: c.order.jobNumber.trim(),
+      partNumber: c.order.partNumber.trim(),
+      fromPart: c.fromPart,
+      start: iso(Math.max(c.start, from)),
+      end: iso(Math.min(c.end, to)),
+    });
+  }
+  return out.sort((a, b) => Date.parse(a.start) - Date.parse(b.start) || (a.kind === 'change' ? -1 : 1));
 }
 
 export interface ScheduleSegment {

@@ -5,6 +5,8 @@ import {
   lastPartBefore,
   plannedOrdersForShift,
   plannedRuntimeForShift,
+  shiftPlanBar,
+  type PlanBarItem,
   type ScheduleContext,
 } from './schedule';
 
@@ -668,6 +670,25 @@ export interface SavedShiftPlan {
    *  of the shift the order was planned to run (absent on rows kept before
    *  it was recorded). */
   jobs: Array<{ jobNumber: string; partNumber: string; pieces: number; hours?: number }>;
+  /** The plan across the shift — orders as they run and the die changes in
+   *  front of them — for the Live Status schedule bar (absent on rows kept
+   *  before it was recorded). */
+  bar?: PlanBarItem[];
+}
+
+/**
+ * `shiftPlanBar` with the press's own history for its first order's die
+ * change, as `shiftPlanFor` keeps it: the bar of a shift not kept yet.
+ */
+export function shiftPlanBarFor(
+  orders: ReadonlyArray<PlanningOrder>,
+  machineCode: string,
+  shiftId: string,
+  ctx: PlanContext = {},
+  history: ReadonlyArray<ProductionRecord> = [],
+): PlanBarItem[] {
+  const press = pressContext(history.filter((r) => r.shiftId !== shiftId), machineCode, ctx);
+  return shiftPlanBar(orders, machineCode, shiftId, press);
 }
 
 /**
@@ -713,6 +734,7 @@ export function shiftPlanFor(
     shiftId,
     plan: jobs.reduce((sum, job) => sum + job.pieces, 0),
     jobs,
+    bar: shiftPlanBar(orders, machineCode, shiftId, press),
   };
 }
 

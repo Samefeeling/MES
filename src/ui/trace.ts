@@ -8,6 +8,7 @@ import {
   currentShift,
   currentSlotIndex,
   dateKey,
+  previousShift,
   shiftBounds,
   slotClock,
 } from '../core/shifts';
@@ -15,9 +16,13 @@ import { breakdownDetailFor } from '../core/breakdown';
 import { cavityGross } from '../core/metrics';
 import { ordersCoRun, type DieCoRun } from '../core/corun';
 import {
+  dieLookup,
+  planningOrderMatchesMachine,
   plannedOrdersForShift,
   scheduleSegmentsForShift,
+  type PlanBarItem,
 } from '../core/schedule';
+import { shiftPlanBarFor, shiftPlanFor, type SavedShiftPlan } from '../core/kpi-attainment';
 import {
   hoursUnavailableFor,
   jobLeftPiecesFor,
@@ -99,6 +104,19 @@ export interface TraceRow {
   records: ProductionRecord[];
   /** Planning.csv rows for this machine that overlap the live shift. */
   schedule?: PlanningOrder[];
+  /** The press's plan across the live shift — its orders as they run and
+   *  the die changes in front of them. `kept`: PMD_ShiftPlan's plan of
+   *  record; otherwise worked out from Planning.csv by the same rule, as it
+   *  will be kept. Drawn instead of `schedule` when present. */
+  plan?: {
+    kept: boolean;
+    bar: PlanBarItem[];
+    /** Pieces planned per order this shift (empty when unknown). */
+    jobs: SavedShiftPlan['jobs'];
+    /** The press's Planning.csv orders, for each order's own Start → Due. */
+    orders: PlanningOrder[];
+    dieOf: (partNumber: string) => string | undefined;
+  };
   /** True when this row is just a placeholder for an idle machine on
    *  the live view — render the card with a muted "Idle" badge. */
   idle?: boolean;
@@ -702,10 +720,76 @@ function scheduleTime(value: string): string {
   )}`;
 }
 
-/** Planning.csv Start–Due bars aligned to the same eight-hour shift as the
- * live status grid. Overlapping jobs occupy separate lanes. */
+const clock = (iso: string): string =>
+  new Date(iso).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+/**
+ * The press's plan across the shift (`TraceRow.plan`): each order where it
+ * runs once its die changes have their four hours, and the changes, aligned
+ * to the status grid above. Overlapping pieces (a co-run) take separate lanes.
+ */
+function renderPlanBar(r: TraceRow, plan: NonNullable<TraceRow['plan']>): string {
+  const bounds = shiftBounds(r.shiftId);
+  if (!bounds) return '';
+  const from = bounds.start.getTime();
+  const span = bounds.end.getTime() - from;
+  const rowHeight = 17;
+  const laneEnds: number[] = [];
+  const dieName = (part: string): string => {
+    const die = part ? plan.dieOf(part) : undefined;
+    return part ? `${part} (${die ? `Die ${die}` : 'die not in PMD_ProductDieColor'})` : 'what the press last ran is not known';
+  };
+  const bars = plan.bar
+    .map((b) => {
+      const start = Date.parse(b.start);
+      const end = Date.parse(b.end);
+      let lane = laneEnds.findIndex((laneEnd) => laneEnd <= start);
+      if (lane < 0) lane = laneEnds.length;
+      laneEnds[lane] = end;
+      const pos = `left:${(((start - from) / span) * 100).toFixed(3)}%;width:${(((end - start) / span) * 100).toFixed(
+        3,
+      )}%;top:${lane * rowHeight}px`;
+      if (b.kind === 'change') {
+        const tip = [
+          `Die change ${clock(b.start)}–${clock(b.end)}`,
+          `${dieName(b.fromPart ?? '')} → ${dieName(b.partNumber)}`,
+          `For job ${b.jobNumber}`,
+        ].join('\n');
+        return `<div class="trace-schedule-bar is-change" style="${pos}" title="${escapeHtml(tip)}">Die change</div>`;
+      }
+      const order = plan.orders.find((o) => o.jobNumber.trim() === b.jobNumber);
+      const pieces = plan.jobs.find((j) => j.jobNumber.trim() === b.jobNumber)?.pieces;
+      const tip = [
+        `Job ${b.jobNumber}`,
+        `${b.partNumber}${order?.partDescription ? ' — ' + order.partDescription : ''}`,
+        `Runs ${clock(b.start)}–${clock(b.end)} this shift`,
+        order ? `Planning.csv Start ${scheduleTime(order.plannedStart)} → Due ${scheduleTime(order.plannedEnd)}` : '',
+        order && start > from && Date.parse(order.plannedStart) < start
+          ? `Moved ${((start - Date.parse(order.plannedStart)) / 3_600_000).toFixed(1)} h later for a die change`
+          : '',
+        pieces != null ? `Plan this shift ${pieces.toLocaleString()} pcs` : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
+      return `<div class="trace-schedule-bar" style="${pos}" title="${escapeHtml(tip)}">${escapeHtml(b.jobNumber)}</div>`;
+    })
+    .join('');
+  const source = plan.kept
+    ? `<span title="The plan this shift is judged by (Schedule Adherence), kept in PMD_ShiftPlan once the shift was under way">PMD_ShiftPlan · plan of record</span>`
+    : `<span title="Not kept in PMD_ShiftPlan yet (it is kept 30 minutes into the shift): worked out from Planning.csv by the same rule">Planning.csv + die changes · not kept yet</span>`;
+  return `<div class="trace-schedule">
+    <div class="trace-schedule-head"><b>Schedule</b>${source}</div>
+    <div class="trace-schedule-track" style="height:${Math.max(1, laneEnds.length) * rowHeight}px">${bars}</div>
+  </div>`;
+}
+
+/** The press's plan across the shift when the row carries one
+ * (`renderPlanBar`); otherwise Planning.csv Start–Due bars aligned to the
+ * same eight-hour shift as the live status grid. Overlapping jobs occupy
+ * separate lanes. */
 export function renderSchedule(r: TraceRow, now: Date = new Date()): string {
   void now; // Retain the public signature for callers/tests; colour no longer depends on time.
+  if (r.plan) return r.plan.bar.length ? renderPlanBar(r, r.plan) : '';
   const { segments, laneCount } = scheduleSegmentsForShift(
     r.schedule ?? [],
     r.machineCode,
@@ -973,7 +1057,7 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
     render();
   }
   const live = currentShift(new Date());
-  const [rows, planning, dieList] = await Promise.all([
+  const [rows, planning, dieList, keptPlans] = await Promise.all([
     dalRef.listProduction({ shiftId: live.shiftId }).catch((err) => {
       console.warn('[pmd] live trace listProduction failed:', err);
       errors.push(`Live production: ${(err as Error).message || 'read failed'}`);
@@ -991,6 +1075,17 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
           return [];
         })
       : Promise.resolve([]),
+    // The shift's plan of record, for the Schedule bar. Not there yet (or
+    // unreadable): the bar is worked out from Planning.csv instead.
+    dalRef.listShiftPlans
+      ? dalRef
+          .listShiftPlans({ from: live.shiftId.slice(0, 10), to: live.shiftId.slice(0, 10) })
+          .then((plans) => plans.filter((p) => p.shiftId === live.shiftId))
+          .catch((err) => {
+            console.warn('[pmd] live trace PMD_ShiftPlan read failed:', err);
+            return [] as SavedShiftPlan[];
+          })
+      : Promise.resolve([] as SavedShiftPlan[]),
   ]);
   if (version !== liveLoadVersion || S !== state || state.view !== 'live') return;
   if (rows == null) {
@@ -1040,12 +1135,36 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
     if (aActive !== bActive) return aActive - bActive;
     return floorIndex(a.machineCode) - floorIndex(b.machineCode);
   });
+  // Each press's plan across the shift: the kept one where PMD_ShiftPlan
+  // has it with its bar; otherwise as it will be kept, which needs what the
+  // press ran before its first order — the shift before as well as this one.
+  const keptByMachine = new Map(keptPlans.map((p) => [p.machineCode.trim().toUpperCase(), p]));
+  const dieOf = dieLookup(dieList);
+  const needHistory = state.machines.some((m) => !keptByMachine.get(m.machineCode.trim().toUpperCase())?.bar);
+  const history = needHistory ? [...(await previousShiftRecords(live.shiftId)), ...rows] : rows;
+  if (version !== liveLoadVersion || S !== state || state.view !== 'live') return;
+  const now = new Date();
+  const planFor = (machineCode: string): NonNullable<TraceRow['plan']> => {
+    const kept = keptByMachine.get(machineCode.trim().toUpperCase());
+    const orders = planning.filter((o) => planningOrderMatchesMachine(o, machineCode));
+    if (kept?.bar) return { kept: true, bar: kept.bar, jobs: kept.jobs, orders, dieOf };
+    const ahead = shiftPlanFor(planning, machineCode, live.shiftId, now, { dieOf }, history);
+    return {
+      kept: false,
+      bar: ahead?.bar ?? shiftPlanBarFor(planning, machineCode, live.shiftId, { dieOf }, history),
+      // A kept row from before the bar was recorded still has its pieces.
+      jobs: kept?.jobs ?? ahead?.jobs ?? [],
+      orders,
+      dieOf,
+    };
+  };
   const out: TraceRow[] = [];
   for (const m of sortedMachines) {
     const recs = byMachine.get(m.machineCode) ?? [];
     const machineSchedule = plannedOrdersForShift(planning, m.machineCode, live.shiftId);
+    const plan = planFor(m.machineCode);
     if (recs.length === 0) {
-      out.push(idlePlaceholder(m.machineCode, live.shiftId, machineSchedule));
+      out.push({ ...idlePlaceholder(m.machineCode, live.shiftId, machineSchedule), plan });
       continue;
     }
     // One card per machine: a press can carry several jobs in the same
@@ -1067,12 +1186,12 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
         ordersCoRun(latestDie, dieFor(row.partNumber), latest.orderQty, row.orderQty),
     );
     if (coRunners.length) {
-      out.push({ ...latest, coRun: true, schedule: machineSchedule });
+      out.push({ ...latest, coRun: true, schedule: machineSchedule, plan });
       for (const row of coRunners) {
-        out.push({ ...row, coRun: true, schedule: machineSchedule });
+        out.push({ ...row, coRun: true, schedule: machineSchedule, plan });
       }
     } else {
-      out.push({ ...latest, schedule: machineSchedule });
+      out.push({ ...latest, schedule: machineSchedule, plan });
     }
   }
   state.liveRows = out;
@@ -1081,6 +1200,24 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
   state.loading = false;
   render();
   drawNowLines();
+}
+
+let previousShiftCache: { shiftId: string; records: Promise<ProductionRecord[]> } | null = null;
+
+/** The shift before `shiftId`'s production, read once per shift: what each
+ *  press ran before its first order, for that order's die change. */
+function previousShiftRecords(shiftId: string): Promise<ProductionRecord[]> {
+  const prev = previousShift(shiftId);
+  if (!prev) return Promise.resolve([]);
+  if (previousShiftCache?.shiftId !== prev) {
+    const records = dalRef.listProduction({ shiftId: prev }).catch((err) => {
+      console.warn('[pmd] live trace previous shift read failed:', err);
+      if (previousShiftCache?.shiftId === prev) previousShiftCache = null;
+      return [] as ProductionRecord[];
+    });
+    previousShiftCache = { shiftId: prev, records };
+  }
+  return previousShiftCache.records;
 }
 
 /**

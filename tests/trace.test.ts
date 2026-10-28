@@ -14,6 +14,7 @@ import {
   totalGoodExceedsShiftTarget,
 } from '../src/ui/operator';
 import { order, rec } from './helpers';
+import { shiftPlanBar } from '../src/core/schedule';
 
 // Job Left / Shift Target are pure formulas owned by the operator module
 // — the Trace page reuses them so management sees the same numbers as
@@ -307,6 +308,29 @@ describe('Live Status card for a press with no order', () => {
     const html = renderSchedule(live({ schedule: [plan] }), new Date('2026-07-01T11:00:00'));
     expect(html).toContain('class="trace-schedule-bar"');
     expect(html).not.toMatch(/is-(green|orange|red|future)/);
+  });
+
+  it('draws the plan of record: the die change first, then the order where it now runs', () => {
+    // The press last ran OLD (Die D-OLD); J91, not started, puts Die D-NEW
+    // on, so its four hours come first and J91 runs from 11:00. J92 shares
+    // the die and runs after J91, past the end of the shift.
+    const dies: Record<string, string> = { OLD: 'D-OLD', NEW: 'D-NEW', NEW2: 'D-NEW' };
+    const dieOf = (part: string) => dies[part];
+    const orders = [
+      order({ jobNumber: 'J91', partNumber: 'NEW', machineCode: '1300T', plannedStart: '2026-07-01T07:00:00', plannedEnd: '2026-07-01T13:00:00', qtyPerHr: 1 / 50, jobRequired: 300, orderQty: 300 }),
+      order({ jobNumber: 'J92', partNumber: 'NEW2', machineCode: '1300T', plannedStart: '2026-07-01T13:00:00', plannedEnd: '2026-07-01T17:00:00', qtyPerHr: 1 / 50, jobRequired: 200, orderQty: 200 }),
+    ];
+    const bar = shiftPlanBar(orders, '1300T', '2026-07-01-Day', { dieOf, partBefore: () => 'OLD' });
+    expect(bar.map((b) => `${b.kind} ${b.jobNumber}`)).toEqual(['change J91', 'run J91']);
+    const html = renderSchedule(live({ plan: { kept: true, bar, jobs: [{ jobNumber: 'J91', partNumber: 'NEW', pieces: 200 }], orders, dieOf } }));
+    expect(html).toContain('PMD_ShiftPlan · plan of record');
+    expect(html).toMatch(/class="trace-schedule-bar is-change" style="left:0\.000%;width:50\.000%;top:0px" title="Die change 07:00–11:00\nOLD \(Die D-OLD\) → NEW \(Die D-NEW\)/);
+    expect(html).toMatch(/style="left:50\.000%;width:50\.000%;top:0px" title="Job J91[^"]*Moved 4\.0 h later for a die change\nPlan this shift 200 pcs">J91</);
+    expect(html).not.toContain('J92');
+    // Not kept yet: the same bar, said to be worked out from Planning.csv.
+    expect(renderSchedule(live({ plan: { kept: false, bar, jobs: [], orders, dieOf } }))).toContain('Planning.csv + die changes · not kept yet');
+    // Nothing on the press this shift: no Schedule, whatever Planning.csv overlaps.
+    expect(renderSchedule(live({ schedule: orders, plan: { kept: true, bar: [], jobs: [], orders, dieOf } }))).toBe('');
   });
 
   it('shows full breakdown taxonomy detail when hovering a B block', () => {

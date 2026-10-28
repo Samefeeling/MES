@@ -39,7 +39,7 @@ import {
   encodeBreakdownCauseMap,
 } from '../core/breakdown';
 import { parseShiftPattern, previousShift, shiftBounds, slotClock } from '../core/shifts';
-import { dieLookup } from '../core/schedule';
+import { dieLookup, type PlanBarItem } from '../core/schedule';
 import { hoursUnavailableFor, shiftTargetFor } from '../core/targets';
 import {
   keptPlanSnapshot,
@@ -489,6 +489,38 @@ export interface SharePointOptions {
 }
 
 type RollbackAction = () => Promise<void>;
+
+
+/**
+ * A Live Status bar piece as PlanJobs holds it, among the kept orders. Its
+ * order goes under `job`, and `jobNumber` is left empty, so a build that reads
+ * PlanJobs as orders only passes over it.
+ */
+function planBarEntry(b: PlanBarItem): Record<string, string> {
+  return {
+    bar: b.kind,
+    jobNumber: '',
+    job: b.jobNumber,
+    partNumber: b.partNumber,
+    ...(b.fromPart != null ? { fromPart: b.fromPart } : {}),
+    start: b.start,
+    end: b.end,
+  };
+}
+
+function readPlanBarEntry(j: Record<string, unknown>): PlanBarItem | null {
+  const start = str(j['start']);
+  const end = str(j['end']);
+  if (!Number.isFinite(Date.parse(start)) || !(Date.parse(end) > Date.parse(start))) return null;
+  return {
+    kind: j['bar'] === 'change' ? 'change' : 'run',
+    jobNumber: str(j['job']).trim(),
+    partNumber: str(j['partNumber']).trim(),
+    ...(j['fromPart'] != null ? { fromPart: str(j['fromPart']).trim() } : {}),
+    start,
+    end,
+  };
+}
 
 export class SharePointDataLayer implements PmdDataLayer {
   private digest: { value: string; expires: number } | null = null;
@@ -2268,11 +2300,15 @@ export class SharePointDataLayer implements PmdDataLayer {
       const plan = num(r['SchedulePlan']);
       if (!machineCode || !shiftBounds(shiftId) || !(plan >= 0)) continue;
       let jobs: SavedShiftPlan['jobs'] = [];
+      let bar: PlanBarItem[] | undefined;
       try {
         const parsed = JSON.parse(str(r['PlanJobs']) || '[]') as unknown;
         if (Array.isArray(parsed)) {
-          jobs = parsed
-            .filter((j): j is Record<string, unknown> => !!j && typeof j === 'object')
+          const entries = parsed.filter((j): j is Record<string, unknown> => !!j && typeof j === 'object');
+          const pieces = entries.filter((j) => j['bar'] === 'run' || j['bar'] === 'change');
+          if (pieces.length) bar = pieces.map(readPlanBarEntry).filter((b): b is PlanBarItem => !!b);
+          jobs = entries
+            .filter((j) => j['bar'] == null)
             .map((j) => ({
               jobNumber: str(j['jobNumber']).trim(),
               partNumber: str(j['partNumber']).trim(),
@@ -2284,7 +2320,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       } catch {
         /* the plan total still stands without its order detail */
       }
-      out.push({ id: getId(r), machineCode, shiftId, plan, jobs });
+      out.push({ id: getId(r), machineCode, shiftId, plan, jobs, ...(bar ? { bar } : {}) });
     }
     return out;
   }
@@ -2402,7 +2438,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         MachineCode: row.machineCode,
         ShiftId: row.shiftId,
         SchedulePlan: row.plan,
-        PlanJobs: JSON.stringify(row.jobs),
+        PlanJobs: JSON.stringify([...row.jobs, ...(row.bar ?? []).map(planBarEntry)]),
       });
       kept.push(row);
     }

@@ -45,6 +45,8 @@ const DIE_ROWS = Object.entries(DIES).map(([partNumber, dieNumber]) => ({
   partNumber, dieNumber, hex: '', name: '', category: '', die: '', coRun: false,
 }));
 const MORNING_AFTER = new Date('2026-10-13T09:00:00');
+/** A local wall-clock time as the ISO a plan's bar holds. */
+const at = (local: string): string => new Date(local).toISOString();
 const SHIFTS = ['Day', 'Afternoon', 'Night'].map((s) => `2026-10-12-${s}`);
 const PRESSES = ['1600T', '1300T', 'Batt1', 'Batt2', '850T', '550T', '320T', '150T', '125T', 'HStamp'];
 
@@ -124,11 +126,19 @@ describe('PMD_ShiftPlan: the plan of record of every press in a shift', () => {
       machineCode: '320T',
       shiftId: NIGHT,
       plan: 200,
-      // 23:00–01:43, one shot making both parts; 2.72 h × 45 is 122 of
-      // each, capped at the 100 ordered.
+      // One shot making both parts, 2.72 h; × 45 is 122 of each, capped at
+      // the 100 ordered.
       jobs: [
         { jobNumber: 'SFM507921', partNumber: 'V11582-2', pieces: 100, hours: 2.72 },
         { jobNumber: 'SFM507922', partNumber: 'V11582-1', pieces: 100, hours: 2.72 },
+      ],
+      // Across the shift, for the Live Status bar: nothing says what the
+      // press ran before, so the Lumba tool goes on first (23:00–03:00) and
+      // both parts run from 03:00.
+      bar: [
+        { kind: 'change', jobNumber: 'SFM507921', partNumber: 'V11582-2', fromPart: '', start: at('2026-10-12T23:00'), end: at('2026-10-13T03:00') },
+        { kind: 'run', jobNumber: 'SFM507921', partNumber: 'V11582-2', start: at('2026-10-13T03:00'), end: at('2026-10-13T05:43') },
+        { kind: 'run', jobNumber: 'SFM507922', partNumber: 'V11582-1', start: at('2026-10-13T03:00'), end: at('2026-10-13T05:43') },
       ],
     });
     // Kept before or during the shift, it is the whole shift's plan.
@@ -138,10 +148,15 @@ describe('PMD_ShiftPlan: the plan of record of every press in a shift', () => {
   it('keeps "nothing planned" too, and nothing when a quantity is unknown', () => {
     // Batt2's order starts the next night.
     expect(shiftPlanFor(orders, 'Batt2', NIGHT, MORNING_AFTER, CTX)).toEqual({
-      machineCode: 'Batt2', shiftId: NIGHT, plan: 0, jobs: [],
+      machineCode: 'Batt2', shiftId: NIGHT, plan: 0, jobs: [], bar: [],
     });
-    // 550T's night was its die change (see above): kept as planned for nothing.
-    expect(shiftPlanFor(orders, '550T', NIGHT, MORNING_AFTER, CTX)?.plan).toBe(0);
+    // 550T's night was its die change (see above): kept as planned for
+    // nothing, the change on its bar.
+    const dieNight = shiftPlanFor(orders, '550T', NIGHT, MORNING_AFTER, CTX);
+    expect(dieNight?.plan).toBe(0);
+    expect(dieNight?.bar).toEqual([
+      { kind: 'change', jobNumber: 'SFM507970', partNumber: 'V4528', fromPart: '', start: at('2026-10-13T03:00'), end: at('2026-10-13T07:00') },
+    ]);
     const noRate = orders.map((o) => (o.jobNumber === 'SFM507921' ? { ...o, qtyPerHr: 0 } : o));
     expect(shiftPlanFor(noRate, '320T', NIGHT, MORNING_AFTER, CTX)).toBeNull();
   });
@@ -362,7 +377,13 @@ describe('keeping the plans', () => {
       expect.objectContaining({ Title: '320T|2026-10-12-Night', MachineCode: '320T', ShiftId: NIGHT, SchedulePlan: 200 }),
     );
     expect(rows).toContainEqual(expect.objectContaining({ Title: 'Batt2|2026-10-12-Night', SchedulePlan: 0, PlanJobs: '[]' }));
-    expect(JSON.parse(rows.find((r) => r.MachineCode === '320T')!.PlanJobs as string)).toHaveLength(2);
+    // The two orders, then the bar — entries with no jobNumber, which an
+    // older build reading PlanJobs as orders passes over.
+    const planJobs = JSON.parse(rows.find((r) => r.MachineCode === '320T')!.PlanJobs as string) as Array<Record<string, unknown>>;
+    expect(planJobs.filter((j) => j.jobNumber).map((j) => j.jobNumber)).toEqual(['SFM507921', 'SFM507922']);
+    expect(planJobs.filter((j) => !j.jobNumber).map((j) => `${j.bar} ${j.job}`)).toEqual([
+      'change SFM507921', 'run SFM507921', 'run SFM507922',
+    ]);
     expect(first).toHaveLength(PRESSES.length);
     // Kept: read back as it was written, and nothing more is written.
     const before = posts.length;

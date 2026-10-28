@@ -509,7 +509,7 @@ hand — a generic list with:
 | `MachineCode` | Single line | Press, as PMD_Machine names it |
 | `ShiftId` | Single line, **indexed** | `YYYY-MM-DD-Day/Afternoon/Night`. Indexed so the KPI page's date filter keeps working past 5,000 rows |
 | `SchedulePlan` | Number | Pieces the plan asked for (0 = nothing planned on the press) |
-| `PlanJobs` | Multi-line (plain text) | The planned orders as JSON: `[{"jobNumber","partNumber","pieces","hours"}]`, most pieces first |
+| `PlanJobs` | Multi-line (plain text) | The planned orders as JSON: `[{"jobNumber","partNumber","pieces","hours"}]`, most pieces first; then the shift's plan across the 8 hours for the Live Status Schedule bar, as entries `{"bar":"run"\|"change","jobNumber":"","job","partNumber","fromPart","start","end"}` (ISO times, cut to the shift). The bar entries leave `jobNumber` empty so a reader that takes PlanJobs as orders skips them. Power BI: take only entries with a `jobNumber`. |
 
 Without the list, sign-off works as before and the KPI page falls back to
 Planning.csv and the sign-off snapshots. Power BI: a period's Schedule
