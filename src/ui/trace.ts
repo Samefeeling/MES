@@ -110,6 +110,9 @@ export interface TraceRow {
    *  will be kept. Drawn instead of `schedule` when present. */
   plan?: {
     kept: boolean;
+    /** Not `kept`, though PMD_ShiftPlan has the shift's row: kept before
+     *  rows held the bar, so the bar is worked out from Planning.csv. */
+    keptWithoutBar?: boolean;
     bar: PlanBarItem[];
     /** Pieces planned per order this shift (empty when unknown). */
     jobs: SavedShiftPlan['jobs'];
@@ -776,7 +779,9 @@ function renderPlanBar(r: TraceRow, plan: NonNullable<TraceRow['plan']>): string
     .join('');
   const source = plan.kept
     ? `<span title="The plan this shift is judged by (Schedule Adherence), kept in PMD_ShiftPlan once the shift was under way">PMD_ShiftPlan · plan of record</span>`
-    : `<span title="Not kept in PMD_ShiftPlan yet (it is kept 30 minutes into the shift): worked out from Planning.csv by the same rule">Planning.csv + die changes · not kept yet</span>`;
+    : plan.keptWithoutBar
+      ? `<span title="PMD_ShiftPlan kept this shift's pieces before it kept the bar: the bar is worked out from Planning.csv by the same rule, and may differ from what was kept">Planning.csv + die changes · kept without a bar</span>`
+      : `<span title="Not kept in PMD_ShiftPlan yet (it is kept 30 minutes into the shift): worked out from Planning.csv by the same rule">Planning.csv + die changes · not kept yet</span>`;
   return `<div class="trace-schedule">
     <div class="trace-schedule-head"><b>Schedule</b>${source}</div>
     <div class="trace-schedule-track" style="height:${Math.max(1, laneEnds.length) * rowHeight}px">${bars}</div>
@@ -1151,6 +1156,7 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
     const ahead = shiftPlanFor(planning, machineCode, live.shiftId, now, { dieOf }, history);
     return {
       kept: false,
+      keptWithoutBar: !!kept,
       bar: ahead?.bar ?? shiftPlanBarFor(planning, machineCode, live.shiftId, { dieOf }, history),
       // A kept row from before the bar was recorded still has its pieces.
       jobs: kept?.jobs ?? ahead?.jobs ?? [],

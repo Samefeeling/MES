@@ -329,6 +329,7 @@ describe('Live Status card for a press with no order', () => {
     expect(html).not.toContain('J92');
     // Not kept yet: the same bar, said to be worked out from Planning.csv.
     expect(renderSchedule(live({ plan: { kept: false, bar, jobs: [], orders, dieOf } }))).toContain('Planning.csv + die changes · not kept yet');
+    expect(renderSchedule(live({ plan: { kept: false, keptWithoutBar: true, bar, jobs: [], orders, dieOf } }))).toContain('kept without a bar');
     // Nothing on the press this shift: no Schedule, whatever Planning.csv overlaps.
     expect(renderSchedule(live({ schedule: orders, plan: { kept: true, bar: [], jobs: [], orders, dieOf } }))).toBe('');
   });
