@@ -42,6 +42,83 @@ export const DIE_COMPONENTS: Array<{ key: string; label: string }> = [
   { key: 'WaterLeaks', label: 'Water Leaks' },
 ];
 
+/** One condition-check row of the Die Change Log: a Choice column of
+ *  PMD_DieChangeLog whose choices are the 1 / 2 / 3 scale. */
+export interface DieComponent {
+  /** The column's internal name: what the row is written under. */
+  key: string;
+  /** What the setter sees. */
+  label: string;
+  /** The column's own choice text for each rating, when read from the list
+   *  (SharePoint takes a choice only as spelled). Absent: DIE_CONDITION_META. */
+  choices?: Partial<Record<Exclude<DieComponentCondition, ''>, string>>;
+}
+
+/** "DateStampChanged" → "Date Stamp Changed"; a known component keeps its label. */
+export function dieComponentLabel(key: string): string {
+  const known = DIE_COMPONENTS.find((c) => c.key === key);
+  if (known) return known.label;
+  return key
+    .replace(/_x0020_/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** A list column as SharePoint describes it (fields endpoint). */
+export interface ListFieldInfo {
+  Title: string;
+  InternalName: string;
+  TypeAsString?: string;
+  Choices?: string[] | { results?: string[] };
+}
+
+/**
+ * The condition checks PMD_DieChangeLog holds: every Choice column whose
+ * choices carry the whole 1 / 2 / 3 scale, bar the event's own columns
+ * (`exclude` — SignOffStatus can be a Choice of "1"/"2"/"3"). So a check the
+ * toolroom adds as a column (DateStampChanged) is asked on the next popup.
+ * The 13 original checks come first, in their order; new ones follow as the
+ * list has them.
+ */
+export function dieComponentsFromFields(
+  fields: ReadonlyArray<ListFieldInfo>,
+  exclude: ReadonlySet<string>,
+): DieComponent[] {
+  const found: DieComponent[] = [];
+  for (const f of fields) {
+    if (f.TypeAsString !== 'Choice' || exclude.has(f.InternalName) || exclude.has(f.Title)) continue;
+    const list = Array.isArray(f.Choices) ? f.Choices : (f.Choices?.results ?? []);
+    const choices: DieComponent['choices'] = {};
+    for (const choice of list) {
+      const cond = parseDieCondition(choice);
+      if (cond && !choices[cond]) choices[cond] = choice;
+    }
+    if (!choices.good || !choices.worn || !choices.damaged) continue;
+    const known = DIE_COMPONENTS.find((c) => c.key === f.InternalName);
+    found.push({
+      key: f.InternalName,
+      label: known?.label ?? (f.Title && f.Title !== f.InternalName ? f.Title : dieComponentLabel(f.InternalName)),
+      choices,
+    });
+  }
+  const order = (key: string): number => {
+    const i = DIE_COMPONENTS.findIndex((c) => c.key === key);
+    return i < 0 ? DIE_COMPONENTS.length : i;
+  };
+  return found
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => order(a.c.key) - order(b.c.key) || a.i - b.i)
+    .map(({ c }) => c);
+}
+
+/** The components rated on any of `sides`, the 13 original ones first. */
+function ratedKeys(...sides: Array<Record<string, DieComponentCondition> | undefined>): string[] {
+  const keys = new Set<string>(DIE_COMPONENTS.map((c) => c.key));
+  for (const side of sides) for (const key of Object.keys(side ?? {})) keys.add(key);
+  return [...keys];
+}
+
 /** Natural key for one continuous D/I block. The start slot is what makes
  *  two separate changes on the same machine/shift/job independent. */
 export function dieChangeEventKey(
@@ -97,8 +174,8 @@ export function dieSignOffStatus(
 ): DieSignOffStatus {
   let worst: DieSignOffStatus = 0;
   for (const side of sides) {
-    for (const c of DIE_COMPONENTS) {
-      const rank = DIE_CONDITION_RANK[side?.[c.key] ?? ''] ?? 0;
+    for (const key of Object.keys(side ?? {})) {
+      const rank = DIE_CONDITION_RANK[side?.[key] ?? ''] ?? 0;
       if (rank > worst) worst = rank;
     }
   }
@@ -134,7 +211,7 @@ export interface DieConditionSummary {
   jobNumber: string;
   problemDescription: string;
   /** Components rated 2 (worn) / 3 (damaged), damaged first — anything
-   *  here queues the die for priority service. Empty = all 13 good. */
+   *  here queues the die for priority service. Empty = all good. */
   flags: DieConditionFlag[];
   /** Any component rated 3 — the die must surface as Problems. */
   hasDamaged: boolean;
@@ -170,9 +247,9 @@ export function latestConditionByDie(logs: DieChangeLog[]): Map<string, DieCondi
     // those two inspections onto one worst-condition report instead of the
     // second side being discarded by the newest-first de-duplication.
     if (reports[0].die && reports[0].die === reports[1].die) {
-      for (const c of DIE_COMPONENTS) {
-        if (rank(reports[1].components[c.key]) > rank(reports[0].components[c.key]))
-          reports[0].components[c.key] = reports[1].components[c.key];
+      for (const key of ratedKeys(reports[0].components, reports[1].components)) {
+        if (rank(reports[1].components[key]) > rank(reports[0].components[key]))
+          reports[0].components[key] = reports[1].components[key];
       }
       if (reports[1].problem) {
         reports[0].problem = [reports[0].problem, reports[1].problem]
@@ -190,10 +267,10 @@ export function latestConditionByDie(logs: DieChangeLog[]): Map<string, DieCondi
         Object.values(report.components).some(Boolean) || report.problem.trim().length > 0;
       if (!die || !assessed || out.has(die)) continue; // first real hit = latest
       const flags: DieConditionFlag[] = [];
-      for (const c of DIE_COMPONENTS) {
-        const cond = report.components[c.key];
+      for (const key of ratedKeys(report.components)) {
+        const cond = report.components[key];
         if (cond === 'worn' || cond === 'damaged')
-          flags.push({ key: c.key, label: c.label, condition: cond });
+          flags.push({ key, label: dieComponentLabel(key), condition: cond });
       }
       flags.sort((a, b) =>
         a.condition === b.condition ? 0 : a.condition === 'damaged' ? -1 : 1,

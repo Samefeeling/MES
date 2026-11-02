@@ -2125,7 +2125,7 @@ function openDieDetail(dieNumber: string): void {
         · <b>${escapeHtml(dcRec.machine)}</b> · job ${escapeHtml(dcRec.jobNumber)}
         · <b>${(dcRec.slots * 0.5).toLocaleString()} h</b> (${dcRec.slots} × 30 min slots on Die Change)</div>`
     : `<div class="die-dc none">No die change recorded in the selected window (${escapeHtml(S!.from)} → ${escapeHtml(S!.to)}).</div>`;
-  // Latest setter's condition report (PMD_DieChangeLog) — the 13-component
+  // Latest setter's condition report (PMD_DieChangeLog) — the component
   // check filed when this die last came OUT of a press. Worn/damaged
   // components are the toolroom's priority-service queue.
   const cond = condFor(d.dieNumber);
@@ -2146,7 +2146,7 @@ function openDieDetail(dieNumber: string): void {
                 )
                 .join('')}</div>
               ${cond.hasDamaged ? '<div class="die-cond-note bad">⚠ Component damaged — the die shows as <b>Problems</b> and service is PRIORITY.</div>' : '<div class="die-cond-note">Rated 2 — operational, but queue for priority service at the next window.</div>'}`
-            : '<div class="die-cond-ok">All 13 components rated “1. Good work order” ✓</div>'
+            : '<div class="die-cond-ok">All components rated “1. Good work order” ✓</div>'
         }
         ${cond.problemDescription ? `<div class="die-cond-desc">“${escapeHtml(cond.problemDescription)}”</div>` : ''}
       </div>`;

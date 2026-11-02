@@ -56,6 +56,9 @@ import {
   DIE_COMPONENTS,
   DIE_CONDITION_META,
   dieChangeEventKey,
+  dieComponentsFromFields,
+  type DieComponent,
+  type ListFieldInfo,
   dieSignOffStatus,
   parseDieCondition,
   parseDieSignOffStatus,
@@ -1725,8 +1728,39 @@ export class SharePointDataLayer implements PmdDataLayer {
     return this.dieChangeSchemaReady;
   }
 
+  private dieChangeComponentsLoad: Promise<DieComponent[]> | null = null;
+
+  /**
+   * The condition checks the Die Change Log asks: PMD_DieChangeLog's own
+   * 1 / 2 / 3 Choice columns (dieComponentsFromFields), so a column the
+   * toolroom adds is asked, written and read back without a code change.
+   * Read once a session; the 13 built-in checks when the columns cannot be
+   * read (and that read is tried again next time).
+   */
+  async listDieChangeComponents(): Promise<DieComponent[]> {
+    if (!this.dieChangeComponentsLoad) {
+      const F = this.F.dieChangeLog;
+      const exclude = new Set<string>(['Title', ...Object.values(F)]);
+      this.dieChangeComponentsLoad = this.getJson<{ d: { results: ListFieldInfo[] } }>(
+        `${this.listUrl(LISTS.dieChangeLog)}/fields?$filter=Hidden eq false`,
+      )
+        .then((env) => {
+          const found = dieComponentsFromFields(env.d.results, exclude);
+          if (!found.length) throw new Error('no 1 / 2 / 3 Choice columns found');
+          return found;
+        })
+        .catch((e) => {
+          console.warn('[pmd] PMD_DieChangeLog condition columns unreadable, using the built-in 13:', e);
+          this.dieChangeComponentsLoad = null;
+          return DIE_COMPONENTS;
+        });
+    }
+    return this.dieChangeComponentsLoad;
+  }
+
   async listDieChangeLog(): Promise<DieChangeLog[]> {
     const F = this.F.dieChangeLog;
+    const checks = await this.listDieChangeComponents();
     try {
       const rows = await this.getAllItems<Record<string, unknown>>(LISTS.dieChangeLog);
       return rows
@@ -1757,7 +1791,7 @@ export class SharePointDataLayer implements PmdDataLayer {
           dieNumberIn: str(r[F.dieNumberIn]).trim(),
           dieDescriptionIn: str(r[F.dieDescriptionIn]).trim(),
           components: Object.fromEntries(
-            DIE_COMPONENTS.map((c) => [c.key, parseDieCondition(str(r[c.key]))]),
+            checks.map((c) => [c.key, parseDieCondition(str(r[c.key]))]),
           ),
           componentsIn: parseDieComponentsJson(str(r[F.componentsInJson])),
           signOffStatus: parseDieSignOffStatus(r[F.signOffStatus]),
@@ -1834,12 +1868,13 @@ export class SharePointDataLayer implements PmdDataLayer {
             ? String(clean.signOffStatus)
             : clean.signOffStatus,
     };
-    for (const c of DIE_COMPONENTS) {
+    for (const c of await this.listDieChangeComponents()) {
       const cond = clean.components[c.key];
       // On update, always write the component (clearing a downgraded flag);
       // on insert, only send a value when set. body[c.key] otherwise stays
-      // absent so SharePoint keeps its default.
-      if (cond) body[c.key] = DIE_CONDITION_META[cond].label;
+      // absent so SharePoint keeps its default. Written in the column's own
+      // spelling of the choice.
+      if (cond) body[c.key] = c.choices?.[cond] ?? DIE_CONDITION_META[cond].label;
       else if (existing) body[c.key] = null;
     }
     if (existing) {
@@ -5279,9 +5314,10 @@ function parseDieComponentsJson(raw: string): Record<string, DieComponentConditi
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const out: Record<string, DieComponentCondition> = {};
-    for (const c of DIE_COMPONENTS) {
-      const cond = parseDieCondition(str(parsed[c.key]));
-      if (cond) out[c.key] = cond;
+    // Every check the row was saved with, the toolroom's added ones too.
+    for (const [key, value] of Object.entries(parsed ?? {})) {
+      const cond = parseDieCondition(str(value));
+      if (cond) out[key] = cond;
     }
     return out;
   } catch {

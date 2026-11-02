@@ -1,4 +1,5 @@
 import type { SavedShiftPlan } from '../core/kpi-attainment';
+import type { DieComponent } from '../core/die';
 import type {
   BdCode,
   BreakdownLogDetail,
@@ -112,6 +113,9 @@ export interface PmdDataLayer {
   // condition report, popped up on the first D/I status of a tuple.
   /** All die-change reports, newest first. */
   listDieChangeLog?(): Promise<DieChangeLog[]>;
+  /** The condition checks a Die Change Log asks — PMD_DieChangeLog's
+   *  1 / 2 / 3 Choice columns. Absent: the built-in 13 (DIE_COMPONENTS). */
+  listDieChangeComponents?(): Promise<DieComponent[]>;
   /** Persist a new report (id/createdAt assigned by the backend). */
   createDieChangeLog?(
     /** `signOffStatus` is not an input: the DAL derives it from the ratings

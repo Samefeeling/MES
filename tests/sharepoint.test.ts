@@ -2012,6 +2012,53 @@ describe('PMD_Production denormalisation: jobRequired + partDescription survive 
       expect(bodies.at(-1)!.SignOffStatus).toBeNull();
     });
 
+    it('asks, writes and reads every 1 / 2 / 3 column the list has — DateStampChanged too', async () => {
+      const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+      const bodies = stubDieChangeLog(dal, 'Number');
+      const scale = ['1. Good work order', '2. Operational but worn', '3. Damaged or can’t be used'];
+      const o = dal as unknown as { getJson: (url: string) => Promise<unknown>; getAllItems: () => Promise<unknown[]> };
+      const schema = o.getJson;
+      o.getJson = async (url: string): Promise<unknown> =>
+        url.includes('/fields?$filter=Hidden eq false') && !url.includes('$select')
+          ? {
+              d: {
+                results: [
+                  { Title: 'Shift', InternalName: 'Shift', TypeAsString: 'Choice', Choices: { results: ['Day', 'Afternoon', 'Night'] } },
+                  { Title: 'SignOffStatus', InternalName: 'SignOffStatus', TypeAsString: 'Choice', Choices: { results: ['1', '2', '3'] } },
+                  // Added by hand, spelled with a straight apostrophe.
+                  { Title: 'DateStampChanged', InternalName: 'DateStampChanged', TypeAsString: 'Choice', Choices: { results: ['1. Good work order', '2. Operational but worn', "3. Damaged or can't be used"] } },
+                  { Title: 'Bolts', InternalName: 'Bolts', TypeAsString: 'Choice', Choices: { results: scale } },
+                ],
+              },
+            }
+          : schema(url);
+      expect((await dal.listDieChangeComponents()).map((c) => `${c.key}:${c.label}`)).toEqual([
+        'Bolts:Bolts',
+        'DateStampChanged:Date Stamp Changed',
+      ]);
+      await dal.createDieChangeLog!({
+        ...event,
+        components: { Bolts: 'good', DateStampChanged: 'damaged' },
+        componentsIn: { DateStampChanged: 'worn' },
+      });
+      const body = bodies.at(-1)!;
+      expect(body.Bolts).toBe('1. Good work order');
+      // In the column's own spelling, or SharePoint refuses the choice.
+      expect(body.DateStampChanged).toBe("3. Damaged or can't be used");
+      expect(JSON.parse(body.ComponentsInJson as string)).toEqual({ DateStampChanged: 'worn' });
+      expect(body).not.toHaveProperty('Shift', expect.stringMatching(/^\d/));
+      o.getAllItems = async (): Promise<unknown[]> => [
+        {
+          Id: 7, EventKey: 'A', Created: '2026-07-20T08:00:00Z',
+          Bolts: '1. Good work order', DateStampChanged: "3. Damaged or can't be used",
+          ComponentsInJson: '{"DateStampChanged":"worn"}',
+        },
+      ];
+      const [row] = await dal.listDieChangeLog!();
+      expect(row.components).toEqual({ Bolts: 'good', DateStampChanged: 'damaged' });
+      expect(row.componentsIn).toEqual({ DateStampChanged: 'worn' });
+    });
+
     it('reads a stored status back off the row', async () => {
       const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
       const o = dal as unknown as { getAllItems: () => Promise<unknown[]> };

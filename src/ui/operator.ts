@@ -71,6 +71,7 @@ import {
   DIE_CONDITION_OF_RANK,
   dieChangeEventKey,
   dieSignOffStatus,
+  type DieComponent,
 } from '../core/die';
 import { setDieNoteContext } from './nav-context';
 import { renderOutputRejectChart } from './charts';
@@ -3419,6 +3420,10 @@ async function openSaveSignoffModal(): Promise<void> {
     );
     return;
   }
+  // A shift with a die change owes its Die Change Log (one per press per
+  // shift). Exempt as the gaps gate is: a supervisor correcting data, or a
+  // reopened order whose timeline was already accepted.
+  if (!isSupervisor() && !reopenedForCorrection() && !(await dieChangeLoggedForSignoff())) return;
   const c = canonical();
   if (c?.countStart == null || c?.countEnd == null) {
     toast('Count Start and Count End are required — enter 0 if no parts were counted', 'err');
@@ -3936,10 +3941,13 @@ function openAddOrderModal(): void {
 // ---------------------------------------------------------------------
 // Die Change Log (PMD_DieChangeLog) — one row per continuous D/I block.
 // Date / shift / setter / machine / job / die-out / die-in are
-// prefilled; the setter's real work is the 13-component condition
+// prefilled; the setter's real work is the condition
 // check (1 Good · 2 Worn · 3 Damaged) that builds the die's health
 // history for the toolroom. EventKey includes the block's first slot, so a
 // later independent change on the same job does not overwrite this one.
+// The checks are PMD_DieChangeLog's 1 / 2 / 3 Choice columns. A press owes
+// one log with "Die" ticked per shift: the first D asks for it without a
+// Skip, later D's do not ask, and sign-off asks if it is still missing.
 
 interface DieChangeEventRef {
   start: number;
@@ -3969,9 +3977,41 @@ function dieChangeEventsTouching(slots: number[]): DieChangeEventRef[] {
   return [...byStart.values()].sort((a, b) => a.start - b.start);
 }
 
+/**
+ * Whether this press has a die change logged this shift — a saved Die Change
+ * Log with "Die" ticked, whichever order it was filed under. One is what a
+ * shift owes: the first D asks for it and will not take Skip, and once it is
+ * saved no later D asks again. Throws when the log cannot be read.
+ */
+async function shiftDieChangeLogged(): Promise<boolean> {
+  if (!dalRef.listDieChangeLog) return true;
+  const day = sid().slice(0, 10);
+  const norm = (v: string): string => v.trim().toUpperCase();
+  return (await dalRef.listDieChangeLog()).some(
+    (r) =>
+      norm(r.machineCode) === norm(S!.mc) &&
+      r.date === day &&
+      norm(r.shift) === norm(S!.shiftCode) &&
+      r.changeOver.includes('Die'),
+  );
+}
+
 function maybeOpenDieChangeLog(code: StatusCode, events: DieChangeEventRef[]): void {
   if (!dalRef.createDieChangeLog || !S!.selJob) return;
   void (async () => {
+    if (code === 'D') {
+      // One die change log per press per shift, and it is not optional.
+      let logged: boolean;
+      try {
+        logged = await shiftDieChangeLogged();
+      } catch (e) {
+        console.warn('[pmd] die change log read failed:', e);
+        toast('Could not read the Die Change Log — it will be asked for at sign-off', 'warn');
+        return;
+      }
+      if (!logged) await openDieChangeLogModal(code, events[0], { required: true });
+      return;
+    }
     // A dragged range can skip slots occupied by another job, producing two
     // disjoint D/I blocks. Prompt for each block in sequence so every
     // continuous event gets its own row; opening them all at once would make
@@ -3980,6 +4020,35 @@ function maybeOpenDieChangeLog(code: StatusCode, events: DieChangeEventRef[]): v
   })().catch((e) => {
       console.error('[pmd] die change log open failed:', e);
     });
+}
+
+/**
+ * Sign-off's check that the shift's die change was logged: the selected
+ * order has D on the timeline and the press has no Die Change Log this shift
+ * (the popup was closed by a reload, or its save failed). Opens the required
+ * log for the order's first D block; true when sign-off may go on.
+ */
+async function dieChangeLoggedForSignoff(): Promise<boolean> {
+  if (!dalRef.createDieChangeLog || !S!.selJob) return true;
+  const dSlots = S!.prod
+    .filter((r) => r.jobNumber === S!.selJob && r.statusCode === 'D')
+    .map((r) => r.slotIndex);
+  if (!dSlots.length) return true;
+  try {
+    if (await shiftDieChangeLogged()) return true;
+  } catch (e) {
+    toast(`Could not read the Die Change Log — try sign-off again (${e instanceof Error ? e.message : e})`, 'err');
+    return false;
+  }
+  const [event] = dieChangeEventsTouching(dSlots);
+  if (!event) return true;
+  toast('This shift has a die change (D): fill in the Die Change Log before signing off', 'warn');
+  await openDieChangeLogModal('D', event, { required: true });
+  try {
+    return await shiftDieChangeLogged();
+  } catch {
+    return false;
+  }
 }
 
 async function eventDieChangeLog(event: DieChangeEventRef): Promise<DieChangeLog | undefined> {
@@ -3995,9 +4064,16 @@ async function eventDieChangeLog(event: DieChangeEventRef): Promise<DieChangeLog
 async function openDieChangeLogModal(
   trigger: StatusCode,
   event: DieChangeEventRef,
+  opts: { required?: boolean } = {},
 ): Promise<void> {
+  const required = !!opts.required;
   const saved = await eventDieChangeLog(event);
   const existing = saved != null;
+  // The checks are PMD_DieChangeLog's own condition columns, so one the
+  // toolroom adds there is asked here too.
+  const checks: DieComponent[] = dalRef.listDieChangeComponents
+    ? await dalRef.listDieChangeComponents().catch(() => DIE_COMPONENTS)
+    : DIE_COMPONENTS;
   const dieByPart = (part?: string): { dieNumber: string; die: string } | undefined =>
     part ? S!.dieColors.get(part.trim().toUpperCase()) : undefined;
   const partIn =
@@ -4050,12 +4126,12 @@ async function openDieChangeLogModal(
     saved ? saved.changeOver.includes(label) : fallback;
   const co = (label: string, checked: boolean): string =>
     `<label class="dcl-co"><input type="checkbox" value="${escapeHtml(label)}"${checked ? ' checked' : ''}>${escapeHtml(label)}</label>`;
-  // One 13-component grid for a side (out / in), prefilled from its row.
+  // One condition grid for a side (out / in), prefilled from its row.
   const compGrid = (
     side: 'out' | 'in',
     comps: Record<string, DieComponentCondition> | undefined,
   ): string =>
-    `<div class="dcl-comps" data-dcl-side="${side}">${DIE_COMPONENTS.map((c) => {
+    `<div class="dcl-comps" data-dcl-side="${side}">${checks.map((c) => {
       const sel: DieComponentCondition = comps?.[c.key] || 'good';
       return `<div class="dcl-comp" data-dcl-comp="${c.key}">
         <span class="dcl-comp-name">${escapeHtml(c.label)}</span>
@@ -4080,9 +4156,10 @@ async function openDieChangeLogModal(
   const mc = openModal(`<div class="bd-modal dcl-modal">
     <h2 class="bd-title dcl-title">🔁 Die Change Log${existing ? ' — edit' : ''}</h2>
     <p class="bd-sub dcl-editnote"><i>Timeline slots ${event.start + 1}–${event.end + 1} · one SharePoint row for this continuous event${existing ? ' · editing the saved row' : ''}.</i></p>
+    ${required ? '<p class="dcl-required"><b>Required:</b> one Die Change Log per press per shift. Once it is saved, no other D this shift asks for it.</p>' : ''}
     <div class="dcl-row">
       <label>Die setter<select data-dcl="setter">${setterOpts}</select></label>
-      <span class="dcl-cos">Change over ${co('Die', coChecked('Die', trigger === 'D'))}${co('Insert', coChecked('Insert', trigger === 'I'))}${co('Space In', coChecked('Space In', false))}${co('SpaceOut', coChecked('SpaceOut', false))}</span>
+      <span class="dcl-cos">Change over ${required ? co('Die', true).replace('<input ', '<input disabled ') : co('Die', coChecked('Die', trigger === 'D'))}${co('Insert', coChecked('Insert', trigger === 'I'))}${co('Space In', coChecked('Space In', false))}${co('SpaceOut', coChecked('SpaceOut', false))}</span>
     </div>
     <div class="dcl-row">
       <label>Die OUT<select data-dcl="out">${dieOpts(dieSel(saved?.dieNumberOut, dieOut?.dieNumber))}</select></label>
@@ -4104,7 +4181,7 @@ async function openDieChangeLogModal(
     <div class="dcl-signoff" data-dcl-signoff aria-live="polite"></div>
     <div class="bd-actions">
       <button class="btn-primary-big" data-dcl-save>${existing ? 'Update' : 'Save'} Die Change Log</button>
-      <button class="btn-ghost-big" data-dcl-skip>Skip</button>
+      ${required ? '<button class="btn-ghost-big" data-dcl-skip hidden>Close — asked again at sign-off</button>' : '<button class="btn-ghost-big" data-dcl-skip>Skip</button>'}
     </div>
   </div>`);
   let resolveModal!: () => void;
@@ -4117,11 +4194,12 @@ async function openDieChangeLogModal(
     finished = true;
     resolveModal();
   };
-  // Backdrop dismissal is equivalent to Skip for queue progression.
+  // Backdrop dismissal is equivalent to Skip for queue progression. A
+  // required log has no Skip, so the backdrop does nothing.
   const backdrop = document.getElementById('modal');
   if (backdrop) {
     backdrop.onclick = (e) => {
-      if (e.target !== backdrop) return;
+      if (e.target !== backdrop || required) return;
       closeModal();
       finish();
     };
@@ -4170,7 +4248,7 @@ async function openDieChangeLogModal(
     void (async () => {
       const val = (k: string): string =>
         (mc.querySelector<HTMLSelectElement | HTMLTextAreaElement>(`[data-dcl="${k}"]`)?.value ?? '').trim();
-      // Collect the 13 ratings for one side, counting worn/damaged flags.
+      // Collect the ratings for one side, counting worn/damaged flags.
       const collect = (side: 'out' | 'in'): { comps: Record<string, DieComponentCondition>; flagged: number } => {
         const comps = readSide(side);
         const flagged = Object.values(comps).filter(
@@ -4193,6 +4271,8 @@ async function openDieChangeLogModal(
       const changeOver = Array.from(
         mc.querySelectorAll<HTMLInputElement>('.dcl-co input:checked'),
       ).map((c) => c.value);
+      // What makes a required log count for the shift (shiftDieChangeLogged).
+      if (required && !changeOver.includes('Die')) changeOver.unshift('Die');
       const outDie = dies.find((d) => d.dieNumber === val('out'));
       const inDie = dies.find((d) => d.dieNumber === val('in'));
       const btn = mc.querySelector<HTMLButtonElement>('[data-dcl-save]');
@@ -4238,6 +4318,9 @@ async function openDieChangeLogModal(
           btn.disabled = false;
           btn.textContent = `${existing ? 'Update' : 'Save'} Die Change Log`;
         }
+        // A required log that cannot be saved must not trap the press: it
+        // may be closed now, and sign-off asks for it again.
+        mc.querySelector<HTMLButtonElement>('[data-dcl-skip]')?.removeAttribute('hidden');
       }
     })();
   });

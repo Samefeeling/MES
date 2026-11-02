@@ -11,6 +11,7 @@ import {
   dieHealth,
   dieServiceStatus,
   dieSignOffStatus,
+  dieComponentsFromFields,
   dieJobNumbers,
   dieNotePhotoName,
   diePartNumbers,
@@ -611,8 +612,9 @@ describe('SignOffStatus (the one number the setter signs off on)', () => {
   it('is 0 when nothing was rated, which is not the same as all good', () => {
     expect(dieSignOffStatus({}, {})).toBe(0);
     expect(dieSignOffStatus(undefined, undefined)).toBe(0);
-    // A key that is not one of the 13 is not an assessment.
-    expect(dieSignOffStatus({ SomethingElse: 'damaged' } as never)).toBe(0);
+    // A check the toolroom added as a column is an assessment like the 13
+    // (see "Die Change Log checks follow the list"); an unrated one is not.
+    expect(dieSignOffStatus({ DateStampChanged: '' })).toBe(0);
   });
 
   it('reads back a digit, a number or the old long choice string', () => {
@@ -1320,5 +1322,43 @@ describe('Job Search Die#', () => {
     const planned = new Map([['J2', 'p2']]);
     expect(dieRecords(parts, recs, planned).map((r) => r.jobNumber)).toEqual(['J1', 'J2', 'J1']);
     expect(dieJobNumbers(parts, recs, planned)).toEqual(['J1', 'J2']);
+  });
+});
+
+describe('Die Change Log checks follow the list', () => {
+  const scale = { results: ['1. Good work order', '2. Operational but worn', '3. Damaged or can’t be used'] };
+  it('asks every 1 / 2 / 3 Choice column, the original 13 first, and nothing else', () => {
+    const checks = dieComponentsFromFields(
+      [
+        { Title: 'Date Stamp Changed', InternalName: 'Date_x0020_Stamp_x0020_Changed', TypeAsString: 'Choice', Choices: scale },
+        { Title: 'Venting', InternalName: 'Venting', TypeAsString: 'Choice', Choices: scale },
+        { Title: 'Bolts', InternalName: 'Bolts', TypeAsString: 'Choice', Choices: scale },
+        { Title: 'Shift', InternalName: 'Shift', TypeAsString: 'Choice', Choices: { results: ['Day', 'Night'] } },
+        { Title: 'SignOffStatus', InternalName: 'SignOffStatus', TypeAsString: 'Choice', Choices: ['1', '2', '3'] },
+        { Title: 'Half a scale', InternalName: 'Half', TypeAsString: 'Choice', Choices: ['1. Good', '2. Worn'] },
+        { Title: 'Notes', InternalName: 'Notes', TypeAsString: 'Note' },
+      ],
+      new Set(['SignOffStatus']),
+    );
+    expect(checks.map((c) => `${c.key}:${c.label}`)).toEqual([
+      'Bolts:Bolts',
+      'Venting:Venting',
+      'Date_x0020_Stamp_x0020_Changed:Date Stamp Changed',
+    ]);
+    expect(checks[2].choices?.damaged).toBe('3. Damaged or can’t be used');
+  });
+
+  it('counts an added check in the sign-off and the toolroom flags', () => {
+    expect(dieSignOffStatus({ Bolts: 'good', DateStampChanged: 'damaged' })).toBe(3);
+    const latest = latestConditionByDie([
+      {
+        id: 1, eventKey: 'K', eventStartSlot: 0, eventEndSlot: 1, date: '2026-11-02', shift: 'Day',
+        dieSetter: 'A', machineCode: '550T', changeOver: ['Die'], jobNumber: 'J', dieNumberOut: '117',
+        dieDescriptionOut: '', dieNumberIn: '', dieDescriptionIn: '', components: { DateStampChanged: 'worn' },
+        componentsIn: {}, signOffStatus: 2, problemDescription: 'stamp worn', problemDescriptionIn: '',
+        createdAt: '2026-11-02T08:00:00Z',
+      },
+    ]);
+    expect(latest.get('117')?.flags).toEqual([{ key: 'DateStampChanged', label: 'Date Stamp Changed', condition: 'worn' }]);
   });
 });
