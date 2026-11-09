@@ -4,8 +4,10 @@
 //
 // Actual running hours: the half-hours the press was marked R (Running),
 // on any day. Available working hours: every weekday of the month the
-// FactoryCalendar list does not shut (holidays and RDOs alike), × 24 h.
-// Weekend R hours count as running, so a month can pass 100%.
+// FactoryCalendar list does not shut (holidays and RDOs alike), × 24 h,
+// plus 8 h for each shift the press worked on a day the factory is shut —
+// a weekend, a holiday or an RDO — so the R hours of a weekend shift are
+// counted against that shift, not against nothing.
 // The month so far, for the month under way.
 
 import { machineKey } from './maint';
@@ -13,6 +15,9 @@ import { SLOT_MINUTES } from './shifts';
 
 /** Hours a weekday makes available: three shifts, round the clock. */
 export const UTILIZATION_HOURS_PER_WEEKDAY = 24;
+
+/** Hours a shift worked on a closed day adds. */
+export const UTILIZATION_HOURS_PER_SHIFT = 8;
 
 /** The presses charted, in the order they are laid out. */
 export const UTILIZATION_PRESSES = ['1600T', '1300T', 'Batt1', 'Batt2', '850T', '550T', '320T', '150T', '125T'];
@@ -33,10 +38,15 @@ export interface ShiftTimeline {
 }
 
 export interface UtilizationMonth {
-  /** `YYYY-MM`. */
+  /** `YYYY-MM`, or 'YTD' for the year to date. */
   month: string;
   runHours: number;
+  /** weekdayHours + closedShiftHours. */
   availableHours: number;
+  /** Open weekdays × 24 h. */
+  weekdayHours: number;
+  /** Shifts worked on closed days × 8 h. */
+  closedShiftHours: number;
   /** runHours ÷ availableHours × 100; null with no available hours. */
   pct: number | null;
 }
@@ -120,6 +130,36 @@ export function runHoursByMonth(timelines: ReadonlyArray<ShiftTimeline>): Map<st
   return out;
 }
 
+/**
+ * Shifts each press worked on a day the factory is shut (a weekend, or a
+ * day in `closed`), by month: machine key → month → shifts. A shift is
+ * worked when the press has any status in it but O (No Plan) — set up,
+ * started or broken down counts as well as running, since the crew was
+ * there to run it.
+ */
+export function closedDayShiftsByMonth(
+  timelines: ReadonlyArray<ShiftTimeline>,
+  closed: ReadonlySet<string>,
+): Map<string, Map<string, number>> {
+  const worked = new Set<string>();
+  for (const t of timelines) {
+    const day = t.shiftId.slice(0, 10);
+    const [y, m, d] = day.split('-').map(Number);
+    if (!isWeekend(new Date(y, m - 1, d)) && !closed.has(day)) continue;
+    if ([...(t.timeline ?? '').slice(0, 16)].some((c) => c !== '·' && c !== 'O' && c.trim() !== '')) {
+      worked.add(`${machineKey(t.machineCode)}|${t.shiftId}`);
+    }
+  }
+  const out = new Map<string, Map<string, number>>();
+  for (const key of worked) {
+    const [machine, shiftId] = key.split('|');
+    const byMonth = out.get(machine) ?? new Map<string, number>();
+    byMonth.set(shiftId.slice(0, 7), (byMonth.get(shiftId.slice(0, 7)) ?? 0) + 1);
+    out.set(machine, byMonth);
+  }
+  return out;
+}
+
 /** The `n` months up to and including `asOf`'s, oldest first. */
 export function lastMonths(asOf: Date, n = 12): string[] {
   const out: string[] = [];
@@ -130,27 +170,50 @@ export function lastMonths(asOf: Date, n = 12): string[] {
   return out;
 }
 
-/** Each press's Utilization in each of `months`. */
+const utilizationOf = (month: string, runHours: number, weekdayHours: number, closedShiftHours: number): UtilizationMonth => {
+  const available = weekdayHours + closedShiftHours;
+  return {
+    month,
+    runHours,
+    availableHours: available,
+    weekdayHours,
+    closedShiftHours,
+    pct: available > 0 ? Math.round((runHours / available) * 1000) / 10 : null,
+  };
+};
+
+/**
+ * Each press's Utilization in each of `months`, and over the year to date
+ * (`asOf`'s calendar year: Σ R hours ÷ Σ available hours of its months,
+ * which `months` must include — the last 12 always do).
+ */
 export function machineUtilization(
   presses: ReadonlyArray<string>,
   months: ReadonlyArray<string>,
   timelines: ReadonlyArray<ShiftTimeline>,
   calendar: ReadonlyArray<CalendarDay>,
   asOf: Date,
-): Array<{ machineCode: string; months: UtilizationMonth[] }> {
+): Array<{ machineCode: string; ytd: UtilizationMonth; months: UtilizationMonth[] }> {
   const run = runHoursByMonth(timelines);
   const closed = factoryClosedDays(calendar);
-  return presses.map((machineCode) => ({
-    machineCode,
-    months: months.map((month) => {
-      const runHours = run.get(machineKey(machineCode))?.get(month) ?? 0;
-      const available = availableHours(month, closed, asOf);
-      return {
+  const extra = closedDayShiftsByMonth(timelines, closed);
+  const year = String(asOf.getFullYear());
+  return presses.map((machineCode) => {
+    const key = machineKey(machineCode);
+    const monthly = months.map((month) =>
+      utilizationOf(
         month,
-        runHours,
-        availableHours: available,
-        pct: available > 0 ? Math.round((runHours / available) * 1000) / 10 : null,
-      };
-    }),
-  }));
+        run.get(key)?.get(month) ?? 0,
+        availableHours(month, closed, asOf),
+        (extra.get(key)?.get(month) ?? 0) * UTILIZATION_HOURS_PER_SHIFT,
+      ),
+    );
+    const ytd = monthly.filter((m) => m.month.startsWith(year));
+    const sum = (f: (m: UtilizationMonth) => number): number => ytd.reduce((n, m) => n + f(m), 0);
+    return {
+      machineCode,
+      ytd: utilizationOf('YTD', sum((m) => m.runHours), sum((m) => m.weekdayHours), sum((m) => m.closedShiftHours)),
+      months: monthly,
+    };
+  });
 }

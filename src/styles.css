@@ -915,6 +915,12 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .kpi-ops-table thead .kpi-ops-groups th[rowspan]{white-space:normal;line-height:1.2}
 .kpi-ops-table thead tr+tr th{height:30px;padding:3px 5px;font-size:11px;line-height:1.2;white-space:normal;text-transform:none;letter-spacing:0;background:color-mix(in srgb,var(--theme-dark) 86%,#000)}
 .kpi-ops-table thead th small{display:block;font-size:10px;font-weight:600;opacity:.8}
+/* The two operator tables sit side by side: one header height for both. The
+   limits table's two rows (group + column) are fixed, and the output table's
+   single row takes their sum, so the first rows line up across the page. */
+.kpi-ops-limits thead .kpi-ops-groups th{height:24px}
+.kpi-ops-limits thead tr+tr th{height:32px}
+.kpi-ops-output thead th{height:56px}
 .kpi-ops-table thead th.kpi-ops-grp,.kpi-ops-table thead .kpi-ops-groups th[colspan]{text-align:center}
 .kpi-ops-table .num{text-align:right}
 .kpi-ops-table thead tr+tr th.num{text-align:right}

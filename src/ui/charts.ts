@@ -693,10 +693,13 @@ export function renderBoxPlotChart(series: BoxSeries[]): string {
 // =========================================================================
 
 export interface UtilizationBar {
-  /** `YYYY-MM`. */
+  /** `YYYY-MM`, or 'YTD' for the year to date. */
   month: string;
   runHours: number;
   availableHours: number;
+  /** Open weekdays × 24 h, and shifts worked on closed days × 8 h. */
+  weekdayHours?: number;
+  closedShiftHours?: number;
   pct: number | null;
   /** The month under way: its figure is the month so far. */
   partial?: boolean;
@@ -706,9 +709,9 @@ const UTIL_W = 460;
 const UTIL_H = 190;
 
 /**
- * A press's Utilization, a bar a month, % on the axis. The axis runs to 100%
- * or past it when a month ran more hours than its weekdays made available
- * (weekend work, or more than one shift a day); the 100% line is dashed.
+ * A press's Utilization, a bar a month, % on the axis; a 'YTD' bar (the year
+ * to date) is drawn darker and set off from the months by a rule. The axis
+ * runs to 100%, or past it if a bar does; the 100% line is dashed.
  */
 export function renderUtilizationChart(bars: UtilizationBar[]): string {
   const padL = 34;
@@ -729,22 +732,33 @@ export function renderUtilizationChart(bars: UtilizationBar[]): string {
   }
   grid += `<line x1="${padL}" y1="${y(100).toFixed(1)}" x2="${UTIL_W - padR}" y2="${y(100).toFixed(1)}" stroke="#64748b" stroke-dasharray="4 3"/>`;
   const monthLabel = (m: string): string =>
-    new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1, 1).toLocaleDateString('en-AU', { month: 'short' });
+    m === 'YTD'
+      ? 'YTD'
+      : new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1, 1).toLocaleDateString('en-AU', { month: 'short' });
   let marks = '';
   bars.forEach((b, i) => {
     const cx = padL + i * slot + slot / 2;
+    const ytd = b.month === 'YTD';
     const tip = [
-      `${monthLabel(b.month)} ${b.month.slice(0, 4)}${b.partial ? ' (so far)' : ''}`,
+      ytd ? 'Year to date' : `${monthLabel(b.month)} ${b.month.slice(0, 4)}${b.partial ? ' (so far)' : ''}`,
       `Running (R) ${b.runHours.toFixed(1)} h`,
-      `Available ${b.availableHours} h (weekdays less holidays and RDOs × 24 h)`,
+      `Available ${b.availableHours} h`,
+      b.weekdayHours != null ? `  open weekdays × 24 h: ${b.weekdayHours} h` : '',
+      b.closedShiftHours ? `  shifts worked on weekends / holidays / RDOs × 8 h: ${b.closedShiftHours} h` : '',
       `Utilization ${b.pct == null ? '—' : `${b.pct.toFixed(1)}%`}`,
-    ].join('\n');
+    ]
+      .filter(Boolean)
+      .join('\n');
+    if (ytd && i + 1 < bars.length) {
+      const x = padL + (i + 1) * slot;
+      marks += `<line x1="${x.toFixed(1)}" y1="${padT}" x2="${x.toFixed(1)}" y2="${padT + innerH}" stroke="#94a3b8"/>`;
+    }
     if (b.pct != null && b.pct > 0) {
       const h = (b.pct / top) * innerH;
-      marks += `<rect x="${(cx - bw / 2).toFixed(1)}" y="${y(b.pct).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="#0284c7"${b.partial ? ' fill-opacity="0.55"' : ''}/>`;
+      marks += `<rect x="${(cx - bw / 2).toFixed(1)}" y="${y(b.pct).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${ytd ? '#075985' : '#0284c7'}"${b.partial ? ' fill-opacity="0.55"' : ''}/>`;
       marks += `<text x="${cx.toFixed(1)}" y="${(y(b.pct) - 3).toFixed(1)}" font-size="9.5" fill="#1e293b" text-anchor="middle" font-weight="700">${Math.round(b.pct)}</text>`;
     }
-    marks += `<text x="${cx.toFixed(1)}" y="${UTIL_H - 7}" font-size="9.5" fill="#475569" text-anchor="middle">${escAttr(monthLabel(b.month))}</text>`;
+    marks += `<text x="${cx.toFixed(1)}" y="${UTIL_H - 7}" font-size="9.5" fill="${ytd ? '#075985' : '#475569'}" text-anchor="middle"${ytd ? ' font-weight="700"' : ''}>${escAttr(monthLabel(b.month))}</text>`;
     // The whole column carries the hover, so a short or empty bar has one too.
     marks += `<rect x="${(cx - slot / 2).toFixed(1)}" y="${padT}" width="${slot.toFixed(1)}" height="${innerH}" fill="transparent"><title>${escAttr(tip)}</title></rect>`;
   });

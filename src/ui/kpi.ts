@@ -65,6 +65,7 @@ import {
   type BoxSeries,
 } from './charts';
 import {
+  UTILIZATION_HOURS_PER_SHIFT,
   UTILIZATION_HOURS_PER_WEEKDAY,
   UTILIZATION_PRESSES,
   lastMonths,
@@ -591,7 +592,7 @@ let dalRef: PmdDataLayer;
 let utilLoad: {
   key: string;
   loading: boolean;
-  charts: Array<{ machineCode: string; months: UtilizationMonth[] }>;
+  charts: Array<{ machineCode: string; ytd: UtilizationMonth; months: UtilizationMonth[] }>;
   error: string;
   calendarError: string;
 } | null = null;
@@ -602,7 +603,13 @@ function ensureUtilization(): void {
   const months = lastMonths(now, 12);
   const key = `${months[0]}|${dateKey(now)}`;
   if (utilLoad?.key === key) return;
-  const load = { key, loading: true, charts: [] as Array<{ machineCode: string; months: UtilizationMonth[] }>, error: '', calendarError: '' };
+  const load = {
+    key,
+    loading: true,
+    charts: [] as Array<{ machineCode: string; ytd: UtilizationMonth; months: UtilizationMonth[] }>,
+    error: '',
+    calendarError: '',
+  };
   utilLoad = load;
   void (async () => {
     const [timelines, calendar] = await Promise.all([
@@ -637,14 +644,15 @@ function renderUtilizationSection(): string {
       ? `<div class="kpi-util-wait">Production not read: ${escapeHtml(load.error)}</div>`
       : `<div class="kpi-util-grid">${load.charts
           .map(
-            (c) => `<div class="kpi-chart kpi-util-card"><h4>${escapeHtml(c.machineCode)}</h4>${renderUtilizationChart(
-              c.months.map((m) => ({ ...m, partial: m.month === thisMonth })),
-            )}</div>`,
+            (c) => `<div class="kpi-chart kpi-util-card"><h4>${escapeHtml(c.machineCode)}</h4>${renderUtilizationChart([
+              c.ytd,
+              ...c.months.map((m) => ({ ...m, partial: m.month === thisMonth })),
+            ])}</div>`,
           )
           .join('')}</div>`;
   return `<section class="kpi-util" aria-label="Machine Utilization by month">
     <h3>Machine Utilization by month 🔒</h3>
-    <div class="kpi-chart-note">Utilization = hours marked <b>R</b> (Running) ÷ available hours, where available = every weekday the FactoryCalendar list does not shut (holidays and RDOs) × ${UTILIZATION_HOURS_PER_WEEKDAY} h. The month under way (paler bar) is the month so far. Weekend R hours count as running, so a month can pass 100% (dashed line).${
+    <div class="kpi-chart-note">Utilization = hours marked <b>R</b> (Running) ÷ available hours, where available = every weekday the FactoryCalendar list does not shut (holidays and RDOs) × ${UTILIZATION_HOURS_PER_WEEKDAY} h, plus ${UTILIZATION_HOURS_PER_SHIFT} h for each shift the press worked on a weekend, holiday or RDO (any status but O). <b>YTD</b> (dark bar, first) is this calendar year: Σ R hours ÷ Σ available hours. The month under way (paler bar) is the month so far.${
       load.calendarError ? ` <b>⚠ FactoryCalendar not read (${escapeHtml(load.calendarError)}): no holidays or RDOs taken off.</b>` : ''
     }</div>
     ${body}

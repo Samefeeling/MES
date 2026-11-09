@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   availableHours,
+  closedDayShiftsByMonth,
   factoryClosedDays,
   lastMonths,
   machineUtilization,
@@ -56,8 +57,50 @@ describe('Machine Utilization', () => {
     );
     expect(charts.map((c) => c.machineCode)).toEqual(['1600T', '1300T']);
     // 8 h over 20 weekdays × 24 h.
-    expect(charts[0].months[1]).toEqual({ month: '2026-11', runHours: 8, availableHours: 480, pct: 1.7 });
+    expect(charts[0].months[1]).toEqual({
+      month: '2026-11', runHours: 8, availableHours: 480, weekdayHours: 480, closedShiftHours: 0, pct: 1.7,
+    });
     expect(charts[1].months[1].pct).toBe(0);
+  });
+
+  it('adds 8 h for each shift a press worked on a weekend, holiday or RDO', () => {
+    const timelines = [
+      // Saturday 7th: Day and Afternoon run; the Night only sets up — the crew
+      // was there, so it is available time too.
+      { machineCode: '850T', shiftId: '2026-11-07-Day', timeline: 'RRRRRRRRRRRRRRRR' },
+      { machineCode: '850T', shiftId: '2026-11-07-Afternoon', timeline: 'RRRRRRRR········' },
+      { machineCode: '850T', shiftId: '2026-11-07-Night', timeline: 'DDDD············' },
+      // Sunday: a shift marked only "No Plan" was not worked.
+      { machineCode: '850T', shiftId: '2026-11-08-Day', timeline: 'OOOOOOOOOOOOOOOO' },
+      // The 11th is shut in the FactoryCalendar, and 850T ran a shift.
+      { machineCode: '850T', shiftId: '2026-11-11-Day', timeline: 'RRRRRRRR' },
+      // Two orders on one shift are one shift.
+      { machineCode: '850T', shiftId: '2026-11-11-Day', timeline: '········RRRR' },
+      // A weekday shift is in the 24 h already.
+      { machineCode: '850T', shiftId: '2026-11-10-Day', timeline: 'RRRRRRRRRRRRRRRR' },
+    ];
+    expect(closedDayShiftsByMonth(timelines, new Set(['2026-11-11'])).get('850T')?.get('2026-11')).toBe(4);
+    const [c] = machineUtilization(['850T'], ['2026-11'], timelines, [{ day: '2026-11-11', name: 'Shutdown' }], END_OF_NOV);
+    // R: 8 + 4 + 6 + 8 = 26 h. Available: 20 open weekdays × 24 + 4 shifts × 8.
+    expect(c.months[0]).toMatchObject({ runHours: 26, weekdayHours: 480, closedShiftHours: 32, availableHours: 512 });
+    expect(c.months[0].pct).toBe(5.1);
+  });
+
+  it('gives the year to date as Σ R hours ÷ Σ available hours of this year\'s months', () => {
+    const [c] = machineUtilization(
+      ['1600T'],
+      ['2025-12', '2026-01', '2026-02'],
+      [
+        { machineCode: '1600T', shiftId: '2025-12-01-Day', timeline: 'RRRRRRRRRRRRRRRR' },
+        { machineCode: '1600T', shiftId: '2026-01-05-Day', timeline: 'RRRRRRRRRRRRRRRR' },
+        { machineCode: '1600T', shiftId: '2026-02-02-Day', timeline: 'RRRRRRRR' },
+      ],
+      [],
+      new Date(2026, 1, 28, 12),
+    );
+    // January 2026 has 22 weekdays, February 20: 42 × 24 = 1008 h; December is last year's.
+    expect(c.ytd).toMatchObject({ month: 'YTD', runHours: 12, availableHours: 1008 });
+    expect(c.ytd.pct).toBe(1.2);
   });
 
   it('lists the last 12 months, oldest first', () => {
