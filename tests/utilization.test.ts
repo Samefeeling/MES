@@ -86,21 +86,47 @@ describe('Machine Utilization', () => {
     expect(c.months[0].pct).toBe(5.1);
   });
 
-  it('gives the year to date as Σ R hours ÷ Σ available hours of this year\'s months', () => {
+  it('gives YTD as Σ R hours ÷ Σ available hours of the financial year, from April', () => {
+    const timelines = [
+      { machineCode: '1600T', shiftId: '2025-03-03-Day', timeline: 'RRRRRRRRRRRRRRRR' },
+      { machineCode: '1600T', shiftId: '2025-12-01-Day', timeline: 'RRRRRRRRRRRRRRRR' },
+      { machineCode: '1600T', shiftId: '2026-01-05-Day', timeline: 'RRRRRRRRRRRRRRRR' },
+      { machineCode: '1600T', shiftId: '2026-02-02-Day', timeline: 'RRRRRRRR' },
+    ];
+    // Records counted from any month: FY 2025/26 runs April 2025 → March 2026,
+    // so March 2025 is last year's.
+    const [c] = machineUtilization(
+      ['1600T'], ['2025-03', '2025-12', '2026-01', '2026-02'], timelines, [], new Date(2026, 1, 28, 12), '2000-01',
+    );
+    // December 23 weekdays, January 22, February 20: 65 × 24 = 1560 h.
+    expect(c.ytd).toMatchObject({ month: 'YTD', runHours: 20, availableHours: 1560, fromMonth: '2025-04', excludedMonths: [] });
+    expect(c.ytd.pct).toBe(1.3);
+    // Counting from January: December is charted but not in YTD.
+    const [d] = machineUtilization(
+      ['1600T'], ['2025-12', '2026-01', '2026-02'], timelines, [], new Date(2026, 1, 28, 12), '2026-01',
+    );
+    expect(d.ytd).toMatchObject({ runHours: 12, availableHours: 1008, excludedMonths: ['2025-12'] });
+    expect(d.months.map((m) => !!m.incomplete)).toEqual([true, false, false]);
+  });
+
+  it('starts this year\'s YTD at August 2026: MES went live over June and July', () => {
+    const asOf = new Date(2026, 10, 9, 10);
+    const months = lastMonths(asOf);
     const [c] = machineUtilization(
       ['1600T'],
-      ['2025-12', '2026-01', '2026-02'],
+      months,
       [
-        { machineCode: '1600T', shiftId: '2025-12-01-Day', timeline: 'RRRRRRRRRRRRRRRR' },
-        { machineCode: '1600T', shiftId: '2026-01-05-Day', timeline: 'RRRRRRRRRRRRRRRR' },
-        { machineCode: '1600T', shiftId: '2026-02-02-Day', timeline: 'RRRRRRRR' },
+        { machineCode: '1600T', shiftId: '2026-07-06-Day', timeline: 'RRRRRRRRRRRRRRRR' },
+        { machineCode: '1600T', shiftId: '2026-08-03-Day', timeline: 'RRRRRRRRRRRRRRRR' },
       ],
       [],
-      new Date(2026, 1, 28, 12),
+      asOf,
     );
-    // January 2026 has 22 weekdays, February 20: 42 × 24 = 1008 h; December is last year's.
-    expect(c.ytd).toMatchObject({ month: 'YTD', runHours: 12, availableHours: 1008 });
-    expect(c.ytd.pct).toBe(1.2);
+    expect(c.ytd.fromMonth).toBe('2026-04');
+    expect(c.ytd.excludedMonths).toEqual(['2026-04', '2026-05', '2026-06', '2026-07']);
+    // August 21 weekdays, September 22, October 22, November 2nd–9th 6: 71 × 24.
+    expect(c.ytd).toMatchObject({ runHours: 8, availableHours: 71 * 24 });
+    expect(c.months.filter((m) => m.incomplete).map((m) => m.month).at(-1)).toBe('2026-07');
   });
 
   it('lists the last 12 months, oldest first', () => {

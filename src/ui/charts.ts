@@ -703,6 +703,11 @@ export interface UtilizationBar {
   pct: number | null;
   /** The month under way: its figure is the month so far. */
   partial?: boolean;
+  /** A month before MES recorded in full: drawn grey, not in YTD. */
+  incomplete?: boolean;
+  /** YTD only: the financial year's first month, and the months left out. */
+  fromMonth?: string;
+  excludedMonths?: string[];
 }
 
 const UTIL_W = 460;
@@ -739,8 +744,15 @@ export function renderUtilizationChart(bars: UtilizationBar[]): string {
   bars.forEach((b, i) => {
     const cx = padL + i * slot + slot / 2;
     const ytd = b.month === 'YTD';
+    const monthName = (m: string): string => `${monthLabel(m)} ${m.slice(0, 4)}`;
     const tip = [
-      ytd ? 'Year to date' : `${monthLabel(b.month)} ${b.month.slice(0, 4)}${b.partial ? ' (so far)' : ''}`,
+      ytd
+        ? `Financial year to date${b.fromMonth ? ` (from ${monthName(b.fromMonth)})` : ''}`
+        : `${monthName(b.month)}${b.partial ? ' (so far)' : ''}`,
+      ytd && b.excludedMonths?.length
+        ? `  left out (MES records not complete): ${b.excludedMonths.map(monthName).join(', ')}`
+        : '',
+      b.incomplete ? '  MES records not complete: not in YTD' : '',
       `Running (R) ${b.runHours.toFixed(1)} h`,
       `Available ${b.availableHours} h`,
       b.weekdayHours != null ? `  open weekdays × 24 h: ${b.weekdayHours} h` : '',
@@ -755,7 +767,7 @@ export function renderUtilizationChart(bars: UtilizationBar[]): string {
     }
     if (b.pct != null && b.pct > 0) {
       const h = (b.pct / top) * innerH;
-      marks += `<rect x="${(cx - bw / 2).toFixed(1)}" y="${y(b.pct).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${ytd ? '#075985' : '#0284c7'}"${b.partial ? ' fill-opacity="0.55"' : ''}/>`;
+      marks += `<rect x="${(cx - bw / 2).toFixed(1)}" y="${y(b.pct).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${ytd ? '#075985' : b.incomplete ? '#94a3b8' : '#0284c7'}"${b.partial ? ' fill-opacity="0.55"' : ''}/>`;
       marks += `<text x="${cx.toFixed(1)}" y="${(y(b.pct) - 3).toFixed(1)}" font-size="9.5" fill="#1e293b" text-anchor="middle" font-weight="700">${Math.round(b.pct)}</text>`;
     }
     marks += `<text x="${cx.toFixed(1)}" y="${UTIL_H - 7}" font-size="9.5" fill="${ytd ? '#075985' : '#475569'}" text-anchor="middle"${ytd ? ' font-weight="700"' : ''}>${escAttr(monthLabel(b.month))}</text>`;

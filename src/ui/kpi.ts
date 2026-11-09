@@ -66,6 +66,7 @@ import {
 } from './charts';
 import {
   UTILIZATION_HOURS_PER_SHIFT,
+  UTILIZATION_FIRST_FULL_MONTH,
   UTILIZATION_HOURS_PER_WEEKDAY,
   UTILIZATION_PRESSES,
   lastMonths,
@@ -652,7 +653,7 @@ function renderUtilizationSection(): string {
           .join('')}</div>`;
   return `<section class="kpi-util" aria-label="Machine Utilization by month">
     <h3>Machine Utilization by month 🔒</h3>
-    <div class="kpi-chart-note">Utilization = hours marked <b>R</b> (Running) ÷ available hours, where available = every weekday the FactoryCalendar list does not shut (holidays and RDOs) × ${UTILIZATION_HOURS_PER_WEEKDAY} h, plus ${UTILIZATION_HOURS_PER_SHIFT} h for each shift the press worked on a weekend, holiday or RDO (any status but O). <b>YTD</b> (dark bar, first) is this calendar year: Σ R hours ÷ Σ available hours. The month under way (paler bar) is the month so far.${
+    <div class="kpi-chart-note">Utilization = hours marked <b>R</b> (Running) ÷ available hours, where available = every weekday the FactoryCalendar list does not shut (holidays and RDOs) × ${UTILIZATION_HOURS_PER_WEEKDAY} h, plus ${UTILIZATION_HOURS_PER_SHIFT} h for each shift the press worked on a weekend, holiday or RDO (any status but O). <b>YTD</b> (dark bar, first) is the financial year to date, from April: Σ R hours ÷ Σ available hours, counted from ${new Date(Number(UTILIZATION_FIRST_FULL_MONTH.slice(0, 4)), Number(UTILIZATION_FIRST_FULL_MONTH.slice(5, 7)) - 1, 1).toLocaleDateString('en-AU', { month: 'short', year: 'numeric' })}, the first month MES recorded in full (the grey months before it are not in YTD). The month under way (paler bar) is the month so far.${
       load.calendarError ? ` <b>⚠ FactoryCalendar not read (${escapeHtml(load.calendarError)}): no holidays or RDOs taken off.</b>` : ''
     }</div>
     ${body}
