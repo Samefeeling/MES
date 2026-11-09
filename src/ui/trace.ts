@@ -727,9 +727,10 @@ const clock = (iso: string): string =>
   new Date(iso).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false });
 
 /**
- * The press's plan across the shift (`TraceRow.plan`): each order where it
- * runs once its die changes have their four hours, and the changes, aligned
- * to the status grid above. Overlapping pieces (a co-run) take separate lanes.
+ * The press's plan across the shift (`TraceRow.plan`): each order where
+ * Planning.csv has it, and its die change in the four hours before it,
+ * aligned to the status grid above. Overlapping pieces (a co-run, or a
+ * change the planner left no room for) take separate lanes.
  */
 function renderPlanBar(r: TraceRow, plan: NonNullable<TraceRow['plan']>): string {
   const bounds = shiftBounds(r.shiftId);
@@ -767,9 +768,6 @@ function renderPlanBar(r: TraceRow, plan: NonNullable<TraceRow['plan']>): string
         `${b.partNumber}${order?.partDescription ? ' — ' + order.partDescription : ''}`,
         `Runs ${clock(b.start)}–${clock(b.end)} this shift`,
         order ? `Planning.csv Start ${scheduleTime(order.plannedStart)} → Due ${scheduleTime(order.plannedEnd)}` : '',
-        order && start > from && Date.parse(order.plannedStart) < start
-          ? `Starts ${((start - Date.parse(order.plannedStart)) / 3_600_000).toFixed(1)} h into its window, after the die change`
-          : '',
         pieces != null ? `Plan this shift ${pieces.toLocaleString()} pcs` : '',
       ]
         .filter(Boolean)

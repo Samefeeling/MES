@@ -20,9 +20,7 @@ import { rec } from './helpers';
 
 // Planning.csv as PMD had it for Monday 12 Oct 2026 (the rows that touch the
 // day). 1300T's second order runs Morning + Night only; 320T is planned for
-// the night with a two-part tool, its window long enough for the die to go
-// on first (23:00–03:00) and both parts to run (03:00–05:43). MES has nothing
-// signed for either at night.
+// the night with a two-part tool. MES has nothing signed for either at night.
 const PLAN_12_OCT = [
   'Machine,JobHead_StartDate,JobOper_ProdStandard,JobHead_ReqDueDate,JobHead_JobNum,JobHead_PartNum,JobHead_PartDescription,Calculated_RemainingQty,JobHead_ProdQty,no of shift',
   '1300T,12/10/2026 7:30,16,12/10/2026 12:00,SFM507841,G1188100,Postura,200,1000,MAN',
@@ -31,8 +29,8 @@ const PLAN_12_OCT = [
   'Batt2,13/10/2026 23:00,26.09302372,15/10/2026 10:41,SFM507866,G0256004,Proteus,918,918,MAN',
   'Batt1,12/10/2026 7:30,24.00000384,12/10/2026 11:56,SFM507920,POPL0112,Postura,150,150,MAN',
   '550T,13/10/2026 3:00,17.99999856,14/10/2026 9:45,SFM507970,V4528,Podium,400,400,MN',
-  '320T,12/10/2026 23:00,45.00450045,13/10/2026 5:43,SFM507921,V11582-2,Lumba Arm,100,100,MN',
-  '320T,12/10/2026 23:00,45.00450045,13/10/2026 5:43,SFM507922,V11582-1,Lumba Arm,100,100,MN',
+  '320T,12/10/2026 23:00,45.00450045,13/10/2026 1:43,SFM507921,V11582-2,Lumba Arm,100,100,MN',
+  '320T,12/10/2026 23:00,45.00450045,13/10/2026 1:43,SFM507922,V11582-1,Lumba Arm,100,100,MN',
   'HS,12/10/2026 12:00,20.99958001,12/10/2026 18:36,018661-2,MAPSE000,Postura,65,65,MA',
 ].join('\n');
 const orders = parsePlanningCsv(PLAN_12_OCT);
@@ -91,25 +89,26 @@ describe('12 Oct 2026: a press planned and not signed stays in the plan', () => 
     expect(plannedOn(lines, '1300T', 'Night')).toBe(128); // 8 h × 16
     expect(plannedOn(lines, 'Batt1', 'Day')).toBe(106);
     // 550T's order is its first in the file, not under way, and starts at
-    // 03:00 — long after the export's 07:30 "now": those four hours put its
-    // die on, and the press runs it from 07:00 (core/schedule
-    // pressRunsAfterDieChanges). It made nothing that night either.
-    expect(plannedOn(lines, '550T', 'Night')).toBe(0);
+    // 03:00 — long after the export's 07:30 "now": its die goes on in the
+    // four hours before (23:00–03:00, core/schedule pressPlanAfterDieChanges)
+    // and the night is asked for the window's own 03:00–07:00, 4 h × 18.
+    expect(plannedOn(lines, '550T', 'Night')).toBe(72);
     expect(plannedOn(lines, '320T', 'Night')).toBe(200); // two parts off one tool
     // 3 h at 20.99958 is 62.9987: 63, and the 2 left of the order after it.
     expect(plannedOn(lines, 'HStamp', 'Day')).toBe(63);
     expect(plannedOn(lines, 'HStamp', 'Afternoon')).toBe(2);
   });
 
-  it('judges the day against 1,159 pieces, not the 902 MES had rows for', () => {
+  it('judges the day against 1,231 pieces, not the 902 MES had rows for', () => {
     // 1300T's night booked work nobody signed off; 320T booked nothing.
     const lines = lastDay((press, sid) => press === '1300T' && sid.endsWith('Night'));
     const a = attainmentOfTuples(lines);
-    // 1,231 before 550T's die change was given its four hours.
-    expect(a.expected).toBe(1159);
+    // Every order's own Start–Due window, 550T's 72 at the end of the night
+    // included: its die change is before its start, not inside it.
+    expect(a.expected).toBe(1231);
     // 67 + 184 + 184 + 72 (1300T's first order, capped) + 106 + 0 + 2.
     expect(a.actual).toBe(615);
-    expect(a.pct).toBe(Math.round((615 / 1159) * 100));
+    expect(a.pct).toBe(Math.round((615 / 1231) * 100));
     const night1300 = lines.filter((l) => l.machineCode === '1300T' && l.shiftId.endsWith('Night'));
     expect(night1300.every((l) => l.unsigned && l.credited === 0)).toBe(true);
   });
@@ -134,14 +133,18 @@ describe('PMD_ShiftPlan: the plan of record of every press in a shift', () => {
         { jobNumber: 'SFM507921', partNumber: 'V11582-2', pieces: 100, hours: 2.72 },
         { jobNumber: 'SFM507922', partNumber: 'V11582-1', pieces: 100, hours: 2.72 },
       ],
-      // Across the shift, for the Live Status bar: nothing says what the
-      // press ran before, so the Lumba tool goes on first (23:00–03:00) and
-      // both parts run from 03:00.
+      // Across the shift, for the Live Status bar: both parts run where
+      // Epicor put them. Nothing says what the press ran before, so the
+      // Lumba tool goes on in the four hours before — the afternoon's bar.
       bar: [
-        { kind: 'change', jobNumber: 'SFM507921', partNumber: 'V11582-2', fromPart: '', start: at('2026-10-12T23:00'), end: at('2026-10-13T03:00') },
-        { kind: 'run', jobNumber: 'SFM507921', partNumber: 'V11582-2', start: at('2026-10-13T03:00'), end: at('2026-10-13T05:43') },
-        { kind: 'run', jobNumber: 'SFM507922', partNumber: 'V11582-1', start: at('2026-10-13T03:00'), end: at('2026-10-13T05:43') },
+        { kind: 'run', jobNumber: 'SFM507921', partNumber: 'V11582-2', start: at('2026-10-12T23:00'), end: at('2026-10-13T01:43') },
+        { kind: 'run', jobNumber: 'SFM507922', partNumber: 'V11582-1', start: at('2026-10-12T23:00'), end: at('2026-10-13T01:43') },
       ],
+    });
+    expect(shiftPlanFor(orders, '320T', '2026-10-12-Afternoon', MORNING_AFTER, CTX)).toMatchObject({
+      plan: 0,
+      jobs: [],
+      bar: [{ kind: 'change', jobNumber: 'SFM507921', partNumber: 'V11582-2', fromPart: '', start: at('2026-10-12T19:00'), end: at('2026-10-12T23:00') }],
     });
     // Kept before or during the shift, it is the whole shift's plan.
     expect(shiftPlanFor(orders, '1300T', NIGHT, new Date('2026-10-12T23:30:00'), CTX)?.plan).toBe(128);
@@ -152,12 +155,13 @@ describe('PMD_ShiftPlan: the plan of record of every press in a shift', () => {
     expect(shiftPlanFor(orders, 'Batt2', NIGHT, MORNING_AFTER, CTX)).toEqual({
       machineCode: 'Batt2', shiftId: NIGHT, plan: 0, jobs: [], bar: [],
     });
-    // 550T's night was its die change (see above): kept as planned for
-    // nothing, the change on its bar.
+    // 550T's night: the die change in the four hours before the order's
+    // 03:00 start, then the order's own 03:00–07:00.
     const dieNight = shiftPlanFor(orders, '550T', NIGHT, MORNING_AFTER, CTX);
-    expect(dieNight?.plan).toBe(0);
+    expect(dieNight?.plan).toBe(72);
     expect(dieNight?.bar).toEqual([
-      { kind: 'change', jobNumber: 'SFM507970', partNumber: 'V4528', fromPart: '', start: at('2026-10-13T03:00'), end: at('2026-10-13T07:00') },
+      { kind: 'change', jobNumber: 'SFM507970', partNumber: 'V4528', fromPart: '', start: at('2026-10-12T23:00'), end: at('2026-10-13T03:00') },
+      { kind: 'run', jobNumber: 'SFM507970', partNumber: 'V4528', start: at('2026-10-13T03:00'), end: at('2026-10-13T07:00') },
     ]);
     const noRate = orders.map((o) => (o.jobNumber === 'SFM507921' ? { ...o, qtyPerHr: 0 } : o));
     expect(shiftPlanFor(noRate, '320T', NIGHT, MORNING_AFTER, CTX)).toBeNull();
@@ -166,7 +170,7 @@ describe('PMD_ShiftPlan: the plan of record of every press in a shift', () => {
   it('is kept for every press, run or not', () => {
     const { save, remove } = shiftPlanChanges(PRESSES, [], orders, NIGHT, MORNING_AFTER, CTX);
     expect(save.map((p) => `${p.machineCode} ${p.plan}`)).toEqual([
-      '1600T 184', '1300T 128', 'Batt1 0', 'Batt2 0', '850T 0', '550T 0', '320T 200', '150T 0', '125T 0', 'HStamp 0',
+      '1600T 184', '1300T 128', 'Batt1 0', 'Batt2 0', '850T 0', '550T 72', '320T 200', '150T 0', '125T 0', 'HStamp 0',
     ]);
     expect(remove).toEqual([]);
   });
@@ -318,7 +322,7 @@ describe('keeping the plans', () => {
     // The demo's presses (no 1300T): the one signing, and 320T, run and
     // not signed yet; the rest kept as planned for nothing.
     expect(kept.filter((p) => p.plan > 0).map((p) => `${p.machineCode} ${p.plan}`).sort()).toEqual([
-      '1600T 184', '320T 200',
+      '1600T 184', '320T 200', '550T 72',
     ]);
     expect(kept.length).toBeGreaterThan(2);
     const signed = internals.production.find((r) => r.machineCode === '1600T' && r.slotIndex === 0);
@@ -384,8 +388,11 @@ describe('keeping the plans', () => {
     const planJobs = JSON.parse(rows.find((r) => r.MachineCode === '320T')!.PlanJobs as string) as Array<Record<string, unknown>>;
     expect(planJobs.filter((j) => j.jobNumber).map((j) => j.jobNumber)).toEqual(['SFM507921', 'SFM507922']);
     expect(planJobs.filter((j) => !j.jobNumber).map((j) => `${j.bar} ${j.job}`)).toEqual([
-      'change SFM507921', 'run SFM507921', 'run SFM507922',
+      'run SFM507921', 'run SFM507922',
     ]);
+    // 550T's die goes on in the night, before its order starts at 03:00.
+    const bar550 = JSON.parse(rows.find((r) => r.MachineCode === '550T')!.PlanJobs as string) as Array<Record<string, unknown>>;
+    expect(bar550.filter((j) => !j.jobNumber).map((j) => `${j.bar} ${j.job}`)).toEqual(['change SFM507970', 'run SFM507970']);
     expect(first).toHaveLength(PRESSES.length);
     // Kept: read back as it was written, and nothing more is written.
     const before = posts.length;

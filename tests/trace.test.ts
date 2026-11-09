@@ -310,15 +310,14 @@ describe('Live Status card for a press with no order', () => {
     expect(html).not.toMatch(/is-(green|orange|red|future)/);
   });
 
-  it('draws the plan of record: the die change first, then the order in what is left of its window', () => {
+  it('draws the plan of record: the die change in the 4 h before the order, the order where Epicor put it', () => {
     // The press last ran OLD (Die D-OLD); J91, not started, puts Die D-NEW
-    // on, so its four hours take the start of its 07:00–13:00 window and J91
-    // runs 11:00–13:00, still its Due. J92 shares the die and runs from
-    // 13:00, as Epicor put it.
+    // on: the change is the four hours before its 11:00 start, and J91 runs
+    // its own 11:00–13:00. J92 shares the die and runs from 13:00.
     const dies: Record<string, string> = { OLD: 'D-OLD', NEW: 'D-NEW', NEW2: 'D-NEW' };
     const dieOf = (part: string) => dies[part];
     const orders = [
-      order({ jobNumber: 'J91', partNumber: 'NEW', machineCode: '1300T', plannedStart: '2026-07-01T07:00:00', plannedEnd: '2026-07-01T13:00:00', qtyPerHr: 1 / 50, jobRequired: 300, orderQty: 300 }),
+      order({ jobNumber: 'J91', partNumber: 'NEW', machineCode: '1300T', plannedStart: '2026-07-01T11:00:00', plannedEnd: '2026-07-01T13:00:00', qtyPerHr: 1 / 50, jobRequired: 300, orderQty: 300 }),
       order({ jobNumber: 'J92', partNumber: 'NEW2', machineCode: '1300T', plannedStart: '2026-07-01T13:00:00', plannedEnd: '2026-07-01T17:00:00', qtyPerHr: 1 / 50, jobRequired: 200, orderQty: 200 }),
     ];
     const bar = shiftPlanBar(orders, '1300T', '2026-07-01-Day', { dieOf, partBefore: () => 'OLD' });
@@ -326,7 +325,7 @@ describe('Live Status card for a press with no order', () => {
     const html = renderSchedule(live({ plan: { kept: true, bar, jobs: [{ jobNumber: 'J91', partNumber: 'NEW', pieces: 200 }], orders, dieOf } }));
     expect(html).toContain('PMD_ShiftPlan · plan of record');
     expect(html).toMatch(/class="trace-schedule-bar is-change" style="left:0\.000%;width:50\.000%;top:0px" title="Die change 07:00–11:00\nOLD \(Die D-OLD\) → NEW \(Die D-NEW\)/);
-    expect(html).toMatch(/style="left:50\.000%;width:25\.000%;top:0px" title="Job J91[^"]*Starts 4\.0 h into its window, after the die change\nPlan this shift 200 pcs">J91</);
+    expect(html).toMatch(/style="left:50\.000%;width:25\.000%;top:0px" title="Job J91[^"]*Plan this shift 200 pcs">J91</);
     expect(html).toMatch(/style="left:75\.000%;width:25\.000%;top:0px" title="Job J92/);
     // Not kept yet: the same bar, said to be worked out from Planning.csv.
     expect(renderSchedule(live({ plan: { kept: false, bar, jobs: [], orders, dieOf } }))).toContain('Planning.csv + die changes · not kept yet');
