@@ -644,8 +644,8 @@ function renderUtilizationSection(): string {
           .join('')}</div>`;
   return `<section class="kpi-util" aria-label="Machine Utilization by month">
     <h3>Machine Utilization by month 🔒</h3>
-    <div class="kpi-chart-note">Utilization = hours marked <b>R</b> (Running) ÷ available hours, where available = every weekday that is not a holiday in the FactoryCalendar list × ${UTILIZATION_HOURS_PER_WEEKDAY} h. RDOs in the list count as available. The month under way (paler bar) is the month so far. Weekend R hours count as running, so a month can pass 100% (dashed line).${
-      load.calendarError ? ` <b>⚠ FactoryCalendar not read (${escapeHtml(load.calendarError)}): no holidays taken off.</b>` : ''
+    <div class="kpi-chart-note">Utilization = hours marked <b>R</b> (Running) ÷ available hours, where available = every weekday the FactoryCalendar list does not shut (holidays and RDOs) × ${UTILIZATION_HOURS_PER_WEEKDAY} h. The month under way (paler bar) is the month so far. Weekend R hours count as running, so a month can pass 100% (dashed line).${
+      load.calendarError ? ` <b>⚠ FactoryCalendar not read (${escapeHtml(load.calendarError)}): no holidays or RDOs taken off.</b>` : ''
     }</div>
     ${body}
   </section>`;

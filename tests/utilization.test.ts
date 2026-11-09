@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   availableHours,
-  factoryHolidays,
+  factoryClosedDays,
   lastMonths,
   machineUtilization,
   runHoursByMonth,
@@ -12,24 +12,24 @@ describe('Machine Utilization', () => {
   // November 2026: 21 weekdays (Sun 1st → Mon 30th).
   const END_OF_NOV = new Date(2026, 10, 30, 23, 0);
 
-  it('makes 8 h available on every weekday that is not a FactoryCalendar holiday', () => {
-    expect(availableHours('2026-11', new Set(), END_OF_NOV)).toBe(21 * 8);
-    // A holiday on a weekday comes off; one on a weekend changes nothing.
-    expect(availableHours('2026-11', new Set(['2026-11-11', '2026-11-14']), END_OF_NOV)).toBe(20 * 8);
+  it('makes 24 h available on every weekday the FactoryCalendar does not shut', () => {
+    expect(availableHours('2026-11', new Set(), END_OF_NOV)).toBe(21 * 24);
+    // A closed weekday comes off; a closed weekend day changes nothing.
+    expect(availableHours('2026-11', new Set(['2026-11-11', '2026-11-14']), END_OF_NOV)).toBe(20 * 24);
     // The month under way: its weekdays so far, today included (Mon 2nd–Mon 9th).
-    expect(availableHours('2026-11', new Set(), new Date(2026, 10, 9, 10))).toBe(6 * 8);
+    expect(availableHours('2026-11', new Set(), new Date(2026, 10, 9, 10))).toBe(6 * 24);
     expect(availableHours('2026-12', new Set(), new Date(2026, 10, 9, 10))).toBe(0);
   });
 
-  it('takes the holidays out of FactoryCalendar, not its RDOs', () => {
-    const holidays = factoryHolidays([
+  it('takes out every day FactoryCalendar shuts, its RDOs too', () => {
+    const closed = factoryClosedDays([
       { day: '2026-12-25', name: 'Christmas Day' },
       { day: '2026-12-28', name: 'RDO' },
       { day: '2026-12-29', name: 'Rostered day off' },
       // A weekend Anzac Day shuts the Monday after (the Assembly board's rule).
       { day: '2027-04-25', name: 'Anzac Day' },
     ]);
-    expect([...holidays].sort()).toEqual(['2026-12-25', '2027-04-25', '2027-04-26']);
+    expect([...closed].sort()).toEqual(['2026-12-25', '2026-12-28', '2026-12-29', '2027-04-25', '2027-04-26']);
   });
 
   it('counts each R half-hour of a press once, by the month of its shift', () => {
@@ -55,8 +55,8 @@ describe('Machine Utilization', () => {
       END_OF_NOV,
     );
     expect(charts.map((c) => c.machineCode)).toEqual(['1600T', '1300T']);
-    // 8 h over 20 weekdays × 8 h.
-    expect(charts[0].months[1]).toEqual({ month: '2026-11', runHours: 8, availableHours: 160, pct: 5 });
+    // 8 h over 20 weekdays × 24 h.
+    expect(charts[0].months[1]).toEqual({ month: '2026-11', runHours: 8, availableHours: 480, pct: 1.7 });
     expect(charts[1].months[1].pct).toBe(0);
   });
 

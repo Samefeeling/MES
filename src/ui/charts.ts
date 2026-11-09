@@ -736,7 +736,7 @@ export function renderUtilizationChart(bars: UtilizationBar[]): string {
     const tip = [
       `${monthLabel(b.month)} ${b.month.slice(0, 4)}${b.partial ? ' (so far)' : ''}`,
       `Running (R) ${b.runHours.toFixed(1)} h`,
-      `Available ${b.availableHours} h (weekdays less holidays × 8 h)`,
+      `Available ${b.availableHours} h (weekdays less holidays and RDOs × 24 h)`,
       `Utilization ${b.pct == null ? '—' : `${b.pct.toFixed(1)}%`}`,
     ].join('\n');
     if (b.pct != null && b.pct > 0) {
