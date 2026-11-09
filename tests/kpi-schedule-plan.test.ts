@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   attainmentOfTuples,
   scheduleTuplesForShift,
+  shiftPlanFor,
   targetAttainmentForRecords,
   type PlanContext,
 } from '../src/core/kpi-attainment';
@@ -326,23 +327,28 @@ describe('a die change at the head of a press plan (Planning.csv, 26 Oct 2026)',
     expect(plan('320T', '2026-10-27-Day')).toEqual({ SFM507991: 3353 });
   });
 
-  it('asks 850T for nothing on the Day its die went on, and moves the colours behind it', () => {
+  it('asks 850T for nothing on the Day its die went on, and keeps every window where Epicor put it', () => {
+    // 11:00 → 15:00 is the die change, inside Black's 11:00 → 18:06 window.
     expect(plan('850T', '2026-10-27-Day')).toEqual({});
-    // Black runs from 15:00; Grey follows it on the same die with no change.
-    expect(plan('850T', '2026-10-27-Afternoon')).toEqual({ SFM507987: 360, SFM507986: 49 });
-    // The planner left four hours before the Back Large; the orders before it
-    // now end four hours later, so the change pushes it on by four as well.
-    expect(new Date(runOf('SFM507997', '850T').plannedStart)).toEqual(new Date('2026-10-29T18:42:00'));
+    expect(new Date(runOf('SFM507987', '850T').plannedStart)).toEqual(new Date('2026-10-27T15:00:00'));
+    expect(runOf('SFM507987', '850T').plannedEnd).toBe(orders.find((o) => o.jobNumber === 'SFM507987')!.plannedEnd);
+    // Black runs 15:00 → 18:06, still its Due, then Grey from 18:06 on the
+    // same die with no change: 3.1 h and 4.9 h at 54.5 an hour.
+    expect(plan('850T', '2026-10-27-Afternoon')).toEqual({ SFM507987: 169, SFM507986: 267 });
+    // The planner left four hours before the Back Large (10:42 → 14:42): it
+    // starts where Epicor put it.
+    expect(runOf('SFM507997', '850T')).toBe(orders.find((o) => o.jobNumber === 'SFM507997'));
   });
 
-  it('takes from the next order only what the planner left short of four hours', () => {
+  it('takes from the next order only what the planner left short of four hours, and never moves its Due', () => {
     const first = order({ jobNumber: 'A', machineCode: '125T', partNumber: 'X', plannedStart: '2026-10-27T08:00:00', plannedEnd: '2026-10-27T10:00:00' });
     const next = order({ jobNumber: 'B', machineCode: '125T', partNumber: 'Y', plannedStart: '2026-10-27T13:00:00', plannedEnd: '2026-10-27T15:00:00' });
     const runs = pressRunsAfterDieChanges([first, next], '125T', { dieOf: (p) => (p === 'X' ? 'D1' : 'D2'), partBefore: () => 'X' });
     expect(runs.get(first)).toBe(first);
-    // Three hours left for a four-hour change: one hour later, same length.
+    // Three hours left for a four-hour change: it starts an hour late and
+    // still ends at its Due.
     expect(new Date(runs.get(next)!.plannedStart)).toEqual(new Date('2026-10-27T14:00:00'));
-    expect(new Date(runs.get(next)!.plannedEnd)).toEqual(new Date('2026-10-27T16:00:00'));
+    expect(new Date(runs.get(next)!.plannedEnd)).toEqual(new Date('2026-10-27T15:00:00'));
     // A die nobody has recorded is a die change too.
     const unknown = pressRunsAfterDieChanges([first, next], '125T', { partBefore: () => 'X' });
     expect(new Date(unknown.get(next)!.plannedStart)).toEqual(new Date('2026-10-27T14:00:00'));
@@ -369,5 +375,39 @@ describe('a die change at the head of a press plan (Planning.csv, 26 Oct 2026)',
     expect(new Date(a.plannedStart).getTime()).toBeGreaterThanOrEqual(new Date('2026-11-05T22:08:00').getTime());
     const hs = order({ jobNumber: 'HS1', machineCode: 'HS', plannedStart: '2026-10-27T12:00:00', plannedEnd: '2026-10-27T15:00:00' });
     expect(pressRunsAfterDieChanges([...orders, hs], 'Hstamp').get(hs)).toBe(hs);
+  });
+});
+
+describe('Planning.csv Start–Due cut into shifts as they stand (125T, 9 Nov 2026)', () => {
+  // The export scheduled from 07:30; 125T's order starts at 11:00, and
+  // nothing says what the press ran before: its die goes on first.
+  const PLAN_9_NOV = [
+    'Machine,JobHead_StartDate,JobOper_ProdStandard,JobHead_ReqDueDate,JobHead_JobNum,JobHead_PartNum,JobHead_PartDescription,Calculated_RemainingQty,JobHead_ProdQty,no of shift',
+    'Batt1,9/11/2026 7:30,24,9/11/2026 19:00,SFM508000,POPL01034,Postura Max,200,200,MAN',
+    '125T,9/11/2026 11:00,858.000858,10/11/2026 0:19,SFM508014,G04160002,Enc Screw Cap Black,11000,11000,MAN',
+  ].join('\n');
+  const orders = parsePlanningCsv(PLAN_9_NOV);
+  const LATER = new Date('2026-11-12T00:00:00');
+  const kept = (shift: string) => shiftPlanFor(orders, '125T', `2026-11-09-${shift}`, LATER, {});
+
+  it('keeps the order to its window: the die change takes its first 4 h, and it still ends at 00:19', () => {
+    const run = pressRunsAfterDieChanges(orders, '125T', {}).get(orders[1])!;
+    expect(new Date(run.plannedStart)).toEqual(new Date('2026-11-09T15:00:00'));
+    expect(new Date(run.plannedEnd)).toEqual(new Date('2026-11-10T00:19:00'));
+    // Day 07:00–15:00: the change, 11:00–15:00; nothing to make.
+    expect(kept('Day')).toMatchObject({ plan: 0, jobs: [] });
+    expect(kept('Day')!.bar!.map((b) => `${b.kind} ${new Date(b.start).getHours()}–${new Date(b.end).getHours()}`)).toEqual(['change 11–15']);
+    // Afternoon 15:00–23:00: 8 h at 858 an hour.
+    expect(kept('Afternoon')).toMatchObject({ plan: 6864, jobs: [{ jobNumber: 'SFM508014', pieces: 6864, hours: 8 }] });
+    // Night 23:00 9 Nov → 07:00 10 Nov: the order runs 23:00–00:19, 1.32 h.
+    const night = kept('Night')!;
+    expect(night.jobs).toEqual([{ jobNumber: 'SFM508014', partNumber: 'G04160002', pieces: 1129, hours: 1.32 }]);
+    expect(new Date(night.bar![0].end)).toEqual(new Date('2026-11-10T00:19:00'));
+  });
+
+  it('asks a window too short for its die change for nothing', () => {
+    const short = parsePlanningCsv(PLAN_9_NOV.replace('10/11/2026 0:19', '9/11/2026 14:00'));
+    expect(new Date(pressRunsAfterDieChanges(short, '125T', {}).get(short[1])!.plannedStart)).toEqual(new Date(short[1].plannedEnd));
+    expect(shiftPlanFor(short, '125T', '2026-11-09-Day', LATER, {})).toMatchObject({ plan: 0, jobs: [] });
   });
 });

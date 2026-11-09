@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   attainmentOfTuples,
+  floorScheduleAdherence,
   kpiComparisonLabel,
   kpiComparisonMode,
   savedPlanMissing,
@@ -310,5 +311,28 @@ describe('Schedule Adherence over a wider period, from the saved plans', () => {
     expect(savedPlanMissing(recs)).toBe(true);
     const lines = savedScheduleTuples(recs, true);
     expect(attainmentOfTuples(lines).pct).toBe(78); // (95 + 60) ÷ 2 = 77.5
+  });
+});
+
+describe('the floor Schedule Adherence', () => {
+  it('is the plain average of the presses\' percentages, each press with a plan counted once', () => {
+    // 9 Nov: 125T planned 11,000 caps and nothing was entered. By pieces the
+    // floor reads near 0%; by press it is one press of five at 0%.
+    const f = floorScheduleAdherence([
+      { machineCode: '1600T', planned: true, pct: 92 },
+      { machineCode: '850T', planned: true, pct: 85 },
+      { machineCode: '550T', planned: true, pct: 100 },
+      { machineCode: '320T', planned: true, pct: 78 },
+      { machineCode: '125T', planned: true, pct: 0 },
+      // Planned for nothing (its shift only put a die on): not a press of this figure.
+      { machineCode: 'Batt1', planned: true, pct: undefined },
+      { machineCode: 'Batt2', planned: false, pct: null },
+      // An order of unknown quantity: no percentage, left out and named.
+      { machineCode: '150T', planned: true, pct: null },
+    ]);
+    expect(f.pct).toBe(71); // (92 + 85 + 100 + 78 + 0) ÷ 5 = 71
+    expect(f.counted.map((c) => c.machineCode)).toEqual(['1600T', '850T', '550T', '320T', '125T']);
+    expect(f.leftOut).toEqual(['150T']);
+    expect(floorScheduleAdherence([]).pct).toBeNull();
   });
 });

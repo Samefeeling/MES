@@ -20,7 +20,9 @@ import { rec } from './helpers';
 
 // Planning.csv as PMD had it for Monday 12 Oct 2026 (the rows that touch the
 // day). 1300T's second order runs Morning + Night only; 320T is planned for
-// the night with a two-part tool. MES has nothing signed for either at night.
+// the night with a two-part tool, its window long enough for the die to go
+// on first (23:00–03:00) and both parts to run (03:00–05:43). MES has nothing
+// signed for either at night.
 const PLAN_12_OCT = [
   'Machine,JobHead_StartDate,JobOper_ProdStandard,JobHead_ReqDueDate,JobHead_JobNum,JobHead_PartNum,JobHead_PartDescription,Calculated_RemainingQty,JobHead_ProdQty,no of shift',
   '1300T,12/10/2026 7:30,16,12/10/2026 12:00,SFM507841,G1188100,Postura,200,1000,MAN',
@@ -29,8 +31,8 @@ const PLAN_12_OCT = [
   'Batt2,13/10/2026 23:00,26.09302372,15/10/2026 10:41,SFM507866,G0256004,Proteus,918,918,MAN',
   'Batt1,12/10/2026 7:30,24.00000384,12/10/2026 11:56,SFM507920,POPL0112,Postura,150,150,MAN',
   '550T,13/10/2026 3:00,17.99999856,14/10/2026 9:45,SFM507970,V4528,Podium,400,400,MN',
-  '320T,12/10/2026 23:00,45.00450045,13/10/2026 1:43,SFM507921,V11582-2,Lumba Arm,100,100,MN',
-  '320T,12/10/2026 23:00,45.00450045,13/10/2026 1:43,SFM507922,V11582-1,Lumba Arm,100,100,MN',
+  '320T,12/10/2026 23:00,45.00450045,13/10/2026 5:43,SFM507921,V11582-2,Lumba Arm,100,100,MN',
+  '320T,12/10/2026 23:00,45.00450045,13/10/2026 5:43,SFM507922,V11582-1,Lumba Arm,100,100,MN',
   'HS,12/10/2026 12:00,20.99958001,12/10/2026 18:36,018661-2,MAPSE000,Postura,65,65,MA',
 ].join('\n');
 const orders = parsePlanningCsv(PLAN_12_OCT);

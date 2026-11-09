@@ -22,6 +22,8 @@ import {
 } from '../core/standards';
 import {
   attainmentOfTuples,
+  floorScheduleAdherence,
+  type FloorAdherence,
   idleShiftTuples,
   kpiComparisonLabel,
   kpiComparisonMode,
@@ -1807,6 +1809,29 @@ function comparisonPct(a: ComparisonSlice): number | null {
     : null;
 }
 
+/** The floor's Schedule Adherence over the table's presses (core
+ *  floorScheduleAdherence): each press with a plan counted once. */
+function floorAdherence(rows: ReadonlyArray<{ machineCode: string; total: ComparisonSlice }>): FloorAdherence {
+  return floorScheduleAdherence(
+    rows.map((r) => ({
+      machineCode: r.machineCode,
+      planned: r.total.comparisonTotal > 0,
+      pct: r.total.expOutput != null && r.total.expOutput > 0 ? comparisonPct(r.total) : r.total.comparisonCovered < r.total.comparisonTotal ? null : undefined,
+    })),
+  );
+}
+
+function floorAdherenceTitle(f: FloorAdherence): string {
+  if (!f.counted.length) return 'No press has a complete plan to judge.';
+  return 'Floor Schedule Adherence = the plain average of the presses\' own percentages, each press with a plan counted once'
+    + ' (pieces are not added across presses: a small press\'s quantities would outweigh the rest of the floor).'
+    + ' ' + f.counted.map((c) => c.machineCode + ' ' + c.pct + '%').join(' · ')
+    + ' → (' + f.counted.map((c) => c.pct).join(' + ') + ') ÷ ' + f.counted.length + ' = ' + f.pct + '%.'
+    + (f.leftOut.length
+      ? ' Left out — an order of unknown quantity in the plan: ' + f.leftOut.join(', ') + '.'
+      : '');
+}
+
 function comparisonTitle(a: ComparisonSlice): string {
   const missing = a.comparisonCovered < a.comparisonTotal;
   if (kpiComparisonMode(S!.period) === 'schedule') {
@@ -3482,11 +3507,12 @@ function render(): void {
   // with, readable from the back of the room before anyone drills into
   // the per-machine table.
   const asAt = new Date().toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' });
-  const stat = (label: string, value: string, cls = ''): string =>
-    `<div class="kpi-stat${cls ? ' ' + cls : ''}"><span class="kpi-stat-label">${escapeHtml(
+  const stat = (label: string, value: string, cls = '', title = ''): string =>
+    `<div class="kpi-stat${cls ? ' ' + cls : ''}"${title ? ` title="${escapeHtml(title)}"` : ''}><span class="kpi-stat-label">${escapeHtml(
       label,
     )}</span><b class="kpi-stat-value">${value}</b></div>`;
-  const totPlanPct = comparisonPct(tot);
+  const floor = floorAdherence(S!.rows);
+  const totPlanPct = floor.pct;
   const stats = S!.loading
     ? ''
     : `<div class="kpi-stats">
@@ -3495,6 +3521,7 @@ function render(): void {
           comparisonLabel(),
           totPlanPct != null ? totPlanPct + '%' : '—',
           totPlanPct != null ? 'is-' + planColourClass(totPlanPct, S!.thresholds) : '',
+          floorAdherenceTitle(floor),
         )}
         ${stat('Reject', tot.reject ? String(tot.reject) : '—', 'is-red')}
         ${stat('Yield', totYield != null ? totYield + '%' : '—', totYield != null ? 'is-' + colourClass(+totYield, S!.thresholds.yieldGreen, S!.thresholds.yieldAmber) : '')}
@@ -3519,7 +3546,7 @@ function render(): void {
   const activeRange = periodRange(S!.period, new Date());
   const fromVal = S!.period === 'custom' ? S!.customFrom : dateKey(activeRange.from);
   const toVal = S!.period === 'custom' ? S!.customTo : dateKey(activeRange.to);
-  const comparisonHelp = '<div><b>Schedule Adherence</b> judges every press in every finished shift against its <b>plan of record</b>, kept in PMD_ShiftPlan once the shift is under way (or, failing that, at its first sign-off): every order planned on the press in the shift — in the shifts its “no of shift” (M/A/N) is crewed for — is asked for its share of the planned runtime × JobOper_ProdStandard, up to its quantity, whether the press ran or not. Die changes get their 4 hours first, as on the Assembly board: where PMD_ProductDieColor puts an order on a different die from the one before it (or does not know the die), the order waits for the change, and a press’s first order starts with one unless it is already under way, starts at the export’s “now”, or the press was last running its die — so a shift that only puts the die on is asked for nothing. The hot-stamp press has no dies. A kept plan is never rewritten: Planning.csv moves an order under way to the export’s “now” and drops a finished one, so a later file can no longer say what a past shift was asked for. The plan is shared down when the shift booked more changeover and smoko than it left room for. Good is capped per order, so over-producing one order cannot hide another; output on orders the kept plan does not have is not credited. A press left idle shows 0 against its plan. A shift not yet signed off still counts its plan and is credited nothing until it is signed (marked “unsigned”). A press-shift with no kept plan (before PMD_ShiftPlan held every press) uses, for Last 24h, what Planning.csv still holds — orders Epicor has dropped use the ShiftTarget saved when they ran — and for <b>wider periods</b> what its sign-off saved (PMD_Production.ScheduleAttain × SchedulePlan). Wider periods add the shifts up: Σ credited ÷ Σ plan. Order rows of a wider period show output only. Missing plan quantities show “—”; hover for coverage.</div>';
+  const comparisonHelp = '<div><b>Schedule Adherence</b> judges every press in every finished shift against its <b>plan of record</b>, kept in PMD_ShiftPlan once the shift is under way (or, failing that, at its first sign-off): every order planned on the press in the shift — in the shifts its “no of shift” (M/A/N) is crewed for — is asked for its share of the planned runtime × JobOper_ProdStandard, up to its quantity, whether the press ran or not. Each order is cut into shifts by its Planning.csv Start and Due as they stand — Day 07:00–15:00, Afternoon 15:00–23:00, Night 23:00 to 07:00 the next morning, dated by the day it starts. The window never moves: where PMD_ProductDieColor puts an order on a different die from the one before it (or does not know the die), its 4-hour die change takes the first hours the planner did not leave for it, and the order runs in what is left up to its Due. A press’s first order starts with one unless it is already under way, starts at the export’s “now”, or the press was last running its die — so a shift that only puts the die on is asked for nothing, and so is an order whose window is shorter than its change. The hot-stamp press has no dies. A kept plan is never rewritten: Planning.csv moves an order under way to the export’s “now” and drops a finished one, so a later file can no longer say what a past shift was asked for. The plan is shared down when the shift booked more changeover and smoko than it left room for. Good is capped per order, so over-producing one order cannot hide another; output on orders the kept plan does not have is not credited. A press left idle shows 0 against its plan. A shift not yet signed off still counts its plan and is credited nothing until it is signed (marked “unsigned”). A press-shift with no kept plan (before PMD_ShiftPlan held every press) uses, for Last 24h, what Planning.csv still holds — orders Epicor has dropped use the ShiftTarget saved when they ran — and for <b>wider periods</b> what its sign-off saved (PMD_Production.ScheduleAttain × SchedulePlan). Each press adds its shifts up: Σ credited ÷ Σ plan. The floor’s figure (TOTAL and the tile above) is the plain average of the presses’ percentages, every press with a plan counted once — pieces are not added across presses, where a small press’s quantities would outweigh the rest. Order rows of a wider period show output only. Missing plan quantities show “—”; hover for coverage.</div>';
   app.innerHTML = `
     <div class="kpi">
       <div class="kpi-head">
@@ -3561,7 +3588,7 @@ function render(): void {
               ? ''
               : (() => {
                   const th = (v: number): string => (v ? v.toFixed(1) : '—');
-                  const totPct = comparisonPct(tot);
+                  const totPct = floor.pct;
                   const totCls = planColourClass(totPct, S!.thresholds);
                   return `<tfoot><tr class="kpi-total">
                     <th>TOTAL</th>
@@ -3576,7 +3603,7 @@ function render(): void {
                     ${setupCell(tot.colorHrs, tot.colorStdHrs, COLOR_CHANGE_STD_HRS, 'Colour change')}
                     ${setupCell(tot.insertHrs, tot.insertStdHrs, INSERT_CHANGE_STD_HRS, 'Insert change')}
                     <td class="num">—</td>
-                    <td class="num ${totCls}"${tot.comparisonTotal ? ` title="${escapeHtml(comparisonTitle(tot))}"` : ''}>${totPct == null ? '—' : totPct + '%'}</td>
+                    <td class="num ${totCls}"${tot.comparisonTotal ? ` title="${escapeHtml(floorAdherenceTitle(floor))}"` : ''}>${totPct == null ? '—' : totPct + '%'}</td>
                     <td class="kpi-ho-cell muted">—</td>
                   </tr></tfoot>`;
                 })()

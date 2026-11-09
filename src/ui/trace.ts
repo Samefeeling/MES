@@ -768,7 +768,7 @@ function renderPlanBar(r: TraceRow, plan: NonNullable<TraceRow['plan']>): string
         `Runs ${clock(b.start)}–${clock(b.end)} this shift`,
         order ? `Planning.csv Start ${scheduleTime(order.plannedStart)} → Due ${scheduleTime(order.plannedEnd)}` : '',
         order && start > from && Date.parse(order.plannedStart) < start
-          ? `Moved ${((start - Date.parse(order.plannedStart)) / 3_600_000).toFixed(1)} h later for a die change`
+          ? `Starts ${((start - Date.parse(order.plannedStart)) / 3_600_000).toFixed(1)} h into its window, after the die change`
           : '',
         pieces != null ? `Plan this shift ${pieces.toLocaleString()} pcs` : '',
       ]

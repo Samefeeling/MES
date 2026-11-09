@@ -59,6 +59,37 @@ export function kpiComparisonMode(period: string): KpiComparisonMode {
   return period === 'last3' ? 'schedule' : 'saved';
 }
 
+/** The floor's Schedule Adherence, and the presses it is the average of. */
+export interface FloorAdherence {
+  pct: number | null;
+  counted: Array<{ machineCode: string; pct: number }>;
+  /** Presses with a plan but no percentage (an order of unknown quantity). */
+  leftOut: string[];
+}
+
+/**
+ * The floor's Schedule Adherence: the plain average of each press's own
+ * percentage, every press with a plan counted once. Pieces are not added
+ * across presses — a small press's parts run in the tens of thousands, so
+ * a Σ pieces ratio is that press's figure whatever the rest of the floor did.
+ * A press is given as its percentage; null when it has a plan it cannot be
+ * judged on (left out, and named), undefined when it has none to judge
+ * (nothing planned: not a press of this figure).
+ */
+export function floorScheduleAdherence(
+  presses: ReadonlyArray<{ machineCode: string; planned: boolean; pct: number | null | undefined }>,
+): FloorAdherence {
+  const counted: Array<{ machineCode: string; pct: number }> = [];
+  const leftOut: string[] = [];
+  for (const p of presses) {
+    if (!p.planned || p.pct === undefined) continue;
+    if (p.pct === null) leftOut.push(p.machineCode);
+    else counted.push({ machineCode: p.machineCode, pct: p.pct });
+  }
+  const pct = counted.length ? Math.round(counted.reduce((n, c) => n + c.pct, 0) / counted.length) : null;
+  return { pct, counted, leftOut };
+}
+
 export function kpiComparisonLabel(_mode: KpiComparisonMode): 'Schedule Adherence' {
   return 'Schedule Adherence';
 }

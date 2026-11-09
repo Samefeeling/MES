@@ -46,25 +46,26 @@ export function lastPartBefore(
 
 /**
  * A press's planned orders as they will actually run once its die changes
- * are given their time — each order's Start–Due window moved later where a
- * die change has to come first, its length kept.
+ * are given their time — inside each order's own Start–Due window. The
+ * window never moves: Planning.csv's Start and Due are the plan, cut into
+ * shifts as they stand (Day 07–15, Afternoon 15–23, Night 23–07). Where a
+ * die change has to come first and the planner left no room for it, the
+ * change takes the window's first hours and the order runs in what is left,
+ * up to its Due — so the shifts are asked for what that window can make.
  *
- * The rule is the Assembly board's PMD lane (assembly/src/engine/assembly/
- * pressPlan.ts). Two orders on one press need a die change
- * (DIE_CHANGE_STD_HRS) unless PMD_ProductDieColor puts both parts on the same
- * die; a die it does not know is a die change, because assuming the cheap
- * answer is how a plan comes out four hours optimistic. The change runs
- * straight after the order before as it now runs; where the planner left four
- * hours for it nothing moves, and where it left less, this order and every
- * one behind it on the press move later by the difference. Orders Epicor
- * overlaps on one die are a co-run and move together. On the same die it is a
- * colour or insert change, which Epicor already allows inside the window, so
- * nothing is added for it here.
+ * Two orders on one press need a die change (DIE_CHANGE_STD_HRS) unless
+ * PMD_ProductDieColor puts both parts on the same die; a die it does not
+ * know is a die change, because assuming the cheap answer is how a plan
+ * comes out four hours optimistic. The change runs straight after the order
+ * before ends; where the planner left four hours between them it costs the
+ * order nothing, where it left less the order starts that much later and
+ * still ends at its Due. Orders Epicor overlaps on one die are a co-run and
+ * wait for the same change. On the same die it is a colour or insert
+ * change, which Epicor already allows inside the window, so nothing is
+ * taken for it here.
  *
  * The press's first order in Planning.csv has nobody before it in the file —
- * that order is finished and gone, and its die change went with it, so the
- * window reads as running from its first minute when those hours put the die
- * on (320T's 03:05 start on a Night). It is compared with what the press was
+ * that order is finished and gone. It is compared with what the press was
  * last running before it, from the press's records; with no record to go on
  * it starts with a die change unless the press is plainly carrying on: the
  * order is already under way (part of it made), or it starts when the export
@@ -72,7 +73,9 @@ export function lastPartBefore(
  * earliest start in the file).
  *
  * The hot-stamp press has no dies: its orders are returned as they are.
- * The map is from each of the press's orders to the order as it will run.
+ * The map is from each of the press's orders to the order as it will run
+ * (its Start later where a change comes first; a change that fills the whole
+ * window leaves Start = Due, nothing to run).
  */
 export function pressRunsAfterDieChanges(
   orders: ReadonlyArray<PlanningOrder>,
@@ -95,8 +98,8 @@ export interface PlannedDieChange {
 
 /**
  * `pressRunsAfterDieChanges`, with the die changes it gave time to. A change
- * goes straight after the order before as it now runs (the Assembly board's
- * PressSlot); the press's first order puts its die on from its own start.
+ * goes straight after the order before ends; the press's first order puts its
+ * die on from its own start. No window is moved or stretched.
  */
 export function pressPlanAfterDieChanges(
   orders: ReadonlyArray<PlanningOrder>,
@@ -139,36 +142,34 @@ export function pressPlanAfterDieChanges(
     if (last) return !sameDie(last, o.partNumber);
     return (start - earliest) / HOUR_MS >= 1;
   };
-  let last: { order: PlanningOrder; plannedEnd: number; runEnd: number; pushed: number } | null = null;
+  // A change is drawn inside the plan: it stops at the order's Due, where
+  // the window — and the plan for it — ends.
+  const change = (start: number, p: { order: PlanningOrder; end: number }, fromPart: string): void => {
+    const end = Math.min(start + DIE_CHANGE_MS, p.end);
+    if (end > start) changes.push({ start, end, order: p.order, fromPart });
+  };
+  // The order the press was last on (the latest-ending), and when the die
+  // its group runs on was ready.
+  let last: { order: PlanningOrder; end: number; ready: number } | null = null;
   for (const p of planned) {
-    const length = p.end - p.start;
-    let runStart: number;
-    if (last && p.start < last.plannedEnd && sameDie(last.order.partNumber, p.order.partNumber)) {
-      // A co-run: the same shot, moved as far as the order it runs with.
-      runStart = p.start + last.pushed;
-    } else {
-      let ready = -Infinity;
-      if (last) {
-        ready = last.runEnd;
-        if (!sameDie(last.order.partNumber, p.order.partNumber)) {
-          changes.push({ start: ready, end: ready + DIE_CHANGE_MS, order: p.order, fromPart: last.order.partNumber.trim() });
-          ready += DIE_CHANGE_MS;
-        }
-      } else if (firstNeedsChange(p.order, p.start)) {
-        ready = p.start + DIE_CHANGE_MS;
-        changes.push({ start: p.start, end: ready, order: p.order, fromPart: ctx.partBefore?.(p.start)?.trim() ?? '' });
+    let ready = -Infinity;
+    if (last && p.start < last.end && sameDie(last.order.partNumber, p.order.partNumber)) {
+      // A co-run: the same shot, waiting for the same die change.
+      ready = last.ready;
+    } else if (last) {
+      if (!sameDie(last.order.partNumber, p.order.partNumber)) {
+        ready = last.end + DIE_CHANGE_MS;
+        change(last.end, p, last.order.partNumber.trim());
       }
-      runStart = Math.max(p.start, ready);
+    } else if (firstNeedsChange(p.order, p.start)) {
+      ready = p.start + DIE_CHANGE_MS;
+      change(p.start, p, ctx.partBefore?.(p.start)?.trim() ?? '');
     }
-    const runEnd = runStart + length;
-    const moved =
-      runStart === p.start
-        ? p.order
-        : { ...p.order, plannedStart: new Date(runStart).toISOString(), plannedEnd: new Date(runEnd).toISOString() };
+    // The window keeps its Due; a change that runs past it leaves nothing.
+    const runStart = Math.min(Math.max(p.start, ready), p.end);
+    const moved = runStart === p.start ? p.order : { ...p.order, plannedStart: new Date(runStart).toISOString() };
     out.set(p.order, moved);
-    if (!last || runEnd >= last.runEnd || !(p.start < last.plannedEnd)) {
-      last = { order: p.order, plannedEnd: p.end, runEnd, pushed: runStart - p.start };
-    }
+    if (!last || p.end >= last.end) last = { order: p.order, end: p.end, ready: Math.max(ready, p.start) };
   }
   return { runs: out, changes };
 }
