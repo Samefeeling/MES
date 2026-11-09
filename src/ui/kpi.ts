@@ -710,12 +710,11 @@ function renderUtilizationSection(): string {
           <label class="kpi-ops-pick">Month <select data-util-period>${options}</select></label>
         </div>
         ${byMachine}
-        <div class="kpi-chart-note">Click a press to chart it by month on the right; click it again, or Total, for every press.</div>
       </div>
       <div class="kpi-chart kpi-util-card">
         <div class="kpi-chart-head">
           <h4>Utilization by month · ${escapeHtml(utilView.machine || 'All presses')} 🔒</h4>
-          ${utilView.machine ? '<button type="button" class="btn kpi-util-all" data-util-machine="">All presses</button>' : ''}
+          ${utilView.machine ? '<button type="button" class="btn kpi-util-all" data-util-machine="">All presses</button>' : '<span class="kpi-util-hint">Click a press on the left to chart it here</span>'}
         </div>
         ${byMonth}
       </div>
@@ -723,7 +722,7 @@ function renderUtilizationSection(): string {
   }
   return `<section class="kpi-util" aria-label="Machine Utilization">
     <h3>Machine Utilization 🔒</h3>
-    <div class="kpi-chart-note">Utilization = hours marked <b>R</b> (Running) ÷ available hours, where available = every weekday the FactoryCalendar list does not shut (holidays and RDOs) × ${UTILIZATION_HOURS_PER_WEEKDAY} h, plus ${UTILIZATION_HOURS_PER_SHIFT} h for each shift the press worked on a weekend, holiday or RDO (any status but O). <b>Total</b> = Σ R hours of the nine presses ÷ Σ their available hours. The financial year runs April → March; <b>YTD</b> (dark bar, first) is Σ R hours ÷ Σ available hours of its months from ${escapeHtml(firstFull)}, the first month MES recorded in full — the months before it have no bar. The month under way (paler bar) is the month so far.${
+    <div class="kpi-chart-note">Utilization = hours marked <b>R</b> (Running) ÷ available hours, where available = every weekday the FactoryCalendar list does not shut (holidays and RDOs) × ${UTILIZATION_HOURS_PER_WEEKDAY} h, plus ${UTILIZATION_HOURS_PER_SHIFT} h for each shift the press worked on a weekend, holiday or RDO (any status but O). <b>Total</b> = Σ R hours of the nine presses ÷ Σ their available hours. The financial year runs April → March; <b>YTD</b> (dark bar, first) is Σ R hours ÷ Σ available hours of its months from ${escapeHtml(firstFull)}, the first month MES recorded in full — the months before it have no bar. The month under way (paler bar) is the month so far. Click a press on the left chart to see it by month on the right; click it again, or Total, for every press.${
       load.calendarError ? ` <b>⚠ FactoryCalendar not read (${escapeHtml(load.calendarError)}): no holidays or RDOs taken off.</b>` : ''
     }</div>
     ${body}

@@ -4,7 +4,9 @@ import { DEFAULT_KPI_THRESHOLDS } from '../src/core/kpi-thresholds';
 import {
   applyMachineFilter,
   nextMachinePick,
+  nextOperatorSort,
   renderOperatorSection,
+  sortedOperators,
   type OperatorView,
 } from '../src/ui/kpi-operators';
 import { rec } from './helpers';
@@ -92,7 +94,7 @@ describe('operator section machine pick', () => {
     expect(html).toContain('data-op-machine="" aria-pressed="false"');
     expect(html).toContain('1 of 3 machines');
     expect(html).toContain('Operator output by machine');
-    expect(html).toContain('<th>Machines</th>');
+    expect(html).toMatch(/data-op-sort="machines"[^>]*>Machines</);
     expect(html).not.toMatch(/\bPress(es)?\b/);
   });
 
@@ -122,5 +124,34 @@ describe('operator section machine pick', () => {
   it('no chips with one machine in the window, nothing at all with none', () => {
     expect(renderOperatorSection(view(order('1600T', 'Ann', 'RR', 5)))).not.toContain('data-op-machine');
     expect(renderOperatorSection(view([]))).toBe('');
+  });
+
+  it('sorts by any output column, and lists both tables in that order', () => {
+    const recs = [...floor, ...order('550T', 'Cid', 'RRRRRRRR', 80), ...order('150T', '', 'RR', 500)];
+    const v = { ...view(recs), machineOrder: ['1600T', '1300T', '320T', '550T', '150T'] };
+    const names = (): string[] => sortedOperators(v).map((p) => p.operator);
+    // By output, most first; "Not recorded" last whatever it made.
+    expect(names()).toEqual(['Ann', 'Cid', 'Bob', '']);
+    v.sort = nextOperatorSort(v.sort, 'operator');
+    expect(v.sort).toEqual({ key: 'operator', dir: 1 });
+    expect(names()).toEqual(['Ann', 'Bob', 'Cid', '']);
+    v.sort = nextOperatorSort(v.sort, 'operator');
+    expect(names()).toEqual(['Cid', 'Bob', 'Ann', '']);
+    v.sort = nextOperatorSort(v.sort, 'runHrs');
+    expect(v.sort).toEqual({ key: 'runHrs', dir: -1 });
+    // Cid 4 h of R, Ann 3 h, Bob 2 h.
+    expect(names()).toEqual(['Cid', 'Ann', 'Bob', '']);
+    v.sort = nextOperatorSort(v.sort, 'machines');
+    expect(names()[0]).toBe('Ann');
+    // The stoppage table follows the output table, row for row.
+    v.sort = { key: 'operator', dir: -1 };
+    const html = renderOperatorSection(v);
+    const rowsOf = (table: string, attr: string): string[] => {
+      const part = html.slice(html.indexOf(table));
+      return [...part.slice(0, part.indexOf('</tbody>')).matchAll(new RegExp(`${attr}="([^"]*)"`, 'g'))].map((m) => m[1]);
+    };
+    expect(rowsOf('kpi-ops-output', 'data-op-pick')).toEqual(['Cid', 'Bob', 'Ann', '']);
+    expect(rowsOf('kpi-ops-limits', 'data-op-open')).toEqual(['Cid', 'Bob', 'Ann', '']);
+    expect(html).toContain('data-op-sort="operator" tabindex="0" aria-sort="descending"');
   });
 });

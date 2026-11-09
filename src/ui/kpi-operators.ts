@@ -44,7 +44,13 @@ export interface OperatorView {
   total: Kpi | null;
   /** Row to bring into view after the next render (a bar was clicked). */
   scrollTo?: string;
+  /** How the operator rows are ordered — both tables alike, set by clicking
+   *  a column head of the output table. Unset: by output, most first. */
+  sort?: { key: OperatorSortKey; dir: 1 | -1 };
 }
+
+/** The output table's columns, each of which sorts the operators. */
+export type OperatorSortKey = 'operator' | 'shifts' | 'machines' | 'runHrs' | 'output' | 'scrap' | 'yield' | 'efficiency';
 
 /**
  * One colour per press, by its place in the page's press order — the
@@ -141,8 +147,48 @@ export function applyMachineFilter(v: OperatorView): void {
   v.total = recs.length ? aggregate(recs, v.ctByJob) : null;
 }
 
-const byOutput = (a: OperatorPerf, b: OperatorPerf): number =>
-  !a.operator ? 1 : !b.operator ? -1 : b.kpi.output - a.kpi.output;
+const SORT_VALUE: Record<OperatorSortKey, (p: OperatorPerf) => number | string | null> = {
+  operator: (p) => nameOf(p.operator),
+  shifts: (p) => p.kpi.shifts,
+  machines: (p) => p.machines.length,
+  runHrs: (p) => p.kpi.runHrs,
+  output: (p) => p.kpi.output,
+  scrap: (p) => p.kpi.scrap,
+  yield: (p) => yieldOf(p.kpi.output, p.kpi.scrap),
+  efficiency: (p) => p.kpi.efficiency,
+};
+const DEFAULT_SORT = { key: 'output' as OperatorSortKey, dir: -1 as const };
+
+/**
+ * The operators in the order both tables list them: the column picked on
+ * the output table, either way round, by name between equals. "Not
+ * recorded" stays last, and so does a row with no figure for the column.
+ */
+export function sortedOperators(v: OperatorView): OperatorPerf[] {
+  const { key, dir } = v.sort ?? DEFAULT_SORT;
+  const val = SORT_VALUE[key];
+  return [...v.perf].sort((a, b) => {
+    if (!a.operator !== !b.operator) return !a.operator ? 1 : -1;
+    const x = val(a);
+    const y = val(b);
+    if (x == null || y == null) {
+      if (x != null) return -1;
+      if (y != null) return 1;
+    } else {
+      const c = typeof x === 'string' ? x.localeCompare(String(y)) : x - (y as number);
+      if (c) return c * dir;
+    }
+    return nameOf(a.operator).localeCompare(nameOf(b.operator));
+  });
+}
+
+/** The sort after a column head is clicked: the same column turns round; a
+ *  new one starts A → Z for names, most first for figures. */
+export function nextOperatorSort(current: OperatorView['sort'], key: OperatorSortKey): { key: OperatorSortKey; dir: 1 | -1 } {
+  const now = current ?? DEFAULT_SORT;
+  if (now.key === key) return { key, dir: now.dir === 1 ? -1 : 1 };
+  return { key, dir: key === 'operator' ? 1 : -1 };
+}
 const byStoppages = (a: OperatorPerf, b: OperatorPerf): number =>
   flaggedTotal(b) - flaggedTotal(a) || b.hoursOver - a.hoursOver || nameOf(a.operator).localeCompare(nameOf(b.operator));
 
@@ -151,8 +197,7 @@ const byStoppages = (a: OperatorPerf, b: OperatorPerf): number =>
 // ---------------------------------------------------------------------------
 
 function outputChart(v: OperatorView, p: OperatorPerf | undefined): string {
-  const options = [...v.perf]
-    .sort(byOutput)
+  const options = sortedOperators(v)
     .map(
       (o) =>
         `<option value="${escapeHtml(o.operator)}"${o === p ? ' selected' : ''}>${escapeHtml(nameOf(o.operator))}</option>`,
@@ -280,10 +325,17 @@ function pressChips(v: OperatorView, machines: string[]): string {
   return `<div class="kpi-ops-mcs">${chips}${more}</div>`;
 }
 
+/** A column head of the output table that sorts by it. */
+function sortHead(v: OperatorView, key: OperatorSortKey, label: string, num: boolean, title = ''): string {
+  const { key: on, dir } = v.sort ?? DEFAULT_SORT;
+  const active = on === key;
+  const aria = active ? (dir === 1 ? 'ascending' : 'descending') : 'none';
+  return `<th class="${num ? 'num ' : ''}kpi-ops-sort${active ? ' is-sorted' : ''}" data-op-sort="${key}" tabindex="0" aria-sort="${aria}" title="${escapeHtml(`${title ? `${title}. ` : ''}Sort both tables by ${label}`)}">${label}<span class="kpi-ops-sort-ind" aria-hidden="true">${active ? (dir === 1 ? '▲' : '▼') : '↕'}</span></th>`;
+}
+
 function outputTable(v: OperatorView, pick: OperatorPerf | undefined): string {
   const t = v.thresholds;
-  const rows = [...v.perf]
-    .sort(byOutput)
+  const rows = sortedOperators(v)
     .map((p) => {
       const k = p.kpi;
       const y = yieldOf(k.output, k.scrap);
@@ -316,19 +368,19 @@ function outputTable(v: OperatorView, pick: OperatorPerf | undefined): string {
       </tr></tfoot>`
     : '';
   return `<div class="kpi-ops-block">
-    <div class="kpi-ops-caption"><h4>Operator output &amp; yield 🔒</h4><span>Click a row to chart that operator</span></div>
+    <div class="kpi-ops-caption"><h4>Operator output &amp; yield 🔒</h4><span>Click a row to chart that operator · a column head to sort both tables</span></div>
     <div class="kpi-ops-wrap">
       <table class="kpi-ops-table kpi-ops-output">
         ${colgroup([150, 56, null, 58, 64, 60, 58, 64])}
         <thead><tr>
-          <th>Operator</th>
-          <th class="num" title="Shifts they are named on">Shifts</th>
-          <th>Machines</th>
-          <th class="num">Run h</th>
-          <th class="num">Output</th>
-          <th class="num">Reject</th>
-          <th class="num">Yield</th>
-          <th class="num" title="Efficiency: standard hours of the output ÷ run hours, as in the machine table">Effic.</th>
+          ${sortHead(v, 'operator', 'Operator', false)}
+          ${sortHead(v, 'shifts', 'Shifts', true, 'Shifts they are named on')}
+          ${sortHead(v, 'machines', 'Machines', false, 'How many machines')}
+          ${sortHead(v, 'runHrs', 'Run h', true)}
+          ${sortHead(v, 'output', 'Output', true)}
+          ${sortHead(v, 'scrap', 'Reject', true)}
+          ${sortHead(v, 'yield', 'Yield', true)}
+          ${sortHead(v, 'efficiency', 'Effic.', true, 'Efficiency: standard hours of the output ÷ run hours, as in the machine table')}
         </tr></thead>
         <tbody>${rows}</tbody>
         ${foot}
@@ -376,7 +428,8 @@ function flaggedCell(flagged: number, events: number, limit: number, first: bool
 const LIMITED = ['startup', 'die', 'change'] as const;
 
 function stopsTable(v: OperatorView): string {
-  const ranked = [...v.perf].sort(byStoppages);
+  // The output table's order, so an operator sits on the same line in both.
+  const ranked = sortedOperators(v);
   const body = ranked
     .map((p) => {
       const open = v.open.has(p.operator);
@@ -411,7 +464,7 @@ function stopsTable(v: OperatorView): string {
       </tr></tfoot>`
     : '';
   return `<div class="kpi-ops-block">
-    <div class="kpi-ops-caption"><h4>Operator setups, startups &amp; downtime against the limits 🔒</h4><span>Click a row to list the stoppages over their limit</span></div>
+    <div class="kpi-ops-caption"><h4>Operator setups, startups &amp; downtime against the limits 🔒</h4><span>Same order as the output table · click a row to list the stoppages over their limit</span></div>
     <div class="kpi-ops-wrap">
       <table class="kpi-ops-table kpi-ops-limits">
         ${colgroup([150, 52, 52, 52, 62, 60, 62, 48, 52, 60])}
@@ -512,6 +565,14 @@ export function wireOperatorSection(app: HTMLElement, v: OperatorView, rerender:
       rerender();
       // The page is drawn afresh; keep the keyboard on the chip just pressed.
       app.querySelector<HTMLElement>(`.kpi-ops [data-op-machine="${CSS.escape(mc)}"]`)?.focus({ preventScroll: true });
+    }),
+  );
+  app.querySelectorAll<HTMLElement>('.kpi-ops [data-op-sort]').forEach((th) =>
+    onActivate(th, () => {
+      const key = th.dataset.opSort as OperatorSortKey;
+      v.sort = nextOperatorSort(v.sort, key);
+      rerender();
+      app.querySelector<HTMLElement>(`.kpi-ops [data-op-sort="${key}"]`)?.focus({ preventScroll: true });
     }),
   );
   app.querySelector<HTMLSelectElement>('.kpi-ops [data-op-select]')?.addEventListener('change', (e) => {
