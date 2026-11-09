@@ -1731,3 +1731,11 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .tm-sub{font-size:11px;color:var(--mu)}
 .mt-flag{color:var(--rd);font-weight:800;cursor:help;margin-left:4px}
 .mt-table td.mt-st{white-space:nowrap}
+/* Machine Utilization by month (supervisor): nine presses, each chart at
+   least 460 wide × 230 high, wrapping to one a row on a narrow screen. */
+.kpi-util{margin-top:16px}
+.kpi-util h3{margin:0 0 4px;font-size:15px;color:var(--theme-dark)}
+.kpi-util-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(460px,100%),1fr));gap:12px;margin-top:8px}
+.kpi-util-card{min-height:230px;box-sizing:border-box}
+.kpi-util-card h4{margin:0 0 2px}
+.kpi-util-wait{margin-top:8px;font-size:13px;color:var(--mu)}

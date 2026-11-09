@@ -502,6 +502,8 @@ export interface ProductionCounterRecord {
   countStart: number | null;
   countEnd: number | null;
   cavities?: number;
+  /** The order's 16-half-hour status timeline this shift, when known. */
+  timeline?: string;
 }
 
 export interface UserContext {

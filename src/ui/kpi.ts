@@ -60,9 +60,17 @@ import {
   renderOutputByShiftChart,
   renderParetoByShiftChart,
   renderParetoChart,
+  renderUtilizationChart,
   SHIFT_COLORS,
   type BoxSeries,
 } from './charts';
+import {
+  UTILIZATION_HOURS_PER_WEEKDAY,
+  UTILIZATION_PRESSES,
+  lastMonths,
+  machineUtilization,
+  type UtilizationMonth,
+} from '../core/utilization';
 import {
   collectChangeoverEvents,
   collectSetupEvents,
@@ -574,6 +582,74 @@ type ChartBucket = CoreChartBucket;
 
 let S: KpiState | null = null;
 let dalRef: PmdDataLayer;
+
+/**
+ * Machine Utilization by month (supervisor only): the last 12 months, read
+ * once a page load and again when the day turns. Its own read, apart from
+ * the period's, so the table never waits on a year of headers.
+ */
+let utilLoad: {
+  key: string;
+  loading: boolean;
+  charts: Array<{ machineCode: string; months: UtilizationMonth[] }>;
+  error: string;
+  calendarError: string;
+} | null = null;
+
+function ensureUtilization(): void {
+  if (!isSupervisor() || !dalRef?.listProductionCounters) return;
+  const now = new Date();
+  const months = lastMonths(now, 12);
+  const key = `${months[0]}|${dateKey(now)}`;
+  if (utilLoad?.key === key) return;
+  const load = { key, loading: true, charts: [] as Array<{ machineCode: string; months: UtilizationMonth[] }>, error: '', calendarError: '' };
+  utilLoad = load;
+  void (async () => {
+    const [timelines, calendar] = await Promise.all([
+      // Shift ids compare as text ("Afternoon" < "Day"): from the bare date.
+      dalRef.listProductionCounters!({ shiftIdFrom: `${months[0]}-01`, shiftIdTo: `${dateKey(now)}-z` }).catch((e) => {
+        load.error = (e as Error).message || String(e);
+        return [];
+      }),
+      dalRef.listFactoryCalendar
+        ? dalRef.listFactoryCalendar().catch((e) => {
+            load.calendarError = (e as Error).message || String(e);
+            return [];
+          })
+        : Promise.resolve([]),
+    ]);
+    load.charts = machineUtilization(UTILIZATION_PRESSES, months, timelines, calendar, now);
+    load.loading = false;
+    if (utilLoad === load && S && S.view === 'metrics') render();
+  })();
+}
+
+/** The nine presses' Utilization charts, laid out in floor order. */
+function renderUtilizationSection(): string {
+  if (!isSupervisor() || !dalRef.listProductionCounters) return '';
+  ensureUtilization();
+  const load = utilLoad;
+  if (!load) return '';
+  const thisMonth = lastMonths(new Date(), 1)[0];
+  const body = load.loading
+    ? '<div class="kpi-util-wait">Reading 12 months of shifts…</div>'
+    : load.error
+      ? `<div class="kpi-util-wait">Production not read: ${escapeHtml(load.error)}</div>`
+      : `<div class="kpi-util-grid">${load.charts
+          .map(
+            (c) => `<div class="kpi-chart kpi-util-card"><h4>${escapeHtml(c.machineCode)}</h4>${renderUtilizationChart(
+              c.months.map((m) => ({ ...m, partial: m.month === thisMonth })),
+            )}</div>`,
+          )
+          .join('')}</div>`;
+  return `<section class="kpi-util" aria-label="Machine Utilization by month">
+    <h3>Machine Utilization by month 🔒</h3>
+    <div class="kpi-chart-note">Utilization = hours marked <b>R</b> (Running) ÷ available hours, where available = every weekday that is not a holiday in the FactoryCalendar list × ${UTILIZATION_HOURS_PER_WEEKDAY} h. RDOs in the list count as available. The month under way (paler bar) is the month so far. Weekend R hours count as running, so a month can pass 100% (dashed line).${
+      load.calendarError ? ` <b>⚠ FactoryCalendar not read (${escapeHtml(load.calendarError)}): no holidays taken off.</b>` : ''
+    }</div>
+    ${body}
+  </section>`;
+}
 let computeVersion = 0;
 let kpiMount = 0;
 export function unmountKpi(): void { kpiMount++; computeVersion++; }
@@ -3410,6 +3486,7 @@ function render(): void {
       </div>
       ${buildImpwPanel()}
       ${charts}
+      ${renderUtilizationSection()}
       ${isSupervisor() && !S!.loading ? renderOperatorSection({ ...S!.ops, thresholds: S!.thresholds }) : ''}
       <div class="kpi-note">
         <div>Every metric uses one traffic-light language: <b>🟢 met · 🟡 close · 🔴 short</b>.</div>

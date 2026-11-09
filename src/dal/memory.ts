@@ -390,7 +390,14 @@ export class MemoryDataLayer implements PmdDataLayer {
       const held = byTuple.get(key);
       if (!held || (r.slotIndex === 0 && held.slotIndex !== 0)) byTuple.set(key, r);
     }
-    return [...byTuple.values()].map((r) => ({
+    const timelines = new Map<string, string[]>();
+    for (const r of rows) {
+      const key = `${r.machineCode}|${r.shiftId}|${r.jobNumber}`;
+      const tl = timelines.get(key) ?? Array.from({ length: 16 }, () => '·');
+      if (r.statusCode && r.slotIndex >= 0 && r.slotIndex < 16) tl[r.slotIndex] = r.statusCode;
+      timelines.set(key, tl);
+    }
+    return [...byTuple.entries()].map(([key, r]) => ({
       machineCode: r.machineCode,
       shiftId: r.shiftId,
       jobNumber: r.jobNumber,
@@ -398,6 +405,7 @@ export class MemoryDataLayer implements PmdDataLayer {
       countStart: r.countStart,
       countEnd: r.countEnd,
       cavities: r.cavities,
+      timeline: timelines.get(key)?.join(''),
     }));
   }
 

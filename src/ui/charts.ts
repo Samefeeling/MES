@@ -687,3 +687,66 @@ export function renderBoxPlotChart(series: BoxSeries[]): string {
 
   return `<svg viewBox="0 0 ${width} ${HB}" width="100%" height="${HB}" role="img" preserveAspectRatio="xMidYMid meet">${grid}${body}</svg>`;
 }
+
+// =========================================================================
+// Machine Utilization by month — one press per chart (supervisor KPI).
+// =========================================================================
+
+export interface UtilizationBar {
+  /** `YYYY-MM`. */
+  month: string;
+  runHours: number;
+  availableHours: number;
+  pct: number | null;
+  /** The month under way: its figure is the month so far. */
+  partial?: boolean;
+}
+
+const UTIL_W = 460;
+const UTIL_H = 190;
+
+/**
+ * A press's Utilization, a bar a month, % on the axis. The axis runs to 100%
+ * or past it when a month ran more hours than its weekdays made available
+ * (weekend work, or more than one shift a day); the 100% line is dashed.
+ */
+export function renderUtilizationChart(bars: UtilizationBar[]): string {
+  const padL = 34;
+  const padR = 8;
+  const padT = 16;
+  const padB = 22;
+  const innerW = UTIL_W - padL - padR;
+  const innerH = UTIL_H - padT - padB;
+  const top = Math.max(100, Math.ceil(Math.max(0, ...bars.map((b) => b.pct ?? 0)) / 25) * 25);
+  const y = (pct: number): number => padT + innerH - (pct / top) * innerH;
+  const n = Math.max(1, bars.length);
+  const slot = innerW / n;
+  const bw = Math.min(26, slot * 0.7);
+  let grid = '';
+  for (let v = 0; v <= top; v += top > 200 ? 100 : top > 100 ? 50 : 25) {
+    grid += `<line x1="${padL}" y1="${y(v).toFixed(1)}" x2="${UTIL_W - padR}" y2="${y(v).toFixed(1)}" stroke="#e2e8f0"/>`;
+    grid += `<text x="${padL - 4}" y="${(y(v) + 3).toFixed(1)}" font-size="9.5" fill="#64748b" text-anchor="end">${v}%</text>`;
+  }
+  grid += `<line x1="${padL}" y1="${y(100).toFixed(1)}" x2="${UTIL_W - padR}" y2="${y(100).toFixed(1)}" stroke="#64748b" stroke-dasharray="4 3"/>`;
+  const monthLabel = (m: string): string =>
+    new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1, 1).toLocaleDateString('en-AU', { month: 'short' });
+  let marks = '';
+  bars.forEach((b, i) => {
+    const cx = padL + i * slot + slot / 2;
+    const tip = [
+      `${monthLabel(b.month)} ${b.month.slice(0, 4)}${b.partial ? ' (so far)' : ''}`,
+      `Running (R) ${b.runHours.toFixed(1)} h`,
+      `Available ${b.availableHours} h (weekdays less holidays × 8 h)`,
+      `Utilization ${b.pct == null ? '—' : `${b.pct.toFixed(1)}%`}`,
+    ].join('\n');
+    if (b.pct != null && b.pct > 0) {
+      const h = (b.pct / top) * innerH;
+      marks += `<rect x="${(cx - bw / 2).toFixed(1)}" y="${y(b.pct).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="#0284c7"${b.partial ? ' fill-opacity="0.55"' : ''}/>`;
+      marks += `<text x="${cx.toFixed(1)}" y="${(y(b.pct) - 3).toFixed(1)}" font-size="9.5" fill="#1e293b" text-anchor="middle" font-weight="700">${Math.round(b.pct)}</text>`;
+    }
+    marks += `<text x="${cx.toFixed(1)}" y="${UTIL_H - 7}" font-size="9.5" fill="#475569" text-anchor="middle">${escAttr(monthLabel(b.month))}</text>`;
+    // The whole column carries the hover, so a short or empty bar has one too.
+    marks += `<rect x="${(cx - slot / 2).toFixed(1)}" y="${padT}" width="${slot.toFixed(1)}" height="${innerH}" fill="transparent"><title>${escAttr(tip)}</title></rect>`;
+  });
+  return `<svg viewBox="0 0 ${UTIL_W} ${UTIL_H}" width="100%" role="img" aria-label="Utilization by month" preserveAspectRatio="xMidYMid meet">${grid}${marks}</svg>`;
+}

@@ -1,5 +1,6 @@
 import type { SavedShiftPlan } from '../core/kpi-attainment';
 import type { DieComponent } from '../core/die';
+import type { CalendarDay } from '../core/utilization';
 import type {
   BdCode,
   BreakdownLogDetail,
@@ -174,6 +175,8 @@ export interface PmdDataLayer {
    *  lightweight path for its rolling annual ledger so it does not have
    *  to download a year of status/reject event detail. */
   listProductionCounters?(filter: ProductionFilter): Promise<ProductionCounterRecord[]>;
+  /** The FactoryCalendar list (holidays and RDOs), for Machine Utilization. */
+  listFactoryCalendar?(): Promise<CalendarDay[]>;
   /** Signed-off history only — reads PMD_Production exclusively, with no
    *  in-progress PMD_LiveStatus mirror and no local editCache blended in.
    *  The Trace "Job Number Search" uses this so a historical lookup

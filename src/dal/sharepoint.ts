@@ -40,6 +40,7 @@ import {
 } from '../core/breakdown';
 import { parseShiftPattern, previousShift, shiftBounds, slotClock } from '../core/shifts';
 import { dieLookup, type PlanBarItem } from '../core/schedule';
+import type { CalendarDay } from '../core/utilization';
 import { hoursUnavailableFor, shiftTargetFor } from '../core/targets';
 import {
   keptPlanSnapshot,
@@ -117,6 +118,10 @@ const LISTS = {
    *  once the shift is under way or at its first sign-off. Auto-provisioned
    *  on the first keep (see ensureShiftPlanList). */
   shiftPlan: 'PMD_ShiftPlan',
+  /** The days the factory is shut — public holidays and RDOs — kept by the
+   *  Assembly board (assembly/src/data/sharepoint/factoryCalendar.list.ts):
+   *  Date, and Name ("RDO" or the holiday's name). Read-only here. */
+  factoryCalendar: 'FactoryCalendar',
 } as const;
 
 // SharePoint's internal column names are baked in at creation time. These
@@ -1758,6 +1763,32 @@ export class SharePointDataLayer implements PmdDataLayer {
     return this.dieChangeComponentsLoad;
   }
 
+  /**
+   * The FactoryCalendar list's days, for Machine Utilization's available
+   * hours. Its Date and Name columns are found by what they are, as the
+   * Assembly board finds them: a column made as "Name" can come out as
+   * `Name0`, and hidden built-in columns are titled "Name" too.
+   */
+  async listFactoryCalendar(): Promise<CalendarDay[]> {
+    const env = await this.getJson<{ d: { results: Array<{ Title: string; InternalName: string; TypeAsString?: string }> } }>(
+      `${this.listUrl(LISTS.factoryCalendar)}/fields?$filter=Hidden eq false and ReadOnlyField eq false&$select=Title,InternalName,TypeAsString`,
+    );
+    const titled = (title: string) =>
+      env.d.results.filter((f) => f.Title.trim().toLowerCase() === title || f.InternalName.toLowerCase() === title);
+    const date = titled('date').find((f) => /DateTime/i.test(f.TypeAsString ?? 'DateTime'));
+    const name = titled('name').find((f) => f.InternalName !== 'Title');
+    if (!date) throw new Error(`${LISTS.factoryCalendar}: no Date column`);
+    const rows = await this.getAllItems<Record<string, unknown>>(LISTS.factoryCalendar);
+    const out: CalendarDay[] = [];
+    for (const r of rows) {
+      const day = readCalendarDay(r[date.InternalName]);
+      if (!day) continue;
+      const raw = (name ? str(r[name.InternalName]) : '') || str(r['Title']);
+      out.push({ day, name: raw.trim() || 'RDO' });
+    }
+    return out;
+  }
+
   async listDieChangeLog(): Promise<DieChangeLog[]> {
     const F = this.F.dieChangeLog;
     const checks = await this.listDieChangeComponents();
@@ -2685,6 +2716,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         countStart: h.countStart,
         countEnd: h.countEnd,
         cavities: h.cavities,
+        timeline: h.timeline,
       });
     }
     // Counts being edited on this device can be newer than the 60-second
@@ -2704,6 +2736,7 @@ export class SharePointDataLayer implements PmdDataLayer {
         countStart: r.countStart,
         countEnd: r.countEnd,
         cavities: r.cavities,
+        timeline: timelineOf(rows),
       });
     }
     return [...counters.values()];
@@ -5301,6 +5334,36 @@ function nullOrNum(v: unknown): number | null {
   if (v == null || v === '') return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+/** A tuple's slot records as the 16-character status timeline. */
+function timelineOf(rows: ReadonlyArray<{ slotIndex: number; statusCode: string }>): string {
+  const tl = Array.from({ length: 16 }, () => '·');
+  for (const r of rows) if (r.statusCode && r.slotIndex >= 0 && r.slotIndex < 16) tl[r.slotIndex] = r.statusCode;
+  return tl.join('');
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * A FactoryCalendar Date cell as a day — the Assembly board's
+ * readCalendarDay. SharePoint answers a date-only column as the UTC instant
+ * of the site's midnight (`2026-12-24T13:00:00Z` is 25 December in Sydney),
+ * so the instant is taken to the nearest UTC midnight, wherever the browser
+ * is. A bare `YYYY-MM-DD`, a d/m/yyyy, or a time with no zone, is taken as
+ * written.
+ */
+export function readCalendarDay(value: unknown): string | null {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  const v = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  const au = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(v);
+  if (au) return `${au[3]}-${au[2].padStart(2, '0')}-${au[1].padStart(2, '0')}`;
+  const unzoned = /^(\d{4}-\d{2}-\d{2})T[\d:.]+$/.exec(v);
+  if (unzoned) return unzoned[1];
+  const ms = new Date(v).getTime();
+  if (Number.isNaN(ms)) return null;
+  return new Date(Math.round(ms / DAY_MS) * DAY_MS).toISOString().slice(0, 10);
 }
 
 /** "280" → 280 for SP Number columns; null for blank / non-numeric. */
