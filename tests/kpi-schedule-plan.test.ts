@@ -17,6 +17,7 @@ import {
 import { parseShiftPattern } from '../src/core/shifts';
 import { parsePlanningCsv } from '../src/dal/sharepoint';
 import { order, rec } from './helpers';
+import type { ProductionRecord } from '../src/types';
 
 // 850T as Planning.csv had it for 22 Sept 2026 — planned from the afternoon
 // through the night, and never run for want of a crew.
@@ -422,5 +423,42 @@ describe('Planning.csv Start–Due cut into shifts as they stand (125T, 9 Nov 20
     const short = parsePlanningCsv(PLAN_9_NOV.replace('10/11/2026 0:19', '9/11/2026 14:00'));
     // 11:00 → 14:00 at 858 an hour.
     expect(shiftPlanFor(short, '125T', '2026-11-09-Day', LATER, {})).toMatchObject({ plan: 2574 });
+  });
+});
+
+describe('the die change a crew is in the middle of stays in the plan (1600T, 10 Nov 2026)', () => {
+  const PLAN_10_NOV = [
+    'Machine,JobHead_StartDate,JobOper_ProdStandard,JobHead_ReqDueDate,JobHead_JobNum,JobHead_PartNum,JobHead_PartDescription,Calculated_RemainingQty,JobHead_ProdQty,no of shift',
+    'Batt1,10/11/2026 7:30,24,10/11/2026 19:00,SFM508000,POPL01034,Postura Max,200,200,MAN',
+    '1600T,10/11/2026 11:30,44.00000528,11/11/2026 6:45,SFM507979,7911FR,Encore Seat Inner Moulding FR,825,825,MAN',
+  ].join('\n');
+  const orders = parsePlanningCsv(PLAN_10_NOV);
+  const DAY = '2026-11-10-Day';
+  const ctx: PlanContext = { dieOf: (part) => ({ POPL00123: 'D-POSTURA', '7911FR': 'D-ENCORE' })[part.toUpperCase()] };
+  // The night made Postura Plus, and in its last hour started the die change
+  // — booked, as the floor does, against the order whose die it puts on.
+  const night = [0, 1, 2, 3].map((slotIndex) =>
+    rec({ machineCode: '1600T', shiftId: '2026-11-09-Night', jobNumber: 'SFM507844', partNumber: 'POPL00123', slotIndex, statusCode: 'R' }),
+  );
+  const changing = [14, 15].map((slotIndex) =>
+    rec({ machineCode: '1600T', shiftId: '2026-11-09-Night', jobNumber: 'SFM507979', partNumber: '7911FR', slotIndex, statusCode: 'D' }),
+  );
+  const bars = (history: ProductionRecord[]): string[] =>
+    shiftPlanFor(orders, '1600T', DAY, new Date('2026-11-10T08:05:00'), ctx, history)!.bar!.map(
+      (b) => `${b.kind} ${new Date(b.start).toTimeString().slice(0, 5)}–${new Date(b.end).toTimeString().slice(0, 5)}`,
+    );
+
+  it('reads what the press last RAN, not the change booked on the new order', () => {
+    // The D half-hours on SFM507979 are the change itself: the press last
+    // ran Postura, so the Encore die goes on 07:30–11:30.
+    expect(bars([...night, ...changing])).toEqual(['change 07:30–11:30', 'run 11:30–15:00']);
+    expect(shiftPlanFor(orders, '1600T', DAY, new Date('2026-11-10T08:05:00'), ctx, [...night, ...changing])).toMatchObject({
+      plan: 154, // 3.5 h × 44
+    });
+  });
+
+  it('has no change when the press last ran a part of the same die', () => {
+    const same = night.map((r) => ({ ...r, partNumber: '7911FR' }));
+    expect(bars([...same, ...changing])).toEqual(['run 11:30–15:00']);
   });
 });

@@ -24,13 +24,20 @@ export function dieLookup(
   return (partNumber) => byPart.get(partNumber.trim().toUpperCase());
 }
 
-/** `ScheduleContext.partBefore` over a press's records: the part of the
- *  latest half-hour with a status that began before the moment. */
+/**
+ * `ScheduleContext.partBefore` over a press's records: the part of the
+ * latest half-hour the press was RUNNING (R) that began before the moment —
+ * the die that was last making parts. A half-hour of die change, startup or
+ * breakdown says nothing of it: the crew books the change that puts an
+ * order's die on (D) against that order itself, and counting it made the
+ * press look as if it were already on the die, so the change it was in the
+ * middle of dropped out of the plan.
+ */
 export function lastPartBefore(
   records: ReadonlyArray<{ shiftId: string; slotIndex: number; statusCode: string; partNumber: string; jobNumber: string }>,
 ): (at: number) => string | undefined {
   const runs = records
-    .filter((r) => r.statusCode && r.partNumber && !r.jobNumber.startsWith('DC_'))
+    .filter((r) => r.statusCode === 'R' && r.partNumber && !r.jobNumber.startsWith('DC_'))
     .map((r) => ({ at: slotTimeRange(r.shiftId, r.slotIndex)?.start.getTime() ?? NaN, part: r.partNumber }))
     .filter((r) => Number.isFinite(r.at))
     .sort((a, b) => a.at - b.at);
