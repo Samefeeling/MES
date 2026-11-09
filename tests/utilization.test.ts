@@ -3,9 +3,11 @@ import {
   availableHours,
   closedDayShiftsByMonth,
   factoryClosedDays,
+  financialYearMonths,
   lastMonths,
   machineUtilization,
   runHoursByMonth,
+  totalUtilization,
 } from '../src/core/utilization';
 import { readCalendarDay, SharePointDataLayer } from '../src/dal/sharepoint';
 
@@ -99,34 +101,57 @@ describe('Machine Utilization', () => {
       ['1600T'], ['2025-03', '2025-12', '2026-01', '2026-02'], timelines, [], new Date(2026, 1, 28, 12), '2000-01',
     );
     // December 23 weekdays, January 22, February 20: 65 × 24 = 1560 h.
-    expect(c.ytd).toMatchObject({ month: 'YTD', runHours: 20, availableHours: 1560, fromMonth: '2025-04', excludedMonths: [] });
+    expect(c.ytd).toMatchObject({ month: 'YTD', runHours: 20, availableHours: 1560, fromMonth: '2025-12', toMonth: '2026-02' });
     expect(c.ytd.pct).toBe(1.3);
-    // Counting from January: December is charted but not in YTD.
+    // MES recording in full from January: December has no figure and is not in YTD.
     const [d] = machineUtilization(
       ['1600T'], ['2025-12', '2026-01', '2026-02'], timelines, [], new Date(2026, 1, 28, 12), '2026-01',
     );
-    expect(d.ytd).toMatchObject({ runHours: 12, availableHours: 1008, excludedMonths: ['2025-12'] });
-    expect(d.months.map((m) => !!m.incomplete)).toEqual([true, false, false]);
+    expect(d.ytd).toMatchObject({ runHours: 12, availableHours: 1008, fromMonth: '2026-01' });
+    expect(d.months[0]).toMatchObject({ beforeMes: true, runHours: 0, availableHours: 0, pct: null });
   });
 
-  it('starts this year\'s YTD at August 2026: MES went live over June and July', () => {
+  it('charts April → March and starts this year at September 2026, when MES recorded in full', () => {
     const asOf = new Date(2026, 10, 9, 10);
-    const months = lastMonths(asOf);
+    const months = financialYearMonths(asOf);
+    expect([months[0], months[11]]).toEqual(['2026-04', '2027-03']);
+    expect(financialYearMonths(new Date(2027, 2, 31))[0]).toBe('2026-04');
+    expect(financialYearMonths(new Date(2027, 3, 1))[0]).toBe('2027-04');
     const [c] = machineUtilization(
       ['1600T'],
       months,
       [
-        { machineCode: '1600T', shiftId: '2026-07-06-Day', timeline: 'RRRRRRRRRRRRRRRR' },
         { machineCode: '1600T', shiftId: '2026-08-03-Day', timeline: 'RRRRRRRRRRRRRRRR' },
+        { machineCode: '1600T', shiftId: '2026-09-07-Day', timeline: 'RRRRRRRRRRRRRRRR' },
       ],
       [],
       asOf,
     );
-    expect(c.ytd.fromMonth).toBe('2026-04');
-    expect(c.ytd.excludedMonths).toEqual(['2026-04', '2026-05', '2026-06', '2026-07']);
-    // August 21 weekdays, September 22, October 22, November 2nd–9th 6: 71 × 24.
-    expect(c.ytd).toMatchObject({ runHours: 8, availableHours: 71 * 24 });
-    expect(c.months.filter((m) => m.incomplete).map((m) => m.month).at(-1)).toBe('2026-07');
+    expect(c.ytd).toMatchObject({ fromMonth: '2026-09', toMonth: '2026-11' });
+    // September 22 weekdays, October 22, November 2nd–9th 6: 50 × 24.
+    expect(c.ytd).toMatchObject({ runHours: 8, availableHours: 50 * 24 });
+    expect(c.months.filter((m) => m.beforeMes).map((m) => m.month)).toEqual(['2026-04', '2026-05', '2026-06', '2026-07', '2026-08']);
+    // Months to come have no hours yet.
+    expect(c.months[11]).toMatchObject({ month: '2027-03', availableHours: 0, pct: null });
+  });
+
+  it('totals every press: Σ R hours ÷ Σ each press\'s own available hours', () => {
+    const series = machineUtilization(
+      ['850T', '550T'],
+      ['2026-11'],
+      [
+        { machineCode: '850T', shiftId: '2026-11-02-Day', timeline: 'RRRRRRRRRRRRRRRR' },
+        // A Saturday shift adds its 8 h to 550T only.
+        { machineCode: '550T', shiftId: '2026-11-07-Day', timeline: 'RRRRRRRRRRRRRRRR' },
+      ],
+      [],
+      END_OF_NOV,
+    );
+    const t = totalUtilization(series);
+    expect(t.machineCode).toBe('Total');
+    // 16 h ÷ (504 + 504 + 8) h.
+    expect(t.months[0]).toMatchObject({ runHours: 16, weekdayHours: 1008, closedShiftHours: 8, availableHours: 1016, pct: 1.6 });
+    expect(t.ytd).toMatchObject({ runHours: 16, availableHours: 1016, fromMonth: '2026-11' });
   });
 
   it('lists the last 12 months, oldest first', () => {

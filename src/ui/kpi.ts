@@ -60,7 +60,9 @@ import {
   renderOutputByShiftChart,
   renderParetoByShiftChart,
   renderParetoChart,
+  renderUtilizationByMachineChart,
   renderUtilizationChart,
+  utilMonthName,
   SHIFT_COLORS,
   type BoxSeries,
 } from './charts';
@@ -69,9 +71,12 @@ import {
   UTILIZATION_FIRST_FULL_MONTH,
   UTILIZATION_HOURS_PER_WEEKDAY,
   UTILIZATION_PRESSES,
-  lastMonths,
+  UTILIZATION_TOTAL,
+  financialYearMonths,
   machineUtilization,
+  totalUtilization,
   type UtilizationMonth,
+  type UtilizationSeries,
 } from '../core/utilization';
 import {
   collectChangeoverEvents,
@@ -164,13 +169,14 @@ export function isHotStampMachine(m: Pick<Machine, 'machineCode' | 'displayName'
 type PeriodKey = 'last3' | 'thisWeek' | 'lastWeek' | 'thisMonth' | 'lastMonth' | 'custom';
 type KpiPageView = 'metrics' | TracePanelView;
 
-// Two presets the meetings actually use; any other window is picked
+// Two presets the meetings actually use (Last Week: the last full week,
+// Monday to Sunday); any other window is picked
 // directly on the always-visible From/To inputs (which is what 'custom'
 // is now — no tab). periodRange still understands the removed keys, so
 // nothing breaks if one comes back.
 const PERIODS: Array<{ key: PeriodKey; label: string }> = [
   { key: 'last3', label: 'Last 24h' },
-  { key: 'thisWeek', label: 'This Week' },
+  { key: 'lastWeek', label: 'Last Week' },
 ];
 
 const SHIFT_ORDER: ShiftCode[] = SHIFTS.map((s) => s.code);
@@ -586,39 +592,52 @@ let S: KpiState | null = null;
 let dalRef: PmdDataLayer;
 
 /**
- * Machine Utilization by month (supervisor only): the last 12 months, read
- * once a page load and again when the day turns. Its own read, apart from
- * the period's, so the table never waits on a year of headers.
+ * Machine Utilization (supervisor only): the financial year's months, April
+ * → March, read once a page load and again when the day turns. Its own
+ * read, apart from the period's, so the table never waits on a year of
+ * headers.
  */
 let utilLoad: {
   key: string;
   loading: boolean;
-  charts: Array<{ machineCode: string; ytd: UtilizationMonth; months: UtilizationMonth[] }>;
+  months: string[];
+  presses: UtilizationSeries[];
+  total: UtilizationSeries | null;
   error: string;
   calendarError: string;
 } | null = null;
 
+/** What the Utilization charts show: the by-machine chart's period ('YTD'
+ *  or a month), and the press the by-month chart is for ('' = every press). */
+const utilView = { period: 'YTD', machine: '' };
+
 function ensureUtilization(): void {
   if (!isSupervisor() || !dalRef?.listProductionCounters) return;
   const now = new Date();
-  const months = lastMonths(now, 12);
+  const months = financialYearMonths(now);
   const key = `${months[0]}|${dateKey(now)}`;
   if (utilLoad?.key === key) return;
+  // Nothing before MES recorded in full is charted: no need to read it.
+  const from = months[0] > UTILIZATION_FIRST_FULL_MONTH ? months[0] : UTILIZATION_FIRST_FULL_MONTH;
   const load = {
     key,
     loading: true,
-    charts: [] as Array<{ machineCode: string; ytd: UtilizationMonth; months: UtilizationMonth[] }>,
+    months,
+    presses: [] as UtilizationSeries[],
+    total: null as UtilizationSeries | null,
     error: '',
     calendarError: '',
   };
   utilLoad = load;
   void (async () => {
     const [timelines, calendar] = await Promise.all([
-      // Shift ids compare as text ("Afternoon" < "Day"): from the bare date.
-      dalRef.listProductionCounters!({ shiftIdFrom: `${months[0]}-01`, shiftIdTo: `${dateKey(now)}-z` }).catch((e) => {
-        load.error = (e as Error).message || String(e);
-        return [];
-      }),
+      from > dateKey(now).slice(0, 7)
+        ? Promise.resolve([])
+        : // Shift ids compare as text ("Afternoon" < "Day"): from the bare date.
+          dalRef.listProductionCounters!({ shiftIdFrom: `${from}-01`, shiftIdTo: `${dateKey(now)}-z` }).catch((e) => {
+            load.error = (e as Error).message || String(e);
+            return [];
+          }),
       dalRef.listFactoryCalendar
         ? dalRef.listFactoryCalendar().catch((e) => {
             load.calendarError = (e as Error).message || String(e);
@@ -626,38 +645,110 @@ function ensureUtilization(): void {
           })
         : Promise.resolve([]),
     ]);
-    load.charts = machineUtilization(UTILIZATION_PRESSES, months, timelines, calendar, now);
+    load.presses = machineUtilization(UTILIZATION_PRESSES, months, timelines, calendar, now);
+    load.total = totalUtilization(load.presses);
     load.loading = false;
     if (utilLoad === load && S && S.view === 'metrics') render();
   })();
 }
 
-/** The nine presses' Utilization charts, laid out in floor order. */
+/**
+ * Two charts side by side: every press (and their Total) over one period —
+ * the year to date or a month, picked like the operator — and, on the
+ * right, one press by month (the one clicked on the left) or, with none
+ * clicked, every press by month. YTD stays first on both.
+ */
 function renderUtilizationSection(): string {
   if (!isSupervisor() || !dalRef.listProductionCounters) return '';
   ensureUtilization();
   const load = utilLoad;
   if (!load) return '';
-  const thisMonth = lastMonths(new Date(), 1)[0];
-  const body = load.loading
-    ? '<div class="kpi-util-wait">Reading 12 months of shifts…</div>'
-    : load.error
-      ? `<div class="kpi-util-wait">Production not read: ${escapeHtml(load.error)}</div>`
-      : `<div class="kpi-util-grid">${load.charts
-          .map(
-            (c) => `<div class="kpi-chart kpi-util-card"><h4>${escapeHtml(c.machineCode)}</h4>${renderUtilizationChart([
-              c.ytd,
-              ...c.months.map((m) => ({ ...m, partial: m.month === thisMonth })),
-            ])}</div>`,
-          )
-          .join('')}</div>`;
-  return `<section class="kpi-util" aria-label="Machine Utilization by month">
-    <h3>Machine Utilization by month 🔒</h3>
-    <div class="kpi-chart-note">Utilization = hours marked <b>R</b> (Running) ÷ available hours, where available = every weekday the FactoryCalendar list does not shut (holidays and RDOs) × ${UTILIZATION_HOURS_PER_WEEKDAY} h, plus ${UTILIZATION_HOURS_PER_SHIFT} h for each shift the press worked on a weekend, holiday or RDO (any status but O). <b>YTD</b> (dark bar, first) is the financial year to date, from April: Σ R hours ÷ Σ available hours, counted from ${new Date(Number(UTILIZATION_FIRST_FULL_MONTH.slice(0, 4)), Number(UTILIZATION_FIRST_FULL_MONTH.slice(5, 7)) - 1, 1).toLocaleDateString('en-AU', { month: 'short', year: 'numeric' })}, the first month MES recorded in full (the grey months before it are not in YTD). The month under way (paler bar) is the month so far.${
+  const thisMonth = dateKey(new Date()).slice(0, 7);
+  const firstFull = utilMonthName(UTILIZATION_FIRST_FULL_MONTH);
+  let body: string;
+  if (load.loading) body = '<div class="kpi-util-wait">Reading the financial year\'s shifts…</div>';
+  else if (load.error) body = `<div class="kpi-util-wait">Production not read: ${escapeHtml(load.error)}</div>`;
+  else {
+    const total = load.total!;
+    // Months that have a figure: from MES's first full month to this one.
+    const shown = load.months.filter((m) => m >= UTILIZATION_FIRST_FULL_MONTH && m <= thisMonth);
+    if (utilView.period !== 'YTD' && !shown.includes(utilView.period)) utilView.period = 'YTD';
+    if (utilView.machine && !load.presses.some((p) => p.machineCode === utilView.machine)) utilView.machine = '';
+    const pick = (s: UtilizationSeries): UtilizationMonth =>
+      utilView.period === 'YTD' ? s.ytd : s.months.find((m) => m.month === utilView.period)!;
+    const periodName =
+      utilView.period === 'YTD'
+        ? 'Year to date'
+        : `${utilMonthName(utilView.period)}${utilView.period === thisMonth ? ' (so far)' : ''}`;
+    const options = [
+      `<option value="YTD"${utilView.period === 'YTD' ? ' selected' : ''}>Year to date</option>`,
+      ...shown
+        .slice()
+        .reverse()
+        .map(
+          (m) =>
+            `<option value="${m}"${utilView.period === m ? ' selected' : ''}>${escapeHtml(utilMonthName(m))}${m === thisMonth ? ' (so far)' : ''}</option>`,
+        ),
+    ].join('');
+    const byMachine = renderUtilizationByMachineChart(
+      [
+        { machineCode: UTILIZATION_TOTAL, bar: pick(total), total: true },
+        ...load.presses.map((p) => ({ machineCode: p.machineCode, bar: { ...pick(p), partial: utilView.period === thisMonth } })),
+      ],
+      utilView.machine,
+      periodName,
+    );
+    const series = load.presses.find((p) => p.machineCode === utilView.machine) ?? total;
+    const byMonth = renderUtilizationChart([
+      series.ytd,
+      ...series.months.map((m) => ({ ...m, partial: m.month === thisMonth })),
+    ]);
+    body = `<div class="kpi-util-grid">
+      <div class="kpi-chart kpi-util-card">
+        <div class="kpi-chart-head">
+          <h4>Utilization by machine · ${escapeHtml(periodName)} 🔒</h4>
+          <label class="kpi-ops-pick">Month <select data-util-period>${options}</select></label>
+        </div>
+        ${byMachine}
+        <div class="kpi-chart-note">Click a press to chart it by month on the right; click it again, or Total, for every press.</div>
+      </div>
+      <div class="kpi-chart kpi-util-card">
+        <div class="kpi-chart-head">
+          <h4>Utilization by month · ${escapeHtml(utilView.machine || 'All presses')} 🔒</h4>
+          ${utilView.machine ? '<button type="button" class="btn kpi-util-all" data-util-machine="">All presses</button>' : ''}
+        </div>
+        ${byMonth}
+      </div>
+    </div>`;
+  }
+  return `<section class="kpi-util" aria-label="Machine Utilization">
+    <h3>Machine Utilization 🔒</h3>
+    <div class="kpi-chart-note">Utilization = hours marked <b>R</b> (Running) ÷ available hours, where available = every weekday the FactoryCalendar list does not shut (holidays and RDOs) × ${UTILIZATION_HOURS_PER_WEEKDAY} h, plus ${UTILIZATION_HOURS_PER_SHIFT} h for each shift the press worked on a weekend, holiday or RDO (any status but O). <b>Total</b> = Σ R hours of the nine presses ÷ Σ their available hours. The financial year runs April → March; <b>YTD</b> (dark bar, first) is Σ R hours ÷ Σ available hours of its months from ${escapeHtml(firstFull)}, the first month MES recorded in full — the months before it have no bar. The month under way (paler bar) is the month so far.${
       load.calendarError ? ` <b>⚠ FactoryCalendar not read (${escapeHtml(load.calendarError)}): no holidays or RDOs taken off.</b>` : ''
     }</div>
     ${body}
   </section>`;
+}
+
+/** The Utilization charts' month pick and press clicks. */
+function wireUtilization(app: HTMLElement): void {
+  app.querySelector<HTMLSelectElement>('.kpi-util [data-util-period]')?.addEventListener('change', (e) => {
+    utilView.period = (e.target as HTMLSelectElement).value;
+    render();
+  });
+  app.querySelectorAll<Element>('.kpi-util [data-util-machine]').forEach((el) => {
+    const go = (): void => {
+      utilView.machine = (el as HTMLElement).dataset?.utilMachine ?? el.getAttribute('data-util-machine') ?? '';
+      render();
+    };
+    el.addEventListener('click', go);
+    el.addEventListener('keydown', (e) => {
+      const k = (e as KeyboardEvent).key;
+      if (k !== 'Enter' && k !== ' ') return;
+      e.preventDefault();
+      go();
+    });
+  });
 }
 let computeVersion = 0;
 let kpiMount = 0;
@@ -3675,6 +3766,7 @@ function render(): void {
     .querySelectorAll<HTMLButtonElement>('[data-collapse-month]')
     .forEach((b) => b.addEventListener('click', () => toggleMonth(b.dataset.collapseMonth!)));
   if (isSupervisor()) wireOperatorSection(app, S!.ops, render);
+  wireUtilization(app);
 
   restoreView(app, anchor);
 }

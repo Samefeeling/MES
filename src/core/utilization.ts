@@ -10,10 +10,11 @@
 // counted against that shift, not against nothing.
 // The month so far, for the month under way.
 //
-// YTD is the financial year to date — the year runs from April (the New
-// Zealand practice) — counted from the first month MES recorded in full:
-// MES went live over June–July 2026, so the months before August have no
-// or partial records and would only drag the figure down.
+// The year runs from April (the New Zealand practice): the months are
+// charted April → March, and YTD is the financial year to date. Both start
+// at the first month MES recorded in full — it went live over June–August
+// 2026, so the months before September have no or partial records: they
+// show no bar and are not in YTD, where they would only drag it down.
 
 import { machineKey } from './maint';
 import { SLOT_MINUTES } from './shifts';
@@ -32,10 +33,12 @@ export const UTILIZATION_FY_START_MONTH = 4;
 
 /**
  * The first month (`YYYY-MM`) MES recorded in full. Months before it (MES
- * went live over June–July 2026) are still charted, greyed, but left out of
- * the YTD figure.
+ * went live over June–August 2026) show no bar and are not in YTD.
  */
-export const UTILIZATION_FIRST_FULL_MONTH = '2026-08';
+export const UTILIZATION_FIRST_FULL_MONTH = '2026-09';
+
+/** The chart that adds every press up. */
+export const UTILIZATION_TOTAL = 'Total';
 
 /** A row of the FactoryCalendar list: a day the factory is shut. */
 export interface CalendarDay {
@@ -64,11 +67,18 @@ export interface UtilizationMonth {
   closedShiftHours: number;
   /** runHours ÷ availableHours × 100; null with no available hours. */
   pct: number | null;
-  /** A month before MES recorded in full: charted, but not in YTD. */
-  incomplete?: boolean;
-  /** YTD only: the financial year's first month, and the months left out. */
-  fromMonth?: string;
-  excludedMonths?: string[];
+  /** A month before MES recorded in full: no figure, not in YTD. */
+  beforeMes?: boolean;
+  /** YTD only: the first and last month it covers (null: none yet). */
+  fromMonth?: string | null;
+  toMonth?: string | null;
+}
+
+/** A press's months, and its year to date. */
+export interface UtilizationSeries {
+  machineCode: string;
+  ytd: UtilizationMonth;
+  months: UtilizationMonth[];
 }
 
 const pad = (n: number): string => String(n).padStart(2, '0');
@@ -196,6 +206,15 @@ export function financialYearStart(asOf: Date, startMonth = UTILIZATION_FY_START
   return `${y}-${pad(startMonth)}`;
 }
 
+/** The financial year's 12 months, April → March, that `asOf` falls in. */
+export function financialYearMonths(asOf: Date, startMonth = UTILIZATION_FY_START_MONTH): string[] {
+  const [y, m] = financialYearStart(asOf, startMonth).split('-').map(Number);
+  return Array.from({ length: 12 }, (_, i) => {
+    const d = new Date(y, m - 1 + i, 1);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+  });
+}
+
 const utilizationOf = (month: string, runHours: number, weekdayHours: number, closedShiftHours: number): UtilizationMonth => {
   const available = weekdayHours + closedShiftHours;
   return {
@@ -210,9 +229,10 @@ const utilizationOf = (month: string, runHours: number, weekdayHours: number, cl
 
 /**
  * Each press's Utilization in each of `months`, and over the financial year
- * to date (from April: Σ R hours ÷ Σ available hours of its months, from
- * `firstFull` on — `months` must include the year's, which the last 12
- * always do).
+ * to date (from April, or from `firstFull` when MES recorded in full only
+ * later: Σ R hours ÷ Σ available hours of those months, which `months` must
+ * include — the financial year's always do). A month before `firstFull`
+ * has no figure.
  */
 export function machineUtilization(
   presses: ReadonlyArray<string>,
@@ -221,34 +241,56 @@ export function machineUtilization(
   calendar: ReadonlyArray<CalendarDay>,
   asOf: Date,
   firstFull = UTILIZATION_FIRST_FULL_MONTH,
-): Array<{ machineCode: string; ytd: UtilizationMonth; months: UtilizationMonth[] }> {
+): UtilizationSeries[] {
   const run = runHoursByMonth(timelines);
   const closed = factoryClosedDays(calendar);
   const extra = closedDayShiftsByMonth(timelines, closed);
-  const from = financialYearStart(asOf);
-  const inYear = (month: string): boolean => month >= from && month <= lastMonths(asOf, 1)[0];
-  const left = months.filter((m) => inYear(m) && m < firstFull);
+  const fyStart = financialYearStart(asOf);
+  const from = fyStart > firstFull ? fyStart : firstFull;
+  const thisMonth = lastMonths(asOf, 1)[0];
+  const inYtd = (month: string): boolean => month >= from && month <= thisMonth;
+  const covered = months.filter(inYtd);
   return presses.map((machineCode) => {
     const key = machineKey(machineCode);
     const monthly = months.map((month) =>
-      utilizationOf(
-        month,
-        run.get(key)?.get(month) ?? 0,
-        availableHours(month, closed, asOf),
-        (extra.get(key)?.get(month) ?? 0) * UTILIZATION_HOURS_PER_SHIFT,
-      ),
+      month < firstFull
+        ? { ...utilizationOf(month, 0, 0, 0), beforeMes: true }
+        : utilizationOf(
+            month,
+            run.get(key)?.get(month) ?? 0,
+            availableHours(month, closed, asOf),
+            (extra.get(key)?.get(month) ?? 0) * UTILIZATION_HOURS_PER_SHIFT,
+          ),
     );
-    for (const m of monthly) if (m.month < firstFull) m.incomplete = true;
-    const ytd = monthly.filter((m) => inYear(m.month) && !m.incomplete);
-    const sum = (f: (m: UtilizationMonth) => number): number => ytd.reduce((n, m) => n + f(m), 0);
-    return {
-      machineCode,
-      ytd: {
-        ...utilizationOf('YTD', sum((m) => m.runHours), sum((m) => m.weekdayHours), sum((m) => m.closedShiftHours)),
-        fromMonth: from,
-        excludedMonths: left,
-      },
-      months: monthly,
-    };
+    return { machineCode, ytd: ytdOf(monthly.filter((m) => inYtd(m.month)), covered), months: monthly };
   });
+}
+
+function ytdOf(months: ReadonlyArray<UtilizationMonth>, covered: ReadonlyArray<string>): UtilizationMonth {
+  const sum = (f: (m: UtilizationMonth) => number): number => months.reduce((n, m) => n + f(m), 0);
+  return {
+    ...utilizationOf('YTD', sum((m) => m.runHours), sum((m) => m.weekdayHours), sum((m) => m.closedShiftHours)),
+    fromMonth: covered[0] ?? null,
+    toMonth: covered[covered.length - 1] ?? null,
+  };
+}
+
+/**
+ * Every press added up, month by month and over the year to date: Σ R hours
+ * of the presses ÷ Σ their available hours (each press's own — a weekend
+ * shift adds its 8 h only to the press that worked it).
+ */
+export function totalUtilization(series: ReadonlyArray<UtilizationSeries>): UtilizationSeries {
+  const add = (ms: ReadonlyArray<UtilizationMonth>, month: string): UtilizationMonth => {
+    const sum = (f: (m: UtilizationMonth) => number): number => ms.reduce((n, m) => n + f(m), 0);
+    const out = utilizationOf(month, sum((m) => m.runHours), sum((m) => m.weekdayHours), sum((m) => m.closedShiftHours));
+    return ms[0]?.beforeMes ? { ...out, beforeMes: true } : out;
+  };
+  const months = series[0]?.months.map((m, i) => add(series.map((s) => s.months[i]), m.month)) ?? [];
+  const ytd = add(series.map((s) => s.ytd), 'YTD');
+  return {
+    machineCode: UTILIZATION_TOTAL,
+    ytd: { ...ytd, fromMonth: series[0]?.ytd.fromMonth ?? null, toMonth: series[0]?.ytd.toMonth ?? null },
+    months,
+  };
 }

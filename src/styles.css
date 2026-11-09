@@ -1741,7 +1741,10 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
    least 460 wide × 230 high, wrapping to one a row on a narrow screen. */
 .kpi-util{margin-top:16px}
 .kpi-util h3{margin:0 0 4px;font-size:15px;color:var(--theme-dark)}
-.kpi-util-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(460px,100%),1fr));gap:12px;margin-top:8px}
+.kpi-util-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(460px,100%),1fr));gap:12px;margin-top:8px}
+.kpi-util-all{font-size:12px;padding:3px 10px;min-height:28px}
+.kpi-util .util-hit:focus{outline:none}
+.kpi-util .util-hit:focus-visible{stroke:#0f172a;stroke-width:1.5}
 .kpi-util-card{min-height:230px;box-sizing:border-box}
 .kpi-util-card h4{margin:0 0 2px}
 .kpi-util-wait{margin-top:8px;font-size:13px;color:var(--mu)}

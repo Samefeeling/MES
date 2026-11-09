@@ -703,31 +703,71 @@ export interface UtilizationBar {
   pct: number | null;
   /** The month under way: its figure is the month so far. */
   partial?: boolean;
-  /** A month before MES recorded in full: drawn grey, not in YTD. */
-  incomplete?: boolean;
-  /** YTD only: the financial year's first month, and the months left out. */
-  fromMonth?: string;
-  excludedMonths?: string[];
+  /** A month before MES recorded in full: no figure. */
+  beforeMes?: boolean;
+  /** YTD only: the first and last month it covers. */
+  fromMonth?: string | null;
+  toMonth?: string | null;
 }
 
 const UTIL_W = 460;
 const UTIL_H = 190;
 
+const utilMonthShort = (m: string): string =>
+  new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1, 1).toLocaleDateString('en-AU', { month: 'short' });
+/** "Sep 2026". */
+export const utilMonthName = (m: string): string => `${utilMonthShort(m)} ${m.slice(0, 4)}`;
+
+interface UtilColumn {
+  label: string;
+  /** The hover's first line. */
+  heading: string;
+  bar: UtilizationBar;
+  /** YTD / Total: drawn darker, set off from the rest by a rule. */
+  summary?: boolean;
+  /** Another column is picked: this one is drawn faint. */
+  dim?: boolean;
+  picked?: boolean;
+  /** Clickable: the value its data-util-machine carries. */
+  pick?: string;
+}
+
+function utilTip(c: UtilColumn): string {
+  const b = c.bar;
+  if (b.beforeMes) return `${c.heading}\nMES was not yet recording in full: no figure`;
+  if (b.pct == null && !b.availableHours) return `${c.heading}\nNo available hours yet`;
+  return [
+    c.heading,
+    `Running (R) ${b.runHours.toFixed(1)} h`,
+    `Available ${b.availableHours} h`,
+    b.weekdayHours != null ? `  open weekdays × 24 h: ${b.weekdayHours} h` : '',
+    b.closedShiftHours ? `  shifts worked on weekends / holidays / RDOs × 8 h: ${b.closedShiftHours} h` : '',
+    `Utilization ${b.pct == null ? '—' : `${b.pct.toFixed(1)}%`}`,
+    c.pick == null
+      ? ''
+      : c.summary || c.picked
+        ? 'Click: every press by month'
+        : `Click: ${c.label} by month`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
 /**
- * A press's Utilization, a bar a month, % on the axis; a 'YTD' bar (the year
- * to date) is drawn darker and set off from the months by a rule. The axis
- * runs to 100%, or past it if a bar does; the 100% line is dashed.
+ * Utilization columns, % on the axis, the first one a summary (YTD or Total)
+ * drawn darker and set off by a rule. The axis runs to 100%, or past it if a
+ * bar does; the 100% line is dashed.
  */
-export function renderUtilizationChart(bars: UtilizationBar[]): string {
+function renderUtilColumns(cols: UtilColumn[], ariaLabel: string): string {
   const padL = 34;
   const padR = 8;
   const padT = 16;
   const padB = 22;
   const innerW = UTIL_W - padL - padR;
   const innerH = UTIL_H - padT - padB;
-  const top = Math.max(100, Math.ceil(Math.max(0, ...bars.map((b) => b.pct ?? 0)) / 25) * 25);
+  const top = Math.max(100, Math.ceil(Math.max(0, ...cols.map((c) => c.bar.pct ?? 0)) / 25) * 25);
   const y = (pct: number): number => padT + innerH - (pct / top) * innerH;
-  const n = Math.max(1, bars.length);
+  const n = Math.max(1, cols.length);
   const slot = innerW / n;
   const bw = Math.min(26, slot * 0.7);
   let grid = '';
@@ -736,43 +776,75 @@ export function renderUtilizationChart(bars: UtilizationBar[]): string {
     grid += `<text x="${padL - 4}" y="${(y(v) + 3).toFixed(1)}" font-size="9.5" fill="#64748b" text-anchor="end">${v}%</text>`;
   }
   grid += `<line x1="${padL}" y1="${y(100).toFixed(1)}" x2="${UTIL_W - padR}" y2="${y(100).toFixed(1)}" stroke="#64748b" stroke-dasharray="4 3"/>`;
-  const monthLabel = (m: string): string =>
-    m === 'YTD'
-      ? 'YTD'
-      : new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1, 1).toLocaleDateString('en-AU', { month: 'short' });
   let marks = '';
-  bars.forEach((b, i) => {
+  cols.forEach((c, i) => {
+    const b = c.bar;
     const cx = padL + i * slot + slot / 2;
-    const ytd = b.month === 'YTD';
-    const monthName = (m: string): string => `${monthLabel(m)} ${m.slice(0, 4)}`;
-    const tip = [
-      ytd
-        ? `Financial year to date${b.fromMonth ? ` (from ${monthName(b.fromMonth)})` : ''}`
-        : `${monthName(b.month)}${b.partial ? ' (so far)' : ''}`,
-      ytd && b.excludedMonths?.length
-        ? `  left out (MES records not complete): ${b.excludedMonths.map(monthName).join(', ')}`
-        : '',
-      b.incomplete ? '  MES records not complete: not in YTD' : '',
-      `Running (R) ${b.runHours.toFixed(1)} h`,
-      `Available ${b.availableHours} h`,
-      b.weekdayHours != null ? `  open weekdays × 24 h: ${b.weekdayHours} h` : '',
-      b.closedShiftHours ? `  shifts worked on weekends / holidays / RDOs × 8 h: ${b.closedShiftHours} h` : '',
-      `Utilization ${b.pct == null ? '—' : `${b.pct.toFixed(1)}%`}`,
-    ]
-      .filter(Boolean)
-      .join('\n');
-    if (ytd && i + 1 < bars.length) {
+    if (c.summary && i + 1 < cols.length) {
       const x = padL + (i + 1) * slot;
       marks += `<line x1="${x.toFixed(1)}" y1="${padT}" x2="${x.toFixed(1)}" y2="${padT + innerH}" stroke="#94a3b8"/>`;
     }
+    const op = c.dim ? 0.3 : b.partial ? 0.55 : 1;
     if (b.pct != null && b.pct > 0) {
       const h = (b.pct / top) * innerH;
-      marks += `<rect x="${(cx - bw / 2).toFixed(1)}" y="${y(b.pct).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${ytd ? '#075985' : b.incomplete ? '#94a3b8' : '#0284c7'}"${b.partial ? ' fill-opacity="0.55"' : ''}/>`;
-      marks += `<text x="${cx.toFixed(1)}" y="${(y(b.pct) - 3).toFixed(1)}" font-size="9.5" fill="#1e293b" text-anchor="middle" font-weight="700">${Math.round(b.pct)}</text>`;
+      marks += `<rect x="${(cx - bw / 2).toFixed(1)}" y="${y(b.pct).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${c.summary ? '#075985' : '#0284c7'}"${op < 1 ? ` fill-opacity="${op}"` : ''}${c.picked ? ' stroke="#0f172a" stroke-width="1.5"' : ''}/>`;
+      marks += `<text x="${cx.toFixed(1)}" y="${(y(b.pct) - 3).toFixed(1)}" font-size="9.5" fill="#1e293b" text-anchor="middle" font-weight="700"${c.dim ? ' fill-opacity="0.45"' : ''}>${Math.round(b.pct)}</text>`;
     }
-    marks += `<text x="${cx.toFixed(1)}" y="${UTIL_H - 7}" font-size="9.5" fill="${ytd ? '#075985' : '#475569'}" text-anchor="middle"${ytd ? ' font-weight="700"' : ''}>${escAttr(monthLabel(b.month))}</text>`;
-    // The whole column carries the hover, so a short or empty bar has one too.
-    marks += `<rect x="${(cx - slot / 2).toFixed(1)}" y="${padT}" width="${slot.toFixed(1)}" height="${innerH}" fill="transparent"><title>${escAttr(tip)}</title></rect>`;
+    const labelFill = b.beforeMes ? '#cbd5e1' : c.summary ? '#075985' : c.picked ? '#0f172a' : '#475569';
+    const bold = c.summary || c.picked;
+    marks += `<text x="${cx.toFixed(1)}" y="${UTIL_H - 7}" font-size="9.5" fill="${labelFill}" text-anchor="middle"${bold ? ' font-weight="700"' : ''}>${escAttr(c.label)}</text>`;
+    // The whole column carries the hover (and the click), so a short or
+    // empty bar has one too.
+    const hit =
+      c.pick != null
+        ? ` class="util-hit" data-util-machine="${escAttr(c.pick)}" role="button" tabindex="0" aria-pressed="${!!c.picked}" style="cursor:pointer"`
+        : '';
+    marks += `<rect x="${(cx - slot / 2).toFixed(1)}" y="${padT}" width="${slot.toFixed(1)}" height="${innerH + padB}" fill="transparent"${hit}><title>${escAttr(utilTip(c))}</title></rect>`;
   });
-  return `<svg viewBox="0 0 ${UTIL_W} ${UTIL_H}" width="100%" role="img" aria-label="Utilization by month" preserveAspectRatio="xMidYMid meet">${grid}${marks}</svg>`;
+  return `<svg viewBox="0 0 ${UTIL_W} ${UTIL_H}" width="100%" role="img" aria-label="${escAttr(ariaLabel)}" preserveAspectRatio="xMidYMid meet">${grid}${marks}</svg>`;
+}
+
+/**
+ * A press's (or every press's) Utilization, a bar a month, with its 'YTD'
+ * bar first. A month before MES recorded in full, or still to come, has no
+ * bar.
+ */
+export function renderUtilizationChart(bars: UtilizationBar[]): string {
+  return renderUtilColumns(
+    bars.map((b) => {
+      const ytd = b.month === 'YTD';
+      const span = b.fromMonth && b.toMonth ? ` (${utilMonthName(b.fromMonth)} → ${utilMonthName(b.toMonth)})` : '';
+      return {
+        label: ytd ? 'YTD' : utilMonthShort(b.month),
+        heading: ytd ? `Financial year to date${span}` : `${utilMonthName(b.month)}${b.partial ? ' (so far)' : ''}`,
+        bar: b,
+        summary: ytd,
+      };
+    }),
+    'Utilization by month',
+  );
+}
+
+/**
+ * Every press's Utilization over one period (a month, or the year to date),
+ * a bar a press, with the presses' Total first. Clicking a press picks it
+ * (data-util-machine); clicking it again, or the Total, picks every press.
+ */
+export function renderUtilizationByMachineChart(
+  items: ReadonlyArray<{ machineCode: string; bar: UtilizationBar; total?: boolean }>,
+  picked: string,
+  period: string,
+): string {
+  return renderUtilColumns(
+    items.map((it) => ({
+      label: it.machineCode,
+      heading: `${it.total ? 'Every press' : it.machineCode} · ${period}`,
+      bar: it.bar,
+      summary: it.total,
+      picked: !it.total && it.machineCode === picked,
+      dim: !!picked && !it.total && it.machineCode !== picked,
+      pick: it.total ? '' : it.machineCode === picked ? '' : it.machineCode,
+    })),
+    'Utilization by machine',
+  );
 }
