@@ -6,6 +6,7 @@ import {
   sumOtherShiftGood,
   unsignedEarlierTuples,
 } from '../src/core/jobgood';
+import { aggregate } from '../src/core/metrics';
 import { rec } from './helpers';
 
 describe('sumOtherShiftGood (cross-shift Job Left carry)', () => {
@@ -82,6 +83,22 @@ describe('sumOtherShiftGood (cross-shift Job Left carry)', () => {
       }),
     ];
     expect(sumOtherShiftGood(all, 'Z|2026-05-15-Afternoon')).toBe(50);
+  });
+
+  // A shift signed before PMD_Rejects existed (or whose events were lost)
+  // reads back with the Reject column total on slot 0 and no per-code map.
+  // The KPI page and the list's TotalGood both subtract it; Job Left took
+  // the map alone, counted the gross as Good, and ran the order out early.
+  it('subtracts a bare rejectCount where the per-code map is gone, as the KPI page does', () => {
+    const all = [
+      rec({
+        jobNumber: 'J', slotIndex: 0, statusCode: 'R', locked: true, machineCode: 'A',
+        shiftId: '2026-05-15-Day', countStart: 0, countEnd: 50, rejectCount: 8, rejects: '{}',
+      }),
+    ];
+    expect(sumOtherShiftGood(all, 'Z|2026-05-15-Afternoon')).toBe(42);
+    expect(sumGoodStartedBefore(all, 'Z', '2026-05-15-Afternoon')).toBe(42);
+    expect(aggregate(all).output).toBe(42);
   });
 });
 

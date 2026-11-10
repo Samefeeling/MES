@@ -70,7 +70,18 @@ export function cavityGross(
   return Math.max(0, countEnd - countStart) * c;
 }
 
-function sumRejects(r: ProductionRecord): number {
+/**
+ * Reject pieces on one slot record: its per-code `rejects` map when it has
+ * one, else the bare `rejectCount`.
+ *
+ * The count is the only figure a row carries when its per-code detail is
+ * gone — a shift signed before PMD_Rejects existed, or a live row on a
+ * tenant without RejectsBySlot. Every Good figure has to read it the same
+ * way: Job Left (core/jobgood) used to take the map alone, so on those rows
+ * it subtracted no rejects at all while the KPI page and the list's
+ * TotalGood both did, and the order looked further along than it was.
+ */
+export function rejectsOf(r: Pick<ProductionRecord, 'rejects' | 'rejectCount'>): number {
   if (r.rejects && r.rejects !== '{}') {
     try {
       const parsed = JSON.parse(r.rejects) as Record<string, number>;
@@ -153,7 +164,7 @@ export function aggregate(
     const g = canonical
       ? cavityGross(canonical.countStart, canonical.countEnd, canonical.cavities)
       : 0;
-    const rej = grp.reduce((a, r) => a + sumRejects(r), 0);
+    const rej = grp.reduce((a, r) => a + rejectsOf(r), 0);
     const good = Math.max(0, g - rej);
     gross += g;
     scrap += rej;

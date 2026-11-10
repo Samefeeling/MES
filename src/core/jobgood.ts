@@ -1,5 +1,5 @@
 import type { ProductionRecord } from '../types';
-import { cavityGross } from './metrics';
+import { cavityGross, rejectsOf } from './metrics';
 import { shiftBounds } from './shifts';
 
 // Cross-shift Good totals for the Job Left math. Shared by the operator
@@ -42,12 +42,8 @@ function aggregateByTuple(all: ProductionRecord[]): Map<string, TupleAgg> {
       tuples.set(key, t);
     }
     if (r.slotIndex === 0) t.gross = cavityGross(r.countStart, r.countEnd, r.cavities);
-    try {
-      const obj = JSON.parse(r.rejects || '{}') as Record<string, number>;
-      t.rejects += Object.values(obj).reduce((a, v) => a + (Number(v) || 0), 0);
-    } catch {
-      t.rejects += Number(r.rejectCount) || 0;
-    }
+    // The same reading of a row's rejects as every other Good figure.
+    t.rejects += rejectsOf(r);
     if (r.locked || r.reopened || r.statusCode) t.real = true;
   }
   return tuples;
