@@ -39,7 +39,13 @@ import {
   encodeBreakdownCauseMap,
 } from '../core/breakdown';
 import { parseShiftPattern, previousShift, shiftBounds, slotClock } from '../core/shifts';
-import { dieLookup, lastRunFromTimelines, lastRunLookback, type PlanBarItem } from '../core/schedule';
+import {
+  dieLookup,
+  lastRunFromTimelines,
+  lastRunLookback,
+  planningHoldsAPlan,
+  type PlanBarItem,
+} from '../core/schedule';
 import type { CalendarDay } from '../core/utilization';
 import { hoursUnavailableFor, shiftTargetFor } from '../core/targets';
 import {
@@ -566,6 +572,26 @@ export class SharePointDataLayer implements PmdDataLayer {
   private unlockedTuples = new Set<string>();
   private static readonly UNLOCKED_TUPLES_KEY = 'pmd_unlocked_tuples_v1';
   /**
+   * Unlocked tuples whose PMD_Production.Reopened = Yes this device has SEEN
+   * on the server. The local unlock flag alone cannot tell "still open for
+   * correction" from "another device has signed it off again": once the
+   * server row of a tuple in this set reads Reopened = No, the correction
+   * window is over and listProduction drops the local flag and the cache
+   * with it. A tuple never seen reopened (a tenant without the column) is
+   * never in here, and keeps the device-local behaviour. Persisted with
+   * unlockedTuples.
+   */
+  private reopenSeen = new Set<string>();
+  private static readonly REOPEN_SEEN_KEY = 'pmd_reopen_seen_v1';
+  /**
+   * The signed rows the server flags Reopened = Yes, as the last
+   * listProduction read them: tuple key → its signed slots. Reopened makes
+   * the row editable on EVERY device, but only the device that unlocked it
+   * holds the rehydrated copy sign-off needs — so the first edit made
+   * anywhere else adopts the tuple from this (upsertProductionRecord).
+   */
+  private reopenedOnServer = new Map<string, ProductionRecord[]>();
+  /**
    * Tuples whose editCache rows THIS DEVICE authored (an operator or
    * supervisor actually typed/tapped into them here), as opposed to
    * copies backfilled from PMD_LiveStatus purely for VIEWING another
@@ -751,17 +777,29 @@ export class SharePointDataLayer implements PmdDataLayer {
       if (!raw) return;
       const parsed = JSON.parse(raw) as string[];
       for (const k of parsed) this.unlockedTuples.add(k);
+      const seen = localStorage.getItem(SharePointDataLayer.REOPEN_SEEN_KEY);
+      for (const k of seen ? (JSON.parse(seen) as string[]) : []) {
+        if (this.unlockedTuples.has(k)) this.reopenSeen.add(k);
+      }
     } catch (e) {
       console.warn('[pmd] could not rehydrate unlocked tuples:', e);
     }
   }
 
   private persistUnlockedTuples(): void {
+    // Only an unlocked tuple can be waiting on the server's re-lock.
+    for (const k of this.reopenSeen) {
+      if (!this.unlockedTuples.has(k)) this.reopenSeen.delete(k);
+    }
     if (typeof localStorage === 'undefined') return;
     try {
       localStorage.setItem(
         SharePointDataLayer.UNLOCKED_TUPLES_KEY,
         JSON.stringify(Array.from(this.unlockedTuples)),
+      );
+      localStorage.setItem(
+        SharePointDataLayer.REOPEN_SEEN_KEY,
+        JSON.stringify(Array.from(this.reopenSeen)),
       );
     } catch (e) {
       console.warn('[pmd] could not persist unlocked tuples:', e);
@@ -2456,7 +2494,8 @@ export class SharePointDataLayer implements PmdDataLayer {
    * by from then on. Called while the shift is under way (main.ts, from a
    * device that writes) and by every sign-off of the shift. Returns the
    * shift's rows as they stand after it; null when the list could not be
-   * read, in which case nothing is written — a row may already be kept.
+   * read, in which case nothing is written — a row may already be kept —
+   * and when no row is kept yet and Planning.csv holds no plan to keep.
    */
   async keepShiftPlans(shiftId: string): Promise<SavedShiftPlan[] | null> {
     let saved = await this.readShiftPlans(`ShiftId eq '${odataString(shiftId)}'`);
@@ -2469,6 +2508,19 @@ export class SharePointDataLayer implements PmdDataLayer {
     if (machines.every((code) => keys.has(code.trim().toUpperCase())) && saved.length === keys.size) {
       return saved.map(({ id: _id, ...plan }) => plan);
     }
+    // A kept row is never rewritten, so it is not kept from a planning read
+    // that holds no plan at all (planningHoldsAPlan): a header-only export,
+    // or one whose Machine / date column was renamed, would freeze "nothing
+    // planned" onto every press of the shift for good. Nothing is written;
+    // with no row kept yet the answer is null, so the keeper asks again in
+    // ten minutes and the shift is kept as soon as the export is right.
+    const orders = await this.listPlanning({});
+    if (!planningHoldsAPlan(orders)) {
+      console.warn(
+        `[pmd] PMD_ShiftPlan: Planning.csv holds no order with a press and a Start–Due window — ${shiftId} not kept from it`,
+      );
+      return saved.length ? saved.map(({ id: _id, ...plan }) => plan) : null;
+    }
     // What each press ran before its first order opens, for that order's
     // die change: the shift before and this one so far. Not worth failing
     // the keep over — a press with no record starts on the file's rule.
@@ -2476,8 +2528,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     // And, where the press stood that long, what it last ran in the days
     // before: the die its next order is compared with.
     const lookback = lastRunLookback(shiftId);
-    const [orders, dieColors, history, headers] = await Promise.all([
-      this.listPlanning({}),
+    const [dieColors, history, headers] = await Promise.all([
       this.listProductDieColors().catch(() => [] as ProductDieColor[]),
       Promise.all(
         [prevSid, shiftId]
@@ -2815,6 +2866,58 @@ export class SharePointDataLayer implements PmdDataLayer {
       prodModMsByKey.set(key, isNaN(t) ? 0 : t);
       if (h.reopened) prodReopenedKeys.add(key);
     }
+    // What the server says is open for correction right now. Kept so a
+    // device that did not do the unlock can still adopt the tuple on its
+    // first edit (upsertProductionRecord); a tuple this read covers and no
+    // longer finds reopened is forgotten.
+    const inThisRead = (k: string): boolean => {
+      const [machineCode = '', shiftId = '', ...job] = k.split('|');
+      return productionMatches(
+        { machineCode, shiftId, jobNumber: job.join('|') } as ProductionRecord,
+        filter,
+      );
+    };
+    for (const k of Array.from(this.reopenedOnServer.keys())) {
+      if (inThisRead(k) && !prodReopenedKeys.has(k)) this.reopenedOnServer.delete(k);
+    }
+    for (const h of prodHeaders) {
+      if (!matchesFilter(h) || !h.reopened) continue;
+      const key = this.cacheKey(h.machineCode, `${h.date}-${h.shift}`, h.jobNumber);
+      const hWithTimeline: HeaderRow = h.timeline
+        ? h
+        : { ...h, timeline: breakdownByKey.get(key)?.timeline ?? '' };
+      this.reopenedOnServer.set(
+        key,
+        this.expandHeaderToSlots(
+          hWithTimeline,
+          rejectsByKey.get(key) ?? [],
+          true,
+          breakdownByKey.get(key),
+        ),
+      );
+    }
+    // The server's Reopened flag is the authority on whether a correction
+    // window is still open. A local unlock the server has confirmed
+    // (Reopened = Yes was read back) ends the moment the row reads
+    // Reopened = No again: some device has signed the correction off, and
+    // holding on to the local flag would let this device's now-stale copy
+    // shadow the newly signed record for good. An unlock the server never
+    // confirmed (no Reopened column on the tenant) stays device-local.
+    let unlockChanged = false;
+    for (const k of signedKeys) {
+      if (!this.unlockedTuples.has(k)) continue;
+      if (prodReopenedKeys.has(k)) {
+        if (!this.reopenSeen.has(k)) {
+          this.reopenSeen.add(k);
+          unlockChanged = true;
+        }
+      } else if (this.reopenSeen.has(k)) {
+        this.unlockedTuples.delete(k);
+        this.reopenSeen.delete(k);
+        unlockChanged = true;
+      }
+    }
+    if (unlockChanged) this.persistUnlockedTuples();
     let purged = false;
     for (const k of Array.from(this.editCache.keys())) {
       if (!signedKeys.has(k)) continue;
@@ -2827,6 +2930,10 @@ export class SharePointDataLayer implements PmdDataLayer {
       // time anything reads the production list.
       if (this.unlockedTuples.has(k)) continue;
       this.editCache.delete(k);
+      // The copy is gone and so is this device's authorship of it: left
+      // marked, a spectator copy backfilled below would be re-broadcast
+      // from here as if it had been typed here.
+      this.dirtyTuples.delete(k);
       purged = true;
     }
 
@@ -3560,6 +3667,7 @@ export class SharePointDataLayer implements PmdDataLayer {
   async upsertProductionRecord(record: ProductionRecord): Promise<ProductionRecord> {
     // Cache live edit; do not write to SharePoint until sign-off.
     const key = this.cacheKey(record.machineCode, record.shiftId, record.jobNumber);
+    this.adoptReopenedTuple(key);
     const list = this.editCache.get(key) ?? [];
     const idx = list.findIndex((r) => r.slotIndex === record.slotIndex);
     const stored = { ...record, id: idx >= 0 ? list[idx].id || -1 : -(list.length + 1) };
@@ -3571,6 +3679,40 @@ export class SharePointDataLayer implements PmdDataLayer {
     this.dirtyTuples.add(key);
     this.persistEditCache();
     return stored;
+  }
+
+  /**
+   * First edit, on this device, of a tuple ANOTHER device unlocked.
+   *
+   * PMD_Production.Reopened = Yes opens the row for correction on every
+   * device, but unlockShift's rehydrate + unlock flag only ever ran on the
+   * device that did the unlock. Anywhere else the sheet rendered as open
+   * and nothing typed into it survived: the cache held the one edited slot,
+   * and the next read purged it as a stale copy of a signed tuple — so the
+   * value snapped back, and a Sign Off pressed there found nothing to write
+   * and still reported success, leaving the row Reopened (and therefore out
+   * of every KPI, which count signed rows only).
+   *
+   * So the edit adopts the tuple exactly as the unlock would have: the
+   * signed slots as the server last gave them go into the cache (a slot
+   * already there — the unlocking device's live mirror — is kept), and the
+   * tuple is marked unlocked here too. Sign-off then has the whole tuple to
+   * write, and the server's re-lock ends the window on every device.
+   */
+  private adoptReopenedTuple(key: string): void {
+    if (this.unlockedTuples.has(key)) return;
+    const signedSlots = this.reopenedOnServer.get(key);
+    if (!signedSlots) return;
+    const list = this.editCache.get(key) ?? [];
+    for (const slot of signedSlots) {
+      if (list.some((s) => s.slotIndex === slot.slotIndex)) continue;
+      list.push({ ...slot, locked: false, reopened: true, lockedBy: '', lockedAt: '' });
+    }
+    this.editCache.set(key, list);
+    this.unlockedTuples.add(key);
+    // Adopted BECAUSE the server said reopened: its re-lock ends it here too.
+    this.reopenSeen.add(key);
+    this.persistUnlockedTuples();
   }
 
   /**
@@ -3612,7 +3754,23 @@ export class SharePointDataLayer implements PmdDataLayer {
       // any local edits (e.g. on a freshly unlocked shift to confirm
       // "yes, the existing numbers are fine"), the existing row stays
       // as-is and the unlock flag clears below.
-      this.unlockedTuples.delete(ownKey(jobNumber ?? ''));
+      //
+      // What may still be owed is the lock itself. A row left at
+      // Reopened = Yes reads as unsigned on every device and drops out of
+      // the KPIs (signed rows only) — so a sign-off that changes nothing
+      // still has to close the correction window on the server, or it
+      // reports "saved" over a row that stays open. A failure here is
+      // thrown: the supervisor must not be told it is signed when it is not.
+      const prefix = `${machineCode}|${shiftId}|`;
+      const signing = (k: string): boolean =>
+        jobNumber ? k === ownKey(jobNumber) : k.startsWith(prefix);
+      for (const k of Array.from(this.reopenedOnServer.keys()).filter(signing)) {
+        await this.setReopenedFlag(machineCode, shiftId, k.slice(prefix.length), false);
+        this.reopenedOnServer.delete(k);
+      }
+      for (const k of Array.from(this.unlockedTuples).filter(signing)) {
+        this.unlockedTuples.delete(k);
+      }
       this.persistUnlockedTuples();
       return;
     }
@@ -3949,6 +4107,8 @@ export class SharePointDataLayer implements PmdDataLayer {
       const tupleKey = ownKey(job);
       this.editCache.delete(tupleKey);
       this.unlockedTuples.delete(tupleKey);
+      // Signed again: an edit before the next read must not re-adopt it.
+      this.reopenedOnServer.delete(tupleKey);
     }
     this.persistEditCache();
     this.persistUnlockedTuples();
@@ -5844,8 +6004,10 @@ function aggregateSlots(slots: ProductionRecord[]): {
     }
     const shiftId = r.shiftId;
     const slotLabel = slotClock(shiftId, r.slotIndex) || String(r.slotIndex);
-    for (const [code, qty] of Object.entries(obj)) {
-      if (!qty) continue;
+    for (const [code, raw] of Object.entries(obj)) {
+      // A count that came back as text ("3") must add, not concatenate.
+      const qty = Number(raw);
+      if (!Number.isFinite(qty) || qty === 0) continue;
       reject += qty;
       rejectEvents.push({
         timeline: slotLabel,

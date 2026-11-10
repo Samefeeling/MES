@@ -14,6 +14,7 @@ import {
 } from '../src/core/kpi-attainment';
 import { MemoryDataLayer } from '../src/dal/memory';
 import { parsePlanningCsv, SharePointDataLayer } from '../src/dal/sharepoint';
+import { planningHoldsAPlan } from '../src/core/schedule';
 import { shiftTargetFor } from '../src/core/targets';
 import type { ProductionRecord } from '../src/types';
 import { rec } from './helpers';
@@ -400,5 +401,76 @@ describe('keeping the plans', () => {
     expect(posts.length).toBe(before);
     expect(again?.find((p) => p.machineCode === '320T')).toEqual(first?.find((p) => p.machineCode === '320T'));
     expect(deletes).toEqual([]);
+  });
+
+  // A kept row is never rewritten. A broken export — header only, or the
+  // Machine / date column renamed — parses to orders that match no press,
+  // and keeping from it froze "nothing planned" onto every press for good.
+  describe('a planning read that holds no plan is not kept', () => {
+    const PLANLESS: Array<[string, string]> = [
+      ['a header and no rows', PLAN_12_OCT.split('\n')[0]],
+      ['no Machine column', PLAN_12_OCT.replace(/^Machine,/, 'Press,')],
+      ['no start date column', PLAN_12_OCT.replace('JobHead_StartDate', 'StartDate')],
+    ];
+
+    it('tells a plan from none', () => {
+      expect(planningHoldsAPlan(orders)).toBe(true);
+      for (const [, csv] of PLANLESS) expect(planningHoldsAPlan(parsePlanningCsv(csv))).toBe(false);
+      // A supervisor's manual order has no press and no window: not a plan.
+      expect(
+        planningHoldsAPlan([{ ...orders[0], source: 'Manual', manuallyAdded: true, machineCode: '' }]),
+      ).toBe(false);
+    });
+
+    for (const [what, csv] of PLANLESS) {
+      it(`writes nothing from ${what}, and asks to be tried again`, async () => {
+        const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x', canWrite: () => true });
+        const posts: string[] = [];
+        const o = dal as unknown as {
+          listMachines: () => Promise<unknown[]>;
+          listPlanning: () => Promise<unknown[]>;
+          getAllItems: () => Promise<unknown[]>;
+          getJson: () => Promise<unknown>;
+          post: (url: string) => Promise<unknown>;
+        };
+        o.listMachines = async () => PRESSES.map((machineCode) => ({ machineCode, active: true }));
+        o.listPlanning = async () => parsePlanningCsv(csv);
+        o.getAllItems = async () => [];
+        o.getJson = async () => ({});
+        o.post = async (url) => {
+          posts.push(url);
+          return {};
+        };
+        // null, not []: the keeper retries in ten minutes instead of
+        // taking the shift as kept.
+        await expect(dal.keepShiftPlans('2026-10-12-Night')).resolves.toBeNull();
+        expect(posts).toEqual([]);
+      });
+    }
+
+    it('still answers with the rows already kept', async () => {
+      const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x', canWrite: () => true });
+      const posts: string[] = [];
+      const o = dal as unknown as {
+        listMachines: () => Promise<unknown[]>;
+        listPlanning: () => Promise<unknown[]>;
+        getAllItems: () => Promise<unknown[]>;
+        post: (url: string) => Promise<unknown>;
+      };
+      o.listMachines = async () => PRESSES.map((machineCode) => ({ machineCode, active: true }));
+      o.listPlanning = async () => [];
+      o.getAllItems = async () => [
+        { ID: 1, MachineCode: '320T', ShiftId: '2026-10-12-Night', SchedulePlan: 200, PlanJobs: '[]' },
+      ];
+      o.post = async (url) => {
+        posts.push(url);
+        return {};
+      };
+      // The sign-off of 320T is still judged by the plan kept for it.
+      await expect(dal.keepShiftPlans('2026-10-12-Night')).resolves.toEqual([
+        { machineCode: '320T', shiftId: '2026-10-12-Night', plan: 200, jobs: [] },
+      ]);
+      expect(posts).toEqual([]);
+    });
   });
 });

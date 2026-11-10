@@ -270,6 +270,28 @@ function orderWindow(order: PlanningOrder): { start: Date; end: Date } | null {
   return { start, end };
 }
 
+/**
+ * Whether a planning read holds any plan at all: at least one ERP order
+ * that names a press and has a Start–Due window.
+ *
+ * A healthy Planning.csv always does — it carries the open orders of the
+ * days ahead even on a Sunday nobody works. A read that does not is a
+ * broken export, not an empty factory: a header with no rows, or a file
+ * whose `Machine` or date column was renamed, parses to orders that match
+ * no press, and every press then reads "nothing planned". That is harmless
+ * on screen and permanent in PMD_ShiftPlan, whose rows are never rewritten
+ * — so the plan of record is not kept from a read that fails this.
+ */
+export function planningHoldsAPlan(orders: ReadonlyArray<PlanningOrder>): boolean {
+  return orders.some(
+    (o) =>
+      o.source === 'ERP' &&
+      !o.isDieChange &&
+      normaliseMachineCode(o.machineCode) !== '' &&
+      orderWindow(o) !== null,
+  );
+}
+
 /** Saturday or Sunday, by the date a shift is filed under — so Friday's
  * night (Fri 23:00 → Sat 07:00) is a weekday shift and Sunday's night
  * (Sun 23:00 → Mon 07:00) is weekend. */
