@@ -173,6 +173,77 @@
   See `sanitizeBodyStrings` + `findInvalidTextField` in
   `src/dal/sharepoint.ts`.
 
+- **A re-opened order could only be corrected on the device that unlocked
+  it** (fix 2026-11-10). `Reopened = Yes` opens the row on every device,
+  but the rehydrate + `unlockedTuples` flag only ran where Unlock was
+  pressed. Anywhere else the sheet showed "Re-opened for correction", an
+  edit snapped back on the next read (purged as a stale copy of a signed
+  tuple), and Sign Off found an empty cache, wrote nothing and still
+  toasted "Signed off" — leaving the row Reopened, which the KPI page
+  (`r.locked` only) then left out. Now: the first edit on another device
+  adopts the tuple from the signed row the server last gave
+  (`adoptReopenedTuple`); a sign-off with nothing changed sets
+  `Reopened = No` itself and throws if that fails; and once an unlock the
+  server confirmed reads `Reopened = No` again, every device drops its
+  local flag and copy (`reopenSeen`) instead of shadowing the row another
+  device signed. A tenant without the column keeps the device-local
+  unlock. See `tests/reopened-cross-device.test.ts`.
+- **PMD_ShiftPlan is not kept from a planning read that holds no plan**
+  (2026-11-10). Its rows are never rewritten, so a header-only export or a
+  renamed `Machine` / date column froze "nothing planned" onto every press
+  of the shift. `keepShiftPlans` now answers null (the keeper retries in
+  ten minutes) unless Planning.csv has at least one ERP order with a press
+  and a Start–Due window (`planningHoldsAPlan`). A file that is only
+  *partly* wrong — half its rows — cannot be told from a short plan here;
+  the export script's atomic write is the defence for that.
+- **Throttling** (2026-11-10). SharePoint Online answers 429, or 503 with
+  `Retry-After`, without running the request; one of those used to fail a
+  whole sign-off. Every call now goes through `fetchThroughThrottle` (three
+  more tries, waits as asked, 15 s at most). A 503 with no `Retry-After` is
+  not retried — the request may have been run.
+- **A value SharePoint refuses at sign-off is shown to the signer**
+  (2026-11-10). The row still lands without it (see the `Invalid text
+  value` entry above), but the sheet now reads `takeWriteWarnings()` after
+  `lockShift` and holds a notice open naming the column — it used to be a
+  console line only, so a shift's Quality Checks could be lost behind a
+  "Signed off" toast.
+
+### Open — not fixed, needs a decision or facts from the site
+
+- **`scripts/sync-epicor-to-sp.ps1` cannot produce the Planning.csv the app
+  reads.** It writes no `Machine` column and no "no of shift" column; the
+  parser, every test fixture and the Assembly press parser all need
+  `Machine`. Deployed as DEPLOYMENT.md § D says, it yields a file in which
+  no order belongs to any press. Whatever produces the real file is not in
+  this repository — bring that script in, or add the two columns here once
+  the Epicor field behind `Machine` is known. Until then the script's own
+  header check (`JobHead_JobNum` only) does not protect the app.
+- **All shift maths runs on the device's clock and time zone.** There is no
+  plant time zone in the code: a viewer whose computer is on Auckland time
+  sees "now", the current shift and Last 24h two hours out, and a device
+  that writes from there keeps the shift plan early and sweeps live rows
+  early. Floor iPads on automatic Sydney time are unaffected. Either pin
+  the zone in `core/shifts.ts` or refuse to write from a device that is
+  not on it.
+- **The two daylight-saving nights.** A shift is 16 half-hours from its
+  local start, so the Night that gains an hour (first Sunday of April) has
+  no slot for 06:00–07:00, and the Night that loses one (first Sunday of
+  October) runs its last two slots into the Day shift. Two shifts a year;
+  how to book the ninth hour is a floor decision.
+- **List view threshold.** Only `PMD_ShiftPlan.ShiftId` and
+  `PMD_DieChangeLog.EventKey` are indexed by the app. Reads of
+  `PMD_Production`, `PMD_Rejects`, `PMD_BreakDownlog` and `PMD_LiveStatus`
+  filter on `Title` and the date column; past 5,000 rows SharePoint refuses
+  a filter on an un-indexed column. `PMD_Rejects` (one row per reject
+  event) gets there first. Check that the date column of each is indexed
+  on the tenant.
+- **Sign-off is a picked name, not a login.** The supervisor on a signed
+  row is whoever was chosen in the dropdown; the supervisor password
+  (compiled into the bundle) gates Unlock and the overrides only. There is
+  no record of who unlocked a row, when, or what it said before the
+  correction — turn on version history for `PMD_Production` to get the
+  before/after from SharePoint itself.
+
 ## Assembly board
 
 - **Two identical `ASSY_Production` rows for one job-day** (fixed
@@ -231,7 +302,10 @@
 ## Build / toolchain
 
 - **Deployed app shows mock data / old P-codes = built without
-  `VITE_BACKEND=sharepoint`.** Vite bakes env vars in at *build* time only.
+  `VITE_BACKEND=sharepoint`.** The page now says so itself: a red bar under
+  the top bar, "Demo data — this page is not connected to SharePoint…"
+  (`backendWarning`, 2026-11-10), also for a mistyped value or a missing
+  `VITE_SITE_URL`. Vite bakes env vars in at *build* time only.
   No `.env.local` (or wrong content) → `createDataLayer` falls back to
   `memory`, so you see seeded data and Afternoon/Night look empty. Fix:
   create `.env.local` (VITE_BACKEND + VITE_SITE_URL + VITE_PLANNING_PATH),

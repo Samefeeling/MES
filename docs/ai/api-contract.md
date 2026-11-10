@@ -43,8 +43,15 @@ ProductionFilter { machineCode?, shiftId?, shiftIdFrom?, shiftIdTo?, jobNumber? 
   signed off. In SharePoint this is where the cached slot edits flush to
   the three lists (header + analytic + events). Creates a slot-0
   placeholder if the shift had no records.
-- **`unlockShift`**: clears the lock; in SharePoint deletes the header +
-  analytic + reject rows for that (machine, shift) so it can be refiled.
+- **`unlockShift`**: re-opens the signed rows for correction. In SharePoint
+  nothing is deleted: `PMD_Production.Reopened` is set to Yes (every device
+  then reads the row as open) and the unlocking device rehydrates its edit
+  cache from the signed row. Another device adopts the tuple on its first
+  edit. The next `lockShift` of the tuple — with or without changes — sets
+  `Reopened` back to No.
+- **`takeWriteWarnings`** (optional): what the writes since the last call
+  had and the backend refused, one line per column. The operator sheet asks
+  after `lockShift` and shows them to whoever signed.
 - **`listProduction`**: returns per-slot `ProductionRecord[]`. Memory
   backend stores them directly; SharePoint reconstructs them from the
   `PMD_Production` header (`Status` string → slots) + `PMD_Rejects` events.
