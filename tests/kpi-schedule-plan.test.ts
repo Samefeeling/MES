@@ -8,6 +8,7 @@ import {
 } from '../src/core/kpi-attainment';
 import {
   crewedWindowHoursBefore,
+  lastRunFromTimelines,
   orderCrewedForShift,
   plannedOrdersForShift,
   pressPlanAfterDieChanges,
@@ -460,5 +461,47 @@ describe('the die change a crew is in the middle of stays in the plan (1600T, 10
   it('has no change when the press last ran a part of the same die', () => {
     const same = night.map((r) => ({ ...r, partNumber: '7911FR' }));
     expect(bars([...same, ...changing])).toEqual(['run 11:30–15:00']);
+  });
+
+  it('looks back past a shift the press stood through, to what it last ran', () => {
+    // Nothing on 1600T in the night; three days before it ran 7911 — the
+    // same Encore die as 7911FR.
+    const lastRun = lastRunFromTimelines([
+      { machineCode: '1600T', shiftId: '2026-11-06-Day', jobNumber: 'SFM507900', partNumber: 'POPL00123', timeline: 'RRRRRRRRRRRRRRRR' },
+      { machineCode: '1600t ', shiftId: '2026-11-07-Day', jobNumber: 'SFM507950', partNumber: '7911', timeline: 'DDDDRRRRRRRR····' },
+      // Booked on the new order, and not running: says nothing of the die.
+      { machineCode: '1600T', shiftId: '2026-11-09-Night', jobNumber: 'SFM507979', partNumber: '7911FR', timeline: '············DDDD' },
+      // What it does once the shift is under way is not what the plan was made on.
+      { machineCode: '1600T', shiftId: DAY, jobNumber: 'SFM507979', partNumber: '7911FR', timeline: 'RR' },
+      { machineCode: 'Batt1', shiftId: '2026-11-09-Night', jobNumber: 'X', partNumber: 'POPL01034', timeline: 'RRRR' },
+    ]);
+    expect(lastRun('1600T', new Date('2026-11-07T08:00:00').getTime())).toBe('POPL00123');
+    expect(lastRun('1600T', new Date('2026-11-10T07:00:00').getTime())).toBe('7911');
+    const planOf = (dies: Record<string, string>) =>
+      shiftPlanFor(orders, '1600T', DAY, new Date('2026-11-10T08:05:00'), { dieOf: (part) => dies[part.toUpperCase()], lastRun }, []);
+    // PMD_ProductDieColor has both on one DieNumber: an insert / colour
+    // change — no die change, and the bar says what it follows.
+    const same = planOf({ '7911': 'D-ENCORE', '7911FR': 'D-ENCORE' })!;
+    expect(same.bar).toEqual([
+      expect.objectContaining({ kind: 'run', jobNumber: 'SFM507979', fromPart: '7911' }),
+    ]);
+    // Different DieNumbers, or one the list does not know: a die change.
+    expect(planOf({ '7911': 'D-ENCORE-STD', '7911FR': 'D-ENCORE' })!.bar!.map((b) => `${b.kind} ${b.fromPart ?? ''}`)).toEqual(['change 7911', 'run ']);
+    expect(planOf({ '7911FR': 'D-ENCORE' })!.bar!.map((b) => b.kind)).toEqual(['change', 'run']);
+  });
+
+  it('says what an order follows on the same die, in the shift it starts in', () => {
+    // 850T, 27 Oct: Grey follows Black at 18:06 on the same seat die.
+    const csv = [
+      'Machine,JobHead_StartDate,JobOper_ProdStandard,JobHead_ReqDueDate,JobHead_JobNum,JobHead_PartNum,JobHead_PartDescription,Calculated_RemainingQty,JobHead_ProdQty,no of shift',
+      '"850T","2026-10-27 07:00:00","54.5","2026-10-27 18:06:00","SFM507987","17705-BLK","Seat - Black","100","360","MAN"',
+      '"850T","2026-10-27 18:06:00","54.5","2026-10-28 15:52:00","SFM507986","17705-GRY","Seat - Grey","1160","1160","MAN"',
+    ].join('\n');
+    const seat = { dieOf: () => 'D-SEAT-M' };
+    const bar = (shift: string) =>
+      shiftPlanFor(parsePlanningCsv(csv), '850T', `2026-10-27-${shift}`, new Date('2026-10-30T00:00:00'), seat, [])!.bar!;
+    expect(bar('Afternoon').map((b) => `${b.jobNumber} ${b.fromPart ?? '-'}`)).toEqual(['SFM507987 -', 'SFM507986 17705-BLK']);
+    // The night it only carries on in: nothing to say.
+    expect(bar('Night').map((b) => `${b.jobNumber} ${b.fromPart ?? '-'}`)).toEqual(['SFM507986 -']);
   });
 });

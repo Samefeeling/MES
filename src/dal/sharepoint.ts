@@ -39,7 +39,7 @@ import {
   encodeBreakdownCauseMap,
 } from '../core/breakdown';
 import { parseShiftPattern, previousShift, shiftBounds, slotClock } from '../core/shifts';
-import { dieLookup, type PlanBarItem } from '../core/schedule';
+import { dieLookup, lastRunFromTimelines, lastRunLookback, type PlanBarItem } from '../core/schedule';
 import type { CalendarDay } from '../core/utilization';
 import { hoursUnavailableFor, shiftTargetFor } from '../core/targets';
 import {
@@ -2473,7 +2473,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     // die change: the shift before and this one so far. Not worth failing
     // the keep over — a press with no record starts on the file's rule.
     const prevSid = previousShift(shiftId);
-    const [orders, dieColors, history] = await Promise.all([
+    // And, where the press stood that long, what it last ran in the days
+    // before: the die its next order is compared with.
+    const lookback = lastRunLookback(shiftId);
+    const [orders, dieColors, history, headers] = await Promise.all([
       this.listPlanning({}),
       this.listProductDieColors().catch(() => [] as ProductDieColor[]),
       Promise.all(
@@ -2481,6 +2484,12 @@ export class SharePointDataLayer implements PmdDataLayer {
           .filter((sid): sid is string => !!sid)
           .map((sid) => this.listProduction({ shiftId: sid }).catch(() => [] as ProductionRecord[])),
       ).then((lists) => lists.flat()),
+      lookback
+        ? this.listProductionCounters(lookback).catch((e) => {
+            console.warn('[pmd] PMD_ShiftPlan: last runs not read, die changes go by the shift before only:', e);
+            return [] as ProductionCounterRecord[];
+          })
+        : Promise.resolve([] as ProductionCounterRecord[]),
     ]);
     const { save, remove } = shiftPlanChanges(
       machines,
@@ -2488,7 +2497,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       orders,
       shiftId,
       new Date(),
-      { dieOf: dieLookup(dieColors) },
+      { dieOf: dieLookup(dieColors), lastRun: lastRunFromTimelines(headers) },
       history,
     );
     for (const row of remove) {

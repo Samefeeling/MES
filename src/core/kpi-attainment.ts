@@ -13,7 +13,11 @@ import {
 /** What the KPI side can tell the plan: which die each part runs on, and —
  *  when the caller knows better than the records it passes — what each press
  *  was running before an order's window opened. */
-export type PlanContext = Pick<ScheduleContext, 'dieOf' | 'partBefore'>;
+export type PlanContext = Pick<ScheduleContext, 'dieOf' | 'partBefore'> & {
+  /** What a press last ran before a moment, over the days before
+   *  (`lastRunFromTimelines`) — asked when the records at hand do not say. */
+  lastRun?: (machineCode: string, at: number) => string | undefined;
+};
 
 /** The plan's context for one press: the die mapping, and what the press was
  *  last running before an order's window opened, from its own records. */
@@ -23,11 +27,31 @@ function pressContext(
   ctx: PlanContext,
 ): ScheduleContext {
   const mine = machineCode.trim().toUpperCase();
+  const fromRecords = lastPartBefore(records.filter((r) => r.machineCode.trim().toUpperCase() === mine));
   return {
     dieOf: ctx.dieOf,
-    partBefore:
-      ctx.partBefore ?? lastPartBefore(records.filter((r) => r.machineCode.trim().toUpperCase() === mine)),
+    partBefore: ctx.partBefore ?? ((at) => fromRecords(at) ?? ctx.lastRun?.(machineCode, at)),
   };
+}
+
+/**
+ * The plan's context for a shift's plan of record: the press's history
+ * before the shift only. What it ran once the shift began is not what was
+ * on it when the plan was made — an order started early would read as
+ * "already on its die" and lose the change that put the die on.
+ */
+function contextBeforeShift(
+  history: ReadonlyArray<ProductionRecord>,
+  machineCode: string,
+  shiftId: string,
+  ctx: PlanContext,
+): ScheduleContext {
+  const opens = shiftBounds(shiftId)?.start.getTime() ?? Infinity;
+  const lastRun = ctx.lastRun;
+  return pressContext(history.filter((r) => r.shiftId !== shiftId), machineCode, {
+    ...ctx,
+    lastRun: lastRun ? (code, at) => lastRun(code, Math.min(at, opens)) : undefined,
+  });
 }
 import { SLOT_MINUTES, shiftBounds } from './shifts';
 import { setupStandardHours } from './standards';
@@ -718,7 +742,7 @@ export function shiftPlanBarFor(
   ctx: PlanContext = {},
   history: ReadonlyArray<ProductionRecord> = [],
 ): PlanBarItem[] {
-  const press = pressContext(history.filter((r) => r.shiftId !== shiftId), machineCode, ctx);
+  const press = contextBeforeShift(history, machineCode, shiftId, ctx);
   return shiftPlanBar(orders, machineCode, shiftId, press);
 }
 
@@ -741,7 +765,7 @@ export function shiftPlanFor(
   const bounds = shiftBounds(shiftId);
   if (!bounds) return null;
   const judgedAt = new Date(Math.max(asOf.getTime(), bounds.end.getTime()));
-  const press = pressContext(history.filter((r) => r.shiftId !== shiftId), machineCode, ctx);
+  const press = contextBeforeShift(history, machineCode, shiftId, ctx);
   const lines = scheduleTuplesForShift([], orders, machineCode, shiftId, judgedAt, false, press);
   if (lines.some((line) => line.planned == null)) return null;
   const hoursByJob = new Map<string, number>();

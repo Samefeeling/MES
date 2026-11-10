@@ -24,6 +24,18 @@ export function dieLookup(
   return (partNumber) => byPart.get(partNumber.trim().toUpperCase());
 }
 
+/** How far back a press's last run is looked for, in days. */
+export const LAST_RUN_LOOKBACK_DAYS = 14;
+
+/** The shift-id range (`shiftIdFrom` / `shiftIdTo`, compared as text) of the
+ *  LAST_RUN_LOOKBACK_DAYS before `shiftId`, the shift itself included. */
+export function lastRunLookback(shiftId: string): { shiftIdFrom: string; shiftIdTo: string } | null {
+  const p = parseShiftId(shiftId);
+  if (!p) return null;
+  const from = new Date(p.year, p.month - 1, p.day - LAST_RUN_LOOKBACK_DAYS);
+  return { shiftIdFrom: dateKey(from), shiftIdTo: `${shiftId.slice(0, 10)}-z` };
+}
+
 /**
  * `ScheduleContext.partBefore` over a press's records: the part of the
  * latest half-hour the press was RUNNING (R) that began before the moment —
@@ -52,6 +64,42 @@ export function lastPartBefore(
 }
 
 /**
+ * What each press last RAN before a moment, from the shift headers of the
+ * days before (`listProductionCounters`: one row an order a shift, with its
+ * 16-half-hour status timeline) — the long view `lastPartBefore` has no
+ * records for, when the press stood a shift or a weekend before its next
+ * order. machine code (any case) and moment → part.
+ */
+export function lastRunFromTimelines(
+  headers: ReadonlyArray<{ machineCode: string; shiftId: string; jobNumber: string; partNumber: string; timeline?: string }>,
+): (machineCode: string, at: number) => string | undefined {
+  const byPress = new Map<string, Array<{ at: number; part: string }>>();
+  for (const h of headers) {
+    const part = h.partNumber.trim();
+    const tl = h.timeline ?? '';
+    if (!part || h.jobNumber.startsWith('DC_')) continue;
+    for (let i = 0; i < tl.length && i < 16; i++) {
+      if (tl[i] !== 'R') continue;
+      const at = slotTimeRange(h.shiftId, i)?.start.getTime();
+      if (at == null) continue;
+      const key = normaliseMachineCode(h.machineCode);
+      const runs = byPress.get(key) ?? [];
+      runs.push({ at, part });
+      byPress.set(key, runs);
+    }
+  }
+  for (const runs of byPress.values()) runs.sort((a, b) => a.at - b.at);
+  return (machineCode, at) => {
+    let part: string | undefined;
+    for (const r of byPress.get(normaliseMachineCode(machineCode)) ?? []) {
+      if (r.at >= at) break;
+      part = r.part;
+    }
+    return part;
+  };
+}
+
+/**
  * A press's planned orders as they run — exactly as Planning.csv has them.
  * Epicor's Start–Due is the press's pure running time (planning's own rule):
  * the window is never moved or shortened, and is cut into shifts as it
@@ -67,6 +115,14 @@ export function pressRunsAfterDieChanges(
   ctx: ScheduleContext = {},
 ): Map<PlanningOrder, PlanningOrder> {
   return pressPlanAfterDieChanges(orders, machineCode, ctx).runs;
+}
+
+/** An order that follows another part on the SAME die: an insert or colour
+ *  change, inside the window already — no die change. */
+export interface SameDieChangeover {
+  order: PlanningOrder;
+  /** The part before it: the order before, or what the press last ran. */
+  fromPart: string;
 }
 
 /** A die change on a press, as `pressPlanAfterDieChanges` times it. */
@@ -87,15 +143,17 @@ export interface PlannedDieChange {
  * running time and the shift the change falls in is asked for nothing on its
  * account.
  *
- * Two orders on one press need a die change unless PMD_ProductDieColor puts
- * both parts on the same die; a die it does not know is a die change. On the
- * same die it is a colour or insert change, which Epicor already allows
- * inside the window. Orders Epicor overlaps on one die are a co-run: one
- * change, before the first of them.
+ * The one test: the part the press ran last and the part of this order — do
+ * they have the same DieNumber in PMD_ProductDieColor? The same die is an
+ * insert or colour change, which Epicor already allows inside the window
+ * (`sameDie` lists them, so the bar can say why there is no die change); a
+ * different die, or one the list does not know, is a die change. Orders
+ * Epicor overlaps on one die are a co-run: one change, before the first.
  *
- * The press's first order in Planning.csv has nobody before it in the file —
- * that order is finished and gone. It is compared with what the press was
- * last running before it, from the press's records; with no record to go on
+ * "Ran last" is the order before it in Planning.csv; the press's first
+ * order in the file has nobody before it there — that order is finished and
+ * gone — so it is compared with what the press last RAN before it, from the
+ * press's own records (`ScheduleContext.partBefore`). With no record to go on
  * it has a die change before it unless the press is plainly carrying on: the
  * order is already under way (part of it made), or it starts when the export
  * was scheduled from (Epicor puts the next order on a press at "now", the
@@ -107,9 +165,10 @@ export function pressPlanAfterDieChanges(
   orders: ReadonlyArray<PlanningOrder>,
   machineCode: string,
   ctx: ScheduleContext = {},
-): { runs: Map<PlanningOrder, PlanningOrder>; changes: PlannedDieChange[] } {
+): { runs: Map<PlanningOrder, PlanningOrder>; changes: PlannedDieChange[]; sameDie: SameDieChangeover[] } {
   const out = new Map<PlanningOrder, PlanningOrder>();
   const changes: PlannedDieChange[] = [];
+  const kept: SameDieChangeover[] = [];
   const press = normaliseMachineCode(machineCode);
   const die = (part: string): string => (ctx.dieOf?.(part.trim()) ?? '').trim().toUpperCase();
   const sameDie = (a: string, b: string): boolean => {
@@ -134,7 +193,7 @@ export function pressPlanAfterDieChanges(
   }
   if (press === 'HS' || press === 'HSTAMP') {
     for (const p of planned) out.set(p.order, p.order);
-    return { runs: out, changes };
+    return { runs: out, changes, sameDie: kept };
   }
   planned.sort((a, b) => a.start - b.start || a.order.jobNumber.localeCompare(b.order.jobNumber));
   const DIE_CHANGE_MS = DIE_CHANGE_STD_HRS * HOUR_MS;
@@ -147,6 +206,10 @@ export function pressPlanAfterDieChanges(
   const change = (p: { order: PlanningOrder; start: number }, fromPart: string): void => {
     changes.push({ start: p.start - DIE_CHANGE_MS, end: p.start, order: p.order, fromPart });
   };
+  // Another part on the die already on: an insert or colour change.
+  const onSameDie = (p: { order: PlanningOrder }, fromPart: string): void => {
+    if (fromPart && fromPart.toUpperCase() !== p.order.partNumber.trim().toUpperCase()) kept.push({ order: p.order, fromPart });
+  };
   // The order the press was last on (the latest-ending).
   let last: { order: PlanningOrder; end: number } | null = null;
   for (const p of planned) {
@@ -155,12 +218,16 @@ export function pressPlanAfterDieChanges(
       // A co-run: the same shot on the die already on.
     } else if (last) {
       if (!sameDie(last.order.partNumber, p.order.partNumber)) change(p, last.order.partNumber.trim());
+      else onSameDie(p, last.order.partNumber.trim());
     } else if (firstNeedsChange(p.order, p.start)) {
       change(p, ctx.partBefore?.(p.start)?.trim() ?? '');
+    } else {
+      const before = ctx.partBefore?.(p.start)?.trim() ?? '';
+      if (before && sameDie(before, p.order.partNumber)) onSameDie(p, before);
     }
     if (!last || p.end >= last.end) last = { order: p.order, end: p.end };
   }
-  return { runs: out, changes };
+  return { runs: out, changes, sameDie: kept };
 }
 
 const HOUR_MS = 3_600_000;
@@ -346,7 +413,9 @@ export interface PlanBarItem {
   /** The order running, or the one the change puts the die on for. */
   jobNumber: string;
   partNumber: string;
-  /** A change: the part coming off ('' when nothing says). */
+  /** A change: the part coming off ('' when nothing says). A run: the part
+   *  before it on the SAME die, when the order starts in this shift with an
+   *  insert or colour change — why there is no die change in front of it. */
   fromPart?: string;
   /** Clipped to the shift (ISO). */
   start: string;
@@ -369,14 +438,16 @@ export function shiftPlanBar(
   const from = bounds.start.getTime();
   const to = bounds.end.getTime();
   const iso = (ms: number): string => new Date(ms).toISOString();
-  const { runs, changes } = pressPlanAfterDieChanges(orders, machineCode, ctx);
+  const { runs, changes, sameDie } = pressPlanAfterDieChanges(orders, machineCode, ctx);
   const out: PlanBarItem[] = [];
   for (const order of plannedOrdersForShift([...runs.values()], machineCode, shiftId)) {
     const window = orderWindow(order)!;
+    const follows = window.start.getTime() >= from ? sameDie.find((c) => c.order === order) : undefined;
     out.push({
       kind: 'run',
       jobNumber: order.jobNumber.trim(),
       partNumber: order.partNumber.trim(),
+      ...(follows ? { fromPart: follows.fromPart } : {}),
       start: iso(Math.max(window.start.getTime(), from)),
       end: iso(Math.min(window.end.getTime(), to)),
     });

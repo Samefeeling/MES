@@ -17,6 +17,8 @@ import { cavityGross } from '../core/metrics';
 import { ordersCoRun, type DieCoRun } from '../core/corun';
 import {
   dieLookup,
+  lastRunFromTimelines,
+  lastRunLookback,
   planningOrderMatchesMachine,
   plannedOrdersForShift,
   scheduleSegmentsForShift,
@@ -768,6 +770,9 @@ function renderPlanBar(r: TraceRow, plan: NonNullable<TraceRow['plan']>): string
         `${b.partNumber}${order?.partDescription ? ' — ' + order.partDescription : ''}`,
         `Runs ${clock(b.start)}–${clock(b.end)} this shift`,
         order ? `Planning.csv Start ${scheduleTime(order.plannedStart)} → Due ${scheduleTime(order.plannedEnd)}` : '',
+        b.fromPart
+          ? `After ${dieName(b.fromPart)}: the same die — insert / colour change, no die change`
+          : '',
         pieces != null ? `Plan this shift ${pieces.toLocaleString()} pcs` : '',
       ]
         .filter(Boolean)
@@ -1145,17 +1150,18 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
   const dieOf = dieLookup(dieList);
   const needHistory = state.machines.some((m) => !keptByMachine.get(m.machineCode.trim().toUpperCase())?.bar);
   const history = needHistory ? [...(await previousShiftRecords(live.shiftId)), ...rows] : rows;
+  const lastRun = needHistory ? await lastRunsBefore(live.shiftId) : undefined;
   if (version !== liveLoadVersion || S !== state || state.view !== 'live') return;
   const now = new Date();
   const planFor = (machineCode: string): NonNullable<TraceRow['plan']> => {
     const kept = keptByMachine.get(machineCode.trim().toUpperCase());
     const orders = planning.filter((o) => planningOrderMatchesMachine(o, machineCode));
     if (kept?.bar) return { kept: true, bar: kept.bar, jobs: kept.jobs, orders, dieOf };
-    const ahead = shiftPlanFor(planning, machineCode, live.shiftId, now, { dieOf }, history);
+    const ahead = shiftPlanFor(planning, machineCode, live.shiftId, now, { dieOf, lastRun }, history);
     return {
       kept: false,
       keptWithoutBar: !!kept,
-      bar: ahead?.bar ?? shiftPlanBarFor(planning, machineCode, live.shiftId, { dieOf }, history),
+      bar: ahead?.bar ?? shiftPlanBarFor(planning, machineCode, live.shiftId, { dieOf, lastRun }, history),
       // A kept row from before the bar was recorded still has its pieces.
       jobs: kept?.jobs ?? ahead?.jobs ?? [],
       orders,
@@ -1204,6 +1210,28 @@ async function loadLive(opts: { silent?: boolean } = {}): Promise<void> {
   state.loading = false;
   render();
   drawNowLines();
+}
+
+let lastRunCache: { shiftId: string; lastRun: Promise<ReturnType<typeof lastRunFromTimelines> | undefined> } | null = null;
+
+/** What each press last ran in the days before `shiftId` (the shift headers),
+ *  read once per shift: the die a press's first order is compared with when
+ *  the press stood through the shift before. */
+function lastRunsBefore(shiftId: string): Promise<ReturnType<typeof lastRunFromTimelines> | undefined> {
+  const lookback = lastRunLookback(shiftId);
+  if (!lookback || !dalRef.listProductionCounters) return Promise.resolve(undefined);
+  if (lastRunCache?.shiftId !== shiftId) {
+    const lastRun = dalRef
+      .listProductionCounters(lookback)
+      .then((headers) => lastRunFromTimelines(headers))
+      .catch((err) => {
+        console.warn('[pmd] live trace last runs read failed:', err);
+        if (lastRunCache?.shiftId === shiftId) lastRunCache = null;
+        return undefined;
+      });
+    lastRunCache = { shiftId, lastRun };
+  }
+  return lastRunCache.lastRun;
 }
 
 let previousShiftCache: { shiftId: string; records: Promise<ProductionRecord[]> } | null = null;
