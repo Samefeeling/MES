@@ -64,8 +64,9 @@ export interface ProductDieColor {
   die: string;
   /** PMD_ProductDieColor.CoRun (Yes/No). Two parts are treated as
    *  co-runners — run simultaneously on one press, so the operator sheet
-   *  mirrors their machine status — only when they share a die AND BOTH
-   *  carry CoRun = Yes. Same die without the flag means they run
+   *  mirrors their machine status — only when they share a die, BOTH
+   *  carry CoRun = Yes, and this list does not give them different colours
+   *  (core/corun.ts). Same die without the flag means they run
    *  one-after-another and stay independent. Defaults to false. */
   coRun: boolean;
 }

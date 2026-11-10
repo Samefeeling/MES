@@ -211,23 +211,62 @@ describe('partsCoRun', () => {
 });
 
 describe('ordersCoRun', () => {
-  const yes = (dieNumber: string): { dieNumber: string; coRun: boolean } => ({ dieNumber, coRun: true });
-  const no = (dieNumber: string): { dieNumber: string; coRun: boolean } => ({ dieNumber, coRun: false });
-  it('co-runs only when parts co-run AND order quantities are equal & known', () => {
-    // same die, both flagged, equal qty → co-run
-    expect(ordersCoRun(yes('D9'), yes('D9'), 1400, 1400)).toBe(true);
-    // same die, both flagged, DIFFERENT qty → not co-run (the bug case:
-    // different colours share the die but run separately)
-    expect(ordersCoRun(yes('D9'), yes('D9'), 1400, 1200)).toBe(false);
-    // parts don't co-run (one flag off) → qty equality is irrelevant
-    expect(ordersCoRun(yes('D9'), no('D9'), 1400, 1400)).toBe(false);
-    // unknown qty on either side can't be confirmed equal → not co-run
-    expect(ordersCoRun(yes('D9'), yes('D9'), 1400, null)).toBe(false);
-    expect(ordersCoRun(yes('D9'), yes('D9'), null, 1400)).toBe(false);
-    expect(ordersCoRun(yes('D9'), yes('D9'), undefined, undefined)).toBe(false);
-    // non-positive quantities are treated as unknown
-    expect(ordersCoRun(yes('D9'), yes('D9'), 0, 0)).toBe(false);
-    expect(ordersCoRun(yes('D9'), yes('D9'), -5, -5)).toBe(false);
+  const part = (
+    partNumber: string,
+    dieNumber: string,
+    colour = '',
+    hex = '',
+    coRun = true,
+  ): { partNumber: string; dieNumber: string; coRun: boolean; colour: string; hex: string } => ({
+    partNumber,
+    dieNumber,
+    coRun,
+    colour,
+    hex,
+  });
+
+  it('links two flagged parts of one die, whatever the two order quantities are', () => {
+    // Order Quantity is not asked at all: an uneven pair runs together until
+    // the smaller order is made, then that cavity is blocked.
+    expect(ordersCoRun(part('SEAT', 'D9', 'Slate', '#334155'), part('BACK', 'D9', 'Slate', '#334155'))).toBe(true);
+  });
+
+  it('still needs both flags and the same die', () => {
+    expect(ordersCoRun(part('SEAT', 'D9'), part('BACK', 'D9', '', '', false))).toBe(false);
+    expect(ordersCoRun(part('SEAT', 'D9'), part('BACK', 'D8'))).toBe(false);
+    expect(ordersCoRun(part('SEAT', ''), part('BACK', ''))).toBe(false);
+    expect(ordersCoRun(part('SEAT', 'D9'), undefined)).toBe(false);
+    expect(ordersCoRun(undefined, undefined)).toBe(false);
+  });
+
+  it('keeps the colours of a die apart (the bug the quantity test stood in for)', () => {
+    // Slate seat + slate back are made together; the white pair runs after.
+    const seatSlate = part('SEAT-S', 'D9', 'Slate', '#334155');
+    const backSlate = part('BACK-S', 'D9', 'Slate', '#334155');
+    const seatWhite = part('SEAT-W', 'D9', 'White', '#ffffff');
+    const backWhite = part('BACK-W', 'D9', 'White', '#ffffff');
+    expect(ordersCoRun(seatSlate, backSlate)).toBe(true);
+    expect(ordersCoRun(seatWhite, backWhite)).toBe(true);
+    expect(ordersCoRun(seatSlate, seatWhite)).toBe(false);
+    expect(ordersCoRun(seatSlate, backWhite)).toBe(false);
+  });
+
+  it('calls two parts different colours only when the list says so', () => {
+    // A name OR a hex that agrees is the same colour.
+    expect(ordersCoRun(part('A', 'D9', 'Slate', '#334155'), part('B', 'D9', 'Slate Grey', '#334155'))).toBe(true);
+    expect(ordersCoRun(part('A', 'D9', ' slate ', '#334155'), part('B', 'D9', 'Slate', '#33415A'))).toBe(true);
+    expect(ordersCoRun(part('A', 'D9', '', '#334155'), part('B', 'D9', '', '#334155'.toUpperCase()))).toBe(true);
+    // No colour recorded on a part: nothing to tell apart, the flag decides.
+    expect(ordersCoRun(part('A', 'D9', 'Slate', '#334155'), part('B', 'D9'))).toBe(true);
+    expect(ordersCoRun(part('A', 'D9', 'Slate'), part('B', 'D9', '', '#ffffff'))).toBe(true);
+    // Both differ.
+    expect(ordersCoRun(part('A', 'D9', 'Slate', '#334155'), part('B', 'D9', 'White', '#ffffff'))).toBe(false);
+    expect(ordersCoRun(part('A', 'D9', 'Slate'), part('B', 'D9', 'White'))).toBe(false);
+  });
+
+  it('never links two orders for the same part', () => {
+    // Two orders of one part are run one after the other.
+    expect(ordersCoRun(part('SEAT', 'D9', 'Slate'), part(' seat ', 'D9', 'Slate'))).toBe(false);
   });
 });
 

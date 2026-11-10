@@ -110,11 +110,25 @@ export function shiftTargetFor(
   jobLeft: number,
   unavailableHrs = 0,
 ): number | null {
+  const capacity = shiftCapacityFor(o, unavailableHrs);
+  if (capacity == null) return null;
+  return jobLeft < capacity ? jobLeft : capacity;
+}
+
+/**
+ * Pieces the press can make of an order in one shift at its standard, over
+ * the hours the shift has for it (all eight unless `unavailableHrs` says
+ * otherwise) — the `capacity` of the Shift Target rule, on its own. Null when
+ * the order carries no standard.
+ */
+export function shiftCapacityFor(
+  o: Pick<PlanningOrder, 'qtyPerHr'>,
+  unavailableHrs = 0,
+): number | null {
   if (!o.qtyPerHr || o.qtyPerHr <= 0) return null;
   const ct = o.qtyPerHr; // hours per piece
   const avail = Math.max(0, SHIFT_HOURS - Math.max(0, unavailableHrs));
-  const capacity = wholePieces(avail / ct);
-  return jobLeft < capacity ? jobLeft : capacity;
+  return wholePieces(avail / ct);
 }
 
 /**

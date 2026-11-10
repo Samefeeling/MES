@@ -35,12 +35,18 @@ import {
   runningCavities,
   type CavitySource,
 } from '../core/cavities';
-import { ordersCoRun } from '../core/corun';
+import {
+  cavityBlockReminders,
+  ordersCoRun,
+  type CavityBlockReminder,
+  type DieCoRun,
+} from '../core/corun';
 // Re-exported so existing importers (Trace view, tests) can keep pulling
 // these from ./operator while the canonical definitions live in core.
 import {
   hoursUnavailableFor,
   jobLeftPiecesFor,
+  shiftCapacityFor,
   shiftTargetFor,
   SHIFT_TARGET_WARNING_RATIO,
   totalGoodExceedsShiftTarget,
@@ -134,6 +140,11 @@ interface OpState {
    *  order Epicor has completed (an overrun one included) while the press is
    *  still running it. Null until read, or for another order. */
   jobFacts: { job: string; facts: OrderFacts } | null;
+  /** Good already signed on OTHER shifts, per co-runner of `job` — what the
+   *  block-the-cavity reminder needs to know each co-runner's Job Left. Read
+   *  for one selection on one (machine, shift) `key`; anything else on screen
+   *  means it has not been read yet and no reminder is shown from it. */
+  coRunGood: { job: string; key: string; at: number; totals: Map<string, number> } | null;
   /** Orders this press ran in the previous shift that Planning.csv no longer
    *  holds — an order overrun past its quantity is complete in Epicor while
    *  the press is still on it. Offered in the Job# list as carried over,
@@ -1047,41 +1058,35 @@ function partNumberForJob(job: string): string {
   return S!.planning.find((o) => o.jobNumber === job)?.partNumber ?? '';
 }
 
-/** The PMD_ProductDieColor row for a job's part, or undefined. */
-function dieRowForJob(job: string): { dieNumber: string; coRun: boolean } | undefined {
+/** The PMD_ProductDieColor row for a job's part — its die, CoRun flag and
+ *  colour — or undefined. */
+function dieRowForJob(job: string): DieCoRun | undefined {
   const pn = partNumberForJob(job).trim().toUpperCase();
   if (!pn) return undefined;
-  return S!.dieColors.get(pn);
-}
-
-/** Order Quantity for a job (Epicor ProdQty), or null when unknown / a die
- *  change. Used to gate co-running: genuinely-simultaneous orders share the
- *  same quantity. */
-function orderQtyForJob(job: string): number | null {
-  const o = orderForJob(job);
-  if (!o || o.isDieChange) return null;
-  return o.orderQty > 0 ? o.orderQty : null;
+  const row = S!.dieColors.get(pn);
+  if (!row) return undefined;
+  return {
+    partNumber: pn,
+    dieNumber: row.dieNumber,
+    coRun: row.coRun,
+    colour: row.name,
+    hex: row.hex,
+  };
 }
 
 /**
- * Two jobs co-run when they share the same non-empty die, both parts are
- * flagged CoRun = Yes in PMD_ProductDieColor, AND the two orders carry the
- * same Order Quantity. The die match alone is not enough: different colours
- * share a die and are often scheduled one-after-another, so the floor marks
- * the genuinely-simultaneous parts with CoRun. The equal-quantity check is
- * the final guard — a multi-cavity die makes one of each part per cycle, so
- * truly co-running orders finish equal quantities; differing quantities mean
- * the colours run separately even when both are flagged. Only when all three
- * hold does the operator sheet mirror their machine status.
+ * Two jobs co-run when they are two different parts on the same non-empty
+ * die, both flagged CoRun = Yes in PMD_ProductDieColor, and the list does not
+ * give the two parts different colours (see ordersCoRun). The die match alone
+ * is not enough: different colours share a die and are scheduled
+ * one-after-another. Order Quantity is not asked — an uneven pair runs
+ * together until the smaller order is made, then that cavity is blocked
+ * (buildCavityBlockBanner). Only a pair that passes has its machine status
+ * mirrored.
  */
 function coRunsWith(jobA: string, jobB: string): boolean {
   if (!jobA || !jobB || jobA === jobB) return false;
-  return ordersCoRun(
-    dieRowForJob(jobA),
-    dieRowForJob(jobB),
-    orderQtyForJob(jobA),
-    orderQtyForJob(jobB),
-  );
+  return ordersCoRun(dieRowForJob(jobA), dieRowForJob(jobB));
 }
 
 /** Distinct OTHER jobs already recorded on this (machine, shift) that
@@ -1115,6 +1120,29 @@ function coRunLinks(job: string): string[] {
     if (!j || seen.has(j) || !coRunsWith(j, job)) return;
     seen.add(j);
     out.push(j);
+  };
+  for (const o of shiftOrders()) consider(o.jobNumber);
+  for (const r of S!.prod) consider(r.jobNumber);
+  return out;
+}
+
+/**
+ * Every order the die of `job` has on this (machine, shift) — recorded or
+ * planned: the co-runners of coRunLinks and, with them, the OTHER orders for
+ * the selected order's own part (never co-runners of it: one cavity makes
+ * them one after another). Empty for an order that co-runs with nothing.
+ * What the block-the-cavity reminder adds up by part.
+ */
+function coRunDieJobs(job: string): string[] {
+  const links = coRunLinks(job);
+  if (!links.length) return [];
+  const own = partNumberForJob(job).trim().toUpperCase();
+  const out = [...links];
+  const seen = new Set<string>([job, ...links]);
+  const consider = (j: string): void => {
+    if (!j || seen.has(j)) return;
+    seen.add(j);
+    if (own && partNumberForJob(j).trim().toUpperCase() === own) out.push(j);
   };
   for (const o of shiftOrders()) consider(o.jobNumber);
   for (const r of S!.prod) consider(r.jobNumber);
@@ -1326,6 +1354,7 @@ async function reload(preferLiveJob = false): Promise<void> {
   // Before anything writes a row: the order's own history is what stamps
   // its Part # and cycle time when Planning.csv no longer holds it.
   await refreshJobTotal();
+  await refreshCoRunTotals();
   // Tuples that already carry real data are confirmed by definition —
   // must run before needsConfirm() gates the automation below.
   autoConfirmExistingWork();
@@ -1870,6 +1899,95 @@ async function refreshJobTotal(): Promise<void> {
   S!.unsignedEarlier = unsignedEarlierTuples(blended, currentKey);
 }
 
+/** How long a co-runner's signed total is reused. It only moves when some
+ *  OTHER shift of that order is signed off, so it need not be re-read on
+ *  every tap of the sheet. */
+const CO_RUN_TOTALS_MS = 5 * 60_000;
+
+/**
+ * Good already signed on other shifts for each other order on the selected
+ * order's die (coRunDieJobs) — the same signed-only figure refreshJobTotal
+ * keeps for the selected order itself, so an order's Job Left in the
+ * block-the-cavity reminder is the number its own sheet shows. An order that
+ * cannot be read is left out, and its part gets no reminder, rather than be
+ * counted from nothing.
+ */
+async function refreshCoRunTotals(): Promise<void> {
+  const state = S!;
+  const job = state.selJob;
+  const key = `${state.mc}|${sid()}`;
+  const links = job && !isPastShift() ? coRunDieJobs(job) : [];
+  if (!links.length) {
+    state.coRunGood = null;
+    return;
+  }
+  const had = state.coRunGood;
+  if (
+    had &&
+    had.job === job &&
+    had.key === key &&
+    Date.now() - had.at < CO_RUN_TOTALS_MS &&
+    links.every((j) => had.totals.has(j))
+  ) {
+    return;
+  }
+  const totals = new Map<string, number>();
+  await Promise.all(
+    links.map(async (j) => {
+      try {
+        const signed = dalRef.listSignedOffProduction
+          ? await dalRef.listSignedOffProduction({ jobNumber: j })
+          : (await dalRef.listProduction({ jobNumber: j })).filter(
+              (r) => r.locked || r.reopened,
+            );
+        totals.set(j, sumOtherShiftGood(signed, key));
+      } catch (e) {
+        console.warn(`[pmd] co-run: could not read what is already made of ${j}`, e);
+      }
+    }),
+  );
+  state.coRunGood = { job, key, at: Date.now(), totals };
+}
+
+/** Good made of `job` on the shift on screen: slot-0 counters × cavities,
+ *  less every reject entered against it. */
+function goodThisShiftFor(job: string): number {
+  const c = S!.prod.find((r) => r.jobNumber === job && r.slotIndex === 0);
+  const gross = cavityGross(c?.countStart ?? null, c?.countEnd ?? null, c?.cavities);
+  return Math.max(0, gross - jobTotals(job));
+}
+
+/**
+ * The block-the-cavity reminders for the die the selected order runs on (see
+ * cavityBlockReminders). Empty on a past shift, for an order with no
+ * co-runner, and until the other orders' signed totals have been read for
+ * this very selection.
+ */
+function cavityBlockNotes(): CavityBlockReminder[] {
+  const job = S!.selJob;
+  if (!job || isPastShift()) return [];
+  const known = S!.coRunGood;
+  if (!known || known.job !== job || known.key !== `${S!.mc}|${sid()}`) return [];
+  const others = coRunDieJobs(job);
+  if (!others.length) return [];
+  const progress = [job, ...others].map((j) => {
+    const o = orderForJob(j);
+    const signedElsewhere = j === job ? S!.jobTotalGood : known.totals.get(j);
+    const jobLeft =
+      o && signedElsewhere != null
+        ? jobLeftPiecesFor(o, signedElsewhere + goodThisShiftFor(j))
+        : null;
+    return {
+      jobNumber: j,
+      partNumber: partNumberForJob(j),
+      jobLeft,
+      shiftCapacity: o ? shiftCapacityFor(o) : null,
+      onShift: S!.prod.some((r) => r.jobNumber === j),
+    };
+  });
+  return cavityBlockReminders(progress);
+}
+
 /** "125T|2026-07-06-Afternoon" → "06/07 Afternoon" (+ machine when it's
  *  not the press on screen) for the Job Left ⚠ tooltip. */
 function fmtTupleKey(key: string): string {
@@ -1924,6 +2042,7 @@ async function refreshJobTotalAndPaintSide(): Promise<void> {
     outputWarnEl.hidden = !outputWarning;
     outputWarnEl.textContent = outputWarning?.message ?? '';
   }
+  paintCavityBlockBanner();
   document
     .querySelectorAll<HTMLInputElement>(
       '.op-side input[data-meta="cstart"],.op-side input[data-meta="cend"]',
@@ -2879,6 +2998,55 @@ function buildSignoffReminderBanner(): string {
   </div>`;
 }
 
+/**
+ * 🔒 Block-the-cavity reminder. A co-running pair with uneven quantities is
+ * run together until the smaller order is made; that part's cavity is then
+ * blocked and the die carries on with the other. The sheet says so from the
+ * moment the smaller order has less than a shift of output left, so the block
+ * is planned for instead of found out from a pile of surplus parts.
+ */
+function cavityBlockBannerInner(): string {
+  const notes = cavityBlockNotes();
+  if (!notes.length) return '';
+  const n = (v: number): string => v.toLocaleString('en-AU');
+  // A part by its description, then the order(s) it is on.
+  const name = (p: { partNumber: string; jobNumbers: string[] }): string => {
+    const desc = p.jobNumbers
+      .map((j) => orderForJob(j)?.partDescription ?? '')
+      .find((d) => d && d !== '(historical)');
+    return `<b>${escapeHtml(desc || p.partNumber || p.jobNumbers[0])}</b> (${escapeHtml(
+      p.jobNumbers.join(', '),
+    )})`;
+  };
+  const lines = notes
+    .map((r) => {
+      const others = r.continuing.map((c) => `${name(c)} — ${n(c.left)} left`).join('; ');
+      const carryOn = `Still to run: ${others}.`;
+      if (r.done) {
+        return `<span>${name(r)} is complete — block its cavity now. ${carryOn}</span>`;
+      }
+      const perShift = r.shiftCapacity != null ? ` (a shift makes about ${n(r.shiftCapacity)})` : '';
+      return `<span>${name(r)} has <b>${n(r.left)}</b> left — less than one shift${perShift}. Block its cavity as soon as it is made. ${carryOn}</span>`;
+    })
+    .join('');
+  return `<div class="cavity-block-text"><b>🔒 Block a cavity</b>${lines}</div>`;
+}
+
+function buildCavityBlockBanner(): string {
+  const inner = cavityBlockBannerInner();
+  return `<div class="cavity-block-banner" data-cavity-block role="status"${inner ? '' : ' hidden'}>${inner}</div>`;
+}
+
+/** Repaint the reminder in place — a Count End typed on the sheet moves Job
+ *  Left without a re-render. */
+function paintCavityBlockBanner(): void {
+  const el = document.querySelector<HTMLElement>('[data-cavity-block]');
+  if (!el) return;
+  const inner = cavityBlockBannerInner();
+  el.innerHTML = inner;
+  el.hidden = !inner;
+}
+
 function render(): void {
   applyShiftTheme();
   // Preserve the scroll position across a re-render — without this,
@@ -2901,6 +3069,7 @@ function render(): void {
     ${buildReopenedBanner()}
     ${buildLockBanner()}
     ${buildMeta()}
+    ${buildCavityBlockBanner()}
     ${buildConfirmBar()}
     ${detail}
   </div>`;
@@ -4643,9 +4812,9 @@ async function doUnlock(): Promise<void> {
   }
 }
 
-function jobTotals(): number {
+function jobTotals(job: string = S!.selJob): number {
   let rej = 0;
-  for (const r of S!.prod.filter((x) => x.jobNumber === S!.selJob)) {
+  for (const r of S!.prod.filter((x) => x.jobNumber === job)) {
     const obj = parseRejects(r);
     rej += Object.values(obj).reduce((a, v) => a + (Number(v) || 0), 0);
   }
@@ -4748,6 +4917,7 @@ export async function renderOperator(
     jobTotalGood: 0,
     unsignedEarlier: [],
     jobFacts: null,
+    coRunGood: null,
     carried: null,
     selSet: new Set<number>(),
     dieColors,

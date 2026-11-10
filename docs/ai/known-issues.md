@@ -208,6 +208,28 @@
   console line only, so a shift's Quality Checks could be lost behind a
   "Signed off" toast.
 
+- **Co-Run no longer asks for equal Order Quantities** (2026-11-10). The
+  ⛓ Co-Run link, the status mirror and the Trace board's co-run cards used
+  to need both orders at the same quantity. An uneven pair is real: both
+  parts run together until the smaller order is made, then that cavity is
+  blocked and the die carries on. The quantity test was only ever a stand-in
+  for "not two colours of the same die", so that is now asked directly: two
+  orders co-run when they are two different parts, same non-empty
+  `DieNumber`, both `CoRun = Yes`, and `PMD_ProductDieColor` does not give
+  the two parts different colours (a matching `ActualColor` name OR a
+  matching hex is the same colour; a part with no colour recorded is not
+  told apart). **If a link is missing, check the two parts' colour and
+  DieNumber in the list** — they are compared as text.
+- **🔒 Block a cavity** (2026-11-10). On the operator sheet, under the
+  header row: shown when a part of the die has less than one full shift of
+  its standard output left (8 h ÷ `JobOper_ProdStandard`) and another part
+  has more left. Added up by PART over every order of it the press has in
+  its list, so an order with another order for the same part behind it does
+  not raise it. Job Left is the sheet's own figure (signed shifts + this
+  shift), so a missing sign-off on an earlier shift delays the reminder the
+  same way it overstates Job Left. No standard on the order → no reminder.
+  See `cavityBlockReminders` and `tests/corun-cavity-block.test.ts`.
+
 ### Open — not fixed, needs a decision or facts from the site
 
 - **`scripts/sync-epicor-to-sp.ps1` cannot produce the Planning.csv the app
