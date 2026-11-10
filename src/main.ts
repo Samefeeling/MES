@@ -1,4 +1,4 @@
-import { createDataLayer, resolveMangoCsvPath, type PmdDataLayer } from './dal';
+import { backendWarning, createDataLayer, resolveMangoCsvPath, type PmdDataLayer } from './dal';
 import {
   renderOperator,
   operatorPollTick,
@@ -46,6 +46,27 @@ console.info(
     resolveMangoCsvPath(import.meta.env as Record<string, string>) || '(none)'
   }`,
 );
+
+// A build that is not on SharePoint — no .env.local at build time, a mistyped
+// VITE_BACKEND — runs on seeded demo data, looks entirely healthy, takes a
+// shift's entries and keeps none of them. The console line above is where
+// that used to be found out; this says it on the page, across the top, for
+// as long as the page is open.
+const backendProblem = backendWarning(
+  import.meta.env as Record<string, string>,
+  import.meta.env.PROD,
+);
+if (backendProblem) {
+  const banner = document.createElement('div');
+  banner.id = 'backendBanner';
+  banner.setAttribute('role', 'alert');
+  banner.textContent = `\u26A0 ${backendProblem}`;
+  // Beside #app, so it is inside whatever the host page wraps the app in
+  // (the SPFx shell's full-screen layer) rather than behind it.
+  const app = document.getElementById('app');
+  if (app) app.before(banner);
+  else document.body.prepend(banner);
+}
 
 // Expose the DAL on window so the smoke-test / diagnoseFields() snippets in
 // docs/ work from the browser console — including on the deployed SPFx page,
