@@ -191,6 +191,13 @@ export interface PmdDataLayer {
    *  on the remaining timeline slots) stay live and editable. Omit to
    *  sign off every job on the shift (legacy whole-shift sign-off). */
   lockShift(machineCode: string, shiftId: string, supervisor: string, operator: string, jobNumber?: string, jobLeft?: number | null): Promise<void>;
+  /** What the writes since the last call had and the backend would not
+   *  take, one line each (`Column — why`), and forgets them. A sign-off
+   *  still lands without such a value rather than fail outright; the
+   *  operator sheet asks straight after lockShift so whoever signed is told
+   *  what the record is missing. Optional — a backend that never drops a
+   *  value omits it. */
+  takeWriteWarnings?(): string[];
   /** Unlocks signed-off records for a (machine, shift). When jobNumber
    *  is supplied, only that job's rows are unlocked; otherwise the
    *  whole shift is unlocked. Per-job is the common path (one order

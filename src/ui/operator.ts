@@ -4455,6 +4455,9 @@ async function doSignoffSave(confirmBtn?: HTMLButtonElement): Promise<void> {
     );
     closeModal();
     toast(`Signed off · ${S!.selJob || 'shift'} saved to Master`, 'ok');
+    // What the list would not take. The shift is signed without it, and
+    // nobody would know from the toast above.
+    const notSaved = dalRef.takeWriteWarnings?.() ?? [];
     // Keep selJob: the next shift on the same job continues seamlessly
     // (operator keeps clicking ▶ to advance). Matches how Machine sticks
     // across shift navigation.
@@ -4467,6 +4470,7 @@ async function doSignoffSave(confirmBtn?: HTMLButtonElement): Promise<void> {
     // The PMD_Production row exists now — ship any photos the operator
     // queued during the shift onto it as attachments.
     void flushPhotoQueue();
+    if (notSaved.length) showNotSavedNotice(notSaved);
   } catch (e) {
     // Surface the actual SP/Graph failure so we don't blindly blame "network".
     // The full stack is in console; toast shows the first line for triage.
@@ -4482,6 +4486,23 @@ async function doSignoffSave(confirmBtn?: HTMLButtonElement): Promise<void> {
   } finally {
     signoffInFlight = false;
   }
+}
+
+/**
+ * The shift is signed, and SharePoint refused part of it. A toast is gone in
+ * three seconds; this stays until it is acknowledged, because the record is
+ * missing something only the people at the press can still supply.
+ */
+function showNotSavedNotice(lines: string[]): void {
+  const mc = openModal(`<div class="bd-modal">
+    <h3 class="bd-title">⚠ Signed off — but not everything was saved</h3>
+    <p class="bd-sub">The shift is signed and its counts are saved. SharePoint would not take the values below, so the record is missing them. Tell your supervisor before the sheet is cleared:</p>
+    <ul class="not-saved-list">${lines.map((l) => `<li>${escapeHtml(l)}</li>`).join('')}</ul>
+    <div class="bd-actions">
+      <button type="button" class="btn-primary-big" data-ack>OK</button>
+    </div>
+  </div>`);
+  mc.querySelector('[data-ack]')?.addEventListener('click', closeModal);
 }
 
 function openQcPicker(slot: number): void {

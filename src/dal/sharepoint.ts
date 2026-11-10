@@ -4683,6 +4683,32 @@ export class SharePointDataLayer implements PmdDataLayer {
    *  doesn't doom every snapshot. */
   private rejectedFields = new Map<string, Set<string>>();
 
+  /**
+   * Values a sign-off had and PMD_Production would not take, since the last
+   * takeWriteWarnings(). The row is still written without them — losing the
+   * whole shift over one column would be worse — but that used to be said
+   * only in the console, so a shift's Quality Check sign-offs or handover
+   * note could vanish behind a "Signed off" toast. The sheet now reads
+   * these back and shows them to whoever signed.
+   */
+  private writeWarnings: string[] = [];
+  /** `list|field` → why its value is refused, for a column banned from
+   *  later writes: every sign-off that drops it says so, not only the first. */
+  private lostReasons = new Map<string, string>();
+
+  private noteLostValue(list: string, field: string, why: string): void {
+    // The live mirror repeats every minute and is not the record.
+    if (list !== LISTS.production) return;
+    const line = `${field} — ${why}`;
+    if (!this.writeWarnings.includes(line)) this.writeWarnings.push(line);
+  }
+
+  takeWriteWarnings(): string[] {
+    const out = this.writeWarnings;
+    this.writeWarnings = [];
+    return out;
+  }
+
   /** Fields that are denormalised conveniences or backwards-compatible
    *  extensions. These may be omitted on an older tenant without changing
    *  the tuple's identity or its authoritative counts. Core key/count fields
@@ -4721,7 +4747,10 @@ export class SharePointDataLayer implements PmdDataLayer {
     const banned = this.rejectedFields.get(list);
     if (!banned) return;
     for (const k of banned) {
-      if (this.isFailSoftHeaderField(list, k)) delete body[k];
+      if (!this.isFailSoftHeaderField(list, k)) continue;
+      const why = this.lostReasons.get(`${list}|${k}`);
+      if (why && k in body) this.noteLostValue(list, k, why);
+      delete body[k];
     }
   }
 
@@ -4839,6 +4868,9 @@ export class SharePointDataLayer implements PmdDataLayer {
         console.warn(
           `[pmd] SP rejected a ${typeof body[k]} written to column '${k}' on ${list} — that column is typed as text, not ${typeof body[k] === 'boolean' ? 'Yes/No' : 'Number'}. Fix the '${k}' column type in SharePoint. Posted the row without it so the sign-off lands.`,
         );
+        const why = `the column is typed as text, not ${typeof body[k] === 'boolean' ? 'Yes/No' : 'Number'}`;
+        this.lostReasons.set(`${list}|${k}`, why);
+        this.noteLostValue(list, k, why);
         return k;
       } catch (e) {
         if (!/convert a primitive value to the expected type/i.test((e as Error).message || '')) throw e;
@@ -4882,6 +4914,13 @@ export class SharePointDataLayer implements PmdDataLayer {
             : ` — value contains a character SharePoint refuses (control char / line separator). Clear and retype this field.`;
         console.warn(
           `[pmd] SP rejected text value in column '${k}' on ${list}${lengthHint} Posted the row without it so the rest of the sign-off lands. value=${JSON.stringify(val)}`,
+        );
+        this.noteLostValue(
+          list,
+          k,
+          val.length > 255
+            ? `its ${val.length} characters do not fit: the column must be "Multiple lines of text"`
+            : 'it holds a character SharePoint refuses: clear the field and type it again',
         );
         return k;
       } catch (e) {
