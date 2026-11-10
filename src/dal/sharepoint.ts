@@ -868,7 +868,7 @@ export class SharePointDataLayer implements PmdDataLayer {
 
   private async getDigest(): Promise<string> {
     if (this.digest && this.digest.expires > Date.now() + 5_000) return this.digest.value;
-    const res = await fetch(`${this.siteUrl}/_api/contextinfo`, {
+    const res = await fetchThroughThrottle(`${this.siteUrl}/_api/contextinfo`, {
       method: 'POST',
       credentials: 'include',
       headers: { Accept: 'application/json;odata=verbose' },
@@ -886,7 +886,7 @@ export class SharePointDataLayer implements PmdDataLayer {
   }
 
   private async getJson<T>(url: string): Promise<T> {
-    const res = await fetch(url, {
+    const res = await fetchThroughThrottle(url, {
       credentials: 'include',
       headers: { Accept: 'application/json;odata=verbose' },
     });
@@ -931,7 +931,7 @@ export class SharePointDataLayer implements PmdDataLayer {
   private async post(url: string, body: unknown, ifMatch?: string): Promise<Response> {
     this.writesStarted++;
     const digest = await this.getDigest();
-    const res = await fetch(url, {
+    const res = await fetchThroughThrottle(url, {
       method: 'POST',
       credentials: 'include',
       headers: {
@@ -977,7 +977,7 @@ export class SharePointDataLayer implements PmdDataLayer {
   private async del(url: string): Promise<void> {
     this.writesStarted++;
     const digest = await this.getDigest();
-    const res = await fetch(url, {
+    const res = await fetchThroughThrottle(url, {
       method: 'POST',
       credentials: 'include',
       headers: { 'X-RequestDigest': digest, 'IF-MATCH': '*', 'X-HTTP-Method': 'DELETE' },
@@ -1023,7 +1023,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     // Attachment upload is raw binary, NOT the JSON post() path — SP
     // stores the request body verbatim as the file.
     const url = `${this.listUrl(LISTS.production)}/items(${id})/AttachmentFiles/add(FileName='${encodeURIComponent(odataString(fileName))}')`;
-    const res = await fetch(url, {
+    const res = await fetchThroughThrottle(url, {
       method: 'POST',
       credentials: 'include',
       headers: { Accept: 'application/json;odata=verbose', 'X-RequestDigest': digest },
@@ -1661,7 +1661,7 @@ export class SharePointDataLayer implements PmdDataLayer {
     const digest = await this.getDigest();
     // Raw binary body, like attachProductionPhoto — SP stores it verbatim.
     const url = `${this.listUrl(LISTS.dieMaster)}/items(${id})/AttachmentFiles/add(FileName='${encodeURIComponent(odataString(fileName))}')`;
-    const res = await fetch(url, {
+    const res = await fetchThroughThrottle(url, {
       method: 'POST',
       credentials: 'include',
       headers: { Accept: 'application/json;odata=verbose', 'X-RequestDigest': digest },
@@ -2279,7 +2279,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       .join('/')
       .replace(/'/g, "''");
     const url = `${this.siteUrl}/_api/web/getFileByServerRelativeUrl('${encodedPath}')/$value?_t=${Date.now()}`;
-    const res = await fetch(url, {
+    const res = await fetchThroughThrottle(url, {
       credentials: 'include',
       headers: { Accept: 'text/csv,text/plain,*/*' },
     });
@@ -5225,6 +5225,57 @@ export class SharePointDataLayer implements PmdDataLayer {
 
 // ---- helpers ---------------------------------------------------------
 
+/** How often a throttled request is sent again, and the longest single wait. */
+const THROTTLE_RETRIES = 3;
+const THROTTLE_MAX_WAIT_MS = 15_000;
+
+/**
+ * How long to stand off after a throttled answer: SharePoint's own
+ * Retry-After (seconds, or an HTTP date) when it gives one, else 1 s, 2 s,
+ * 4 s. Never less than a quarter of a second nor more than fifteen — a
+ * supervisor is watching a "Saving…" button.
+ */
+export function throttleWaitMs(
+  retryAfter: string | null | undefined,
+  attempt: number,
+  now: number = Date.now(),
+): number {
+  const raw = (retryAfter ?? '').trim();
+  let ms = NaN;
+  if (/^\d+(\.\d+)?$/.test(raw)) ms = Number(raw) * 1000;
+  else if (raw) ms = Date.parse(raw) - now;
+  if (!Number.isFinite(ms) || ms < 0) ms = 1000 * 2 ** attempt;
+  return Math.min(Math.max(ms, 250), THROTTLE_MAX_WAIT_MS);
+}
+
+/**
+ * `fetch`, sent again when SharePoint Online throttles it.
+ *
+ * A busy tenant answers 429, or 503 with a Retry-After, and has NOT run the
+ * request — that is what makes sending it again safe for a write as well as
+ * a read, a create included. Without this one throttled call in the dozen a
+ * sign-off makes failed the whole sign-off, and one in a page load left the
+ * page blank. A 503 with no Retry-After is not a throttle (a gateway may
+ * have passed the request on before failing) and is returned as it is, as
+ * is every other answer; after THROTTLE_RETRIES the last answer stands and
+ * the caller reports it.
+ */
+export async function fetchThroughThrottle(
+  url: string,
+  init?: RequestInit,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(url, init);
+    const retryAfter = res?.headers?.get?.('Retry-After') ?? null;
+    const throttled = res?.status === 429 || (res?.status === 503 && retryAfter != null);
+    if (!throttled || attempt >= THROTTLE_RETRIES) return res;
+    const ms = throttleWaitMs(retryAfter, attempt);
+    console.warn(`[sp] throttled (${res.status}) — sending again in ${ms} ms: ${url.split('?')[0]}`);
+    await wait(ms);
+  }
+}
+
 function mergeFieldMap(base: SharePointFieldMap, override?: PartialFieldMap): SharePointFieldMap {
   if (!override) return base;
   const out = { ...base } as SharePointFieldMap;
@@ -6828,7 +6879,7 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
       end.setUTCDate(end.getUTCDate() + 1);
       const list = encodeURIComponent((env.VITE_PRODUCTION_LIST || 'ASSY_Production').replace(/'/g, "''")).replace(/'/g, '%27');
       if (new URL(site).origin !== window.location.origin) throw new Error('Open MES on the configured SharePoint site.');
-      const schemaResponse = await fetch(`${site}/_api/web/lists/getbytitle('${list}')/fields?$select=Title,InternalName,ReadOnlyField`, {
+      const schemaResponse = await fetchThroughThrottle(`${site}/_api/web/lists/getbytitle('${list}')/fields?$select=Title,InternalName,ReadOnlyField`, {
         credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json;odata=nometadata' },
       });
       if (!schemaResponse.ok) throw new Error('Assembly column definitions could not be loaded.');
@@ -6846,7 +6897,7 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
       const keys = new Set<string>();
       for (let page = 0; url && page < 100; page++) {
         if (new URL(url).origin !== window.location.origin) throw new Error('Open MES on the configured SharePoint site.');
-        const res = await fetch(url, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json;odata=nometadata' } });
+        const res = await fetchThroughThrottle(url, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json;odata=nometadata' } });
         if (!res.ok) throw new Error(`Assembly results could not be loaded (${res.status}).`);
         const body = await res.json() as { value?: Record<string, unknown>[]; 'odata.nextLink'?: string; '@odata.nextLink'?: string };
         for (const row of body.value ?? []) {
