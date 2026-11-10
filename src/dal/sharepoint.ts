@@ -1816,10 +1816,21 @@ export class SharePointDataLayer implements PmdDataLayer {
     const date = titled('date').find((f) => /DateTime/i.test(f.TypeAsString ?? 'DateTime'));
     const name = titled('name').find((f) => f.InternalName !== 'Title');
     if (!date) throw new Error(`${LISTS.factoryCalendar}: no Date column`);
-    const rows = await this.getAllItems<Record<string, unknown>>(LISTS.factoryCalendar);
+    // The days are the site's days, so they are read in the site's zone. A
+    // site that will not say leaves them read the old way rather than fail
+    // the page.
+    const [rows, zone] = await Promise.all([
+      this.getAllItems<Record<string, unknown>>(LISTS.factoryCalendar),
+      this.getJson<unknown>(`${this.siteUrl}/_api/web/RegionalSettings/TimeZone`)
+        .then(readSiteZone)
+        .catch((e) => {
+          console.warn('[pmd] FactoryCalendar: site time zone not read, days taken to the nearest UTC midnight', e);
+          return null;
+        }),
+    ]);
     const out: CalendarDay[] = [];
     for (const r of rows) {
-      const day = readCalendarDay(r[date.InternalName]);
+      const day = readCalendarDay(r[date.InternalName], zone);
       if (!day) continue;
       const raw = (name ? str(r[name.InternalName]) : '') || str(r['Title']);
       out.push({ day, name: raw.trim() || 'RDO' });
@@ -5604,15 +5615,46 @@ function timelineOf(rows: ReadonlyArray<{ slotIndex: number; statusCode: string 
 
 const DAY_MS = 86_400_000;
 
+/** The SharePoint site's time zone: minutes east of UTC, in standard and in
+ *  daylight time. The zone the FactoryCalendar list is typed in and shown in. */
+export interface SiteZone {
+  standardMin: number;
+  daylightMin: number;
+}
+
+/**
+ * The site's zone out of `_api/web/RegionalSettings/TimeZone`. SharePoint
+ * gives biases — minutes to ADD to local time to reach UTC — so Sydney is
+ * Bias −600 with DaylightBias −60, Auckland −720 with −60. Null when the
+ * answer is not that shape.
+ */
+export function readSiteZone(body: unknown): SiteZone | null {
+  const root = (body ?? {}) as Record<string, unknown>;
+  const info = ((root.d as Record<string, unknown> | undefined) ?? root).Information as
+    | Record<string, unknown>
+    | undefined;
+  const bias = Number(info?.Bias);
+  if (!info || !Number.isFinite(bias)) return null;
+  const standard = Number(info.StandardBias);
+  const daylight = Number(info.DaylightBias);
+  return {
+    standardMin: -(bias + (Number.isFinite(standard) ? standard : 0)),
+    daylightMin: -(bias + (Number.isFinite(daylight) ? daylight : 0)),
+  };
+}
+
 /**
  * A FactoryCalendar Date cell as a day — the Assembly board's
- * readCalendarDay. SharePoint answers a date-only column as the UTC instant
- * of the site's midnight (`2026-12-24T13:00:00Z` is 25 December in Sydney),
- * so the instant is taken to the nearest UTC midnight, wherever the browser
- * is. A bare `YYYY-MM-DD`, a d/m/yyyy, or a time with no zone, is taken as
- * written.
+ * readCalendarDay, kept the same. SharePoint answers a date-only column as
+ * the UTC instant of the SITE's midnight (`2026-12-24T13:00:00Z` is
+ * 25 December in Sydney). With the site's zone the instant is moved into it
+ * and the day is that midnight's. Without it the instant is taken to the
+ * nearest UTC midnight — right for a site within eleven hours of UTC, one day
+ * early in summer for a site further east (Auckland), which is how
+ * New Year's Day came out on 31 December. Never the browser's own zone. A
+ * bare `YYYY-MM-DD`, a d/m/yyyy, or a time with no zone, is taken as written.
  */
-export function readCalendarDay(value: unknown): string | null {
+export function readCalendarDay(value: unknown, zone?: SiteZone | null): string | null {
   if (typeof value !== 'string' || value.trim() === '') return null;
   const v = value.trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
@@ -5622,7 +5664,15 @@ export function readCalendarDay(value: unknown): string | null {
   if (unzoned) return unzoned[1];
   const ms = new Date(v).getTime();
   if (Number.isNaN(ms)) return null;
-  return new Date(Math.round(ms / DAY_MS) * DAY_MS).toISOString().slice(0, 10);
+  const utcDay = (at: number): string => new Date(at).toISOString().slice(0, 10);
+  if (zone) {
+    for (const offset of [zone.daylightMin, zone.standardMin]) {
+      const local = ms + offset * 60_000;
+      if (local % DAY_MS === 0) return utcDay(local);
+    }
+    return utcDay(Math.floor((ms + zone.standardMin * 60_000) / DAY_MS) * DAY_MS);
+  }
+  return utcDay(Math.round(ms / DAY_MS) * DAY_MS);
 }
 
 /** "280" → 280 for SP Number columns; null for blank / non-numeric. */

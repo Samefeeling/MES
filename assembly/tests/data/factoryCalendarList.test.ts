@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LocalCalendar,
+  dayInstant,
   readCalendarDay,
   readCalendarRows,
+  readSiteZone,
+  type SiteZone,
 } from '@/data/sharepoint/factoryCalendar.list';
 import { closureOn, isClosed } from '@/engine/assembly/dates';
 import { ok } from '@/lib/result';
@@ -27,6 +30,84 @@ describe('reading the FactoryCalendar list', () => {
     expect(readCalendarDay('')).toBeNull();
     expect(readCalendarDay('soon')).toBeNull();
     expect(readCalendarDay(null)).toBeNull();
+  });
+
+  // The site's zone, as SharePoint's RegionalSettings/TimeZone gives it.
+  const sydney = readSiteZone({ Information: { Bias: -600, StandardBias: 0, DaylightBias: -60 } });
+  const auckland = readSiteZone({ Information: { Bias: -720, StandardBias: 0, DaylightBias: -60 } });
+  const utc: SiteZone = { standardMin: 0, daylightMin: 0 };
+
+  it('reads the site zone out of its biases', () => {
+    expect(sydney).toEqual({ standardMin: 600, daylightMin: 660 });
+    expect(auckland).toEqual({ standardMin: 720, daylightMin: 780 });
+    // The verbose envelope, and a site with no daylight saving.
+    expect(readSiteZone({ d: { Information: { Bias: 480, StandardBias: 0, DaylightBias: -60 } } })).toEqual({
+      standardMin: -480,
+      daylightMin: -420,
+    });
+    expect(readSiteZone({ Information: { Bias: -480 } })).toEqual({ standardMin: 480, daylightMin: 480 });
+    expect(readSiteZone({})).toBeNull();
+    expect(readSiteZone(null)).toBeNull();
+    expect(readSiteZone({ Information: { Bias: 'x' } })).toBeNull();
+  });
+
+  it('reads a day in the site zone — a site east of UTC+11 is no longer a day early', () => {
+    // The list as an Auckland-time site answers it over the summer shutdown:
+    // each day is that site's midnight, 11:00 UTC the day BEFORE.
+    const list = [
+      { id: '1', fields: { Date: '2026-12-24T11:00:00Z', Name: 'Christmas Day' } },
+      { id: '2', fields: { Date: '2026-12-25T11:00:00Z', Name: 'Boxing Day' } },
+      { id: '3', fields: { Date: '2026-12-28T11:00:00Z', Name: 'RDO' } },
+      { id: '4', fields: { Date: '2026-12-29T11:00:00Z', Name: 'RDO' } },
+      { id: '5', fields: { Date: '2026-12-30T11:00:00Z', Name: 'RDO' } },
+      { id: '6', fields: { Date: '2026-12-31T11:00:00Z', Name: "New Year's Day" } },
+    ];
+    // Without the zone every one of them is a day early: Christmas on the
+    // 24th, New Year's Day on 31 December, and 1 January a working day.
+    expect(readCalendarRows(list).map((r) => r.day)).toEqual([
+      '2026-12-24', '2026-12-25', '2026-12-28', '2026-12-29', '2026-12-30', '2026-12-31',
+    ]);
+    expect(readCalendarRows(list, auckland).map((r) => r.day)).toEqual([
+      '2026-12-25', '2026-12-26', '2026-12-29', '2026-12-30', '2026-12-31', '2027-01-01',
+    ]);
+    // Its winter midnight is 12:00 UTC the day before.
+    expect(readCalendarDay('2027-04-24T12:00:00Z', auckland)).toBe('2027-04-25');
+  });
+
+  it('reads a Sydney site the same with its zone as without', () => {
+    for (const cell of ['2026-12-24T13:00:00Z', '2026-06-30T14:00:00Z', '2026-12-31T13:00:00Z']) {
+      expect(readCalendarDay(cell, sydney)).toBe(readCalendarDay(cell));
+    }
+    expect(readCalendarDay('2026-12-31T13:00:00Z', sydney)).toBe('2027-01-01');
+    // A cell that carries a time of day is read in the site's standard time.
+    expect(readCalendarDay('2026-12-25T11:00:00Z', sydney)).toBe('2026-12-25'); // 21:00 AEST
+    expect(readCalendarDay('2026-12-25T03:30:00Z', utc)).toBe('2026-12-25');
+    // A site west of UTC: Los Angeles midnight is 08:00 UTC the same day.
+    const pacific = readSiteZone({ Information: { Bias: 480, StandardBias: 0, DaylightBias: -60 } });
+    expect(readCalendarDay('2027-01-01T08:00:00Z', pacific)).toBe('2027-01-01');
+    expect(readCalendarDay('2026-07-01T07:00:00Z', pacific)).toBe('2026-07-01');
+    // Text forms are taken as written, zone or no zone.
+    expect(readCalendarDay('2027-01-01', auckland)).toBe('2027-01-01');
+    expect(readCalendarDay('1/01/2027', auckland)).toBe('2027-01-01');
+  });
+
+  it('writes a day so that SharePoint shows it and the board reads it back', () => {
+    // No zone known: 11:00 UTC on the day, as before.
+    expect(dayInstant('2027-01-01')).toBe('2027-01-01T11:00:00Z');
+    for (const zone of [sydney, auckland, utc]) {
+      for (const day of ['2027-01-01', '2026-07-01', '2026-10-04', '2027-04-04']) {
+        const written = dayInstant(day, zone);
+        // Kept as written…
+        expect(readCalendarDay(written, zone)).toBe(day);
+        // …or cut to the site's midnight in daylight time (an hour earlier).
+        const cut = new Date(Date.parse(`${day}T00:00:00Z`) - zone!.daylightMin * 60_000).toISOString();
+        expect(readCalendarDay(cut, zone)).toBe(day);
+      }
+    }
+    // On the Auckland site: 12:00 UTC the day before — midnight NZST, 01:00
+    // NZDT, the day meant either way. 11:00 UTC ON the day was midnight of
+    // the day AFTER in summer.
+    expect(dayInstant('2027-01-01', auckland)).toBe('2026-12-31T12:00:00.000Z');
   });
 
   it('keeps one row a day, names a blank one RDO, and drops rows with no date', () => {

@@ -268,6 +268,20 @@
 
 ## Assembly board
 
+- **FactoryCalendar days one day early in summer — 1 January a working
+  day** (2026-11-10). A date-only cell comes back as the UTC instant of the
+  SITE's midnight. It was taken to the nearest UTC midnight, which is the
+  right day only for a site within eleven hours of UTC. On a site whose
+  regional time zone is further east (Auckland, UTC+13 in summer) every
+  summer day read one early: Christmas on the 24th, New Year's Day on
+  31 December, and 1 January open with work loaded on it; winter days
+  (UTC+12, exactly on the half) read right, which hid it. The board and the
+  KPI page's Machine Utilization now ask the site for its zone
+  (`_api/web/RegionalSettings/TimeZone`) and read each cell in it; a day
+  added from the board is written as the site's midnight. If the zone cannot
+  be read the old reading stands. Not covered: a person whose PERSONAL
+  SharePoint regional settings use another zone than the site types days in
+  that zone — set the site's zone, or enter the days from the board.
 - **Two identical `ASSY_Production` rows for one job-day** (fixed
   2026-09-16). The sync reads the whole list once, decides which days have
   no row yet, and opens them. Two boards on the same plan — a second tab,

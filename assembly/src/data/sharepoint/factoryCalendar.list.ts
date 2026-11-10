@@ -54,17 +54,59 @@ const message = (e: unknown): string => (e instanceof Error ? e.message : String
 const DAY_MS = 86_400_000;
 
 /**
+ * The SharePoint site's own time zone, as minutes east of UTC in standard
+ * time and in daylight time. It is the zone the list is typed in and shown
+ * in, so it is the zone a Date cell means.
+ */
+export interface SiteZone {
+  standardMin: number;
+  daylightMin: number;
+}
+
+/**
+ * The site's zone out of `_api/web/RegionalSettings/TimeZone`. SharePoint
+ * gives it as biases — the minutes to ADD to local time to reach UTC — so
+ * Sydney is Bias −600 with DaylightBias −60, and Auckland −720 with −60.
+ * Null when the answer is not that shape.
+ */
+export function readSiteZone(body: unknown): SiteZone | null {
+  const root = (body ?? {}) as Record<string, unknown>;
+  const info = ((root.d as Record<string, unknown> | undefined) ?? root).Information as
+    | Record<string, unknown>
+    | undefined;
+  const bias = Number(info?.Bias);
+  if (!info || !Number.isFinite(bias)) return null;
+  const standard = Number(info.StandardBias);
+  const daylight = Number(info.DaylightBias);
+  return {
+    standardMin: -(bias + (Number.isFinite(standard) ? standard : 0)),
+    daylightMin: -(bias + (Number.isFinite(daylight) ? daylight : 0)),
+  };
+}
+
+const utcDay = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
+
+/**
  * A Date cell as a day. SharePoint answers a date-only column as the UTC
  * instant of the site's midnight — `2026-12-24T13:00:00Z` is 25 December in
- * Sydney. Reading that instant in the browser's own time zone is only right
- * when the browser is in the site's: in China or on UTC it is still the 24th,
- * and every day in the list came out one early. So the instant is taken to the
- * nearest UTC midnight instead — the site's midnight is within twelve hours of
- * it for any site between UTC−11 and UTC+11, all of Australia with daylight
- * saving included — and the day is that, wherever the browser is. A bare
- * `YYYY-MM-DD`, or a time with no zone, is taken as it is written.
+ * Sydney — so the day it means can only be read in the SITE's time zone:
+ *
+ *   - With the site's zone (`readSiteZone`), the instant is moved into it. A
+ *     date-only cell is exactly midnight there, in standard or in daylight
+ *     time, and the day is that midnight's. A cell that carries a time of day
+ *     is read in the site's standard time.
+ *   - Without it, the instant is taken to the nearest UTC midnight, which is
+ *     the same day for any site between UTC−11 and UTC+11. It is NOT for a
+ *     site further east: Auckland's summer midnight is 11:00 UTC the day
+ *     before, and every summer day of a list kept on such a site came out one
+ *     early — Christmas on the 24th, New Year's Day on 31 December and
+ *     1 January a working day.
+ *
+ * Never the browser's own zone: in China or on UTC, Sydney's 25 December is
+ * still the 24th. A bare `YYYY-MM-DD`, or a time with no zone, is taken as it
+ * is written.
  */
-export function readCalendarDay(value: unknown): string | null {
+export function readCalendarDay(value: unknown, zone?: SiteZone | null): string | null {
   if (typeof value !== 'string' || value.trim() === '') return null;
   const v = value.trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
@@ -74,7 +116,14 @@ export function readCalendarDay(value: unknown): string | null {
   if (unzoned) return unzoned[1];
   const ms = new Date(v).getTime();
   if (Number.isNaN(ms)) return null;
-  return new Date(Math.round(ms / DAY_MS) * DAY_MS).toISOString().slice(0, 10);
+  if (zone) {
+    for (const offset of [zone.daylightMin, zone.standardMin]) {
+      const local = ms + offset * 60_000;
+      if (local % DAY_MS === 0) return utcDay(local);
+    }
+    return utcDay(Math.floor((ms + zone.standardMin * 60_000) / DAY_MS) * DAY_MS);
+  }
+  return utcDay(Math.round(ms / DAY_MS) * DAY_MS);
 }
 
 /**
@@ -84,12 +133,13 @@ export function readCalendarDay(value: unknown): string | null {
  */
 export function readCalendarRows(
   items: readonly { id: string; fields: Record<string, unknown> }[],
+  zone?: SiteZone | null,
 ): CalendarRow[] {
   const byDay = new Map<string, CalendarRow>();
   const sorted = [...items].sort((a, b) => Number(a.id) - Number(b.id));
   for (const item of sorted) {
     const f = item.fields;
-    const day = readCalendarDay(f.Date ?? f.date ?? f.Date0);
+    const day = readCalendarDay(f.Date ?? f.date ?? f.Date0, zone);
     if (!day) continue;
     const raw = f.Name ?? f.Name0 ?? f.Title;
     const name = typeof raw === 'string' && raw.trim() ? raw.trim().slice(0, 60) : 'RDO';
@@ -99,13 +149,21 @@ export function readCalendarRows(
 }
 
 /**
- * The instant written for a day: 11:00 UTC on it. In every time zone from
- * UTC−11 to UTC+11 that is still the same day, so SharePoint stores the day
- * meant whether it keeps the instant or cuts it to the site's midnight, and
- * `readCalendarDay` reads it back as that day. The browser's own midnight was
- * the day before in UTC for a browser east of the site.
+ * The instant written for a day.
+ *
+ * With the site's zone: the site's midnight on that day in standard time —
+ * midnight or 01:00 on the day whatever the season, so SharePoint shows the
+ * day meant and `readCalendarDay` reads it back, whether SharePoint keeps the
+ * instant or cuts it to the site's own midnight.
+ *
+ * Without it: 11:00 UTC on the day, which is still that day in every zone
+ * from UTC−11 to UTC+11. The browser's own midnight was the day before in UTC
+ * for a browser east of the site.
  */
-const dayInstant = (day: string): string => `${day}T11:00:00Z`;
+export const dayInstant = (day: string, zone?: SiteZone | null): string =>
+  zone
+    ? new Date(Date.parse(`${day}T00:00:00Z`) - zone.standardMin * 60_000).toISOString()
+    : `${day}T11:00:00Z`;
 
 // --- the signed-in session (production) ------------------------------------
 
@@ -140,9 +198,34 @@ class SessionCalendar implements CalendarBackend {
   readonly isList = true;
   constructor(private readonly cfg: SharePointConfig, private readonly list = FACTORY_CALENDAR_LIST) {}
 
+  private zoneRead: Promise<SiteZone | null> | null = null;
+
+  /**
+   * The site's time zone, asked once. A site that will not say (or answers
+   * something else) leaves the days read the old way, right for any site
+   * within eleven hours of UTC — the calendar must still load.
+   */
+  private zone(): Promise<SiteZone | null> {
+    this.zoneRead ??= sessionRequest(
+      this.cfg,
+      `${this.cfg.siteUrl.replace(/\/$/, '')}/_api/web/RegionalSettings/TimeZone`,
+    )
+      .then(async (res) => {
+        const zone = readSiteZone(await res.json());
+        if (!zone) console.warn(`[assembly] ${this.list}: the site's time zone was not understood.`);
+        return zone;
+      })
+      .catch((e) => {
+        console.warn(`[assembly] ${this.list}: the site's time zone was not read — ${message(e)}`);
+        this.zoneRead = null;
+        return null;
+      });
+    return this.zoneRead;
+  }
+
   async load(): Promise<Result<CalendarRow[], string>> {
     try {
-      const cols = await sessionColumns(this.cfg, this.list);
+      const [cols, zone] = await Promise.all([sessionColumns(this.cfg, this.list), this.zone()]);
       const select = ['Id', 'Title', cols.date, cols.name].filter(Boolean).join(',');
       let url = `${restList(this.cfg, this.list)}/items?$select=${select}&$top=500`;
       const items: { id: string; fields: Record<string, unknown> }[] = [];
@@ -156,7 +239,7 @@ class SessionCalendar implements CalendarBackend {
         }
         url = body['odata.nextLink'] ?? body['@odata.nextLink'] ?? '';
       }
-      return ok(readCalendarRows(items));
+      return ok(readCalendarRows(items, zone));
     } catch (e) {
       return err(`${this.list} not read: ${message(e)}`);
     }
@@ -164,8 +247,8 @@ class SessionCalendar implements CalendarBackend {
 
   async add(day: string, name: string): Promise<Result<CalendarRow, string>> {
     try {
-      const cols = await sessionColumns(this.cfg, this.list);
-      const body: Record<string, unknown> = { Title: name, [cols.date]: dayInstant(day) };
+      const [cols, zone] = await Promise.all([sessionColumns(this.cfg, this.list), this.zone()]);
+      const body: Record<string, unknown> = { Title: name, [cols.date]: dayInstant(day, zone) };
       if (cols.name) body[cols.name] = name;
       const res = await sessionRequest(this.cfg, `${restList(this.cfg, this.list)}/items`, {
         method: 'POST',

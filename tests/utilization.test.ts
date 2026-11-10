@@ -9,7 +9,7 @@ import {
   runHoursByMonth,
   totalUtilization,
 } from '../src/core/utilization';
-import { readCalendarDay, SharePointDataLayer } from '../src/dal/sharepoint';
+import { readCalendarDay, readSiteZone, SharePointDataLayer } from '../src/dal/sharepoint';
 
 describe('Machine Utilization', () => {
   // November 2026: 21 weekdays (Sun 1st → Mon 30th).
@@ -166,6 +166,38 @@ describe('Machine Utilization', () => {
     expect(readCalendarDay('2026-12-25')).toBe('2026-12-25');
     expect(readCalendarDay('25/12/2026')).toBe('2026-12-25');
     expect(readCalendarDay('')).toBeNull();
+  });
+
+  it('reads a day in the SITE\'s time zone when the site is east of UTC+11', async () => {
+    // A site on Auckland time: summer midnight is 11:00 UTC the day BEFORE.
+    // Taken to the nearest UTC midnight, New Year's Day came out on
+    // 31 December and 1 January counted as a working day.
+    const auckland = readSiteZone({ d: { Information: { Bias: -720, StandardBias: 0, DaylightBias: -60 } } });
+    expect(auckland).toEqual({ standardMin: 720, daylightMin: 780 });
+    expect(readCalendarDay('2026-12-31T11:00:00Z')).toBe('2026-12-31'); // the old reading
+    expect(readCalendarDay('2026-12-31T11:00:00Z', auckland)).toBe('2027-01-01');
+    expect(readCalendarDay('2026-12-24T11:00:00Z', auckland)).toBe('2026-12-25');
+    expect(readCalendarDay('2027-04-24T12:00:00Z', auckland)).toBe('2027-04-25'); // NZST
+    // Sydney is read the same with its zone as without.
+    const sydney = readSiteZone({ Information: { Bias: -600, StandardBias: 0, DaylightBias: -60 } });
+    expect(readCalendarDay('2026-12-24T13:00:00Z', sydney)).toBe('2026-12-25');
+    expect(readCalendarDay('2026-06-30T14:00:00Z', sydney)).toBe('2026-07-01');
+    expect(readSiteZone({ d: { results: [] } })).toBeNull();
+
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const o = dal as unknown as { getJson: (url: string) => Promise<unknown>; getAllItems: (list: string) => Promise<unknown[]> };
+    o.getJson = async (url) =>
+      url.includes('RegionalSettings/TimeZone')
+        ? { d: { Information: { Bias: -720, StandardBias: 0, DaylightBias: -60 } } }
+        : { d: { results: [{ Title: 'Date', InternalName: 'Date', TypeAsString: 'DateTime' }] } };
+    o.getAllItems = async () => [
+      { Id: 1, Title: "New Year's Day", Date: '2026-12-31T11:00:00Z' },
+      { Id: 2, Title: 'Christmas Day', Date: '2026-12-24T11:00:00Z' },
+    ];
+    expect(await dal.listFactoryCalendar()).toEqual([
+      { day: '2027-01-01', name: "New Year's Day" },
+      { day: '2026-12-25', name: 'Christmas Day' },
+    ]);
   });
 
   it('finds FactoryCalendar\'s Date and Name columns by what they are', async () => {
