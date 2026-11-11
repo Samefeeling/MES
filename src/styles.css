@@ -247,17 +247,6 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 /* The small "/expected" companion on a judged Output cell. */
 .kpi-exp{font-size:10px;font-weight:600;color:var(--mu)}
 .kpi-unsigned{display:inline-block;margin-left:6px;font-style:normal;padding:0 4px;border:1px solid currentColor;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;line-height:13px;color:#b45309;vertical-align:1px;white-space:nowrap}
-.kpi-adh{margin:14px 0}
-.kpi-adh h4{margin:0 0 6px;font-size:14px;font-weight:700;color:var(--theme-dark)}
-.kpi-adh-table th:first-child{text-align:left;white-space:nowrap}
-.kpi-adh-day{cursor:pointer}
-.kpi-adh-day th,.kpi-adh-day td{font-weight:800;background:#f8fafc;border-top:2px solid var(--theme-dark)}
-.kpi-adh-press th{font-weight:600;padding-left:26px}
-.kpi-idle{color:#b91c1c}
-.kpi-adh-table td.green{color:#15803d}
-.kpi-adh-table td.amber{color:#FFA500}
-.kpi-adh-table td.red{color:#b91c1c}
-.kpi-adh-table td.blue{color:#1d4ed8}
 .kpi-total th,.kpi-total td{border-top:2px solid var(--theme-dark);font-weight:800;background:#f8fafc}
 /* Per-category subtotal block (PMD_ProductDieColor.Category) sitting at
    the end of the body, directly above the sticky TOTAL footer. Same

@@ -40,10 +40,9 @@ order, category and floor totals cannot be judged by different rules.
   order the shift's plan did not have earns nothing.
 - **One formula at every level** (`attainmentOfTuples` over lines priced by
   `withStandardHours`): a press in a shift, a press over a day, a shift
-  across the floor, a production day (07:00 to 07:00 — the night shift
-  belongs to the day it starts on), a part category, and the whole period
-  (the TOTAL row and the tile). The page's "by day, shift and press" table
-  (`adherenceByDay`) shows each of them.
+  across the floor (the Day / Afternoon / Night rows at the foot of the
+  table), a part category, and the whole period (the TOTAL row and the
+  tile).
 
 Why standard hours: pieces of different parts cannot be added — 11,000 caps
 and 120 chair shells are not 11,120 of anything, and by pieces the caps are

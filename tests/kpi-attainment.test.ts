@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  adherenceByDay,
   attainmentOfTuples,
   withStandardHours,
   type AttainmentTuple,
@@ -399,31 +398,5 @@ describe('Schedule Adherence in standard hours', () => {
     const a = attainmentOfTuples([line('1600T', '2026-11-09-Day', 'SHELL', 120, 90)]);
     expect(a.pct).toBe(75);
     expect(a.plannedHrs).toBeUndefined();
-  });
-
-  it('adds up by production day: press-shift, press day, shift across presses, day', () => {
-    const lines = withStandardHours([
-      line('1600T', '2026-11-09-Day', 'SHELL', 120, 120),
-      line('1600T', '2026-11-09-Night', 'SHELL', 120, 60, { unsigned: true }),
-      line('850T', '2026-11-09-Day', 'SEAT', 80, 0, { idle: true }),
-      line('850T', '2026-11-09-Day', 'CAPS', 0, 900, { source: 'unscheduled', credited: 0 }),
-      line('1600T', '2026-11-10-Day', 'SHELL', 60, 60),
-    ], rate);
-    const days = adherenceByDay(lines);
-    expect(days.map((d) => d.date)).toEqual(['2026-11-10', '2026-11-09']);
-    const nov9 = days[1];
-    const p1600 = nov9.presses.find((p) => p.machineCode === '1600T')!;
-    expect(p1600.byShift.Day.attainment.pct).toBe(100);
-    expect(p1600.byShift.Night.attainment.pct).toBe(50);
-    expect(p1600.byShift.Night.unsigned).toBe(true);
-    expect(p1600.total.pct).toBe(75); // 12 of 16 h
-    const p850 = nov9.presses.find((p) => p.machineCode === '850T')!;
-    expect(p850.byShift.Day.attainment.pct).toBe(0);
-    expect(p850.byShift.Day.idle).toBe(true);
-    expect(nov9.byShift.Day.pct).toBe(67); // 8 of 12 h
-    expect(nov9.byShift.Afternoon).toBeUndefined();
-    expect(nov9.total.plannedHrs).toBeCloseTo(20, 9);
-    expect(nov9.total.pct).toBe(60); // 12 of 20 h
-    expect(days[0].total.pct).toBe(100);
   });
 });

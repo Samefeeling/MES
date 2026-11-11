@@ -329,63 +329,6 @@ export function withStandardHours(
   });
 }
 
-/** One production day of Schedule Adherence: every press in every shift
- *  that had a plan, the press's day, each shift across the presses, and the
- *  day — all the same Σ earned ÷ Σ planned standard hours. */
-export interface DayAdherence {
-  /** YYYY-MM-DD of the production day: 07:00 to 07:00 the next morning, so
-   *  the night shift belongs to the day it starts on. */
-  date: string;
-  total: KpiAttainment;
-  byShift: Record<string, KpiAttainment>;
-  presses: Array<{
-    machineCode: string;
-    total: KpiAttainment;
-    byShift: Record<string, { attainment: KpiAttainment; unsigned: boolean; idle: boolean }>;
-  }>;
-}
-
-/** The plan lines by production day, shift and press, newest day first.
- *  Presses keep the order they are first met in. */
-export function adherenceByDay(lines: ReadonlyArray<AttainmentTuple>): DayAdherence[] {
-  const days = new Map<string, Map<string, Map<string, AttainmentTuple[]>>>();
-  for (const line of lines) {
-    if (line.source === 'unscheduled') continue;
-    const date = line.shiftId.slice(0, 10);
-    const shift = line.shiftId.slice(11);
-    if (!date || !shift) continue;
-    const presses = days.get(date) ?? new Map<string, Map<string, AttainmentTuple[]>>();
-    days.set(date, presses);
-    const shifts = presses.get(line.machineCode) ?? new Map<string, AttainmentTuple[]>();
-    presses.set(line.machineCode, shifts);
-    shifts.set(shift, [...(shifts.get(shift) ?? []), line]);
-  }
-  return [...days.entries()]
-    .sort(([a], [b]) => (a < b ? 1 : a > b ? -1 : 0))
-    .map(([date, presses]) => {
-      const dayLines: AttainmentTuple[] = [];
-      const shiftLines = new Map<string, AttainmentTuple[]>();
-      const rows = [...presses.entries()].map(([machineCode, shifts]) => {
-        const byShift: DayAdherence['presses'][number]['byShift'] = {};
-        const own: AttainmentTuple[] = [];
-        for (const [shift, group] of shifts) {
-          byShift[shift] = {
-            attainment: attainmentOfTuples(group),
-            unsigned: group.every((l) => l.unsigned),
-            idle: group.every((l) => l.idle),
-          };
-          own.push(...group);
-          shiftLines.set(shift, [...(shiftLines.get(shift) ?? []), ...group]);
-        }
-        dayLines.push(...own);
-        return { machineCode, total: attainmentOfTuples(own), byShift };
-      });
-      const byShift: Record<string, KpiAttainment> = {};
-      for (const [shift, group] of shiftLines) byShift[shift] = attainmentOfTuples(group);
-      return { date, total: attainmentOfTuples(dayLines), byShift, presses: rows };
-    });
-}
-
 const jobKey = (job: string): string => job.trim().toUpperCase();
 
 /**

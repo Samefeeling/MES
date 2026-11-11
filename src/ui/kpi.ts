@@ -22,9 +22,7 @@ import {
 } from '../core/standards';
 import {
   attainmentOfTuples,
-  adherenceByDay,
   withStandardHours,
-  type DayAdherence,
   idleShiftTuples,
   kpiComparisonLabel,
   kpiComparisonMode,
@@ -435,11 +433,6 @@ interface KpiState {
   /** Wider periods, before PMD_Production.SchedulePlan existed: some signed
    *  shift saved only its %, so every shift counts once (savedScheduleTuples). */
   equalWeight: boolean;
-  /** Schedule Adherence by production day, shift and press. */
-  adherenceDays: DayAdherence[];
-  /** Days of that table whose presses are shown / hidden against the
-   *  default (shown when the period has three days or fewer). */
-  adherenceToggled: Set<string>;
   /** Yes / No already recorded against a finding, by its key. */
   impwDecisions: Map<string, ImpwDecision>;
   /** The plant's answers to Mango's placement fields and option lists,
@@ -671,69 +664,73 @@ function ensureUtilization(): void {
  * right, one press by month (the one clicked on the left) or, with none
  * clicked, every press by month. YTD stays first on both.
  */
-/** One cell of the by-day table: the percentage over the standard hours
- *  it is the ratio of. */
-function adherenceCell(a: KpiAttainment | undefined, flags: { unsigned?: boolean; idle?: boolean } = {}): string {
-  if (!a || a.total === 0) return '<td class="num muted">—</td>';
-  const known = a.covered === a.total && (a.plannedHrs ?? 0) > 0;
-  const pct = known ? a.pct : null;
-  const cls = pct == null ? '' : planColourClass(pct, S!.thresholds);
-  const hours = known && !S!.equalWeight
-    ? '<span class="kpi-exp">' + (a.creditedHrs ?? 0).toFixed(1) + '/' + (a.plannedHrs ?? 0).toFixed(1) + ' h</span>'
-    : '';
-  const tag = flags.unsigned
-    ? '<span class="kpi-unsigned">unsigned</span>'
-    : flags.idle ? '<span class="kpi-unsigned kpi-idle">not run</span>' : '';
-  const title = known
-    ? 'Earned ' + (a.creditedHrs ?? 0).toFixed(2) + ' of ' + (a.plannedHrs ?? 0).toFixed(2) + ' standard hours planned'
-      + (S!.equalWeight ? ' (equal shares: some shifts saved no plan quantity)' : '')
-      + ' · ' + a.actual + ' of ' + a.expected + ' pcs credited.'
-      + (flags.unsigned ? ' Booked, not signed off yet: nothing is credited until it is signed.' : '')
-      + (flags.idle && !flags.unsigned ? ' Planned, nothing signed on the press in this shift.' : '')
-    : (a.total - a.covered) + ' of ' + a.total + ' plan lines have no known quantity or rate.';
-  return '<td class="num ' + cls + '" title="' + escapeHtml(title) + '">' + (pct == null ? '—' : pct + '%') + ' ' + hours + tag + '</td>';
-}
-
-/**
- * Schedule Adherence by production day: each press in each shift, the
- * press's day, each shift across the presses, and the day's total — every
- * figure Σ standard hours earned ÷ Σ standard hours planned.
- */
-function renderAdherenceByDay(): string {
-  const days = S!.adherenceDays;
-  if (S!.loading || !days.length) return '';
-  const openByDefault = days.length <= 3;
-  const order = new Map(S!.machines.map((m, i) => [m.machineCode, i] as const));
-  const body = days.map((day) => {
-    const open = openByDefault !== S!.adherenceToggled.has(day.date);
-    const [y, mo, d] = day.date.split('-').map(Number);
-    const label = new Date(y, mo - 1, d, 12).toLocaleDateString('en-AU', { weekday: 'short', day: '2-digit', month: 'short' });
-    const head = `<tr class="kpi-adh-day" data-adh-day="${escapeHtml(day.date)}" tabindex="0" role="button" aria-expanded="${open}">
-      <th><span class="kpi-toggle">${open ? '–' : '+'}</span> ${escapeHtml(label)} <span class="kpi-exp">all presses</span></th>
-      ${SHIFT_ORDER.map((code) => adherenceCell(day.byShift[code])).join('')}
-      ${adherenceCell(day.total)}
-    </tr>`;
-    if (!open) return head;
-    const presses = [...day.presses].sort((a, b) => (order.get(a.machineCode) ?? 999) - (order.get(b.machineCode) ?? 999));
-    return head + presses.map((p) => `<tr class="kpi-adh-press">
-      <th>${escapeHtml(p.machineCode)}</th>
-      ${SHIFT_ORDER.map((code) => {
-        const cell = p.byShift[code];
-        return adherenceCell(cell?.attainment, cell);
-      }).join('')}
-      ${adherenceCell(p.total)}
-    </tr>`).join('');
-  }).join('');
-  return `<div class="kpi-adh">
-    <h4>Schedule Adherence — by day, shift and press</h4>
-    <div class="kpi-table-wrap">
-      <table class="summary-table kpi-adh-table">
-        <thead><tr><th>Production day / press</th>${SHIFT_ORDER.map((c) => `<th>${c}</th>`).join('')}<th>Day total</th></tr></thead>
-        <tbody>${body}</tbody>
-      </table>
-    </div>
-    <div class="kpi-note">A production day runs 07:00 to 07:00 — the night shift belongs to the day it starts on. Each cell: adherence, and standard hours earned / planned. Click a day to show or hide its presses.</div>
-  </div>`;
+/** Aggregates added up: a floor total, or one shift across the presses. */
+function sumAggs(list: ReadonlyArray<ShiftAgg>) {
+  return list.reduce(
+    (a, r) => {
+      a.output += r.output;
+      a.reject += r.reject;
+      a.runHrs += r.runHrs;
+      a.downHrs += r.downHrs;
+      a.setupHrs += r.setupHrs;
+      a.dieHrs += r.dieHrs;
+      a.colorHrs += r.colorHrs;
+      a.insertHrs += r.insertHrs;
+      a.startupHrs += r.startupHrs;
+      // Machine-shifts, not shifts: floor-wide scrap is judged against
+      // every press's shift allowance, the same way each machine row is
+      // judged against its own.
+      a.shifts += r.shifts;
+      if (r.attainedOutput != null) {
+        a.attainedOutput = (a.attainedOutput ?? 0) + r.attainedOutput;
+      }
+      if (r.expOutput != null) a.expOutput = (a.expOutput ?? 0) + r.expOutput;
+      if (r.attainedHrs != null) a.attainedHrs = (a.attainedHrs ?? 0) + r.attainedHrs;
+      if (r.expHrs != null) a.expHrs = (a.expHrs ?? 0) + r.expHrs;
+      a.unratedRunHrs += r.unratedRunHrs;
+      a.stdHours += r.stdHours;
+      a.ratedJobs += r.ratedJobs;
+      a.comparisonCovered += r.comparisonCovered;
+      a.comparisonTotal += r.comparisonTotal;
+      a.unscheduledOutput += r.unscheduledOutput;
+      a.unsignedLines += r.unsignedLines;
+      a.idleLines += r.idleLines;
+      a.savedLines += r.savedLines;
+      a.fallbackLines += r.fallbackLines;
+      a.dieStdHrs = (a.dieStdHrs ?? 0) + (r.dieStdHrs ?? 0);
+      a.colorStdHrs = (a.colorStdHrs ?? 0) + (r.colorStdHrs ?? 0);
+      a.insertStdHrs = (a.insertStdHrs ?? 0) + (r.insertStdHrs ?? 0);
+      return a;
+    },
+    {
+      output: 0,
+      reject: 0,
+      runHrs: 0,
+      downHrs: 0,
+      setupHrs: 0,
+      dieHrs: 0,
+      colorHrs: 0,
+      insertHrs: 0,
+      startupHrs: 0,
+      shifts: 0,
+      unratedRunHrs: 0, stdHours: 0,
+      ratedJobs: 0,
+      attainedOutput: null as number | null,
+      expOutput: null as number | null,
+      attainedHrs: null as number | null,
+      expHrs: null as number | null,
+      comparisonCovered: 0,
+      comparisonTotal: 0,
+      unscheduledOutput: 0,
+      unsignedLines: 0,
+      idleLines: 0,
+      savedLines: 0,
+      fallbackLines: 0,
+      dieStdHrs: null as number | null,
+      colorStdHrs: null as number | null,
+      insertStdHrs: null as number | null,
+    },
+  );
 }
 
 function renderUtilizationSection(): string {
@@ -1742,7 +1739,6 @@ async function compute(now = new Date()): Promise<void> {
   });
 
   S!.rows = rows;
-  S!.adherenceDays = adherenceByDay(linesByMachine.flat());
   // Judged against the SAME thresholds the table paints with, so a Mango
   // ticket can never claim a shift missed a target the screen shows as met.
   S!.impwSlices = impwSlices;
@@ -3240,71 +3236,7 @@ function render(): void {
   const allShiftsGlyph = anyShiftsCollapsed ? '+' : '–';
   const allOrdersGlyph = anyOrdersHidden ? '›' : '⌄';
 
-  const tot = S!.rows.reduce(
-    (a, r) => {
-      a.output += r.total.output;
-      a.reject += r.total.reject;
-      a.runHrs += r.total.runHrs;
-      a.downHrs += r.total.downHrs;
-      a.setupHrs += r.total.setupHrs;
-      a.dieHrs += r.total.dieHrs;
-      a.colorHrs += r.total.colorHrs;
-      a.insertHrs += r.total.insertHrs;
-      a.startupHrs += r.total.startupHrs;
-      // Machine-shifts, not shifts: floor-wide scrap is judged against
-      // every press's shift allowance, the same way each machine row is
-      // judged against its own.
-      a.shifts += r.total.shifts;
-      if (r.total.attainedOutput != null) {
-        a.attainedOutput = (a.attainedOutput ?? 0) + r.total.attainedOutput;
-      }
-      if (r.total.expOutput != null) a.expOutput = (a.expOutput ?? 0) + r.total.expOutput;
-      if (r.total.attainedHrs != null) a.attainedHrs = (a.attainedHrs ?? 0) + r.total.attainedHrs;
-      if (r.total.expHrs != null) a.expHrs = (a.expHrs ?? 0) + r.total.expHrs;
-      a.unratedRunHrs += r.total.unratedRunHrs;
-      a.stdHours += r.total.stdHours;
-      a.ratedJobs += r.total.ratedJobs;
-      a.comparisonCovered += r.total.comparisonCovered;
-      a.comparisonTotal += r.total.comparisonTotal;
-      a.unscheduledOutput += r.total.unscheduledOutput;
-      a.unsignedLines += r.total.unsignedLines;
-      a.idleLines += r.total.idleLines;
-      a.savedLines += r.total.savedLines;
-      a.fallbackLines += r.total.fallbackLines;
-      a.dieStdHrs = (a.dieStdHrs ?? 0) + (r.total.dieStdHrs ?? 0);
-      a.colorStdHrs = (a.colorStdHrs ?? 0) + (r.total.colorStdHrs ?? 0);
-      a.insertStdHrs = (a.insertStdHrs ?? 0) + (r.total.insertStdHrs ?? 0);
-      return a;
-    },
-    {
-      output: 0,
-      reject: 0,
-      runHrs: 0,
-      downHrs: 0,
-      setupHrs: 0,
-      dieHrs: 0,
-      colorHrs: 0,
-      insertHrs: 0,
-      startupHrs: 0,
-      shifts: 0,
-      unratedRunHrs: 0, stdHours: 0,
-      ratedJobs: 0,
-      attainedOutput: null as number | null,
-      expOutput: null as number | null,
-      attainedHrs: null as number | null,
-      expHrs: null as number | null,
-      comparisonCovered: 0,
-      comparisonTotal: 0,
-      unscheduledOutput: 0,
-      unsignedLines: 0,
-      idleLines: 0,
-      savedLines: 0,
-      fallbackLines: 0,
-      dieStdHrs: null as number | null,
-      colorStdHrs: null as number | null,
-      insertStdHrs: null as number | null,
-    },
-  );
+  const tot = sumAggs(S!.rows.map((r) => r.total));
   const totPieces = tot.output + tot.reject;
   const totYield =
     totPieces > 0 ? ((tot.output / totPieces) * 100).toFixed(1) : null;
@@ -3413,6 +3345,22 @@ function render(): void {
           ${emptyHandoverCell()}
         </tr>`,
       )
+      .join('');
+    // Each shift across every press, between the categories and the TOTAL
+    // they add up to. Schedule Adherence is the same Σ standard hours
+    // earned ÷ Σ planned as every other row.
+    body += SHIFT_ORDER
+      .map((code, i) => {
+        const sum = sumAggs(S!.rows.map((r) => r.byShift[code]));
+        const pieces = sum.output + sum.reject;
+        const agg: ShiftAgg = { ...sum, yieldPct: pieces > 0 ? +((sum.output / pieces) * 100).toFixed(1) : 100 };
+        return `<tr class="kpi-cat-total kpi-shift-total${i === 0 ? ' kpi-cat-first' : ''}">
+          <th>${code}</th>
+          ${colorCell()}
+          ${aggCells(agg)}
+          ${emptyHandoverCell()}
+        </tr>`;
+      })
       .join('');
   }
 
@@ -3652,8 +3600,8 @@ function render(): void {
   const comparisonHelp = '<div><b>Schedule Adherence</b> = standard hours earned ÷ standard hours planned, for every press in every finished shift.'
     + ' <b>Planned</b>: the pieces the press’s plan of record asked of each order in the shift × the part’s standard hours per piece (JobOper_ProdStandard).'
     + ' <b>Earned</b>: min(signed Good, planned pieces) per order × the same standard — over-producing one order never makes up for another, and output on an order that was not in the shift’s plan earns nothing.'
-    + ' Pieces of different parts cannot be added; their standard hours can, so a <b>press-shift</b>, a <b>press’s day</b>, a <b>shift across the floor</b>, a <b>day</b> and the <b>period</b> (TOTAL and the tile above) are all the same sum: Σ earned ÷ Σ planned. A press planned for eight hours weighs four times one planned for two.'
-    + ' A production day is 07:00 to 07:00: Day 07:00–15:00, Afternoon 15:00–23:00, Night 23:00–07:00, dated by the day it starts.</div>'
+    + ' Pieces of different parts cannot be added; their standard hours can, so a <b>press-shift</b>, a <b>press</b>, a <b>shift across the floor</b>, a category and the <b>period</b> (TOTAL and the tile above) are all the same sum: Σ earned ÷ Σ planned. A press planned for eight hours weighs four times one planned for two.'
+    + ' The Day / Afternoon / Night rows above TOTAL are each shift across every press. A production day is 07:00 to 07:00: Day 07:00–15:00, Afternoon 15:00–23:00, Night 23:00–07:00, dated by the day it starts.</div>'
     + '<div><b>The plan of record</b> is frozen in PMD_ShiftPlan once the shift is under way and never rewritten (Planning.csv is redrawn at every export). It asks each order for its planned run hours in the shift ÷ standard hours per piece, up to the order quantity, only in the shifts its “no of shift” is crewed for. A 4-hour die change in front of an order on a different die is not asked for pieces.'
     + ' The plan is reduced only when the shift booked more standard changeover time (die 4 h, colour or insert 30 min — the standard, not the time taken) and smoko than the plan left room for.</div>'
     + '<div><b>Always counted:</b> a planned press that did not run scores 0 against its plan (“not run”); a shift not signed off counts its plan and earns nothing until it is signed (“unsigned”). <b>Not judged:</b> a press-shift with nothing planned. “—” means a planned quantity or a rate is not known; hover for the detail.'
@@ -3721,7 +3669,6 @@ function render(): void {
           }
         </table>
       </div>
-      ${renderAdherenceByDay()}
       ${buildImpwPanel()}
       ${charts}
       ${renderUtilizationSection()}
@@ -3867,21 +3814,6 @@ function render(): void {
       render();
     });
   }
-  app.querySelectorAll<HTMLElement>('[data-adh-day]').forEach((row) => {
-    const toggle = (): void => {
-      const day = row.dataset.adhDay!;
-      if (S!.adherenceToggled.has(day)) S!.adherenceToggled.delete(day);
-      else S!.adherenceToggled.add(day);
-      render();
-    };
-    row.addEventListener('click', toggle);
-    row.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        toggle();
-      }
-    });
-  });
   const allOrdersBtn = app.querySelector<HTMLButtonElement>('[data-toggle-all-orders]');
   if (allOrdersBtn) {
     allOrdersBtn.addEventListener('click', () => {
@@ -4368,8 +4300,6 @@ export async function renderKpi(dal: PmdDataLayer, assemblyDal?: AssemblyDataLay
       total: null,
     },
     equalWeight: false,
-    adherenceDays: [],
-    adherenceToggled: new Set(),
     impwDecisions: loadImpwDecisions(),
     impwSite: loadImpwSite(),
     impwOptions: null,
