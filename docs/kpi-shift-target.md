@@ -28,6 +28,49 @@ Every figure is a sum of Machine + Shift + Job plan lines
 (`AttainmentTuple` in `src/core/kpi-attainment.ts`), so machine, shift,
 order, category and floor totals cannot be judged by different rules.
 
+## Schedule Adherence — the definition
+
+    Schedule Adherence = Σ standard hours earned ÷ Σ standard hours planned
+
+- **Planned standard hours** of a plan line = the pieces the plan of record
+  asked of the order in the shift × the part's standard hours per piece
+  (JobOper_ProdStandard).
+- **Earned standard hours** = min(signed Good, planned pieces) × the same
+  standard. Over-producing one order earns nothing extra, and output on an
+  order the shift's plan did not have earns nothing.
+- **One formula at every level** (`attainmentOfTuples` over lines priced by
+  `withStandardHours`): a press in a shift, a press over a day, a shift
+  across the floor, a production day (07:00 to 07:00 — the night shift
+  belongs to the day it starts on), a part category, and the whole period
+  (the TOTAL row and the tile). The page's "by day, shift and press" table
+  (`adherenceByDay`) shows each of them.
+
+Why standard hours: pieces of different parts cannot be added — 11,000 caps
+and 120 chair shells are not 11,120 of anything, and by pieces the caps are
+the floor's figure. The floor used to be the plain average of the presses'
+percentages to get round that, which gave a press planned for one hour the
+same say as one planned for twenty-four. Standard hours add up, and weigh
+each press by what was asked of it. Example: 125T planned 11,000 caps (8 h)
+and made none; 1600T made 108 of 120 shells (8 h). By pieces 1%; averaged
+50%; by standard hours 7.2 ÷ 16 = 45%.
+
+The standard of a line (`hoursPerPiece` in `ui/kpi.ts`): the CycleTime on
+the order's signed rows, else Planning.csv's, else what its kept plan implies
+(hours ÷ pieces). A line with no known rate has no hours: the figure shows
+"—" rather than a guess. A press-shift known only by what its sign-off saved
+(no order lines) is priced at the order that made most of it, never above
+the shift's eight hours.
+
+Always counted: a planned press that did not run (0 earned); a shift booked
+and not signed off (plan counts, nothing earned until signed). Not judged: a
+press-shift with nothing planned. The plan is reduced only by the standard
+changeover allowance and smoko the shift booked, and only when the plan left
+no room for them (`keptPlanShare`).
+
+The sections below say where each line's planned pieces come from; they are
+unchanged. PMD_Production.ScheduleAttain / SchedulePlan, saved at sign-off,
+stay in pieces (credited = ScheduleAttain × SchedulePlan).
+
 ## Schedule Adherence (Last 24h)
 
 For each finished shift and each order Planning.csv has on the press in it:
@@ -58,7 +101,7 @@ For each finished shift and each order Planning.csv has on the press in it:
   four hours of it as 71.99999 — 72, not 71. ShiftTarget uses the same rule.
 - **Credited** = min(Good, plan) per order, so over-producing one order
   cannot hide missing another.
-- Adherence = Σ credited ÷ Σ plan.
+- Adherence = Σ credited ÷ Σ plan, each in standard hours (see above).
 
 Lines outside the comparison:
 

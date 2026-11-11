@@ -69,6 +69,12 @@ export interface KpiAttainment {
   covered: number;
   /** Tuples that should have had a comparison value. */
   total: number;
+  /** Standard hours asked for and earned (pieces × standard hours per
+   *  piece) — what `pct` is the ratio of once the lines carry them
+   *  (`withStandardHours`). Absent when no line does: `pct` is then the
+   *  ratio of the pieces. */
+  plannedHrs?: number;
+  creditedHrs?: number;
 }
 
 /**
@@ -83,48 +89,26 @@ export function kpiComparisonMode(period: string): KpiComparisonMode {
   return period === 'last3' ? 'schedule' : 'saved';
 }
 
-/** The floor's Schedule Adherence, and the presses it is the average of. */
-export interface FloorAdherence {
-  pct: number | null;
-  counted: Array<{ machineCode: string; pct: number }>;
-  /** Presses with a plan but no percentage (an order of unknown quantity). */
-  leftOut: string[];
-}
-
-/**
- * The floor's Schedule Adherence: the plain average of each press's own
- * percentage, every press with a plan counted once. Pieces are not added
- * across presses — a small press's parts run in the tens of thousands, so
- * a Σ pieces ratio is that press's figure whatever the rest of the floor did.
- * A press is given as its percentage; null when it has a plan it cannot be
- * judged on (left out, and named), undefined when it has none to judge
- * (nothing planned: not a press of this figure).
- */
-export function floorScheduleAdherence(
-  presses: ReadonlyArray<{ machineCode: string; planned: boolean; pct: number | null | undefined }>,
-): FloorAdherence {
-  const counted: Array<{ machineCode: string; pct: number }> = [];
-  const leftOut: string[] = [];
-  for (const p of presses) {
-    if (!p.planned || p.pct === undefined) continue;
-    if (p.pct === null) leftOut.push(p.machineCode);
-    else counted.push({ machineCode: p.machineCode, pct: p.pct });
-  }
-  const pct = counted.length ? Math.round(counted.reduce((n, c) => n + c.pct, 0) / counted.length) : null;
-  return { pct, counted, leftOut };
-}
-
 export function kpiComparisonLabel(_mode: KpiComparisonMode): 'Schedule Adherence' {
   return 'Schedule Adherence';
 }
 
-function result(actual: number, expected: number, covered: number, total: number): KpiAttainment {
+function result(
+  actual: number,
+  expected: number,
+  covered: number,
+  total: number,
+  hours: { planned: number; credited: number } | null = null,
+): KpiAttainment {
+  const num = hours ? hours.credited : actual;
+  const den = hours ? hours.planned : expected;
   return {
     actual,
     expected,
-    pct: expected > 0 ? Math.round((actual / expected) * 100) : null,
+    pct: den > 0 ? Math.round((num / den) * 100) : null,
     covered,
     total,
+    ...(hours ? { plannedHrs: hours.planned, creditedHrs: hours.credited } : {}),
   };
 }
 
@@ -273,25 +257,133 @@ export interface AttainmentTuple {
   /** Wider periods: a machine-shift with no signed production at all, one
    *  line for the press (`idleShiftTuples`). */
   idle?: boolean;
+  /** Standard hours the plan asked for: planned × standard hours per piece
+   *  (`withStandardHours`). Pieces of different parts cannot be added —
+   *  2,000 clips and 60 chair shells are not 2,060 of anything — and their
+   *  standard hours can, so this is what a press, a shift, a day and the
+   *  floor are added up in. null = the part's rate is not known; absent =
+   *  never worked out (the line is then compared in pieces). */
+  plannedHrs?: number | null;
+  /** Standard hours earned: plannedHrs × credited ÷ planned. */
+  creditedHrs?: number;
 }
 
-/** The comparison over a set of lines. Unscheduled lines are outside it on
- *  both sides; a line with no known plan counts against coverage, not
- *  against the percentage. */
+/**
+ * The comparison over a set of lines: Σ earned standard hours ÷ Σ planned
+ * standard hours, once the lines carry hours (`withStandardHours`); Σ credited
+ * ÷ Σ planned pieces for lines that never had them worked out. Unscheduled
+ * lines are outside it on both sides; a line with no known plan — or, in
+ * hours, no known rate — counts against coverage, not against the percentage.
+ */
 export function attainmentOfTuples(tuples: ReadonlyArray<AttainmentTuple>): KpiAttainment {
+  const inHours = tuples.some((tuple) => tuple.source !== 'unscheduled' && tuple.plannedHrs !== undefined);
   let actual = 0;
   let expected = 0;
   let covered = 0;
   let total = 0;
+  let plannedHrs = 0;
+  let creditedHrs = 0;
   for (const tuple of tuples) {
     if (tuple.source === 'unscheduled') continue;
     total++;
     if (tuple.planned == null) continue;
+    if (inHours && tuple.plannedHrs == null) continue;
     covered++;
     actual += tuple.credited;
     expected += tuple.planned;
+    plannedHrs += tuple.plannedHrs ?? 0;
+    creditedHrs += tuple.creditedHrs ?? 0;
   }
-  return result(actual, expected, covered, total);
+  return result(actual, expected, covered, total, inHours ? { planned: plannedHrs, credited: creditedHrs } : null);
+}
+
+/**
+ * The lines with their standard hours: planned × the part's standard hours
+ * per piece (JobOper_ProdStandard), earned in the proportion the pieces were
+ * credited. `hoursPerPiece` answers for a line's order on its press — null
+ * when nobody knows the rate, and the line then counts against coverage.
+ *
+ * A line for a whole press-shift (no order of its own: a plan saved at
+ * sign-off) is priced at the order that made most of it and can never ask
+ * for more hours than the shift has. `shares`: the lines are equal shares of
+ * 100, not pieces (see `savedScheduleTuples`), and stay as they are.
+ */
+export function withStandardHours(
+  lines: ReadonlyArray<AttainmentTuple>,
+  hoursPerPiece: (line: AttainmentTuple) => number | null | undefined,
+  shares = false,
+): AttainmentTuple[] {
+  return lines.map((line) => {
+    if (line.source === 'unscheduled' || line.plannedHrs !== undefined) return line;
+    if (line.planned == null) return { ...line, plannedHrs: null, creditedHrs: 0 };
+    if (shares) return { ...line, plannedHrs: line.planned, creditedHrs: line.credited };
+    if (line.planned === 0) return { ...line, plannedHrs: 0, creditedHrs: 0 };
+    const rate = hoursPerPiece(line);
+    if (!(rate != null && Number.isFinite(rate) && rate > 0)) return { ...line, plannedHrs: null, creditedHrs: 0 };
+    let hours = line.planned * rate;
+    if (!line.jobNumber) {
+      const bounds = shiftBounds(line.shiftId);
+      if (bounds) hours = Math.min(hours, (bounds.end.getTime() - bounds.start.getTime()) / 3_600_000);
+    }
+    return { ...line, plannedHrs: hours, creditedHrs: (hours * line.credited) / line.planned };
+  });
+}
+
+/** One production day of Schedule Adherence: every press in every shift
+ *  that had a plan, the press's day, each shift across the presses, and the
+ *  day — all the same Σ earned ÷ Σ planned standard hours. */
+export interface DayAdherence {
+  /** YYYY-MM-DD of the production day: 07:00 to 07:00 the next morning, so
+   *  the night shift belongs to the day it starts on. */
+  date: string;
+  total: KpiAttainment;
+  byShift: Record<string, KpiAttainment>;
+  presses: Array<{
+    machineCode: string;
+    total: KpiAttainment;
+    byShift: Record<string, { attainment: KpiAttainment; unsigned: boolean; idle: boolean }>;
+  }>;
+}
+
+/** The plan lines by production day, shift and press, newest day first.
+ *  Presses keep the order they are first met in. */
+export function adherenceByDay(lines: ReadonlyArray<AttainmentTuple>): DayAdherence[] {
+  const days = new Map<string, Map<string, Map<string, AttainmentTuple[]>>>();
+  for (const line of lines) {
+    if (line.source === 'unscheduled') continue;
+    const date = line.shiftId.slice(0, 10);
+    const shift = line.shiftId.slice(11);
+    if (!date || !shift) continue;
+    const presses = days.get(date) ?? new Map<string, Map<string, AttainmentTuple[]>>();
+    days.set(date, presses);
+    const shifts = presses.get(line.machineCode) ?? new Map<string, AttainmentTuple[]>();
+    presses.set(line.machineCode, shifts);
+    shifts.set(shift, [...(shifts.get(shift) ?? []), line]);
+  }
+  return [...days.entries()]
+    .sort(([a], [b]) => (a < b ? 1 : a > b ? -1 : 0))
+    .map(([date, presses]) => {
+      const dayLines: AttainmentTuple[] = [];
+      const shiftLines = new Map<string, AttainmentTuple[]>();
+      const rows = [...presses.entries()].map(([machineCode, shifts]) => {
+        const byShift: DayAdherence['presses'][number]['byShift'] = {};
+        const own: AttainmentTuple[] = [];
+        for (const [shift, group] of shifts) {
+          byShift[shift] = {
+            attainment: attainmentOfTuples(group),
+            unsigned: group.every((l) => l.unsigned),
+            idle: group.every((l) => l.idle),
+          };
+          own.push(...group);
+          shiftLines.set(shift, [...(shiftLines.get(shift) ?? []), ...group]);
+        }
+        dayLines.push(...own);
+        return { machineCode, total: attainmentOfTuples(own), byShift };
+      });
+      const byShift: Record<string, KpiAttainment> = {};
+      for (const [shift, group] of shiftLines) byShift[shift] = attainmentOfTuples(group);
+      return { date, total: attainmentOfTuples(dayLines), byShift, presses: rows };
+    });
 }
 
 const jobKey = (job: string): string => job.trim().toUpperCase();

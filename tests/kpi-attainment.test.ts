@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  adherenceByDay,
   attainmentOfTuples,
-  floorScheduleAdherence,
+  withStandardHours,
+  type AttainmentTuple,
   kpiComparisonLabel,
   kpiComparisonMode,
   savedPlanMissing,
@@ -314,25 +316,114 @@ describe('Schedule Adherence over a wider period, from the saved plans', () => {
   });
 });
 
-describe('the floor Schedule Adherence', () => {
-  it('is the plain average of the presses\' percentages, each press with a plan counted once', () => {
-    // 9 Nov: 125T planned 11,000 caps and nothing was entered. By pieces the
-    // floor reads near 0%; by press it is one press of five at 0%.
-    const f = floorScheduleAdherence([
-      { machineCode: '1600T', planned: true, pct: 92 },
-      { machineCode: '850T', planned: true, pct: 85 },
-      { machineCode: '550T', planned: true, pct: 100 },
-      { machineCode: '320T', planned: true, pct: 78 },
-      { machineCode: '125T', planned: true, pct: 0 },
-      // Planned for nothing (its shift only put a die on): not a press of this figure.
-      { machineCode: 'Batt1', planned: true, pct: undefined },
-      { machineCode: 'Batt2', planned: false, pct: null },
-      // An order of unknown quantity: no percentage, left out and named.
-      { machineCode: '150T', planned: true, pct: null },
-    ]);
-    expect(f.pct).toBe(71); // (92 + 85 + 100 + 78 + 0) ÷ 5 = 71
-    expect(f.counted.map((c) => c.machineCode)).toEqual(['1600T', '850T', '550T', '320T', '125T']);
-    expect(f.leftOut).toEqual(['150T']);
-    expect(floorScheduleAdherence([]).pct).toBeNull();
+describe('Schedule Adherence in standard hours', () => {
+  const line = (
+    machineCode: string, shiftId: string, jobNumber: string, planned: number | null, good: number,
+    extra: Partial<AttainmentTuple> = {},
+  ): AttainmentTuple => ({
+    machineCode, shiftId, jobNumber, planned, good,
+    credited: planned == null ? 0 : Math.min(good, planned), source: 'saved', ...extra,
+  });
+  // Standard hours per piece: caps 1,375 an hour, a shell 15 an hour.
+  const rates: Record<string, number> = { CAPS: 8 / 11_000, SHELL: 1 / 15, SEAT: 1 / 20 };
+  const rate = (l: AttainmentTuple): number | undefined => rates[l.jobNumber || l.leadJob || ''];
+
+  it('prices each line at its part\'s standard and earns in proportion to the pieces credited', () => {
+    const [l] = withStandardHours([line('1600T', '2026-11-09-Day', 'SHELL', 120, 90)], rate);
+    expect(l.plannedHrs).toBeCloseTo(8, 9);
+    expect(l.creditedHrs).toBeCloseTo(6, 9);
+    expect(attainmentOfTuples([l]).pct).toBe(75);
+  });
+
+  it('adds presses up by hours: 11,000 missed caps are one press-shift, not the floor', () => {
+    // 9 Nov: 125T planned 11,000 caps for the shift and made none; 1600T made
+    // 108 of 120 shells. By pieces the floor reads 1%; each press was planned
+    // for eight hours, so by standard hours it is 7.2 of 16.
+    const lines = withStandardHours([
+      line('125T', '2026-11-09-Day', 'CAPS', 11_000, 0),
+      line('1600T', '2026-11-09-Day', 'SHELL', 120, 108),
+    ], rate);
+    const a = attainmentOfTuples(lines);
+    expect(a.plannedHrs).toBeCloseTo(16, 9);
+    expect(a.creditedHrs).toBeCloseTo(7.2, 9);
+    expect(a.pct).toBe(45);
+    expect(a.actual).toBe(108); // the pieces are still reported
+    expect(a.expected).toBe(11_120);
+  });
+
+  it('weighs a press planned for a whole shift above one planned for two hours', () => {
+    const lines = withStandardHours([
+      line('1600T', '2026-11-09-Day', 'SHELL', 120, 120), // 8 h, all made
+      line('850T', '2026-11-09-Day', 'SEAT', 40, 0),      // 2 h, none made
+    ], rate);
+    expect(attainmentOfTuples(lines).pct).toBe(80); // 8 ÷ 10, not the 50% of an average
+  });
+
+  it('leaves over-production and unplanned output out', () => {
+    const lines = withStandardHours([
+      line('1600T', '2026-11-09-Day', 'SHELL', 60, 90),
+      line('1600T', '2026-11-09-Day', 'SEAT', 80, 40),
+      line('1600T', '2026-11-09-Day', 'CAPS', 0, 500, { source: 'unscheduled', credited: 0 }),
+    ], rate);
+    const a = attainmentOfTuples(lines);
+    expect(a.plannedHrs).toBeCloseTo(8, 9); // 4 h of shells + 4 h of seats
+    expect(a.creditedHrs).toBeCloseTo(6, 9); // 4 h + 2 h
+    expect(a.total).toBe(2);
+  });
+
+  it('a line with no known rate or quantity counts against coverage, never as a guess', () => {
+    const lines = withStandardHours([
+      line('1600T', '2026-11-09-Day', 'SHELL', 120, 120),
+      line('850T', '2026-11-09-Day', 'UNKNOWN', 50, 50),
+      line('550T', '2026-11-09-Day', 'SEAT', null, 10),
+    ], rate);
+    const a = attainmentOfTuples(lines);
+    expect(lines[1].plannedHrs).toBeNull();
+    expect(a.covered).toBe(1);
+    expect(a.total).toBe(3);
+  });
+
+  it('a whole press-shift saved at sign-off is priced at its lead order and never above the shift', () => {
+    const [l] = withStandardHours([line('1600T', '2026-11-09-Day', '', 300, 150, { leadJob: 'SHELL' })], rate);
+    expect(l.plannedHrs).toBe(8); // 300 ÷ 15 = 20 h, more than a shift holds
+    expect(l.creditedHrs).toBe(4);
+  });
+
+  it('keeps equal shares as they are', () => {
+    const [l] = withStandardHours([line('1600T', '2026-11-09-Day', '', 100, 0, { credited: 95 })], rate, true);
+    expect(l.plannedHrs).toBe(100);
+    expect(l.creditedHrs).toBe(95);
+  });
+
+  it('lines never priced are still compared in pieces', () => {
+    const a = attainmentOfTuples([line('1600T', '2026-11-09-Day', 'SHELL', 120, 90)]);
+    expect(a.pct).toBe(75);
+    expect(a.plannedHrs).toBeUndefined();
+  });
+
+  it('adds up by production day: press-shift, press day, shift across presses, day', () => {
+    const lines = withStandardHours([
+      line('1600T', '2026-11-09-Day', 'SHELL', 120, 120),
+      line('1600T', '2026-11-09-Night', 'SHELL', 120, 60, { unsigned: true }),
+      line('850T', '2026-11-09-Day', 'SEAT', 80, 0, { idle: true }),
+      line('850T', '2026-11-09-Day', 'CAPS', 0, 900, { source: 'unscheduled', credited: 0 }),
+      line('1600T', '2026-11-10-Day', 'SHELL', 60, 60),
+    ], rate);
+    const days = adherenceByDay(lines);
+    expect(days.map((d) => d.date)).toEqual(['2026-11-10', '2026-11-09']);
+    const nov9 = days[1];
+    const p1600 = nov9.presses.find((p) => p.machineCode === '1600T')!;
+    expect(p1600.byShift.Day.attainment.pct).toBe(100);
+    expect(p1600.byShift.Night.attainment.pct).toBe(50);
+    expect(p1600.byShift.Night.unsigned).toBe(true);
+    expect(p1600.total.pct).toBe(75); // 12 of 16 h
+    const p850 = nov9.presses.find((p) => p.machineCode === '850T')!;
+    expect(p850.byShift.Day.attainment.pct).toBe(0);
+    expect(p850.byShift.Day.idle).toBe(true);
+    expect(nov9.byShift.Day.pct).toBe(67); // 8 of 12 h
+    expect(nov9.byShift.Afternoon).toBeUndefined();
+    expect(nov9.total.plannedHrs).toBeCloseTo(20, 9);
+    expect(nov9.total.pct).toBe(60); // 12 of 20 h
+    expect(days[0].total.pct).toBe(100);
   });
 });
