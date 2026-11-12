@@ -83,11 +83,31 @@ describe('a sheet confirmed under the names of the shift before', () => {
     expect(crewOf(day).supervisors).toEqual(['Jean-Michel Thomas', 'Tin Maung']);
   });
 
-  it('keeps the named operator when nobody signed, or when he signed some of them', () => {
+  it('keeps the named operator when nobody signed', () => {
     const unsigned = afternoon.map((r) => ({ ...r, qcBy: '' }));
     expect(sheetPeople(unsigned).operators).toEqual(['John Taylor']);
-    const shared = afternoon.map((r) => ({ ...r, qcBy: r.slotIndex === 2 ? 'John Taylor' : r.qcBy }));
-    expect(sheetPeople(shared)).toMatchObject({ operators: ['John Taylor'], leftover: false });
+  });
+
+  it('somebody covering a break is an operator of the sheet too, after the named one', () => {
+    // John Taylor ran the press and signed most checks; Ben Wood signed two
+    // while he was on his break, and Ann Lee one.
+    const cover = (slot: number): string => (slot === 4 || slot === 5 ? 'Ben Wood' : slot === 9 ? 'Ann Lee' : 'John Taylor');
+    const shared = afternoon.map((r) => ({ ...r, qcBy: r.qcBy ? cover(r.slotIndex) : '' }));
+    expect(sheetPeople(shared)).toMatchObject({ operators: ['John Taylor', 'Ben Wood', 'Ann Lee'], leftover: false });
+    expect(operatorsOf(shared)).toEqual(['Ann Lee', 'Ben Wood', 'John Taylor']);
+    // The sheet's output is still the named operator's.
+    expect([...operatorByTuple(shared).values()]).toEqual(['John Taylor']);
+  });
+
+  it('counts a person once in a total, on however many presses they signed', () => {
+    // Ben Wood runs the hot-stamp press and covers a break on 550T.
+    const other = sheet('2026-11-12-Afternoon', 'Ann Lee', 'RRRRRRRRRRRRRRRR').map((r) => ({
+      ...r, machineCode: '550T', jobNumber: 'SFM500001',
+      operator: r.slotIndex === 0 ? 'Ann Lee' : '',
+      qcBy: r.slotIndex === 6 ? 'Ben Wood' : r.qcBy,
+    }));
+    expect(operatorsOf(other)).toEqual(['Ann Lee', 'Ben Wood']);
+    expect(crewOf([...afternoon, ...other]).operators).toEqual(['Ann Lee', 'Ben Wood']);
   });
 
   it('the supervisor\'s own check slots say nothing about the operator', () => {

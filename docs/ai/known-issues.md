@@ -402,6 +402,11 @@
   by the KPI Operator column, the shift head-counts and the per-operator
   tables. PMD_Production itself is not rewritten — a supervisor can still
   correct a sheet by unlocking it.
+- Break cover: the Quality Checks are signed by whoever is running the
+  press, so a sheet can have more than one signer. All of them show on the
+  press and order rows (named Operator first); the shift and floor
+  head-counts count each person once. The sheet's output stays with the
+  named Operator in the per-operator tables.
 - Limit: a sheet with a leftover name and NO Quality Check signed cannot be
   told from a correct one. And an operator who never signs his own checks,
   on a press where somebody else signs all of them, reads as a leftover.
