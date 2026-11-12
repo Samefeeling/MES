@@ -23,6 +23,7 @@ import {
 import {
   attainmentOfTuples,
   withStandardHours,
+  withStandbyPress,
   idleShiftTuples,
   kpiComparisonLabel,
   kpiComparisonMode,
@@ -36,7 +37,7 @@ import {
   type SavedShiftPlan,
 } from '../core/kpi-attainment';
 import {
-  OVERTIME_SHARE, crewSize, firstName, floorStaffing, operatorsOf, rosterOf, shiftStaffing,
+  OVERTIME_SHARE, crewSize, firstName, floorStaffing, operatorsOf, operatorsRunningByShift, rosterOf, shiftStaffing,
   type Roster, type Staffing,
 } from '../core/crew';
 import {
@@ -242,6 +243,11 @@ interface ShiftAgg {
   /** Wider periods: machine-shifts with no signed production, counted at
    *  their plan with nothing credited (idleShiftTuples). */
   idleLines: number;
+  /** Plan lines of a shift's standby press (AttainmentTuple.standby): more
+   *  presses planned than operators on the shift, so this plan is not
+   *  counted — and the standard hours it would have asked for. */
+  standbyLines: number;
+  standbyHrs: number;
   /** Wider periods: machine-shifts read from the plan sign-off saved, and
    *  order-shifts signed before it was saved, which use their ShiftTarget. */
   savedLines: number;
@@ -710,6 +716,8 @@ function sumAggs(list: ReadonlyArray<ShiftAgg>) {
       a.unscheduledOutput += r.unscheduledOutput;
       a.unsignedLines += r.unsignedLines;
       a.idleLines += r.idleLines;
+      a.standbyLines += r.standbyLines;
+      a.standbyHrs += r.standbyHrs;
       a.savedLines += r.savedLines;
       a.fallbackLines += r.fallbackLines;
       a.dieStdHrs = (a.dieStdHrs ?? 0) + (r.dieStdHrs ?? 0);
@@ -739,6 +747,8 @@ function sumAggs(list: ReadonlyArray<ShiftAgg>) {
       unscheduledOutput: 0,
       unsignedLines: 0,
       idleLines: 0,
+      standbyLines: 0,
+      standbyHrs: 0,
       savedLines: 0,
       fallbackLines: 0,
       dieStdHrs: null as number | null,
@@ -1003,6 +1013,8 @@ function toAgg(k: Kpi): ShiftAgg {
     unscheduledOutput: 0,
     unsignedLines: 0,
     idleLines: 0,
+    standbyLines: 0,
+    standbyHrs: 0,
     savedLines: 0,
     fallbackLines: 0,
     dieStdHrs: null,
@@ -1035,6 +1047,8 @@ function emptyAgg(): ShiftAgg {
     unscheduledOutput: 0,
     unsignedLines: 0,
     idleLines: 0,
+    standbyLines: 0,
+    standbyHrs: 0,
     savedLines: 0,
     fallbackLines: 0,
     dieStdHrs: null,
@@ -1050,6 +1064,11 @@ function addComparison(a: ShiftAgg, comparison: KpiAttainment | null): void {
       a.expOutput = (a.expOutput ?? 0) + comparison.expected;
       a.attainedHrs = (a.attainedHrs ?? 0) + (comparison.creditedHrs ?? 0);
       a.expHrs = (a.expHrs ?? 0) + (comparison.plannedHrs ?? 0);
+    } else if (comparison.actual > 0 || (comparison.creditedHrs ?? 0) > 0) {
+      // A standby press on its own: nothing asked of it, and what it made in
+      // place of a press that fell short is carried up to the shift's total.
+      a.attainedOutput = (a.attainedOutput ?? 0) + comparison.actual;
+      a.attainedHrs = (a.attainedHrs ?? 0) + (comparison.creditedHrs ?? 0);
     }
     a.comparisonCovered += comparison.covered;
     a.comparisonTotal += comparison.total;
@@ -1064,6 +1083,10 @@ function addTuples(a: ShiftAgg, lines: ReadonlyArray<AttainmentTuple>): void {
     if (line.source === 'unscheduled') a.unscheduledOutput += line.good;
     if (line.unsigned) a.unsignedLines++;
     if (line.idle) a.idleLines++;
+    if (line.standby) {
+      a.standbyLines++;
+      a.standbyHrs += line.plannedHrs ?? 0;
+    }
     if (line.source === 'saved') a.savedLines++;
     if (line.source === 'shiftTarget') a.fallbackLines++;
   }
@@ -1542,28 +1565,9 @@ async function compute(now = new Date()): Promise<void> {
       .sort(byCompletion);
   };
   // Every machine's plan lines, kept for the category subtotals.
-  const linesByMachine: AttainmentTuple[][] = [];
-
-  const charts = new Map<string, ChartBucket>();
-  // Every (machine, shift instance) in the window, for the Mango IMPW
-  // findings. Collected here rather than from the rendered rows because
-  // byShift rolls Day/Afternoon/Night across the whole period — an
-  // improvement ticket needs the ONE shift it happened on (Mango's Date of
-  // occurrence is a required field).
-  const impwSlices: ImpwSlice[] = [];
-  const rows: KpiRow[] = S!.machines.map((m, i) => {
+  const linesByMachine: AttainmentTuple[][] = (() => {
+    const perPress = S!.machines.map((m, i): AttainmentTuple[] => {
     const all = perMachineProd[i];
-    // PMD_Production / PMD_LiveStatus now carry JobHead_PartNum on
-    // every row. Use it as the authoritative source — overrides the
-    // planning fallback so a job whose order has rolled off Epicor
-    // still resolves a swatch.
-    for (const r of all) {
-      if (r.partNumber) partNumByJob.set(r.jobNumber, r.partNumber);
-      // Production wins for partDescription too — see partDescByJob
-      // comment above. Skip blanks so we never blow away a planning seed
-      // with an empty production row (the non-canonical slots carry '').
-      if (r.partDescription) partDescByJob.set(r.jobNumber, r.partDescription);
-    }
     // Every plan line of this press in the window (see AttainmentTuple).
     // A shift with a kept plan (PMD_ShiftPlan) is judged by it — Last 24h
     // and wider periods alike, run or not: it is the plan as it stood while
@@ -1619,8 +1623,38 @@ async function compute(now = new Date()): Promise<void> {
               planCtx,
             ),
           ];
-    const lines = withStandardHours(pieceLines, hoursPerPiece, equalWeight);
-    linesByMachine[i] = lines;
+    return withStandardHours(pieceLines, hoursPerPiece, equalWeight);
+    });
+    // The shift's standby press is contingency, not commitment: where more
+    // presses were planned than the shift had operators, one press's plan
+    // is left out (core/kpi-attainment `withStandbyPress`).
+    const operators = operatorsRunningByShift(perMachineProd.flat());
+    const judged = withStandbyPress(perPress.flat(), (shiftId) => operators.get(shiftId) ?? 0);
+    let at = 0;
+    return perPress.map((own) => judged.slice(at, (at += own.length)));
+  })();
+
+  const charts = new Map<string, ChartBucket>();
+  // Every (machine, shift instance) in the window, for the Mango IMPW
+  // findings. Collected here rather than from the rendered rows because
+  // byShift rolls Day/Afternoon/Night across the whole period — an
+  // improvement ticket needs the ONE shift it happened on (Mango's Date of
+  // occurrence is a required field).
+  const impwSlices: ImpwSlice[] = [];
+  const rows: KpiRow[] = S!.machines.map((m, i) => {
+    const all = perMachineProd[i];
+    // PMD_Production / PMD_LiveStatus now carry JobHead_PartNum on
+    // every row. Use it as the authoritative source — overrides the
+    // planning fallback so a job whose order has rolled off Epicor
+    // still resolves a swatch.
+    for (const r of all) {
+      if (r.partNumber) partNumByJob.set(r.jobNumber, r.partNumber);
+      // Production wins for partDescription too — see partDescByJob
+      // comment above. Skip blanks so we never blow away a planning seed
+      // with an empty production row (the non-canonical slots carry '').
+      if (r.partDescription) partDescByJob.set(r.jobNumber, r.partDescription);
+    }
+    const lines = linesByMachine[i];
     const linesFor = (code: ShiftCode): AttainmentTuple[] =>
       lines.filter((line) => parseShiftId(line.shiftId)?.code === code);
     // A saved plan is the press's for the shift, not any one order's: it
@@ -1928,14 +1962,28 @@ type ComparisonSlice = Pick<
   | 'unscheduledOutput'
   | 'unsignedLines'
   | 'idleLines'
+  | 'standbyLines'
+  | 'standbyHrs'
   | 'savedLines'
   | 'fallbackLines'
 >;
 
 function comparisonPct(a: ComparisonSlice): number | null {
   return a.comparisonCovered === a.comparisonTotal && a.attainedHrs != null && a.expHrs != null && a.expHrs > 0
-    ? Math.round((a.attainedHrs / a.expHrs) * 100)
+    // Never past 100 %: a standby press's output only makes up what the
+    // shift's other presses fell short by, and a slice that holds the
+    // standby without the press it stood in for is capped the same way.
+    ? Math.min(100, Math.round((a.attainedHrs / a.expHrs) * 100))
     : null;
+}
+
+/** What a slice's standby presses mean for its figure, for a tooltip. */
+function standbyLine(a: Pick<ComparisonSlice, 'standbyLines' | 'standbyHrs'>): string {
+  if (!a.standbyLines) return '';
+  return ' Standby press: ' + a.standbyLines + ' plan line' + (a.standbyLines === 1 ? '' : 's')
+    + ' left out of the plan' + (S!.equalWeight ? '' : ' (' + a.standbyHrs.toFixed(1) + ' standard h)')
+    + ' — more presses were planned in the shift than it had operators, and the one that made least is taken as the standby.'
+    + ' What it made still counts, up to what the shift\'s other presses fell short by.';
 }
 
 /** Standard hours earned of those planned, for a tooltip. */
@@ -1953,7 +2001,8 @@ function floorAdherenceTitle(a: ComparisonSlice): string {
     + (a.comparisonCovered < a.comparisonTotal
       ? ' ' + (a.comparisonTotal - a.comparisonCovered) + ' of ' + a.comparisonTotal
         + ' plan lines have no known quantity or rate — no percentage until they do.'
-      : '');
+      : '')
+    + standbyLine(a);
 }
 
 function comparisonTitle(a: ComparisonSlice): string {
@@ -1979,7 +2028,8 @@ function comparisonTitle(a: ComparisonSlice): string {
           + ' ' + (a.savedLines === 1 ? 'is' : 'are')
           + ' judged by the plan kept while the shift ran (PMD_ShiftPlan) — Planning.csv may have moved '
           + (a.savedLines === 1 ? 'it' : 'them') + ' since.'
-        : '');
+        : '')
+      + standbyLine(a);
   }
   const plural = (n: number, one: string): string => n + ' ' + one + (n === 1 ? '' : 's');
   return 'Plan = the plan kept for each press-shift while it ran (PMD_ShiftPlan), credited min(Good, plan) per order;'
@@ -2006,7 +2056,8 @@ function comparisonTitle(a: ComparisonSlice): string {
       : '')
     + (a.unscheduledOutput > 0
       ? ' ' + a.unscheduledOutput + ' pcs made in shifts with nothing planned on the press — not credited.'
-      : '');
+      : '')
+    + standbyLine(a);
 }
 
 /** Output and plan come from the same signed machine-shift-job tuples. */
@@ -2032,8 +2083,13 @@ function outputCell(a: ComparisonSlice & { output: number }): string {
 }
 
 /** Beside a row's name when every plan line in it booked work nobody has
- *  signed: its 0 is "not signed yet", not "never ran". */
+ *  signed: its 0 is "not signed yet", not "never ran" — or when all it was
+ *  planned for was as a shift's standby press: its "—" is "not held to a
+ *  plan", not "nothing planned". */
 function unsignedTag(a: ComparisonSlice): string {
+  if (a.standbyLines > 0 && a.comparisonTotal === 0) {
+    return '<span class="kpi-unsigned kpi-standby" title="' + escapeHtml(standbyLine(a).trim()) + '">standby</span>';
+  }
   return a.unsignedLines > 0 && a.unsignedLines === a.comparisonTotal
     ? '<span class="kpi-unsigned" title="Booked, not signed off yet: the plan counts, nothing is credited until it is signed.">unsigned</span>'
     : '';
@@ -2318,7 +2374,7 @@ function aggCells(
     ${setupCell(a.colorHrs, a.colorStdHrs, COLOR_CHANGE_STD_HRS, 'Colour change')}
     ${setupCell(a.insertHrs, a.insertStdHrs, INSERT_CHANGE_STD_HRS, 'Insert change')}
     <td class="num ${colourOee ? oc : ''}" title="${escapeHtml(efficiencyTitle(a))}">${eff == null ? '—' : eff + '%'}</td>
-    <td class="num ${pc}"${a.comparisonTotal ? ` title="${escapeHtml(comparisonTitle(a))}"` : ''}>${planPct == null ? '—' : planPct + '%'}</td>`;
+    <td class="num ${pc}"${a.comparisonTotal ? ` title="${escapeHtml(comparisonTitle(a))}"` : a.standbyLines ? ` title="${escapeHtml(standbyLine(a).trim())}"` : ''}>${planPct == null ? '—' : planPct + '%'}</td>`;
 }
 
 /**
@@ -3705,7 +3761,8 @@ function render(): void {
     + ' The Day / Afternoon / Night rows above TOTAL are each shift across every press. A production day is 07:00 to 07:00: Day 07:00–15:00, Afternoon 15:00–23:00, Night 23:00–07:00, dated by the day it starts.</div>'
     + '<div><b>The plan of record</b> is frozen in PMD_ShiftPlan once the shift is under way and never rewritten (Planning.csv is redrawn at every export). It asks each order for its planned run hours in the shift ÷ standard hours per piece, up to the order quantity, only in the shifts its “no of shift” is crewed for. A 4-hour die change in front of an order on a different die is not asked for pieces. The plan starts from where the press stands when the shift begins: the order it was last running runs on for as long as what is left of it takes (order quantity less the good of the shifts before), and the orders behind it wait — a shift is not charged for the time the shift before it lost.'
     + ' The plan is reduced only when the shift booked more standard changeover time (die 4 h, colour or insert 30 min — the standard, not the time taken) and smoko than the plan left room for.</div>'
-    + '<div><b>Always counted:</b> a planned press that did not run scores 0 against its plan (“not run”); a shift not signed off counts its plan and earns nothing until it is signed (“unsigned”). <b>Not judged:</b> a press-shift with nothing planned. “—” means a planned quantity or a rate is not known; hover for the detail.'
+    + '<div><b>The standby press.</b> Planning loads one press more than a shift has people for, so a crew whose press or material fails has somewhere to go. Where a shift had more presses planned than operators running one, <b>one</b> press — the one that earned least, normally the one never started — is taken as the standby (“standby”): its plan is not counted. What it made still counts, up to what the shift’s other presses fell short by, so a crew that moved over keeps its output and the shift can reach 100% and not pass it. One press a shift at most: a shift two people short is short.</div>'
+    + '<div><b>Always counted:</b> a planned press that did not run scores 0 against its plan (“not run”), unless it is the shift’s standby; a shift not signed off counts its plan and earns nothing until it is signed (“unsigned”). <b>Not judged:</b> a press-shift with nothing planned. “—” means a planned quantity or a rate is not known; hover for the detail.'
     + ' Shifts from before PMD_ShiftPlan held every press use what Planning.csv still holds (Last 24h) or what their sign-off saved (wider periods). Order rows of a wider period show output only.</div>';
   app.innerHTML = `
     <div class="kpi">

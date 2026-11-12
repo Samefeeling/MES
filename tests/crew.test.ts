@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  crewOf, crewSize, firstName, floorStaffing, namesForSheet, onOvertime, operatorsOf, rosterOf, sheetPeople,
-  shiftStaffing,
+  crewOf, crewSize, firstName, floorStaffing, namesForSheet, onOvertime, operatorsOf, operatorsRunningByShift,
+  rosterOf, sheetPeople, shiftStaffing,
 } from '../src/core/crew';
 import { operatorByTuple } from '../src/core/operator-perf';
 import { rec as base } from './helpers';
@@ -212,5 +212,27 @@ describe('how many people a shift had on, overtime at half', () => {
   it('without a roster nobody is on overtime', () => {
     expect(shiftStaffing(afternoon, rosterOf())).toMatchObject({ people: 4, overtime: [] });
     expect(shiftStaffing([], roster)).toMatchObject({ people: 0, shifts: 0 });
+  });
+});
+
+describe('how many people ran a press in a shift', () => {
+  const sheet = (machineCode: string, shiftId: string, operator: string, cover = ''): ReturnType<typeof rec>[] =>
+    [0, 2, 3, 4].map((slotIndex) =>
+      rec({
+        machineCode, shiftId, jobNumber: 'J-' + machineCode, slotIndex, statusCode: 'R',
+        operator: slotIndex === 0 ? operator : '', supervisor: slotIndex === 0 ? 'Tin Maung' : '',
+        qcBy: slotIndex === 3 && cover ? cover : operator,
+      }));
+
+  it('counts the operator of each sheet once: no supervisors, nobody who only covered a break', () => {
+    const day = '2026-11-16-Day';
+    const records = [
+      ...sheet('P1', day, 'John Taylor'),
+      ...sheet('P2', day, 'Ben Wood', 'Relief Rita'), // Rita covered Ben's break
+      // John's press stopped and he moved to the standby.
+      ...sheet('S', day, 'John Taylor'),
+      ...sheet('P1', '2026-11-16-Afternoon', 'Ann Lee'),
+    ];
+    expect(operatorsRunningByShift(records)).toEqual(new Map([[day, 2], ['2026-11-16-Afternoon', 1]]));
   });
 });

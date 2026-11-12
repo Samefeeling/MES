@@ -70,6 +70,45 @@ The sections below say where each line's planned pieces come from; they are
 unchanged. PMD_Production.ScheduleAttain / SchedulePlan, saved at sign-off,
 stay in pieces (credited = ScheduleAttain × SchedulePlan).
 
+
+### The standby press
+
+Planning loads one press more than a shift has people for, so that a crew
+whose press or material fails has somewhere to go. That press is
+contingency, not commitment: four operators cannot run five presses, and a
+shift held to all five is capped at 80 % however well it runs.
+
+`withStandbyPress` (core/kpi-attainment.ts), per shift across the floor:
+
+- **When.** More presses carry a plan than there are operators running a
+  press in the shift — the operator of each signed sheet, each person once
+  (`operatorsRunningByShift`); somebody who only covered a break is not
+  counted, and each press still awaiting sign-off counts as crewed. A shift
+  with no operator on record yet is left alone.
+- **Which.** Nobody marks the standby, so it is the press that earned the
+  fewest standard hours: normally the one never started; where a crew moved
+  over mid-shift, the one it left or the one it went to, whichever made
+  less. A press awaiting sign-off, or one that ran on a plan nobody can
+  price, is never picked.
+- **One a shift, never more.** Planning loads one. A shift two people short
+  loses the second press's plan in full.
+- **What it does.** The standby's plan leaves the comparison ("standby" tag,
+  no figure of its own). What it made still counts, up to what the shift's
+  other presses fell short by — so a crew that moved over keeps its output,
+  and the shift reaches 100 % and never passes it. Every level adds up the
+  same lines: press, shift row, category, TOTAL.
+
+Example — five presses planned at 7 standard hours, four operators. P1
+earns 2 h and stops; its operator earns 5 h on the standby; the other three
+earn 7 h each. Held to five presses: 28 ÷ 35 = 80 %. With the standby rule:
+(21 + 5 + 2) ÷ 28 = 100 %. Had nobody moved: 21 ÷ 28 = 75 %.
+
+Limits: an absent operator and a standby left idle look the same in the
+data — one press is let off either way. People present with no sheet (no
+press to run, no material) are not on record and cannot be counted. Chosen
+with Production, 13 Nov 2026: by head-count, one press a shift, both
+presses' output counted to 100 %.
+
 ## Schedule Adherence (Last 24h)
 
 For each finished shift and each order Planning.csv has on the press in it:

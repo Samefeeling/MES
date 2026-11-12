@@ -268,6 +268,11 @@ export interface AttainmentTuple {
   plannedHrs?: number | null;
   /** Standard hours earned: plannedHrs × credited ÷ planned. */
   creditedHrs?: number;
+  /** The press was the shift's standby (`withStandbyPress`): more presses
+   *  were planned than there were operators to run them. Its plan is outside
+   *  the comparison; what it made still counts, up to what the shift's other
+   *  presses fell short by — `credited` / `creditedHrs` hold that share. */
+  standby?: boolean;
 }
 
 /**
@@ -287,6 +292,13 @@ export function attainmentOfTuples(tuples: ReadonlyArray<AttainmentTuple>): KpiA
   let creditedHrs = 0;
   for (const tuple of tuples) {
     if (tuple.source === 'unscheduled') continue;
+    if (tuple.standby) {
+      // Not judged: no plan to hold it to. What it earned in place of a
+      // press that fell short is in the numerator all the same.
+      actual += tuple.credited;
+      creditedHrs += tuple.creditedHrs ?? 0;
+      continue;
+    }
     total++;
     if (tuple.planned == null) continue;
     if (inHours && tuple.plannedHrs == null) continue;
@@ -328,6 +340,89 @@ export function withStandardHours(
       if (bounds) hours = Math.min(hours, (bounds.end.getTime() - bounds.start.getTime()) / 3_600_000);
     }
     return { ...line, plannedHrs: hours, creditedHrs: (hours * line.credited) / line.planned };
+  });
+}
+
+/**
+ * The standby press of each shift, taken out of the plan.
+ *
+ * Planning loads one press more than the shift has people for, so that a
+ * crew whose press or material fails has somewhere to go. That press is
+ * contingency, not commitment: a shift of four operators cannot run five
+ * presses, and holding it to five caps a perfect shift at 80 %.
+ *
+ * Per shift (a date and a shift, the whole floor): when more presses carry
+ * a plan than there are operators on the shift (`operatorsOn`, plus one for
+ * each press still awaiting sign-off, whose operator is not on record yet),
+ * ONE press is the standby — never more: planning loads one, and a shift
+ * two people short is short. Nobody marks which, so it is the press that
+ * earned least: normally the one never started; where a crew moved over
+ * mid-shift, the one it left or the one it went to, whichever made less.
+ *
+ * The standby's plan leaves the comparison. What it made stays earned, up
+ * to what the other presses of the shift fell short by — the output that
+ * replaced theirs — so the shift can reach 100 % and never pass it. A shift
+ * nobody has signed yet (no operator on record) is left as it is.
+ */
+export function withStandbyPress(
+  lines: ReadonlyArray<AttainmentTuple>,
+  operatorsOn: (shiftId: string) => number,
+): AttainmentTuple[] {
+  const inHours = lines.some((line) => line.source !== 'unscheduled' && line.plannedHrs !== undefined);
+  const plan = (line: AttainmentTuple): number => (inHours ? line.plannedHrs ?? 0 : line.planned ?? 0);
+  const earned = (line: AttainmentTuple): number => (inHours ? line.creditedHrs ?? 0 : line.credited);
+  const pressKey = (line: AttainmentTuple): string => line.machineCode.trim().toUpperCase();
+
+  interface Press {
+    key: string; planned: boolean; plan: number; earned: number; good: number; unsigned: boolean;
+    /** A line of it has no known plan or rate: what it earned is not known. */
+    unknown: boolean;
+  }
+  const byShift = new Map<string, Map<string, Press>>();
+  for (const line of lines) {
+    if (line.source === 'unscheduled') continue;
+    let presses = byShift.get(line.shiftId);
+    if (!presses) byShift.set(line.shiftId, (presses = new Map()));
+    const key = pressKey(line);
+    let press = presses.get(key);
+    if (!press) presses.set(key, (press = { key, planned: false, plan: 0, earned: 0, good: 0, unsigned: false, unknown: false }));
+    // A plan whose rate nobody knows is a plan all the same.
+    if ((line.planned ?? 0) > 0 || line.planned == null) press.planned = true;
+    press.plan += plan(line);
+    press.earned += earned(line);
+    press.good += line.good;
+    if (line.unsigned) press.unsigned = true;
+    if (line.planned == null || (inHours && line.plannedHrs == null)) press.unknown = true;
+  }
+
+  /** Shift → its standby press and the share of that press's earnings kept. */
+  const standby = new Map<string, { key: string; share: number }>();
+  for (const [shiftId, presses] of byShift) {
+    const planned = [...presses.values()].filter((press) => press.planned);
+    const operators = operatorsOn(shiftId);
+    if (operators < 1) continue;
+    const crewed = operators + planned.filter((press) => press.unsigned).length;
+    if (planned.length <= crewed) continue;
+    const [spare] = planned
+      // Not a press that ran on a plan nobody can price: its place in the
+      // order is not known.
+      .filter((press) => !press.unsigned && !(press.unknown && press.good > 0))
+      .sort((a, b) => a.earned - b.earned || a.good - b.good || a.plan - b.plan || a.key.localeCompare(b.key));
+    if (!spare) continue;
+    const shortfall = planned.reduce((sum, press) => (press === spare ? sum : sum + Math.max(0, press.plan - press.earned)), 0);
+    standby.set(shiftId, { key: spare.key, share: spare.earned > 0 ? Math.min(1, shortfall / spare.earned) : 0 });
+  }
+  if (!standby.size) return [...lines];
+
+  return lines.map((line) => {
+    const spare = standby.get(line.shiftId);
+    if (!spare || line.source === 'unscheduled' || pressKey(line) !== spare.key) return line;
+    return {
+      ...line,
+      standby: true,
+      credited: Math.round(line.credited * spare.share),
+      ...(line.creditedHrs !== undefined ? { creditedHrs: line.creditedHrs * spare.share } : {}),
+    };
   });
 }
 

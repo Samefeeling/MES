@@ -105,6 +105,25 @@ export function operatorsOf(records: ReadonlyArray<ProductionRecord>): string[] 
 }
 
 /**
+ * How many people ran a press in each shift (a date and a shift): the
+ * operator of each sheet, each person once. Somebody who only covered a
+ * break ran no press of their own and is not one of them; an operator who
+ * moved from one press to another in the shift is one person.
+ */
+export function operatorsRunningByShift(records: ReadonlyArray<ProductionRecord>): Map<string, number> {
+  const names = new Map<string, Set<string>>();
+  for (const sheet of sheets(records)) {
+    const [lead] = sheetPeople(sheet).operators;
+    if (!lead) continue;
+    const shiftId = sheet[0].shiftId;
+    const seen = names.get(shiftId);
+    if (seen) seen.add(lead.toLowerCase());
+    else names.set(shiftId, new Set([lead.toLowerCase()]));
+  }
+  return new Map([...names].map(([shiftId, seen]) => [shiftId, seen.size]));
+}
+
+/**
  * Everybody on the records: the operators and supervisors of their sheets
  * (`sheetPeople`). A supervisor signs every press of the shift and runs
  * none, so they belong to the shift and the floor, not to a press.
