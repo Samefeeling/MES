@@ -85,7 +85,7 @@ import { clearSupervisor, isSupervisor } from './supervisor-auth';
 import { isIpadDevice } from '../core/device';
 import { confirmTuple, isTupleConfirmed, pressesRunningJobElsewhere } from '../core/confirm';
 import { rejectSlotBlock } from '../core/rejectslot';
-import { SUPERVISOR_QC_SLOTS, namesForSheet } from '../core/crew';
+import { SUPERVISOR_QC_SLOTS, namesForSheet, shiftTagMatches } from '../core/crew';
 
 /**
  * Device-class write rule (replaces the old per-device OwnerDevice claim
@@ -2096,13 +2096,10 @@ export function rosterNames(
   shiftCode: ShiftCode,
   alwaysInclude: string,
 ): string[] {
-  const want = shiftCode.trim().toLowerCase();
   const names: string[] = [];
   const seen = new Set<string>();
   for (const o of roster) {
-    const sh = (o.shift ?? '').trim().toLowerCase();
-    const match = sh === '' || sh === want || want.startsWith(sh) || sh.startsWith(want);
-    if (!match) continue;
+    if (!shiftTagMatches(o.shift, shiftCode)) continue;
     if (seen.has(o.operatorName)) continue;
     seen.add(o.operatorName);
     names.push(o.operatorName);

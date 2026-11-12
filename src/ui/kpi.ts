@@ -35,7 +35,10 @@ import {
   type KpiAttainment,
   type SavedShiftPlan,
 } from '../core/kpi-attainment';
-import { crewOf, crewSize, firstName, operatorsOf, type Crew } from '../core/crew';
+import {
+  OVERTIME_SHARE, crewSize, firstName, floorStaffing, operatorsOf, rosterOf, shiftStaffing,
+  type Roster, type Staffing,
+} from '../core/crew';
 import {
   DEFAULT_KPI_THRESHOLDS,
   loadKpiThresholds,
@@ -440,8 +443,11 @@ interface KpiState {
    *  shift saved only its %, so every shift counts once (savedScheduleTuples). */
   equalWeight: boolean;
   /** Everybody on the signed sheets of the period, and by shift. */
-  crew: Crew;
-  crewByShift: Record<ShiftCode, Crew>;
+  /** Who is rostered on which shift (the People lists) — what tells
+   *  somebody on overtime from the shift's own people. */
+  roster: Roster;
+  staff: Staffing;
+  staffByShift: Record<ShiftCode, Staffing>;
   /** Yes / No already recorded against a finding, by its key. */
   impwDecisions: Map<string, ImpwDecision>;
   /** The plant's answers to Mango's placement fields and option lists,
@@ -1759,12 +1765,10 @@ async function compute(now = new Date()): Promise<void> {
   // they sign every press and run none, so they are counted by shift and
   // for the floor, not against a press.
   const everyRecord = perMachineProd.flat();
-  S!.crew = crewOf(everyRecord);
-  S!.crewByShift = {
-    Day: crewOf(everyRecord.filter((r) => parseShiftId(r.shiftId)?.code === 'Day')),
-    Afternoon: crewOf(everyRecord.filter((r) => parseShiftId(r.shiftId)?.code === 'Afternoon')),
-    Night: crewOf(everyRecord.filter((r) => parseShiftId(r.shiftId)?.code === 'Night')),
-  };
+  const staffOf = (code: ShiftCode): Staffing =>
+    shiftStaffing(everyRecord.filter((r) => parseShiftId(r.shiftId)?.code === code), S!.roster);
+  S!.staffByShift = { Day: staffOf('Day'), Afternoon: staffOf('Afternoon'), Night: staffOf('Night') };
+  S!.staff = floorStaffing(everyRecord, SHIFT_ORDER.map((code) => S!.staffByShift[code]));
   // Judged against the SAME thresholds the table paints with, so a Mango
   // ticket can never claim a shift missed a target the screen shows as met.
   S!.impwSlices = impwSlices;
@@ -2179,15 +2183,37 @@ function operatorCell(names?: ReadonlyArray<string>): string {
     + escapeHtml(names.map(firstName).join(', ')) + '</td>';
 }
 
+const NO_STAFF: Staffing = { crew: { operators: [], supervisors: [] }, overtime: [], shifts: 0, people: 0 };
+
+/** 12, 12.5, 11.9 — people, to one decimal where it is not a whole number. */
+function peopleCount(n: number): string {
+  return String(+n.toFixed(1));
+}
+
 /** Operator column of a shift or floor total: how many people were on —
- *  operators and the supervisors who signed — and who, on hover. */
-function crewCell(crew: Crew): string {
-  const n = crewSize(crew);
-  if (!n) return '<td class="kpi-op-cell muted">—</td>';
-  const title = n + (n === 1 ? ' person' : ' people') + ' on shift.'
+ *  operators and the supervisors who signed, somebody on overtime at half
+ *  (`OVERTIME_SHARE`) — and who, on hover. `floor` = the three shifts
+ *  added up; otherwise one kind of shift, averaged over its days. */
+function crewCell(staff: Staffing, floor = false): string {
+  const { crew } = staff;
+  const names = crewSize(crew);
+  if (!names) return '<td class="kpi-op-cell muted">—</td>';
+  const shown = peopleCount(staff.people);
+  const days = floor ? Math.max(...SHIFT_ORDER.map((code) => S!.staffByShift[code].shifts)) : staff.shifts;
+  const lead = floor
+    ? shown + ' people: Day + Afternoon + Night added up' + (days > 1 ? ', each averaged over its shifts' : '') + '.'
+    : days > 1
+      ? shown + ' people a shift on average, over ' + days + ' shifts.'
+      : shown + (staff.people === 1 ? ' person' : ' people') + ' on shift.';
+  const overtime = staff.overtime.length
+    ? ' On overtime (not rostered on the shift, counted as ' + OVERTIME_SHARE + '): ' + staff.overtime.join(', ') + '.'
+    : '';
+  const title = lead
+    + (days > 1 ? ' Seen in the period —' : '')
     + (crew.operators.length ? ' Operators (' + crew.operators.length + '): ' + crew.operators.join(', ') + '.' : '')
-    + (crew.supervisors.length ? ' Supervisors (' + crew.supervisors.length + '): ' + crew.supervisors.join(', ') + '.' : '');
-  return '<td class="kpi-op-cell kpi-op-count" title="' + escapeHtml(title) + '">' + n + '</td>';
+    + (crew.supervisors.length ? ' Supervisors (' + crew.supervisors.length + '): ' + crew.supervisors.join(', ') + '.' : '')
+    + overtime;
+  return '<td class="kpi-op-cell kpi-op-count" title="' + escapeHtml(title) + '">' + shown + '</td>';
 }
 
 function colorCell(c?: ColorTag): string {
@@ -3404,7 +3430,7 @@ function render(): void {
         const agg: ShiftAgg = { ...sum, yieldPct: pieces > 0 ? +((sum.output / pieces) * 100).toFixed(1) : 100 };
         return `<tr class="kpi-cat-total kpi-shift-total${i === 0 ? ' kpi-cat-first' : ''}">
           <th>${code}</th>
-          ${crewCell(S!.crewByShift[code])}
+          ${crewCell(S!.staffByShift[code])}
           ${colorCell()}
           ${aggCells(agg)}
           ${emptyHandoverCell()}
@@ -3681,7 +3707,7 @@ function render(): void {
             <th class="kpi-machine-head">Machine
               <button type="button" class="kpi-toggle kpi-toggle-all" data-toggle-all-shifts title="Toggle shift breakdown on every machine">${allShiftsGlyph}</button>
               <button type="button" class="kpi-toggle kpi-toggle-all kpi-orders-toggle" data-toggle-all-orders title="Toggle per-order rollup on every machine">${allOrdersGlyph}</button>
-            </th><th class="kpi-op-head" title="Who ran the press (first names — hover for full names): the operator named on the signed sheet, then anybody else who signed one of its operator Quality Checks, e.g. covering a break. Where the named operator signed none of them and somebody else did, only the people who signed are shown. Day / Afternoon / Night and TOTAL count everybody on shift, each person once, the supervisors named on the sheets or signing them off included; somebody on overtime is counted in each shift they worked.">Operator</th><th class="kpi-color-head">Color</th>
+            </th><th class="kpi-op-head" title="Who ran the press (first names — hover for full names): the operator named on the signed sheet, then anybody else who signed one of its operator Quality Checks, e.g. covering a break. Where the named operator signed none of them and somebody else did, only the people who signed are shown. Day / Afternoon / Night count everybody on shift, each person once, the supervisors named on the sheets or signing them off included. Somebody on overtime — on a shift the People list does not roster them on — counts as half a person there (4 of the shift's 8 hours). Over several days the figure is the average per shift. TOTAL adds the three shifts up.">Operator</th><th class="kpi-color-head">Color</th>
             <th>Output</th><th>Reject</th><th>Yield%</th>
             <th>Run h</th><th>Down h</th>
             <th title="S — Startup / warm-up">Startup h</th>
@@ -3701,7 +3727,7 @@ function render(): void {
                   const totCls = planColourClass(totPct, S!.thresholds);
                   return `<tfoot><tr class="kpi-total">
                     <th>TOTAL</th>
-                    ${crewCell(S!.crew)}
+                    ${crewCell(S!.staff, true)}
                     ${colorCell()}
                     ${outputCell(tot)}
                     ${rejectCell(tot.reject, tot.shifts, 'FLOOR')}
@@ -4304,6 +4330,14 @@ export async function renderKpi(dal: PmdDataLayer, assemblyDal?: AssemblyDataLay
   dalRef = dal;
   document.body.className = 'shift-day';
   const machines = (await dal.listMachines()).sort((a, b) => a.sequence - b.sequence);
+  // The People lists say who is rostered on which shift. Without them
+  // nobody reads as overtime and everybody counts as one.
+  const roster = await Promise.all([dal.listOperators(), dal.listSupervisors()])
+    .then(([operators, supervisors]) => rosterOf(operators, supervisors))
+    .catch((err) => {
+      console.warn('[kpi] roster not loaded — overtime is not told apart', err);
+      return rosterOf();
+    });
   if (mount !== kpiMount) return;
   // Default custom range: last 7 calendar days, so switching to the
   // Custom tab and pressing nothing still shows a meaningful window.
@@ -4351,12 +4385,9 @@ export async function renderKpi(dal: PmdDataLayer, assemblyDal?: AssemblyDataLay
       total: null,
     },
     equalWeight: false,
-    crew: { operators: [], supervisors: [] },
-    crewByShift: {
-      Day: { operators: [], supervisors: [] },
-      Afternoon: { operators: [], supervisors: [] },
-      Night: { operators: [], supervisors: [] },
-    },
+    roster,
+    staff: NO_STAFF,
+    staffByShift: { Day: NO_STAFF, Afternoon: NO_STAFF, Night: NO_STAFF },
     impwDecisions: loadImpwDecisions(),
     impwSite: loadImpwSite(),
     impwOptions: null,

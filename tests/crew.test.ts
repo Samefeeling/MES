@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { crewOf, crewSize, firstName, namesForSheet, operatorsOf, sheetPeople } from '../src/core/crew';
+import {
+  crewOf, crewSize, firstName, floorStaffing, namesForSheet, onOvertime, operatorsOf, rosterOf, sheetPeople,
+  shiftStaffing,
+} from '../src/core/crew';
 import { operatorByTuple } from '../src/core/operator-perf';
 import { rec as base } from './helpers';
 import type { ProductionRecord } from '../src/types';
@@ -146,3 +149,68 @@ describe('the names a sheet opens with', () => {
   });
 });
 
+describe('how many people a shift had on, overtime at half', () => {
+  // People list: John and Ben run presses on Day and Afternoon; Tin Maung
+  // supervises Day, Jean-Michel the Afternoon; Sam is on no shift's list.
+  const roster = rosterOf(
+    [
+      { operatorName: 'John Taylor', shift: 'Day' },
+      { operatorName: 'Ben Wood', shift: 'Afternoon' },
+      { operatorName: 'Sam Untagged', shift: '' },
+    ],
+    [
+      { operatorName: 'Tin Maung', shift: 'Day' },
+      { operatorName: 'Jean-Michel Thomas', shift: 'Afternoon' },
+    ],
+  );
+  const sheet = (shiftId: string, operator: string, supervisor: string, machineCode = 'HStamp'): ReturnType<typeof rec>[] =>
+    [0, 1, 2, 3].map((slotIndex) =>
+      rec({
+        machineCode, shiftId, jobNumber: 'SFM508005', slotIndex, statusCode: 'R',
+        operator: slotIndex === 0 ? operator : '', supervisor: slotIndex === 0 ? supervisor : '',
+        qcBy: slotIndex === 1 ? '' : operator,
+      }));
+  const day = sheet('2026-11-12-Day', 'John Taylor', 'Tin Maung');
+  // Tin Maung stays on into the Afternoon with its own supervisor.
+  const afternoon = [
+    ...sheet('2026-11-12-Afternoon', 'Ben Wood', 'Tin Maung'),
+    ...sheet('2026-11-12-Afternoon', 'Sam Untagged', 'Jean-Michel Thomas', '550T'),
+  ];
+
+  it('tells overtime by the roster: a tag for another shift, and none for this one', () => {
+    expect(onOvertime(roster, 'Tin Maung', 'Afternoon')).toBe(true);
+    expect(onOvertime(roster, 'tin  maung', 'Day')).toBe(false);
+    expect(onOvertime(roster, 'Sam Untagged', 'Night')).toBe(false); // no tag: every shift
+    expect(onOvertime(roster, 'Somebody New', 'Night')).toBe(false); // not on the list
+    // A supervisor listed for two shifts is at home on both.
+    const both = rosterOf([{ operatorName: 'Tin Maung', shift: 'Day' }, { operatorName: 'Tin Maung', shift: 'Afternoon Shift' }]);
+    expect(onOvertime(both, 'Tin Maung', 'Afternoon')).toBe(false);
+    expect(onOvertime(both, 'Tin Maung', 'Night')).toBe(true);
+  });
+
+  it('counts the shift\'s own people as 1 and somebody on overtime as 0.5', () => {
+    expect(shiftStaffing(day, roster)).toMatchObject({ people: 2, shifts: 1, overtime: [] });
+    // Ben, Sam, Jean-Michel = 3, Tin Maung on overtime = 0.5.
+    expect(shiftStaffing(afternoon, roster)).toMatchObject({ people: 3.5, shifts: 1, overtime: ['Tin Maung'] });
+    expect(shiftStaffing(afternoon, roster).crew.supervisors).toEqual(['Jean-Michel Thomas', 'Tin Maung']);
+  });
+
+  it('adds the shifts up for the floor: 1.5 for the person who did both, named once', () => {
+    const shifts = [shiftStaffing(day, roster), shiftStaffing(afternoon, roster)];
+    const floor = floorStaffing([...day, ...afternoon], shifts);
+    expect(floor.people).toBe(5.5);
+    expect(floor.overtime).toEqual(['Tin Maung']);
+    expect([...floor.crew.operators, ...floor.crew.supervisors]).toHaveLength(5);
+  });
+
+  it('averages a kind of shift over the days it ran', () => {
+    // Two Afternoons: 3.5 people, then Ben alone under Jean-Michel = 2.
+    const next = sheet('2026-11-13-Afternoon', 'Ben Wood', 'Jean-Michel Thomas');
+    expect(shiftStaffing([...afternoon, ...next], roster)).toMatchObject({ people: 2.75, shifts: 2 });
+  });
+
+  it('without a roster nobody is on overtime', () => {
+    expect(shiftStaffing(afternoon, rosterOf())).toMatchObject({ people: 4, overtime: [] });
+    expect(shiftStaffing([], roster)).toMatchObject({ people: 0, shifts: 0 });
+  });
+});

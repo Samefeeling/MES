@@ -407,6 +407,17 @@
   "Other shifts — overtime" (`otherShiftNames`). With the names no longer
   carried across a shift change, somebody rostered on Day and staying on
   into the Afternoon could otherwise not put their own name on its sheet.
+- Overtime in the head-counts (`shiftStaffing`, `floorStaffing`,
+  core/crew.ts): on the KPI page's Day / Afternoon / Night rows a person on
+  a shift the People list does not roster them on counts as 0.5 (4 of the
+  shift's 8 hours — a FIXED share, Production's choice, 13 Nov 2026: the
+  sheets do not record how long anybody was in). Over several days a row is
+  the average per shift worked; TOTAL adds the three rows, so a person who
+  did their own shift and stayed on is 1.5 there, named once.
+  Limits: it rests on PMD_Operator.Shift being current — a crew whose tag
+  is out of date (rotation, a swapped shift) reads as overtime and counts
+  half. Somebody untagged, or not on the list, always counts 1. Overtime of
+  2 h or of a whole shift counts 0.5 all the same.
 - Break cover: the Quality Checks are signed by whoever is running the
   press, so a sheet can have more than one signer. All of them show on the
   press and order rows (named Operator first); the shift and floor
