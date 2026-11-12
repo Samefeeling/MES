@@ -384,3 +384,27 @@
   time in SharePoint against when the planning sync ran.
 - Rows already kept are never rewritten: 12 Nov's figures stay as they are.
 
+## A shift recorded under the crew of the shift before (fixed)
+
+- Symptom (HStamp, 12 Nov 2026): the Afternoon sheet named John Taylor and
+  Tin Maung — the Day's operator and supervisor — while every Quality Check
+  on it was signed by the Afternoon operator. The KPI page showed the Day's
+  people in the Afternoon.
+- Cause: on the Operator page the names of a sheet not yet confirmed are
+  only staged, and the staged names survived a change of shift. A crew that
+  tapped ✅ Confirm without re-picking was recorded as the crew it relieved.
+- Fix, capture (`namesForSheet`, core/crew.ts): staged names carry to the
+  next order on the same press in the same shift only; a new shift or
+  another press starts blank, and ✅ Confirm then asks for both.
+- Fix, reading old sheets (`sheetPeople`): where the named Operator signed
+  none of the operator Quality Checks and somebody else did, the signers are
+  the operators and the Supervisor named beside the leftover is dropped. Used
+  by the KPI Operator column, the shift head-counts and the per-operator
+  tables. PMD_Production itself is not rewritten — a supervisor can still
+  correct a sheet by unlocking it.
+- Limit: a sheet with a leftover name and NO Quality Check signed cannot be
+  told from a correct one. And an operator who never signs his own checks,
+  on a press where somebody else signs all of them, reads as a leftover.
+- A sheet's supervisor is the one it names; the sign-off name is used only
+  when it names none (a late sign-off is by another shift's supervisor).
+

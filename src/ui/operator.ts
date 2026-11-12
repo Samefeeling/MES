@@ -85,6 +85,7 @@ import { clearSupervisor, isSupervisor } from './supervisor-auth';
 import { isIpadDevice } from '../core/device';
 import { confirmTuple, isTupleConfirmed, pressesRunningJobElsewhere } from '../core/confirm';
 import { rejectSlotBlock } from '../core/rejectslot';
+import { SUPERVISOR_QC_SLOTS, namesForSheet } from '../core/crew';
 
 /**
  * Device-class write rule (replaces the old per-device OwnerDevice claim
@@ -124,6 +125,11 @@ interface OpState {
   bdCodes: Map<string, BdCode>;
   selOperator: string;
   selSupervisor: string;
+  /** The press and shift ("machine|shiftId") the names above were picked
+   *  or loaded for. Names staged for a sheet not yet confirmed carry from
+   *  one order to the next on the same press in the same shift — the same
+   *  crew — and never into another shift or onto another press. */
+  namesFor: string;
   /** 1 = single-shift detail (editable); 2 = today's 3 shifts;
    *  3 = past 7 days; 4 = past 30 days. Levels 2-4 are read-only summaries. */
   viewLevel: number;
@@ -1692,9 +1698,22 @@ function hydrateOperatorSupervisor(): void {
   // Unconfirmed tuple: names are STAGED locally (nothing written yet, so
   // canonical is empty) — keep whatever the worker just picked so the
   // reload between pick and ✅ Confirm doesn't blank the dropdowns.
-  if (needsConfirm() && !c?.operator && !c?.supervisor) return;
-  S!.selOperator = c?.operator ?? '';
-  S!.selSupervisor = c?.supervisor ?? '';
+  //
+  // Only for the press and shift they were picked on. The next shift's
+  // sheet starts with nobody named: left showing the crew before it, it was
+  // confirmed as it stood and the Afternoon was recorded under the Day's
+  // operator and supervisor (hot-stamp press, 12 Nov 2026).
+  const here = `${S!.mc}|${sid()}`;
+  const names = namesForSheet({
+    here,
+    pickedFor: S!.namesFor,
+    unconfirmed: needsConfirm() && !c?.operator && !c?.supervisor,
+    picked: { operator: S!.selOperator, supervisor: S!.selSupervisor },
+    recorded: c,
+  });
+  S!.selOperator = names.operator;
+  S!.selSupervisor = names.supervisor;
+  S!.namesFor = here;
 }
 
 /**
@@ -2314,7 +2333,6 @@ export function initials(name: string): string {
  * 05:30) because every shift counts slots from 0 at its start.
  * Operators still do a QC every other slot.
  */
-const SUPERVISOR_QC_SLOTS = new Set([1, 7, 13]);
 
 /** Whose turn is it to QC this slot — supervisor at the 3 cadence slots
  *  per shift, operator on every other slot. */
@@ -3406,6 +3424,7 @@ function onMetaChange(el: HTMLElement): void {
       break;
     case 'operator':
       S!.selOperator = val;
+      S!.namesFor = `${S!.mc}|${sid()}`;
       saveView();
       // Pre-confirm the name is only STAGED — the confirm tap writes it.
       // Writing here would recreate the junk the confirm flow prevents.
@@ -3419,6 +3438,7 @@ function onMetaChange(el: HTMLElement): void {
       break;
     case 'supervisor':
       S!.selSupervisor = val;
+      S!.namesFor = `${S!.mc}|${sid()}`;
       saveView();
       if (needsConfirm()) {
         render();
@@ -4913,6 +4933,8 @@ export async function renderOperator(
     bdCodes,
     selOperator,
     selSupervisor,
+    // Names restored with a saved view belong to that view's press and shift.
+    namesFor: selOperator || selSupervisor ? `${startMc}|${buildShiftId(viewDate, shiftCode)}` : '',
     viewLevel: 1,
     jobTotalGood: 0,
     unsignedEarlier: [],

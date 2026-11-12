@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { crewOf, crewSize, firstName, operatorsOf } from '../src/core/crew';
+import { crewOf, crewSize, firstName, namesForSheet, operatorsOf, sheetPeople } from '../src/core/crew';
+import { operatorByTuple } from '../src/core/operator-perf';
 import { rec as base } from './helpers';
 import type { ProductionRecord } from '../src/types';
 
@@ -44,3 +45,91 @@ describe('who was on shift', () => {
     expect(crewSize(crew)).toBe(2);
   });
 });
+
+describe('a sheet confirmed under the names of the shift before', () => {
+  // Hot-stamp press, 12 Nov 2026. The Day sheet names John Taylor and Tin
+  // Maung. The Afternoon sheet was confirmed without re-picking, so it names
+  // them too — and every Quality Check on it is signed by Ben Wood.
+  const sheet = (shiftId: string, signer: string, timeline: string): ReturnType<typeof rec>[] =>
+    [...timeline].map((statusCode, slotIndex) =>
+      rec({
+        machineCode: 'HStamp', shiftId, jobNumber: 'SFM508005', slotIndex,
+        statusCode: statusCode as 'R' | 'M',
+        operator: slotIndex === 0 ? 'John Taylor' : '',
+        supervisor: slotIndex === 0 ? 'Tin Maung' : '',
+        qcBy: statusCode === 'R' ? signer : '',
+        locked: true, lockedBy: 'Jean-Michel Thomas',
+      }));
+  const day = sheet('2026-11-12-Day', 'John Taylor', 'MMMMMMMMMMMRRRMR');
+  const afternoon = sheet('2026-11-12-Afternoon', 'Ben Wood', 'RRRRRRMRRRRRRMRR');
+
+  it('goes by who signed the operator checks when the named operator signed none', () => {
+    expect(sheetPeople(afternoon)).toEqual({ operators: ['Ben Wood'], supervisors: [], leftover: true });
+    expect(operatorsOf(afternoon)).toEqual(['Ben Wood']);
+    expect([...operatorByTuple(afternoon).values()]).toEqual(['Ben Wood']);
+  });
+
+  it('keeps the named crew where the operator signed his own checks', () => {
+    expect(sheetPeople(day)).toEqual({ operators: ['John Taylor'], supervisors: ['Tin Maung'], leftover: false });
+  });
+
+  it('so the Day\'s people are in the Day only', () => {
+    const other = rec({
+      machineCode: '1600T', shiftId: '2026-11-12-Afternoon', jobNumber: 'X', slotIndex: 0, statusCode: 'R',
+      operator: 'Heng Ong', supervisor: 'Jean-Michel Thomas',
+    });
+    expect(crewOf([...afternoon, other])).toEqual({
+      operators: ['Ben Wood', 'Heng Ong'],
+      supervisors: ['Jean-Michel Thomas'],
+    });
+    expect(crewOf(day)).toEqual({ operators: ['John Taylor'], supervisors: ['Tin Maung'] });
+  });
+
+  it('keeps the named operator when nobody signed, or when he signed some of them', () => {
+    const unsigned = afternoon.map((r) => ({ ...r, qcBy: '' }));
+    expect(sheetPeople(unsigned).operators).toEqual(['John Taylor']);
+    const shared = afternoon.map((r) => ({ ...r, qcBy: r.slotIndex === 2 ? 'John Taylor' : r.qcBy }));
+    expect(sheetPeople(shared)).toMatchObject({ operators: ['John Taylor'], leftover: false });
+  });
+
+  it('the supervisor\'s own check slots say nothing about the operator', () => {
+    // Only half-hours 1, 7 and 13 signed, by the supervisor: no contradiction.
+    const supOnly = afternoon.map((r) => ({ ...r, qcBy: [1, 7].includes(r.slotIndex) ? 'Jean-Michel Thomas' : '' }));
+    expect(sheetPeople(supOnly)).toMatchObject({ operators: ['John Taylor'], leftover: false });
+  });
+
+  it('a sheet naming no supervisor falls back to who signed it off', () => {
+    const noSup = day.map((r) => ({ ...r, supervisor: '' }));
+    expect(sheetPeople(noSup).supervisors).toEqual(['Jean-Michel Thomas']);
+  });
+});
+
+describe('the names a sheet opens with', () => {
+  const picked = { operator: 'John Taylor', supervisor: 'Tin Maung' };
+
+  it('a new shift starts with nobody named', () => {
+    expect(namesForSheet({
+      here: 'HStamp|2026-11-12-Afternoon', pickedFor: 'HStamp|2026-11-12-Day', unconfirmed: true, picked,
+    })).toEqual({ operator: '', supervisor: '' });
+  });
+
+  it('another press starts with nobody named', () => {
+    expect(namesForSheet({
+      here: '1600T|2026-11-12-Day', pickedFor: 'HStamp|2026-11-12-Day', unconfirmed: true, picked,
+    })).toEqual({ operator: '', supervisor: '' });
+  });
+
+  it('the next order on the same press in the same shift keeps the crew', () => {
+    expect(namesForSheet({
+      here: 'HStamp|2026-11-12-Day', pickedFor: 'HStamp|2026-11-12-Day', unconfirmed: true, picked,
+    })).toEqual(picked);
+  });
+
+  it('a sheet with names recorded shows those', () => {
+    expect(namesForSheet({
+      here: 'HStamp|2026-11-12-Day', pickedFor: 'HStamp|2026-11-12-Day', unconfirmed: false, picked,
+      recorded: { operator: 'Ben Wood', supervisor: 'Jean-Michel Thomas' },
+    })).toEqual({ operator: 'Ben Wood', supervisor: 'Jean-Michel Thomas' });
+  });
+});
+

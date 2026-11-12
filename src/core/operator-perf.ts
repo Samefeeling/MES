@@ -1,3 +1,4 @@
+import { sheetPeople } from './crew';
 import type { ProductionRecord, StatusCode } from '../types';
 import { collectChangeoverEvents } from './changeover';
 import { aggregate, type Kpi } from './metrics';
@@ -76,16 +77,21 @@ export interface OperatorPerf {
 const tupleKey = (r: ProductionRecord): string =>
   `${r.machineCode.trim().toUpperCase()}|${r.shiftId}|${r.jobNumber.trim().toUpperCase()}`;
 
-const cleanName = (s: string | undefined): string => (s ?? '').trim().replace(/\s+/g, ' ');
-
-/** Operator per (press, shift, order), read off its canonical row. */
+/** Operator per (press, shift, order): the one its sheet names — or, where
+ *  that name is a leftover from the shift before, whoever signed most of its
+ *  operator Quality Checks (core/crew `sheetPeople`). */
 export function operatorByTuple(records: readonly ProductionRecord[]): Map<string, string> {
-  const out = new Map<string, string>();
+  const sheets = new Map<string, ProductionRecord[]>();
   for (const r of records) {
-    const name = cleanName(r.operator);
-    if (!name) continue;
     const k = tupleKey(r);
-    if (r.slotIndex === 0 || !out.has(k)) out.set(k, name);
+    const sheet = sheets.get(k);
+    if (sheet) sheet.push(r);
+    else sheets.set(k, [r]);
+  }
+  const out = new Map<string, string>();
+  for (const [k, sheet] of sheets) {
+    const name = sheetPeople(sheet).operators[0];
+    if (name) out.set(k, name);
   }
   return out;
 }
