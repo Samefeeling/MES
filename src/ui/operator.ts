@@ -2111,14 +2111,31 @@ export function rosterNames(
   return names;
 }
 
-function selOpts(values: string[], selected: string, placeholder: string): string {
+/**
+ * The rest of a roster: the people of the OTHER shifts, A–Z. Somebody on
+ * overtime works a shift they are not rostered on, and has to be able to
+ * put their own name on its sheet — so the pickers list the shift's own
+ * people first (`rosterNames`) and these after, under their own heading.
+ */
+export function otherShiftNames(roster: Operator[], shown: ReadonlyArray<string>): string[] {
+  const seen = new Set(shown);
+  const names: string[] = [];
+  for (const o of roster) {
+    if (seen.has(o.operatorName)) continue;
+    seen.add(o.operatorName);
+    names.push(o.operatorName);
+  }
+  return names.sort((a, b) => a.localeCompare(b));
+}
+
+const OTHER_SHIFTS_LABEL = 'Other shifts — overtime';
+
+function selOpts(values: string[], selected: string, placeholder: string, others: string[] = []): string {
+  const opt = (v: string): string =>
+    `<option value="${escapeHtml(v)}"${v === selected ? ' selected' : ''}>${escapeHtml(v)}</option>`;
   return [`<option value="">— ${escapeHtml(placeholder)} —</option>`]
-    .concat(
-      values.map(
-        (v) =>
-          `<option value="${escapeHtml(v)}"${v === selected ? ' selected' : ''}>${escapeHtml(v)}</option>`,
-      ),
-    )
+    .concat(values.map(opt))
+    .concat(others.length ? [`<optgroup label="${OTHER_SHIFTS_LABEL}">${others.map(opt).join('')}</optgroup>`] : [])
     .join('');
 }
 
@@ -2222,22 +2239,16 @@ function buildMeta(): string {
   // signed off by the wrong name". Supervisor mode reveals the select
   // again so a correction can be made and re-signed off.
   const opSupLocked = lockInfo() !== null && !isSupervisor();
-  const lockedOrSelect = (meta: 'operator' | 'supervisor', list: string[], value: string): string =>
-    isReadOnlyDevice()
-      ? `<input type="text" disabled value="${escapeHtml(value || '—')}" title="Read only — sign in as supervisor to edit">`
-      : opSupLocked
-        ? `<input type="text" disabled value="${escapeHtml(value || '—')}" title="Signed off — sign in as supervisor to change">`
-        : `<select data-meta="${meta}">${selOpts(list, value, meta)}</select>`;
-  const opField = lockedOrSelect(
-    'operator',
-    rosterNames(S!.operators, S!.shiftCode, S!.selOperator),
-    S!.selOperator,
-  );
-  const supField = lockedOrSelect(
-    'supervisor',
-    rosterNames(S!.supervisors, S!.shiftCode, S!.selSupervisor),
-    S!.selSupervisor,
-  );
+  const lockedOrSelect = (meta: 'operator' | 'supervisor', roster: Operator[], value: string): string => {
+    if (isReadOnlyDevice())
+      return `<input type="text" disabled value="${escapeHtml(value || '—')}" title="Read only — sign in as supervisor to edit">`;
+    if (opSupLocked)
+      return `<input type="text" disabled value="${escapeHtml(value || '—')}" title="Signed off — sign in as supervisor to change">`;
+    const list = rosterNames(roster, S!.shiftCode, value);
+    return `<select data-meta="${meta}">${selOpts(list, value, meta, otherShiftNames(roster, list))}</select>`;
+  };
+  const opField = lockedOrSelect('operator', S!.operators, S!.selOperator);
+  const supField = lockedOrSelect('supervisor', S!.supervisors, S!.selSupervisor);
   // Order Qty = total order quantity (Epicor JobHead_ProdQty), shown in the
   // meta row next to Job# / Part#. This is the whole-order size and stays
   // fixed; Job Left (side panel) = this total − Σ signed Good.
@@ -4711,21 +4722,18 @@ function openQcPicker(slot: number): void {
   const current = slotRec(slot)?.qcBy ?? '';
   // QC sign-off names are also narrowed to the shift's roster (current
   // sign-off always kept, even if from another shift).
-  const roster = rosterNames(
-    role === 'operator' ? S!.operators : S!.supervisors,
-    S!.shiftCode,
-    current,
-  );
+  const people = role === 'operator' ? S!.operators : S!.supervisors;
+  const roster = rosterNames(people, S!.shiftCode, current);
+  // Somebody on overtime signs on a shift they are not rostered on.
+  const others = otherShiftNames(people, roster);
   const roleLabel = role === 'operator' ? '👷 Operator' : '👔 Supervisor';
-  const buttons = roster
-    .map(
-      (n) =>
-        `<button class="bd-cause${n === current ? ' is-current' : ''}" data-qc-pick="${escapeHtml(n)}">
+  const pick = (n: string): string =>
+    `<button class="bd-cause${n === current ? ' is-current' : ''}" data-qc-pick="${escapeHtml(n)}">
           <span class="bd-code">${escapeHtml(initials(n))}</span>
           <span class="bd-cause-text">${escapeHtml(n)}</span>
-        </button>`,
-    )
-    .join('');
+        </button>`;
+  const buttons = roster.map(pick).join('')
+    + (others.length ? `<p class="bd-sub">${OTHER_SHIFTS_LABEL}</p>${others.map(pick).join('')}` : '');
   const clearBtn = current
     ? `<button class="btn-ghost-big" data-qc-clear>↺ Clear sign-off</button>`
     : '';

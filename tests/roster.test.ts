@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { rosterNames } from '../src/ui/operator';
+import { otherShiftNames, rosterNames } from '../src/ui/operator';
 import type { Operator } from '../src/types';
 
 function op(operatorName: string, shift?: string): Operator {
@@ -40,5 +40,20 @@ describe('rosterNames (shift-filtered operator/supervisor list)', () => {
   it('de-duplicates names', () => {
     const r = [op('Sam', 'Day'), op('Sam', 'Day')];
     expect(rosterNames(r, 'Day', '').filter((n) => n === 'Sam')).toHaveLength(1);
+  });
+});
+
+describe('otherShiftNames (the people of the other shifts, for overtime)', () => {
+  const roster = [op('Day Op', 'Day'), op('Night Op', 'Night'), op('Arvo Op', 'Afternoon'), op('Untagged Op', '')];
+
+  it('lists everybody the shift\'s own list leaves out, A–Z', () => {
+    const own = rosterNames(roster, 'Afternoon', '');
+    expect(own).toEqual(['Arvo Op', 'Untagged Op']);
+    expect(otherShiftNames(roster, own)).toEqual(['Day Op', 'Night Op']);
+  });
+
+  it('never repeats a name the shift\'s list already has', () => {
+    const own = rosterNames(roster, 'Afternoon', 'Day Op'); // Day Op already picked
+    expect(otherShiftNames(roster, own)).toEqual(['Night Op']);
   });
 });

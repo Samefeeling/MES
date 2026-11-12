@@ -402,6 +402,11 @@
   by the KPI Operator column, the shift head-counts and the per-operator
   tables. PMD_Production itself is not rewritten — a supervisor can still
   correct a sheet by unlocking it.
+- Overtime: the Operator, Supervisor and Quality Check pickers list the
+  shift's own roster (PMD_Operator.Shift) first and everybody else under
+  "Other shifts — overtime" (`otherShiftNames`). With the names no longer
+  carried across a shift change, somebody rostered on Day and staying on
+  into the Afternoon could otherwise not put their own name on its sheet.
 - Break cover: the Quality Checks are signed by whoever is running the
   press, so a sheet can have more than one signer. All of them show on the
   press and order rows (named Operator first); the shift and floor
