@@ -227,8 +227,11 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 /* min-width = the colgroup's own widths (250 + 100 + 11×72 + 230), so the
    fixed layout never has to squeeze a metric column. Bump it when a
    column is added or removed. */
-.kpi-table{background:#fff;font-variant-numeric:tabular-nums;border:0;border-radius:0;overflow:visible;min-width:1372px;table-layout:fixed}
+.kpi-table{background:#fff;font-variant-numeric:tabular-nums;border:0;border-radius:0;overflow:visible;min-width:1492px;table-layout:fixed}
 .kpi-col-machine{width:250px}
+.kpi-col-operator{width:120px}
+.kpi-table td.kpi-op-cell{text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+.kpi-table td.kpi-op-count{font-weight:800;cursor:help}
 .kpi-col-color{width:100px}
 .kpi-col-metric{width:72px}
 .kpi-col-handover{width:230px}

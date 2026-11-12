@@ -35,6 +35,7 @@ import {
   type KpiAttainment,
   type SavedShiftPlan,
 } from '../core/kpi-attainment';
+import { crewOf, crewSize, firstName, operatorsOf, type Crew } from '../core/crew';
 import {
   DEFAULT_KPI_THRESHOLDS,
   loadKpiThresholds,
@@ -256,6 +257,8 @@ interface JobAgg {
   partDescShort: string;
   color: ColorTag;
   agg: ShiftAgg;
+  /** Operators named on the order's sheets (full names). */
+  operators: string[];
   /** Epoch ms the order last came off the press inside the window; null
    *  when it has no slot with a status. Orders are listed by this. */
   lastRunAt: number | null;
@@ -352,6 +355,9 @@ interface KpiRow {
   handovers: HandoverEntry[];
   total: ShiftAgg;
   byShift: Record<ShiftCode, ShiftAgg>;
+  /** Operators named on the press's sheets, over the period and by shift. */
+  operators: string[];
+  operatorsByShift: Record<ShiftCode, string[]>;
   /** Per (shift, job) breakdown for the 3rd-level expansion. */
   jobsByShift: Record<ShiftCode, JobAgg[]>;
   /** Per-Job# rollup across every shift in the selected period — drives
@@ -433,6 +439,9 @@ interface KpiState {
   /** Wider periods, before PMD_Production.SchedulePlan existed: some signed
    *  shift saved only its %, so every shift counts once (savedScheduleTuples). */
   equalWeight: boolean;
+  /** Everybody on the signed sheets of the period, and by shift. */
+  crew: Crew;
+  crewByShift: Record<ShiftCode, Crew>;
   /** Yes / No already recorded against a finding, by its key. */
   impwDecisions: Map<string, ImpwDecision>;
   /** The plant's answers to Mango's placement fields and option lists,
@@ -1518,6 +1527,7 @@ async function compute(now = new Date()): Promise<void> {
           partDescShort: firstTwoWords(desc),
           color: colorForJob(partNumByJob.get(jobNumber) ?? '', desc, dieColors),
           agg,
+          operators: operatorsOf(recs),
           lastRunAt: lastRunAt(recs),
         };
       })
@@ -1636,6 +1646,7 @@ async function compute(now = new Date()): Promise<void> {
       Afternoon: [],
       Night: [],
     };
+    const operatorsByShift: Record<ShiftCode, string[]> = { Day: [], Afternoon: [], Night: [] };
     for (const code of SHIFT_ORDER) {
       const shiftBuckets = buckets.get(code)!;
       const flat: ProductionRecord[] = [];
@@ -1689,6 +1700,7 @@ async function compute(now = new Date()): Promise<void> {
         charts.set(dateKey, cb);
       }
       byShift[code] = toAgg(aggregate(flat, ctByJob));
+      operatorsByShift[code] = operatorsOf(flat);
       for (const std of stdAcc) addStd(byShift[code], null, std);
       addTuples(byShift[code], linesFor(code));
 
@@ -1733,12 +1745,24 @@ async function compute(now = new Date()): Promise<void> {
       handovers: collectHandovers(all),
       total,
       byShift,
+      operators: operatorsOf(all),
+      operatorsByShift,
       jobsByShift,
       byJobTotal,
     };
   });
 
   S!.rows = rows;
+  // Who was on: operators off the sheets, and the supervisors who signed —
+  // they sign every press and run none, so they are counted by shift and
+  // for the floor, not against a press.
+  const everyRecord = perMachineProd.flat();
+  S!.crew = crewOf(everyRecord);
+  S!.crewByShift = {
+    Day: crewOf(everyRecord.filter((r) => parseShiftId(r.shiftId)?.code === 'Day')),
+    Afternoon: crewOf(everyRecord.filter((r) => parseShiftId(r.shiftId)?.code === 'Afternoon')),
+    Night: crewOf(everyRecord.filter((r) => parseShiftId(r.shiftId)?.code === 'Night')),
+  };
   // Judged against the SAME thresholds the table paints with, so a Mango
   // ticket can never claim a shift missed a target the screen shows as met.
   S!.impwSlices = impwSlices;
@@ -2145,6 +2169,25 @@ function jobNameTh(jobNumber: string, partDescShort: string, fullDesc: string): 
  *  total) where there is no single colour to point at; pass a ColorTag
  *  on a job row to render swatch + label ("neutral" when no colour word
  *  was found in the part description). */
+/** Operator column of a press, shift or order row: first names, the full
+ *  names on hover. No names = a row that is not one press's work. */
+function operatorCell(names?: ReadonlyArray<string>): string {
+  if (!names || !names.length) return '<td class="kpi-op-cell muted">—</td>';
+  return '<td class="kpi-op-cell" title="' + escapeHtml(names.join(', ')) + '">'
+    + escapeHtml(names.map(firstName).join(', ')) + '</td>';
+}
+
+/** Operator column of a shift or floor total: how many people were on —
+ *  operators and the supervisors who signed — and who, on hover. */
+function crewCell(crew: Crew): string {
+  const n = crewSize(crew);
+  if (!n) return '<td class="kpi-op-cell muted">—</td>';
+  const title = n + (n === 1 ? ' person' : ' people') + ' on shift.'
+    + (crew.operators.length ? ' Operators (' + crew.operators.length + '): ' + crew.operators.join(', ') + '.' : '')
+    + (crew.supervisors.length ? ' Supervisors (' + crew.supervisors.length + '): ' + crew.supervisors.join(', ') + '.' : '');
+  return '<td class="kpi-op-cell kpi-op-count" title="' + escapeHtml(title) + '">' + n + '</td>';
+}
+
 function colorCell(c?: ColorTag): string {
   if (!c) return `<td class="kpi-color-cell muted">—</td>`;
   if (c.neutral) {
@@ -3246,7 +3289,7 @@ function render(): void {
 
   let body: string;
   if (S!.loading) {
-    body = `<tr><td colspan="14" class="muted">Loading…</td></tr>`;
+    body = `<tr><td colspan="15" class="muted">Loading…</td></tr>`;
   } else {
     body = S!.rows
       .map((r) => {
@@ -3275,6 +3318,7 @@ function render(): void {
           : '';
         const headRow = `<tr class="kpi-machine">
           <th>${toggle}${ordersToggle}<span class="kpi-mc-name">${escapeHtml(r.machineCode)}</span>${unsignedTag(r.total)}</th>
+          ${operatorCell(r.operators)}
           ${colorCell()}
           ${aggCells(r.total, null, true, r.machineCode, r.machineCode)}
           ${formatHandoverCell(r.machineCode, r.handovers)}
@@ -3287,7 +3331,7 @@ function render(): void {
                 } (period total) · ${finishedLabel(j.lastRunAt)}`;
                 return `<tr class="kpi-job kpi-order-total">
                   ${jobNameTh(j.jobNumber, j.partDescShort, fullDesc)}
-                  ${colorCell(j.color)}
+                  ${operatorCell(j.operators)}${colorCell(j.color)}
                   ${aggCells(j.agg, null, false)}
                   ${emptyHandoverCell()}
                 </tr>`;
@@ -3310,6 +3354,7 @@ function render(): void {
             : '<span class="kpi-job-toggle ph"></span>';
           const shiftRow = `<tr class="kpi-shift">
             <th class="kpi-shift-name">${chev}${escapeHtml(code)}${unsignedTag(a)}</th>
+            ${operatorCell(r.operatorsByShift[code])}
             ${colorCell()}
             ${aggCells(a, null, false)}
             ${emptyHandoverCell()}
@@ -3322,7 +3367,7 @@ function render(): void {
               } · ${finishedLabel(j.lastRunAt)}`;
               return `<tr class="kpi-job">
                 ${jobNameTh(j.jobNumber, j.partDescShort, fullDesc)}
-                ${colorCell(j.color)}
+                ${operatorCell(j.operators)}${colorCell(j.color)}
                 ${aggCells(j.agg, null, false)}
                 ${emptyHandoverCell()}
               </tr>`;
@@ -3340,6 +3385,7 @@ function render(): void {
       .map(
         (c, i) => `<tr class="kpi-cat-total${i === 0 ? ' kpi-cat-first' : ''}">
           <th>${escapeHtml(c.category)}</th>
+          ${operatorCell()}
           ${colorCell()}
           ${aggCells(c.agg, null, false)}
           ${emptyHandoverCell()}
@@ -3356,6 +3402,7 @@ function render(): void {
         const agg: ShiftAgg = { ...sum, yieldPct: pieces > 0 ? +((sum.output / pieces) * 100).toFixed(1) : 100 };
         return `<tr class="kpi-cat-total kpi-shift-total${i === 0 ? ' kpi-cat-first' : ''}">
           <th>${code}</th>
+          ${crewCell(S!.crewByShift[code])}
           ${colorCell()}
           ${aggCells(agg)}
           ${emptyHandoverCell()}
@@ -3623,6 +3670,7 @@ function render(): void {
         <table class="summary-table kpi-table">
           <colgroup>
             <col class="kpi-col-machine">
+            <col class="kpi-col-operator">
             <col class="kpi-col-color">
             <col span="11" class="kpi-col-metric">
             <col class="kpi-col-handover">
@@ -3631,7 +3679,7 @@ function render(): void {
             <th class="kpi-machine-head">Machine
               <button type="button" class="kpi-toggle kpi-toggle-all" data-toggle-all-shifts title="Toggle shift breakdown on every machine">${allShiftsGlyph}</button>
               <button type="button" class="kpi-toggle kpi-toggle-all kpi-orders-toggle" data-toggle-all-orders title="Toggle per-order rollup on every machine">${allOrdersGlyph}</button>
-            </th><th class="kpi-color-head">Color</th>
+            </th><th class="kpi-op-head" title="Operators named on the signed sheets (first names — hover for full names). Day / Afternoon / Night and TOTAL count everybody on shift, the supervisors who signed included.">Operator</th><th class="kpi-color-head">Color</th>
             <th>Output</th><th>Reject</th><th>Yield%</th>
             <th>Run h</th><th>Down h</th>
             <th title="S — Startup / warm-up">Startup h</th>
@@ -3651,6 +3699,7 @@ function render(): void {
                   const totCls = planColourClass(totPct, S!.thresholds);
                   return `<tfoot><tr class="kpi-total">
                     <th>TOTAL</th>
+                    ${crewCell(S!.crew)}
                     ${colorCell()}
                     ${outputCell(tot)}
                     ${rejectCell(tot.reject, tot.shifts, 'FLOOR')}
@@ -4300,6 +4349,12 @@ export async function renderKpi(dal: PmdDataLayer, assemblyDal?: AssemblyDataLay
       total: null,
     },
     equalWeight: false,
+    crew: { operators: [], supervisors: [] },
+    crewByShift: {
+      Day: { operators: [], supervisors: [] },
+      Afternoon: { operators: [], supervisors: [] },
+      Night: { operators: [], supervisors: [] },
+    },
     impwDecisions: loadImpwDecisions(),
     impwSite: loadImpwSite(),
     impwOptions: null,
