@@ -64,25 +64,23 @@ describe('a sheet confirmed under the names of the shift before', () => {
   const afternoon = sheet('2026-11-12-Afternoon', 'Ben Wood', 'RRRRRRMRRRRRRMRR');
 
   it('goes by who signed the operator checks when the named operator signed none', () => {
-    expect(sheetPeople(afternoon)).toEqual({ operators: ['Ben Wood'], supervisors: [], leftover: true });
+    expect(sheetPeople(afternoon)).toMatchObject({ operators: ['Ben Wood'], leftover: true });
     expect(operatorsOf(afternoon)).toEqual(['Ben Wood']);
     expect([...operatorByTuple(afternoon).values()]).toEqual(['Ben Wood']);
   });
 
   it('keeps the named crew where the operator signed his own checks', () => {
-    expect(sheetPeople(day)).toEqual({ operators: ['John Taylor'], supervisors: ['Tin Maung'], leftover: false });
+    expect(sheetPeople(day)).toMatchObject({ operators: ['John Taylor'], leftover: false });
   });
 
-  it('so the Day\'s people are in the Day only', () => {
-    const other = rec({
-      machineCode: '1600T', shiftId: '2026-11-12-Afternoon', jobNumber: 'X', slotIndex: 0, statusCode: 'R',
-      operator: 'Heng Ong', supervisor: 'Jean-Michel Thomas',
+  it('leaves the supervisors alone: somebody on overtime is rightly in both shifts', () => {
+    // Tin Maung stayed on into the Afternoon. Nothing on the sheet says
+    // otherwise, so he is counted there with whoever signed it off.
+    expect(crewOf(afternoon)).toEqual({
+      operators: ['Ben Wood'],
+      supervisors: ['Jean-Michel Thomas', 'Tin Maung'],
     });
-    expect(crewOf([...afternoon, other])).toEqual({
-      operators: ['Ben Wood', 'Heng Ong'],
-      supervisors: ['Jean-Michel Thomas'],
-    });
-    expect(crewOf(day)).toEqual({ operators: ['John Taylor'], supervisors: ['Tin Maung'] });
+    expect(crewOf(day).supervisors).toEqual(['Jean-Michel Thomas', 'Tin Maung']);
   });
 
   it('keeps the named operator when nobody signed, or when he signed some of them', () => {
@@ -96,11 +94,6 @@ describe('a sheet confirmed under the names of the shift before', () => {
     // Only half-hours 1, 7 and 13 signed, by the supervisor: no contradiction.
     const supOnly = afternoon.map((r) => ({ ...r, qcBy: [1, 7].includes(r.slotIndex) ? 'Jean-Michel Thomas' : '' }));
     expect(sheetPeople(supOnly)).toMatchObject({ operators: ['John Taylor'], leftover: false });
-  });
-
-  it('a sheet naming no supervisor falls back to who signed it off', () => {
-    const noSup = day.map((r) => ({ ...r, supervisor: '' }));
-    expect(sheetPeople(noSup).supervisors).toEqual(['Jean-Michel Thomas']);
   });
 });
 

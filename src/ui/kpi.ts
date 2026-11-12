@@ -3681,7 +3681,7 @@ function render(): void {
             <th class="kpi-machine-head">Machine
               <button type="button" class="kpi-toggle kpi-toggle-all" data-toggle-all-shifts title="Toggle shift breakdown on every machine">${allShiftsGlyph}</button>
               <button type="button" class="kpi-toggle kpi-toggle-all kpi-orders-toggle" data-toggle-all-orders title="Toggle per-order rollup on every machine">${allOrdersGlyph}</button>
-            </th><th class="kpi-op-head" title="Operators named on the signed sheets (first names — hover for full names). Where the operator a sheet names signed none of its Quality Checks and somebody else did, the people who signed are shown instead. Day / Afternoon / Night and TOTAL count everybody on shift, the sheets' supervisors included.">Operator</th><th class="kpi-color-head">Color</th>
+            </th><th class="kpi-op-head" title="Operators named on the signed sheets (first names — hover for full names). Where the operator a sheet names signed none of its Quality Checks and somebody else did, the people who signed are shown instead. Day / Afternoon / Night and TOTAL count everybody on shift, the supervisors named on the sheets or signing them off included; somebody on overtime is counted in each shift they worked.">Operator</th><th class="kpi-color-head">Color</th>
             <th>Output</th><th>Reject</th><th>Yield%</th>
             <th>Run h</th><th>Down h</th>
             <th title="S — Startup / warm-up">Startup h</th>

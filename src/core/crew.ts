@@ -38,7 +38,7 @@ export interface SheetPeople {
   /** The Operator named on the sheet signed none of its operator Quality
    *  Checks while somebody else did: the name is a leftover (the sheet was
    *  confirmed without re-picking it), and the people who signed are taken
-   *  instead. */
+   *  as its operators instead. */
   leftover: boolean;
 }
 
@@ -60,35 +60,25 @@ function byCount(names: Iterable<string>): string[] {
 /**
  * The people of ONE sheet (the records of one press, shift and order).
  *
- * The Operator and Supervisor a sheet names are picked once, at its ✅
- * Confirm; the Quality Checks are signed by name every half-hour. Where the
- * two disagree outright — the named Operator signed none of the operator
- * checks and somebody else signed them — the checks are the record of who
- * was at the press, and the Supervisor named beside that Operator goes with
- * him. (The Operator sheet used to carry both names over from the shift
- * before, and a crew that confirmed without re-picking was recorded as the
- * crew it relieved.)
+ * The Operator a sheet names is picked once, at its ✅ Confirm; the Quality
+ * Checks are signed by name every half-hour. Where the two disagree outright
+ * — the named Operator signed none of the operator checks and somebody else
+ * signed them — the checks are the record of who was at the press. (The
+ * Operator sheet used to carry the names over from the shift before, and a
+ * crew that confirmed without re-picking was recorded as the crew it
+ * relieved.)
  *
- * The supervisor is the one the sheet names; only a sheet that names none
- * falls back to whoever signed it off — a sign-off made the next morning is
- * by the next shift's supervisor.
+ * Supervisors are the one the sheet names and whoever signed it off. Nothing
+ * on a sheet contradicts them: somebody on overtime is rightly in two
+ * shifts, so a name from the shift before is not, by itself, a mistake.
  */
 export function sheetPeople(records: ReadonlyArray<ProductionRecord>): SheetPeople {
-  const named = (field: 'operator' | 'supervisor'): string =>
-    clean(records.find((r) => r.slotIndex === 0 && clean(r[field]))?.[field])
-    || clean(records.find((r) => clean(r[field]))?.[field]);
-  const operator = named('operator');
-  const supervisor = named('supervisor');
-  const signed = records.filter((r) => clean(r.qcBy));
-  const operatorChecks = byCount(signed.filter((r) => !SUPERVISOR_QC_SLOTS.has(r.slotIndex)).map((r) => r.qcBy));
+  const operator = clean(records.find((r) => r.slotIndex === 0 && clean(r.operator))?.operator)
+    || clean(records.find((r) => clean(r.operator))?.operator);
+  const operatorChecks = byCount(records.filter((r) => !SUPERVISOR_QC_SLOTS.has(r.slotIndex)).map((r) => r.qcBy));
   const leftover = !!operator && operatorChecks.length > 0 && !operatorChecks.some((n) => same(n, operator));
   const operators = leftover || !operator ? operatorChecks : [operator];
-  let supervisors: string[];
-  if (leftover) {
-    supervisors = byCount(signed.filter((r) => SUPERVISOR_QC_SLOTS.has(r.slotIndex)).map((r) => r.qcBy))
-      .filter((n) => !operators.some((o) => same(o, n)));
-  } else if (supervisor) supervisors = [supervisor];
-  else supervisors = byCount(records.map((r) => r.lockedBy)).slice(0, 1);
+  const supervisors = byCount(records.flatMap((r) => [r.supervisor, r.lockedBy]));
   return { operators, supervisors, leftover };
 }
 

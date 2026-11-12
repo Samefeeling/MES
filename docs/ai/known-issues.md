@@ -398,13 +398,15 @@
   another press starts blank, and ✅ Confirm then asks for both.
 - Fix, reading old sheets (`sheetPeople`): where the named Operator signed
   none of the operator Quality Checks and somebody else did, the signers are
-  the operators and the Supervisor named beside the leftover is dropped. Used
+  the operators. Used
   by the KPI Operator column, the shift head-counts and the per-operator
   tables. PMD_Production itself is not rewritten — a supervisor can still
   correct a sheet by unlocking it.
 - Limit: a sheet with a leftover name and NO Quality Check signed cannot be
   told from a correct one. And an operator who never signs his own checks,
   on a press where somebody else signs all of them, reads as a leftover.
-- A sheet's supervisor is the one it names; the sign-off name is used only
-  when it names none (a late sign-off is by another shift's supervisor).
+- Supervisors are NOT second-guessed: the one a sheet names and whoever
+  signed it off both count. Production confirmed (13 Nov 2026) that a person
+  on overtime is rightly in two shifts — Tin Maung on 12 Nov, Day and
+  Afternoon. The same person in two shifts is not, by itself, an error.
 
