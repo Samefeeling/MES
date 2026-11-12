@@ -42,7 +42,10 @@ import { parseShiftPattern, previousShift, shiftBounds, slotClock } from '../cor
 import {
   dieLookup,
   lastRunFromTimelines,
+  lastJobsBefore,
   lastRunLookback,
+  ordersOpenAtShiftStart,
+  planningOrderMatchesMachine,
   planningHoldsAPlan,
   type PlanBarItem,
 } from '../core/schedule';
@@ -57,7 +60,7 @@ import {
   snapshotToSave,
   type SavedShiftPlan,
 } from '../core/kpi-attainment';
-import { retroJobLeftFixes, sumGoodStartedBefore } from '../core/jobgood';
+import { leftAtShiftStart, retroJobLeftFixes, sumGoodStartedBefore } from '../core/jobgood';
 import { orderFactsFromHistory } from '../core/order-history';
 import {
   DIE_COMPONENTS,
@@ -2553,6 +2556,35 @@ export class SharePointDataLayer implements PmdDataLayer {
           })
         : Promise.resolve([] as ProductionCounterRecord[]),
     ]);
+    // Where each press stands when the shift starts: the order it was last
+    // running, and what is left of every order open by then (its quantity
+    // less the good of the shifts before, signed or not). The plan runs the
+    // order on the press for as long as that takes, and the orders behind it
+    // wait (pressPlanFromShiftStart). An order whose records cannot be read
+    // keeps Planning.csv's window.
+    const startsAt = shiftBounds(shiftId)?.start.getTime() ?? Date.now();
+    const lastJobsOf = lastJobsBefore(history, headers);
+    const lastJobs = (code: string): string[] => lastJobsOf(code, startsAt);
+    const onPress = (o: PlanningOrder): boolean => {
+      const job = o.jobNumber.trim().toUpperCase();
+      return machines.some((code) => planningOrderMatchesMachine(o, code) && lastJobs(code).includes(job));
+    };
+    const recordsByJob = new Map<string, ProductionRecord[]>();
+    await Promise.all(
+      [...new Set(ordersOpenAtShiftStart(orders, shiftId, onPress).map((o) => o.jobNumber.trim()))]
+        .filter(Boolean)
+        .map(async (jobNumber) => {
+          try {
+            recordsByJob.set(jobNumber.toUpperCase(), await this.listProduction({ jobNumber }));
+          } catch (e) {
+            console.warn(`[pmd] PMD_ShiftPlan: ${jobNumber} not read, planned by its Planning.csv window:`, e);
+          }
+        }),
+    );
+    const leftOf = (o: PlanningOrder): number | undefined => {
+      const records = recordsByJob.get(o.jobNumber.trim().toUpperCase());
+      return records ? leftAtShiftStart(o, records, shiftId) : undefined;
+    };
     const { save, remove } = shiftPlanChanges(
       machines,
       saved,
@@ -2561,6 +2593,7 @@ export class SharePointDataLayer implements PmdDataLayer {
       new Date(),
       { dieOf: dieLookup(dieColors), lastRun: lastRunFromTimelines(headers) },
       history,
+      { leftOf, lastJobs },
     );
     for (const row of remove) {
       await this.del(`${this.listUrl(LISTS.shiftPlan)}/items(${row.id})`);

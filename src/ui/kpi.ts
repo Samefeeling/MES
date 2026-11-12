@@ -1516,7 +1516,9 @@ async function compute(now = new Date()): Promise<void> {
       return found;
     };
     for (const [jobNumber, recs] of recsByJob) entry(jobNumber).recs.push(...recs);
-    for (const line of lines) entry(line.jobNumber).lines.push(line);
+    // A line for the press's whole shift (a plan kept without its orders)
+    // belongs to no order: it counts on the shift's row, not as a blank one.
+    for (const line of lines) if (line.jobNumber.trim()) entry(line.jobNumber).lines.push(line);
     return [...jobs.values()]
       .map(({ jobNumber, recs, lines: own }) => {
         const desc = partDescByJob.get(jobNumber) ?? '';
@@ -3649,7 +3651,7 @@ function render(): void {
     + ' <b>Earned</b>: min(signed Good, planned pieces) per order × the same standard — over-producing one order never makes up for another, and output on an order that was not in the shift’s plan earns nothing.'
     + ' Pieces of different parts cannot be added; their standard hours can, so a <b>press-shift</b>, a <b>press</b>, a <b>shift across the floor</b>, a category and the <b>period</b> (TOTAL and the tile above) are all the same sum: Σ earned ÷ Σ planned. A press planned for eight hours weighs four times one planned for two.'
     + ' The Day / Afternoon / Night rows above TOTAL are each shift across every press. A production day is 07:00 to 07:00: Day 07:00–15:00, Afternoon 15:00–23:00, Night 23:00–07:00, dated by the day it starts.</div>'
-    + '<div><b>The plan of record</b> is frozen in PMD_ShiftPlan once the shift is under way and never rewritten (Planning.csv is redrawn at every export). It asks each order for its planned run hours in the shift ÷ standard hours per piece, up to the order quantity, only in the shifts its “no of shift” is crewed for. A 4-hour die change in front of an order on a different die is not asked for pieces.'
+    + '<div><b>The plan of record</b> is frozen in PMD_ShiftPlan once the shift is under way and never rewritten (Planning.csv is redrawn at every export). It asks each order for its planned run hours in the shift ÷ standard hours per piece, up to the order quantity, only in the shifts its “no of shift” is crewed for. A 4-hour die change in front of an order on a different die is not asked for pieces. The plan starts from where the press stands when the shift begins: the order it was last running runs on for as long as what is left of it takes (order quantity less the good of the shifts before), and the orders behind it wait — a shift is not charged for the time the shift before it lost.'
     + ' The plan is reduced only when the shift booked more standard changeover time (die 4 h, colour or insert 30 min — the standard, not the time taken) and smoko than the plan left room for.</div>'
     + '<div><b>Always counted:</b> a planned press that did not run scores 0 against its plan (“not run”); a shift not signed off counts its plan and earns nothing until it is signed (“unsigned”). <b>Not judged:</b> a press-shift with nothing planned. “—” means a planned quantity or a rate is not known; hover for the detail.'
     + ' Shifts from before PMD_ShiftPlan held every press use what Planning.csv still holds (Last 24h) or what their sign-off saved (wider periods). Order rows of a wider period show output only.</div>';

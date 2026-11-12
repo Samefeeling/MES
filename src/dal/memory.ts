@@ -1,4 +1,5 @@
-import { dieLookup } from '../core/schedule';
+import { dieLookup, lastJobsBefore } from '../core/schedule';
+import { shiftBounds } from '../core/shifts';
 import {
   keptPlanSnapshot,
   savedScheduleSnapshot,
@@ -8,6 +9,7 @@ import {
   snapshotToSave,
   type SavedShiftPlan,
 } from '../core/kpi-attainment';
+import { leftAtShiftStart } from '../core/jobgood';
 import { appendHandoverLine } from '../core/handover';
 import type {
   BdCode,
@@ -149,6 +151,10 @@ export class MemoryDataLayer implements PmdDataLayer {
       now,
       { dieOf: dieLookup(this.dieColors) },
       this.production,
+      {
+        leftOf: (o) => leftAtShiftStart(o, this.production.filter((r) => r.jobNumber === o.jobNumber), shiftId),
+        lastJobs: (code) => lastJobsBefore(this.production)(code, shiftBounds(shiftId)?.start.getTime() ?? now.getTime()),
+      },
     );
     this.shiftPlans = this.shiftPlans.filter((p) => !remove.includes(p)).concat(save);
     return MemoryDataLayer.clone(this.shiftPlans.filter((p) => p.shiftId === shiftId));

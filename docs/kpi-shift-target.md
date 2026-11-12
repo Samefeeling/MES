@@ -194,6 +194,29 @@ Every press in every shift gets one row (`shiftPlanChanges`):
   kept too, at 0 — output there is outside the plan. A press with a planned
   order that has no rate keeps nothing (its quantity is unknown) and falls
   back to Planning.csv.
+- **From where the press stands when the shift starts**
+  (`pressPlanFromShiftStart`). Planning.csv is written once and the floor
+  moves on, so the keep also reads which order each press was last RUNNING
+  before the shift (`lastJobsBefore`) and what is left of every order open by
+  then — order quantity less the good of the shifts before, signed or not,
+  capped by Epicor's remaining quantity (`leftAtShiftStart`):
+  - the order **on the press** runs from the shift's start for left ×
+    standard hours per piece: on past its Due when it is behind, and still
+    the press's work when its window is already over;
+  - an order **behind it** keeps its place and its gap: it starts when the
+    one before ends, never before its own Start (finishing early pulls
+    nothing forward);
+  - an order the press is **not on** is only ever shortened to what is left
+    of it — one that never started is not carried into later shifts;
+  - nothing left: asked for nothing. Remaining quantity not known (no order
+    quantity, records not read): Planning.csv's window as it stands.
+
+  Example, hot-stamp press, 12 Nov 2026: SFM508005 planned 07:30–19:30 at
+  24/h, SFM508226 from 19:30. The Day lost five hours and made 56 of the 265
+  left. By the file the Afternoon was asked for 108 + 105 and, having run
+  SFM508005 all shift (209 made), read 51% with SFM508226 at 0. Planned from
+  where the press stood — 209 left, 8.7 h — the Afternoon is asked for
+  SFM508005 only and reads 100%; the Day carries its own shortfall.
 - **Never rewritten.** Two devices keeping at once can each write a row for
   a press; the next keep deletes the later one, and readers take the first.
 
@@ -211,6 +234,10 @@ still holds (`idleShiftTuples`) — a fallback that loses plans the further
 back the shift is.
 
 Known limits: a shift with no device open and nobody signing keeps no plan.
+A plan is kept 30 minutes into the shift from Planning.csv as it then stands:
+if the day's plan reaches PMD_Planning later than that, the shift is kept
+from the plan before it (a press with nothing in the old plan is kept at 0,
+and its output shows as outside the plan).
 Order rows of a wider period still show output only.
 
 ## Efficiency

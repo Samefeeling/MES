@@ -9,7 +9,7 @@
 // page.
 
 import type { PmdDataLayer } from '../dal';
-import { isHotStampPart, matchNewParts, type DieMatch, type DieMiss, type NewPart } from '../core/die-match';
+import { isHotStampPart, isHotStampPress, matchNewParts, type DieMatch, type DieMiss, type NewPart } from '../core/die-match';
 
 export interface DieSyncResult {
   checkedAt: Date;
@@ -73,6 +73,10 @@ async function run(dal: PmdDataLayer, opts: { write: boolean }): Promise<DieSync
     // ERP orders only: a die change is not a part, and a supervisor's
     // manual order is typed by hand.
     if (!part || o.isDieChange || o.source !== 'ERP' || registered.has(key) || seen.has(key)) continue;
+    // Anything planned on the hot-stamp press runs on no die: neither added
+    // nor listed. (Checked before `seen`, so the same part planned on a
+    // moulding press as well is still looked at there.)
+    if (isHotStampPress(o.machineCode)) continue;
     seen.add(key);
     // A hot-stamped chair has no die of its own: neither added nor listed.
     if (isHotStampPart(o.partDescription || descByPart.get(key) || '')) continue;

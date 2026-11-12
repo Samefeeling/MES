@@ -365,3 +365,22 @@
   **Never open a new PR.** If push is rejected, `git pull --rebase` first
   (the branch sometimes gets commits from the Claude Code UI, e.g. shift
   label tweaks).
+
+## Schedule Adherence: a shift charged for the shift before (fixed going forward)
+
+- Symptom (HStamp, 12 Nov 2026): Afternoon ran SFM508005 all shift (209
+  good) and read 209/185, 51%, with SFM508226 at 0/91; Day read 56/— with a
+  blank order row.
+- Cause 1: the plan of record was Planning.csv's windows as written that
+  morning. SFM508005 was to end at 19:30 — true only if the Day made its
+  180; it made 56. Fixed: the plan is kept from where the press stands at
+  the shift's start (`pressPlanFromShiftStart`, docs/kpi-shift-target.md).
+- Cause 2 (blank row): the Day's PMD_ShiftPlan row was kept at plan 0, and
+  output against a 0 plan was one nameless "unscheduled" line. Fixed: it is
+  reported order by order.
+- NOT fixed, and not confirmed: WHY the Day's row was kept at 0. The row is
+  written 30 minutes into the shift from PMD_Planning as it then stands;
+  most likely the 07:30 plan had not reached it yet. Check the row's Created
+  time in SharePoint against when the planning sync ran.
+- Rows already kept are never rewritten: 12 Nov's figures stay as they are.
+

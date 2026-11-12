@@ -5,7 +5,9 @@ import {
   lastPartBefore,
   plannedOrdersForShift,
   plannedRuntimeForShift,
+  pressPlanFromShiftStart,
   shiftPlanBar,
+  type StandingAtShiftStart,
   type PlanBarItem,
   type ScheduleContext,
 } from './schedule';
@@ -788,17 +790,25 @@ export function shiftPlanBarFor(
  * its first order opens. null when an order planned there has no rate — its
  * quantity unknown, so nothing is kept and the shift falls back to
  * Planning.csv.
+ *
+ * `standing` — which order each press was last running and what is left of
+ * each order when the shift starts — makes it the plan as it stood at that
+ * moment (`pressPlanFromShiftStart`): the order the press is on runs for as
+ * long as what is left of it takes, and the orders behind it wait. Without
+ * it the plan is Planning.csv's windows as they are.
  */
 export function shiftPlanFor(
-  orders: ReadonlyArray<PlanningOrder>,
+  planning: ReadonlyArray<PlanningOrder>,
   machineCode: string,
   shiftId: string,
   asOf: Date = new Date(),
   ctx: PlanContext = {},
   history: ReadonlyArray<ProductionRecord> = [],
+  standing?: StandingAtShiftStart,
 ): SavedShiftPlan | null {
   const bounds = shiftBounds(shiftId);
   if (!bounds) return null;
+  const orders = standing ? pressPlanFromShiftStart(planning, machineCode, shiftId, standing) : planning;
   const judgedAt = new Date(Math.max(asOf.getTime(), bounds.end.getTime()));
   const press = contextBeforeShift(history, machineCode, shiftId, ctx);
   const lines = scheduleTuplesForShift([], orders, machineCode, shiftId, judgedAt, false, press);
@@ -839,7 +849,8 @@ export function shiftPlanFor(
  *   - Two devices keeping at once can each write a row for the same press;
  *     the next keep removes the later one.
  *
- * `history` is the presses' production before the shift (see shiftPlanFor).
+ * `history` is the presses' production before the shift, and `standing`
+ * where the presses stand when it starts (see shiftPlanFor).
  */
 export function shiftPlanChanges<Row extends SavedShiftPlan>(
   machineCodes: ReadonlyArray<string>,
@@ -849,6 +860,7 @@ export function shiftPlanChanges<Row extends SavedShiftPlan>(
   asOf: Date = new Date(),
   ctx: PlanContext = {},
   history: ReadonlyArray<ProductionRecord> = [],
+  standing?: StandingAtShiftStart,
 ): { save: SavedShiftPlan[]; remove: Row[] } {
   const key = (code: string): string => code.trim().toUpperCase();
   const savedKeys = new Set<string>();
@@ -860,7 +872,7 @@ export function shiftPlanChanges<Row extends SavedShiftPlan>(
   const save: SavedShiftPlan[] = [];
   for (const code of machineCodes) {
     if (savedKeys.has(key(code))) continue;
-    const plan = shiftPlanFor(orders, code, shiftId, asOf, ctx, history);
+    const plan = shiftPlanFor(orders, code, shiftId, asOf, ctx, history, standing);
     if (plan) save.push(plan);
   }
   return { save, remove };
@@ -915,11 +927,16 @@ export function keptPlanTuples(
     credited: source === 'unscheduled' ? 0 : Math.min(good, planned), source,
   });
   if (!row.jobs.length) {
-    // A total kept without its orders (or plan 0): the press's output
-    // against it as a whole.
-    const good = aggregate([...ran.values()].flat()).output;
-    if (row.plan > 0) out.push(line('', row.plan, good, 'saved'));
-    else if (good > 0) out.push(line('', 0, good, 'unscheduled'));
+    // A total kept without its orders: the press's output against it as a
+    // whole. Nothing planned: each order's output is outside the plan, and
+    // is reported against that order.
+    if (row.plan > 0) out.push(line('', row.plan, aggregate([...ran.values()].flat()).output, 'saved'));
+    else {
+      for (const group of ran.values()) {
+        const good = aggregate(group).output;
+        if (good > 0) out.push(line(group[0].jobNumber.trim(), 0, good, 'unscheduled'));
+      }
+    }
   } else {
     for (const job of row.jobs) {
       const pieces = share < 1 ? wholePieces(job.pieces * share) : job.pieces;

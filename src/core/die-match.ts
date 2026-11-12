@@ -44,6 +44,17 @@ export function isHotStampPart(description: string): boolean {
   return /\bhot\s*-?\s*stamp/i.test(description);
 }
 
+/**
+ * The hot-stamp press as Planning.csv and the machine register name it
+ * ("HS", "HStamp", "Hot Stamp"). An order planned there is a moulded part
+ * going through for its print — whatever its description says, it has no
+ * die to be placed on.
+ */
+export function isHotStampPress(machineCode: string | null | undefined): boolean {
+  const code = (machineCode ?? '').toUpperCase().replace(/[\s_-]/g, '');
+  return code === 'HS' || code.includes('HSTAMP') || code.includes('HOTSTAMP');
+}
+
 const tokens = (s: string): string[] => s.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
 
 /**

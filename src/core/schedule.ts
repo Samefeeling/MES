@@ -405,6 +405,170 @@ export function orderCrewedForShift(order: PlanningOrder, shiftId: string): bool
   return patternCrews(order, shiftId);
 }
 
+/** What is left of an order when a shift starts, in pieces: its quantity
+ *  less the good made on it in the shifts before. null / undefined when that
+ *  is not known — the order then keeps Planning.csv's window as it stands. */
+export type LeftAtShiftStart = (order: PlanningOrder) => number | null | undefined;
+
+/** Where the presses stand when a shift starts, from their own records. */
+export interface StandingAtShiftStart {
+  leftOf: LeftAtShiftStart;
+  /** The order(s) a press was last RUNNING before the shift — more than one
+   *  for a co-run (`lastJobsBefore`). */
+  lastJobs: (machineCode: string) => ReadonlyArray<string>;
+}
+
+/**
+ * The order(s) each press was last RUNNING (R) before a moment: every order
+ * with an R in the press's latest running half-hour before it — one order,
+ * or the parts of a co-run. From slot records (the shift before, signed or
+ * live) and shift headers with their 16-half-hour timeline (the days
+ * before). Machine code (any case) and moment → job numbers, upper-cased.
+ */
+export function lastJobsBefore(
+  records: ReadonlyArray<{ machineCode: string; shiftId: string; slotIndex: number; statusCode: string; jobNumber: string }>,
+  headers: ReadonlyArray<{ machineCode: string; shiftId: string; jobNumber: string; timeline?: string }> = [],
+): (machineCode: string, at: number) => string[] {
+  const byPress = new Map<string, Array<{ at: number; job: string }>>();
+  const add = (machineCode: string, shiftId: string, slot: number, jobNumber: string): void => {
+    const job = jobNumber.trim().toUpperCase();
+    const at = slotTimeRange(shiftId, slot)?.start.getTime();
+    if (!job || job.startsWith('DC_') || at == null) return;
+    const key = normaliseMachineCode(machineCode);
+    const runs = byPress.get(key) ?? [];
+    runs.push({ at, job });
+    byPress.set(key, runs);
+  };
+  for (const r of records) if (r.statusCode === 'R') add(r.machineCode, r.shiftId, r.slotIndex, r.jobNumber);
+  for (const h of headers) {
+    const tl = h.timeline ?? '';
+    for (let i = 0; i < tl.length && i < 16; i++) if (tl[i] === 'R') add(h.machineCode, h.shiftId, i, h.jobNumber);
+  }
+  return (machineCode, at) => {
+    let latest = -Infinity;
+    let jobs = new Set<string>();
+    for (const r of byPress.get(normaliseMachineCode(machineCode)) ?? []) {
+      if (r.at >= at || r.at < latest) continue;
+      if (r.at > latest) {
+        latest = r.at;
+        jobs = new Set();
+      }
+      jobs.add(r.job);
+    }
+    return [...jobs];
+  };
+}
+
+/** The window of an order as planned; null without a usable Start–Due. */
+function plannedSpan(order: PlanningOrder): { start: number; end: number } | null {
+  const window = orderWindow(order);
+  return window ? { start: window.start.getTime(), end: window.end.getTime() } : null;
+}
+
+/**
+ * The orders a keep of `shiftId` wants to know what is left of: every ERP
+ * order with a press whose window had opened by the shift's start and is
+ * either still open or the order its press was last running (`onPress`).
+ */
+export function ordersOpenAtShiftStart(
+  orders: ReadonlyArray<PlanningOrder>,
+  shiftId: string,
+  onPress: (order: PlanningOrder) => boolean = () => false,
+): PlanningOrder[] {
+  const from = shiftBounds(shiftId)?.start.getTime();
+  if (from == null) return [];
+  return orders.filter((o) => {
+    if (o.isDieChange || o.source !== 'ERP' || !normaliseMachineCode(o.machineCode)) return false;
+    const span = plannedSpan(o);
+    return !!span && span.start <= from && (span.end > from || onPress(o));
+  });
+}
+
+/**
+ * A press's plan as it stands when a shift STARTS: Planning.csv's orders in
+ * Planning.csv's sequence, with the order the press is on running for as
+ * long as what is actually left of it takes.
+ *
+ * Planning.csv is written once and the floor moves on. A press that lost
+ * its Day to a breakdown is still on the same order all Afternoon, and the
+ * file — written that morning — still says the order ends at 19:30 and the
+ * next one starts. Judged by that, the Afternoon is asked for an order it
+ * could not start and credited half of the one it ran flat out: the Day's
+ * shortfall charged to the shift after it. And an order ahead of the file
+ * is asked for pieces it no longer holds. So, for an order whose window had
+ * opened by the shift's start and whose remaining quantity is known
+ * (`standing.leftOf`):
+ *
+ *   - ON THE PRESS (the order the press was last running, `lastJobs`): it
+ *     runs from the shift's start for left × standard hours per piece —
+ *     longer than the file says when it is behind, shorter when ahead, and
+ *     still the press's work when its window is already over;
+ *   - not on the press: its window is only ever shortened to what is left.
+ *     An order the press never ran, or left for another, is not carried
+ *     into later shifts — the press may be following the plan with the
+ *     next order, and would be charged for one it was never given;
+ *   - nothing left: asked for nothing;
+ *   - an order behind keeps its place and its gap — it starts when the one
+ *     before it ends, never before its own Start. Finishing early does not
+ *     pull the next order forward: material and crew were arranged for the
+ *     planned time.
+ *
+ * Orders the shift is not crewed for, orders of other presses and orders
+ * with no known remaining quantity are returned as they are — the plan is
+ * then Planning.csv's. Each shift is planned from its own start; the windows
+ * returned are for this shift only.
+ */
+export function pressPlanFromShiftStart(
+  orders: ReadonlyArray<PlanningOrder>,
+  machineCode: string,
+  shiftId: string,
+  standing: StandingAtShiftStart,
+): PlanningOrder[] {
+  const bounds = shiftBounds(shiftId);
+  if (!bounds) return [...orders];
+  const from = bounds.start.getTime();
+  const lastJobs = new Set(standing.lastJobs(machineCode).map((job) => job.trim().toUpperCase()));
+  const mine = orders
+    .filter((o) => !o.isDieChange && planningOrderMatchesMachine(o, machineCode) && plannedSpan(o))
+    .sort(
+      (a, b) => plannedSpan(a)!.start - plannedSpan(b)!.start || a.jobNumber.localeCompare(b.jobNumber),
+    );
+  const moved = new Map<PlanningOrder, PlanningOrder>();
+  // The order before in the queue: as planned, and as it now runs.
+  let prev: { plannedEnd: number; end: number } | null = null;
+  for (const order of mine) {
+    if (!orderCrewedForShift(order, shiftId)) continue;
+    const span = plannedSpan(order)!;
+    const opened = span.start <= from;
+    const raw = opened ? standing.leftOf(order) : undefined;
+    const left = raw != null && Number.isFinite(raw) && order.qtyPerHr > 0 ? Math.max(0, raw) : undefined;
+    const onPress = opened && left != null && lastJobs.has(order.jobNumber.trim().toUpperCase());
+    // Wholly past: only the order still on the press is today's work.
+    if (span.end <= from && !(onPress && left! > 0)) continue;
+    // Behind the order before it (not overlapping it: that is a co-run),
+    // it keeps its gap; nothing starts before the shift or its own Start.
+    const asPlanned = Math.max(from, span.start);
+    const start: number = prev && span.start >= prev.plannedEnd
+      ? Math.max(asPlanned, prev.end + (span.start - prev.plannedEnd))
+      : asPlanned;
+    const plannedHours = (span.end - asPlanned) / HOUR_MS;
+    const needHours = left != null ? left * order.qtyPerHr : plannedHours;
+    const hours = onPress ? needHours : Math.min(plannedHours, needHours);
+    const end = start + hours * HOUR_MS;
+    if (!prev || span.end >= prev.plannedEnd) prev = { plannedEnd: span.end, end };
+    if (start === asPlanned && hours === plannedHours) continue; // as planned
+    const copy: PlanningOrder = {
+      ...order,
+      plannedStart: new Date(start).toISOString(),
+      plannedEnd: new Date(end).toISOString(),
+    };
+    // Which weekend days were worked is read off the window Epicor gave.
+    weekendMemo.set(copy, weekendDaysWorked(order));
+    moved.set(order, copy);
+  }
+  return orders.map((o) => moved.get(o) ?? o);
+}
+
 /** Planning rows assigned to a press whose Start–Due interval overlaps the
  * selected eight-hour shift, in a shift the order is crewed for. Touching an
  * edge is not an overlap. */

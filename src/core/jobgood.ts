@@ -168,3 +168,25 @@ export function retroJobLeftFixes(
   }
   return out;
 }
+
+/**
+ * What is left of an order when `shiftId` starts: its quantity less the
+ * good made on it in every shift that started earlier — the Job Left the
+ * operator sheet shows, read at the shift's start. `records` are the order's
+ * own records on every press, signed or still live: the shift before is
+ * seldom signed off when the next one is planned. Epicor's own remaining
+ * quantity (Planning.csv, as at its export) caps it where it is lower — it
+ * knows of pieces made before this system kept records. undefined when the
+ * order has no quantity or the shift does not parse.
+ */
+export function leftAtShiftStart(
+  order: { orderQty: number; jobRequired: number },
+  records: ProductionRecord[],
+  shiftId: string,
+): number | undefined {
+  if (!(order.orderQty > 0)) return undefined;
+  const made = sumGoodStartedBefore(records, '', shiftId);
+  if (made == null) return undefined;
+  const left = Math.max(0, order.orderQty - made);
+  return order.jobRequired > 0 ? Math.min(left, order.jobRequired) : left;
+}
