@@ -2226,6 +2226,27 @@ function colorCell(c?: ColorTag): string {
   )}</span></td>`;
 }
 
+/** Rejects against the per-shift allowance, scaled by the shifts the
+ *  figure rolls up — one verdict for a table cell and the headline tile. */
+function rejectJudgement(reject: number, shifts: number): { cls: 'green' | 'red'; verdict: string } {
+  const span = Math.max(1, shifts);
+  const cls = reject <= REJECT_PER_SHIFT_MAX * span ? 'green' : 'red';
+  const perShift =
+    span === 1
+      ? `${reject} in the shift`
+      : `${reject} over ${span} shifts = ${(reject / span).toFixed(1)}/shift`;
+  return { cls, verdict: `${perShift} · ${cls === 'green' ? '🟢 within' : '🔴 above'} ${REJECT_PER_SHIFT_MAX} per shift` };
+}
+
+/** Efficiency cell tooltip: what the figure is made of, or why there is none. */
+function efficiencyTitle(a: { unratedRunHrs: number; ratedJobs: number; stdHours: number; runHrs: number }): string {
+  return a.unratedRunHrs > 0
+    ? `${a.unratedRunHrs.toFixed(1)} run hours have no production standard; Efficiency unavailable`
+    : a.ratedJobs > 0
+      ? `${a.stdHours.toFixed(1)} standard hours of output in ${a.runHrs.toFixed(1)} run hours`
+      : 'No job in this slice carries a production standard';
+}
+
 /** Scrap a single shift is allowed before the number turns red. */
 export const REJECT_PER_SHIFT_MAX = 5;
 
@@ -2245,13 +2266,7 @@ export function rejectCell(reject: number, shifts: number, drillKey?: string): s
   // No scrap at all: a dash, uncoloured. Green here would read as a
   // measurement ("we made 0 bad parts") on rows that simply logged none.
   if (!reject) return `<td class="num">—</td>`;
-  const span = Math.max(1, shifts);
-  const cls = reject <= REJECT_PER_SHIFT_MAX * span ? 'green' : 'red';
-  const perShift =
-    span === 1
-      ? `${reject} in the shift`
-      : `${reject} over ${span} shifts = ${(reject / span).toFixed(1)}/shift`;
-  const verdict = `${perShift} · ${cls === 'green' ? '🟢 within' : '🔴 above'} ${REJECT_PER_SHIFT_MAX} per shift`;
+  const { cls, verdict } = rejectJudgement(reject, shifts);
   if (!drillKey) {
     return `<td class="num ${cls}" title="${escapeHtml(verdict)}">${reject}</td>`;
   }
@@ -2302,7 +2317,7 @@ function aggCells(
     ${setupCell(a.dieHrs, a.dieStdHrs, DIE_CHANGE_STD_HRS, 'Die change')}
     ${setupCell(a.colorHrs, a.colorStdHrs, COLOR_CHANGE_STD_HRS, 'Colour change')}
     ${setupCell(a.insertHrs, a.insertStdHrs, INSERT_CHANGE_STD_HRS, 'Insert change')}
-    <td class="num ${colourOee ? oc : ''}" title="${a.unratedRunHrs > 0 ? escapeHtml(`${a.unratedRunHrs.toFixed(1)} run hours have no production standard; Efficiency unavailable`) : a.ratedJobs > 0 ? escapeHtml(`${a.stdHours.toFixed(1)} standard hours of output in ${a.runHrs.toFixed(1)} run hours`) : 'No job in this slice carries a production standard'}">${eff == null ? '—' : eff + '%'}</td>
+    <td class="num ${colourOee ? oc : ''}" title="${escapeHtml(efficiencyTitle(a))}">${eff == null ? '—' : eff + '%'}</td>
     <td class="num ${pc}"${a.comparisonTotal ? ` title="${escapeHtml(comparisonTitle(a))}"` : ''}>${planPct == null ? '—' : planPct + '%'}</td>`;
 }
 
@@ -3642,17 +3657,28 @@ function render(): void {
   const stats = S!.loading
     ? ''
     : `<div class="kpi-stats">
-        ${stat('Output', tot.output ? String(tot.output) : '—')}
+        ${stat(
+          'Output',
+          tot.output ? String(tot.output) : '—',
+          tot.output && totPlanPct != null ? 'is-' + planColourClass(totPlanPct, S!.thresholds) : '',
+          'Total Good. Coloured like ' + comparisonLabel() + ' beside it.',
+        )}
         ${stat(
           comparisonLabel(),
           totPlanPct != null ? totPlanPct + '%' : '—',
           totPlanPct != null ? 'is-' + planColourClass(totPlanPct, S!.thresholds) : '',
           floorAdherenceTitle(tot),
         )}
-        ${stat('Reject', tot.reject ? String(tot.reject) : '—', 'is-red')}
+        ${(() => {
+          // Judged like the table's Reject cells: against the per-shift
+          // allowance, scaled by the shifts the floor ran.
+          if (!tot.reject) return stat('Reject', '—');
+          const { cls, verdict } = rejectJudgement(tot.reject, tot.shifts);
+          return stat('Reject', String(tot.reject), 'is-' + cls, verdict);
+        })()}
         ${stat('Yield', totYield != null ? totYield + '%' : '—', totYield != null ? 'is-' + colourClass(+totYield, S!.thresholds.yieldGreen, S!.thresholds.yieldAmber) : '')}
-        ${stat('Run hours', tot.runHrs ? tot.runHrs.toFixed(1) : '—', 'is-green')}
-        ${stat('Down hours', tot.downHrs ? tot.downHrs.toFixed(1) : '—', tot.downHrs ? 'is-red' : '')}
+        ${stat('Run hours', tot.runHrs ? tot.runHrs.toFixed(1) : '—', '', 'No standard to judge against — not coloured.')}
+        ${stat('Down hours', tot.downHrs ? tot.downHrs.toFixed(1) : '—', '', 'No standard to judge against — not coloured.')}
         ${(() => {
           // C/O tile judged like the table cells: within the combined
           // die+colour+insert standard is green, a little over amber, worse
@@ -3731,14 +3757,14 @@ function render(): void {
                     ${colorCell()}
                     ${outputCell(tot)}
                     ${rejectCell(tot.reject, tot.shifts, 'FLOOR')}
-                    <td class="num">${totYield != null ? totYield + '%' : '—'}</td>
+                    <td class="num ${totYield != null ? colourClass(+totYield, S!.thresholds.yieldGreen, S!.thresholds.yieldAmber) : ''}">${totYield != null ? totYield + '%' : '—'}</td>
                     <td class="num">${th(tot.runHrs)}</td>
                     ${downHrsCell(tot.downHrs, 'FLOOR')}
                     <td class="num">${th(tot.startupHrs)}</td>
                     ${setupCell(tot.dieHrs, tot.dieStdHrs, DIE_CHANGE_STD_HRS, 'Die change')}
                     ${setupCell(tot.colorHrs, tot.colorStdHrs, COLOR_CHANGE_STD_HRS, 'Colour change')}
                     ${setupCell(tot.insertHrs, tot.insertStdHrs, INSERT_CHANGE_STD_HRS, 'Insert change')}
-                    <td class="num">—</td>
+                    <td class="num ${totOee != null ? colourClass(totOee, S!.thresholds.effGreen, S!.thresholds.effAmber) : ''}" title="${escapeHtml(efficiencyTitle(tot))}">${totOee != null ? totOee + '%' : '—'}</td>
                     <td class="num ${totCls}"${tot.comparisonTotal ? ` title="${escapeHtml(floorAdherenceTitle(tot))}"` : ''}>${totPct == null ? '—' : totPct + '%'}</td>
                     <td class="kpi-ho-cell muted">—</td>
                   </tr></tfoot>`;
