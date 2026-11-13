@@ -104,23 +104,59 @@ export function operatorsOf(records: ReadonlyArray<ProductionRecord>): string[] 
   return distinct(sheets(records).flatMap((sheet) => sheetPeople(sheet).operators));
 }
 
+/** Somebody who can run a press in a shift, and the presses (upper-cased)
+ *  whose sheets they led. */
+export interface PressOperator {
+  name: string;
+  presses: string[];
+}
+
 /**
- * How many people ran a press in each shift (a date and a shift): the
- * operator of each sheet, each person once. Somebody who only covered a
- * break ran no press of their own and is not one of them; an operator who
- * moved from one press to another in the shift is one person.
+ * Who could run a press in each shift (a date and a shift): the lead
+ * operator of each sheet, each person once, with the presses they led.
+ *
+ * Somebody who only covered a break led no sheet and is not one of them; an
+ * operator who moved from one press to another is one person with two
+ * presses.
+ *
+ * A supervisor relieves breaks and sets presses up; a sheet in their name
+ * with no production on it (a die change on the standby, say) is not a
+ * press being run. So a supervisor of the shift — the Supervisor its sheets
+ * name, whoever signed them off, or somebody the People list holds as a
+ * supervisor (`listedSupervisors`, any case) — is counted only for the
+ * sheets with run time on them, and not at all without one. An operator is
+ * counted for every sheet they lead: one standing by a press that is down
+ * all shift is still its crew.
  */
-export function operatorsRunningByShift(records: ReadonlyArray<ProductionRecord>): Map<string, number> {
-  const names = new Map<string, Set<string>>();
+export function pressOperatorsByShift(
+  records: ReadonlyArray<ProductionRecord>,
+  listedSupervisors: Iterable<string> = [],
+): Map<string, PressOperator[]> {
+  const listed = new Set([...listedSupervisors].map((n) => clean(n).toLowerCase()));
+  const byShift = new Map<string, ProductionRecord[][]>();
   for (const sheet of sheets(records)) {
-    const [lead] = sheetPeople(sheet).operators;
-    if (!lead) continue;
-    const shiftId = sheet[0].shiftId;
-    const seen = names.get(shiftId);
-    if (seen) seen.add(lead.toLowerCase());
-    else names.set(shiftId, new Set([lead.toLowerCase()]));
+    const held = byShift.get(sheet[0].shiftId);
+    if (held) held.push(sheet);
+    else byShift.set(sheet[0].shiftId, [sheet]);
   }
-  return new Map([...names].map(([shiftId, seen]) => [shiftId, seen.size]));
+  const out = new Map<string, PressOperator[]>();
+  for (const [shiftId, shiftSheets] of byShift) {
+    const people = shiftSheets.map(sheetPeople);
+    const supervisors = new Set([...listed, ...people.flatMap((p) => p.supervisors.map((n) => n.toLowerCase()))]);
+    const found = new Map<string, { name: string; presses: Set<string> }>();
+    shiftSheets.forEach((sheet, i) => {
+      const [lead] = people[i].operators;
+      if (!lead) return;
+      const key = lead.toLowerCase();
+      if (supervisors.has(key) && !sheet.some((r) => r.statusCode === 'R')) return;
+      const press = sheet[0].machineCode.trim().toUpperCase();
+      const held = found.get(key);
+      if (held) held.presses.add(press);
+      else found.set(key, { name: lead, presses: new Set([press]) });
+    });
+    out.set(shiftId, [...found.values()].map((o) => ({ name: o.name, presses: [...o.presses].sort() })));
+  }
+  return out;
 }
 
 /**

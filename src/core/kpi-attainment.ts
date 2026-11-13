@@ -352,12 +352,15 @@ export function withStandardHours(
  * presses, and holding it to five caps a perfect shift at 80 %.
  *
  * Per shift (a date and a shift, the whole floor): when more presses carry
- * a plan than there are operators on the shift (`operatorsOn`, plus one for
- * each press still awaiting sign-off, whose operator is not on record yet),
- * ONE press is the standby — never more: planning loads one, and a shift
- * two people short is short. Nobody marks which, so it is the press that
- * earned least: normally the one never started; where a crew moved over
- * mid-shift, the one it left or the one it went to, whichever made less.
+ * a plan than the shift had people to run them, ONE press is the standby —
+ * never more: planning loads one, and a shift two people short is short.
+ * `operatorsOn` says how many people that is, given the presses the shift
+ * had a plan for: somebody on a press with no plan is not free for one that
+ * has (core/crew `pressOperatorsByShift`). Each press still awaiting
+ * sign-off adds one, its operator not being on record yet. Nobody marks
+ * which press is the standby, so it is the one that earned least: normally
+ * the one never started; where a crew moved over mid-shift, the one it left
+ * or the one it went to, whichever made less.
  *
  * The standby's plan leaves the comparison. What it made stays earned, up
  * to what the other presses of the shift fell short by — the output that
@@ -366,7 +369,7 @@ export function withStandardHours(
  */
 export function withStandbyPress(
   lines: ReadonlyArray<AttainmentTuple>,
-  operatorsOn: (shiftId: string) => number,
+  operatorsOn: (shiftId: string, plannedPresses: ReadonlySet<string>) => number,
 ): AttainmentTuple[] {
   const inHours = lines.some((line) => line.source !== 'unscheduled' && line.plannedHrs !== undefined);
   const plan = (line: AttainmentTuple): number => (inHours ? line.plannedHrs ?? 0 : line.planned ?? 0);
@@ -399,7 +402,7 @@ export function withStandbyPress(
   const standby = new Map<string, { key: string; share: number }>();
   for (const [shiftId, presses] of byShift) {
     const planned = [...presses.values()].filter((press) => press.planned);
-    const operators = operatorsOn(shiftId);
+    const operators = operatorsOn(shiftId, new Set(planned.map((press) => press.key)));
     if (operators < 1) continue;
     const crewed = operators + planned.filter((press) => press.unsigned).length;
     if (planned.length <= crewed) continue;

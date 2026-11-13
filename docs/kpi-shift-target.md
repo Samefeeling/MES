@@ -80,11 +80,21 @@ shift held to all five is capped at 80 % however well it runs.
 
 `withStandbyPress` (core/kpi-attainment.ts), per shift across the floor:
 
-- **When.** More presses carry a plan than there are operators running a
-  press in the shift — the operator of each signed sheet, each person once
-  (`operatorsRunningByShift`); somebody who only covered a break is not
-  counted, and each press still awaiting sign-off counts as crewed. A shift
-  with no operator on record yet is left alone.
+- **When.** More presses carry a plan than the shift had people to run
+  them. Those people are the lead operator of each signed sheet, each
+  person once (`pressOperatorsByShift`, core/crew.ts), with three rules:
+  - somebody who only covered a break led no sheet and is not counted;
+  - a **supervisor** of the shift — named Supervisor on its sheets, the one
+    who signed them off, or a supervisor on the People list — is counted
+    only when a sheet in their name has run time on it. A supervisor
+    relieves breaks and sets presses up: a die change on the standby is not
+    a press being run. An operator is counted for any sheet they lead, so a
+    press with a crew that is down all shift is still held to its plan;
+  - somebody whose only press had **no plan** (hot stamp on new parts, say)
+    is not free for a press that had one, and is not counted.
+
+  Each press still awaiting sign-off counts as crewed. A shift with nobody
+  on record yet is left alone.
 - **Which.** Nobody marks the standby, so it is the press that earned the
   fewest standard hours: normally the one never started; where a crew moved
   over mid-shift, the one it left or the one it went to, whichever made
@@ -105,9 +115,17 @@ earn 7 h each. Held to five presses: 28 ÷ 35 = 80 %. With the standby rule:
 
 Limits: an absent operator and a standby left idle look the same in the
 data — one press is let off either way. People present with no sheet (no
-press to run, no material) are not on record and cannot be counted. Chosen
+press to run, no material) are not on record and cannot be counted. A supervisor who ran
+a press for half an hour counts as a whole person for the shift. Chosen
 with Production, 13 Nov 2026: by head-count, one press a shift, both
-presses' output counted to 100 %.
+presses' output counted to 100 %; a supervisor counts only with production
+of their own.
+
+Worked case, a Day shift of five: Gabriel on 1600T, Tony on Batt2, Miley on
+550T, John on the hot stamp (no plan), and Tin — the supervisor — relieving
+breaks, with a 2.5 h die change on Batt1 in his name and nothing made.
+Four presses planned (1600T, Batt1, Batt2, 550T), three people to run them
+(not Tin, not John): Batt1 is the standby.
 
 ## Schedule Adherence (Last 24h)
 

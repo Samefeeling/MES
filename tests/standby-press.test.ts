@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { attainmentOfTuples, withStandbyPress, type AttainmentTuple } from '../src/core/kpi-attainment';
+import { pressOperatorsByShift } from '../src/core/crew';
+import { rec } from './helpers';
+import type { ProductionRecord } from '../src/types';
 
 const SHIFT = '2026-11-16-Day';
 
@@ -114,5 +117,51 @@ describe('the standby press of a shift is not held to its plan', () => {
     const judged = withStandbyPress(lines, operators(2));
     expect(standbyOf(judged)).toEqual(['S']);
     expect(attainmentOfTuples(judged)).toMatchObject({ pct: 85, expected: 200, actual: 170 });
+  });
+});
+
+describe('the people a shift had for its planned presses', () => {
+  /** A signed sheet under supervisor Tin: `status` on its half-hours. */
+  const sheet = (machineCode: string, operator: string, status: ProductionRecord['statusCode'] = 'R'): ProductionRecord[] =>
+    [0, 2, 3].map((slotIndex) =>
+      rec({
+        machineCode, shiftId: SHIFT, jobNumber: 'J-' + machineCode, slotIndex, statusCode: status,
+        operator: slotIndex === 0 ? operator : '', supervisor: 'Tin', lockedBy: 'Tin', qcBy: operator,
+      }));
+  const judge = (lines: AttainmentTuple[], records: ProductionRecord[]): AttainmentTuple[] => {
+    const people = pressOperatorsByShift(records);
+    return withStandbyPress(lines, (shiftId, planned) =>
+      (people.get(shiftId) ?? []).filter((o) => o.presses.some((p) => planned.has(p))).length);
+  };
+  // Four presses planned; the hot stamp runs parts that carry no plan.
+  const lines = [
+    press('1600T', 6, 5.6), press('BATT1', 3, 0), press('BATT2', 8, 7.8), press('550T', 8, 3.8),
+    { machineCode: 'HSTAMP', shiftId: SHIFT, jobNumber: 'J-HSTAMP', planned: 0, good: 56, credited: 0, source: 'unscheduled' } as AttainmentTuple,
+  ];
+  const running = [...sheet('1600T', 'Gabriel'), ...sheet('Batt2', 'Tony'), ...sheet('550T', 'Miley'), ...sheet('HStamp', 'John')];
+
+  it('five people, one the supervisor relieving breaks: the press only he touched is the standby', () => {
+    // Tin changed the die on Batt1 and ran nothing; John is on the hot stamp.
+    const judged = judge(lines, [...running, ...sheet('Batt1', 'Tin', 'D')]);
+    expect(pct(lines)).toBe(69); // 17.2 of 25, Batt1 held to its plan
+    expect(standbyOf(judged)).toEqual(['BATT1']);
+    expect(attainmentOfTuples(judged)).toMatchObject({ pct: 78, plannedHrs: 22 }); // 17.2 of 22
+  });
+
+  it('an operator of his own on that press: it had a crew, and is held to its plan', () => {
+    const judged = judge(lines, [...running, ...sheet('Batt1', 'Phong', 'D')]);
+    expect(standbyOf(judged)).toEqual([]);
+    expect(pct(judged)).toBe(69);
+  });
+
+  it('the supervisor ran it: one more person, no standby', () => {
+    const judged = judge(lines, [...running, ...sheet('Batt1', 'Tin', 'D'), ...sheet('Batt1', 'Tin').map((r) => ({ ...r, slotIndex: r.slotIndex + 8 }))]);
+    expect(standbyOf(judged)).toEqual([]);
+  });
+
+  it('somebody on a press with no plan is not free for one that has', () => {
+    // Nobody at Batt1 at all, and five operators on the floor: John's is the hot stamp.
+    const judged = judge(lines, [...running, ...sheet('125T', 'Van')]);
+    expect(standbyOf(judged)).toEqual(['BATT1']);
   });
 });

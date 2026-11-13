@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  crewOf, crewSize, firstName, floorStaffing, namesForSheet, onOvertime, operatorsOf, operatorsRunningByShift,
+  crewOf, crewSize, firstName, floorStaffing, namesForSheet, onOvertime, operatorsOf, pressOperatorsByShift,
   rosterOf, sheetPeople, shiftStaffing,
 } from '../src/core/crew';
 import { operatorByTuple } from '../src/core/operator-perf';
@@ -215,24 +215,56 @@ describe('how many people a shift had on, overtime at half', () => {
   });
 });
 
-describe('how many people ran a press in a shift', () => {
-  const sheet = (machineCode: string, shiftId: string, operator: string, cover = ''): ReturnType<typeof rec>[] =>
+describe('who could run a press in a shift', () => {
+  /** A signed sheet: `status` on every half-hour, under supervisor Tin. */
+  const sheet = (machineCode: string, shiftId: string, operator: string, cover = '', status: ProductionRecord['statusCode'] = 'R'): ProductionRecord[] =>
     [0, 2, 3, 4].map((slotIndex) =>
       rec({
-        machineCode, shiftId, jobNumber: 'J-' + machineCode, slotIndex, statusCode: 'R',
+        machineCode, shiftId, jobNumber: 'J-' + machineCode, slotIndex, statusCode: status,
         operator: slotIndex === 0 ? operator : '', supervisor: slotIndex === 0 ? 'Tin Maung' : '',
         qcBy: slotIndex === 3 && cover ? cover : operator,
       }));
+  const day = '2026-11-16-Day';
+  const names = (records: ProductionRecord[], listed: string[] = [], shiftId = day): Record<string, string[]> =>
+    Object.fromEntries((pressOperatorsByShift(records, listed).get(shiftId) ?? []).map((o) => [o.name, o.presses]));
 
-  it('counts the operator of each sheet once: no supervisors, nobody who only covered a break', () => {
-    const day = '2026-11-16-Day';
+  it('the lead of each sheet once: no supervisors, nobody who only covered a break', () => {
     const records = [
       ...sheet('P1', day, 'John Taylor'),
       ...sheet('P2', day, 'Ben Wood', 'Relief Rita'), // Rita covered Ben's break
       // John's press stopped and he moved to the standby.
-      ...sheet('S', day, 'John Taylor'),
+      ...sheet('s', day, 'John Taylor'),
       ...sheet('P1', '2026-11-16-Afternoon', 'Ann Lee'),
     ];
-    expect(operatorsRunningByShift(records)).toEqual(new Map([[day, 2], ['2026-11-16-Afternoon', 1]]));
+    expect(names(records)).toEqual({ 'John Taylor': ['P1', 'S'], 'Ben Wood': ['P2'] });
+    expect(names(records, [], '2026-11-16-Afternoon')).toEqual({ 'Ann Lee': ['P1'] });
+  });
+
+  it('a supervisor with a sheet and no production on it is not running a press', () => {
+    // Tin, the shift's supervisor, changed the die on the standby between breaks.
+    const records = [...sheet('P1', day, 'John Taylor'), ...sheet('S', day, 'Tin Maung', '', 'D')];
+    expect(names(records)).toEqual({ 'John Taylor': ['P1'] });
+  });
+
+  it('a supervisor who ran a press is one of them, for the presses that ran', () => {
+    const records = [
+      ...sheet('P1', day, 'John Taylor'),
+      ...sheet('P2', day, 'tin maung'),
+      ...sheet('S', day, 'Tin Maung', '', 'D'),
+    ];
+    expect(names(records)).toEqual({ 'John Taylor': ['P1'], 'tin maung': ['P2'] });
+  });
+
+  it('an operator standing by a press that is down all shift is still its crew', () => {
+    const records = [...sheet('P1', day, 'John Taylor'), ...sheet('P2', day, 'Ben Wood', '', 'B')];
+    expect(names(records)).toEqual({ 'John Taylor': ['P1'], 'Ben Wood': ['P2'] });
+  });
+
+  it('knows a supervisor from the People list too, and from who signed off', () => {
+    const unnamed = (machineCode: string, operator: string, lockedBy = ''): ProductionRecord[] =>
+      sheet(machineCode, day, operator, '', 'D').map((r) => ({ ...r, supervisor: '', lockedBy }));
+    expect(names(unnamed('S', 'Kim Park'))).toEqual({ 'Kim Park': ['S'] });
+    expect(names(unnamed('S', 'Kim Park'), [' KIM  park '])).toEqual({});
+    expect(names([...unnamed('S', 'Kim Park'), ...unnamed('P1', 'John Taylor', 'Kim Park')])).toEqual({ 'John Taylor': ['P1'] });
   });
 });
