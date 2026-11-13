@@ -410,6 +410,14 @@ interface KpiState {
    *  "Battens"), rendered as subtotal rows above the grand TOTAL.
    *  Parts without a category land in "Other". */
   catTotals: Array<{ category: string; agg: ShiftAgg }>;
+  /** The same subtotals for one kind of shift — what the table shows
+   *  while `shiftFilter` is set. A category with nothing made and nothing
+   *  planned on that shift is left out. */
+  catTotalsByShift: Record<ShiftCode, Array<{ category: string; agg: ShiftAgg }>>;
+  /** The table's shift filter (the drop-down in its Machine header):
+   *  every row then carries that shift's figures only. null = all three.
+   *  The tiles and charts stay on the whole period. */
+  shiftFilter: ShiftCode | null;
   /** Reject quantity per RejectCode, sliced floor-wide and per machine.
    *  Quantity + shift come directly from PMD_Rejects; the human label is
    *  resolved by RejectCode from PMD_RejectCategories. RejectCategory on
@@ -1898,13 +1906,24 @@ async function compute(now = new Date()): Promise<void> {
       if (!byCategory.has(cat)) byCategory.set(cat, []);
     }
   });
-  S!.catTotals = Array.from(byCategory.entries())
-    .map(([category, recs]) => {
-      const agg = recs.length ? toAgg(aggregate(recs, ctByJob)) : emptyAgg();
-      addTuples(agg, linesByCategory.get(category) ?? []);
-      return { category, agg };
-    })
-    .sort((a, b2) => b2.agg.output - a.agg.output);
+  const catTotalsOf = (code: ShiftCode | null): Array<{ category: string; agg: ShiftAgg }> => {
+    const onShift = (x: { shiftId: string }): boolean => !code || parseShiftId(x.shiftId)?.code === code;
+    return Array.from(byCategory.entries())
+      .map(([category, allRecs]) => {
+        const recs = allRecs.filter(onShift);
+        const catLines = (linesByCategory.get(category) ?? []).filter(onShift);
+        const agg = recs.length ? toAgg(aggregate(recs, ctByJob)) : emptyAgg();
+        addTuples(agg, catLines);
+        return { category, agg, blank: !recs.length && !catLines.length };
+      })
+      // The period's list keeps every category it found; one shift's list
+      // drops those that shift had nothing to do with.
+      .filter((c) => !code || !c.blank)
+      .map(({ category, agg }) => ({ category, agg }))
+      .sort((a, b2) => b2.agg.output - a.agg.output);
+  };
+  S!.catTotals = catTotalsOf(null);
+  S!.catTotalsByShift = { Day: catTotalsOf('Day'), Afternoon: catTotalsOf('Afternoon'), Night: catTotalsOf('Night') };
 
   // paretoMachines = ['', ...machineCodes] above; index 0 is the floor,
   // indices 1..N are the per-machine slices. The drill-down keys on the
@@ -3265,6 +3284,7 @@ const FOCUS_KEYS = [
   'data-jobs',
   'data-toggle-all-shifts',
   'data-toggle-all-orders',
+  'data-shift-filter',
   'data-collapse-month',
   'data-period',
   'data-kpi-view',
@@ -3385,6 +3405,14 @@ function render(): void {
   // The headline Efficiency — the same ingredients as the per-row figure and
   // the chart overlay, summed and divided once.
   const totOee = efficiencyOf(tot);
+  // The table's own total: the tiles above always read the whole period
+  // (`tot`); the table follows its shift filter.
+  const only = S!.shiftFilter;
+  const tableTot = only ? sumAggs(S!.rows.map((r) => r.byShift[only])) : tot;
+  const tablePieces = tableTot.output + tableTot.reject;
+  const tableYield = tablePieces > 0 ? ((tableTot.output / tablePieces) * 100).toFixed(1) : null;
+  const tableOee = efficiencyOf(tableTot);
+  const onShift = (x: { shiftId: string }): boolean => !only || parseShiftId(x.shiftId)?.code === only;
 
   let body: string;
   if (S!.loading) {
@@ -3394,7 +3422,11 @@ function render(): void {
       .map((r) => {
         // A press planned and never run has no orders made, but its shifts
         // still carry the plan it missed.
-        const hasData = r.byJobTotal.length > 0 || r.total.comparisonTotal > 0;
+        // Under the shift filter the press row IS that shift: its figures,
+        // its crew, its orders, its handovers.
+        const rowAgg = only ? r.byShift[only] : r.total;
+        const rowJobs = only ? r.jobsByShift[only] : r.byJobTotal;
+        const hasData = rowJobs.length > 0 || rowAgg.comparisonTotal > 0;
         const isCollapsed = S!.collapsed.has(r.machineCode) || !hasData;
         const ordersOpen = S!.ordersExpanded.has(r.machineCode);
         // A machine with no jobs in the period has no shift breakdown
@@ -3411,23 +3443,27 @@ function render(): void {
         const ordersToggle = hasData
           ? `<button type="button" class="kpi-toggle kpi-orders-toggle" data-orders="${escapeHtml(
               r.machineCode,
-            )}" aria-label="${ordersOpen ? 'Hide' : 'Show'} per-order rollup for ${escapeHtml(r.machineCode)}" title="Toggle per-Job# rollup across all shifts in this period">${
+            )}" aria-label="${ordersOpen ? 'Hide' : 'Show'} per-order rollup for ${escapeHtml(r.machineCode)}" title="Toggle per-Job# rollup ${only ? 'for the ' + only + ' shifts' : 'across all shifts'} in this period">${
               ordersOpen ? '⌄' : '›'
             }</button>`
           : '';
         const headRow = `<tr class="kpi-machine">
-          <th>${toggle}${ordersToggle}<span class="kpi-mc-name">${escapeHtml(r.machineCode)}</span>${unsignedTag(r.total)}</th>
-          ${operatorCell(r.operators)}
+          <th>${toggle}${ordersToggle}<span class="kpi-mc-name">${escapeHtml(r.machineCode)}</span>${unsignedTag(rowAgg)}</th>
+          ${operatorCell(only ? r.operatorsByShift[only] : r.operators)}
           ${colorCell()}
-          ${aggCells(r.total, null, true, r.machineCode, r.machineCode)}
-          ${formatHandoverCell(r.machineCode, r.handovers)}
+          ${
+            // The Reject / Down drill-downs break the whole period down, so
+            // they are offered only where the number is the whole period's.
+            only ? aggCells(rowAgg) : aggCells(rowAgg, null, true, r.machineCode, r.machineCode)
+          }
+          ${formatHandoverCell(r.machineCode, r.handovers.filter(onShift))}
         </tr>`;
         const orderRows = ordersOpen
-          ? r.byJobTotal
+          ? rowJobs
               .map((j) => {
                 const fullDesc = `${j.jobNumber}${
                   j.partDescShort ? ' — ' + j.partDescShort : ''
-                } (period total) · ${finishedLabel(j.lastRunAt)}`;
+                } (${only ? only + ' total' : 'period total'}) · ${finishedLabel(j.lastRunAt)}`;
                 return `<tr class="kpi-job kpi-order-total">
                   ${jobNameTh(j.jobNumber, j.partDescShort, fullDesc)}
                   ${operatorCell(j.operators)}${colorCell(j.color)}
@@ -3438,7 +3474,7 @@ function render(): void {
               .join('')
           : '';
         if (isCollapsed) return headRow + orderRows;
-        const shiftRows = SHIFT_ORDER.map((code) => {
+        const shiftRows = (only ? [only] : SHIFT_ORDER).map((code) => {
           const a = r.byShift[code];
           const jobs = r.jobsByShift[code];
           const expandKey = `${r.machineCode}|${code}`;
@@ -3480,7 +3516,7 @@ function render(): void {
     // Category subtotals close the body, directly above the sticky
     // grand-TOTAL footer. One row per PMD_ProductDieColor.Category that
     // saw production this period; "Other" collects uncategorised parts.
-    body += S!.catTotals
+    body += (only ? S!.catTotalsByShift[only] : S!.catTotals)
       .map(
         (c, i) => `<tr class="kpi-cat-total${i === 0 ? ' kpi-cat-first' : ''}">
           <th>${escapeHtml(c.category)}</th>
@@ -3494,7 +3530,8 @@ function render(): void {
     // Each shift across every press, between the categories and the TOTAL
     // they add up to. Schedule Adherence is the same Σ standard hours
     // earned ÷ Σ planned as every other row.
-    body += SHIFT_ORDER
+    // Under the shift filter the TOTAL below is that one shift already.
+    body += (only ? [] : SHIFT_ORDER)
       .map((code, i) => {
         const sum = sumAggs(S!.rows.map((r) => r.byShift[code]));
         const pieces = sum.output + sum.reject;
@@ -3790,6 +3827,10 @@ function render(): void {
             <th class="kpi-machine-head">Machine
               <button type="button" class="kpi-toggle kpi-toggle-all" data-toggle-all-shifts title="Toggle shift breakdown on every machine">${allShiftsGlyph}</button>
               <button type="button" class="kpi-toggle kpi-toggle-all kpi-orders-toggle" data-toggle-all-orders title="Toggle per-order rollup on every machine">${allOrdersGlyph}</button>
+              <select class="kpi-shift-filter${only ? ' is-on' : ''}" data-shift-filter aria-label="Show one shift only" title="Show one shift only: every row of the table — presses, orders, categories, TOTAL — then carries that shift's figures. The tiles above and the charts below stay on the whole period.">
+                <option value=""${only ? '' : ' selected'}>All shifts</option>
+                ${SHIFT_ORDER.map((code) => `<option value="${code}"${only === code ? ' selected' : ''}>${code}</option>`).join('')}
+              </select>
             </th><th class="kpi-op-head" title="Who ran the press (first names — hover for full names): the operator named on the signed sheet, then anybody else who signed one of its operator Quality Checks, e.g. covering a break. Where the named operator signed none of them and somebody else did, only the people who signed are shown. Day / Afternoon / Night count everybody on shift, each person once, the supervisors named on the sheets or signing them off included. Somebody on overtime — on a shift the People list does not roster them on — counts as half a person there (4 of the shift's 8 hours). Over several days the figure is the average per shift. TOTAL adds the three shifts up.">Operator</th><th class="kpi-color-head">Color</th>
             <th>Output</th><th>Reject</th><th>Yield%</th>
             <th>Run h</th><th>Down h</th>
@@ -3797,7 +3838,7 @@ function render(): void {
             <th title="D — Die change">Die h</th>
             <th title="C — Colour change">Colour h</th>
             <th title="I — Insert change">Insert h</th>
-            <th title="The output's standard hours at the planned rate ÷ every run hour — (Good ÷ JobOper_ProdStandard) ÷ R hours">Efficiency*</th><th title="${escapeHtml(comparisonTitle(tot))}">${comparisonLabel()}</th>
+            <th title="The output's standard hours at the planned rate ÷ every run hour — (Good ÷ JobOper_ProdStandard) ÷ R hours">Efficiency*</th><th title="${escapeHtml(comparisonTitle(tableTot))}">${comparisonLabel()}</th>
             <th class="kpi-ho-head">Handover</th>
           </tr></thead>
           <tbody>${body}</tbody>
@@ -3806,23 +3847,24 @@ function render(): void {
               ? ''
               : (() => {
                   const th = (v: number): string => (v ? v.toFixed(1) : '—');
-                  const totPct = totPlanPct;
+                  const totPct = only ? comparisonPct(tableTot) : totPlanPct;
                   const totCls = planColourClass(totPct, S!.thresholds);
+                  const t = tableTot;
                   return `<tfoot><tr class="kpi-total">
-                    <th>TOTAL</th>
-                    ${crewCell(S!.staff, true)}
+                    <th>TOTAL${only ? ' — ' + only : ''}</th>
+                    ${only ? crewCell(S!.staffByShift[only]) : crewCell(S!.staff, true)}
                     ${colorCell()}
-                    ${outputCell(tot)}
-                    ${rejectCell(tot.reject, tot.shifts, 'FLOOR')}
-                    <td class="num ${totYield != null ? colourClass(+totYield, S!.thresholds.yieldGreen, S!.thresholds.yieldAmber) : ''}">${totYield != null ? totYield + '%' : '—'}</td>
-                    <td class="num">${th(tot.runHrs)}</td>
-                    ${downHrsCell(tot.downHrs, 'FLOOR')}
-                    <td class="num">${th(tot.startupHrs)}</td>
-                    ${setupCell(tot.dieHrs, tot.dieStdHrs, DIE_CHANGE_STD_HRS, 'Die change')}
-                    ${setupCell(tot.colorHrs, tot.colorStdHrs, COLOR_CHANGE_STD_HRS, 'Colour change')}
-                    ${setupCell(tot.insertHrs, tot.insertStdHrs, INSERT_CHANGE_STD_HRS, 'Insert change')}
-                    <td class="num ${totOee != null ? colourClass(totOee, S!.thresholds.effGreen, S!.thresholds.effAmber) : ''}" title="${escapeHtml(efficiencyTitle(tot))}">${totOee != null ? totOee + '%' : '—'}</td>
-                    <td class="num ${totCls}"${tot.comparisonTotal ? ` title="${escapeHtml(floorAdherenceTitle(tot))}"` : ''}>${totPct == null ? '—' : totPct + '%'}</td>
+                    ${outputCell(t)}
+                    ${rejectCell(t.reject, t.shifts, only ? undefined : 'FLOOR')}
+                    <td class="num ${tableYield != null ? colourClass(+tableYield, S!.thresholds.yieldGreen, S!.thresholds.yieldAmber) : ''}">${tableYield != null ? tableYield + '%' : '—'}</td>
+                    <td class="num">${th(t.runHrs)}</td>
+                    ${downHrsCell(t.downHrs, only ? undefined : 'FLOOR')}
+                    <td class="num">${th(t.startupHrs)}</td>
+                    ${setupCell(t.dieHrs, t.dieStdHrs, DIE_CHANGE_STD_HRS, 'Die change')}
+                    ${setupCell(t.colorHrs, t.colorStdHrs, COLOR_CHANGE_STD_HRS, 'Colour change')}
+                    ${setupCell(t.insertHrs, t.insertStdHrs, INSERT_CHANGE_STD_HRS, 'Insert change')}
+                    <td class="num ${tableOee != null ? colourClass(tableOee, S!.thresholds.effGreen, S!.thresholds.effAmber) : ''}" title="${escapeHtml(efficiencyTitle(t))}">${tableOee != null ? tableOee + '%' : '—'}</td>
+                    <td class="num ${totCls}"${t.comparisonTotal ? ` title="${escapeHtml(floorAdherenceTitle(t))}"` : ''}>${totPct == null ? '—' : totPct + '%'}</td>
                     <td class="kpi-ho-cell muted">—</td>
                   </tr></tfoot>`;
                 })()
@@ -3936,7 +3978,9 @@ function render(): void {
     b.addEventListener('click', () => {
       const machineCode = b.dataset.handoverMachine!;
       const row = S!.rows.find((r) => r.machineCode === machineCode);
-      if (row?.handovers.length) openHandoverDetail(machineCode, row.handovers);
+      const only = S!.shiftFilter;
+      const shown = (row?.handovers ?? []).filter((h) => !only || parseShiftId(h.shiftId)?.code === only);
+      if (shown.length) openHandoverDetail(machineCode, shown);
     }),
   );
   app.querySelectorAll<HTMLButtonElement>('[data-reject-drill]').forEach((b) =>
@@ -3961,6 +4005,11 @@ function render(): void {
       render();
     }),
   );
+  app.querySelector<HTMLSelectElement>('[data-shift-filter]')?.addEventListener('change', (e) => {
+    const v = (e.currentTarget as HTMLSelectElement).value;
+    S!.shiftFilter = SHIFT_ORDER.find((code) => code === v) ?? null;
+    render();
+  });
   const allShiftsBtn = app.querySelector<HTMLButtonElement>('[data-toggle-all-shifts]');
   if (allShiftsBtn) {
     allShiftsBtn.addEventListener('click', () => {
@@ -4446,6 +4495,8 @@ export async function renderKpi(dal: PmdDataLayer, assemblyDal?: AssemblyDataLay
     jobsExpanded: new Set(),
     ordersExpanded: new Set(),
     catTotals: [],
+    catTotalsByShift: { Day: [], Afternoon: [], Night: [] },
+    shiftFilter: null,
     rejectPareto: { floor: [], byMachine: new Map() },
     downtimePareto: { floor: [], byMachine: new Map() },
     rejectDescByCode: new Map(),

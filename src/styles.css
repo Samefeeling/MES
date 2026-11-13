@@ -223,6 +223,10 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
    label. */
 .kpi-machine-head{white-space:nowrap}
 .kpi-toggle-all{width:22px;height:22px;font-size:14px;margin-left:6px;margin-right:0}
+/* Shift filter beside them. Amber while it is on: the table is then one
+   shift's figures while the tiles above still read the whole period. */
+.kpi-shift-filter{height:22px;margin-left:6px;padding:0 2px;border:1px solid var(--bd);border-radius:6px;background:#fff;color:var(--theme-dark);font:inherit;font-size:12px;font-weight:700;text-transform:none;letter-spacing:0;cursor:pointer;vertical-align:middle;max-width:96px}
+.kpi-shift-filter.is-on{background:#fef3c7;border-color:#f59e0b;color:#92400e}
 .kpi-table-wrap{background:#fff;border:1px solid var(--bd);border-radius:12px;overflow:auto;max-height:70vh;position:relative}
 /* min-width = the colgroup's own widths (250 + 100 + 11×72 + 230), so the
    fixed layout never has to squeeze a metric column. Bump it when a
