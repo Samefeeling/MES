@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { attainmentOfTuples, withStandbyPress, type AttainmentTuple } from '../src/core/kpi-attainment';
-import { pressOperatorsByShift } from '../src/core/crew';
+import { pressCrewsByShift, unattendedPresses } from '../src/core/crew';
 import { rec } from './helpers';
 import type { ProductionRecord } from '../src/types';
 
@@ -129,9 +129,12 @@ describe('the people a shift had for its planned presses', () => {
         operator: slotIndex === 0 ? operator : '', supervisor: 'Tin', lockedBy: 'Tin', qcBy: operator,
       }));
   const judge = (lines: AttainmentTuple[], records: ProductionRecord[]): AttainmentTuple[] => {
-    const people = pressOperatorsByShift(records);
-    return withStandbyPress(lines, (shiftId, planned) =>
-      (people.get(shiftId) ?? []).filter((o) => o.presses.some((p) => planned.has(p))).length);
+    const crews = pressCrewsByShift(records);
+    return withStandbyPress(
+      lines,
+      (shiftId, planned) => (crews.get(shiftId)?.operators ?? []).filter((o) => o.presses.some((p) => planned.has(p))).length,
+      (shiftId) => unattendedPresses(crews.get(shiftId)?.unattended),
+    );
   };
   // Four presses planned; the hot stamp runs parts that carry no plan.
   const lines = [
@@ -161,7 +164,34 @@ describe('the people a shift had for its planned presses', () => {
 
   it('somebody on a press with no plan is not free for one that has', () => {
     // Nobody at Batt1 at all, and five operators on the floor: John's is the hot stamp.
-    const judged = judge(lines, [...running, ...sheet('125T', 'Van')]);
+    const judged = judge(lines, [...running, ...sheet('850T', 'Van')]);
     expect(standbyOf(judged)).toEqual(['BATT1']);
+  });
+
+  it('a small press runs by itself: never the standby, and not a press waiting for a person', () => {
+    // 125T was planned and never set up. Batt1 is still the standby; 125T is held to its plan.
+    const withSmall = [...lines, press('125T', 2, 0)];
+    const judged = judge(withSmall, [...running, ...sheet('Batt1', 'Tin', 'D'), ...sheet('125T', 'Tin', 'D')]);
+    expect(standbyOf(judged)).toEqual(['BATT1']);
+    expect(attainmentOfTuples(judged)).toMatchObject({ plannedHrs: 24 }); // 25 + 2 - Batt1's 3
+
+    // Four operators for the four attended presses, 125T running beside them: no standby.
+    const manned = [...running.filter((r) => r.machineCode !== 'HStamp'), ...sheet('Batt1', 'John')];
+    expect(standbyOf(judge(withSmall, [...manned, ...sheet('125T', 'Tin')]))).toEqual([]);
+    // The same floor without the rule would be five presses for four people.
+    expect(standbyOf(withStandbyPress(withSmall, operators(4)))).toHaveLength(1);
+  });
+
+  it('550T running under the supervisor alone is not the standby, however little it made', () => {
+    // Gabriel left 1600T for Batt1 part-way; Tin has 550T running by itself, badly.
+    const shift = [press('1600T', 6, 4), press('BATT1', 3, 1), press('BATT2', 8, 7.8), press('550T', 8, 0.5)];
+    const records = [...sheet('1600T', 'Gabriel'), ...sheet('Batt1', 'Gabriel'), ...sheet('Batt2', 'Tony'), ...sheet('550T', 'Tin')];
+    // Three attended presses for two people: Batt1, the least of them, is the standby.
+    expect(standbyOf(judge(shift, records))).toEqual(['BATT1']);
+    // Held to be attended, 550T would be taken for it: four presses, three people, and it made least.
+    const people = pressCrewsByShift(records.map((r) => (r.machineCode === '550T' ? { ...r, machineCode: '850T' } : r)));
+    const attended = shift.map((l) => (l.machineCode === '550T' ? { ...l, machineCode: '850T' } : l));
+    expect(standbyOf(withStandbyPress(attended, (id, planned) =>
+      (people.get(id)?.operators ?? []).filter((o) => o.presses.some((p) => planned.has(p))).length))).toEqual(['850T']);
   });
 });

@@ -58,6 +58,15 @@ function byCount(names: Iterable<string>): string[] {
   return [...count.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name)).map((c) => c.name);
 }
 
+/** A sheet's names as written: the Operator it names, and whoever signed
+ *  its operator Quality Checks (most checks first). */
+function sheetNames(records: ReadonlyArray<ProductionRecord>): { operator: string; operatorChecks: string[] } {
+  const operator = clean(records.find((r) => r.slotIndex === 0 && clean(r.operator))?.operator)
+    || clean(records.find((r) => clean(r.operator))?.operator);
+  const operatorChecks = byCount(records.filter((r) => !SUPERVISOR_QC_SLOTS.has(r.slotIndex)).map((r) => r.qcBy));
+  return { operator, operatorChecks };
+}
+
 /**
  * The people of ONE sheet (the records of one press, shift and order).
  *
@@ -76,9 +85,7 @@ function byCount(names: Iterable<string>): string[] {
  * shifts, so a name from the shift before is not, by itself, a mistake.
  */
 export function sheetPeople(records: ReadonlyArray<ProductionRecord>): SheetPeople {
-  const operator = clean(records.find((r) => r.slotIndex === 0 && clean(r.operator))?.operator)
-    || clean(records.find((r) => clean(r.operator))?.operator);
-  const operatorChecks = byCount(records.filter((r) => !SUPERVISOR_QC_SLOTS.has(r.slotIndex)).map((r) => r.qcBy));
+  const { operator, operatorChecks } = sheetNames(records);
   const leftover = !!operator && operatorChecks.length > 0 && !operatorChecks.some((n) => same(n, operator));
   const operators = leftover || !operator
     ? operatorChecks
@@ -104,11 +111,34 @@ export function operatorsOf(records: ReadonlyArray<ProductionRecord>): string[] 
   return distinct(sheets(records).flatMap((sheet) => sheetPeople(sheet).operators));
 }
 
+/** Small presses that run by themselves once the die setter has set them
+ *  up: nobody stands at them, whoever's name is on the sheet. */
+export const UNATTENDED_PRESSES: ReadonlyArray<string> = ['125T', '150T'];
+
+/** Presses that run by themselves on some shifts: the ones where only a
+ *  supervisor's name is on what they ran (`pressCrewsByShift`). */
+export const SOMETIMES_UNATTENDED_PRESSES: ReadonlyArray<string> = ['320T', '550T'];
+
+/** The presses nobody stood at in a shift: the always-unattended ones, and
+ *  those found unattended on that shift (`ShiftPressCrew.unattended`). */
+export function unattendedPresses(found: ReadonlyArray<string> = []): Set<string> {
+  return new Set([...UNATTENDED_PRESSES, ...found]);
+}
+
 /** Somebody who can run a press in a shift, and the presses (upper-cased)
  *  whose sheets they led. */
 export interface PressOperator {
   name: string;
   presses: string[];
+}
+
+/** Who a shift had to run its presses. */
+export interface ShiftPressCrew {
+  operators: PressOperator[];
+  /** Presses (upper-cased) of `SOMETIMES_UNATTENDED_PRESSES` that ran
+   *  unattended on this shift. `UNATTENDED_PRESSES` always are, and are not
+   *  repeated here. */
+  unattended: string[];
 }
 
 /**
@@ -127,34 +157,65 @@ export interface PressOperator {
  * sheets with run time on them, and not at all without one. An operator is
  * counted for every sheet they lead: one standing by a press that is down
  * all shift is still its crew.
+ *
+ * A press that runs unattended gives nobody a press to their name: the
+ * small ones always (`UNATTENDED_PRESSES`), and one of
+ * `SOMETIMES_UNATTENDED_PRESSES` on a shift where everything it ran was
+ * under a supervisor alone — on each of its sheets with run time, the
+ * Operator named is a supervisor, or everybody who signed its operator
+ * Quality Checks is. A sheet of it with no run time says nothing: the press
+ * did not run by itself, it did not run.
  */
-export function pressOperatorsByShift(
+export function pressCrewsByShift(
   records: ReadonlyArray<ProductionRecord>,
   listedSupervisors: Iterable<string> = [],
-): Map<string, PressOperator[]> {
+): Map<string, ShiftPressCrew> {
   const listed = new Set([...listedSupervisors].map((n) => clean(n).toLowerCase()));
+  const pressOf = (sheet: ReadonlyArray<ProductionRecord>): string => sheet[0].machineCode.trim().toUpperCase();
+  const ran = (sheet: ReadonlyArray<ProductionRecord>): boolean => sheet.some((r) => r.statusCode === 'R');
+  const always = new Set(UNATTENDED_PRESSES.map((p) => p.toUpperCase()));
+  const sometimes = new Set(SOMETIMES_UNATTENDED_PRESSES.map((p) => p.toUpperCase()));
+
   const byShift = new Map<string, ProductionRecord[][]>();
   for (const sheet of sheets(records)) {
     const held = byShift.get(sheet[0].shiftId);
     if (held) held.push(sheet);
     else byShift.set(sheet[0].shiftId, [sheet]);
   }
-  const out = new Map<string, PressOperator[]>();
+  const out = new Map<string, ShiftPressCrew>();
   for (const [shiftId, shiftSheets] of byShift) {
     const people = shiftSheets.map(sheetPeople);
     const supervisors = new Set([...listed, ...people.flatMap((p) => p.supervisors.map((n) => n.toLowerCase()))]);
+    const isSupervisor = (name: string): boolean => supervisors.has(name.toLowerCase());
+
+    // press → did everything it ran this shift run under a supervisor alone?
+    const alone = new Map<string, boolean>();
+    for (const sheet of shiftSheets) {
+      const press = pressOf(sheet);
+      if (!sometimes.has(press) || !ran(sheet)) continue;
+      const { operator, operatorChecks } = sheetNames(sheet);
+      const supervisorOnly = (!!operator && isSupervisor(operator))
+        || (operatorChecks.length > 0 && operatorChecks.every(isSupervisor));
+      alone.set(press, (alone.get(press) ?? true) && supervisorOnly);
+    }
+    const unattended = [...alone].filter(([, yes]) => yes).map(([press]) => press).sort();
+    const nobodyAt = new Set([...always, ...unattended]);
+
     const found = new Map<string, { name: string; presses: Set<string> }>();
     shiftSheets.forEach((sheet, i) => {
+      const press = pressOf(sheet);
       const [lead] = people[i].operators;
-      if (!lead) return;
+      if (!lead || nobodyAt.has(press)) return;
       const key = lead.toLowerCase();
-      if (supervisors.has(key) && !sheet.some((r) => r.statusCode === 'R')) return;
-      const press = sheet[0].machineCode.trim().toUpperCase();
+      if (supervisors.has(key) && !ran(sheet)) return;
       const held = found.get(key);
       if (held) held.presses.add(press);
       else found.set(key, { name: lead, presses: new Set([press]) });
     });
-    out.set(shiftId, [...found.values()].map((o) => ({ name: o.name, presses: [...o.presses].sort() })));
+    out.set(shiftId, {
+      operators: [...found.values()].map((o) => ({ name: o.name, presses: [...o.presses].sort() })),
+      unattended,
+    });
   }
   return out;
 }

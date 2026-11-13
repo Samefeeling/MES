@@ -37,7 +37,7 @@ import {
   type SavedShiftPlan,
 } from '../core/kpi-attainment';
 import {
-  OVERTIME_SHARE, crewSize, firstName, floorStaffing, operatorsOf, pressOperatorsByShift, rosterOf, shiftStaffing,
+  OVERTIME_SHARE, crewSize, firstName, floorStaffing, operatorsOf, pressCrewsByShift, rosterOf, shiftStaffing, unattendedPresses,
   type Roster, type Staffing,
 } from '../core/crew';
 import {
@@ -1641,10 +1641,15 @@ async function compute(now = new Date()): Promise<void> {
     // presses were planned than the shift had operators, one press's plan
     // is left out (core/kpi-attainment `withStandbyPress`).
     // The people who could run a planned press: not a supervisor without
-    // production of their own, not somebody on a press that had no plan.
-    const operators = pressOperatorsByShift(perMachineProd.flat(), S!.supervisorNames);
-    const judged = withStandbyPress(perPress.flat(), (shiftId, planned) =>
-      (operators.get(shiftId) ?? []).filter((o) => o.presses.some((press) => planned.has(press))).length);
+    // production of their own, not somebody on a press that had no plan —
+    // and no press that runs unattended is waiting for one of them.
+    const crews = pressCrewsByShift(perMachineProd.flat(), S!.supervisorNames);
+    const judged = withStandbyPress(
+      perPress.flat(),
+      (shiftId, planned) =>
+        (crews.get(shiftId)?.operators ?? []).filter((o) => o.presses.some((press) => planned.has(press))).length,
+      (shiftId) => unattendedPresses(crews.get(shiftId)?.unattended),
+    );
     let at = 0;
     return perPress.map((own) => judged.slice(at, (at += own.length)));
   })();
@@ -2008,7 +2013,7 @@ function standbyLine(a: Pick<ComparisonSlice, 'standbyLines' | 'standbyHrs'>): s
   if (!a.standbyLines) return '';
   return ' Standby press: ' + a.standbyLines + ' plan line' + (a.standbyLines === 1 ? '' : 's')
     + ' left out of the plan' + (S!.equalWeight ? '' : ' (' + a.standbyHrs.toFixed(1) + ' standard h)')
-    + ' — more presses were planned in the shift than it had people to run them (a supervisor counts only with production of their own; somebody on a press with no plan does not), and the one that made least is taken as the standby.'
+    + ' — more presses were planned in the shift than it had people to run them (a supervisor counts only with production of their own; somebody on a press with no plan does not; a press that runs unattended needs nobody), and the one that made least is taken as the standby.'
     + ' What it made still counts, up to what the shift\'s other presses fell short by.';
 }
 
@@ -3805,7 +3810,7 @@ function render(): void {
     + ' The Day / Afternoon / Night rows above TOTAL are each shift across every press. A production day is 07:00 to 07:00: Day 07:00–15:00, Afternoon 15:00–23:00, Night 23:00–07:00, dated by the day it starts.</div>'
     + '<div><b>The plan of record</b> is frozen in PMD_ShiftPlan once the shift is under way and never rewritten (Planning.csv is redrawn at every export). It asks each order for its planned run hours in the shift ÷ standard hours per piece, up to the order quantity, only in the shifts its “no of shift” is crewed for. A 4-hour die change in front of an order on a different die is not asked for pieces. The plan starts from where the press stands when the shift begins: the order it was last running runs on for as long as what is left of it takes (order quantity less the good of the shifts before), and the orders behind it wait — a shift is not charged for the time the shift before it lost.'
     + ' The plan is reduced only when the shift booked more standard changeover time (die 4 h, colour or insert 30 min — the standard, not the time taken) and smoko than the plan left room for.</div>'
-    + '<div><b>The standby press.</b> Planning loads one press more than a shift has people for, so a crew whose press or material fails has somewhere to go. Where a shift had more presses planned than people to run them, <b>one</b> press — the one that earned least, normally the one never started — is taken as the standby (“standby”): its plan is not counted. What it made still counts, up to what the shift’s other presses fell short by, so a crew that moved over keeps its output and the shift can reach 100% and not pass it. One press a shift at most: a shift two people short is short. The people are the operators named on the shift’s sheets; a supervisor is one of them only when a sheet in their name has run time on it — a die change on the standby is not a press being run — and somebody running a press that had no plan is not free for one that had.</div>'
+    + '<div><b>The standby press.</b> Planning loads one press more than a shift has people for, so a crew whose press or material fails has somewhere to go. Where a shift had more presses planned than people to run them, <b>one</b> press — the one that earned least, normally the one never started — is taken as the standby (“standby”): its plan is not counted. What it made still counts, up to what the shift’s other presses fell short by, so a crew that moved over keeps its output and the shift can reach 100% and not pass it. One press a shift at most: a shift two people short is short. The people are the operators named on the shift’s sheets; a supervisor is one of them only when a sheet in their name has run time on it — a die change on the standby is not a press being run — and somebody running a press that had no plan is not free for one that had. A press that runs unattended is outside all of this — it needs nobody, gives nobody a press to their name and is never the standby, so its plan always counts: 125T and 150T always, 320T and 550T on a shift where what they ran carries only a supervisor’s name (as Operator, or on every operator Quality Check).</div>'
     + '<div><b>Always counted:</b> a planned press that did not run scores 0 against its plan (“not run”), unless it is the shift’s standby; a shift not signed off counts its plan and earns nothing until it is signed (“unsigned”). <b>Not judged:</b> a press-shift with nothing planned. “—” means a planned quantity or a rate is not known; hover for the detail.'
     + ' Shifts from before PMD_ShiftPlan held every press use what Planning.csv still holds (Last 24h) or what their sign-off saved (wider periods). Order rows of a wider period show output only.</div>';
   app.innerHTML = `

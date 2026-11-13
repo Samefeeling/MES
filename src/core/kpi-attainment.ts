@@ -356,11 +356,16 @@ export function withStandardHours(
  * never more: planning loads one, and a shift two people short is short.
  * `operatorsOn` says how many people that is, given the presses the shift
  * had a plan for: somebody on a press with no plan is not free for one that
- * has (core/crew `pressOperatorsByShift`). Each press still awaiting
+ * has (core/crew `pressCrewsByShift`). Each press still awaiting
  * sign-off adds one, its operator not being on record yet. Nobody marks
  * which press is the standby, so it is the one that earned least: normally
  * the one never started; where a crew moved over mid-shift, the one it left
  * or the one it went to, whichever made less.
+ *
+ * A press that runs unattended (`unattendedOn`: the small presses, and the
+ * ones a supervisor alone had running that shift) needs nobody: it is not
+ * one of the presses set against the people, and never the standby. Its
+ * plan always counts.
  *
  * The standby's plan leaves the comparison. What it made stays earned, up
  * to what the other presses of the shift fell short by — the output that
@@ -370,6 +375,7 @@ export function withStandardHours(
 export function withStandbyPress(
   lines: ReadonlyArray<AttainmentTuple>,
   operatorsOn: (shiftId: string, plannedPresses: ReadonlySet<string>) => number,
+  unattendedOn: (shiftId: string) => ReadonlySet<string> = () => new Set(),
 ): AttainmentTuple[] {
   const inHours = lines.some((line) => line.source !== 'unscheduled' && line.plannedHrs !== undefined);
   const plan = (line: AttainmentTuple): number => (inHours ? line.plannedHrs ?? 0 : line.planned ?? 0);
@@ -402,11 +408,13 @@ export function withStandbyPress(
   const standby = new Map<string, { key: string; share: number }>();
   for (const [shiftId, presses] of byShift) {
     const planned = [...presses.values()].filter((press) => press.planned);
-    const operators = operatorsOn(shiftId, new Set(planned.map((press) => press.key)));
+    const nobodyAt = unattendedOn(shiftId);
+    const attended = planned.filter((press) => !nobodyAt.has(press.key));
+    const operators = operatorsOn(shiftId, new Set(attended.map((press) => press.key)));
     if (operators < 1) continue;
-    const crewed = operators + planned.filter((press) => press.unsigned).length;
-    if (planned.length <= crewed) continue;
-    const [spare] = planned
+    const crewed = operators + attended.filter((press) => press.unsigned).length;
+    if (attended.length <= crewed) continue;
+    const [spare] = attended
       // Not a press that ran on a plan nobody can price: its place in the
       // order is not known.
       .filter((press) => !press.unsigned && !(press.unknown && press.good > 0))

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  crewOf, crewSize, firstName, floorStaffing, namesForSheet, onOvertime, operatorsOf, pressOperatorsByShift,
-  rosterOf, sheetPeople, shiftStaffing,
+  crewOf, crewSize, firstName, floorStaffing, namesForSheet, onOvertime, operatorsOf, pressCrewsByShift,
+  rosterOf, sheetPeople, shiftStaffing, unattendedPresses,
 } from '../src/core/crew';
 import { operatorByTuple } from '../src/core/operator-perf';
 import { rec as base } from './helpers';
@@ -226,7 +226,9 @@ describe('who could run a press in a shift', () => {
       }));
   const day = '2026-11-16-Day';
   const names = (records: ProductionRecord[], listed: string[] = [], shiftId = day): Record<string, string[]> =>
-    Object.fromEntries((pressOperatorsByShift(records, listed).get(shiftId) ?? []).map((o) => [o.name, o.presses]));
+    Object.fromEntries((pressCrewsByShift(records, listed).get(shiftId)?.operators ?? []).map((o) => [o.name, o.presses]));
+  const unattended = (records: ProductionRecord[], listed: string[] = []): string[] =>
+    [...unattendedPresses(pressCrewsByShift(records, listed).get(day)?.unattended)].sort();
 
   it('the lead of each sheet once: no supervisors, nobody who only covered a break', () => {
     const records = [
@@ -266,5 +268,45 @@ describe('who could run a press in a shift', () => {
     expect(names(unnamed('S', 'Kim Park'))).toEqual({ 'Kim Park': ['S'] });
     expect(names(unnamed('S', 'Kim Park'), [' KIM  park '])).toEqual({});
     expect(names([...unnamed('S', 'Kim Park'), ...unnamed('P1', 'John Taylor', 'Kim Park')])).toEqual({ 'John Taylor': ['P1'] });
+  });
+
+  it('the small presses run by themselves: a sheet on one gives nobody a press', () => {
+    const records = [
+      ...sheet('P1', day, 'John Taylor'),
+      ...sheet('125T', day, 'Tin Maung'), // the supervisor's name, and it ran
+      ...sheet('150t', day, 'Ben Wood'),
+    ];
+    expect(names(records)).toEqual({ 'John Taylor': ['P1'] });
+    expect(unattended(records)).toEqual(['125T', '150T']);
+    // Known without a record of them, too.
+    expect([...unattendedPresses()].sort()).toEqual(['125T', '150T']);
+  });
+
+  it('320T and 550T ran by themselves where only a supervisor is named on what they ran', () => {
+    // 320T in the supervisor's name; 550T in an operator's name left over
+    // from the shift before, every operator check signed by the supervisor.
+    const leftover = sheet('550T', day, 'Ann Lee').map((r) => ({ ...r, qcBy: 'Tin Maung' }));
+    const records = [...sheet('P1', day, 'John Taylor'), ...sheet('320T', day, 'Tin Maung'), ...leftover];
+    expect(unattended(records)).toEqual(['125T', '150T', '320T', '550T']);
+    expect(names(records)).toEqual({ 'John Taylor': ['P1'] });
+  });
+
+  it('an operator at 320T or 550T: a press with a crew like any other', () => {
+    const records = [...sheet('320T', day, 'John Taylor'), ...sheet('550T', day, 'Ben Wood', 'Tin Maung')];
+    expect(unattended(records)).toEqual(['125T', '150T']);
+    expect(names(records)).toEqual({ 'John Taylor': ['320T'], 'Ben Wood': ['550T'] });
+  });
+
+  it('one order of the press under an operator and it was attended that shift', () => {
+    const second = sheet('320T', day, 'John Taylor').map((r) => ({ ...r, jobNumber: 'J-2' }));
+    const records = [...sheet('320T', day, 'Tin Maung'), ...second];
+    expect(unattended(records)).toEqual(['125T', '150T']);
+    expect(names(records)).toEqual({ 'Tin Maung': ['320T'], 'John Taylor': ['320T'] });
+  });
+
+  it('320T in the supervisor\'s name with nothing run did not run by itself: nobody was at it', () => {
+    const records = [...sheet('P1', day, 'John Taylor'), ...sheet('320T', day, 'Tin Maung', '', 'D')];
+    expect(unattended(records)).toEqual(['125T', '150T']);
+    expect(names(records)).toEqual({ 'John Taylor': ['P1'] });
   });
 });

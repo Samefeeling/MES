@@ -82,7 +82,7 @@ shift held to all five is capped at 80 % however well it runs.
 
 - **When.** More presses carry a plan than the shift had people to run
   them. Those people are the lead operator of each signed sheet, each
-  person once (`pressOperatorsByShift`, core/crew.ts), with three rules:
+  person once (`pressCrewsByShift`, core/crew.ts), with three rules:
   - somebody who only covered a break led no sheet and is not counted;
   - a **supervisor** of the shift — named Supervisor on its sheets, the one
     who signed them off, or a supervisor on the People list — is counted
@@ -95,6 +95,20 @@ shift held to all five is capped at 80 % however well it runs.
 
   Each press still awaiting sign-off counts as crewed. A shift with nobody
   on record yet is left alone.
+- **Presses that run unattended** are outside the head-count on both
+  sides: such a press needs nobody, a sheet on it gives nobody a press to
+  their name, and it is never the standby — its plan always counts.
+  - 125T and 150T, always: the die setter sets them up and they run by
+    themselves, whoever's name is on the sheet (`UNATTENDED_PRESSES`).
+  - 320T and 550T (`SOMETIMES_UNATTENDED_PRESSES`), on a shift where
+    everything they ran carries only a supervisor's name: on each sheet
+    with run time, the Operator named is a supervisor, or everybody who
+    signed its operator Quality Checks is. With an operator on any of it,
+    the press had a crew that shift. A sheet with no run time decides
+    nothing — the press did not run by itself, it did not run — so a 320T
+    with only a supervisor's die change on it can still be the standby.
+
+  The four codes are fixed in core/crew.ts.
 - **Which.** Nobody marks the standby, so it is the press that earned the
   fewest standard hours: normally the one never started; where a crew moved
   over mid-shift, the one it left or the one it went to, whichever made
