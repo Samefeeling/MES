@@ -438,15 +438,23 @@
   Supervisor who signed any Quality Check of that shift on any press.
   Production's reasoning: whoever is on shift shows up in the signatures,
   and with the supervisor away the second in charge signs under their own
-  name. A shift with no supervisor check signed keeps the names as written.
+  name. A shift with no supervisor check signed keeps the names as written
+  — as who its supervisor IS, for the standby and unattended rules.
+  For the head-count (`supervisorsIn`) that is not enough: production's
+  rule is "no signature, not in". Signing the checks is not required for
+  sign-off, and on the Night above nobody signed the supervisor's, so the
+  names stood and it still counted four. A supervisor is counted in a shift
+  only with a Quality Check of it signed in their name; the names stand
+  only where the shift has no Quality Check signed at all.
   This replaces "supervisors are not second-guessed" (13 Nov 2026). A person
   on overtime is still rightly in two shifts — Tin Maung on 12 Nov, Day and
   Afternoon — but is now counted in the second only by a Quality Check
-  signed there (or where that shift has no supervisor check signed at all).
-  Limits: a supervisor who was in and signed nothing, while somebody else
-  signed the supervisor checks, is not counted. One person under two
-  spellings (PMD_Operator Name vs. the free-text Supervisor_1) is two
-  people; the TOTAL cell's tooltip lists the names.
+  signed there (or where that shift has no check signed at all).
+  Limits: a supervisor who was in and signed no Quality Check, on a shift
+  where the operators signed theirs, is not counted — a shift whose
+  supervisor never signs the checks reads one person short. One person
+  under two spellings (PMD_Operator Name vs. the free-text Supervisor_1) is
+  two people; the TOTAL cell's tooltip lists the names.
 - The People list does not say who supervised a shift: a second in charge
   is on it as a supervisor (so they can pick their own name) and runs a
   press on every shift the supervisor is in. The standby and unattended

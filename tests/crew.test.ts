@@ -94,9 +94,32 @@ describe('a sheet confirmed under the names of the shift before', () => {
     expect(crewOf([...afternoon, ...other]).supervisors).toEqual(['Jean-Michel Thomas', 'Tin Maung']);
   });
 
-  it('with no supervisor check signed there is nothing to go by: the names stand', () => {
+  it('a named supervisor with no signature, on a shift where checks were signed, was not in', () => {
+    // Nobody signed the supervisor checks; Ben signed his own.
     const unchecked = afternoon.map((r) => ([1, 7, 13].includes(r.slotIndex) ? { ...r, qcBy: '' } : r));
-    expect(crewOf(unchecked)).toEqual({ operators: ['Ben Wood'], supervisors: ['Tin Maung'] });
+    expect(crewOf(unchecked)).toEqual({ operators: ['Ben Wood'], supervisors: [] });
+    expect(shiftStaffing(unchecked, rosterOf())).toMatchObject({ people: 1, shifts: 1 });
+  });
+
+  it('with no check signed at all there is nothing to go by: the names stand', () => {
+    const unsigned = afternoon.map((r) => ({ ...r, qcBy: '' }));
+    expect(crewOf(unsigned)).toEqual({ operators: ['John Taylor'], supervisors: ['Tin Maung'] });
+  });
+
+  it('three people signed and the supervisor did not: the shift had three on', () => {
+    // Night, the supervisor away and nobody signing the supervisor checks.
+    // Joe, the second in charge, relieves the breaks on both presses; one
+    // sheet still carries the supervisor's name.
+    const night = (machineCode: string, operator: string, named: string): ReturnType<typeof rec>[] =>
+      [0, 1, 2, 3].map((slotIndex) =>
+        rec({
+          machineCode, shiftId: '2026-11-12-Night', jobNumber: 'J-' + machineCode, slotIndex, statusCode: 'R',
+          operator: slotIndex === 0 ? operator : '', supervisor: slotIndex === 0 ? named : '', lockedBy: named,
+          qcBy: slotIndex === 1 ? '' : slotIndex === 3 ? 'Joe Tran' : operator,
+        }));
+    const records = [...night('850T', 'Phong Le', 'Tin Maung'), ...night('550T', 'Van Ho', 'Joe Tran')];
+    expect(crewOf(records)).toEqual({ operators: ['Joe Tran', 'Phong Le', 'Van Ho'], supervisors: [] });
+    expect(shiftStaffing(records, rosterOf())).toMatchObject({ people: 3, shifts: 1 });
   });
 
   it('the second in charge standing in for the supervisor is one person, not two', () => {
@@ -197,7 +220,7 @@ describe('how many people a shift had on, overtime at half', () => {
       rec({
         machineCode, shiftId, jobNumber: 'SFM508005', slotIndex, statusCode: 'R',
         operator: slotIndex === 0 ? operator : '', supervisor: slotIndex === 0 ? supervisor : '',
-        qcBy: slotIndex === 1 ? '' : operator,
+        qcBy: slotIndex === 1 ? supervisor : operator,
       }));
   const day = sheet('2026-11-12-Day', 'John Taylor', 'Tin Maung');
   // Tin Maung stays on into the Afternoon with its own supervisor.
