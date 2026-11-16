@@ -313,6 +313,38 @@ describe('an order with no line but a type', () => {
     expect(String(jobs.get('SUNF0000000301')!.line)).toBe('UPL_GLUING');
   });
 
+  it('sends final assembly of a table to the Table line, and of anything else to Assembly', () => {
+    const tables = byId(
+      [
+        'JobNum,PartNum,PartDescription,PersonID,ProdQty,OrderType,ReqDueDate,LaborHrs',
+        'SUNF0000000010,TNL,Twist n Lock Adjustable Height Table - Rect 1200x600,,9,F/A,2027-01-27,9',
+        'SUNF0000000211,ENC,Encore Sideframe - Packed PP Arm Black,,13,F/A,2027-01-11,13',
+        'SUNF0000000011,STB,Stable Mate Adjustable Stool,,1,F/A,2027-01-11,1',
+        'SUNF0000000012,TTP,Tornado Tabletop 1200,,1,F/A,2027-01-11,1',
+        // ERP said Assembly: the description does not overrule it.
+        'SFM2,DETR,Folding Side Table,ASSY,4,F/A,2026-11-13,4',
+      ].join('\n'),
+    );
+    expect(String(tables.get('SUNF0000000010')!.line)).toBe('TABLE');
+    expect(String(tables.get('SUNF0000000211')!.line)).toBe('ASSY');
+    // "Stable" and "Adjustable" are not a table; a tabletop is part of one.
+    expect(String(tables.get('SUNF0000000011')!.line)).toBe('ASSY');
+    expect(String(tables.get('SUNF0000000012')!.line)).toBe('TABLE');
+    expect(String(tables.get('SFM2')!.line)).toBe('ASSY');
+  });
+
+  it('takes cutting and sewing to the cutting line when ERP names only the UPL department', () => {
+    const upl = byId(
+      [
+        'JobNum,PartNum,PartDescription,PersonID,ProdQty,OrderType,ReqDueDate,LaborHrs',
+        'SUNF0000000125,CF-OTT,Cut Fabric For Smart Softie Block Ottoman,UPL,2,C/S,2026-12-03,2',
+        'SUNF0000000126,UP-OTT,Upholstered Ottoman,UPL,2,Upholstery,2026-12-03,2',
+      ].join('\n'),
+    );
+    expect(String(upl.get('SUNF0000000125')!.line)).toBe('UPL_CUT_SEW');
+    expect(String(upl.get('SUNF0000000126')!.line)).toBe('UPL_GLUING');
+  });
+
   it('leaves a line ERP named alone, and an order with nothing to go on unplaced', () => {
     expect(String(jobs.get('SFM1')!.line)).toBe('TBP');
     expect(jobs.get('SUNF0000000302')!.line).toBeNull();

@@ -63,6 +63,8 @@ import type {
 import {
   DEFAULT_HORIZON_DAYS,
   LINES,
+  isUpholsteryByProcess,
+  standsDown,
   pressLineDef,
   stepLinesOf,
   virtualLineDef,
@@ -616,14 +618,26 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
    * written to `ASSY_Production` all read `line.name` as they always did.
    */
   const lineNames = input.lineNames ?? {};
+  const nameOf = (line: LineDef): string =>
+    lineNames[String(line.key)]?.trim() || line.name;
   const named = (line: LineDef): LineDef => {
-    const own = lineNames[String(line.key)]?.trim();
-    return own ? { ...line, name: own } : line;
+    // By process, Upholstery's benches are worked for both families, and the
+    // lane over them says so under both of their names.
+    if (isUpholsteryByProcess() && line.key === 'UPL_GLUING') {
+      const softies = LINES.find((held) => held.key === 'UPL_SOFTIE');
+      return { ...line, name: softies ? `${nameOf(line)} + ${nameOf(softies)}` : nameOf(line) };
+    }
+    const own = nameOf(line);
+    return own === line.name ? line : { ...line, name: own };
   };
   const boardLines: LineDef[] = [
     ...LINES,
     ...(input.virtualLines ?? []).map(virtualLineDef),
-  ].map(named);
+  ]
+    // The Smart Soft Seating lane and its benches stand down by process: its
+    // orders are at the shared benches (see `setUpholsteryByProcess`).
+    .filter((line) => !standsDown(String(line.key)))
+    .map(named);
   const orderOvertime = input.orderOvertime ?? {};
   const progress = input.progress ?? {};
   const progressBaselines = input.progressBaselines ?? {};

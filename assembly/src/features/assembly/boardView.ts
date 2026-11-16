@@ -10,7 +10,7 @@ import {
   startOfDay,
   wholeDaysBetween,
 } from '@/engine/assembly/dates';
-import type { LineKey, Worker } from '@/domain/assembly';
+import { activeLineKey, type LineKey, type Worker } from '@/domain/assembly';
 import { workersOnLeave, type LeaveDays } from '@/engine/assembly/attendance';
 import { formatDay, fromDayKey, toDayKey } from '@/lib/time';
 import type { IncomingSupply, PickShortage } from '@/engine/assembly/pickShortage';
@@ -818,11 +818,14 @@ export function lineOfWorkerToday(
   }
   for (const worker of workers) {
     const id = String(worker.id);
+    // Read through `activeLineKey`: by process, somebody allocated to a
+    // Smart Soft Seating bench is at the shared one, and the allocation
+    // itself is left as it was for the day the board is switched back.
     if (overrides[id]) {
-      at.set(id, overrides[id]);
+      at.set(id, activeLineKey(overrides[id]));
       continue;
     }
-    if (!at.has(id)) at.set(id, worker.skills[0] ?? 'FACTORY_GENERAL');
+    if (!at.has(id)) at.set(id, activeLineKey(worker.skills[0] ?? 'FACTORY_GENERAL'));
   }
   return at;
 }

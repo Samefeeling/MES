@@ -46,6 +46,8 @@ export interface PersistedPlan {
     virtualLines?: import('@/domain/assembly').VirtualLine[];
     /** What this floor calls each line, where the built-in name is not it. */
     lineNames?: Record<string, string>;
+    /** Upholstery scheduled by process: the two lanes share one set of benches. */
+    uplByProcess?: boolean;
     /**
      * The sequence the lines are drawn in, arranged by dragging one onto
      * another. Absent on a plan nobody has arranged, which reads as the order

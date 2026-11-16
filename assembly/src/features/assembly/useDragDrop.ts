@@ -273,7 +273,15 @@ export function useDragDrop() {
 
     // Dropped on a lane or the pool → append. Ordering within a lane is the
     // planner's own, set by dragging a bar, not by dropping a card on another.
-    usePlanStore.getState().moveJob(JobId(String(active.id)), String(over.id));
+    // Nothing else is somewhere an order can be: a card let go over the crew
+    // rolls used to be filed under the roll's id, on no line anybody draws.
+    const onto = over.data.current?.type;
+    if (onto !== 'line' && onto !== 'pool') return;
+    const plan = usePlanStore.getState();
+    const jobId = JobId(String(active.id));
+    // Picked up in the strip and put down in it again: nothing has moved.
+    if (plan.containerOf(jobId) === String(over.id)) return;
+    plan.moveJob(jobId, String(over.id));
   };
 
   return {

@@ -15,7 +15,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { usePlanStore } from '@/store/planStore';
 import { useUiStore } from '@/store/uiStore';
 import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
-import { LINES, virtualLineDef, type LineKey, type Worker } from '@/domain/assembly';
+import { LINES, standsDown, virtualLineDef, type LineKey, type Worker } from '@/domain/assembly';
 import {
   dayBand,
   loadPreview,
@@ -263,7 +263,7 @@ export function WorkerLoadChip({
               {/* The lines the supervisor opened are in here too — putting
                   people on them is what they are for. */}
               {[...LINES, ...virtualLines.map(virtualLineDef)]
-                .filter(target => target.schedulable || target.key === line).map(target =>
+                .filter(target => !standsDown(target.key) && (target.schedulable || target.key === line)).map(target =>
                 <option key={target.key} value={target.key} disabled={!target.schedulable}>{target.name}</option>
               )}
             </select>

@@ -65,6 +65,7 @@ const planningNow = (): PlanningPart => {
       workerLines: p.workerLines,
       virtualLines: p.virtualLines,
       lineNames: p.lineNames,
+      uplByProcess: p.uplByProcess,
       lineOrder: p.lineOrder,
       crewPools: p.crewPools,
       crewRules: p.crewRules,
@@ -157,6 +158,7 @@ export function usePlanPersistence(): PlanPersistence {
   const workerLines = usePlanStore((s) => s.workerLines);
   const virtualLines = usePlanStore((s) => s.virtualLines);
   const lineNames = usePlanStore((s) => s.lineNames);
+  const uplByProcess = usePlanStore((s) => s.uplByProcess);
   const lineOrder = usePlanStore((s) => s.lineOrder);
   const crewPools = usePlanStore((s) => s.crewPools);
   const crewRules = usePlanStore((s) => s.crewRules);
@@ -185,6 +187,7 @@ export function usePlanPersistence(): PlanPersistence {
       workerLines,
       virtualLines,
       lineNames,
+      uplByProcess,
       lineOrder,
       crewPools,
       crewRules,

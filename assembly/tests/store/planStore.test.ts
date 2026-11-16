@@ -507,7 +507,7 @@ describe('what stays in the pool', () => {
   const state = () => usePlanStore.getState();
 
   beforeEach(() => {
-    usePlanStore.setState({ containers: {}, lastSeen: {}, pooledByHand: [], orderStarts: {} });
+    usePlanStore.setState({ containers: {}, lastSeen: {}, pooledByHand: [], orderStarts: {}, lineLayoutVersion: 0 });
   });
 
   it('files an order the pool held for want of a line onto the line it now has', () => {
@@ -531,6 +531,43 @@ describe('what stays in the pool', () => {
     expect(state().pooledByHand).toEqual([]);
     state().reconcile(centres, [job('A', 'TBP'), job('B', 'TBP')], day);
     expect(state().containers.TBP.map(String)).toEqual(['A', 'B']);
+  });
+
+  it('does not take a card picked up in the pool and put down there again for one taken off a line', () => {
+    state().reconcile(centres, [job('SUNF1', null)], day);
+    state().moveJob(JobId('SUNF1'), '__pool__');
+    expect(state().pooledByHand).toEqual([]);
+    // So the day it has a line, it goes onto it.
+    state().reconcile(centres, [job('SUNF1', 'ASSY')], day);
+    expect(state().containers.ASSY.map(String)).toEqual(['SUNF1']);
+  });
+
+  it('drops the by-hand flags of a plan saved before they could be trusted, once', () => {
+    // As stored by the build before: both orders flagged, though only a card
+    // let go in the strip had done it.
+    usePlanStore.setState({
+      containers: { __pool__: [JobId('A'), JobId('B')] },
+      pooledByHand: ['A', 'B'],
+      lineLayoutVersion: 1,
+    });
+    state().reconcile(centres, [job('A', 'TBP'), job('B', 'ASSY')], day);
+    expect(state().containers.__pool__).toEqual([]);
+    expect(state().containers.TBP.map(String)).toEqual(['A']);
+    expect(state().containers.ASSY.map(String)).toEqual(['B']);
+    // From here a person's decision holds.
+    state().moveJob(JobId('B'), '__pool__');
+    state().reconcile(centres, [job('A', 'TBP'), job('B', 'ASSY')], day);
+    expect(state().containers.__pool__.map(String)).toEqual(['B']);
+  });
+
+  it('keeps the plan layout version when the shift-records half of a plan is read in', () => {
+    state().reconcile(centres, [job('B', 'TBP')], day);
+    state().moveJob(JobId('B'), '__pool__');
+    // The planning half carries the version; the records half does not.
+    state().setAssemblyPlan({ lineLayoutVersion: state().lineLayoutVersion, pooledByHand: ['B'] });
+    state().setAssemblyPlan({ lastSeen: state().lastSeen });
+    state().reconcile(centres, [job('B', 'TBP')], day);
+    expect(state().containers.__pool__.map(String)).toEqual(['B']);
   });
 
   it('remembers who pooled an order across a save and a reload', () => {

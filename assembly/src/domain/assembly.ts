@@ -149,6 +149,12 @@ export function canWorkKind(worker: Worker, kind: WorkKind): boolean {
   // is qualified by the line itself, so a cutter is still a whole ASSY hand.
   if (kind === 'general') return true;
   const trades = worker.trades ?? [];
+  // By process the softies and the rest of upholstery are worked at the same
+  // benches, so a hand named for one of them is at the bench for both.
+  const soft: WorkKind[] = ['smart-softie', 'upholstery'];
+  if (upholsteryByProcess && soft.includes(kind)) {
+    return trades.length === 0 || trades.some((trade) => soft.includes(trade));
+  }
   if (trades.length > 0) return trades.includes(kind);
   return !RESTRICTED_KINDS.includes(kind);
 }
@@ -252,6 +258,53 @@ export const LINES: LineDef[] = [
   { key: 'FACTORY_GENERAL', id: WorkCenterId('FACTORY_GENERAL'), name: 'General', schedulable: true, types: ['final-assembly'], parallelOrders: 15, sortIndex: 13 },
 ];
 
+/**
+ * Upholstery scheduled by process rather than by product.
+ *
+ * The board is built as the product families — Smart Soft Seating has its
+ * foaming, sewing and stapling benches and Upholstery has its own three. The
+ * floor, production says, is run as the processes: one foaming bench, one
+ * sewing bench, one stapling bench, each working whatever comes, softie or
+ * not, with the people of both. Switched on, the two families share one set
+ * of benches — Upholstery's, which then stand for the process — and the
+ * Smart Soft Seating lane and its benches leave the board.
+ *
+ * Nothing is rewritten for it. A saved plan, a roster cell and an allocation
+ * keep the key they were given, and are read through `activeLineKey`; so
+ * switching back puts every person and every order where they were.
+ *
+ * Held here, beside the lines it changes the meaning of, and set from the
+ * plan (see `planStore`) — the same arrangement as the crew rules: who works
+ * which bench is asked from everywhere, and the answer has to be one answer.
+ */
+let upholsteryByProcess = false;
+export function setUpholsteryByProcess(on: boolean): void {
+  upholsteryByProcess = on;
+}
+export const isUpholsteryByProcess = (): boolean => upholsteryByProcess;
+
+/** The lane and benches that stand down while upholstery runs by process,
+ *  and the one of Upholstery's each is read as. */
+const SHARED_BENCH: Partial<Record<BuiltInLineKey, BuiltInLineKey>> = {
+  UPL_SOFTIE: 'UPL_GLUING',
+  UPL_SOFTIE_FOAM: 'UPL_GLUING_FOAM',
+  UPL_SOFTIE_SEW: 'UPL_GLUING_SEW',
+  UPL_SOFTIE_STAPLE: 'UPL_GLUING_STAPLE',
+};
+
+/** Is this line off the board while upholstery runs by process? */
+export const standsDown = (key: string): boolean =>
+  upholsteryByProcess && key in SHARED_BENCH;
+
+/**
+ * The line a key means right now: itself, or — by process — the shared bench
+ * a Smart Soft Seating one is read as. For reading where a person or an
+ * order is; never for writing it.
+ */
+export function activeLineKey<K extends string>(key: K): K | BuiltInLineKey {
+  return (upholsteryByProcess && SHARED_BENCH[key as BuiltInLineKey]) || key;
+}
+
 /** Parent line key → its benches, in the order they are worked. */
 export const STEP_LINES: ReadonlyMap<LineKey, LineDef[]> = LINES.reduce(
   (out, line) => {
@@ -273,7 +326,8 @@ export function stepLine(
   parent: LineKey,
   runs: ProductionStep,
 ): LineDef | null {
-  return stepLinesOf(parent).find((line) => line.step === runs) ?? null;
+  // By process, a softie's foaming is done at the one foaming bench there is.
+  return stepLinesOf(activeLineKey(parent)).find((line) => line.step === runs) ?? null;
 }
 
 /**
@@ -297,16 +351,20 @@ export function rootLineKey(key: LineKey): LineKey {
 export const onSameLane = (
   a: LineKey | undefined | null,
   b: LineKey | undefined | null,
-): boolean => Boolean(a && b && rootLineKey(a) === rootLineKey(b));
+): boolean =>
+  Boolean(a && b && rootLineKey(activeLineKey(a)) === rootLineKey(activeLineKey(b)));
 
 /** Is this person qualified for the line — or for the lane its bench is on? */
 export function worksLine(
   worker: { skills: LineKey[] },
   key: LineKey,
 ): boolean {
-  if (worker.skills.includes(key)) return true;
+  // By process, somebody listed for Smart Soft Seating is listed for the
+  // shared benches: the roster cell is read, not rewritten.
+  const skills = worker.skills.map((skill) => activeLineKey(skill));
+  if (skills.includes(key)) return true;
   const root = rootLineKey(key);
-  return root !== key && worker.skills.includes(root);
+  return root !== key && skills.includes(root);
 }
 
 /**
@@ -516,8 +574,11 @@ export const LINE_BY_ID = new Map(LINES.map((l) => [String(l.id), l]));
  * from ERP, the routing table or the BOM, which is how an unfirm (SUNF) order
  * usually arrives. Cutting and sewing has only the one line; upholstery is
  * Gluing, or the Smart Softies bench when the description says so (the same
- * reading as rule R5 in `lineRules`); final assembly is the Assembly line.
- * TBP, Table and General are never guessed: ERP names those itself.
+ * reading as rule R5 in `lineRules`); final assembly is the Assembly line —
+ * or Table, for an order whose description says it is one (production's
+ * rule: the word "Table" in it — a word starting with it, so that an
+ * "Adjustable" stool is not one). TBP and General are never guessed: ERP
+ * names those itself.
  */
 export function lineForOrderType(type: OrderType, description: string): LineKey {
   switch (type) {
@@ -526,7 +587,7 @@ export function lineForOrderType(type: OrderType, description: string): LineKey 
     case 'upholstery':
       return /smart soft/i.test(description) ? 'UPL_SOFTIE' : 'UPL_GLUING';
     case 'final-assembly':
-      return 'ASSY';
+      return /\btable/i.test(description) ? 'TABLE' : 'ASSY';
   }
 }
 

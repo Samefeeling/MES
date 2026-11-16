@@ -27,6 +27,8 @@ one of the eight by looking at it. It lives in the shared plan (`virtualLines`
 in `ASSY_Plans`), not in one browser, and closing it tips its orders back into
 the unplaced pool. See `assembly/docs/board-interaction-rules.md`.
 
+**Upholstery can be scheduled by process.** UPL-Gluing and UPL-SSS are each a lane of three benches (Foaming, Sewing, Stapling). `By process` in the board header (supervisor only) has the two share one set of benches and one crew — the floor as production runs it: Cut, Foaming, Sewing, Stapling — and pressing it again goes back. See `assembly/docs/board-interaction-rules.md`.
+
 Two lines were retired. `UPL` (the catch-all upholstery lane) and `ASSY_STOOL` no longer exist: the BOM rules below say which upholstery bench a part belongs on, and stools are ordinary ASM work. Anything still filed against either — a saved plan, a roster skill, an ERP export — is read onto its successor (`UPL` → UPL-Gluing, `ASSY_STOOL` → ASM), never dropped into the pool.
 
 ## Which line builds a part

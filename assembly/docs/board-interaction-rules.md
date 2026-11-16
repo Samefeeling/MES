@@ -649,17 +649,67 @@ onto the line the export gives it.
 
 Only two kinds of order:
 
-- one a supervisor **dropped there** to take it off the schedule. It stays
-  through every refresh until somebody drags it onto a line again; and
+- one a supervisor **took off a line and dropped there**. It stays through
+  every refresh until somebody drags it onto a line again — or presses
+  **Put N back on their lines** in the strip's heading; and
 - one with **nothing to go on** — no line from ERP, the routing table or the
   BOM, and no order type.
+
+Each card says which it is: **Off ‹line› by hand**, or **No line known**.
 
 Everything else goes onto a line by itself. An order whose type is all there
 is (an unfirm `SUNF…` order, usually) goes to the line that type runs on —
 C/S to UPL-CUT, UPH to UPL-Gluing (UPL-SSS for Smart Softies), F/A to
-Assembly — and an order that sat in the strip only because no line was known
-when it arrived is filed onto its line as soon as one is. Crew orders still
-leaves `SUNF…` orders without a crew, as its rules say.
+Assembly, or to **Table** when a word of its description starts with "Table"
+(production's rule; "Adjustable" is not one) — and an order that sat in the
+strip only because no line was known when it arrived is filed onto its line
+as soon as one is. Where ERP names only the `UPL` department and the order
+says it is C/S, it goes to UPL-CUT rather than to Upholstery. A line ERP
+names itself (ASSY, TABLE, TBP …) is never overruled by a description. Crew
+orders still leaves `SUNF…` orders without a crew, as its rules say.
+
+"By hand" means taken off a line. A card picked up in the strip and let go
+in it again has not been taken off anything; until 16 Nov 2026 that was
+recorded as by hand all the same, and the order then stayed off its line
+through every refresh. Flags written before then cannot be told from that
+mistake, so a plan saved by an older build has them dropped once, on the way
+in (`PLAN_LAYOUT_VERSION` in `planStore`): every order with a line goes back
+onto it, and the supervisor's decisions hold from there. A card let go over
+anything that is not a line or the strip is no longer filed anywhere.
+
+## Upholstery by process
+
+The board is built as the product families: **UPL-SSS** (Smart Soft Seating)
+and **UPL-Gluing** (Upholstery) each have a Foaming, a Sewing and a Stapling
+bench, and their own people. Production runs the floor as the processes —
+Cut, Foaming, Sewing, Stapling — with one bench for each, working both
+families with the people of both.
+
+**By process** in the board header (supervisor only) switches between the
+two. Switched on:
+
+- the Smart Soft Seating lane and its three benches leave the board, and its
+  orders are worked at Upholstery's three, which then stand for the process.
+  The lane over them is named for both ("Upholstery + Smart Soft Seating");
+- each order keeps its own route — a softie is still foamed, or sewn then
+  stapled; an upholstery order still foamed and sewn side by side, then
+  stapled — and its operations keep their ids, so everything booked against
+  them stays booked;
+- somebody allocated to, or listed in the roster for, a Smart Soft Seating
+  bench is at the shared bench of the same step, and a hand named for
+  softies takes upholstery there. A cutter still does not;
+- UPL-CUT, Assembly, Table and the rest are untouched.
+
+Nothing is rewritten for it: allocations, roster cells and line names keep
+what they hold and are read through `activeLineKey` (`domain/assembly`), so
+pressing the button again puts every order and every person back where they
+were. What is not kept is an order somebody had dragged from one of these
+benches to another: changing over files every order of the two lanes by its
+route. Somebody moved to a bench while by process is on Upholstery's bench
+afterwards, because that is the bench the board was showing.
+
+It is planning like the rest of the layout: on this board until **Save**
+publishes it, and then every board reads it.
 
 ## Why an order has no Expect Date
 

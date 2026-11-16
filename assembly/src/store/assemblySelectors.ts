@@ -35,6 +35,9 @@ function useGanttInputs(): GanttInputs | null {
   const production = usePlanStore((s) => s.production);
   const virtualLines = usePlanStore((s) => s.virtualLines);
   const lineNames = usePlanStore((s) => s.lineNames);
+  // Read by the engine through `domain/assembly` (see `setUpholsteryByProcess`).
+  // A dependency, so the board is laid out again when the floor changes over.
+  const uplByProcess = usePlanStore((s) => s.uplByProcess);
   // Not read here: the engine's calendar already carries them (see
   // `calendarStore`). A dependency, so the board is worked out again round them.
   const closedDays = useCalendarStore((s) => s.rows);
@@ -80,6 +83,7 @@ function useGanttInputs(): GanttInputs | null {
       production,
       virtualLines,
       lineNames,
+      uplByProcess,
       closedDays,
       crewRules,
     ],

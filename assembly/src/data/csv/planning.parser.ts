@@ -24,6 +24,7 @@ import { JobId, MachineId, PartId, WorkCenterId } from '@/domain/ids';
 import type { Department, Job } from '@/domain/types';
 import {
   LINE_BY_ID,
+  erpNamedLine,
   lineForOrderType,
   readLineKey,
   type MaterialPrepStatus,
@@ -342,10 +343,20 @@ export function parsePlanningCsv(
     // unfirm (SUNF) orders arrive like that, and leaving them in the pool only
     // made the supervisor file each by hand.
     const typed = readOrderType(cell(row, col.orderType), null);
+    const byType =
+      typed && !placed.excluded ? readPlacement(lineForOrderType(typed, description)) : null;
+    // A department is not a line. ERP's `UPL` covers the cutting bench as well
+    // as upholstery, and read on its own it lands on Upholstery — so an order
+    // that says it is cutting and sewing is taken at its word first.
+    const cutUnderUpl =
+      typed === 'cutting-sewing' &&
+      erpNamedLine(lineCell) === null &&
+      readLineKey(lineCell) === 'UPL_GLUING';
     const placement =
       readPlacement(placed.line ?? '') ??
+      (cutUnderUpl ? byType : null) ??
       readPlacement(lineCell) ??
-      (typed && !placed.excluded ? readPlacement(lineForOrderType(typed, description)) : null);
+      byType;
     if (!placement && lineCell) {
       unknownLines.set(lineCell, (unknownLines.get(lineCell) ?? 0) + 1);
     }

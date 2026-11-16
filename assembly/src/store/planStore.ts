@@ -25,6 +25,9 @@ import {
   arrangeLines,
   isVirtualLine,
   readLineKey,
+  setUpholsteryByProcess,
+  standsDown,
+  stepLinesOf,
   virtualLineDef,
   virtualLineKey,
   type CrewAssignment,
@@ -36,6 +39,21 @@ import {
 
 /** Container id for the un-scheduled job pool. */
 export const POOL_ID = '__pool__';
+
+/**
+ * The plan layout this build writes. 2: `pooledByHand` holds only orders a
+ * person took off a line. Before it, a card picked up in the Unassigned strip
+ * and let go there again was recorded as put there by hand, and stayed off
+ * its line through every refresh — so the flags of an older plan are not
+ * evidence of anything, and are dropped once on the way in.
+ */
+export const PLAN_LAYOUT_VERSION = 2;
+
+/** The two upholstery lanes and their benches: where a routed order is filed
+ *  by its route, and so where everything is re-filed when the route changes. */
+const UPHOLSTERY_CONTAINERS: string[] = (['UPL_GLUING', 'UPL_SOFTIE'] as LineKey[]).flatMap(
+  (lane) => [lane, ...stepLinesOf(lane).map((line) => line.key)],
+);
 
 /**
  * How long an order's plan outlives its last appearance in an export.
@@ -185,6 +203,19 @@ interface PlanState {
    * the built-in name is the default, so clearing a rename restores it.
    */
   lineNames: Record<string, string>;
+  /**
+   * Upholstery scheduled by process: Smart Soft Seating and Upholstery share
+   * one foaming, one sewing and one stapling bench, and the people of both
+   * (see `setUpholsteryByProcess` in `domain/assembly`). How the floor is
+   * run is the plan's to say, so it is published by Save like the lines.
+   */
+  uplByProcess: boolean;
+  /**
+   * Switch between by process and by product. The orders of both lanes are
+   * taken off their benches so the next reconcile files each where its route
+   * now puts it; allocations and line names are left exactly as they are.
+   */
+  setUplByProcess: (on: boolean) => void;
   /** Rename a line. An empty name puts the built-in one back. */
   renameLine: (key: LineKey, name: string) => void;
   /** Open a new line. Returns its key, or null when the name is taken/blank. */
@@ -372,6 +403,7 @@ interface PlanState {
     workerAbsence?: Record<string, string[]>;
     virtualLines?: VirtualLine[];
     lineNames?: Record<string, string>;
+    uplByProcess?: boolean;
     lineOrder?: LineKey[];
     crewPools?: CrewPool[];
     /** Read through `readCrewRules`, so a stored plan cannot hand the engine nonsense. */
@@ -426,7 +458,17 @@ export function virtualWorkCenters(lines: readonly VirtualLine[]): WorkCenter[] 
  * moulding line the workbook has it on.
  */
 function homeContainer(job: Job, known: Set<string>): string {
-  if (job.manual) return known.has('FACTORY_GENERAL') ? 'FACTORY_GENERAL' : POOL_ID;
+  const target = homeLineOf(job);
+  return target && known.has(target) ? target : POOL_ID;
+}
+
+/**
+ * The line an order is filed on by itself, or null when nothing names one.
+ * Also what the Unassigned strip shows on an order that was taken off its
+ * line by hand, and where its one press puts those back.
+ */
+export function homeLineOf(job: Job): string | null {
+  if (job.manual) return 'FACTORY_GENERAL';
   // The line is already decided — by ERP for TBP/PMD/Table/General, by the
   // routing table or the BOM for the rest (see engine/assembly/lineRouter).
   // Re-deriving it here from the part description is exactly the guess those
@@ -434,7 +476,7 @@ function homeContainer(job: Job, known: Set<string>): string {
   const target = job.department === 'assembly'
     ? (readLineKey(String(job.line ?? '')) ?? job.line)
     : job.preferredMachine;
-  return target && known.has(String(target)) ? String(target) : POOL_ID;
+  return target ? String(target) : null;
 }
 
 /** Remove a job id from every container (returns a new map). */
@@ -521,6 +563,17 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   workerOnLeave: {},
   virtualLines: [],
   lineNames: {},
+  uplByProcess: false,
+  setUplByProcess(on) {
+    set((state) => {
+      if (state.uplByProcess === on) return state;
+      const containers = { ...state.containers };
+      for (const key of UPHOLSTERY_CONTAINERS) {
+        if (containers[key]?.length) containers[key] = [];
+      }
+      return { uplByProcess: on, containers };
+    });
+  },
   lineOrder: [],
   crewPools: DEFAULT_CREW_POOLS,
   crewRules: DEFAULT_CREW_RULES,
@@ -545,6 +598,9 @@ export const usePlanStore = create<PlanState>((set, get) => ({
 
   reconcile(workCenters, jobs, now = new Date(), jobLinks = []) {
     set((state) => {
+      // The routes below are walked by the plan's own way of running
+      // upholstery, whatever was last drawn.
+      setUpholsteryByProcess(state.uplByProcess);
       /*
        * An order on a benched line is filed at the operation it has reached,
        * not at its lane: the board draws it there, its crew is allocated
@@ -589,7 +645,9 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       }
       for (const id of liveJobs) lastSeen[id] = today;
       const retained = (id: string): boolean => id in lastSeen;
-      const byHand = new Set(state.pooledByHand.filter(retained));
+      const byHand = new Set(
+        state.lineLayoutVersion < PLAN_LAYOUT_VERSION ? [] : state.pooledByHand.filter(retained),
+      );
 
       // 1. Carry over existing placements — including an order missing from
       //    this export, which keeps its line and its place in it so that a
@@ -610,6 +668,9 @@ export const usePlanStore = create<PlanState>((set, get) => ({
           // below like a new order, onto its line if it now has one. One a
           // person put there stays, and so does one this export left out.
           if (key === POOL_ID && !byHand.has(sid) && liveJobs.has(sid)) continue;
+          // On a bench that has stood down (upholstery by process): filed
+          // below at the shared bench its route now names.
+          if (standsDown(key) && liveJobs.has(sid)) continue;
           next[target].push(id);
           placed.add(sid);
         }
@@ -655,7 +716,7 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         lastSeen,
         pooledByHand: [...byHand],
         initialized: true,
-        lineLayoutVersion: 1,
+        lineLayoutVersion: PLAN_LAYOUT_VERSION,
       };
     });
   },
@@ -1107,13 +1168,16 @@ export const usePlanStore = create<PlanState>((set, get) => ({
             )
           : state.orderCrewAssignments);
       return {
-        lineLayoutVersion: plan.lineLayoutVersion ?? 0,
+        // Absent on the shift-records half of a plan, which is read in after
+        // the planning half: that must not take the version back to none.
+        lineLayoutVersion: plan.lineLayoutVersion ?? state.lineLayoutVersion,
         manualOrders: plan.manualOrders ?? state.manualOrders,
         workerLines: plan.workerLines ?? state.workerLines,
         workerOnLeave:
           plan.workerOnLeave ?? plan.workerAbsence ?? state.workerOnLeave,
         virtualLines: plan.virtualLines ?? state.virtualLines,
         lineNames: plan.lineNames ?? state.lineNames,
+        uplByProcess: plan.uplByProcess ?? state.uplByProcess,
         // A plan saved before the lines could be arranged carries none, which
         // reads as the built-in order rather than as an empty board.
         lineOrder: plan.lineOrder ?? state.lineOrder,
@@ -1141,12 +1205,18 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       const target = [...(cleared[toContainer] ?? [])];
       const at = toIndex === undefined ? target.length : Math.max(0, Math.min(toIndex, target.length));
       target.splice(at, 0, jobId);
-      // Dropped in the pool by a person: it stays there through every refresh.
+      // Taken off a line and dropped in the pool by a person: it stays there
+      // through every refresh. One already in the pool that is let go there
+      // again has not been taken off anything, and is left as it was — or
+      // picking a card up and putting it down would keep it off its line.
       const id = String(jobId);
+      const from = Object.entries(state.containers).find(([, ids]) => ids.includes(jobId))?.[0];
       const others = state.pooledByHand.filter((x) => x !== id);
+      const offALine = from !== undefined && from !== POOL_ID;
       return {
         containers: { ...cleared, [toContainer]: target },
-        pooledByHand: toContainer === POOL_ID ? [...others, id] : others,
+        pooledByHand:
+          toContainer !== POOL_ID ? others : offALine ? [...others, id] : state.pooledByHand,
       };
     });
   },
@@ -1164,4 +1234,6 @@ export const usePlanStore = create<PlanState>((set, get) => ({
 // The engine draws an unstaffed order's box at the crew the rules give it.
 usePlanStore.subscribe((state, previous) => {
   if (state.crewRules !== previous.crewRules) setActiveCrewRules(state.crewRules);
+  // And walks an upholstery order's route to the benches the plan runs.
+  if (state.uplByProcess !== previous.uplByProcess) setUpholsteryByProcess(state.uplByProcess);
 });

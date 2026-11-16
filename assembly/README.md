@@ -415,7 +415,8 @@ this file is optional.
   runs on: Cutting/Sewing → UPL-CUT, Upholstery → UPL-Gluing (UPL-SSS when the
   description says Smart Soft), Final Assembly → Assembly. The type is read
   however it is written — "Final Assembly", "F/A", "FA", "Cut & Sew", "C/S",
-  "UPH". Only an order with neither a line nor a type is left in the Unassigned
+  "UPH". Final assembly goes to Table instead when a word of the description starts
+  with "Table". Only an order with neither a line nor a type is left in the Unassigned
   strip.
 
 Planning1.csv carries no stock or purchase orders of its own: the shortage

@@ -18,6 +18,7 @@
 import {
   MAX_WORKERS_PER_ORDER,
   canWorkKind,
+  activeLineKey,
   onSameLane,
   worksLine,
   type CrewAssignment,
@@ -556,7 +557,7 @@ export function suggestCrew(
   recompute?: (allocations: Record<string, string[]>) => AssemblyGanttView,
   workerLines: ReadonlyMap<string, LineKey> = new Map(
     board.workers.flatMap((worker) =>
-      worker.skills[0] ? [[String(worker.id), worker.skills[0]]] : [],
+      worker.skills[0] ? [[String(worker.id), activeLineKey(worker.skills[0])]] : [],
     ),
   ),
   rules: CrewRules = activeRules,

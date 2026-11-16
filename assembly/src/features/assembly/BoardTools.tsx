@@ -23,6 +23,7 @@ import {
   LINES,
   PRODUCTIVE_HOURS_PER_PERSON,
   isPressLine,
+  standsDown,
   virtualLineDef,
   type CrewPool,
   type LineKey,
@@ -137,7 +138,7 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
   // The presses too: a press is a line of the board's own making, and one
   // hidden with its × has to have a way back like any other.
   const allLines = [
-    ...LINES,
+    ...LINES.filter((line) => !standsDown(line.key)),
     ...virtualLines.map(virtualLineDef),
     ...board.groups.map((group) => group.line).filter((line) => isPressLine(String(line.key))),
   ];
@@ -227,6 +228,7 @@ export function BoardTools({ board }: { board: AssemblyGanttView | null }) {
           </button>
         )}
         <AddLine />
+        <UpholsteryByProcess />
         <ReopenOrders board={board} />
         <MarkedSet />
         {/* The one control on this row that adds to the board instead of
@@ -556,6 +558,50 @@ function CrewPoolsEditor({ board }: { board: AssemblyGanttView }) {
       <CrewRulesEditor lines={lines.filter((line) => line.key !== 'FACTORY_GENERAL')} />
       <FactoryCalendar today={board.today} />
     </div>
+  );
+}
+
+/**
+ * Upholstery by process, or by product.
+ *
+ * The board is built as the product families: Smart Soft Seating and
+ * Upholstery each have a foaming, a sewing and a stapling bench, and their
+ * own people. Production runs the floor as the processes — one bench each,
+ * working both families with the people of both. One press files every
+ * order of the two lanes at the shared benches; the next puts them back.
+ *
+ * Planning like any other: it is on this board until Save publishes it.
+ */
+function UpholsteryByProcess() {
+  const unlocked = useSupervisorStore((s) => s.unlocked);
+  const on = usePlanStore((s) => s.uplByProcess);
+  // Somebody not signed in is only told, and only when there is something to
+  // tell: by product is the board they have always had.
+  if (!unlocked && !on) return null;
+
+  const change = () => {
+    const plan = usePlanStore.getState();
+    plan.setUplByProcess(!on);
+    // File the two lanes' orders where their routes now put them, rather
+    // than leave it to the next refresh.
+    const data = useDataStore.getState().dataset;
+    if (data) plan.reconcile(data.workCenters, data.jobs, undefined, data.jobLinks);
+  };
+
+  return (
+    <button
+      className={`date-restore by-process ${on ? 'on' : ''}`}
+      aria-pressed={on}
+      disabled={!unlocked}
+      onClick={change}
+      title={
+        on
+          ? 'Upholstery is scheduled by process: one Foaming, one Sewing and one Stapling bench for Smart Soft Seating and Upholstery together, with the people of both. Press to go back to a set of benches for each.'
+          : 'Schedule upholstery by process — Cut, Foaming, Sewing, Stapling: Smart Soft Seating and Upholstery share one bench per process, and their people. Press again to come back.'
+      }
+    >
+      {on ? 'By process ✓' : 'By process'}
+    </button>
   );
 }
 
