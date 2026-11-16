@@ -32,10 +32,13 @@ src/
   dal/              data access layer (§6)
     types.ts        PmdDataLayer interface — the single backend seam
     memory.ts       in-memory backend (seeded demo data, Appendix A)
-    sharepoint.ts   the production backend (SharePoint lists + CSV files)
+    sharepoint.ts   the production backend (SharePoint lists + CSV files);
+                    its parts are in dal/sharepoint/ — see docs/ai/architecture.md
     index.ts        createDataLayer() — VITE_BACKEND feature flag (§12.3)
-  ui/               operator sheet, KPI, Maint, modal, toast, charts
-tests/              business-logic and DAL unit tests
+  ui/               operator sheet (operator.ts + ui/operator/), KPI, Maint,
+                    modal, toast, charts
+tests/              business-logic and DAL unit tests; e2e/ runs the operator
+                    sheet in a browser (npm run test:e2e)
 docs/INTEGRATION.md PMD ⇄ Advanced MES integration design
 ```
 
@@ -45,7 +48,8 @@ docs/INTEGRATION.md PMD ⇄ Advanced MES integration design
 npm install            # PMD dashboard (this package)
 npm run setup:assembly # Assembly board (assembly/ — its own package.json)
 npm run dev            # http://localhost:5173 — uses the in-memory backend
-npm test               # unit tests
+npm test               # unit tests, and the SharePoint data layer end to end
+npm run test:e2e       # the operator sheet in a browser (needs Playwright)
 npm run typecheck      # tsc --noEmit
 npm run build          # typecheck + static bundle to dist/, both apps
 ```

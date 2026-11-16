@@ -52,9 +52,14 @@ UI (src/ui/*)  ──depends-on──►  Core logic (src/core/*)   pure, tested
 | `src/dal/types.ts` | `PmdDataLayer` interface + filter types |
 | `src/dal/memory.ts` | In-memory backend (seeded), the contract reference |
 | `src/dal/seed.ts` | Demo/reference seed data |
-| `src/dal/sharepoint.ts` | **Real backend.** 11 lists, field map, save-on-signoff, Excel sync |
+| `src/dal/sharepoint.ts` | **Real backend** — the door: re-exports what `src/dal/sharepoint/` holds |
+| `src/dal/sharepoint/schema.ts` | List names and `DEFAULT_FIELDS` (the tenant's internal column names), options |
+| `src/dal/sharepoint/http.ts`, `values.ts`, `rows.ts` | Throttled fetch; reading a cell (`str/num/bool/dateOnly…`); a shift as one header row (`aggregateSlots`, OData filters, the live-mirror staleness rules) |
+| `src/dal/sharepoint/csv.ts`, `mango.ts`, `assembly.ts` | The Epicor planning extract; the Mango reports; the Assembly board's lists |
+| `src/dal/sharepoint/rest.ts` → `reference.ts` → `maintenance.ts` → `planning.ts` → `production.ts` → `records.ts` → `data-layer.ts` | The data layer itself: one object built as seven classes, each extending the one before and adding one concern (talking to the site; reference lists; dies and presses; planning; reading a shift; writing the record; edit, mirror, sign-off, unlock). **A layer calls down through `this`, never up** — a new method goes in the lowest layer that has everything it needs |
 | `src/dal/index.ts` | `createDataLayer(env)` factory (reads `VITE_BACKEND`) |
-| `src/ui/operator.ts` | The Excel-style operator sheet (biggest UI module) |
+| `src/ui/operator.ts` | The Excel-style operator sheet — the door: re-exports from `src/ui/operator/` |
+| `src/ui/operator/` | The sheet, one module per concern: `state` (the sheet's state `S` and data layer, set only through `setSheetState` / `setSheetDal`), `sheet` (reading the shift), `data` (loading and writing it), `view` / `summary` / `render` (markup), `lock`, `events`, `status-picker`, `signoff`, `qc`, `die-change`, `add-order`, `photos`, `dictation`, `zoom`, `index` (`renderOperator`) |
 | `src/ui/trace.ts` | `#/trace` traceability search view |
 | `src/ui/breakdown.ts` | Two-tier breakdown cascade modal |
 | `src/ui/charts.ts` | Dependency-free SVG output/reject bar chart |

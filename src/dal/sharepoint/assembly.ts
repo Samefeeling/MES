@@ -1,0 +1,107 @@
+// SharePoint data layer — the Assembly board's lists.
+import type { AssemblyDataLayer, AssemblyResult } from '../../types/assembly';
+import { fetchThroughThrottle } from './http';
+import { type ListField, resolveField } from '../../../assembly/src/data/sharepoint/fieldMap';
+
+export const DEFAULT_ASSEMBLY_FIELDS = {
+  workType: "WorkType", laborHours: "LaborHours", description: "WorkDescription", supportDepartment: "SupportDepartment",
+  // The order's standard labour content and the quantity it covers. Together
+  // they turn a day's finished units back into earned hours, which is what the
+  // KPI page measures Efficiency on.
+  plannedHours: "PlannedHours", orderQty: "OrderQty",
+  // Measured labour hours, written by the Assembly board when a shift saves
+  // its entry. Absent on rows written before it existed; see `bookedHours`.
+  bookedHours: "BookedHour",
+  "job": "Title",
+  "date": "Date",
+  "line": "Line",
+  "operators": "Operators",
+  "output": "ShiftOutput",
+  "complete": "Complete",
+  "reject": "Reject",
+  "rework": "Rework",
+  "completed": "JobCompleted",
+  "due": "DueDate",
+  "completedAt": "CompletedAt"
+};
+
+/** Separate adapter: no PMD column mapping or machine/shift assumptions. */
+export function createAssemblyDataLayer(env: Record<string, string | undefined>, overrides: Partial<typeof DEFAULT_ASSEMBLY_FIELDS> = {}): AssemblyDataLayer {
+  const requestedFields = { ...DEFAULT_ASSEMBLY_FIELDS, ...overrides };
+  return {
+    async results(from, to) {
+      if (env.VITE_BACKEND !== 'sharepoint') return [];
+      const site = (env.VITE_SHAREPOINT_SITE_URL || env.VITE_SITE_URL || '').replace(/\/$/, '');
+      if (!site) throw new Error('Assembly SharePoint site is not configured.');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) throw new Error('Choose a valid date range.');
+      const end = new Date(`${to}T00:00:00Z`);
+      end.setUTCDate(end.getUTCDate() + 1);
+      const list = encodeURIComponent((env.VITE_PRODUCTION_LIST || 'ASSY_Production').replace(/'/g, "''")).replace(/'/g, '%27');
+      if (new URL(site).origin !== window.location.origin) throw new Error('Open MES on the configured SharePoint site.');
+      const schemaResponse = await fetchThroughThrottle(`${site}/_api/web/lists/getbytitle('${list}')/fields?$select=Title,InternalName,ReadOnlyField`, {
+        credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json;odata=nometadata' },
+      });
+      if (!schemaResponse.ok) throw new Error('Assembly column definitions could not be loaded.');
+      const schema = (await schemaResponse.json()).value as ListField[];
+      if (!Array.isArray(schema)) throw new Error('Assembly column definitions are invalid.');
+      const fields = { ...requestedFields };
+      for (const key of Object.keys(fields) as (keyof typeof fields)[]) {
+        const found = resolveField(schema, fields[key]);
+        if (found) fields[key] = found.InternalName;
+        else if (key === 'date' || key === 'job') throw new Error('Missing Assembly column: ' + fields[key]);
+      }
+      const filter = `${fields.date} ge datetime'${from}T00:00:00Z' and ${fields.date} lt datetime'${end.toISOString()}'`;
+      let url = `${site}/_api/web/lists/getbytitle('${list}')/items?$top=500&$filter=${encodeURIComponent(filter)}`;
+      const output: AssemblyResult[] = [];
+      const keys = new Set<string>();
+      for (let page = 0; url && page < 100; page++) {
+        if (new URL(url).origin !== window.location.origin) throw new Error('Open MES on the configured SharePoint site.');
+        const res = await fetchThroughThrottle(url, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json;odata=nometadata' } });
+        if (!res.ok) throw new Error(`Assembly results could not be loaded (${res.status}).`);
+        const body = await res.json() as { value?: Record<string, unknown>[]; 'odata.nextLink'?: string; '@odata.nextLink'?: string };
+        for (const row of body.value ?? []) {
+          const job = String(row[fields.job] ?? '').trim();
+          const day = String(row[fields.date] ?? '').slice(0, 10);
+          /*
+           * One row per order per day — per *operation*, where a route puts
+           * two benches on one order on the same day.
+           *
+           * Gluing foams and sews side by side, and the board writes each
+           * bench its own row: one carries the hours as work in progress, the
+           * other receives the units. Two records, not a duplicate. Keyed on
+           * the day alone this reader refused the whole range the moment a
+           * routed order was worked at two benches in a day, so a record
+           * written exactly as designed reported nothing at all.
+           *
+           * `WorkDescription` is what tells them apart — the writer puts
+           * `Op 20 sewing` there. A list without the column answers blank for
+           * every row, which is the day-only rule again, so an older record
+           * still guards itself exactly as it used to.
+           */
+          const operation = String(row[fields.description] ?? '').trim();
+          const key = `${job}|${day}|${operation}`;
+          if (!job || !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('Assembly results contain an invalid job/date.');
+          if (keys.has(key)) throw new Error(`Duplicate Assembly result: ${job} ${day}${operation ? ` (${operation})` : ''}. Correct the source before reporting totals.`);
+          keys.add(key);
+          const number = (field: string): number => {
+            const n = Number(row[field] ?? 0);
+            if (!Number.isFinite(n) || n < 0) throw new Error(`Invalid ${field} for ${key}.`);
+            return n;
+          };
+          output.push({ workType: String(row[fields.workType] ?? ""), laborHours: number(fields.laborHours), description: operation, supportDepartment: String(row[fields.supportDepartment] ?? ""), id: String(row.Id), job, day, line: String(row[fields.line] ?? ''), operators: String(row[fields.operators] ?? ''),
+            plannedHours: number(fields.plannedHours), orderQty: number(fields.orderQty),
+            // Read apart from `number()`: a missing column and a booked zero
+            // must not read alike, or every unmeasured day would be counted as
+            // a day that took no labour at all.
+            bookedHours: row[fields.bookedHours] == null ? null : number(fields.bookedHours),
+            output: number(fields.output), complete: number(fields.complete), reject: number(fields.reject), rework: number(fields.rework),
+            completed: row[fields.completed] === true, due: row[fields.due] ? String(row[fields.due]) : null,
+            completedAt: row[fields.completedAt] ? String(row[fields.completedAt]) : null });
+        }
+        url = body['odata.nextLink'] ?? body['@odata.nextLink'] ?? '';
+      }
+      if (url) throw new Error('Assembly results exceed the page limit. Select a shorter date range.');
+      return output.sort((a, b) => b.day.localeCompare(a.day) || a.job.localeCompare(b.job));
+    },
+  };
+}

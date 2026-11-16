@@ -11,9 +11,9 @@
 2. **Core stays pure.** `src/core/*` = pure functions: no DOM, no `fetch`,
    no `window`, no module-level mutable state. This is what makes them
    unit-testable. New business rules go here, with a test.
-3. **SharePoint specifics live only in `src/dal/sharepoint.ts`.** Internal
-   column names go in `DEFAULT_FIELDS`; never hardcode a column name
-   elsewhere.
+3. **SharePoint specifics live only in `src/dal/sharepoint.ts` and
+   `src/dal/sharepoint/`.** Internal column names go in `DEFAULT_FIELDS`
+   (`sharepoint/schema.ts`); never hardcode a column name elsewhere.
 4. **Field-name changes are config, not code.** If a SP column's internal
    name differs, patch `DEFAULT_FIELDS` (or pass `fieldMap` override to the
    constructor) — don't sprinkle names through the methods.
@@ -35,7 +35,7 @@ Then commit + push to `claude/rewrite-production-app-e18pD` (updates PR #1).
   Unused vars fail the build — prefix intentional throwaways with `_`.
 - Prefer `interface` for object shapes, `type` for unions.
 - Boundary data (SP REST responses) is untyped at the edge — coerce with the
-  `str()/num()/bool()/nullOrNum()/isoDate()` helpers in `sharepoint.ts`,
+  `str()/num()/bool()/nullOrNum()/isoDate()` helpers in `sharepoint/values.ts`,
   type after mapping.
 
 ## Comments
@@ -56,7 +56,20 @@ Then commit + push to `claude/rewrite-production-app-e18pD` (updates PR #1).
 
 ## Tests
 
-- Business-logic only (Vitest, node env). No DOM/e2e harness.
+- `npm test` is Vitest in the node env: business logic, and the data layer.
+- **`tests/sharepoint-e2e.test.ts`** runs the SharePoint data layer through
+  its public methods against an in-memory site that answers REST
+  (`tests/fake-sharepoint.ts`) — one press, one shift, several devices — and
+  holds the whole conversation with the site against a stored copy
+  (`tests/__snapshots__/`). A change meant to move code must leave that copy
+  alone; a change meant to alter what is sent updates it on purpose
+  (`npx vitest run tests/sharepoint-e2e.test.ts -u`) and says why.
+- **`npm run test:e2e`** (`tests/e2e/`) runs the operator sheet in a real
+  browser on the demo backend with the clock fixed. It needs Playwright,
+  which the project does not install: `npm install --no-save playwright`
+  then `npx playwright install chromium`. Before a refactor of the sheet,
+  record its markup step by step (`E2E_RECORD=before.json npm run test:e2e`)
+  and compare after (`E2E_COMPARE=before.json npm run test:e2e`).
 - Use `tests/helpers.ts` `rec()` / `order()` factories for fixtures.
 - When you change a domain rule, update or add a test in the same commit.
 - Adding a field to `ProductionRecord`? Update `tests/helpers.ts`,
