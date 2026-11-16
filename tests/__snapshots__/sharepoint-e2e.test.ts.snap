@@ -1,0 +1,781 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`a shift on one press, across devices > held the same conversation with the site as the stored one 1`] = `
+[
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Machine')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Operator')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Operator')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_RejectCategories')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakdownMaster')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Planning')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_ManualOrders')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Planning')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_ManualOrders')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')?$select=ListItemEntityTypeFullName",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day' and JobNumber eq 'SFM507001'",
+  },
+  {
+    "method": "POST",
+    "url": "/_api/contextinfo",
+  },
+  {
+    "body": {
+      "CountEnd": 150,
+      "CountStart": 0,
+      "Downtime": 0.5,
+      "Handover": "",
+      "JobHead_PartDescription": "",
+      "JobHead_PartNum": "7911FR",
+      "JobNumber": "SFM507001",
+      "MachineCode": "RRBR············",
+      "Operator": "Tony Lee",
+      "OwnerDevice": "<device>",
+      "QualityChecks": "{"0":"Tony Lee","1":"Jeff Penn"}",
+      "Reject": 3,
+      "RejectsBySlot": "{"1":{"D01":3}}",
+      "RunTime": 1.5,
+      "ShiftId": "Day",
+      "SlotStart_x003a_": "2026-11-16T00:00:00.000Z",
+      "Supervisor": "Jeff Penn",
+      "Title": "850T",
+      "TotalGood": 147,
+      "__metadata": {
+        "type": "SP.Data.PMD_LiveStatusListItem",
+      },
+    },
+    "method": "POST",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day' and JobNumber eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')?$select=ListItemEntityTypeFullName",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day' and JobHead_JobNum eq 'SFM507001'",
+  },
+  {
+    "body": {
+      "BDCause": "{"2":"ELE-03 — Servo / VFD drive fault or alarm"}",
+      "BDCode": "ELE-03",
+      "B_BreakDown": 0.5,
+      "C_ColorChange": 0,
+      "D_DieChange": 0,
+      "Date": "2026-11-16T00:00:00.000Z",
+      "I_InsertChange": 0,
+      "JobHead_JobNum": "SFM507001",
+      "JobHead_PartNum": "7911FR",
+      "M_Maintainance": 0,
+      "O_NoWork": 0,
+      "P_Purge": 0,
+      "R_Runtime": 1.5,
+      "S_StartUpShutdown": 0,
+      "Shift": "Day",
+      "StatusTimeline": "RRBR············",
+      "Title": "850T",
+      "__metadata": {
+        "type": "SP.Data.PMD_BreakDownlogListItem",
+      },
+    },
+    "method": "POST",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day' and JobNumber eq 'SFM507001'",
+  },
+  {
+    "body": {
+      "CountEnd": 150,
+      "CountStart": 0,
+      "Downtime": 0.5,
+      "Handover": "",
+      "JobHead_PartDescription": "",
+      "JobHead_PartNum": "7911FR",
+      "JobNumber": "SFM507001",
+      "MachineCode": "RRBRR···········",
+      "Operator": "Tony Lee",
+      "OwnerDevice": "<device>",
+      "QualityChecks": "{"0":"Tony Lee","1":"Jeff Penn"}",
+      "Reject": 3,
+      "RejectsBySlot": "{"1":{"D01":3}}",
+      "RunTime": 2,
+      "ShiftId": "Day",
+      "SlotStart_x003a_": "2026-11-16T00:00:00.000Z",
+      "Supervisor": "Jeff Penn",
+      "Title": "850T",
+      "TotalGood": 147,
+      "__metadata": {
+        "type": "SP.Data.PMD_LiveStatusListItem",
+      },
+    },
+    "method": "MERGE",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items(10)",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day' and JobNumber eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day' and JobHead_JobNum eq 'SFM507001'",
+  },
+  {
+    "body": {
+      "BDCause": "{"2":"ELE-03 — Servo / VFD drive fault or alarm"}",
+      "BDCode": "ELE-03",
+      "B_BreakDown": 0.5,
+      "C_ColorChange": 0,
+      "D_DieChange": 0,
+      "Date": "2026-11-16T00:00:00.000Z",
+      "I_InsertChange": 0,
+      "JobHead_JobNum": "SFM507001",
+      "JobHead_PartNum": "7911FR",
+      "M_Maintainance": 0,
+      "O_NoWork": 0,
+      "P_Purge": 0,
+      "R_Runtime": 2,
+      "S_StartUpShutdown": 0,
+      "Shift": "Day",
+      "StatusTimeline": "RRBRR···········",
+      "Title": "850T",
+      "__metadata": {
+        "type": "SP.Data.PMD_BreakDownlogListItem",
+      },
+    },
+    "method": "MERGE",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items(11)",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Planning')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_ManualOrders')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Planning')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_ManualOrders')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_ProductDieColor')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-14T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-17T00:00:00.000Z') and ShiftId eq 'Night'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-14T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-17T00:00:00.000Z') and ShiftId eq 'Night'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-14T00:00:00.000Z' and Date le datetime'2026-11-17T00:00:00.000Z') and Shift eq 'Night'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-14T00:00:00.000Z' and Date le datetime'2026-11-17T00:00:00.000Z') and Shift eq 'Night'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_ShiftPlan')/items?$top=5000&$filter=ShiftId eq '2026-11-16-Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Machine')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Planning')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_ManualOrders')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=JobNumber eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=JobHead_JobNum eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=JobHead_JobNum eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day' and JobHead_JobNum eq 'SFM507001'",
+  },
+  {
+    "body": {
+      "BDCause": "{"2":"ELE-03 — Servo / VFD drive fault or alarm"}",
+      "BDCode": "ELE-03",
+      "B_BreakDown": 0.5,
+      "C_ColorChange": 0,
+      "D_DieChange": 0,
+      "Date": "2026-11-16T00:00:00.000Z",
+      "I_InsertChange": 0,
+      "JobHead_JobNum": "SFM507001",
+      "JobHead_PartNum": "7911FR",
+      "M_Maintainance": 0,
+      "O_NoWork": 0,
+      "P_Purge": 0,
+      "R_Runtime": 2,
+      "S_StartUpShutdown": 0,
+      "Shift": "Day",
+      "StatusTimeline": "RRBRR···········",
+      "Title": "850T",
+      "__metadata": {
+        "type": "SP.Data.PMD_BreakDownlogListItem",
+      },
+    },
+    "method": "POST",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items",
+  },
+  {
+    "method": "DELETE",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items(11)",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day' and JobHead_JobNum eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')?$select=ListItemEntityTypeFullName",
+  },
+  {
+    "body": {
+      "Date": "2026-11-16T00:00:00.000Z",
+      "JobHead_JobNum": "SFM507001",
+      "RejectCategory": "R",
+      "RejectCode": "D01",
+      "RejectNumber": 3,
+      "Shift": "Day",
+      "Timeline": "07:30–08:00",
+      "Title": "850T",
+      "__metadata": {
+        "type": "SP.Data.PMD_RejectsListItem",
+      },
+    },
+    "method": "POST",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')?$select=ListItemEntityTypeFullName",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day' and JobNumber eq 'SFM507001'",
+  },
+  {
+    "body": {
+      "Cavities": 1,
+      "CountEnd": 150,
+      "CountStart": 0,
+      "CycleTime": 60,
+      "Downtime": 0.5,
+      "Handover": "",
+      "JobHead_PartDescription": "Encore shell",
+      "JobHead_PartNum": "7911FR",
+      "JobLeft": 500,
+      "JobNumber": "SFM507001",
+      "JobRequired": 500,
+      "MachineCode": "RRBRR···········",
+      "Operator": "Tony Lee",
+      "PlannedStart": "2026-11-16T07:00:00.000Z",
+      "QualityChecks": "{"0":"Tony Lee","1":"Jeff Penn"}",
+      "Reject": 3,
+      "RejectsBySlot": "{"1":{"D01":3}}",
+      "Reopened": false,
+      "RunTime": 2,
+      "ScheduleAttain": null,
+      "SchedulePlan": 0,
+      "ShiftId": "Day",
+      "ShiftTarget": 0,
+      "Signoff": "<now>",
+      "SlotStart_x003a_": "2026-11-16T00:00:00.000Z",
+      "Supervisor": "Jeff Penn",
+      "Title": "850T",
+      "TotalGood": 147,
+      "__metadata": {
+        "type": "SP.Data.PMD_ProductionListItem",
+      },
+    },
+    "method": "POST",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day' and JobNumber eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day' and JobNumber eq 'SFM507001'",
+  },
+  {
+    "method": "DELETE",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items(10)",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=JobNumber eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=JobHead_JobNum eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=JobHead_JobNum eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_RejectCategories')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=Title eq '850T' and JobNumber eq 'SFM507001' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items?$top=5000&$filter=Title eq '850T' and JobNumber eq 'SFM507001' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=Title eq '850T' and JobHead_JobNum eq 'SFM507001' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=Title eq '850T' and JobHead_JobNum eq 'SFM507001' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day' and JobNumber eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')?$select=ListItemEntityTypeFullName",
+  },
+  {
+    "method": "POST",
+    "url": "/_api/contextinfo",
+  },
+  {
+    "body": {
+      "Reopened": true,
+      "__metadata": {
+        "type": "SP.Data.PMD_ProductionListItem",
+      },
+    },
+    "method": "MERGE",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items(14)",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Planning')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_ManualOrders')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_ProductDieColor')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-14T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-17T00:00:00.000Z') and ShiftId eq 'Night'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-14T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-17T00:00:00.000Z') and ShiftId eq 'Night'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-14T00:00:00.000Z' and Date le datetime'2026-11-17T00:00:00.000Z') and Shift eq 'Night'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-14T00:00:00.000Z' and Date le datetime'2026-11-17T00:00:00.000Z') and Shift eq 'Night'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_ShiftPlan')/items?$top=5000&$filter=ShiftId eq '2026-11-16-Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Machine')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Planning')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_ManualOrders')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=JobNumber eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=JobHead_JobNum eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=JobHead_JobNum eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day' and JobHead_JobNum eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')?$select=ListItemEntityTypeFullName",
+  },
+  {
+    "method": "POST",
+    "url": "/_api/contextinfo",
+  },
+  {
+    "body": {
+      "BDCause": "{"2":"ELE-03 — Servo / VFD drive fault or alarm"}",
+      "BDCode": "ELE-03",
+      "B_BreakDown": 0.5,
+      "C_ColorChange": 0,
+      "D_DieChange": 0,
+      "Date": "2026-11-16T00:00:00.000Z",
+      "I_InsertChange": 0,
+      "JobHead_JobNum": "SFM507001",
+      "JobHead_PartNum": "7911FR",
+      "M_Maintainance": 0.5,
+      "O_NoWork": 0,
+      "P_Purge": 0,
+      "R_Runtime": 2,
+      "S_StartUpShutdown": 0,
+      "Shift": "Day",
+      "StatusTimeline": "RRBRRM··········",
+      "Title": "850T",
+      "__metadata": {
+        "type": "SP.Data.PMD_BreakDownlogListItem",
+      },
+    },
+    "method": "POST",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items",
+  },
+  {
+    "method": "DELETE",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items(12)",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day' and JobHead_JobNum eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')?$select=ListItemEntityTypeFullName",
+  },
+  {
+    "body": {
+      "Date": "2026-11-16T00:00:00.000Z",
+      "JobHead_JobNum": "SFM507001",
+      "RejectCategory": "R",
+      "RejectCode": "D01",
+      "RejectNumber": 3,
+      "Shift": "Day",
+      "Timeline": "07:30–08:00",
+      "Title": "850T",
+      "__metadata": {
+        "type": "SP.Data.PMD_RejectsListItem",
+      },
+    },
+    "method": "POST",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items",
+  },
+  {
+    "method": "DELETE",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items(13)",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')?$select=ListItemEntityTypeFullName",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day' and JobNumber eq 'SFM507001'",
+  },
+  {
+    "body": {
+      "Cavities": 1,
+      "CountEnd": 160,
+      "CountStart": 0,
+      "CycleTime": 60,
+      "Downtime": 1,
+      "Handover": "",
+      "JobHead_PartDescription": "Encore shell",
+      "JobHead_PartNum": "7911FR",
+      "JobLeft": 500,
+      "JobNumber": "SFM507001",
+      "JobRequired": 500,
+      "MachineCode": "RRBRRM··········",
+      "Operator": "Tony Lee",
+      "PlannedStart": "2026-11-16T07:00:00.000Z",
+      "QualityChecks": "{"0":"Tony Lee","1":"Jeff Penn"}",
+      "Reject": 3,
+      "RejectsBySlot": "{"1":{"D01":3}}",
+      "Reopened": false,
+      "RunTime": 2,
+      "ScheduleAttain": null,
+      "SchedulePlan": 0,
+      "ShiftId": "Day",
+      "ShiftTarget": 0,
+      "Signoff": "<now>",
+      "SlotStart_x003a_": "2026-11-16T00:00:00.000Z",
+      "Supervisor": "Jeff Penn",
+      "Title": "850T",
+      "TotalGood": 157,
+      "__metadata": {
+        "type": "SP.Data.PMD_ProductionListItem",
+      },
+    },
+    "method": "MERGE",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items(14)",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day' and JobNumber eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day' and JobNumber eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=JobNumber eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=JobHead_JobNum eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=JobHead_JobNum eq 'SFM507001'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_LiveStatus')/items?$top=5000&$filter=Title eq '850T' and (SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z') and ShiftId eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=Title eq '850T' and (Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z') and Shift eq 'Day'",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_ManualOrders')?$select=ListItemEntityTypeFullName",
+  },
+  {
+    "body": {
+      "OrderQty": 50,
+      "PartDescription": "Rush job",
+      "PartNumber": "400.410.70",
+      "Title": "SFM999001",
+      "__metadata": {
+        "type": "SP.Data.PMD_ManualOrdersListItem",
+      },
+    },
+    "method": "POST",
+    "url": "/_api/web/lists/getbytitle('PMD_ManualOrders')/items",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_Planning')/items?$top=5000",
+  },
+  {
+    "method": "GET",
+    "url": "/_api/web/lists/getbytitle('PMD_ManualOrders')/items?$top=5000",
+  },
+]
+`;
