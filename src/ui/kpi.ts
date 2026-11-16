@@ -460,10 +460,6 @@ interface KpiState {
   /** Who is rostered on which shift (the People lists) — what tells
    *  somebody on overtime from the shift's own people. */
   roster: Roster;
-  /** Everybody the People list holds as a supervisor, lower-cased: on a
-   *  sheet of their own they count as running a press only with run time
-   *  on it (the standby press rule). */
-  supervisorNames: ReadonlySet<string>;
   staff: Staffing;
   staffByShift: Record<ShiftCode, Staffing>;
   /** Yes / No already recorded against a finding, by its key. */
@@ -1643,7 +1639,7 @@ async function compute(now = new Date()): Promise<void> {
     // The people who could run a planned press: not a supervisor without
     // production of their own, not somebody on a press that had no plan —
     // and no press that runs unattended is waiting for one of them.
-    const crews = pressCrewsByShift(perMachineProd.flat(), S!.supervisorNames);
+    const crews = pressCrewsByShift(perMachineProd.flat());
     const judged = withStandbyPress(
       perPress.flat(),
       (shiftId, planned) =>
@@ -3843,7 +3839,7 @@ function render(): void {
                 <option value=""${only ? '' : ' selected'}>All shifts</option>
                 ${SHIFT_ORDER.map((code) => `<option value="${code}"${only === code ? ' selected' : ''}>${code}</option>`).join('')}
               </select>
-            </th><th class="kpi-op-head" title="Who ran the press (first names — hover for full names): the operator named on the signed sheet, then anybody else who signed one of its operator Quality Checks, e.g. covering a break. Where the named operator signed none of them and somebody else did, only the people who signed are shown. Day / Afternoon / Night count everybody on shift, each person once, the supervisors named on the sheets or signing them off included. Somebody on overtime — on a shift the People list does not roster them on — counts as half a person there (4 of the shift's 8 hours). Over several days the figure is the average per shift. TOTAL adds the three shifts up.">Operator</th><th class="kpi-color-head">Color</th>
+            </th><th class="kpi-op-head" title="Who ran the press (first names — hover for full names): the operator named on the signed sheet, then anybody else who signed one of its operator Quality Checks, e.g. covering a break. Where the named operator signed none of them and somebody else did, only the people who signed are shown. Day / Afternoon / Night count everybody on shift, each person once, the supervisors included: whoever signed the shift's supervisor Quality Checks (the second in charge, when the supervisor is away), and the Supervisor a sheet names if they signed a Quality Check of the shift themselves — a name carried over from another shift, with no signature, is not counted. Where no supervisor check was signed, the names on the sheets stand. Somebody on overtime — on a shift the People list does not roster them on — counts as half a person there (4 of the shift's 8 hours). Over several days the figure is the average per shift. TOTAL adds the three shifts up.">Operator</th><th class="kpi-color-head">Color</th>
             <th>Output</th><th>Reject</th><th>Yield%</th>
             <th>Run h</th><th>Down h</th>
             <th title="S — Startup / warm-up">Startup h</th>
@@ -4476,14 +4472,11 @@ export async function renderKpi(dal: PmdDataLayer, assemblyDal?: AssemblyDataLay
   const machines = (await dal.listMachines()).sort((a, b) => a.sequence - b.sequence);
   // The People lists say who is rostered on which shift. Without them
   // nobody reads as overtime and everybody counts as one.
-  const { roster, supervisorNames } = await Promise.all([dal.listOperators(), dal.listSupervisors()])
-    .then(([operators, supervisors]) => ({
-      roster: rosterOf(operators, supervisors),
-      supervisorNames: new Set(supervisors.map((s) => s.operatorName.trim().replace(/\s+/g, ' ').toLowerCase())),
-    }))
+  const roster = await Promise.all([dal.listOperators(), dal.listSupervisors()])
+    .then(([operators, supervisors]) => rosterOf(operators, supervisors))
     .catch((err) => {
       console.warn('[kpi] roster not loaded — overtime is not told apart', err);
-      return { roster: rosterOf(), supervisorNames: new Set<string>() };
+      return rosterOf();
     });
   if (mount !== kpiMount) return;
   // Default custom range: last 7 calendar days, so switching to the
@@ -4535,7 +4528,6 @@ export async function renderKpi(dal: PmdDataLayer, assemblyDal?: AssemblyDataLay
     },
     equalWeight: false,
     roster,
-    supervisorNames,
     staff: NO_STAFF,
     staffByShift: { Day: NO_STAFF, Afternoon: NO_STAFF, Night: NO_STAFF },
     impwDecisions: loadImpwDecisions(),

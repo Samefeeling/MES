@@ -84,8 +84,12 @@ shift held to all five is capped at 80 % however well it runs.
   them. Those people are the lead operator of each signed sheet, each
   person once (`pressCrewsByShift`, core/crew.ts), with three rules:
   - somebody who only covered a break led no sheet and is not counted;
-  - a **supervisor** of the shift — named Supervisor on its sheets, the one
-    who signed them off, or a supervisor on the People list — is counted
+  - a **supervisor** of the shift — whoever signed its supervisor Quality
+    Checks (the second in charge, when the supervisor is away) and a named
+    Supervisor who signed a check of the shift; the names on the sheets
+    where no supervisor check was signed (`shiftSupervisors`). Not the
+    People list: a second in charge is on it as a supervisor and runs a
+    press on other shifts — is counted
     only when a sheet in their name has run time on it. A supervisor
     relieves breaks and sets presses up: a die change on the standby is not
     a press being run. An operator is counted for any sheet they lead, so a

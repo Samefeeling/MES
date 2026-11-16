@@ -80,9 +80,10 @@ function sheetNames(records: ReadonlyArray<ProductionRecord>): { operator: strin
  * from the shift before, and a crew that confirmed without re-picking was
  * recorded as the crew it relieved.)
  *
- * Supervisors are the one the sheet names and whoever signed it off. Nothing
- * on a sheet contradicts them: somebody on overtime is rightly in two
- * shifts, so a name from the shift before is not, by itself, a mistake.
+ * Supervisors here are the names as written: the one the sheet names and
+ * whoever signed it off. One sheet cannot say whether they were there — a
+ * supervisor signs every press of the shift — so that is settled for the
+ * shift as a whole (`shiftSupervisors`).
  */
 export function sheetPeople(records: ReadonlyArray<ProductionRecord>): SheetPeople {
   const { operator, operatorChecks } = sheetNames(records);
@@ -104,6 +105,44 @@ function sheets(records: ReadonlyArray<ProductionRecord>): ProductionRecord[][] 
     else out.set(key, [r]);
   }
   return [...out.values()];
+}
+
+/** The sheets of each shift (a date and a shift). */
+function sheetsByShift(records: ReadonlyArray<ProductionRecord>): Map<string, ProductionRecord[][]> {
+  const out = new Map<string, ProductionRecord[][]>();
+  for (const sheet of sheets(records)) {
+    const held = out.get(sheet[0].shiftId);
+    if (held) held.push(sheet);
+    else out.set(sheet[0].shiftId, [sheet]);
+  }
+  return out;
+}
+
+/**
+ * The supervisors who were on ONE shift, from all its sheets.
+ *
+ * The Supervisor a sheet names is picked from a list and so is the name it
+ * is signed off under: neither says the person was there. A sheet confirmed
+ * without re-picking carries the supervisor of the shift before; one signed
+ * off the morning after carries that morning's. Whoever is on shift signs
+ * Quality Checks — the supervisor's own (`SUPERVISOR_QC_SLOTS`) on every
+ * press, by name — and with the supervisor away the second in charge signs
+ * them, under their own name.
+ *
+ * So, where the shift's supervisor checks are signed, its supervisors are
+ * the people who signed them, and a named supervisor is one of them only if
+ * they signed a Quality Check of the shift themselves. Somebody who stayed
+ * on from the shift before and did the job is there by their signatures. A
+ * shift with no supervisor check signed has nothing to go by, and keeps the
+ * names as written.
+ */
+function shiftSupervisors(shiftSheets: ReadonlyArray<ReadonlyArray<ProductionRecord>>): string[] {
+  const records = shiftSheets.flat();
+  const named = byCount(records.flatMap((r) => [r.supervisor, r.lockedBy]));
+  const signedAsSupervisor = byCount(records.filter((r) => SUPERVISOR_QC_SLOTS.has(r.slotIndex)).map((r) => r.qcBy));
+  if (!signedAsSupervisor.length) return named;
+  const signed = new Set(records.map((r) => clean(r.qcBy).toLowerCase()));
+  return distinct([...signedAsSupervisor, ...named.filter((n) => signed.has(n.toLowerCase()))]);
 }
 
 /** The operators of these records' sheets, each once (`sheetPeople`). */
@@ -151,12 +190,13 @@ export interface ShiftPressCrew {
  *
  * A supervisor relieves breaks and sets presses up; a sheet in their name
  * with no production on it (a die change on the standby, say) is not a
- * press being run. So a supervisor of the shift — the Supervisor its sheets
- * name, whoever signed them off, or somebody the People list holds as a
- * supervisor (`listedSupervisors`, any case) — is counted only for the
+ * press being run. So a supervisor of the shift (`shiftSupervisors`: the
+ * second in charge, when the supervisor is away) is counted only for the
  * sheets with run time on them, and not at all without one. An operator is
  * counted for every sheet they lead: one standing by a press that is down
- * all shift is still its crew.
+ * all shift is still its crew. Being on the People list as a supervisor
+ * makes nobody one for a shift — a second in charge is listed there, and
+ * runs a press on every shift the supervisor is in.
  *
  * A press that runs unattended gives nobody a press to their name: the
  * small ones always (`UNATTENDED_PRESSES`), and one of
@@ -166,26 +206,16 @@ export interface ShiftPressCrew {
  * Quality Checks is. A sheet of it with no run time says nothing: the press
  * did not run by itself, it did not run.
  */
-export function pressCrewsByShift(
-  records: ReadonlyArray<ProductionRecord>,
-  listedSupervisors: Iterable<string> = [],
-): Map<string, ShiftPressCrew> {
-  const listed = new Set([...listedSupervisors].map((n) => clean(n).toLowerCase()));
+export function pressCrewsByShift(records: ReadonlyArray<ProductionRecord>): Map<string, ShiftPressCrew> {
   const pressOf = (sheet: ReadonlyArray<ProductionRecord>): string => sheet[0].machineCode.trim().toUpperCase();
   const ran = (sheet: ReadonlyArray<ProductionRecord>): boolean => sheet.some((r) => r.statusCode === 'R');
   const always = new Set(UNATTENDED_PRESSES.map((p) => p.toUpperCase()));
   const sometimes = new Set(SOMETIMES_UNATTENDED_PRESSES.map((p) => p.toUpperCase()));
 
-  const byShift = new Map<string, ProductionRecord[][]>();
-  for (const sheet of sheets(records)) {
-    const held = byShift.get(sheet[0].shiftId);
-    if (held) held.push(sheet);
-    else byShift.set(sheet[0].shiftId, [sheet]);
-  }
   const out = new Map<string, ShiftPressCrew>();
-  for (const [shiftId, shiftSheets] of byShift) {
+  for (const [shiftId, shiftSheets] of sheetsByShift(records)) {
     const people = shiftSheets.map(sheetPeople);
-    const supervisors = new Set([...listed, ...people.flatMap((p) => p.supervisors.map((n) => n.toLowerCase()))]);
+    const supervisors = new Set(shiftSupervisors(shiftSheets).map((n) => n.toLowerCase()));
     const isSupervisor = (name: string): boolean => supervisors.has(name.toLowerCase());
 
     // press → did everything it ran this shift run under a supervisor alone?
@@ -221,15 +251,16 @@ export function pressCrewsByShift(
 }
 
 /**
- * Everybody on the records: the operators and supervisors of their sheets
- * (`sheetPeople`). A supervisor signs every press of the shift and runs
- * none, so they belong to the shift and the floor, not to a press.
+ * Everybody on the records: the operators of their sheets (`sheetPeople`)
+ * and the supervisors of their shifts (`shiftSupervisors`). A supervisor
+ * signs every press of the shift and runs none, so they belong to the shift
+ * and the floor, not to a press.
  */
 export function crewOf(records: ReadonlyArray<ProductionRecord>): Crew {
-  const people = sheets(records).map(sheetPeople);
-  const operators = distinct(people.flatMap((p) => p.operators));
+  const operators = distinct(sheets(records).flatMap((sheet) => sheetPeople(sheet).operators));
   const taken = new Set(operators.map((n) => n.toLowerCase()));
-  const supervisors = distinct(people.flatMap((p) => p.supervisors)).filter((n) => !taken.has(n.toLowerCase()));
+  const supervisors = distinct([...sheetsByShift(records).values()].flatMap(shiftSupervisors))
+    .filter((n) => !taken.has(n.toLowerCase()));
   return { operators, supervisors };
 }
 

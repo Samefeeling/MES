@@ -53,18 +53,19 @@ describe('a sheet confirmed under the names of the shift before', () => {
   // Hot-stamp press, 12 Nov 2026. The Day sheet names John Taylor and Tin
   // Maung. The Afternoon sheet was confirmed without re-picking, so it names
   // them too — and every Quality Check on it is signed by Ben Wood.
-  const sheet = (shiftId: string, signer: string, timeline: string): ReturnType<typeof rec>[] =>
+  // `supervisor` signs the supervisor's Quality Checks (slots 1, 7, 13).
+  const sheet = (shiftId: string, signer: string, timeline: string, supervisor = ''): ReturnType<typeof rec>[] =>
     [...timeline].map((statusCode, slotIndex) =>
       rec({
         machineCode: 'HStamp', shiftId, jobNumber: 'SFM508005', slotIndex,
         statusCode: statusCode as 'R' | 'M',
         operator: slotIndex === 0 ? 'John Taylor' : '',
         supervisor: slotIndex === 0 ? 'Tin Maung' : '',
-        qcBy: statusCode === 'R' ? signer : '',
-        locked: true, lockedBy: 'Jean-Michel Thomas',
+        qcBy: statusCode !== 'R' ? '' : [1, 7, 13].includes(slotIndex) ? supervisor : signer,
+        locked: true, lockedBy: 'Tin Maung',
       }));
-  const day = sheet('2026-11-12-Day', 'John Taylor', 'MMMMMMMMMMMRRRMR');
-  const afternoon = sheet('2026-11-12-Afternoon', 'Ben Wood', 'RRRRRRMRRRRRRMRR');
+  const day = sheet('2026-11-12-Day', 'John Taylor', 'MMMMMMMMMMMRRRMR', 'Tin Maung');
+  const afternoon = sheet('2026-11-12-Afternoon', 'Ben Wood', 'RRRRRRMRRRRRRMRR', 'Jean-Michel Thomas');
 
   it('goes by who signed the operator checks when the named operator signed none', () => {
     expect(sheetPeople(afternoon)).toMatchObject({ operators: ['Ben Wood'], leftover: true });
@@ -76,14 +77,42 @@ describe('a sheet confirmed under the names of the shift before', () => {
     expect(sheetPeople(day)).toMatchObject({ operators: ['John Taylor'], leftover: false });
   });
 
-  it('leaves the supervisors alone: somebody on overtime is rightly in both shifts', () => {
-    // Tin Maung stayed on into the Afternoon. Nothing on the sheet says
-    // otherwise, so he is counted there with whoever signed it off.
-    expect(crewOf(afternoon)).toEqual({
-      operators: ['Ben Wood'],
-      supervisors: ['Jean-Michel Thomas', 'Tin Maung'],
-    });
-    expect(crewOf(day).supervisors).toEqual(['Jean-Michel Thomas', 'Tin Maung']);
+  it('goes by who signed the supervisor checks too: a name carried over, with no signature, was not there', () => {
+    // The sheet names Tin Maung and is signed off under his name; every
+    // supervisor check on it is Jean-Michel's.
+    expect(sheetPeople(afternoon).supervisors).toEqual(['Tin Maung']);
+    expect(crewOf(afternoon)).toEqual({ operators: ['Ben Wood'], supervisors: ['Jean-Michel Thomas'] });
+    expect(crewOf(day).supervisors).toEqual(['Tin Maung']);
+  });
+
+  it('a supervisor who stayed on and signed a check is in both shifts', () => {
+    // Tin Maung signed one of the Afternoon's checks before he left.
+    const stayed = afternoon.map((r) => (r.slotIndex === 1 ? { ...r, qcBy: 'Tin Maung' } : r));
+    expect(crewOf(stayed).supervisors).toEqual(['Jean-Michel Thomas', 'Tin Maung']);
+    // On another press of the shift counts as well: a supervisor signs them all.
+    const other = sheet('2026-11-12-Afternoon', 'Sam Ward', 'RR', 'Tin Maung').map((r) => ({ ...r, machineCode: '850T', operator: r.slotIndex === 0 ? 'Sam Ward' : '' }));
+    expect(crewOf([...afternoon, ...other]).supervisors).toEqual(['Jean-Michel Thomas', 'Tin Maung']);
+  });
+
+  it('with no supervisor check signed there is nothing to go by: the names stand', () => {
+    const unchecked = afternoon.map((r) => ([1, 7, 13].includes(r.slotIndex) ? { ...r, qcBy: '' } : r));
+    expect(crewOf(unchecked)).toEqual({ operators: ['Ben Wood'], supervisors: ['Tin Maung'] });
+  });
+
+  it('the second in charge standing in for the supervisor is one person, not two', () => {
+    // Night, the supervisor away. Joe signs the supervisor checks under his
+    // own name and relieves Phong on 850T; the sheets were confirmed under
+    // the supervisor of the shift before, and 550T names Joe himself.
+    const night = (machineCode: string, operator: string, named: string, cover = ''): ReturnType<typeof rec>[] =>
+      [0, 1, 2, 3].map((slotIndex) =>
+        rec({
+          machineCode, shiftId: '2026-11-12-Night', jobNumber: 'J-' + machineCode, slotIndex, statusCode: 'R',
+          operator: slotIndex === 0 ? operator : '', supervisor: slotIndex === 0 ? named : '', lockedBy: named,
+          qcBy: slotIndex === 1 ? 'Joe Tran' : slotIndex === 3 && cover ? cover : operator,
+        }));
+    const records = [...night('850T', 'Phong Le', 'Jean-Michel Thomas', 'Joe Tran'), ...night('550T', 'Van Ho', 'Joe Tran')];
+    expect(crewOf(records)).toEqual({ operators: ['Joe Tran', 'Phong Le', 'Van Ho'], supervisors: [] });
+    expect(shiftStaffing(records, rosterOf())).toMatchObject({ people: 3, shifts: 1 });
   });
 
   it('keeps the named operator when nobody signed', () => {
@@ -225,10 +254,10 @@ describe('who could run a press in a shift', () => {
         qcBy: slotIndex === 3 && cover ? cover : operator,
       }));
   const day = '2026-11-16-Day';
-  const names = (records: ProductionRecord[], listed: string[] = [], shiftId = day): Record<string, string[]> =>
-    Object.fromEntries((pressCrewsByShift(records, listed).get(shiftId)?.operators ?? []).map((o) => [o.name, o.presses]));
-  const unattended = (records: ProductionRecord[], listed: string[] = []): string[] =>
-    [...unattendedPresses(pressCrewsByShift(records, listed).get(day)?.unattended)].sort();
+  const names = (records: ProductionRecord[], shiftId = day): Record<string, string[]> =>
+    Object.fromEntries((pressCrewsByShift(records).get(shiftId)?.operators ?? []).map((o) => [o.name, o.presses]));
+  const unattended = (records: ProductionRecord[]): string[] =>
+    [...unattendedPresses(pressCrewsByShift(records).get(day)?.unattended)].sort();
 
   it('the lead of each sheet once: no supervisors, nobody who only covered a break', () => {
     const records = [
@@ -239,7 +268,7 @@ describe('who could run a press in a shift', () => {
       ...sheet('P1', '2026-11-16-Afternoon', 'Ann Lee'),
     ];
     expect(names(records)).toEqual({ 'John Taylor': ['P1', 'S'], 'Ben Wood': ['P2'] });
-    expect(names(records, [], '2026-11-16-Afternoon')).toEqual({ 'Ann Lee': ['P1'] });
+    expect(names(records, '2026-11-16-Afternoon')).toEqual({ 'Ann Lee': ['P1'] });
   });
 
   it('a supervisor with a sheet and no production on it is not running a press', () => {
@@ -262,12 +291,18 @@ describe('who could run a press in a shift', () => {
     expect(names(records)).toEqual({ 'John Taylor': ['P1'], 'Ben Wood': ['P2'] });
   });
 
-  it('knows a supervisor from the People list too, and from who signed off', () => {
+  it('the supervisor of a shift is who its sheets and its checks say, not who the People list holds as one', () => {
     const unnamed = (machineCode: string, operator: string, lockedBy = ''): ProductionRecord[] =>
       sheet(machineCode, day, operator, '', 'D').map((r) => ({ ...r, supervisor: '', lockedBy }));
+    // Kim Park is a second in charge: with the supervisor in, an operator like any other.
     expect(names(unnamed('S', 'Kim Park'))).toEqual({ 'Kim Park': ['S'] });
-    expect(names(unnamed('S', 'Kim Park'), [' KIM  park '])).toEqual({});
+    // Signing the shift off makes her its supervisor…
     expect(names([...unnamed('S', 'Kim Park'), ...unnamed('P1', 'John Taylor', 'Kim Park')])).toEqual({ 'John Taylor': ['P1'] });
+    // …and so does signing its supervisor checks, whoever the sheets name.
+    const checked = sheet('P1', day, 'John Taylor').concat(
+      sheet('P1', day, 'John Taylor').slice(0, 1).map((r) => ({ ...r, slotIndex: 1, operator: '', supervisor: '', qcBy: 'Kim Park' })),
+    );
+    expect(names([...checked, ...sheet('S', day, 'Kim Park', '', 'D')])).toEqual({ 'John Taylor': ['P1'] });
   });
 
   it('the small presses run by themselves: a sheet on one gives nobody a press', () => {
