@@ -4469,15 +4469,41 @@ export async function renderKpi(dal: PmdDataLayer, assemblyDal?: AssemblyDataLay
   }
   dalRef = dal;
   document.body.className = 'shift-day';
-  const machines = (await dal.listMachines()).sort((a, b) => a.sequence - b.sequence);
+  // Everything the page needs before its first paint is asked for at once:
+  // none of these reads waits on another, and one after the other each cost
+  // a round trip to SharePoint before the table could start loading.
   // The People lists say who is rostered on which shift. Without them
   // nobody reads as overtime and everybody counts as one.
-  const roster = await Promise.all([dal.listOperators(), dal.listSupervisors()])
+  const rosterRead = Promise.all([dal.listOperators(), dal.listSupervisors()])
     .then(([operators, supervisors]) => rosterOf(operators, supervisors))
     .catch((err) => {
       console.warn('[kpi] roster not loaded — overtime is not told apart', err);
       return rosterOf();
     });
+  // Coordinator / Email on a Mango improvement ticket come from the
+  // signed-in user, so resolve the identity once at mount. A backend
+  // without one leaves the fields blank and the ticket dialog asks.
+  const whoRead = dal.whoAmI().then(
+    (me) => ({ name: me.name, email: me.email }),
+    (e) => {
+      console.warn('[pmd] whoAmI failed', e);
+      return null;
+    },
+  );
+  // Reject code → description (D01 → "ShortShot"), for the Reject drill's
+  // Description column. Cheap, changes rarely; load once at mount.
+  const rejectDescRead = dal.listRejectCategories().then(
+    (cats) => ({ byCode: new Map(cats.map((c) => [c.code.trim().toUpperCase(), c.label])), error: '' }),
+    (e) => {
+      console.warn('[pmd] reject categories load failed', e);
+      return {
+        byCode: new Map<string, string>(),
+        error: `Reject categories: ${(e as Error).message || 'read failed'}`,
+      };
+    },
+  );
+  const machines = (await dal.listMachines()).sort((a, b) => a.sequence - b.sequence);
+  const [roster, who, rejectDesc] = await Promise.all([rosterRead, whoRead, rejectDescRead]);
   if (mount !== kpiMount) return;
   // Default custom range: last 7 calendar days, so switching to the
   // Custom tab and pressing nothing still shows a meaningful window.
@@ -4539,29 +4565,9 @@ export async function renderKpi(dal: PmdDataLayer, assemblyDal?: AssemblyDataLay
     errors: [],
     catalogErrors: [],
   };
-  // Coordinator / Email on a Mango improvement ticket come from the
-  // signed-in user, so resolve the identity once at mount. A backend
-  // without one leaves the fields blank and the ticket dialog asks.
-  try {
-    const me = await dal.whoAmI();
-    if (mount !== kpiMount) return;
-    S.who = { name: me.name, email: me.email };
-  } catch (e) {
-    console.warn('[pmd] whoAmI failed', e);
-  }
-  // Reject code → description (D01 → "ShortShot"), for the Reject drill's
-  // Description column. Cheap, changes rarely; load once at mount.
-  try {
-    const cats = await dal.listRejectCategories();
-    if (mount !== kpiMount) return;
-    S.rejectDescByCode = new Map(
-      cats.map((c) => [c.code.trim().toUpperCase(), c.label]),
-    );
-  } catch (e) {
-    console.warn('[pmd] reject categories load failed', e);
-    S.catalogErrors = [`Reject categories: ${(e as Error).message || 'read failed'}`];
-  }
-  if (mount !== kpiMount) return;
+  if (who) S.who = who;
+  S.rejectDescByCode = rejectDesc.byCode;
+  if (rejectDesc.error) S.catalogErrors = [rejectDesc.error];
   // No supervisor-change subscription needed here: main.ts already
   // re-routes (→ renderKpi) on every supervisor toggle, so the threshold
   // editor appears/disappears on unlock without a page reload.

@@ -589,9 +589,12 @@ export class SharePointMaintenance extends SharePointReference {
 
   async listDieChangeLog(): Promise<DieChangeLog[]> {
     const F = this.F.dieChangeLog;
+    // The rows are asked for alongside the condition columns, not after.
+    const rowsRead = this.getAllItems<Record<string, unknown>>(LISTS.dieChangeLog);
+    rowsRead.catch(() => undefined); // reported where it is awaited, below
     const checks = await this.listDieChangeComponents();
     try {
-      const rows = await this.getAllItems<Record<string, unknown>>(LISTS.dieChangeLog);
+      const rows = await rowsRead;
       return rows
         .map((r) => ({
           id: getId(r),
@@ -861,6 +864,10 @@ export class SharePointMaintenance extends SharePointReference {
   }
 
   async listMachineMaster(): Promise<MachineMaster[]> {
+    // The rows are asked for alongside the columns, not after them: the
+    // columns only say how to read the rows once both are here.
+    const rowsRead = this.getAllItems<Record<string, unknown>>(LISTS.machine);
+    rowsRead.catch(() => undefined); // reported where it is awaited, below
     const { keys, types } = await this.readMachineFields();
     let availableAsFraction = false;
     if (types.available === 'Number') {
@@ -873,7 +880,7 @@ export class SharePointMaintenance extends SharePointReference {
         /* older tenants don't expose it — a plain number column */
       }
     }
-    const rows = await this.getAllItems<Record<string, unknown>>(LISTS.machine);
+    const rows = await rowsRead;
     const code = (r: Record<string, unknown>): string => str(r[this.F.machine.code]).trim();
     this.machineMasterMeta = {
       keys,

@@ -838,7 +838,7 @@ export class SharePointProduction extends SharePointPlanning {
     const fromTo = shiftDateRangeFromTo(filter.shiftIdFrom, filter.shiftIdTo, F.date);
     if (fromTo) parts.push(fromTo);
     const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
-    const rows = await this.getAllItems(list, qs);
+    const rows = await this.headerRows(list, qs, filter);
     const headers: HeaderRow[] = rows.map((r) => ({
       id: getId(r),
       machineCode: str(r[F.machine]),
@@ -901,6 +901,59 @@ export class SharePointProduction extends SharePointPlanning {
       }
     }
     return headers;
+  }
+
+  /** Reads of a span of days, every press and every order, on the wire. */
+  protected spanReadsInFlight: Array<{
+    list: string;
+    lo: number;
+    hi: number;
+    writes: number;
+    rows: Promise<Record<string, unknown>[]>;
+  }> = [];
+
+  /**
+   * The rows of a header read.
+   *
+   * A read of a span of days — every press, every order — joins one already
+   * on the wire that asks for those days and more, instead of downloading
+   * them a second time: Maint asks for 400 days of shot counters and 90 days
+   * of records in the same breath, and the second lies inside the first.
+   * The rows are cut back to the days the narrower request names, so its
+   * caller gets what its own request would have returned. As with
+   * shareRead, a read only joins one that started after the last write, and
+   * only while that one is still in flight: this is not a cache.
+   */
+  protected headerRows(list: string, qs: string, filter: ProductionFilter): Promise<Record<string, unknown>[]> {
+    const span =
+      filter.shiftIdFrom && filter.shiftIdTo && !filter.shiftId && !filter.machineCode && !filter.jobNumber
+        ? {
+            // The same days shiftDateRange asks SharePoint for.
+            lo: Date.parse(`${filter.shiftIdFrom.slice(0, 10)}T00:00:00.000Z`) - 86_400_000,
+            hi: Date.parse(`${filter.shiftIdTo.slice(0, 10)}T00:00:00.000Z`) + 2 * 86_400_000,
+          }
+        : null;
+    if (!span || !Number.isFinite(span.lo) || !Number.isFinite(span.hi)) return this.getAllItems(list, qs);
+    const wider = this.spanReadsInFlight.find(
+      (r) => r.list === list && r.writes === this.writesStarted && r.lo <= span.lo && r.hi >= span.hi,
+    );
+    if (wider) {
+      if (wider.lo === span.lo && wider.hi === span.hi) return wider.rows.then((rows) => rows.slice());
+      const date = this.F.production.date;
+      return wider.rows.then((rows) =>
+        rows.filter((r) => {
+          const at = Date.parse(str(r[date]));
+          return at >= span.lo && at <= span.hi;
+        }),
+      );
+    }
+    const entry = { list, ...span, writes: this.writesStarted, rows: this.getAllItems(list, qs) };
+    const settled = (): void => {
+      this.spanReadsInFlight = this.spanReadsInFlight.filter((r) => r !== entry);
+    };
+    entry.rows.then(settled, settled);
+    this.spanReadsInFlight.push(entry);
+    return entry.rows;
   }
 
   /** A missing column, or a tenant that does not expose the flag, reads as
