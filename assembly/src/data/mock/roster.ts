@@ -10,9 +10,9 @@
 
 import { WorkerId } from '@/domain/ids';
 import { readLineKey, type LineKey, type Worker, type WorkKind } from '@/domain/assembly';
-import seed from './seed.json';
+import type { Seed } from './seed';
 
-export function demoWorkers(): Worker[] {
+export function demoWorkers(seed: Seed): Worker[] {
   return (seed.workers ?? []).map((w) => {
     // The bench within a line, where the seed names one: UPL is cutting,
     // softies and upholstering, and those are not the same people.

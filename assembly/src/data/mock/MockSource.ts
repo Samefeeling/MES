@@ -40,7 +40,7 @@ import { isVisibleMachine } from '@/domain/constants';
 import { MS_PER_DAY } from '@/lib/time';
 import { BaseDataSource } from '@/data/DataSource';
 import { demoWorkers } from './roster';
-import seed from './seed.json';
+import { loadSeed } from './seed';
 
 /** The day every seed date is expressed relative to. */
 const SEED_EPOCH = new Date('2026-06-16T00:00:00');
@@ -95,6 +95,7 @@ export class MockSource extends BaseDataSource {
   readonly name = 'mock';
 
   async fetchWorkCenters(): Promise<WorkCenter[]> {
+    const seed = await loadSeed();
     const machines = seed.machines
       .map(makeMachine)
       .filter((m) => isVisibleMachine(m.id))
@@ -103,10 +104,12 @@ export class MockSource extends BaseDataSource {
   }
 
   async fetchWorkers(): Promise<Worker[]> {
-    return delay(demoWorkers());
+    const seed = await loadSeed();
+    return delay(demoWorkers(seed));
   }
 
   async fetchJobs(): Promise<Job[]> {
+    const seed = await loadSeed();
     // The demo's routing says each part's colour and insert, which is what the
     // press plan reads off PMD_ProductDieColor on the live board.
     const routeOf = new Map(seed.routing.map((r) => [r.partNum, r]));
@@ -159,6 +162,7 @@ export class MockSource extends BaseDataSource {
    * assembly, and the moulded shells those chairs are built from.
    */
   async fetchJobLinks(): Promise<JobMaterialLink[]> {
+    const seed = await loadSeed();
     const links: JobMaterialLink[] = (seed.jobLinks ?? []).map((l) => ({
       jobNum: JobId(l.jobNum),
       parentPart: PartId(l.parentPart),
@@ -173,6 +177,7 @@ export class MockSource extends BaseDataSource {
   }
 
   async fetchRouting(): Promise<RoutingEntry[]> {
+    const seed = await loadSeed();
     const routing: RoutingEntry[] = seed.routing.map((r) => ({
       partNum: PartId(r.partNum),
       machine: MachineId(r.machine),
@@ -185,6 +190,7 @@ export class MockSource extends BaseDataSource {
   }
 
   async fetchInventory(): Promise<InventoryItem[]> {
+    const seed = await loadSeed();
     const inv: InventoryItem[] = seed.inventory.map((i) => ({
       partNum: PartId(i.partNum),
       description: i.description ?? '',
@@ -199,6 +205,7 @@ export class MockSource extends BaseDataSource {
   }
 
   async fetchBom(): Promise<BomLine[]> {
+    const seed = await loadSeed();
     const bom: BomLine[] = seed.bom.map((b) => ({
       finishedPart: PartId(b.finishedPart),
       jobNum: b.jobNum ? JobId(b.jobNum) : null,
@@ -212,6 +219,7 @@ export class MockSource extends BaseDataSource {
   }
 
   async fetchPo(): Promise<PoLine[]> {
+    const seed = await loadSeed();
     const po: PoLine[] = seed.po.map((p) => ({
       partNum: PartId(p.partNum),
       poNum: p.poNum ?? null,
@@ -224,6 +232,7 @@ export class MockSource extends BaseDataSource {
   }
 
   async fetchDemand(): Promise<DemandLine[]> {
+    const seed = await loadSeed();
     const demand: DemandLine[] = seed.demand.map((d) => ({
       partNum: PartId(d.partNum),
       reqDate: toDate(d.reqDate),
