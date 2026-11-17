@@ -256,8 +256,12 @@ describe('PMD on the board', () => {
     // PMD counts the presses' orders, not their changeovers.
     expect(pmd[0].benchOrders).toBe(3);
     const batt = pmd[2];
-    expect(batt.rows.map((r) => r.job.press?.change?.kind ?? String(r.job.id))).toEqual(['A', 'die', 'B']);
-    const b = batt.rows[2];
+    // A changeover is no row of its own: it rides on the order before it.
+    expect(batt.rows.map((r) => String(r.job.id))).toEqual(['A', 'B']);
+    expect(batt.rows[0].changeAfter).toMatchObject({ change: { kind: 'die', fromJob: 'A', toJob: 'B', hours: 4 } });
+    expect(batt.rows[0].changeAfter!.end).toEqual(at('05T19:00'));
+    expect(batt.rows[1].changeAfter).toBeUndefined();
+    const b = batt.rows[1];
     expect(b.start).toEqual(at('05T19:00'));
     expect(b.status.reason).toMatch(/4\.0 h after Epicor's start/);
   });

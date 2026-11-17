@@ -248,6 +248,8 @@ const KIND_LABEL: Record<DayOrderEntry['kind'], string> = {
   crewed: 'crew',
   booked: 'booked',
   waiting: 'no crew yet',
+  press: 'press',
+  change: 'changeover',
 };
 
 /**

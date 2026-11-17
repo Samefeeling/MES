@@ -43,8 +43,6 @@ const view = (rows: OrderRow[], pool: Job[] = []): AssemblyGanttView =>
         line: { key: 'PMD_M12', name: 'M12', parent: 'PMD', schedulable: false },
         rows: [
           row(job('018150-1-1'), new Date(2026, 10, 20)),
-          // A changeover between two runs is drawn as a row; it is no order.
-          row(job('018150-1-1~DC', { press: { change: {} } } as Partial<Job>), new Date(2026, 10, 21)),
         ],
       },
     ],

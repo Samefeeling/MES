@@ -20,6 +20,8 @@ import type { MarkedMove } from './groupMove';
 import { mergeEntries, type WeekSpan } from './weekFold';
 import { OrderRowView } from './OrderRowView';
 import { pctText, LineLoadStrip, type DayDetailContent } from './LineLoadStrip';
+import { PressLoadStrip } from './PressLoadStrip';
+import { pressDayLoads } from './pressLoad';
 
 /**
  * A line and its orders. Schedulable lines are drop targets, so an order can be
@@ -198,6 +200,20 @@ export function LineGroupView({
         : null,
     [collapsed, group, lineRows, dates, board],
   );
+  /*
+   * PMD and its presses fold to the same strip, read against the hours the
+   * presses can run rather than a crew (see `pressLoad`). Their hours stay
+   * out of the board's own figures: the day headings, Hours on board and the
+   * crews read only the lines this board schedules.
+   */
+  const pressLoads = useMemo(
+    () =>
+      collapsed && (group.line.key === 'PMD' || isPressLine(String(group.line.key)))
+        ? pressDayLoads(lineRows, dates, board.today)
+        : null,
+    [collapsed, group.line.key, lineRows, dates, board.today],
+  );
+  const hasStrip = Boolean(dayLoads || pressLoads);
   const crew = useMemo(
     () =>
       board.workers
@@ -208,10 +224,10 @@ export function LineGroupView({
         ),
     [board.workers, group.line.key, todayLine],
   );
-  const isChange = (r: OrderRow) => Boolean(r.job.press?.change);
-  const changeovers = group.rows.filter(isChange).length;
-  const shownOrders = group.rows.length - changeovers;
-  const totalOrders = total - lineRows.filter(isChange).length;
+  // A press's changeovers are drawn on its orders' bars, not counted as orders.
+  const changeovers = lineRows.filter((r) => r.changeAfter).length;
+  const shownOrders = group.rows.length;
+  const totalOrders = total;
   /** A press's shifts, from the orders on it — one pattern, or each that differs. */
   const pressShifts = useMemo(() => {
     if (!isPressLine(String(group.line.key))) return null;
@@ -229,12 +245,12 @@ export function LineGroupView({
           what sticks to the left edge, so the line's totals and its people
           stay readable however far right the grid is scrolled — the row
           itself has to span the whole grid to carry the background. */}
-      <div className={`agroup-head${dayLoads ? ' has-load' : ''}`}>
+      <div className={`agroup-head${hasStrip ? ' has-load' : ''}`}>
        {/* With a day strip, the sticky block also covers the frozen columns, so the day
            strip scrolls under them the way the bars do. */}
        <div
          className="agroup-head-in"
-         style={dayLoads ? { minWidth: labelWidth } : undefined}
+         style={hasStrip ? { minWidth: labelWidth } : undefined}
        >
         <div className="agroup-meta">
         {/* Its own control, in the Order column where the row starts. Folding
@@ -327,7 +343,7 @@ export function LineGroupView({
           )}
           {/* "9 of 11" whenever the two differ: a line quietly showing two
               thirds of itself is the thing a planner has to be able to see.
-              A press's changeovers are rows, not orders, and are not counted. */}
+              A press's changeovers are on its bars, not orders, and are not counted. */}
           <span
             className="agroup-count"
             title={
@@ -430,6 +446,38 @@ export function LineGroupView({
 
         </div>
        </div>
+       {pressLoads && (
+         <PressLoadStrip
+           days={pressLoads}
+           spans={spans}
+           axis={axis}
+           left={labelWidth}
+           width={gridWidth}
+           line={group.line.name}
+           onOpen={(from, to, at) => {
+             const picked = pressLoads.slice(from, to);
+             const hours = picked.reduce((n, d) => n + d.hours, 0);
+             const change = picked.reduce((n, d) => n + d.changeHours, 0);
+             const cap = picked.reduce((n, d) => n + d.capacity, 0);
+             const entries = mergeEntries(picked.map((d) => d.entries));
+             const byPress = new Map<string, typeof entries>();
+             for (const e of entries) byPress.set(e.line, [...(byPress.get(e.line) ?? []), e]);
+             onOpenDay(
+               {
+                 title:
+                   `${group.line.name} · ${formatShortDay(picked[0].date)}` +
+                   (to - from > 1 ? `–${formatShortDay(picked[picked.length - 1].date)}` : ''),
+                 summary:
+                   `${hours.toFixed(1)} h of orders` +
+                   (change > 0 ? ` + ${change.toFixed(1)} h changeover` : '') +
+                   (cap > 0 ? ` · ${pctText(((hours + change) / cap) * 100)} of ${cap.toFixed(0)} h press time` : ''),
+                 groups: [...byPress].map(([name, list]) => ({ name, entries: list })),
+               },
+               at,
+             );
+           }}
+         />
+       )}
        {dayLoads && (
          <LineLoadStrip
            days={dayLoads}

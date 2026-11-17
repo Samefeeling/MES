@@ -69,8 +69,6 @@ function boardEntries(board: AssemblyGanttView, status: FindStatus): Map<string,
   for (const group of board.groups) {
     const line = group.line;
     for (const row of group.rows) {
-      // A press changeover is a row between orders, not an order.
-      if (row.job.press?.change) continue;
       const id = String(row.job.id);
       const order = jobNumOf(id);
       let entry = out.get(order);

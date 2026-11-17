@@ -30,12 +30,15 @@ import { barTag, missingBarReason, timelineDayOffset, unstaffedStretches, unstaf
 import type { DayAxis } from './dayAxis';
 import type { MarkedMove } from './groupMove';
 import { jobNumOf } from '@/domain/routing';
-import { CHANGE_SHORT } from '@/engine/assembly/pressPlan';
+import { CHANGE_NAME, CHANGE_SHORT, changeShortLabel } from '@/engine/assembly/pressPlan';
 
 export const DRAG_TYPE_BAR = 'order-bar';
 
 /** Narrowest a block may be drawn and still be seen. */
 const MIN_PIECE_PX = 10;
+
+/** A half-hour colour change is a few pixels of a day; never less than this. */
+const MIN_CHANGE_PX = 4;
 
 export function OrderBar({
   row,
@@ -345,10 +348,9 @@ export function OrderBar({
    * against the edge that will not move.
    */
   const heldBy = row.waitingOn ? jobNumOf(String(row.waitingOn.onJobId)) : null;
-  const change = row.job.press?.change;
   // A press order is drawn in its product's colour, the way the moulding
-  // floor knows it; a changeover keeps its own D / I / C colours.
-  const product = !change ? row.job.press?.hex ?? null : null;
+  // floor knows it.
+  const product = row.job.press?.hex ?? null;
 
   // A couple of hours of work is a few pixels of bar; where the label cannot
   // fit inside it, the tag goes in the empty grid beside the block.
@@ -357,15 +359,39 @@ export function OrderBar({
     // key a routed order carries. The bar keeps the full id for its drag and
     // its data attributes; only what it prints is trimmed, the same as the
     // order number in the row.
-    // A press changeover is named by what it is, not by its row key.
-    jobId: change ? CHANGE_SHORT[change.kind] : jobNumOf(id),
-    hours: change ? change.hours : remainingHours(row.job),
+    jobId: jobNumOf(id),
+    hours: remainingHours(row.job),
     spanDays: span,
     width,
     left,
     gridWidth,
     overtime: row.overtime,
   });
+
+  /*
+   * The changeover that follows a press order, on the end of its bar.
+   *
+   * It used to be a row of its own between the two orders, which put a row on
+   * the left for every die and colour swap and buried the orders among them.
+   * A changeover is the end of one order and the start of the next, so it is
+   * drawn there: the change's own length after the bar, in the PMD sheet's
+   * colours (die change red, insert orange, colour amber), what changes beside
+   * it, and an arrow down to the order it changes over to (DependencyArrows).
+   */
+  const after = row.changeAfter ?? null;
+  const changeLeft = after ? Math.max(axis.x(axisOffset(after.start)) - left, width) : 0;
+  const changeWidth = after
+    ? Math.max(axis.x(axisOffset(after.end)) - left - changeLeft, MIN_CHANGE_PX)
+    : 0;
+  const changeText = after ? `${CHANGE_SHORT[after.change.kind]} ${changeShortLabel(after.change)}` : '';
+  const changeTitle = after
+    ? `${CHANGE_NAME[after.change.kind]} · ${after.change.hours} h · ${changeShortLabel(after.change)}` +
+      ` — then ${jobNumOf(after.change.toJob)}`
+    : '';
+  /* An order label already out in the grid takes the change along with it,
+     after the change's own length; one inside the bar leaves the change its
+     own label out there. Flipped to the left, the two part. */
+  const changeInTag = Boolean(after) && tag.outside && !tag.flip;
 
   return (
     <div
@@ -408,10 +434,8 @@ export function OrderBar({
       onMouseEnter={() => onDependencyHover(id)}
       onMouseLeave={() => onDependencyHover(null)}
       title={
-        (change
-          ? `${row.job.description} · ${change.hours} h` +
-            ` (after ${change.fromJob}, before ${change.toJob})`
-          : `${jobNumOf(String(row.job.id))} · ${row.days.toFixed(1)} d worked with ${row.workers.length}`) +
+        `${jobNumOf(String(row.job.id))} · ${row.days.toFixed(1)} d worked with ${row.workers.length}` +
+        (after ? `\n${changeTitle}` : '') +
         (readOnly ? '' : ` · position ${row.slot + 1} of ${row.line.parallelOrders}`) +
         (idleDays > 0
           ? ` · put down for ${idleDays} working day${idleDays === 1 ? '' : 's'}` +
@@ -480,15 +504,42 @@ export function OrderBar({
           )}
         </div>
       ))}
+      {after && (
+        <i
+          className={`bar-change ${after.change.kind}`}
+          data-change-to={after.change.toJob}
+          style={{ left: changeLeft, width: changeWidth }}
+          title={changeTitle}
+          aria-hidden="true"
+        />
+      )}
       {/* One tag, so that outside the bar the three parts stay together. */}
-      <span className="bar-tag" data-job-label={id}>
+      <span
+        className="bar-tag"
+        data-job-label={id}
+        style={changeInTag ? { marginLeft: changeLeft + changeWidth - width + 6 } : undefined}
+      >
         <span className="bar-label">{tag.text}</span>
         {row.overtime && (
           <span className="bar-ot" title="Weekend overtime approved">
             OT
           </span>
         )}
+        {changeInTag && (
+          <span className={`bar-change-text ${after!.change.kind}`} title={changeTitle}>
+            {changeText}
+          </span>
+        )}
       </span>
+      {after && !changeInTag && (
+        <span
+          className={`bar-change-tag ${after.change.kind}`}
+          style={{ left: changeLeft + changeWidth + 6 }}
+          title={changeTitle}
+        >
+          <span className={`bar-change-text ${after.change.kind}`}>{changeText}</span>
+        </span>
+      )}
     </div>
   );
 }

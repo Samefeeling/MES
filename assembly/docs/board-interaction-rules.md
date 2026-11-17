@@ -364,8 +364,32 @@ on a press row a day column is midnight to midnight and an order starting at
 07:00–15:30 shift), and its header and every order's **Team** cell carry the
 press's **No of shift** (`MAN · 3 shifts`, `MA · 2 shifts`).
 
-**Between two orders the changeover is a row of its own**, straight after the
-order before it — the way the PMD dashboard lists its DC pseudo-orders:
+**Folded, PMD and each press carry their load day by day**, as an assembly
+line does — but read against the hours the press can run, not a crew: **8 h a
+shift**, for the shifts its orders are manned for (the most any of them says;
+three when none says). PMD's row adds up its presses: every press's hours
+against every press's time, a press idle on an open day included. An order's
+remaining hours are laid over the days its run spans, by the clock time it runs
+on each; a changeover is load too, shown apart on hover. Nothing is drawn
+behind today (what ran is the PMD dashboard's record), an order whose run
+should already have finished is put on today, and a press gets no time on a
+weekend, public holiday or RDO unless its plan runs it then. Pressing a day
+lists its orders and changeovers, by press. Nobody levels or crews a press
+here — Epicor plans it.
+
+**PMD's hours are not the board's.** The day headings, **Hours on board** and
+the crews' capacity read only the lines this board schedules; PMD and its
+presses add nothing to them. PMD's own header counts its orders' hours —
+production only, not changeovers.
+
+**Between two orders the changeover is drawn on the order before it** — not a
+row of its own. After that order's bar comes the change's own length, in the
+PMD dashboard's colours (die change red, insert orange, colour amber), what
+changes beside it (`DC Die 174 → Die 296`, `CC Dark grey → Black`,
+`IC 460h → Size 4`), and an arrow down to the order it changes over to:
+straight down when the next order starts where the change ends, down and
+across into its start when the plan left a gap. The change and the next order
+are on the bar's hover too.
 
 | Between | Changeover | Time |
 | --- | --- | --- |

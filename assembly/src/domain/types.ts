@@ -174,6 +174,9 @@ export interface PressChange {
   toDie: string | null;
   fromColor: string | null;
   toColor: string | null;
+  /** The size either side — the insert, else the sizes the description names. */
+  fromSize?: string | null;
+  toSize?: string | null;
 }
 
 /** A moulding order's place in the press plan. */
@@ -194,8 +197,6 @@ export interface PressInfo {
   hex?: string | null;
   /** The insert (size) set, where the source says. */
   insert: string | null;
-  /** Set on a changeover row: the synthetic order a changeover is drawn as. */
-  change?: PressChange;
   /** Hours a changeover in front of it pushed this order back. */
   pushedHours?: number;
 }

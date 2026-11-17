@@ -13,7 +13,7 @@ import {
   type LineKey,
 } from '@/domain/assembly';
 import { remainingHours } from '@/engine/assembly/duration';
-import { CHANGE_NAME, shiftText } from '@/engine/assembly/pressPlan';
+import { shiftText } from '@/engine/assembly/pressPlan';
 import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { useDataStore } from '@/store/dataStore';
 import {
@@ -167,7 +167,7 @@ export function OrderRowView({
   return (
     <div
       data-row-id={String(row.job.id)}
-      className={`arow ${row.line.parent ? 'bench' : ''} ${selected ? 'selected' : ''} ${isContext ? 'context' : ''} ${row.job.press?.change ? `changeover ${row.job.press.change.kind}` : ''} ${row.completedToday ? 'completed-today' : ''} ${isNew ? 'new-order' : ''} ${over ? 'overdue' : ''} ${found ? 'found' : ''}`}
+      className={`arow ${row.line.parent ? 'bench' : ''} ${selected ? 'selected' : ''} ${isContext ? 'context' : ''} ${row.completedToday ? 'completed-today' : ''} ${isNew ? 'new-order' : ''} ${over ? 'overdue' : ''} ${found ? 'found' : ''}`}
     >
       <div className="acell order">
         {/* A manual support order belongs to Factory General and the plan
@@ -175,7 +175,7 @@ export function OrderRowView({
         <OrderGrip
           id={String(row.job.id)}
           movable={!isContext && !row.job.manual}
-          label={row.job.press?.change ? CHANGE_NAME[row.job.press.change.kind] : jobNumOf(String(row.job.id))}
+          label={jobNumOf(String(row.job.id))}
         />
         {/*
           * Running on the floor, beside the order number rather than on the
@@ -219,7 +219,7 @@ export function OrderRowView({
         {isNew && <span className="order-tag new">NEW</span>}
         {/* The order's planned dispatch day, from the waybill — see shipBy.
             On a press row too: a moulded part sold as it is ships the same way. */}
-        {!row.job.press?.change && <ShipTag jobNum={jobNumOf(String(row.job.id))} />}
+        <ShipTag jobNum={jobNumOf(String(row.job.id))} />
         {/* The trade badge — but not on a routed order. There the bench it
             sits under (Foaming / Sewing / Stapling) and the "1/3 Foaming"
             step beside it already say both which trade and which step, so
@@ -332,11 +332,7 @@ export function OrderRowView({
           {isContext ? (
             // A press order's team is the press's crew: the shifts Planning.csv
             // says it is manned for while the order runs.
-            row.job.press?.change ? (
-              <span className={`chip changeover ${row.job.press.change.kind}`}>
-                {row.job.press.change.hours} h
-              </span>
-            ) : row.job.press?.shifts ? (
+            row.job.press?.shifts ? (
               <span className="chip press-shifts" title={`No of shift on Planning.csv: ${row.job.press.shifts}`}>
                 {shiftText(row.job.press.shifts)}
               </span>

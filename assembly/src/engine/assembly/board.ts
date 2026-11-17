@@ -104,7 +104,7 @@ import { materialArrival, pickLedger, type PickShortage } from './pickShortage';
 import { endOfCrewDay, idleRuns, planVariableCrew, type CrewDayPlan, type TakenOnDay, type VariableCrewPlan } from './crewSchedule';
 import { onLeaveOnDay, type LeaveDays } from './attendance';
 import { lineLoad, type LineLoad } from './workload';
-import { changeLabel, planPresses, type PressSlot } from './pressPlan';
+import { planPresses, type PressSlot } from './pressPlan';
 import { expandRouting } from './routing';
 import { jobNumOf } from '@/domain/routing';
 import { JobId } from '@/domain/ids';
@@ -266,6 +266,13 @@ export interface OrderRow {
    * hours differ from what it assumed. `null` with nobody on the order.
    */
   mustStartBy: Date | null;
+  /**
+   * On a press: the changeover that follows this order, before the next one
+   * the press runs. Drawn at the end of this order's bar, with an arrow down to
+   * the order it is changing over to — a changeover is not an order, so it has
+   * no row of its own.
+   */
+  changeAfter?: PressSlot;
   /** Explicitly closed during today's shift; retained until tomorrow for confirmation. */
   completedToday: boolean;
 }
@@ -484,55 +491,6 @@ function mouldingRow(
  * filled the top of the board with work nothing on it depended on. With
  * nothing needed the row is empty, and the caller drops the lane entirely.
  */
-/**
- * A changeover between two press orders, drawn as a row of its own between
- * them — the way the PMD dashboard lists its DC pseudo-orders — so the press
- * reads top to bottom as the floor works it: order, change, order.
- */
-function changeoverRow(machine: string, slot: PressSlot, line: LineDef, before: OrderRow): OrderRow {
-  const { change } = slot;
-  const job: Job = {
-    id: JobId(`CHG|${machine}|${change.fromJob}|${change.toJob}`),
-    department: 'moulding',
-    partNum: before.job.partNum,
-    description: changeLabel(change),
-    remainingQty: 0,
-    qtyPerHr: null,
-    laborHrs: change.hours,
-    dueDate: null,
-    startDate: slot.start,
-    reqBy: null,
-    released: true,
-    priority: 3,
-    materialPrep: 'unknown',
-    tool: null,
-    preferredMachine: before.job.preferredMachine,
-    orderType: null,
-    line: null,
-    completedQty: 0,
-    predecessors: [],
-    assignedWorkers: [],
-    press: {
-      machine,
-      shifts: before.job.press?.shifts ?? null,
-      end: slot.end,
-      die: change.toDie,
-      dieName: null,
-      color: change.toColor,
-      insert: null,
-      change,
-    },
-  };
-  const row = mouldingRow(job, line, slot.start, { start: slot.start, end: slot.end, pushedHours: 0 });
-  return {
-    ...row,
-    status: {
-      ...row.status,
-      reason: `${changeLabel(change)} — ${change.hours} h after ${change.fromJob}, before ${change.toJob}`,
-    },
-  };
-}
-
 function mouldingContextRows(
   rows: Map<string, OrderRow>,
   neededIds: Set<string>,
@@ -1564,8 +1522,7 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
       return {
         ...group,
         load: lineLoad(rows, incoming),
-        // A press's changeovers are rows between its orders, not orders.
-        benchOrders: rows.filter((row) => !row.job.press?.change).length,
+        benchOrders: rows.length,
       };
     });
   };
@@ -1623,13 +1580,14 @@ export function computeAssemblyGantt(input: AssemblyInputs): AssemblyGanttView {
     const runs = press.runs
       .map((run) => mouldingRows.get(String(run.job.id)))
       .filter((r): r is OrderRow => Boolean(r));
+    // Each changeover goes on the order before it: the order the press is
+    // changing over from.
     const before = new Map(runs.map((r) => [String(r.job.id), r]));
-    const changes = press.changes.map((slot) =>
-      changeoverRow(press.machine, slot, line, before.get(slot.change.fromJob)!),
-    );
-    const rows = [...runs, ...changes].sort(
-      (a, b) => a.start!.getTime() - b.start!.getTime() || (a.job.press?.change ? -1 : 1),
-    );
+    for (const slot of press.changes) {
+      const from = before.get(slot.change.fromJob);
+      if (from) from.changeAfter = slot;
+    }
+    const rows = [...runs].sort((a, b) => a.start!.getTime() - b.start!.getTime());
     groups.push(withLoad(line, rows));
   }
   if (pmdRows.length > 0 || presses.length > 0) groups.unshift(withLoad(pmdLine, pmdRows));

@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { OrderRow } from '@/engine/assembly/board';
+import type { PressChangeKind } from '@/domain/types';
 import {
   dependencyFocus,
   routeDependencies,
@@ -8,13 +9,47 @@ import {
   type RoutedDependency,
 } from './dependencyRouter';
 
+/** A press changeover's arrow: from the end of the change down to the next order. */
+export interface ChangeArrow {
+  key: string;
+  kind: PressChangeKind;
+  path: string;
+}
+
 interface Drawing {
   width: number;
   height: number;
   arrows: (RoutedDependency & { focused: boolean })[];
+  changes: ChangeArrow[];
 }
 
-const EMPTY: Drawing = { width: 0, height: 0, arrows: [] };
+const EMPTY: Drawing = { width: 0, height: 0, arrows: [], changes: [] };
+
+/** Under this, the next order starts where the change ends: straight down. */
+const STRAIGHT_DOWN_PX = 8;
+
+/**
+ * From the end of a changeover down to the order the press changes over to.
+ *
+ * The next order starts where the change ends, so the arrow drops straight
+ * from there onto the top of its bar, as a project plan draws a finish-to-start
+ * link. Where the plan left a gap after the change, it drops to the next bar's
+ * height and runs right into its start. Measured from the bottom of the change,
+ * not its side, so it never crosses the label written beside it.
+ */
+export function changeArrowPath(change: RouteRect, next: RouteRect): string {
+  const x = change.right;
+  const top = change.bottom;
+  if (next.top <= top) return '';
+  if (next.left - x <= STRAIGHT_DOWN_PX) {
+    // Onto the bar's top, inside it even where the bar starts a hair before
+    // the change ends (a co-run overlapping its last minutes).
+    const at = Math.min(Math.max(x, next.left + 3), Math.max(next.left + 3, next.right - 3));
+    return `M ${at} ${top} V ${next.top - 1}`;
+  }
+  const mid = (next.top + next.bottom) / 2;
+  return `M ${x} ${top} V ${mid} H ${next.left - 1}`;
+}
 
 const boxOf = (
   element: HTMLElement,
@@ -62,6 +97,19 @@ export function DependencyArrows({
         if (id) bars.set(id, boxOf(element, hostRect, id));
       });
 
+      // Press changeovers: the change on one bar, down to the next order's.
+      const changes: ChangeArrow[] = [];
+      host.querySelectorAll<HTMLElement>('[data-change-to]').forEach((element) => {
+        const to = element.dataset.changeTo;
+        const kind = [...element.classList].find((c): c is PressChangeKind =>
+          c === 'die' || c === 'insert' || c === 'colour',
+        );
+        const next = to ? bars.get(to) : undefined;
+        if (!to || !kind || !next) return;
+        const path = changeArrowPath(boxOf(element, hostRect, to), next);
+        if (path) changes.push({ key: `change->${to}`, kind, path });
+      });
+
       const edges: DependencyEdge[] = [];
       for (const row of rows) {
         const targetId = String(row.job.id);
@@ -95,6 +143,7 @@ export function DependencyArrows({
         width: host.scrollWidth,
         height: host.scrollHeight,
         arrows,
+        changes,
       });
     };
     const queueMeasure = () => {
@@ -140,9 +189,9 @@ export function DependencyArrows({
     clip();
     scroller.addEventListener('scroll', clip, { passive: true });
     return () => scroller.removeEventListener('scroll', clip);
-  }, [root, labelWidth, drawing.arrows.length]);
+  }, [root, labelWidth, drawing.arrows.length, drawing.changes.length]);
 
-  if (drawing.arrows.length === 0) return null;
+  if (drawing.arrows.length === 0 && drawing.changes.length === 0) return null;
   return (
     <svg
       ref={layer}
@@ -172,7 +221,28 @@ export function DependencyArrows({
         >
           <path className="dependency-marker-focus" d="M 0 0 L 7 3.5 L 0 7 z" />
         </marker>
+        {(['die', 'insert', 'colour'] as const).map((kind) => (
+          <marker
+            key={kind}
+            id={`change-arrowhead-${kind}`}
+            markerWidth="7"
+            markerHeight="7"
+            refX="6"
+            refY="3.5"
+            orient="auto"
+          >
+            <path className={`change-marker ${kind}`} d="M 0 0 L 7 3.5 L 0 7 z" />
+          </marker>
+        ))}
       </defs>
+      {drawing.changes.map((arrow) => (
+        <path
+          key={arrow.key}
+          className={`change-link ${arrow.kind}`}
+          d={arrow.path}
+          markerEnd={`url(#change-arrowhead-${arrow.kind})`}
+        />
+      ))}
       {drawing.arrows.map((arrow) => (
         <g
           key={arrow.key}

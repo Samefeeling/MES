@@ -916,9 +916,10 @@ export interface DayOrderEntry {
   /**
    * `crewed`: planned with people on it. `booked`: output recorded on a day
    * already gone. `waiting`: nobody on it yet — its share of the days before
-   * its Due Date.
+   * its Due Date. `press`: a moulding order's share of a day on its press.
+   * `change`: a press changeover after the order named.
    */
-  kind: 'crewed' | 'booked' | 'waiting';
+  kind: 'crewed' | 'booked' | 'waiting' | 'press' | 'change';
   people: number;
   due: Date | null;
 }

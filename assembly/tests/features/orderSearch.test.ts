@@ -4,7 +4,7 @@ import { findEntries, matchEntries, normalOrder, pickedEntry } from '@/features/
 
 /** Only what the finder reads off a board: its lines, their rows, the pool. */
 function boardOf(
-  groups: { key: string; name: string; parent?: string; rows: { id: string; description: string; step?: string; change?: boolean }[] }[],
+  groups: { key: string; name: string; parent?: string; rows: { id: string; description: string; step?: string }[] }[],
   pool: { id: string; description: string }[] = [],
 ): AssemblyGanttView {
   return {
@@ -15,7 +15,6 @@ function boardOf(
           id: row.id,
           description: row.description,
           operation: row.step ? { step: row.step } : undefined,
-          press: row.change ? { change: { kind: 'die' } } : undefined,
         },
       })),
     })),
@@ -46,7 +45,8 @@ const shown = boardOf(
         { id: 'ASM80410', description: 'Viva Sidechair' },
       ],
     },
-    { key: 'PRESS_M1', name: 'M1', parent: 'PMD', rows: [{ id: 'chg-1', description: 'Die change', change: true }] },
+    // A press's changeovers ride on its orders' bars: the press holds orders only.
+    { key: 'PRESS_M1', name: 'M1', parent: 'PMD', rows: [{ id: 'SFM507001', description: 'Podium shell' }] },
   ],
   [{ id: 'ASM90001', description: 'Table top' }],
 );
@@ -54,14 +54,14 @@ const shown = boardOf(
 describe('order finder', () => {
   it('lists each order once, saying where it is — a routed order at both its benches', () => {
     const entries = findEntries(shown);
-    expect(entries.map((e) => e.order)).toEqual(['ASM70001', 'ASM80410', 'ASM80412', 'ASM90001']);
+    expect(entries.map((e) => e.order)).toEqual(['ASM70001', 'ASM80410', 'ASM80412', 'ASM90001', 'SFM507001']);
     const routed = entries.find((e) => e.order === 'ASM80412')!;
     expect(routed.where).toBe('Upholstery › Foaming, Sewing');
     expect(routed.rowIds).toEqual(['ASM80412#10', 'ASM80412#20']);
     expect(routed.lines).toEqual(['UPL_GLUING', 'UPL_GLUING_FOAM', 'UPL_GLUING_SEW']);
     expect(routed.status).toBe('board');
-    // A changeover between press orders is not an order.
-    expect(entries.some((e) => e.order === 'chg-1')).toBe(false);
+    // A press order is found where it runs.
+    expect(entries.find((e) => e.order === 'SFM507001')?.where).toBe('PMD › M1');
   });
 
   it('lists an order on no line as unassigned, with no rows to scroll to', () => {

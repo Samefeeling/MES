@@ -134,8 +134,6 @@ function jobsOnBoard(view: AssemblyGanttView): { rowsOf: Map<string, Placed[]>; 
     const line = group.line;
     const place = line.parent ? `${names.get(line.parent) ?? line.parent} › ${line.name}` : line.name;
     for (const row of group.rows) {
-      // A press changeover is a row between orders, not an order.
-      if (row.job.press?.change) continue;
       const jobNum = jobNumOf(String(row.job.id));
       const held = rowsOf.get(jobNum);
       if (held) held.push({ row, place });

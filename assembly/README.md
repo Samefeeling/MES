@@ -21,8 +21,11 @@ plan goes back the other way, into the `ASSY_Production` list.
 - **PMD is one sub-line per press** — read from the PMD dashboard's
   `Planning.csv` (`VITE_PMD_PLANNING_CSV_PATH`, else `VITE_PLANNING_CSV_PATH`),
   every press that has an order gets its own line under PMD, the way the
-  benches sit under UPL; a press with nothing on it has none. Between two
-  orders on a press the board adds the changeover as a row of its own: a
+  benches sit under UPL; a press with nothing on it has none. Folded, PMD and
+  each press show their load day by day against the hours the press can run
+  (8 h a shift, for its orders' **No of shift**); none of it is added to the
+  board's own figures. Between two orders on a press the changeover is drawn
+  at the end of the order before it, with an arrow down to the next: a
   **Die Change** of 4 h (`Die 123 → Die 456`) when the die differs, else an
   **Insert Change** (the size in the description changes — `460h`,
   `Size 3`) or a **Colour Change** of 30 min — the die and colour of each part

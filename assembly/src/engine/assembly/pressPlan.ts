@@ -84,16 +84,14 @@ export function changeBetween(prev: Job, next: Job): PressChange | null {
   const toDie = dieOf(next);
   const fromColor = prev.press?.color ?? null;
   const toColor = next.press?.color ?? null;
+  // The size is the insert: an insert field where the source has one, else
+  // the size the description carries ("460h", "Size 3"). Only the colour
+  // changing leaves the rest of the description as it was.
+  const fromSize = key(prev.press?.insert) ?? sizeOf(prev.description);
+  const toSize = key(next.press?.insert) ?? sizeOf(next.description);
   let kind: PressChangeKind;
   if (!key(fromDie) || !key(toDie) || key(fromDie) !== key(toDie)) kind = 'die';
-  else {
-    // The size is the insert: an insert field where the source has one, else
-    // the size the description carries ("460h", "Size 3"). Only the colour
-    // changing leaves the rest of the description as it was.
-    const fromSize = key(prev.press?.insert) ?? sizeOf(prev.description);
-    const toSize = key(next.press?.insert) ?? sizeOf(next.description);
-    kind = fromSize !== toSize ? 'insert' : 'colour';
-  }
+  else kind = fromSize !== toSize ? 'insert' : 'colour';
   return {
     kind,
     hours: CHANGE_HOURS[kind],
@@ -103,7 +101,29 @@ export function changeBetween(prev: Job, next: Job): PressChange | null {
     toDie,
     fromColor,
     toColor,
+    fromSize,
+    toSize,
   };
+}
+
+/** A size key as the floor says it: "460h|size4" → "460h Size 4". */
+const sizeText = (size: string | null | undefined): string | null =>
+  size ? size.split('|').map((s) => s.replace(/^size\s*/, 'Size ')).join(' ') : null;
+
+/**
+ * What changes, in the fewest words — drawn at the end of the order before
+ * it: "Die 174 → Die 296", "Dark grey → Black", "Size 3 → Size 4".
+ */
+export function changeShortLabel(change: PressChange): string {
+  if (change.kind === 'die') {
+    if (!change.fromDie && !change.toDie) return 'die not on PMD_ProductDieColor';
+    return `Die ${change.fromDie ?? '?'} → Die ${change.toDie ?? '?'}`;
+  }
+  if (change.kind === 'colour') {
+    if (!change.fromColor && !change.toColor) return 'colour not on PMD_ProductDieColor';
+    return `${change.fromColor ?? '?'} → ${change.toColor ?? '?'}`;
+  }
+  return `${sizeText(change.fromSize) ?? 'no size'} → ${sizeText(change.toSize) ?? 'no size'}`;
 }
 
 /** "Die Change · Die 123 → Die 456", "Colour Change · Black → Slate". */

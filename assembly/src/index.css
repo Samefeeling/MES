@@ -1457,21 +1457,38 @@ body.col-resizing {
 .arow.context {
   opacity: 0.72;
 }
-/* A press changeover: its own row between the two orders, drawn in the PMD
-   dashboard's status colours — die change red, insert orange, colour amber. */
-.arow.changeover .acell.order { font-style: italic; }
-.arow.changeover.die .bar { color: #7f1d1d; }
-.arow.changeover.die .bar .bar-piece { background: #fecaca; border-color: #dc2626; }
-.arow.changeover.insert .bar { color: #7c2d12; }
-.arow.changeover.insert .bar .bar-piece { background: #fed7aa; border-color: #c2410c; }
-.arow.changeover.colour .bar { color: #78350f; }
-.arow.changeover.colour .bar .bar-piece { background: #fde68a; border-color: #d97706; }
-.chip.changeover { cursor: default; }
-.chip.changeover.die { background: #fee2e2; border-color: #dc2626; color: #7f1d1d; }
-.chip.changeover.insert { background: #ffedd5; border-color: #c2410c; color: #7c2d12; }
-.chip.changeover.colour { background: #fef3c7; border-color: #d97706; color: #78350f; }
+/* A press changeover, on the end of the order before it (see OrderBar): its
+   own length after the bar and what changes beside it, in the PMD dashboard's
+   status colours — die change red, insert orange, colour amber. The arrow
+   down to the next order is the dependency layer's (.change-link). */
+.bar-change {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  border-radius: 2px;
+  border: 1px solid;
+}
+.bar-change.die { background: #fecaca; border-color: #dc2626; }
+.bar-change.insert { background: #fed7aa; border-color: #c2410c; }
+.bar-change.colour { background: #fde68a; border-color: #d97706; }
+.bar-change-tag {
+  position: absolute;
+  white-space: nowrap;
+  pointer-events: auto;
+}
+.bar-change-text { font-weight: 650; }
+.bar-change-text.die { color: #b91c1c; }
+.bar-change-text.insert { color: #c2410c; }
+.bar-change-text.colour { color: #b45309; }
+.change-link { fill: none; stroke-width: 1.25; }
+.change-link.die { stroke: #dc2626; }
+.change-link.insert { stroke: #c2410c; }
+.change-link.colour { stroke: #d97706; }
+.change-marker.die { fill: #dc2626; }
+.change-marker.insert { fill: #c2410c; }
+.change-marker.colour { fill: #d97706; }
 .chip.press-shifts { background: #e2e8f0; border-color: #94a3b8; color: #1e293b; cursor: default; }
-.chip.changeover:hover, .chip.press-shifts:hover { border-color: inherit; }
+.chip.press-shifts:hover { border-color: inherit; }
 .arow.empty .acell.order {
   color: var(--faint);
   font-style: italic;
