@@ -1,3 +1,4 @@
+import { setFactoryCalendar } from '@/engine/assembly/dates';
 import { describe, expect, it } from 'vitest';
 import type { OrderRow } from '@/engine/assembly/board';
 import { incomingSupply, type PickShortage } from '@/engine/assembly/pickShortage';
@@ -29,6 +30,7 @@ import {
   withPredecessors,
   releasedOrderNumbers,
   unstaffedWindow,
+  unstaffedStretches,
   lineDayLoads,
   timelineDays,
 } from '@/features/assembly/boardView';
@@ -762,6 +764,71 @@ describe('the box an order with nobody on it is drawn in', () => {
 
   it('has nowhere to go without a Due Date', () => {
     expect(unstaffedWindow(waiting(null))).toBeNull();
+  });
+
+  describe('across a shutdown', () => {
+    // Christmas 2026: shut from Thursday 24 December to Friday 1 January,
+    // then the weekend — open again on Monday 4 January.
+    const SHUT = ['2026-12-24', '2026-12-25', '2026-12-28', '2026-12-29', '2026-12-30', '2026-12-31', '2027-01-01'];
+    const days = (boxes: { from: Date; to: Date }[]): string[][] =>
+      boxes.map((b) => [toDayKey(b.from), toDayKey(new Date(b.to.getTime() - 1))]);
+    const shut = <T,>(run: () => T): T => {
+      setFactoryCalendar({ listed: SHUT.map((day) => ({ day })), holidays: false });
+      try {
+        return run();
+      } finally {
+        setFactoryCalendar({ listed: [], holidays: true });
+      }
+    };
+
+    it('is drawn on the days the factory is open, never on a holiday or an RDO', () =>
+      shut(() => {
+        // Due first thing on the Monday back: one shift of work, so the last
+        // day it can be done is Wednesday 23 December.
+        const w = unstaffedWindow(waiting('2027-01-04T00:00:00', '2026-12-14T07:00:00'))!;
+        expect(w.late).toBe(false);
+        // The window still runs to the Due Date — that is what is planned to.
+        expect(w.to).toEqual(new Date('2027-01-04T00:00:00'));
+        expect(days(unstaffedStretches(w))).toEqual([['2026-12-23', '2026-12-23']]);
+      }));
+
+    it('leaves the shutdown showing between the days either side of it', () =>
+      shut(() => {
+        // 30 h: two shifts. Due first thing Tuesday 5 January: Monday the
+        // 4th, and Wednesday 23 December before it.
+        const r = waiting('2027-01-05T00:00:00', '2026-12-14T07:00:00');
+        Object.assign(r.job, { laborHrs: 30 });
+        expect(days(unstaffedStretches(unstaffedWindow(r)!))).toEqual([
+          ['2026-12-23', '2026-12-23'],
+          ['2027-01-04', '2027-01-04'],
+        ]);
+      }));
+
+    it('runs straight through with weekend overtime approved, as its bar would', () =>
+      shut(() => {
+        const w = unstaffedWindow(waiting('2027-01-04T00:00:00', '2026-12-14T07:00:00'))!;
+        expect(unstaffedStretches(w, true)).toEqual([{ from: w.from, to: w.to }]);
+      }));
+
+    it('too late to make its Due Date, sits on the day the factory is next open', () =>
+      shut(() => {
+        // It can start on Christmas Day, as far as its material goes.
+        const w = unstaffedWindow(waiting('2027-01-04T00:00:00', '2026-12-25T07:00:00'))!;
+        expect(w.late).toBe(true);
+        expect(unstaffedStretches(w)).toEqual([
+          { from: new Date('2027-01-04T00:00:00'), to: new Date('2027-01-04T00:00:00') },
+        ]);
+      }));
+
+    it('with no length to draw, is held to the end of the last day worked before the Due Date', () =>
+      shut(() => {
+        const r = waiting('2027-01-04T00:00:00', '2026-12-14T07:00:00');
+        Object.assign(r.job, { laborHrs: 0, remainingQty: 0 });
+        const w = unstaffedWindow(r)!;
+        const boxes = unstaffedStretches(w);
+        expect(boxes).toHaveLength(1);
+        expect(boxes[0].to).toEqual(new Date('2026-12-24T00:00:00'));
+      }));
   });
 
   describe('with its start fixed', () => {

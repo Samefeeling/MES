@@ -2636,6 +2636,17 @@ body.col-resizing {
   text-align: center;
   white-space: nowrap;
 }
+/* One box of several — the open days either side of a shutdown (see
+   OrderBar). Each is exactly as wide as its days, so none reaches onto a day
+   the factory is shut; the reason, in the widest, is centred on it and may
+   run past its edges. */
+.bar-missing.placed.part {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
 .bar-missing.late {
   right: auto;
   font-weight: 700;

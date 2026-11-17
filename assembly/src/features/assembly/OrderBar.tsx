@@ -3,7 +3,8 @@
  * coloured by how the Expect Date compares with the Due Date.
  *
  * The bar spans start to Expect Date and is drawn as one block per stretch of
- * open days. Weekend gaps appear only while weekend columns are enabled; with
+ * open days (`barBlocks`): a public holiday or an RDO shows through between
+ * two blocks. Weekend gaps appear only while weekend columns are enabled; with
  * them hidden, Friday and Monday meet on the compact working-day axis.
  *
  * ## Short orders
@@ -21,11 +22,11 @@ import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import type { OrderRow } from '@/engine/assembly/board';
 import { openDaysBetween, workingSpans } from '@/engine/assembly/dates';
+import { barBlocks } from './barBlocks';
 import { completedFraction, remainingHours } from '@/engine/assembly/duration';
-import { MS_PER_DAY, formatDay, formatTime } from '@/lib/time';
-import { endOfCrewDay, startOfCrewDay } from '@/engine/assembly/crewSchedule';
+import { formatDay, formatTime } from '@/lib/time';
 import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
-import { barTag, missingBarReason, timelineDayOffset, unstaffedWindow } from './boardView';
+import { barTag, missingBarReason, timelineDayOffset, unstaffedStretches, unstaffedWindow } from './boardView';
 import type { DayAxis } from './dayAxis';
 import type { MarkedMove } from './groupMove';
 import { jobNumOf } from '@/domain/routing';
@@ -34,9 +35,6 @@ import { CHANGE_SHORT } from '@/engine/assembly/pressPlan';
 export const DRAG_TYPE_BAR = 'order-bar';
 
 /** Narrowest a block may be drawn and still be seen. */
-/** Fractions of a shift are divided out, so flush ends agree to about here. */
-const SEAM = 1e-6;
-
 const MIN_PIECE_PX = 10;
 
 export function OrderBar({
@@ -146,24 +144,46 @@ export function OrderBar({
     const window = readOnly ? null : unstaffedWindow(row);
     const at = (date: Date) =>
       Math.min(Math.max(axis.x(timelineDayOffset(date, horizonStart, showWeekends)), 0), gridWidth);
-    const placed: CSSProperties | undefined = window
-      ? window.late
-        ? { left: at(window.from) + 4 }
-        : {
-            right: gridWidth - at(window.to),
-            width: Math.max(at(window.to) - at(window.from), 0),
-          }
-      : undefined;
+    /*
+     * One box per stretch of days the factory is open, as a bar is one block
+     * per stretch: a Due Date on the first day back from a shutdown used to
+     * lay a single box across every holiday and RDO before it, which read as
+     * work planned on them. Stretches that meet on the grid — either side of
+     * a weekend the axis is not drawing — are one box.
+     */
+    const stretches = window ? unstaffedStretches(window, row.overtime) : [];
+    const boxes = stretches
+      .map((stretch) => ({ left: at(stretch.from), right: at(stretch.to) }))
+      .reduce<{ left: number; right: number }[]>((out, box) => {
+        const previous = out.at(-1);
+        if (previous && box.left - previous.right <= 1) previous.right = Math.max(previous.right, box.right);
+        else out.push({ ...box });
+        return out;
+      }, []);
+    // Off the edge of the grid a stretch has no width; the last is kept so
+    // the order still has a box, held to the edge.
+    const drawn = boxes.filter((box, i) => box.right - box.left > 0 || i === boxes.length - 1);
+    const split = !window?.late && drawn.length > 1;
+    // The reason is written once, in the widest box.
+    const labelled = drawn.reduce(
+      (widest, box, i) => (box.right - box.left > drawn[widest].right - drawn[widest].left ? i : widest),
+      0,
+    );
+    const placedAt = (box: { left: number; right: number }): CSSProperties =>
+      window?.late
+        ? { left: box.left + 4 }
+        : { right: gridWidth - box.right, width: Math.max(box.right - box.left, 0) };
     const when = window
       ? window.late
-        ? `\nCannot make its Due Date ${formatDay(row.job.dueDate!)} — the earliest it can start is ${formatDay(window.from)}`
+        ? `\nCannot make its Due Date ${formatDay(row.job.dueDate!)} — the earliest it can start is ${formatDay(stretches[0].from)}`
         : `\nTo make its Due Date ${formatDay(window.to)}, start by ${formatDay(window.from)}`
       : '';
-    return (
+    const box = (style: CSSProperties | undefined, label: boolean, key?: number) => (
       <button
+        key={key}
         type="button"
-        className={`bar-missing${missing.material ? ' short-material' : ''}${window ? ' placed' : ''}${window?.late ? ' late' : ''}${marked ? ' marked' : ''}${overdue ? ' overdue' : ''}${row.overtime ? ' overtime' : ''}`}
-        style={placed}
+        className={`bar-missing${missing.material ? ' short-material' : ''}${window ? ' placed' : ''}${split ? ' part' : ''}${window?.late ? ' late' : ''}${marked ? ' marked' : ''}${overdue ? ' overdue' : ''}${row.overtime ? ' overtime' : ''}`}
+        style={style}
         title={missing.title + when + (row.overtime ? '\nWeekend overtime approved — it runs straight through the weekend' : '')}
         onClick={(event) => {
           event.stopPropagation();
@@ -178,9 +198,12 @@ export function OrderBar({
         onMouseEnter={() => onDependencyHover(id)}
         onMouseLeave={() => onDependencyHover(null)}
       >
-        {missing.label}
+        {label ? missing.label : '\u00a0'}
       </button>
     );
+    if (!window) return box(undefined, true);
+    if (!split) return box(placedAt(drawn[labelled]), true);
+    return <>{drawn.map((piece, i) => box(placedAt(piece), i === labelled, i))}</>;
   }
 
   // A press row's day is 24 hours; an assembly row's is the white shift.
@@ -204,46 +227,9 @@ export function OrderBar({
   // for the weekend, and a moulding row — the presses keep their own calendar,
   // and this lane mirrors their plan rather than restating it in our hours.
   const continuous = row.overtime || readOnly;
-  const plannedSpans = row.crewDays.map((day) => ({
-    from: startOfCrewDay(day),
-    to: endOfCrewDay(day),
-  }));
-  /*
-   * One run of work is one block, and two days running are one run.
-   *
-   * On the clock a day ends at 15:15 and the next opens at 07:00, so spans
-   * that used to meet at a shared midnight no longer meet at all — compared on
-   * the instant alone, every multi-day bar would come apart into a block per
-   * day. They are the same run when nothing open lies between them and neither
-   * end stops short inside its own shift, which is also exactly the test that
-   * still parts a bar around a day its crew lost to another order.
-   */
-  const merged = row.crewDays.reduce<{ from: Date; to: Date }[]>(
-    (out, day, i) => {
-      const previous = row.crewDays[i - 1];
-      const span = plannedSpans[i];
-      const joined =
-        previous !== undefined &&
-        previous.from + previous.used >= 1 - SEAM &&
-        day.from <= SEAM &&
-        openDaysBetween(previous.date, day.date, continuous).length === 0;
-      if (joined) out.at(-1)!.to = span.to;
-      else out.push({ ...span });
-      return out;
-    },
-    [],
-  );
-  let workedBefore = 0;
-  const spans =
-    !readOnly
-      ? merged.map((piece) => {
-          const worked =
-            (piece.to.getTime() - piece.from.getTime()) / MS_PER_DAY;
-          const result = { ...piece, worked, workedBefore };
-          workedBefore += worked;
-          return result;
-        })
-      : workingSpans(row.start, end, continuous);
+  const spans = !readOnly
+    ? barBlocks(row.crewDays, continuous, (at) => axis.x(axisOffset(at)))
+    : workingSpans(row.start, end, continuous).map((span) => ({ ...span, run: 0 }));
   const worked = spans.reduce((s, p) => s + p.worked, 0);
   const completion = completedFraction(row.job);
   // Days of work already booked, in the same units as `WorkingSpan.worked`.
@@ -253,6 +239,7 @@ export function OrderBar({
     spans.length > 0
       ? spans.map((piece) => ({
           key: piece.from.getTime(),
+          run: piece.run,
           from: piece.from,
           to: piece.to,
           left: axis.x(axisOffset(piece.from)) - left,
@@ -270,7 +257,7 @@ export function OrderBar({
               : 0,
         }))
       : // A closed order has no span left to draw, but still needs a handle.
-        [{ key: 0, from: row.start, to: end, left: 0, width, done: 1 }]
+        [{ key: 0, run: 0, from: row.start, to: end, left: 0, width, done: 1 }]
   )
     .filter((piece) => piece.width > 0)
     .map((piece) => ({
@@ -292,6 +279,9 @@ export function OrderBar({
    */
   const links = pieces.slice(1).flatMap((piece, i) => {
     const previous = pieces[i];
+    // Two blocks of one run are parted by closed days and nothing else: the
+    // closed-day stripe shows through, and there is no pause to draw.
+    if (piece.run === previous.run) return [];
     const idle = openDaysBetween(previous.to, piece.from, continuous);
     const left = previous.left + previous.width;
     const linkWidth = piece.left - left;

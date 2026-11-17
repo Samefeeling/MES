@@ -5,10 +5,12 @@ import {
   addCalendarDays,
   isClosed,
   isWeekend,
+  nextMidnight,
   nextWorkingDay,
   prevWorkingDay,
   startOfDay,
   wholeDaysBetween,
+  workingSpans,
 } from '@/engine/assembly/dates';
 import { activeLineKey, type LineKey, type Worker } from '@/domain/assembly';
 import { workersOnLeave, type LeaveDays } from '@/engine/assembly/attendance';
@@ -496,6 +498,41 @@ export function unstaffedWindow(
   const latest = subWorkingDays(due, days);
   if (due <= floor) return { from: floor, to: floor, late: true };
   return { from: latest > floor ? latest : floor, to: due, late: latest < floor };
+}
+
+/**
+ * The days an order's box is drawn on: the open days of its window.
+ *
+ * The window runs from the last moment the work can start to the Due Date,
+ * and a Due Date on the first day back from a shutdown puts the whole
+ * shutdown inside it. Drawn as one box it lay across the public holidays and
+ * the RDOs, and read as work planned on days the factory is shut. A bar is
+ * one block per stretch the factory is open, the closed days showing through
+ * between them (`workingSpans`); so is the box. The window itself is not
+ * shortened — level loading and the line's load still plan to the Due Date.
+ *
+ * Weekend overtime approved: one box straight through, as its bar would run.
+ * Too late to make its Due Date: where it can start, which is the day the
+ * factory is next open. Nothing open inside it (work of no length): the end
+ * of the last day worked before the Due Date.
+ */
+export function unstaffedStretches(
+  window: { from: Date; to: Date; late: boolean },
+  overtime = false,
+): { from: Date; to: Date }[] {
+  if (window.late) {
+    const at = overtime ? window.from : nextWorkingDay(window.from);
+    return [{ from: at, to: at }];
+  }
+  if (overtime) return [{ from: window.from, to: window.to }];
+  const open = workingSpans(window.from, window.to).map(({ from, to }) => ({ from, to }));
+  if (open.length > 0) return open;
+  const day = startOfDay(window.to);
+  const end =
+    isClosed(day) || day.getTime() === window.to.getTime()
+      ? nextMidnight(prevWorkingDay(day))
+      : window.to;
+  return [{ from: end, to: end }];
 }
 
 /**

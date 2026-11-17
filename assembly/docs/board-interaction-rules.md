@@ -429,6 +429,21 @@ onto one — except a weekend picked with the Weekends switch on, below. A bar
 dropped on one asks for overtime, naming the holiday or RDO;
 **Move to** takes the next day the factory is open.
 
+**Nothing is drawn on a closed day.** A bar is one block per stretch of days
+the factory is open: an order worked on the Wednesday before a shutdown and
+finished on the Monday after it is a block on each, with the holidays and RDOs
+showing through between them — not one block laid across them, which read as
+work planned on days the factory is shut (`features/assembly/barBlocks`). The
+box of an order with no bar ("short material", "no crew") is drawn the same
+way: it still ends on the Due Date and reaches back to the last day the work
+can start, but only over the open days of that stretch, so an order due first
+thing after a shutdown has its box on the last day before it
+(`unstaffedStretches`). A weekend is no different while weekend columns are
+shown; with them hidden, Friday and Monday meet and the block is one. A dashed
+line between two blocks is a pause — time the crew spent on another order —
+and is the only thing that may cross a closed day. An order with weekend
+overtime approved runs straight through.
+
 **The list is the whole calendar.** Once it has been read, a holiday is shut
 on the day the list says and on no other: the board does not add holidays of
 its own beside it. The one rule on top of the list is the factory's Anzac Day
