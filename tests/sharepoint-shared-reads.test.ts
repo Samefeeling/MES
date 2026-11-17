@@ -170,3 +170,75 @@ describe('rows asked for alongside their columns', () => {
     }
   });
 });
+
+describe('history asks only for the columns it reads', () => {
+  const HISTORY = ['PMD_Production', 'PMD_LiveStatus', 'PMD_Rejects', 'PMD_BreakDownlog'];
+  /** The `$select` of each row read of a list since `from`; '' for a read of every column. */
+  const columns = (list: string, from: number): string[] =>
+    site.calls
+      .slice(from)
+      .filter((c) => c.method === 'GET' && c.url.includes(`getbytitle('${list}')/items`))
+      .map((c) => /\$select=([^&]*)/.exec(c.url)?.[1] ?? '');
+
+  it('names the columns of a span of days, on all four lists', async () => {
+    const from = site.calls.length;
+    await device().listProduction(NARROW);
+    for (const list of HISTORY) {
+      expect(columns(list, from), list).toHaveLength(1);
+      expect(columns(list, from)[0], list).toMatch(/^Id,/);
+    }
+    expect(columns('PMD_Rejects', from)[0]).toBe('Id,Title,Shift,Date,Timeline,JobHead_JobNum,RejectCode,RejectCategory,RejectNumber');
+  });
+
+  it('leaves a read of one press and one shift — the operator sheet — as it was', async () => {
+    const from = site.calls.length;
+    await device().listProduction({ machineCode: PRESS, shiftId: '2026-11-09-Day' });
+    for (const list of HISTORY) expect(columns(list, from), list).toEqual(['']);
+  });
+
+  it('does not ask again when the site is failing for another reason', async () => {
+    const office = device();
+    const real = globalThis.fetch;
+    let asked = 0;
+    globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+      const url = decodeURIComponent(String(input));
+      if (!url.includes("getbytitle('PMD_Rejects')/items")) return real(input as string, init);
+      asked++;
+      return Promise.resolve(new Response('down', { status: 500 }));
+    }) as typeof fetch;
+    try {
+      await expect(office.listProduction(NARROW)).rejects.toThrow(/500/);
+      expect(asked).toBe(1);
+    } finally {
+      globalThis.fetch = real;
+    }
+    // …and the next read still names its columns.
+    const from = site.calls.length;
+    await office.listProduction(NARROW);
+    expect(columns('PMD_Rejects', from)).toHaveLength(1);
+    expect(columns('PMD_Rejects', from)[0]).toMatch(/^Id,/);
+  });
+
+  // Last: it takes columns off the site for good.
+  it('reads every column, and the same shift, from a list that lacks one', async () => {
+    const lean = await device().listProduction(NARROW);
+    const leanCounters = await device().listProductionCounters(WIDE);
+    site
+      .withoutColumn('PMD_Production', 'PlannedStart')
+      .withoutColumn('PMD_LiveStatus', 'PlannedStart')
+      .withoutColumn('PMD_Rejects', 'Timeline')
+      .withoutColumn('PMD_BreakDownlog', 'BDCause');
+    const office = device();
+    const from = site.calls.length;
+    const full = await office.listProduction(NARROW);
+    // Refused once, then read whole.
+    for (const list of HISTORY) expect(columns(list, from).map((c) => (c ? 'named' : 'all')), list).toEqual(['named', 'all']);
+    expect(full).toEqual(lean);
+    expect(full.filter((r) => r.statusCode === 'R')).toHaveLength(4);
+    // Remembered for the session: the next read goes straight to every column.
+    const again = site.calls.length;
+    expect(await office.listProduction(NARROW)).toEqual(lean);
+    for (const list of HISTORY) expect(columns(list, again), list).toEqual(['']);
+    expect(await office.listProductionCounters(WIDE)).toEqual(leanCounters);
+  });
+});

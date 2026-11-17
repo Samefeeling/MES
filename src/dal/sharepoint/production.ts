@@ -32,6 +32,17 @@ import {
 import { bdLabelFor, decodeBreakdownCauseMap } from '../../core/breakdown';
 import { SharePointPlanning } from './planning';
 
+/**
+ * A read of a span of days, every press and every order — history, as Maint
+ * and the Utilization chart read it, by the thousand rows. A read of one
+ * press, one shift or one order is the operator sheet's and is left as it is.
+ */
+function isSpanRead(filter: ProductionFilter): boolean {
+  return (
+    Boolean(filter.shiftIdFrom || filter.shiftIdTo) && !filter.shiftId && !filter.machineCode && !filter.jobNumber
+  );
+}
+
 export class SharePointProduction extends SharePointPlanning {
   /**
    * Cache of unsaved slot records for shifts the operator is currently
@@ -926,7 +937,7 @@ export class SharePointProduction extends SharePointPlanning {
    */
   protected headerRows(list: string, qs: string, filter: ProductionFilter): Promise<Record<string, unknown>[]> {
     const span =
-      filter.shiftIdFrom && filter.shiftIdTo && !filter.shiftId && !filter.machineCode && !filter.jobNumber
+      isSpanRead(filter) && filter.shiftIdFrom && filter.shiftIdTo
         ? {
             // The same days shiftDateRange asks SharePoint for.
             lo: Date.parse(`${filter.shiftIdFrom.slice(0, 10)}T00:00:00.000Z`) - 86_400_000,
@@ -947,7 +958,9 @@ export class SharePointProduction extends SharePointPlanning {
         }),
       );
     }
-    const entry = { list, ...span, writes: this.writesStarted, rows: this.getAllItems(list, qs) };
+    // History by the thousand rows: only the columns a header is read from.
+    const columns = [...Object.values(this.F.production), 'Modified'];
+    const entry = { list, ...span, writes: this.writesStarted, rows: this.getColumnItems(list, columns, qs) };
     const settled = (): void => {
       this.spanReadsInFlight = this.spanReadsInFlight.filter((r) => r !== entry);
     };
@@ -992,7 +1005,9 @@ export class SharePointProduction extends SharePointPlanning {
     const fromTo = shiftDateRangeFromTo(filter.shiftIdFrom, filter.shiftIdTo, F.date);
     if (fromTo) parts.push(fromTo);
     const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
-    const rows = await this.getAllItems<Record<string, unknown>>(LISTS.breakdown, qs);
+    const rows = await (isSpanRead(filter)
+      ? this.getColumnItems<Record<string, unknown>>(LISTS.breakdown, Object.values(F), qs)
+      : this.getAllItems<Record<string, unknown>>(LISTS.breakdown, qs));
     const out: BreakdownLogDetail[] = [];
     for (const r of rows) {
       const mc = str(r[F.machine]);
@@ -1049,7 +1064,9 @@ export class SharePointProduction extends SharePointPlanning {
     const fromTo = shiftDateRangeFromTo(filter.shiftIdFrom, filter.shiftIdTo, F.date);
     if (fromTo) parts.push(fromTo);
     const qs = parts.length ? '$filter=' + encodeURIComponent(parts.join(' and ')) : '';
-    const rows = await this.getAllItems<Record<string, unknown>>(LISTS.rejects, qs);
+    const rows = await (isSpanRead(filter)
+      ? this.getColumnItems<Record<string, unknown>>(LISTS.rejects, Object.values(F), qs)
+      : this.getAllItems<Record<string, unknown>>(LISTS.rejects, qs));
     const out = new Map<string, RejectRow[]>();
     for (const r of rows) {
       const mc = str(r[F.machine]);

@@ -106,6 +106,39 @@ export class SharePointRest {
     }).then((rows) => rows.slice());
   }
 
+  /** Lists that refused a read naming its columns, this session. */
+  protected columnsRefused = new Set<string>();
+
+  /**
+   * getAllItems, asking SharePoint for these columns only.
+   *
+   * Asked for everything, each row comes back with every column of the list
+   * and a dozen links to things nobody follows — several times the size of
+   * what a history read uses, on reads of thousands of rows. `columns` is
+   * every column the caller's field map names, so anything read through the
+   * map is there; `Id` is always asked for.
+   *
+   * A tenant whose list lacks one of them answers 400. The read is then made
+   * again the old way, for every column, and the list is read that way for
+   * the rest of the session: slower, never wrong.
+   */
+  protected getColumnItems<T = Record<string, unknown>>(
+    list: string,
+    columns: readonly string[],
+    qs = '',
+  ): Promise<T[]> {
+    if (this.columnsRefused.has(list)) return this.getAllItems<T>(list, qs);
+    const select = `$select=${[...new Set(['Id', ...columns.filter(Boolean)])].join(',')}`;
+    return this.getAllItems<T>(list, qs ? `${select}&${qs}` : select).catch((e) => {
+      if (!/→ 400$/.test((e as Error).message || '')) throw e;
+      this.columnsRefused.add(list);
+      console.warn(
+        `[pmd] ${list}: SharePoint refused a read naming its columns — one of them is not on the list. Reading every column instead (slower). Columns asked for: ${columns.filter(Boolean).join(', ')}`,
+      );
+      return this.getAllItems<T>(list, qs);
+    });
+  }
+
   /** Reads on the wire, by URL. Two callers asking for the same thing at
    *  once (the roster and its supervisors; the Die and Machine halves of
    *  the Mango report) share one request. A read only joins one that

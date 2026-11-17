@@ -29,6 +29,7 @@ export class FakeSharePoint {
   readonly siteUrl: string;
   private lists = new Map<string, Row[]>();
   private files = new Map<string, string>();
+  private absent = new Set<string>();
   private nextId = 1;
   /** Every request made, in order. */
   readonly calls: WireCall[] = [];
@@ -44,6 +45,17 @@ export class FakeSharePoint {
     const held = this.lists.get(title) ?? [];
     for (const row of rows) held.push({ ID: this.nextId++, ...row });
     this.lists.set(title, held);
+    return this;
+  }
+
+  /**
+   * A column this site's list does not have. The lists here have no schema —
+   * a row carries what was written to it — so every column exists until a
+   * test says one does not; a read that names it in `$select` is then
+   * refused, as SharePoint refuses it.
+   */
+  withoutColumn(title: string, name: string): this {
+    this.absent.add(`${title}|${name}`);
     return this;
   }
 
@@ -115,6 +127,22 @@ export class FakeSharePoint {
       const params = new URLSearchParams(query.replace(/\+/g, '%2B'));
       const filter = params.get('$filter');
       const kept = filter ? rows.filter((row) => evalFilter(filter, row)) : rows;
+      // $select: only the columns named — and, as SharePoint does, a 400 for
+      // one the list does not have (see `withoutColumn`).
+      const select = params.get('$select');
+      if (select) {
+        const asked = select.split(',').map((name) => name.trim()).filter(Boolean);
+        const missing = asked.find((name) => this.absent.has(`${title}|${name}`));
+        if (missing) return spError(400, `The field or property '${missing}' does not exist.`);
+        return json({
+          d: {
+            results: kept.map((row) => {
+              const all: Row = { ...row, Id: row.ID };
+              return Object.fromEntries(asked.filter((name) => name in all).map((name) => [name, all[name]]));
+            }),
+          },
+        });
+      }
       return json({ d: { results: kept.map((row) => ({ ...row, Id: row.ID })) } });
     }
     if (path === '/items' && method === 'POST') {

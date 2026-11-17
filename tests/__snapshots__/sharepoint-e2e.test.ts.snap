@@ -456,15 +456,15 @@ exports[`a shift on one press, across devices > held the same conversation with 
   },
   {
     "method": "GET",
-    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$filter=SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z'",
+    "url": "/_api/web/lists/getbytitle('PMD_Production')/items?$top=5000&$select=Id,Title,MachineCode,SlotStart_x003a_,ShiftId,JobNumber,JobHead_PartNum,JobHead_PartDescription,JobRequired,CycleTime,ShiftTarget,VSPLAN,ScheduleAttain,SchedulePlan,CountStart,CountEnd,Cavities,Reject,Operator,Supervisor,RunTime,Downtime,Handover,TotalGood,QualityChecks,RejectsBySlot,OwnerDevice,Signoff,JobLeft,Reopened,PlannedStart,Modified&$filter=SlotStart_x003a_ ge datetime'2026-11-15T00:00:00.000Z' and SlotStart_x003a_ le datetime'2026-11-18T00:00:00.000Z'",
   },
   {
     "method": "GET",
-    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$filter=Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z'",
+    "url": "/_api/web/lists/getbytitle('PMD_Rejects')/items?$top=5000&$select=Id,Title,Shift,Date,Timeline,JobHead_JobNum,RejectCode,RejectCategory,RejectNumber&$filter=Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z'",
   },
   {
     "method": "GET",
-    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$filter=Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z'",
+    "url": "/_api/web/lists/getbytitle('PMD_BreakDownlog')/items?$top=5000&$select=Id,Date,Title,JobHead_JobNum,JobHead_PartNum,Shift,StatusTimeline,BDCode,BDCause,R_Runtime,B_BreakDown,C_ColorChange,D_DieChange,I_InsertChange,M_Maintainance,O_NoWork,P_Purge,S_StartUpShutdown&$filter=Date ge datetime'2026-11-15T00:00:00.000Z' and Date le datetime'2026-11-18T00:00:00.000Z'",
   },
   {
     "method": "GET",
