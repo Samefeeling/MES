@@ -127,8 +127,12 @@ try {
   check.equal(s.supervisor, 'Jeff Penn', 'the Supervisor is picked from the list');
 
   s = await step('sign-off over the output limit', () => page.click('[data-saveclear]'));
-  check.ok(/above 130% of Shift Target/.test(s.toast ?? ''), 'output above 130% of the Shift Target stops the sign-off');
-  check.equal(s.modalTitle, null, 'and opens nothing');
+  check.ok(/Sign off/.test(s.modalTitle ?? ''), 'output above 130% of the Shift Target does not stop the sign-off');
+  check.ok(
+    /above 130% of Shift Target/.test((await page.textContent('#mc .count-warning')) ?? ''),
+    'but the dialog repeats the warning',
+  );
+  await step('sign-off cancelled to fix the count', () => page.click('#mc [data-cancel]'));
 
   s = await step('count end corrected', async () => {
     await page.fill('[data-meta="cend"]', '150');

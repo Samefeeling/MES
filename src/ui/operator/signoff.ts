@@ -39,13 +39,12 @@ let signoffInFlight = false;
  *     is valid data ("counter reset / no parts"); a blank field is
  *     not, because we can't tell "no parts" from "forgot to fill in".
  *   - countEnd >= countStart
- *   - Total Good must not exceed 130% of Shift Target; a likely counter
- *     typo must be corrected before the shift can be locked. A signed-in
- *     SUPERVISOR may sign off anyway (same bypass rule as the slot-gaps
- *     gate below): genuine over-target output happens — a better cycle
- *     than the standard, an extra cavity — and the supervisor vouching
- *     for the figures is exactly what sign-off means. The modal repeats
- *     the warning so the override is a conscious decision.
+ *   - Total Good above 130% of Shift Target is a WARNING only, never a
+ *     gate: the side panel shows it while the counts are typed and the
+ *     modal repeats it, so a counter typo is still caught, but the
+ *     operator signs off without a supervisor — genuine over-target
+ *     output (a better cycle than the standard, an extra cavity) is
+ *     common enough that the gate only held shifts up.
  * Confirming locks the shift records and clears the in-form selection.
  */
 export async function openSaveSignoffModal(): Promise<void> {
@@ -113,22 +112,6 @@ export async function openSaveSignoffModal(): Promise<void> {
   const totalRej = jobTotals();
   const good = Math.max(0, (ce - cs) * cav - totalRej);
   const outputWarning = shiftOutputWarning(good);
-  // Over-130% output hard-blocks the OPERATOR (almost always a Count
-  // Start / Count End typo). A signed-in supervisor proceeds to the
-  // modal instead, which repeats the warning — approving it is theirs
-  // to do, the same way they can bypass the slot-gaps gate above.
-  if (outputWarning && !isSupervisor()) {
-    toast(
-      `${outputWarning.message} Or ask a supervisor to sign in and approve this output.`,
-      'err',
-    );
-    const countEnd = document.querySelector<HTMLInputElement>(
-      '.op-side input[data-meta="cend"]',
-    );
-    countEnd?.focus();
-    countEnd?.select();
-    return;
-  }
   const o = selectedOrder();
 
   const mc = openModal(`<div class="bd-modal">
@@ -147,7 +130,7 @@ export async function openSaveSignoffModal(): Promise<void> {
       outputWarning
         ? `<div class="count-warning" role="alert">${escapeHtml(
             outputWarning.message,
-          )} Signing off as supervisor approves this output as genuine.</div>`
+          )} Signing off records this output as it stands.</div>`
         : ''
     }
     <p class="bd-sub">By signing off you confirm the above figures are correct and lock the shift records.</p>
