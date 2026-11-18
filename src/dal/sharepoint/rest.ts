@@ -254,6 +254,20 @@ export class SharePointRest {
     return this.shareRead(`file:${rawPath}`, () => this.readSiteFile(rawPath, what));
   }
 
+  /** A doc-library file's TimeLastModified (ISO), path as fetchSiteFile
+   *  takes it — a few bytes, to tell whether the file changed. */
+  protected async siteFileModified(rawPath: string): Promise<string | null> {
+    const encodedPath = toServerRelativePath(rawPath)
+      .split('/')
+      .map((seg) => encodeURIComponent(seg))
+      .join('/')
+      .replace(/'/g, "''");
+    const res = await this.getJson<{ d: { TimeLastModified?: string } }>(
+      `${this.siteUrl}/_api/web/getFileByServerRelativeUrl('${encodedPath}')?$select=TimeLastModified&_t=${Date.now()}`,
+    );
+    return res.d?.TimeLastModified || null;
+  }
+
   protected async readSiteFile(rawPath: string, what: string): Promise<string> {
     const serverRelative = toServerRelativePath(rawPath);
     const encodedPath = serverRelative

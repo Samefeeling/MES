@@ -48,8 +48,10 @@ export const LISTS = {
    *  writes here when a Die/Insert Change is first marked. */
   dieChangeLog: 'PMD_DieChangeLog',
   rdoRoster: 'RDO Roster 2026-2030',
-  /** The plan of record of each press in each shift (SavedShiftPlan), kept
-   *  once the shift is under way or at its first sign-off. Auto-provisioned
+  /** The plan of record of each press in each shift (SavedShiftPlan),
+   *  written an hour before the shift (or at its first sign-off), kept up with
+   *  Planning.csv for what is left of the shift while it runs, deleted after
+   *  two months; plus one `PlanningChecked` row. Auto-provisioned
    *  on the first keep (see ensureShiftPlanList). */
   shiftPlan: 'PMD_ShiftPlan',
   /** The days the factory is shut — public holidays and RDOs — kept by the

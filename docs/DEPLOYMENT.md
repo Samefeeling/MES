@@ -492,10 +492,14 @@ list re-uses the same DEFAULT_FIELDS section.
 
 Planning.csv is overwritten on every export, and Epicor moves an order under
 way to start at the export's "now", so a later file cannot say what a past
-shift was asked for. One row per press per shift keeps it: written once the
-shift is under way (30 minutes in, by the first iPad or signed-in supervisor
-with the app open) or, failing that, at the shift's first sign-off, with the
-die changes given their four hours. Rows are never rewritten. The KPI page's
+shift was asked for. One row per press per shift keeps it: written an hour
+before the shift starts (by the first iPad or signed-in supervisor with the
+app open) or, failing that, at the shift's first sign-off, with the die
+changes given their four hours. While the shift runs, a new export that asks
+for something else in what is left of it rewrites the row from that moment
+on; what it asked for before stays. Rows of shifts before the 1st of last
+month are deleted once a day. One more row, Title `PlanningChecked` with no
+MachineCode or ShiftId, notes the export last replanned from. The KPI page's
 Schedule Adherence judges every press-shift with a row by it. See
 `docs/kpi-shift-target.md`.
 

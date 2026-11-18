@@ -848,10 +848,13 @@ export function savedScheduleTuples(
  * shift that ran its plan reads as unplanned — 1600T's SFM507844 lost all
  * three shifts of 26 Oct when the 27 Oct export moved it to 07:00 that
  * morning. So the plan of every press, run or not, is kept while it is still
- * the plan: once the shift is under way (`keepShiftPlans`, from any device
- * that writes) and, failing that, at the shift's first sign-off. A row is
- * never rewritten. Schedule Adherence reads it from then on, for Last 24h and
- * wider periods alike; Planning.csv only for a press-shift nobody kept.
+ * the plan: an hour before the shift starts (`keepShiftPlans`, from any
+ * device that writes) and, failing that, at the shift's first sign-off.
+ * While the shift runs, an export that asks for something else in what is
+ * left of it rewrites the row from then on (`shiftPlanRevisions`); what the
+ * shift was asked for before then never changes. Schedule Adherence reads it,
+ * for Last 24h and wider periods alike; Planning.csv only for a press-shift
+ * nobody kept.
  *
  * The plan is kept with the press's die changes given their time
  * (`pressRunsAfterDieChanges`, the Assembly board's rule), so the hours that
@@ -950,8 +953,8 @@ export function shiftPlanFor(
  *
  *   - Every press without a row gets one — run or not, planned or not
  *     (plan 0) — unless an order planned on it has no rate.
- *   - A kept row is never rewritten: it is the plan as it stood when the
- *     shift was first kept, and Planning.csv only gets further from that.
+ *   - A kept row is left as it is (replanning what is left of the shift is
+ *     shiftPlanRevisions).
  *   - Two devices keeping at once can each write a row for the same press;
  *     the next keep removes the later one.
  *
@@ -982,6 +985,180 @@ export function shiftPlanChanges<Row extends SavedShiftPlan>(
     if (plan) save.push(plan);
   }
   return { save, remove };
+}
+
+/**
+ * How far a kept plan's remainder may drift from Planning.csv before the row
+ * is rewritten: 2% of an order's pieces (and at least one piece). Every
+ * 15-minute export moves the order under way to start at the export, so the
+ * remainder never matches the file to the piece; drift inside this is that,
+ * not a change of plan.
+ */
+export const REPLAN_TOLERANCE = 0.02;
+
+/** Hours from `a` to `b` (ms), never negative. */
+const spanHours = (a: number, b: number): number => Math.max(0, b - a) / 3_600_000;
+
+/**
+ * The share of an order's planned pieces in a plan that falls in [from, to):
+ * by the order's runs on the plan's bar, or — a row kept without a bar, or an
+ * order the bar does not draw — by the share of the shift.
+ */
+function shareBetween(plan: SavedShiftPlan, jobNumber: string, from: number, to: number): number {
+  const bounds = shiftBounds(plan.shiftId);
+  if (!bounds) return 0;
+  const start = bounds.start.getTime();
+  const end = bounds.end.getTime();
+  const runs = (plan.bar ?? []).filter((b) => b.kind === 'run' && jobKey(b.jobNumber) === jobKey(jobNumber));
+  let total = 0;
+  let inside = 0;
+  for (const run of runs) {
+    const a = Math.max(start, new Date(run.start).getTime());
+    const b = Math.min(end, new Date(run.end).getTime());
+    total += spanHours(a, b);
+    inside += spanHours(Math.max(a, from), Math.min(b, to));
+  }
+  if (total > 0) return inside / total;
+  return spanHours(Math.max(start, from), Math.min(end, to)) / spanHours(start, end);
+}
+
+/** A plan's orders cut to [from, to): pieces and hours by job. */
+function jobsBetween(
+  plan: SavedShiftPlan,
+  from: number,
+  to: number,
+): Map<string, { jobNumber: string; partNumber: string; pieces: number; hours?: number }> {
+  const out = new Map<string, { jobNumber: string; partNumber: string; pieces: number; hours?: number }>();
+  for (const job of plan.jobs) {
+    const share = shareBetween(plan, job.jobNumber, from, to);
+    const pieces = job.pieces * share;
+    const hours = job.hours != null ? job.hours * share : undefined;
+    const prev = out.get(jobKey(job.jobNumber));
+    out.set(jobKey(job.jobNumber), {
+      jobNumber: job.jobNumber,
+      partNumber: job.partNumber,
+      pieces: (prev?.pieces ?? 0) + pieces,
+      ...(hours != null || prev?.hours != null ? { hours: (prev?.hours ?? 0) + (hours ?? 0) } : {}),
+    });
+  }
+  return out;
+}
+
+/** Where a replan of `shiftId` at `at` cuts the shift: nothing before the
+ *  shift's start, all of it after its end. */
+function replanCut(shiftId: string, at: Date): { start: number; cut: number; end: number } | null {
+  const bounds = shiftBounds(shiftId);
+  if (!bounds) return null;
+  const start = bounds.start.getTime();
+  const end = bounds.end.getTime();
+  return { start, cut: Math.min(end, Math.max(start, at.getTime())), end };
+}
+
+/**
+ * Whether Planning.csv now asks for something else in what is left of a
+ * kept shift — from `at` to its end (all of it, before the shift starts): an
+ * order added or taken off the press, or an order's pieces moved by more
+ * than REPLAN_TOLERANCE. What the shift was asked for before `at` is not
+ * looked at: it is never rewritten.
+ */
+export function remainderChanged(kept: SavedShiftPlan, fresh: SavedShiftPlan, at: Date): boolean {
+  const cut = replanCut(kept.shiftId, at);
+  if (!cut || cut.cut >= cut.end) return false;
+  const before = jobsBetween(kept, cut.cut, cut.end);
+  const after = jobsBetween(fresh, cut.cut, cut.end);
+  const asked = (jobs: typeof before): Map<string, number> =>
+    new Map([...jobs].filter(([, j]) => j.pieces >= 0.5).map(([key, j]) => [key, j.pieces]));
+  const a = asked(before);
+  const b = asked(after);
+  if (a.size !== b.size || [...a.keys()].some((key) => !b.has(key))) return true;
+  return [...a].some(([key, pieces]) => {
+    const other = b.get(key) ?? 0;
+    return Math.abs(pieces - other) > Math.max(1, REPLAN_TOLERANCE * Math.max(pieces, other));
+  });
+}
+
+/**
+ * A kept plan replanned at `at`: what it asked for before `at` as it was
+ * kept, and from `at` to the end of the shift what Planning.csv asks now.
+ *
+ * Every export redraws the shift — the order under way is put to start at
+ * the export, and the orders behind it follow — so the file read mid-shift
+ * holds none of the time the shift has already lost. The part of the shift
+ * gone is therefore never replanned: a breakdown or a slow run stays
+ * charged, and an order added, taken off or resized is asked for from the
+ * moment it is known. Before the shift starts the whole of it is replanned.
+ */
+export function replannedShiftPlan(kept: SavedShiftPlan, fresh: SavedShiftPlan, at: Date): SavedShiftPlan {
+  const cut = replanCut(kept.shiftId, at);
+  if (!cut || cut.cut >= cut.end) return kept;
+  if (cut.cut <= cut.start) return fresh;
+  const past = jobsBetween(kept, cut.start, cut.cut);
+  const ahead = jobsBetween(fresh, cut.cut, cut.end);
+  const merged = new Map(past);
+  for (const [key, job] of ahead) {
+    const prev = merged.get(key);
+    merged.set(key, {
+      jobNumber: prev?.jobNumber ?? job.jobNumber,
+      partNumber: job.partNumber || prev?.partNumber || '',
+      pieces: (prev?.pieces ?? 0) + job.pieces,
+      ...(job.hours != null || prev?.hours != null ? { hours: (prev?.hours ?? 0) + (job.hours ?? 0) } : {}),
+    });
+  }
+  const jobs = [...merged.values()]
+    .map((job) => ({
+      jobNumber: job.jobNumber,
+      partNumber: job.partNumber,
+      pieces: Math.round(job.pieces),
+      ...(job.hours != null ? { hours: Math.round(job.hours * 100) / 100 } : {}),
+    }))
+    .filter((job) => job.pieces > 0)
+    .sort((a, b) => b.pieces - a.pieces);
+  const clip = (items: ReadonlyArray<PlanBarItem>, from: number, to: number): PlanBarItem[] =>
+    items.flatMap((item) => {
+      const a = Math.max(from, new Date(item.start).getTime());
+      const b = Math.min(to, new Date(item.end).getTime());
+      return b > a ? [{ ...item, start: new Date(a).toISOString(), end: new Date(b).toISOString() }] : [];
+    });
+  const bar = kept.bar || fresh.bar
+    ? [...clip(kept.bar ?? [], cut.start, cut.cut), ...clip(fresh.bar ?? [], cut.cut, cut.end)]
+    : undefined;
+  return {
+    machineCode: kept.machineCode,
+    shiftId: kept.shiftId,
+    plan: jobs.reduce((sum, job) => sum + job.pieces, 0),
+    jobs,
+    ...(bar ? { bar } : {}),
+  };
+}
+
+/**
+ * What replanning `shiftId` at `at` does to PMD_ShiftPlan, given the rows
+ * already kept for it: a row for every press with none (as shiftPlanChanges),
+ * the later of two rows for one press removed, and a kept row rewritten
+ * (`replannedShiftPlan`) where Planning.csv now asks for something else in
+ * what is left of the shift (`remainderChanged`). A press whose plan cannot
+ * be worked out now (an order with no rate) keeps its row as it is.
+ */
+export function shiftPlanRevisions<Row extends SavedShiftPlan>(
+  machineCodes: ReadonlyArray<string>,
+  saved: ReadonlyArray<Row>,
+  orders: ReadonlyArray<PlanningOrder>,
+  shiftId: string,
+  at: Date,
+  ctx: PlanContext = {},
+  history: ReadonlyArray<ProductionRecord> = [],
+  standing?: StandingAtShiftStart,
+): { save: SavedShiftPlan[]; rewrite: Array<{ row: Row; plan: SavedShiftPlan }>; remove: Row[] } {
+  const { save, remove } = shiftPlanChanges(machineCodes, saved, orders, shiftId, at, ctx, history, standing);
+  const rewrite: Array<{ row: Row; plan: SavedShiftPlan }> = [];
+  const known = new Set(machineCodes.map((code) => code.trim().toUpperCase()));
+  for (const row of saved) {
+    if (remove.includes(row) || !known.has(row.machineCode.trim().toUpperCase())) continue;
+    const fresh = shiftPlanFor(orders, row.machineCode, shiftId, at, ctx, history, standing);
+    if (!fresh || !remainderChanged(row, fresh, at)) continue;
+    rewrite.push({ row, plan: replannedShiftPlan(row, fresh, at) });
+  }
+  return { save, rewrite, remove };
 }
 
 /**

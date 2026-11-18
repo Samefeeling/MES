@@ -4,7 +4,8 @@ The KPI page reads signed production records for output. Its plan depends on
 the period:
 
 - **The plan of record — PMD_ShiftPlan.** Every press in every shift has its
-  plan kept once the shift is under way (see below), with its die changes
+  plan written an hour before the shift and kept up with Planning.csv while
+  it runs (see below), with its die changes
   given their four hours as on the Assembly board. Last 24h and wider periods
   alike judge a press-shift by that row, whether the press ran or not: a
   press planned for a shift and left idle (no crew, no material) shows 0
@@ -250,12 +251,13 @@ Rules:
 
 Every press in every shift gets one row (`shiftPlanChanges`):
 
-- **When.** Once the shift is under way — 30 minutes in, room for an export
-  made at the shift change to land — by the first device that writes (an
-  iPad, or a supervisor signed in; `ui/shift-plan-keeper.ts`, checked every
-  ten minutes). Every sign-off of the shift keeps the presses still missing
-  a row, for a shift nobody had a device open in — by then Planning.csv may
-  already have moved on, which is why it is not left to sign-off.
+- **When.** An hour before the shift starts, by the first device that
+  writes (an iPad, or a supervisor signed in; `ui/shift-plan-keeper.ts`,
+  checked every five minutes) — or as soon as one is open, for a shift
+  under way with no row. Every sign-off of the shift keeps the presses still
+  missing a row, for a shift nobody had a device open in — by then
+  Planning.csv may already have moved on, which is why it is not left to
+  sign-off.
 - **What.** The press's plan for the whole shift (`shiftPlanFor`): each order
   planned there, in the shifts its "no of shift" is crewed for, asked for its
   share of the shift × JobOper_ProdStandard, up to its quantity, with the
@@ -292,8 +294,35 @@ Every press in every shift gets one row (`shiftPlanChanges`):
   SFM508005 all shift (209 made), read 51% with SFM508226 at 0. Planned from
   where the press stood — 209 left, 8.7 h — the Afternoon is asked for
   SFM508005 only and reads 100%; the Day carries its own shortfall.
-- **Never rewritten.** Two devices keeping at once can each write a row for
-  a press; the next keep deletes the later one, and readers take the first.
+- **Kept up with Planning.csv — what is left of the shift only**
+  (`shiftPlanRevisions`). From the hour before the shift to its end, every
+  new export (the file's TimeLastModified, `planningVersion`) is checked
+  against the rows: where the file now asks for something else from *now*
+  to the end of the shift — an order added to or taken off the press, or an
+  order's pieces moved by more than 2% (`REPLAN_TOLERANCE`, at least one
+  piece; `remainderChanged`) — the row is rewritten in place
+  (`replannedShiftPlan`): from the shift's start to now as it was kept, and
+  from now on what the file asks. Before the shift starts all of it is
+  replanned; once it is over, none.
+
+  The part of the shift gone is never replanned because every export
+  redraws it: Epicor puts the order under way to start at the export, and
+  the orders behind it follow. Taken whole, the 11:00 file after a
+  four-hour breakdown asks the Day for 11:00–15:00 only, and the shift reads
+  100%. Kept up this way, the breakdown stays charged and an urgent order
+  put in at 11:00 is asked for from 11:00. An export that only moves the
+  order under way changes nothing and writes nothing.
+
+  Every device that writes watches the export; the first to see a new one
+  replans and notes it in the list's one `PlanningChecked` row (no
+  MachineCode, no ShiftId, so never read as a plan), and the others find it
+  done. Two devices keeping at once can each write a row for a press; the
+  next keep deletes the later one, and readers take the first.
+- **Two months kept.** Once a day the keeper deletes the rows of shifts
+  dated before the 1st of last month (`pruneShiftPlans`) — on 17 Nov,
+  everything before 1 Oct. A period reaching further back judges those
+  shifts by what their sign-off saved (PMD_Production.ScheduleAttain and
+  SchedulePlan), as for shifts before the list existed.
 
 Judging a shift by its row (`keptPlanTuples`): per order, credited =
 min(signed Good, plan); output on an order the row does not have is

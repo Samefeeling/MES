@@ -154,3 +154,18 @@ export function previousShift(shiftId: string): string | null {
   prev.setDate(prev.getDate() - 1);
   return buildShiftId(prev, codes[codes.length - 1]);
 }
+
+/**
+ * The shift immediately after `shiftId` (Day → Afternoon → Night → the next
+ * day's Day). Returns null if shiftId is malformed.
+ */
+export function nextShift(shiftId: string): string | null {
+  const p = parseShiftId(shiftId);
+  if (!p) return null;
+  const codes = SHIFTS.map((s) => s.code);
+  const idx = codes.indexOf(p.code);
+  if (idx < codes.length - 1) return buildShiftId(new Date(p.year, p.month - 1, p.day), codes[idx + 1]);
+  const next = new Date(p.year, p.month - 1, p.day);
+  next.setDate(next.getDate() + 1);
+  return buildShiftId(next, codes[0]);
+}

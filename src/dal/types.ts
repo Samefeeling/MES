@@ -163,9 +163,23 @@ export interface PmdDataLayer {
   listShiftPlans?(filter: { from: string; to: string }): Promise<SavedShiftPlan[]>;
   /** Keep the plan of every press in the shift that has none kept yet, from
    *  Planning.csv as it stands now; returns the shift's rows after it (null
-   *  when they could not be read, and nothing was written). Rows are never
-   *  rewritten. */
+   *  when they could not be read, and nothing was written). Kept rows are
+   *  left as they are. */
   keepShiftPlans?(shiftId: string): Promise<SavedShiftPlan[] | null>;
+  /** Replan the shift from Planning.csv as it stands now: a row for every
+   *  press with none, and a kept row rewritten where the file asks for
+   *  something else in what is left of the shift after `at` — what it asked
+   *  for before `at` is never rewritten (see replannedShiftPlan).
+   *  `planningVersion` (planningVersion()) lets devices that saw the same
+   *  export skip what one of them already did. null when nothing could be
+   *  read or Planning.csv holds no plan. */
+  replanShiftPlans?(shiftId: string, at?: Date, planningVersion?: string | null): Promise<SavedShiftPlan[] | null>;
+  /** Delete the kept plans of shifts dated before `before` (YYYY-MM-DD);
+   *  returns how many went. */
+  pruneShiftPlans?(before: string): Promise<number>;
+  /** When Planning.csv was last written (any string that changes with it);
+   *  null when it cannot be told. */
+  planningVersion?(): Promise<string | null>;
 
   // Production (hot path)
   listProduction(filter: ProductionFilter): Promise<ProductionRecord[]>;

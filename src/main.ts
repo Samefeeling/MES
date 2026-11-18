@@ -414,8 +414,10 @@ setTimeout(() => {
   );
 }, 5000);
 
-// Each shift's plan of record (PMD_ShiftPlan) for Schedule Adherence, kept
-// once the shift is under way — from a device that writes, as above.
+// Each shift's plan of record (PMD_ShiftPlan) for Schedule Adherence: written
+// an hour before the shift, kept up with Planning.csv while it runs (what is
+// left of the shift only), and two months kept — from a device that writes,
+// as above.
 startShiftPlanKeeper(dal, () => isIpadDevice() || isSupervisor());
 
 // Poll for new deploys and self-update the iPad clients without a manual

@@ -6,6 +6,7 @@ import {
   scheduleAdherenceForShift,
   scheduleSnapshotForShift,
   shiftPlanChanges,
+  shiftPlanRevisions,
   snapshotToSave,
   type SavedShiftPlan,
 } from '../core/kpi-attainment';
@@ -139,26 +140,72 @@ export class MemoryDataLayer implements PmdDataLayer {
     );
   }
 
+  /** What the plans of a shift are worked out from, as the SharePoint DAL
+   *  reads it (shiftPlanInputs). */
+  private shiftPlanInputs(shiftId: string, now: Date) {
+    return {
+      machines: this.machines.filter((m) => m.active && isProductionMachine(m.machineCode)).map((m) => m.machineCode),
+      ctx: { dieOf: dieLookup(this.dieColors) },
+      standing: {
+        leftOf: (o: PlanningOrder) =>
+          leftAtShiftStart(o, this.production.filter((r) => r.jobNumber === o.jobNumber), shiftId),
+        lastJobs: (code: string) =>
+          lastJobsBefore(this.production)(code, shiftBounds(shiftId)?.start.getTime() ?? now.getTime()),
+      },
+    };
+  }
+
   /** The SharePoint DAL's keepShiftPlans: keep the plan of every press in
    *  the shift with none kept yet. */
   async keepShiftPlans(shiftId: string, now: Date = new Date()): Promise<SavedShiftPlan[]> {
-    const machines = this.machines.filter((m) => m.active && isProductionMachine(m.machineCode));
+    const { machines, ctx, standing } = this.shiftPlanInputs(shiftId, now);
     const { save, remove } = shiftPlanChanges(
-      machines.map((m) => m.machineCode),
+      machines,
       this.shiftPlans.filter((p) => p.shiftId === shiftId),
       this.planning,
       shiftId,
       now,
-      { dieOf: dieLookup(this.dieColors) },
+      ctx,
       this.production,
-      {
-        leftOf: (o) => leftAtShiftStart(o, this.production.filter((r) => r.jobNumber === o.jobNumber), shiftId),
-        lastJobs: (code) => lastJobsBefore(this.production)(code, shiftBounds(shiftId)?.start.getTime() ?? now.getTime()),
-      },
+      standing,
     );
     this.shiftPlans = this.shiftPlans.filter((p) => !remove.includes(p)).concat(save);
     return MemoryDataLayer.clone(this.shiftPlans.filter((p) => p.shiftId === shiftId));
   }
+
+  /** The SharePoint DAL's replanShiftPlans: rewrite what is left of a kept
+   *  shift where Planning.csv now asks for something else. */
+  async replanShiftPlans(shiftId: string, at: Date = new Date()): Promise<SavedShiftPlan[]> {
+    const { machines, ctx, standing } = this.shiftPlanInputs(shiftId, at);
+    const { save, rewrite, remove } = shiftPlanRevisions(
+      machines,
+      this.shiftPlans.filter((p) => p.shiftId === shiftId),
+      this.planning,
+      shiftId,
+      at,
+      ctx,
+      this.production,
+      standing,
+    );
+    this.shiftPlans = this.shiftPlans
+      .filter((p) => !remove.includes(p))
+      .map((p) => rewrite.find((r) => r.row === p)?.plan ?? p)
+      .concat(save);
+    return MemoryDataLayer.clone(this.shiftPlans.filter((p) => p.shiftId === shiftId));
+  }
+
+  /** The SharePoint DAL's pruneShiftPlans: drop the shifts dated before `before`. */
+  async pruneShiftPlans(before: string): Promise<number> {
+    const n = this.shiftPlans.length;
+    this.shiftPlans = this.shiftPlans.filter((p) => p.shiftId.slice(0, 10) >= before);
+    return n - this.shiftPlans.length;
+  }
+
+  /** Demo Planning.csv never changes behind the page's back. */
+  async planningVersion(): Promise<string | null> {
+    return 'memory';
+  }
+
   async listOperators(): Promise<Operator[]> {
     return MemoryDataLayer.clone(this.operators.filter((o) => o.active));
   }

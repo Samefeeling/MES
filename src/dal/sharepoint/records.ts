@@ -21,7 +21,7 @@ import {
   sanitizeBodyStrings,
   type RejectEvent,
 } from './rows';
-import { type SavedShiftPlan, shiftPlanChanges } from '../../core/kpi-attainment';
+import { type SavedShiftPlan, shiftPlanChanges, shiftPlanRevisions } from '../../core/kpi-attainment';
 import { shiftBounds, previousShift } from '../../core/shifts';
 import {
   type PlanBarItem,
@@ -189,7 +189,7 @@ export class SharePointRecords extends SharePointProduction {
       Title: LISTS.shiftPlan,
       BaseTemplate: 100, // generic list
       Description:
-        'The plan of record of each press in each shift, kept once the shift is under way (or at its first sign-off) for the KPI Schedule Adherence. Title = MachineCode|ShiftId.',
+        'The plan of record of each press in each shift for the KPI Schedule Adherence: written an hour before the shift (or at its first sign-off), kept up with Planning.csv for what is left of the shift while it runs, deleted after two months. Title = MachineCode|ShiftId.',
     });
     const fieldsUrl = `${this.listUrl(LISTS.shiftPlan)}/fields`;
     const field = (Title: string, FieldTypeKind: number) =>
@@ -210,37 +210,26 @@ export class SharePointRecords extends SharePointProduction {
   }
 
   /**
-   * Keep the plan of every press in `shiftId` that has no row yet
-   * (shiftPlanChanges) — the plan of record its Schedule Adherence is judged
-   * by from then on. Called while the shift is under way (main.ts, from a
-   * device that writes) and by every sign-off of the shift. Returns the
-   * shift's rows as they stand after it; null when the list could not be
-   * read, in which case nothing is written — a row may already be kept —
-   * and when no row is kept yet and Planning.csv holds no plan to keep.
+   * What working out the plans of `shiftId` needs, read now: the active
+   * presses, Planning.csv, die lookups, the presses' history and where they
+   * stand when the shift starts. null when Planning.csv holds no plan at all
+   * (planningHoldsAPlan): a header-only export, or one whose Machine / date
+   * column was renamed, would put "nothing planned" onto every press.
    */
-  async keepShiftPlans(shiftId: string): Promise<SavedShiftPlan[] | null> {
-    let saved = await this.readShiftPlans(`ShiftId eq '${odataString(shiftId)}'`);
-    if (saved == null) {
-      if (await this.shiftPlanListExists()) return null;
-      saved = [];
-    }
-    const machines = (await this.listMachines()).filter((m) => m.active).map((m) => m.machineCode);
-    const keys = new Set(saved.map((row) => row.machineCode.trim().toUpperCase()));
-    if (machines.every((code) => keys.has(code.trim().toUpperCase())) && saved.length === keys.size) {
-      return saved.map(({ id: _id, ...plan }) => plan);
-    }
-    // A kept row is never rewritten, so it is not kept from a planning read
-    // that holds no plan at all (planningHoldsAPlan): a header-only export,
-    // or one whose Machine / date column was renamed, would freeze "nothing
-    // planned" onto every press of the shift for good. Nothing is written;
-    // with no row kept yet the answer is null, so the keeper asks again in
-    // ten minutes and the shift is kept as soon as the export is right.
+  protected async shiftPlanInputs(shiftId: string, presses?: string[]): Promise<{
+    machines: string[];
+    orders: PlanningOrder[];
+    ctx: Parameters<typeof shiftPlanChanges>[5];
+    history: ProductionRecord[];
+    standing: Parameters<typeof shiftPlanChanges>[7];
+  } | null> {
+    const machines = presses ?? (await this.listMachines()).filter((m) => m.active).map((m) => m.machineCode);
     const orders = await this.listPlanning({});
     if (!planningHoldsAPlan(orders)) {
       console.warn(
-        `[pmd] PMD_ShiftPlan: Planning.csv holds no order with a press and a Start–Due window — ${shiftId} not kept from it`,
+        `[pmd] PMD_ShiftPlan: Planning.csv holds no order with a press and a Start–Due window — ${shiftId} not planned from it`,
       );
-      return saved.length ? saved.map(({ id: _id, ...plan }) => plan) : null;
+      return null;
     }
     // What each press ran before its first order opens, for that order's
     // die change: the shift before and this one so far. Not worth failing
@@ -292,16 +281,60 @@ export class SharePointRecords extends SharePointProduction {
       const records = recordsByJob.get(o.jobNumber.trim().toUpperCase());
       return records ? leftAtShiftStart(o, records, shiftId) : undefined;
     };
-    const { save, remove } = shiftPlanChanges(
+    return {
       machines,
-      saved,
       orders,
-      shiftId,
-      new Date(),
-      { dieOf: dieLookup(dieColors), lastRun: lastRunFromTimelines(headers) },
+      ctx: { dieOf: dieLookup(dieColors), lastRun: lastRunFromTimelines(headers) },
       history,
-      { leftOf, lastJobs },
-    );
+      standing: { leftOf, lastJobs },
+    };
+  }
+
+  /** The PlanJobs / SchedulePlan columns of a plan, as PMD_ShiftPlan holds them. */
+  protected static shiftPlanColumns(row: SavedShiftPlan): Record<string, unknown> {
+    return {
+      SchedulePlan: row.plan,
+      PlanJobs: JSON.stringify([...row.jobs, ...(row.bar ?? []).map(planBarEntry)]),
+    };
+  }
+
+  /** Write a plan as a new PMD_ShiftPlan row. */
+  protected async addShiftPlan(row: SavedShiftPlan): Promise<void> {
+    await this.post(`${this.listUrl(LISTS.shiftPlan)}/items`, {
+      __metadata: { type: await this.itemType(LISTS.shiftPlan) },
+      Title: `${row.machineCode}|${row.shiftId}`,
+      MachineCode: row.machineCode,
+      ShiftId: row.shiftId,
+      ...SharePointRecords.shiftPlanColumns(row),
+    });
+  }
+
+  /**
+   * Keep the plan of every press in `shiftId` that has no row yet
+   * (shiftPlanChanges) — the plan of record its Schedule Adherence is judged
+   * by. Called an hour before the shift starts and while it runs (main.ts,
+   * from a device that writes) and by every sign-off of the shift. Returns
+   * the shift's rows as they stand after it; null when the list could not be
+   * read, in which case nothing is written — a row may already be kept —
+   * and when no row is kept yet and Planning.csv holds no plan to keep.
+   */
+  async keepShiftPlans(shiftId: string): Promise<SavedShiftPlan[] | null> {
+    let saved = await this.readShiftPlans(`ShiftId eq '${odataString(shiftId)}'`);
+    if (saved == null) {
+      if (await this.shiftPlanListExists()) return null;
+      saved = [];
+    }
+    const presses = (await this.listMachines()).filter((m) => m.active).map((m) => m.machineCode);
+    const keys = new Set(saved.map((row) => row.machineCode.trim().toUpperCase()));
+    if (presses.every((code) => keys.has(code.trim().toUpperCase())) && saved.length === keys.size) {
+      return saved.map(({ id: _id, ...plan }) => plan);
+    }
+    // With no row kept yet the answer is null, so the keeper asks again and
+    // the shift is kept as soon as the export is right.
+    const inputs = await this.shiftPlanInputs(shiftId, presses);
+    if (!inputs) return saved.length ? saved.map(({ id: _id, ...plan }) => plan) : null;
+    const { machines, orders, ctx, history, standing } = inputs;
+    const { save, remove } = shiftPlanChanges(machines, saved, orders, shiftId, new Date(), ctx, history, standing);
     for (const row of remove) {
       await this.del(`${this.listUrl(LISTS.shiftPlan)}/items(${row.id})`);
     }
@@ -309,17 +342,162 @@ export class SharePointRecords extends SharePointProduction {
     if (!save.length) return kept;
     await this.ensureShiftPlanList();
     for (const row of save) {
-      await this.post(`${this.listUrl(LISTS.shiftPlan)}/items`, {
-        __metadata: { type: await this.itemType(LISTS.shiftPlan) },
-        Title: `${row.machineCode}|${row.shiftId}`,
-        MachineCode: row.machineCode,
-        ShiftId: row.shiftId,
-        SchedulePlan: row.plan,
-        PlanJobs: JSON.stringify([...row.jobs, ...(row.bar ?? []).map(planBarEntry)]),
-      });
+      await this.addShiftPlan(row);
       kept.push(row);
     }
     return kept;
+  }
+
+  /**
+   * Replan `shiftId` from Planning.csv as it stands now (shiftPlanRevisions):
+   * a row for every press without one, and a kept row rewritten in place
+   * where the file now asks for something else in what is left of the shift
+   * — what it asked for before `at` stays as kept. Called when the export
+   * changes, for the shift under way and, in its last hour, the next one.
+   * Returns the shift's rows after it; null when the list could not be read
+   * or Planning.csv holds no plan, and nothing was written.
+   */
+  async replanShiftPlans(
+    shiftId: string,
+    at: Date = new Date(),
+    planningVersion?: string | null,
+  ): Promise<SavedShiftPlan[] | null> {
+    let saved = await this.readShiftPlans(`ShiftId eq '${odataString(shiftId)}'`);
+    if (saved == null) {
+      if (await this.shiftPlanListExists()) return null;
+      saved = [];
+    }
+    // Every device that writes watches the export; the first to see one
+    // replans, and the rest find it done.
+    const check = planningVersion ? await this.readPlanningCheck() : null;
+    if (planningVersion && check?.planning === planningVersion && check.shifts.includes(shiftId)) {
+      return saved.sort((a, b) => a.id - b.id).map(({ id: _id, ...plan }) => plan);
+    }
+    const inputs = await this.shiftPlanInputs(shiftId);
+    if (!inputs) return null;
+    const { machines, orders, ctx, history, standing } = inputs;
+    // The first row kept for a press is the one read (listShiftPlans), so it
+    // is the one rewritten.
+    saved.sort((a, b) => a.id - b.id);
+    const { save, rewrite, remove } = shiftPlanRevisions(machines, saved, orders, shiftId, at, ctx, history, standing);
+    for (const row of remove) {
+      await this.del(`${this.listUrl(LISTS.shiftPlan)}/items(${row.id})`);
+    }
+    const out = new Map<number, SavedShiftPlan>(
+      saved.filter((row) => !remove.includes(row)).map(({ id, ...plan }) => [id, plan]),
+    );
+    for (const { row, plan } of rewrite) {
+      await this.post(
+        `${this.listUrl(LISTS.shiftPlan)}/items(${row.id})`,
+        { __metadata: { type: await this.itemType(LISTS.shiftPlan) }, ...SharePointRecords.shiftPlanColumns(plan) },
+        '*',
+      );
+      out.set(row.id, plan);
+      console.info(`[pmd] PMD_ShiftPlan: ${row.machineCode} ${shiftId} replanned from Planning.csv (${row.plan} → ${plan.plan})`);
+    }
+    const rows = [...out.values()];
+    if (save.length) {
+      await this.ensureShiftPlanList();
+      for (const row of save) {
+        await this.addShiftPlan(row);
+        rows.push(row);
+      }
+    }
+    if (planningVersion) {
+      const shifts = check?.planning === planningVersion ? [...check.shifts, shiftId] : [shiftId];
+      await this.writePlanningCheck(check?.id ?? null, { planning: planningVersion, shifts }).catch((e) =>
+        console.warn('[pmd] PMD_ShiftPlan: could not note the export replanned from:', e),
+      );
+    }
+    return rows;
+  }
+
+  /** The one PMD_ShiftPlan row that notes which export the shifts were last
+   *  replanned from. No MachineCode and no ShiftId, so no read of plans or
+   *  prune ever takes it for one. */
+  protected static readonly PLANNING_CHECK = 'PlanningChecked';
+
+  protected async readPlanningCheck(): Promise<{ id: number; planning: string; shifts: string[] } | null> {
+    try {
+      const rows = await this.getAllItems<Record<string, unknown>>(
+        LISTS.shiftPlan,
+        '$select=ID,PlanJobs&$filter=' + encodeURIComponent(`Title eq '${SharePointRecords.PLANNING_CHECK}'`),
+      );
+      const row = rows[0];
+      if (!row) return null;
+      const body = JSON.parse(str(row['PlanJobs']) || '{}') as { planning?: unknown; shifts?: unknown };
+      return {
+        id: getId(row),
+        planning: typeof body.planning === 'string' ? body.planning : '',
+        shifts: Array.isArray(body.shifts) ? body.shifts.filter((x): x is string => typeof x === 'string') : [],
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  protected async writePlanningCheck(id: number | null, body: { planning: string; shifts: string[] }): Promise<void> {
+    await this.ensureShiftPlanList();
+    const fields = {
+      __metadata: { type: await this.itemType(LISTS.shiftPlan) },
+      PlanJobs: JSON.stringify(body),
+    };
+    if (id != null) {
+      await this.post(`${this.listUrl(LISTS.shiftPlan)}/items(${id})`, fields, '*');
+      return;
+    }
+    await this.post(`${this.listUrl(LISTS.shiftPlan)}/items`, {
+      ...fields,
+      Title: SharePointRecords.PLANNING_CHECK,
+      MachineCode: '',
+      ShiftId: '',
+      SchedulePlan: 0,
+    });
+  }
+
+  /**
+   * Delete the PMD_ShiftPlan rows of shifts dated before `before`
+   * (YYYY-MM-DD). The keeper keeps this month and the one before. Returns
+   * how many went; a row another device deleted first is passed over.
+   */
+  async pruneShiftPlans(before: string): Promise<number> {
+    if (!(await this.shiftPlanListExists())) return 0;
+    const rows = await this.getAllItems<Record<string, unknown>>(
+      LISTS.shiftPlan,
+      // As text, as listShiftPlans reads it: '2026-10-01-' sorts after every
+      // shift of 30 Sep and before every shift of 1 Oct.
+      '$select=ID,ShiftId&$filter=' + encodeURIComponent(`ShiftId lt '${odataString(before)}-'`),
+    );
+    let gone = 0;
+    for (const row of rows) {
+      const shiftId = str(row['ShiftId']).trim();
+      if (!shiftBounds(shiftId) || shiftId.slice(0, 10) >= before) continue;
+      try {
+        await this.del(`${this.listUrl(LISTS.shiftPlan)}/items(${getId(row)})`);
+        gone++;
+      } catch (e) {
+        if (!/→ 404$/.test(String((e as Error)?.message ?? e))) throw e;
+      }
+    }
+    if (gone) console.info(`[pmd] PMD_ShiftPlan: ${gone} row(s) of shifts before ${before} deleted`);
+    return gone;
+  }
+
+  /**
+   * When Planning.csv was last written — the file's TimeLastModified, or the
+   * legacy PMD_Planning list's last item change — so the keeper replans only
+   * when the export changed. null when it cannot be told.
+   */
+  async planningVersion(): Promise<string | null> {
+    try {
+      if (this.planningCsvPath) return await this.siteFileModified(this.planningCsvPath);
+      const res = await this.getJson<{ d: { LastItemModifiedDate?: string } }>(
+        `${this.listUrl(LISTS.planning)}?$select=LastItemModifiedDate`,
+      );
+      return res.d?.LastItemModifiedDate || null;
+    } catch {
+      return null;
+    }
   }
 
   async appendImpwHandover(machineCode: string, shiftId: string, ticket: string): Promise<void> {

@@ -279,8 +279,9 @@ function orderWindow(order: PlanningOrder): { start: Date; end: Date } | null {
  * broken export, not an empty factory: a header with no rows, or a file
  * whose `Machine` or date column was renamed, parses to orders that match
  * no press, and every press then reads "nothing planned". That is harmless
- * on screen and permanent in PMD_ShiftPlan, whose rows are never rewritten
- * — so the plan of record is not kept from a read that fails this.
+ * on screen and lasting in PMD_ShiftPlan, whose rows keep what the shift was
+ * asked for once it has passed — so the plan of record is not kept or
+ * replanned from a read that fails this.
  */
 export function planningHoldsAPlan(orders: ReadonlyArray<PlanningOrder>): boolean {
   return orders.some(

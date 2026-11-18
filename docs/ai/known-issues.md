@@ -189,11 +189,11 @@
   device signed. A tenant without the column keeps the device-local
   unlock. See `tests/reopened-cross-device.test.ts`.
 - **PMD_ShiftPlan is not kept from a planning read that holds no plan**
-  (2026-11-10). Its rows are never rewritten, so a header-only export or a
-  renamed `Machine` / date column froze "nothing planned" onto every press
-  of the shift. `keepShiftPlans` now answers null (the keeper retries in
-  ten minutes) unless Planning.csv has at least one ERP order with a press
-  and a Start–Due window (`planningHoldsAPlan`). A file that is only
+  (2026-11-10). A header-only export or a renamed `Machine` / date column
+  froze "nothing planned" onto every press of the shift. `keepShiftPlans`
+  and `replanShiftPlans` now answer null and write nothing (the keeper
+  retries in five minutes) unless Planning.csv has at least one ERP order
+  with a press and a Start–Due window (`planningHoldsAPlan`). A file that is only
   *partly* wrong — half its rows — cannot be told from a short plan here;
   the export script's atomic write is the defence for that.
 - **Throttling** (2026-11-10). SharePoint Online answers 429, or 503 with
@@ -382,7 +382,11 @@
   written 30 minutes into the shift from PMD_Planning as it then stands;
   most likely the 07:30 plan had not reached it yet. Check the row's Created
   time in SharePoint against when the planning sync ran.
-- Rows already kept are never rewritten: 12 Nov's figures stay as they are.
+- Rows of shifts already over are never rewritten: 12 Nov's figures stay as
+  they are. Since 2026-11-18 a row kept before the plan reached Planning.csv
+  is put right by the first export that has it — from then to the end of
+  the shift, not before (docs/kpi-shift-target.md, "Kept up with
+  Planning.csv").
 
 ## A shift recorded under the crew of the shift before (fixed)
 
@@ -460,3 +464,21 @@
   press on every shift the supervisor is in. The standby and unattended
   rules take the shift's supervisors from `shiftSupervisors` only.
 
+
+## PMD_ShiftPlan kept up with Planning.csv (2026-11-18)
+
+- Rows are written an hour before the shift and, while it runs, rewritten
+  from the moment a new export asks for something else in what is left of
+  it (docs/kpi-shift-target.md). What the shift was asked for before then is
+  never rewritten.
+- Not checked on the tenant: the file's TimeLastModified read
+  (`getFileByServerRelativeUrl(...)?$select=TimeLastModified`). If it fails,
+  the keeper replans every 15 minutes instead.
+- A plan written an hour ahead reads where the presses stand at that hour,
+  not at the shift's start: the order on the press is asked for up to an
+  hour's output too much until the first export after the start replans it.
+- A job signed off mid-shift saves the kept plan's figure as it stood then
+  (PMD_Production.ScheduleAttain / SchedulePlan). A later rewrite does not
+  update it. The KPI page reads the row, so this only matters for Power BI
+  and for shifts older than last month, whose rows are deleted.
+- Rows of shifts before the 1st of last month are deleted once a day.

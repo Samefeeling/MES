@@ -29,6 +29,8 @@ export class FakeSharePoint {
   readonly siteUrl: string;
   private lists = new Map<string, Row[]>();
   private files = new Map<string, string>();
+  private fileTimes = new Map<string, string>();
+  private fileWrites = 0;
   private absent = new Set<string>();
   private nextId = 1;
   /** Every request made, in order. */
@@ -62,6 +64,11 @@ export class FakeSharePoint {
   /** A file in a document library, by server-relative path. */
   seedFile(serverRelativePath: string, text: string): this {
     this.files.set(serverRelativePath.toLowerCase(), text);
+    // Each write is a new TimeLastModified, as a re-upload is.
+    this.fileTimes.set(
+      serverRelativePath.toLowerCase(),
+      new Date(Date.UTC(2026, 0, 1) + ++this.fileWrites * 60_000).toISOString(),
+    );
     return this;
   }
 
@@ -107,6 +114,11 @@ export class FakeSharePoint {
     if (file) {
       const text = this.files.get(file[1].toLowerCase());
       return text === undefined ? spError(404, 'File Not Found.') : new Response(text, { status: 200 });
+    }
+    const fileInfo = /^\/_api\/web\/GetFileByServerRelative(?:Url|Path)\((?:decodedurl=)?'([^']+)'\)(?:\?.*)?$/i.exec(url);
+    if (fileInfo && method === 'GET') {
+      const modified = this.fileTimes.get(fileInfo[1].toLowerCase());
+      return modified === undefined ? spError(404, 'File Not Found.') : json({ d: { TimeLastModified: modified } });
     }
 
     const list = /^\/_api\/web\/lists\/getbytitle\('([^']+)'\)(.*)$/i.exec(url);
