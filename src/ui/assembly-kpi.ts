@@ -24,6 +24,13 @@ import {
   yieldPct,
   type AssemblyAgg,
 } from '../core/assembly-metrics';
+import {
+  completedOrderDays,
+  completionSummary,
+  completionsByPerson,
+  isCompletionOnly,
+  type CompletedOrderDay,
+} from '../core/assembly-completions';
 import { departmentTabs } from './kpi-nav';
 import { escapeHtml } from './modal';
 
@@ -194,6 +201,69 @@ function bookingRow(row: AssemblyResult): string {
   </tr>`;
 }
 
+/**
+ * Epicor's completed orders with the people the supervisor confirmed — a
+ * section of its own, never mixed into the board's figures above (see
+ * `core/assembly-completions`).
+ */
+function completionSection(done: readonly CompletedOrderDay[]): string {
+  const t = ASSEMBLY_THRESHOLDS;
+  const sum = completionSummary(done);
+  const on = sum.datedOrders ? Math.round((sum.onTimeOrders / sum.datedOrders) * 100) : null;
+  const people = completionsByPerson(done);
+  const tile = (label: string, value: string, cls = ''): string =>
+    `<div class="kpi-stat${cls ? ' ' + cls : ''}"><span class="kpi-stat-label">${escapeHtml(label)}</span><b class="kpi-stat-value">${value}</b></div>`;
+  if (done.length === 0) {
+    return `<h3 class="kpi-section-title">Completed in Epicor</h3>
+      <div class="kpi-note"><div>No confirmed completions in this period. They appear once a supervisor confirms who finished each order in the Assembly board's <b>✓ Completed</b> dialog.</div></div>`;
+  }
+  return `<h3 class="kpi-section-title">Completed in Epicor <span class="kpi-sub-note">confirmed on the Assembly board</span></h3>
+    <div class="kpi-stats">
+      ${tile('Orders completed', n(sum.orders))}
+      ${tile('Qty', n(sum.qty))}
+      ${tile('Std h', h(sum.stdHours))}
+      ${tile('On time', pct(on), on === null ? '' : 'is-' + colourClass(on, t.onTimeGreen, t.onTimeAmber))}
+      ${tile('People', n(sum.people))}
+    </div>
+    <div class="kpi-table-wrap">
+      <table class="summary-table kpi-table assembly-people-table">
+        <thead><tr>
+          <th class="kpi-machine-head">Person</th><th>Orders</th>
+          <th title="Their share of the standard hours of the orders they finished — an order finished by three people gives each a third">Std h</th>
+          <th title="Days they are named on a completion">Days</th>
+          <th title="Std h ÷ Days">Std h / day</th>
+          <th title="Std h / day ÷ ${PRODUCTIVE_HOURS_PER_PERSON} h">Efficiency</th>
+        </tr></thead>
+        <tbody>${people
+          .map(
+            (p) => `<tr><th>${escapeHtml(p.name)}</th>${cell(n(p.orders))}${cell(h(p.stdHours))}${cell(n(p.days))}${cell(
+              p.perDay.toFixed(2),
+            )}${cell(`${p.efficiency}%`, colourClass(p.efficiency, t.effGreen, t.effAmber))}</tr>`,
+          )
+          .join('')}</tbody>
+      </table>
+    </div>
+    <div class="kpi-table-wrap kpi-bookings">
+      <table class="summary-table kpi-table">
+        <thead><tr>
+          <th>Completed</th><th>Order</th><th>Part</th><th>Line</th><th>Qty</th><th>Std h</th>
+          <th>Due</th><th>On time</th><th>Finished by</th><th>Confirmed by</th>
+        </tr></thead>
+        <tbody>${done
+          .map(
+            (d) => `<tr>
+              <td>${au(d.day)}</td><td>${escapeHtml(d.job)}</td><td>${escapeHtml(d.partNum)}</td><td>${escapeHtml(d.line)}</td>
+              <td class="num">${n(d.qty)}</td><td class="num">${h(d.stdHours)}</td>
+              <td>${d.due ? au(d.due) : '—'}</td>
+              <td class="${d.onTime === null ? 'gray' : d.onTime ? 'green' : 'red'}">${d.onTime === null ? '—' : d.onTime ? 'Yes' : 'Late'}</td>
+              <td>${escapeHtml(d.people.join(', '))}</td><td>${escapeHtml(d.confirmedBy)}</td>
+            </tr>`,
+          )
+          .join('')}</tbody>
+      </table>
+    </div>`;
+}
+
 export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
   const app = document.getElementById('app')!;
   const opening = periodRange('lastDay', new Date());
@@ -218,8 +288,11 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
           )}</button>`,
       ).join('');
 
-    const total = assemblyMetrics(S.rows);
-    const lines = assemblyByLine(S.rows, LINE_ORDER);
+    // The board's own record; a day opened only to hold a completion is not one.
+    const booked = S.rows.filter((row) => !isCompletionOnly(row));
+    const done = completedOrderDays(S.rows);
+    const total = assemblyMetrics(booked);
+    const lines = assemblyByLine(booked, LINE_ORDER);
     const body = S.loading
       ? `<tr><td colspan="15" class="kpi-empty">Loading Assembly results…</td></tr>`
       : lines.length === 0
@@ -301,8 +374,10 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
           </table>
         </div>
 
+        ${S.loading ? '' : completionSection(done)}
+
         ${
-          S.loading || S.rows.length === 0
+          S.loading || booked.length === 0
             ? ''
             : `<div class="kpi-table-wrap kpi-bookings">
                 <table class="summary-table kpi-table">
@@ -312,7 +387,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
                     <th>Output</th><th>Complete</th><th>Reject</th>
                     <th>Rework</th><th>Due</th><th>Completed</th>
                   </tr></thead>
-                  <tbody>${S.rows.map(bookingRow).join('')}</tbody>
+                  <tbody>${booked.map(bookingRow).join('')}</tbody>
                 </table>
               </div>`
         }
@@ -328,6 +403,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
           <div><b>On time% 🟢🟡🔴</b> = orders finished on or before their Due Date ÷ orders finished with a Due Date to judge — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.onTimeGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.onTimeAmber}%.</div>
           <div><b>Support h</b> is Factory General work. It has no output at all, so it is never folded into Output, Yield or Efficiency — a line's support hours would otherwise read as a week spent making nothing.</div>
           <div><b>WIP h</b> is work booked at an operation that does not receive: the sewing bench of an order the stapling bench will finish. The covers exist once and are counted once, where they enter stock, so these hours are held here rather than being charged against an output of zero.</div>
+          <div><b>Completed in Epicor</b> = the orders <code>CompletedJobs.csv</code> shows finished (every planner but PMD), once a supervisor has confirmed who finished them in the Assembly board's <b>✓ Completed</b> dialog. <b>Qty</b> and <b>Std h</b> are Epicor's (<code>LaborDtl_LaborQty</code>, <code>LaborDtl_LaborHrs</code> — standard hours, not clocked time). <b>On time</b> = finished on or before the Due Date. Per person, an order's Std h is shared equally among the people who finished it; <b>Std h / day</b> is over the days a person is named on a completion, and <b>Efficiency</b> is that over ${PRODUCTIVE_HOURS_PER_PERSON} h — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.effGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.effAmber}%. It counts finished work only, so a day spent on an order finished later earns nothing here. This section is never added into the board's figures above.</div>
           <div>An order booked on five days is <b>one</b> order in every count. Press "+" on a line to see the orders behind its figures.</div>
         </div>
       </div>`;

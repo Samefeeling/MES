@@ -498,6 +498,20 @@ next one would land put people on two orders at once about a fifth of the time.
 Asking costs a few milliseconds a round, which is why it runs on the click and
 not behind the label. An order nobody is free for is left for the supervisor.
 
+### Completed orders — who finished them
+
+`CompletedJobs.csv` (Epicor's labour entries, beside the PMD dashboard's
+`Planning.csv`) says which orders were finished. Every planner but PMD, from
+the last working day to yesterday, one completion per order per day
+(`engine/assembly/completedJobs`). The **✓ Completed** chip in the header counts
+the ones nobody has confirmed; the dialog opens by itself once a session for a
+signed-in supervisor. Each order offers the crew the board had on it that day;
+the supervisor corrects and confirms — or types/scans the order number and
+presses Enter. The answer goes to the order's day row in `ASSY_Production`, in
+columns of its own (`engine/assembly/completionRecord`), and from there to
+KPIs · Assembly. On the mock demo the dialog is filled from the board's own
+orders and nothing is written.
+
 ### The plan → `ASSY_Production`
 
 The board mirrors itself into the `ASSY_Production` list Resero already
@@ -521,6 +535,7 @@ Each row carries two kinds of column, and the split is the whole design:
 | `ShiftOutput`, `Complete`, `Reject`, `Rework` | row-level | the shift | the entry is saved |
 | `BookedHour` | row-level | measured | the entry is saved |
 | `JobCompleted`, `CompletedAt`, `Paused`, `PauseReason`, `Notes` | row-level | the shift | the entry is saved |
+| `EpicorQty`, `EpicorHours`, `EpicorPartNum`, `EpicorCompletedAt`, `CompletedBy`, `CompletedByIds`, `CompletionConfirmedBy`, `CompletionConfirmedAt` | row-level | the supervisor, from `CompletedJobs.csv` | a completion is confirmed (never by the sync) |
 
 **Dragging a bar to level the load writes `StartDate` only** — Epicor owns the
 Due Date and this board never changes it. Conversely a refreshed export updates

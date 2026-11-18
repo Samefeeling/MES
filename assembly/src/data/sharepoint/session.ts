@@ -72,6 +72,10 @@ async function listFields(cfg: SharePointConfig, list: string): Promise<ListFiel
   return promise;
 }
 
+/** A list's columns, as the session reads them (cached for a minute). */
+export const sessionListFields = (cfg: SharePointConfig, list: string): Promise<ListField[]> =>
+  listFields(cfg, list);
+
 /**
  * The rows whose `column` holds exactly `value`, asked of SharePoint itself.
  *

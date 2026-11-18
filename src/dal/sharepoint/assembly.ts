@@ -1,5 +1,5 @@
 // SharePoint data layer — the Assembly board's lists.
-import type { AssemblyDataLayer, AssemblyResult } from '../../types/assembly';
+import type { AssemblyDataLayer, AssemblyResult, EpicorCompletion } from '../../types/assembly';
 import { fetchThroughThrottle } from './http';
 import { type ListField, resolveField } from '../../../assembly/src/data/sharepoint/fieldMap';
 
@@ -22,8 +22,15 @@ export const DEFAULT_ASSEMBLY_FIELDS = {
   "rework": "Rework",
   "completed": "JobCompleted",
   "due": "DueDate",
-  "completedAt": "CompletedAt"
+  "completedAt": "CompletedAt",
+  // A confirmed Epicor completion — see `EpicorCompletion`. Optional: a list
+  // the board has not yet added them to simply has no completions to show.
+  epicorQty: "EpicorQty", epicorHours: "EpicorHours", epicorPartNum: "EpicorPartNum", epicorCompletedAt: "EpicorCompletedAt",
+  completedBy: "CompletedBy", confirmedBy: "CompletionConfirmedBy", confirmedAt: "CompletionConfirmedAt",
 };
+
+/** The completion columns are read only when the list has them. */
+const OPTIONAL_COMPLETION = ['epicorQty', 'epicorHours', 'epicorPartNum', 'epicorCompletedAt', 'completedBy', 'confirmedBy', 'confirmedAt'] as const;
 
 /** Separate adapter: no PMD column mapping or machine/shift assumptions. */
 export function createAssemblyDataLayer(env: Record<string, string | undefined>, overrides: Partial<typeof DEFAULT_ASSEMBLY_FIELDS> = {}): AssemblyDataLayer {
@@ -45,11 +52,14 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
       const schema = (await schemaResponse.json()).value as ListField[];
       if (!Array.isArray(schema)) throw new Error('Assembly column definitions are invalid.');
       const fields = { ...requestedFields };
+      const absent = new Set<string>();
       for (const key of Object.keys(fields) as (keyof typeof fields)[]) {
         const found = resolveField(schema, fields[key]);
         if (found) fields[key] = found.InternalName;
         else if (key === 'date' || key === 'job') throw new Error('Missing Assembly column: ' + fields[key]);
+        else absent.add(key);
       }
+      const hasCompletions = OPTIONAL_COMPLETION.every((key) => !absent.has(key));
       const filter = `${fields.date} ge datetime'${from}T00:00:00Z' and ${fields.date} lt datetime'${end.toISOString()}'`;
       let url = `${site}/_api/web/lists/getbytitle('${list}')/items?$top=500&$filter=${encodeURIComponent(filter)}`;
       const output: AssemblyResult[] = [];
@@ -96,12 +106,30 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
             bookedHours: row[fields.bookedHours] == null ? null : number(fields.bookedHours),
             output: number(fields.output), complete: number(fields.complete), reject: number(fields.reject), rework: number(fields.rework),
             completed: row[fields.completed] === true, due: row[fields.due] ? String(row[fields.due]) : null,
-            completedAt: row[fields.completedAt] ? String(row[fields.completedAt]) : null });
+            completedAt: row[fields.completedAt] ? String(row[fields.completedAt]) : null,
+            epicor: hasCompletions ? epicorOf(row, fields) : null });
         }
         url = body['odata.nextLink'] ?? body['@odata.nextLink'] ?? '';
       }
       if (url) throw new Error('Assembly results exceed the page limit. Select a shorter date range.');
       return output.sort((a, b) => b.day.localeCompare(a.day) || a.job.localeCompare(b.job));
     },
+  };
+}
+
+/** A row's confirmed Epicor completion, or null when it has none. */
+export function epicorOf(row: Record<string, unknown>, fields: Record<(typeof OPTIONAL_COMPLETION)[number], string>): EpicorCompletion | null {
+  const confirmedAt = String(row[fields.confirmedAt] ?? '').trim();
+  const qty = Number(row[fields.epicorQty]);
+  if (!confirmedAt || row[fields.epicorQty] == null || !Number.isFinite(qty)) return null;
+  const hours = Number(row[fields.epicorHours] ?? 0);
+  return {
+    qty,
+    hours: Number.isFinite(hours) ? hours : 0,
+    partNum: String(row[fields.epicorPartNum] ?? '').trim(),
+    at: row[fields.epicorCompletedAt] ? String(row[fields.epicorCompletedAt]) : null,
+    people: String(row[fields.completedBy] ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+    confirmedBy: String(row[fields.confirmedBy] ?? '').trim(),
+    confirmedAt,
   };
 }

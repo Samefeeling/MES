@@ -20,6 +20,8 @@ interface ImportMetaEnv {
   readonly VITE_PO_DETAIL_CSV_URL?: string;
   readonly VITE_PO_DETAIL_CSV_PATH?: string;
   readonly VITE_WAYBILL_CSV_URL?: string;
+  readonly VITE_COMPLETED_JOBS_CSV_URL?: string;
+  readonly VITE_COMPLETED_JOBS_CSV_PATH?: string;
   readonly VITE_WAYBILL_CSV_PATH?: string;
   readonly VITE_WAYBILL_LIST?: string;
   readonly VITE_CUBICS_CSV_URL?: string;

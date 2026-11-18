@@ -1779,3 +1779,7 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .kpi-util-card{min-height:230px;box-sizing:border-box}
 .kpi-util-card h4{margin:0 0 2px}
 .kpi-util-wait{margin-top:8px;font-size:13px;color:var(--mu)}
+/* KPIs · Assembly — Epicor completions, confirmed on the board */
+.assembly-kpi .kpi-section-title{margin:18px 0 8px;font-size:14px;font-weight:800;color:#0c4a6e}
+.assembly-kpi .kpi-section-title .kpi-sub-note{display:inline;margin-left:6px}
+.assembly-people-table{width:auto;min-width:min(640px,100%)}

@@ -180,6 +180,38 @@
         {
           "name": "PlannedHours",
           "type": "Number"
+        },
+        {
+          "name": "EpicorQty",
+          "type": "Number"
+        },
+        {
+          "name": "EpicorHours",
+          "type": "Number"
+        },
+        {
+          "name": "EpicorPartNum",
+          "type": "Text"
+        },
+        {
+          "name": "EpicorCompletedAt",
+          "type": "DateTime"
+        },
+        {
+          "name": "CompletedBy",
+          "type": "Text"
+        },
+        {
+          "name": "CompletedByIds",
+          "type": "Text"
+        },
+        {
+          "name": "CompletionConfirmedBy",
+          "type": "Text"
+        },
+        {
+          "name": "CompletionConfirmedAt",
+          "type": "DateTime"
         }
       ]
     },

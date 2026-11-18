@@ -28,6 +28,7 @@ import { DispatchGate } from '@/features/dispatch/DispatchGate';
 import { refreshWaybill } from '@/features/dispatch/waybillSource';
 import { ORDER_TYPE_SHORT } from '@/domain/assembly';
 import { Spinner } from '@/ui';
+import { CompletedOrdersChip, CompletedOrdersDialog, useCompletions } from '@/features/assembly/CompletedOrders';
 
 export default function App() {
   const error = useDataStore((s) => s.error);
@@ -104,6 +105,9 @@ export default function App() {
   useEffect(() => {
     if (readStamp !== null) void refreshWaybill({ sync: syncs.current });
   }, [readStamp]);
+
+  // Yesterday's finished orders, read with the board's own exports.
+  useCompletions(planBoard, readStamp);
 
   // Initial data load.
   useEffect(() => {
@@ -192,6 +196,7 @@ export default function App() {
               <BoardTools board={board} />
               <div className="head-side end">
                 <SupervisorLock />
+                <CompletedOrdersChip />
                 <BarcodeOrderLookup board={board} />
                 {/* Which export this is has left the row entirely — chip and hover
                     both. The source has not changed since the board was built and
@@ -334,6 +339,7 @@ export default function App() {
         </>
       )}
 
+      {!onDispatch && <CompletedOrdersDialog board={planBoard} />}
       {/* Asks before any work is written into a Saturday or Sunday. */}
       <OvertimePrompt />
       {/* …and before anyone is put on two orders at the same time. */}

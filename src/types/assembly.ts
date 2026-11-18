@@ -35,6 +35,25 @@ export interface AssemblyResult {
   completed: boolean;
   due: string | null;
   completedAt: string | null;
+  /**
+   * Epicor's completion of the order that day (`CompletedJobs.csv`), and who
+   * the supervisor confirmed finished it — written by the board's
+   * completed-orders dialog into columns of their own. `null` on a day Epicor
+   * reported nothing for, or that nobody has confirmed.
+   */
+  epicor?: EpicorCompletion | null;
+}
+
+export interface EpicorCompletion {
+  qty: number;
+  /** Standard hours Epicor values the quantity at (`LaborDtl_LaborHrs`). */
+  hours: number;
+  partNum: string;
+  at: string | null;
+  /** The people confirmed as having finished it. */
+  people: string[];
+  confirmedBy: string;
+  confirmedAt: string;
 }
 
 export interface AssemblyDataLayer {

@@ -50,6 +50,11 @@ export interface CsvSourceConfig {
   waybillUrl?: string;
   /** Drive path for `Waybill.csv`; it sits in the same folder as Planning1.csv. */
   waybillFilePath?: string;
+  /** Direct URL to `CompletedJobs.csv`. */
+  completedJobsUrl?: string;
+  /** Drive path for `CompletedJobs.csv` — Epicor's labour entries of what was
+   *  finished; it sits in the same folder as the PMD dashboard's Planning.csv. */
+  completedJobsFilePath?: string;
   /** Direct URL to the cubics sheet. */
   cubicsUrl?: string;
   /** Drive path for `Cubics.csv` (Drews Cubics and Freight Calc as CSV), in the same folder. */
@@ -80,6 +85,10 @@ export function readCsvConfigFromEnv(): CsvSourceConfig {
     productLinesUrl: env.VITE_PRODUCT_LINES_URL ?? '',
     productLinesFilePath:
       env.VITE_PRODUCT_LINES_PATH ?? '/Shared Documents/product-lines.v3.json',
+    completedJobsUrl: env.VITE_COMPLETED_JOBS_CSV_URL ?? '',
+    completedJobsFilePath:
+      env.VITE_COMPLETED_JOBS_CSV_PATH ??
+      `${folderOf(env.VITE_PMD_PLANNING_CSV_PATH ?? env.VITE_PLANNING_CSV_PATH ?? '') || folderOf(filePath) || '/Shared Documents/'}CompletedJobs.csv`,
     pressUrl: env.VITE_PMD_PLANNING_CSV_URL ?? '',
     // The PMD dashboard's own file, by default from the setting it is read
     // with — both builds share one .env.local. Never Planning1.csv itself,
@@ -275,6 +284,26 @@ export async function fetchCubicsCsv(
   return fetchText(
     'Cubics.csv',
     sp.authMode === 'session' ? sessionFile(sp, cfg.cubicsFilePath) : graphFile(sp, cfg.cubicsFilePath),
+    sp.token,
+  );
+}
+
+/** Is `CompletedJobs.csv` somewhere this screen can read it? */
+export function hasCompletedJobsSource(cfg: CsvSourceConfig, sp: SharePointConfig): boolean {
+  if (cfg.completedJobsUrl) return true;
+  return Boolean(cfg.completedJobsFilePath && sp.siteUrl && (sp.token || sp.authMode === 'session'));
+}
+
+/** `CompletedJobs.csv`, or `ok(null)` when there is nowhere to read it from. */
+export async function fetchCompletedJobsCsv(
+  cfg: CsvSourceConfig,
+  sp: SharePointConfig,
+): Promise<Result<string | null, string>> {
+  if (cfg.completedJobsUrl) return fetchText('CompletedJobs.csv', cfg.completedJobsUrl, null);
+  if (!hasCompletedJobsSource(cfg, sp)) return ok(null);
+  return fetchText(
+    'CompletedJobs.csv',
+    sp.authMode === 'session' ? sessionFile(sp, cfg.completedJobsFilePath!) : graphFile(sp, cfg.completedJobsFilePath!),
     sp.token,
   );
 }
