@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { JobId, MachineId, PartId } from '@/domain/ids';
 import type { Job } from '@/domain/types';
-import { changeBetween, changeLabel, planPresses, shiftCount, shiftText, sizeOf } from '@/engine/assembly/pressPlan';
+import { changeBetween, changeLabel, isHotStampPress, planPresses, shiftCount, shiftText, sizeOf } from '@/engine/assembly/pressPlan';
 import { parsePressPlanningCsv } from '@/data/csv/pressPlanning.parser';
 import { mergePressPlan } from '@/data/csv/PlanningCsvSource';
 import { parseDieColors, readHex, withDieColors } from '@/data/sharepoint/dieColor.parser';
@@ -126,6 +126,19 @@ describe('the press plan', () => {
     ]);
     expect(m.changes.map((c) => c.change.kind)).toEqual(['die']);
     expect(m.runs.map((r) => r.start.getHours())).toEqual([7, 7, 19]);
+  });
+
+  it('puts no changeover on the hot-stamp press, and moves nothing for one', () => {
+    for (const machine of ['HS', 'HStamp', 'Hot Stamp']) {
+      const [hs] = planPresses([
+        press('A', 'P1', machine, '05T07:00', '05T15:00', null, 'Black'),
+        press('B', 'P2', machine, '05T15:00', '05T23:00', null, 'Onyx'),
+      ]);
+      expect(hs.changes).toEqual([]);
+      expect(hs.runs.map((r) => r.pushedHours)).toEqual([0, 0]);
+    }
+    expect(isHotStampPress('HS')).toBe(true);
+    expect(isHotStampPress('1300T')).toBe(false);
   });
 
   it('has a press only while it has orders, and keeps presses apart', () => {

@@ -8,7 +8,7 @@ import type { OrderRow } from '@/engine/assembly/board';
 import { DEFAULT_CREW_POOLS } from '@/domain/assembly';
 import { pressDayLoads, pressShifts } from '@/features/assembly/pressLoad';
 import { boardHours, capacityDays } from '@/features/assembly/crewCapacity';
-import { boardDayLoads } from '@/engine/assembly/workload';
+import { boardDayLoads, loadBand, pressLoadBand } from '@/engine/assembly/workload';
 
 const at = (s: string) => new Date(`2026-11-${s}`);
 const day = (k: string) => new Date(`2026-11-${k}T00:00:00`);
@@ -129,5 +129,16 @@ describe('PMD stays out of the assembly board’s figures', () => {
     expect(crews([assembly, ...presses])).toEqual(crews([assembly]));
     const heading = (rows: OrderRow[]) => boardDayLoads(rows, [], MON, 1, MON);
     expect(heading([assembly, ...presses])).toEqual(heading([assembly]));
+  });
+});
+
+describe('a press day, coloured', () => {
+  it('is green while the press is planned within its shifts — three shifts filling 24 h included', () => {
+    expect(pressLoadBand((24 / 24) * 100)).toBe('green');
+    expect(pressLoadBand(100.4)).toBe('green'); // reads 100%
+    expect(pressLoadBand(85)).toBe('green');
+    expect(pressLoadBand(101)).toBe('red');
+    // An assembly line full to its crew is still a warning there.
+    expect(loadBand(100)).toBe('red');
   });
 });

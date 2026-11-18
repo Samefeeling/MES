@@ -1461,22 +1461,21 @@ body.col-resizing {
    own length after the bar and what changes beside it, in the PMD dashboard's
    status colours — die change red, insert orange, colour amber. The arrow
    down to the next order is the dependency layer's (.change-link). */
-.bar-change {
+/* Where a changeover's arrow leaves from: the end of the order's bar. Drawn
+   by the arrow, not here. */
+.bar-change-at {
   position: absolute;
   top: 1px;
   bottom: 1px;
-  border-radius: 2px;
-  border: 1px solid;
+  width: 0;
 }
-.bar-change.die { background: #fecaca; border-color: #dc2626; }
-.bar-change.insert { background: #fed7aa; border-color: #c2410c; }
-.bar-change.colour { background: #fde68a; border-color: #d97706; }
 .bar-change-tag {
   position: absolute;
   white-space: nowrap;
   pointer-events: auto;
 }
 .bar-change-text { font-weight: 650; }
+.bar-tag .bar-change-text { margin-left: 4px; }
 .bar-change-text.die { color: #b91c1c; }
 .bar-change-text.insert { color: #c2410c; }
 .bar-change-text.colour { color: #b45309; }

@@ -6,7 +6,7 @@
  * Epicor's, and this board only reads it.
  */
 import { formatShortDay } from '@/lib/time';
-import { loadBand } from '@/engine/assembly/workload';
+import { pressLoadBand } from '@/engine/assembly/workload';
 import type { DayAxis } from './dayAxis';
 import type { PressDayLoad } from './pressLoad';
 import type { WeekSpan } from './weekFold';
@@ -59,7 +59,7 @@ export function PressLoadStrip({
         ].join('\n')}
         onClick={(e) => onOpen(from, to, { x: e.clientX, y: e.clientY })}
       >
-        <LoadColumn crewed={hours + change} waiting={0} capacity={cap} band={cap > 0 ? loadBand(share) : 'idle'} />
+        <LoadColumn crewed={hours + change} waiting={0} capacity={cap} band={cap > 0 ? pressLoadBand(share) : 'idle'} />
         <span className="aline-figures">
           <b>{hoursText(hours + change)}</b>
         </span>

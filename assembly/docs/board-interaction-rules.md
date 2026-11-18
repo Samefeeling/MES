@@ -374,7 +374,10 @@ on each; a changeover is load too, shown apart on hover. Nothing is drawn
 behind today (what ran is the PMD dashboard's record), an order whose run
 should already have finished is put on today, and a press gets no time on a
 weekend, public holiday or RDO unless its plan runs it then. Pressing a day
-lists its orders and changeovers, by press. Nobody levels or crews a press
+lists its orders and changeovers, by press. A press is planned to run every
+hour of its shifts, so a day is **green up to 100%** of that time — three
+shifts filling 24 hours is the plan, not a warning — and **red past it**; the
+assembly lines keep their 80% / 90% bands. Nobody levels or crews a press
 here — Epicor plans it.
 
 **PMD's hours are not the board's.** The day headings, **Hours on board** and
@@ -382,14 +385,19 @@ the crews' capacity read only the lines this board schedules; PMD and its
 presses add nothing to them. PMD's own header counts its orders' hours —
 production only, not changeovers.
 
-**Between two orders the changeover is drawn on the order before it** — not a
-row of its own. After that order's bar comes the change's own length, in the
-PMD dashboard's colours (die change red, insert orange, colour amber), what
-changes beside it (`DC Die 174 → Die 296`, `CC Dark grey → Black`,
-`IC 460h → Size 4`), and an arrow down to the order it changes over to:
-straight down when the next order starts where the change ends, down and
-across into its start when the plan left a gap. The change and the next order
-are on the bar's hover too.
+**Between two orders the changeover is written on the order before it** — not
+a row of its own, and not a block of its own: after that order's bar, what
+changes, in the PMD dashboard's colours (die change red, insert orange, colour
+amber — `DC Die 174 → Die 296`, `CC Dark grey → Black`, `IC 460h → Size 4`),
+and an arrow from the end of the bar down to the order it changes over to:
+straight down when the next order starts there, down and across into its
+start when the change (or the plan) leaves a gap. The change's length is that
+gap, and on the bar's hover with the next order.
+
+**The hot-stamp press (`HS`) has no changeovers.** It has no dies, and its
+setups are one job of fitting and warming the tool whatever changes, so none
+of the table below applies: nothing is written between its orders, and
+nothing moves for a change.
 
 | Between | Changeover | Time |
 | --- | --- | --- |

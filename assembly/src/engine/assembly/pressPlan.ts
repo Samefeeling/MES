@@ -77,6 +77,16 @@ const sameDie = (a: Job, b: Job): boolean => {
   return da !== null && da === key(dieOf(b));
 };
 
+/**
+ * The hot-stamp press, however it is written ("HS", "HStamp", "Hot Stamp").
+ * It has no dies, and its setups are one job of fitting and warming the tool
+ * whatever changes — the press's die / insert / colour changes do not apply.
+ */
+export function isHotStampPress(machine: string | null | undefined): boolean {
+  const code = (machine ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return code === 'HS' || code.includes('HSTAMP') || code.includes('HOTSTAMP');
+}
+
 /** The changeover `next` needs after `prev` on the same press, or null for none. */
 export function changeBetween(prev: Job, next: Job): PressChange | null {
   if (String(prev.partNum) === String(next.partNum)) return null;
@@ -212,7 +222,8 @@ export function planPresses(jobs: readonly Job[]): PressSequence[] {
       let ready = -Infinity;
       if (last) {
         ready = last.run.end.getTime();
-        const change = changeBetween(last.job, p.job);
+        // Hot stamp: no die changes, and none of the press's other changes.
+        const change = isHotStampPress(machine) ? null : changeBetween(last.job, p.job);
         if (change) {
           const from = last.run.end;
           const to = new Date(from.getTime() + change.hours * HOUR);

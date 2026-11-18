@@ -37,8 +37,6 @@ export const DRAG_TYPE_BAR = 'order-bar';
 /** Narrowest a block may be drawn and still be seen. */
 const MIN_PIECE_PX = 10;
 
-/** A half-hour colour change is a few pixels of a day; never less than this. */
-const MIN_CHANGE_PX = 4;
 
 export function OrderBar({
   row,
@@ -374,23 +372,20 @@ export function OrderBar({
    * It used to be a row of its own between the two orders, which put a row on
    * the left for every die and colour swap and buried the orders among them.
    * A changeover is the end of one order and the start of the next, so it is
-   * drawn there: the change's own length after the bar, in the PMD sheet's
-   * colours (die change red, insert orange, colour amber), what changes beside
-   * it, and an arrow down to the order it changes over to (DependencyArrows).
+   * written there — what changes, in the PMD sheet's colours (die change red,
+   * insert orange, colour amber) — with an arrow from the end of the bar down
+   * to the order it changes over to (DependencyArrows). Its length is not
+   * drawn: the gap before the next order shows it.
    */
   const after = row.changeAfter ?? null;
-  const changeLeft = after ? Math.max(axis.x(axisOffset(after.start)) - left, width) : 0;
-  const changeWidth = after
-    ? Math.max(axis.x(axisOffset(after.end)) - left - changeLeft, MIN_CHANGE_PX)
-    : 0;
   const changeText = after ? `${CHANGE_SHORT[after.change.kind]} ${changeShortLabel(after.change)}` : '';
   const changeTitle = after
     ? `${CHANGE_NAME[after.change.kind]} · ${after.change.hours} h · ${changeShortLabel(after.change)}` +
       ` — then ${jobNumOf(after.change.toJob)}`
     : '';
-  /* An order label already out in the grid takes the change along with it,
-     after the change's own length; one inside the bar leaves the change its
-     own label out there. Flipped to the left, the two part. */
+  /* An order label already out in the grid takes the change along with it;
+     one inside the bar leaves the change its own label out there. Flipped to
+     the left, the two part. */
   const changeInTag = Boolean(after) && tag.outside && !tag.flip;
 
   return (
@@ -505,11 +500,11 @@ export function OrderBar({
         </div>
       ))}
       {after && (
+        /* Where the arrow to the next order leaves from: the end of the bar. */
         <i
-          className={`bar-change ${after.change.kind}`}
+          className={`bar-change-at ${after.change.kind}`}
           data-change-to={after.change.toJob}
-          style={{ left: changeLeft, width: changeWidth }}
-          title={changeTitle}
+          style={{ left: width }}
           aria-hidden="true"
         />
       )}
@@ -517,7 +512,6 @@ export function OrderBar({
       <span
         className="bar-tag"
         data-job-label={id}
-        style={changeInTag ? { marginLeft: changeLeft + changeWidth - width + 6 } : undefined}
       >
         <span className="bar-label">{tag.text}</span>
         {row.overtime && (
@@ -534,7 +528,7 @@ export function OrderBar({
       {after && !changeInTag && (
         <span
           className={`bar-change-tag ${after.change.kind}`}
-          style={{ left: changeLeft + changeWidth + 6 }}
+          style={{ left: width + 6 }}
           title={changeTitle}
         >
           <span className={`bar-change-text ${after.change.kind}`}>{changeText}</span>

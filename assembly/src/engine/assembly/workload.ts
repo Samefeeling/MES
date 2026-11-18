@@ -96,6 +96,16 @@ export function loadBand(pct: number): LoadBand {
   return 'red';
 }
 
+/**
+ * A press's (or PMD's) day, coloured. A press is planned to run every hour of
+ * the shifts it is manned for — three shifts filling 24 hours is the plan, not
+ * a warning — so it is green up to its time, as the share reads (a hair over
+ * 100% that shows as 100% is 100%), and red past it.
+ */
+export function pressLoadBand(pct: number): LoadBand {
+  return Math.round(pct) <= 100 ? 'green' : 'red';
+}
+
 /** One day column's load across the whole board. */
 export interface DayBoardLoad {
   key: string;

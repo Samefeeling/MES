@@ -23,9 +23,10 @@ plan goes back the other way, into the `ASSY_Production` list.
   every press that has an order gets its own line under PMD, the way the
   benches sit under UPL; a press with nothing on it has none. Folded, PMD and
   each press show their load day by day against the hours the press can run
-  (8 h a shift, for its orders' **No of shift**); none of it is added to the
-  board's own figures. Between two orders on a press the changeover is drawn
-  at the end of the order before it, with an arrow down to the next: a
+  (8 h a shift, for its orders' **No of shift**; green up to 100%, red past
+  it); none of it is added to the board's own figures. Between two orders on
+  a press the changeover is written at the end of the order before it, with
+  an arrow down to the next (the hot-stamp press `HS` has none): a
   **Die Change** of 4 h (`Die 123 → Die 456`) when the die differs, else an
   **Insert Change** (the size in the description changes — `460h`,
   `Size 3`) or a **Colour Change** of 30 min — the die and colour of each part
