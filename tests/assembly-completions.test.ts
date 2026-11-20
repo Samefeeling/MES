@@ -4,6 +4,7 @@ import {
   completionSummary,
   completionsByLine,
   completionsByPerson,
+  filterCompletions,
 } from '../src/core/assembly-completions';
 import { epicorOf } from '../src/dal/sharepoint/assembly';
 import type { AssemblyResult, EpicorCompletion } from '../src/types/assembly';
@@ -77,5 +78,40 @@ describe('Epicor completions on KPIs · Assembly', () => {
       .toMatchObject({ qty: 12, hours: 3.5, people: ['Ana', 'Bo'], confirmedBy: 'Jeff' });
     expect(epicorOf({ EpicorQty: 12 }, f)).toBeNull();
     expect(epicorOf({ CompletionConfirmedAt: 'x' }, f)).toBeNull();
+  });
+});
+
+describe('who, on KPIs · Assembly', () => {
+  const done = completedOrderDays([
+    row({ epicor: epicor({ hours: 9, people: ['Billy', 'Husham', 'Malcom'] }) }),
+    row({ id: '2', job: 'J2', epicor: epicor({ hours: 3, people: ['billy', 'Luis'] }) }),
+    row({ id: '3', job: 'J3', line: 'Table', epicor: epicor({ hours: 6, people: ['Yen'] }) }),
+  ]);
+
+  it('shares each order equally: every person\'s Std h adds up to the total, never more', () => {
+    const people = completionsByPerson(done);
+    expect(people.map((p) => [p.name, p.orders, p.stdHours])).toEqual([
+      ['Yen', 1, 6],
+      ['Billy', 2, 4.5],
+      ['Husham', 1, 3],
+      ['Malcom', 1, 3],
+      ['Luis', 1, 1.5],
+    ]);
+    const shared = people.reduce((a, p) => a + p.stdHours, 0);
+    expect(shared).toBeCloseTo(completionSummary(done).stdHours);
+  });
+
+  it('names the people on a line, once each whatever their case', () => {
+    const [assembly, table] = completionsByLine(done, ['Assembly', 'Table']);
+    expect(assembly.summary.names).toEqual(['Billy', 'Husham', 'Luis', 'Malcom']);
+    expect(assembly.orders.find((o) => o.job === 'J2')!.summary.names).toEqual(['billy', 'Luis']);
+    expect(table.summary.names).toEqual(['Yen']);
+  });
+
+  it('narrows the completions to a person, an order, or both', () => {
+    expect(filterCompletions(done, { person: 'BILLY' }).map((d) => d.job)).toEqual(['J1', 'J2']);
+    expect(filterCompletions(done, { job: 'J3' }).map((d) => d.job)).toEqual(['J3']);
+    expect(filterCompletions(done, { person: 'Billy', job: 'J3' })).toEqual([]);
+    expect(filterCompletions(done, {})).toHaveLength(3);
   });
 });

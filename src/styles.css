@@ -1652,11 +1652,23 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 /* ===== Assembly results =====
    Everything here rides on the PMD KPI table's own styles; these are only the
    places Assembly's record needs something PMD has no equivalent of. */
-.assembly-kpi-table{min-width:1114px}
 /* Per-order rows under a line, the way PMD sets its shift sub-rows apart. */
 .assembly-kpi .kpi-sub>th{padding-left:34px;font-weight:600;color:var(--mu)}
 .assembly-kpi .kpi-sub-note{display:block;font-size:11px;font-weight:600;color:var(--mu)}
 .assembly-kpi .kpi-empty{padding:18px;text-align:center;color:var(--mu)}
+/* Who is on a line or an order, beside People. Each name narrows the
+   Completions list to that person; so does an order number. */
+.assembly-kpi-table{min-width:1400px}
+.assembly-kpi .kpi-col-names{width:280px}
+.assembly-kpi td.kpi-names{text-align:left;white-space:normal;line-height:1.9}
+.assembly-kpi th.kpi-names-head{text-align:left}
+.assembly-kpi .kpi-name,.assembly-kpi .kpi-job-link{border:1px solid var(--bd);background:#fff;color:var(--theme-dark);border-radius:10px;padding:0 7px;margin:0 4px 0 0;font:inherit;font-size:12px;font-weight:600;cursor:pointer;line-height:18px}
+.assembly-kpi .kpi-job-link{border-radius:6px;font-size:inherit}
+.assembly-kpi .kpi-name:hover,.assembly-kpi .kpi-job-link:hover{background:#eff6ff;border-color:var(--theme-dark)}
+.assembly-kpi .kpi-name.a,.assembly-kpi .kpi-job-link.a{background:var(--theme-dark);border-color:var(--theme-dark);color:#fff}
+.assembly-kpi tr.kpi-picked>*{background:#eff6ff}
+.assembly-kpi .kpi-filter{margin-left:10px;font-size:12px;font-weight:600;color:var(--tx)}
+.assembly-kpi .kpi-filter-clear{margin-left:8px;border:1px solid var(--bd);background:#fff;border-radius:6px;padding:1px 8px;font:inherit;font-size:12px;cursor:pointer}
 /* The day-by-day bookings behind the summary. Shorter than the table above it:
    it is evidence, not the headline, and it must not push the legend off.
    Sized to its content rather than to equal columns — the summary above has

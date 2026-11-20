@@ -34,11 +34,27 @@ export interface CompletionItem {
   offeredFrom: 'saved' | 'line' | 'order' | 'planning' | 'none';
   /** The line's group that day who were on leave, and so not offered. */
   onLeave: Person[];
+  /**
+   * The supervisor has changed the names. Only then does a refresh keep them:
+   * kept unconditionally, the empty offer of a first read made before the
+   * roster and the line groups were in stuck for the whole session.
+   */
+  edited: boolean;
   confirmed: boolean;
   confirmedBy: string;
   /** Set while this one is being written. */
   saving: boolean;
   error: string | null;
+}
+
+/** A line's group in the dialog: who is offered on its orders, and who was away. */
+export interface LineGroupCrew {
+  /** The day the group is for — the line's latest completion day. */
+  day: string;
+  people: Person[];
+  onLeave: Person[];
+  /** Changed in the dialog; kept across a refresh. */
+  edited: boolean;
 }
 
 interface CompletionState {
@@ -59,9 +75,19 @@ interface CompletionState {
    * reaches its quantity.
    */
   doneQty: Record<string, number>;
+  /** Line name → its group, as the dialog's line headings show it. */
+  lineGroups: Record<string, LineGroupCrew>;
   setOpen: (open: boolean) => void;
   setPeople: (key: string, people: Person[]) => void;
+  /** Add one person to an order, if they are not on it already. */
+  addPerson: (key: string, person: Person) => void;
+  setLineGroup: (line: string, people: Person[]) => void;
+  /** Put the line's group on every order of the line not yet confirmed. */
+  fillLine: (line: string) => void;
 }
+
+const samePerson = (a: Person, b: Person): boolean =>
+  (a.id !== '' && a.id === b.id) || a.name.toLowerCase() === b.name.toLowerCase();
 
 export const useCompletionStore = create<CompletionState>((set) => ({
   status: 'idle',
@@ -73,13 +99,38 @@ export const useCompletionStore = create<CompletionState>((set) => ({
   autoOpenedFor: null,
   local: false,
   doneQty: {},
+  lineGroups: {},
   setOpen: (open) => set({ open }),
   setPeople: (key, people) =>
     set((s) => ({
       items: s.items.map((item) =>
-        item.completion.key === key ? { ...item, people, error: null } : item,
+        item.completion.key === key ? { ...item, people, edited: true, error: null } : item,
       ),
     })),
+  addPerson: (key, person) =>
+    set((s) => ({
+      items: s.items.map((item) =>
+        item.completion.key !== key || item.confirmed || item.people.some((p) => samePerson(p, person))
+          ? item
+          : { ...item, people: [...item.people, person], edited: true, error: null },
+      ),
+    })),
+  setLineGroup: (line, people) =>
+    set((s) => {
+      const held = s.lineGroups[line];
+      if (!held) return s;
+      return { lineGroups: { ...s.lineGroups, [line]: { ...held, people, edited: true } } };
+    }),
+  fillLine: (line) =>
+    set((s) => {
+      const group = s.lineGroups[line];
+      if (!group) return s;
+      return {
+        items: s.items.map((item) =>
+          item.line !== line || item.confirmed ? item : { ...item, people: [...group.people], edited: true, error: null },
+        ),
+      };
+    }),
 }));
 
 /** Orders in the window nobody has put names to yet. */

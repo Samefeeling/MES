@@ -42,6 +42,8 @@ export interface CompletionSummary {
   stdHours: number;
   /** Distinct people named. */
   people: number;
+  /** Their names, as first written, in alphabetical order. */
+  names: string[];
   /** Distinct person × day pairs. */
   personDays: number;
   /** Std h over person-days; null with nobody named. */
@@ -134,6 +136,24 @@ export function completedOrderDays(rows: readonly AssemblyResult[]): CompletedOr
     .sort((a, b) => b.day.localeCompare(a.day) || a.job.localeCompare(b.job));
 }
 
+/** Names once each, whatever their case, alphabetically. */
+function distinctNames(all: readonly string[]): string[] {
+  const seen = new Map<string, string>();
+  for (const name of all) if (!seen.has(name.toLowerCase())) seen.set(name.toLowerCase(), name);
+  return [...seen.values()].sort((a, b) => a.localeCompare(b));
+}
+
+/** The completions a person is named on and/or of one order — the page's filter. */
+export function filterCompletions(
+  done: readonly CompletedOrderDay[],
+  filter: { person?: string | null; job?: string | null },
+): CompletedOrderDay[] {
+  const person = filter.person?.toLowerCase();
+  return done.filter(
+    (d) => (!person || d.people.some((p) => p.toLowerCase() === person)) && (!filter.job || d.job === filter.job),
+  );
+}
+
 export function completionSummary(done: readonly CompletedOrderDay[]): CompletionSummary {
   // An order finished across two days is judged on the later one.
   const last = new Map<string, CompletedOrderDay>();
@@ -152,6 +172,7 @@ export function completionSummary(done: readonly CompletedOrderDay[]): Completio
     qty: done.reduce((s, d) => s + d.qty, 0),
     stdHours,
     people: new Set(done.flatMap((d) => d.people.map((p) => p.toLowerCase()))).size,
+    names: distinctNames(done.flatMap((d) => d.people)),
     personDays,
     perPersonDay: perPersonDay === null ? null : round(perPersonDay),
     efficiency: perPersonDay === null ? null : Math.round((perPersonDay / PRODUCTIVE_HOURS_PER_PERSON) * 100),

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { AssemblyGanttView } from '@/engine/assembly/board';
 import type { Completion } from '@/engine/assembly/completedJobs';
 import type { StoredDay } from '@/engine/assembly/completionRecord';
-import { boardCrewFor, demoCompletions, groupByLine, itemFor, lineCrewFor, lineForPlanner, type WorkerLines } from '@/features/assembly/completions';
+import { boardCrewFor, demoCompletions, groupByLine, itemFor, lineCrewFor, lineForPlanner, lineGroupsFor, type WorkerLines } from '@/features/assembly/completions';
+import { useCompletionStore } from '@/store/completionStore';
 
 const workers = [
   { id: '11', name: 'Ana', skills: [], onShift: true },
@@ -134,6 +135,36 @@ describe('the line group as the first offer', () => {
     const item = itemFor(board, done(), [], [saved], 10, lines);
     expect(item.people.map((p) => p.name)).toEqual(['Fay']);
     expect(item.offeredFrom).toBe('saved');
+  });
+
+  it('gives each line heading its group, on the line\'s latest day', () => {
+    const items = [
+      itemFor(board, done({ key: 'A1|2026-11-16', jobNum: 'A1', day: '2026-11-16' }), [], [], 10, lines),
+      itemFor(board, done({ key: 'A2|2026-11-17', jobNum: 'A2' }), [], [], 10, lines),
+    ];
+    const groups = lineGroupsFor(board, lines, items);
+    expect(Object.keys(groups)).toEqual(['Assembly']);
+    expect(groups.Assembly.day).toBe('2026-11-17');
+    expect(groups.Assembly.people.map((p) => p.name)).toEqual(['Dee', 'Gus', 'Ivy']);
+    expect(groups.Assembly.onLeave.map((p) => p.name)).toEqual(['Eli', 'Hal']);
+  });
+
+  it('fills a line from its heading, drops one name on an order, and leaves confirmed orders alone', () => {
+    const a1 = itemFor(board, done({ key: 'A1|2026-11-17', jobNum: 'A1' }), [], [], 10, lines);
+    const a2 = { ...itemFor(board, done({ key: 'A2|2026-11-17', jobNum: 'A2' }), [], [], 10, lines), confirmed: true, people: [{ id: '23', name: 'Fay' }] };
+    const t1 = itemFor(board, done({ key: 'T1|2026-11-17', jobNum: 'T1', planner: 'TABLE' }), [], [], 10, lines);
+    useCompletionStore.setState({ items: [a1, a2, t1], lineGroups: lineGroupsFor(board, lines, [a1, a2, t1]) });
+    const st = useCompletionStore.getState();
+    st.setLineGroup('Assembly', [{ id: '21', name: 'Dee' }, { id: '25', name: 'Hal' }]);
+    st.fillLine('Assembly');
+    const names = (key: string) => useCompletionStore.getState().items.find((i) => i.completion.key === key)!.people.map((p) => p.name);
+    expect(names('A1|2026-11-17')).toEqual(['Dee', 'Hal']);
+    expect(names('A2|2026-11-17')).toEqual(['Fay']);
+    expect(names('T1|2026-11-17')).toEqual(['Fay']);
+    st.addPerson('T1|2026-11-17', { id: '24', name: 'Gus' });
+    st.addPerson('T1|2026-11-17', { id: '24', name: 'Gus' });
+    expect(names('T1|2026-11-17')).toEqual(['Fay', 'Gus']);
+    expect(useCompletionStore.getState().items.every((i) => i.confirmed || i.edited)).toBe(true);
   });
 
   it('groups the dialog by line in the board order, orders by number within', () => {

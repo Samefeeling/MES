@@ -53,7 +53,7 @@ import { isOnLeave } from '@/engine/assembly/attendance';
 import { usePlanStore } from '@/store/planStore';
 import { lineOfWorkerToday } from './boardView';
 import { fromDayKey, toDayKey } from '@/lib/time';
-import { useCompletionStore, type CompletionItem, type Person } from '@/store/completionStore';
+import { useCompletionStore, type CompletionItem, type LineGroupCrew, type Person } from '@/store/completionStore';
 import { useDataStore } from '@/store/dataStore';
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -188,6 +188,25 @@ export function groupByLine(
     }));
 }
 
+/**
+ * Each line's group for the dialog's headings: the same group its orders are
+ * offered (`lineCrewFor`), on the line's latest completion day.
+ */
+export function lineGroupsFor(
+  board: AssemblyGanttView,
+  workerLines: WorkerLines,
+  items: readonly CompletionItem[],
+): Record<string, LineGroupCrew> {
+  const latest = new Map<string, string>();
+  for (const item of items) {
+    const day = item.completion.day;
+    if ((latest.get(item.line) ?? '') < day) latest.set(item.line, day);
+  }
+  const out: Record<string, LineGroupCrew> = {};
+  for (const [line, day] of latest) out[line] = { day, ...lineCrewFor(board, workerLines, line, day), edited: false };
+  return out;
+}
+
 /** Names on the list, matched to the roster where the roster knows them. */
 function peopleFrom(board: AssemblyGanttView, ids: readonly string[], names: readonly string[]): Person[] {
   return names.map((name, i) => {
@@ -252,6 +271,7 @@ export function itemFor(
     people: offered.people,
     offeredFrom: offered.from,
     onLeave: group.onLeave,
+    edited: false,
     confirmed,
     confirmedBy: row?.confirmedBy ?? '',
     saving: false,
@@ -354,14 +374,27 @@ async function load(board: AssemblyGanttView, now: Date): Promise<void> {
   const list = completedListName();
   const demo = useDataStore.getState().source.name === 'mock' && !hasCompletedJobsSource(csv, sp);
   const keep = (next: CompletionItem[]): CompletionItem[] => {
-    // A name somebody is choosing right now is not thrown away by a refresh.
+    // Names somebody has chosen are not thrown away by a refresh. Names
+    // nobody touched are offered afresh: the roster, the line groups and the
+    // leave may all have come in since.
     const held = new Map(useCompletionStore.getState().items.map((i) => [i.completion.key, i]));
     return next.map((item) => {
       const was = held.get(item.completion.key);
       if (!was) return item;
-      if (useCompletionStore.getState().local) return { ...item, people: was.people, confirmed: was.confirmed, confirmedBy: was.confirmedBy };
-      return item.confirmed ? item : { ...item, people: was.people };
+      if (useCompletionStore.getState().local && was.confirmed) {
+        return { ...item, people: was.people, confirmed: true, confirmedBy: was.confirmedBy, edited: was.edited };
+      }
+      return item.confirmed || !was.edited ? item : { ...item, people: was.people, edited: true };
     });
+  };
+  /** The line headings' groups, keeping any the supervisor has changed. */
+  const groupsFor = (items: CompletionItem[]): Record<string, LineGroupCrew> => {
+    const fresh = lineGroupsFor(board, usePlanStore.getState().workerLines, items);
+    const held = useCompletionStore.getState().lineGroups;
+    for (const [line, group] of Object.entries(fresh)) {
+      if (held[line]?.edited && held[line].day === group.day) fresh[line] = held[line];
+    }
+    return fresh;
   };
 
   if (demo) {
@@ -374,7 +407,8 @@ async function load(board: AssemblyGanttView, now: Date): Promise<void> {
       const skilled = board.workers.filter((w) => key && w.skills.some((k) => rootLineKey(k) === key)).slice(0, 2);
       return { ...item, people: skilled.map((w) => ({ id: String(w.id), name: w.name })) };
     });
-    set({ status: 'ready', window, local: true, error: null, warnings: [], doneQty: {}, items: sameWindow ? keep(items) : items });
+    const shown = sameWindow ? keep(items) : items;
+    set({ status: 'ready', window, local: true, error: null, warnings: [], doneQty: {}, items: shown, lineGroups: groupsFor(shown) });
     return;
   }
   if (!hasCompletedJobsSource(csv, sp)) {
@@ -410,9 +444,11 @@ async function load(board: AssemblyGanttView, now: Date): Promise<void> {
   const items = completions.map((c) =>
     itemFor(board, c, planning.get(c.jobNum) ?? [], completed.get(c.jobNum) ?? [], doneQtyThrough(parsed.rows, c.jobNum, c.day), workerLines),
   );
+  const shown = keep(items);
   set({
     status: 'ready',
-    items: keep(items),
+    items: shown,
+    lineGroups: groupsFor(shown),
     doneQty,
     error: problems.length ? problems.join(' · ') : null,
     warnings: parsed.errors.slice(0, 3),

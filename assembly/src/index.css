@@ -4462,6 +4462,52 @@ button {
   color: var(--muted);
   font-size: 12px;
 }
+/* The line's group under its heading: names to drag onto the orders. */
+.completed-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  font-weight: 400;
+  font-size: 12px;
+}
+.completed-group-label {
+  color: var(--muted);
+  margin-right: 2px;
+}
+.completed-group select {
+  height: 22px;
+  font-size: 12px;
+}
+.completed-leave {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  color: var(--muted);
+}
+.completed-person.drag[draggable='true'] {
+  cursor: grab;
+}
+.completed-person.away {
+  opacity: 0.6;
+  text-decoration: line-through;
+  padding-right: 7px;
+}
+.completed-people.over,
+.completed-group.over {
+  outline: 2px dashed var(--accent);
+  outline-offset: 1px;
+  border-radius: 6px;
+}
+.completed-act .btn + .btn,
+.completed-act button + button {
+  margin-left: 6px;
+}
 .completed-hint {
   flex-basis: 100%;
   color: var(--muted);
