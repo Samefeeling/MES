@@ -3,10 +3,24 @@
  * were finished in the window (`CompletedJobs.csv`), who is down as having
  * finished them, and writing the supervisor's answer to `ASSY_CompletedJobs`.
  *
- * Who is offered before anybody has said, best first: the board's own crew on
- * the order that day, while the board still has the order; the people the
- * order's `ASSY_Planning` row for that day names; the latest earlier row that
- * names anyone.
+ * Who is offered before anybody has said, best first:
+ *
+ *   1. The order's line group as the board draws it for that day — the people
+ *      it places on that line (`lineOfWorkerToday`, the board's own rule) —
+ *      less anyone on leave that day (booked leave, or marked off on the
+ *      board). The supervisor runs each line as one team and keeps those
+ *      groups current, so this is the answer that needs least changing, and
+ *      it holds for an order the board has already let go of — which most
+ *      finished orders are by the morning after.
+ *   2. The board's own crew on the order that day, while it still has the
+ *      order (a line the board has nobody placed on).
+ *   3. The people the order's `ASSY_Planning` row for that day names; else the
+ *      latest earlier row that names anyone.
+ *
+ * Who was left out as on leave is kept on the item, for the dialog to show.
+ *
+ * The groups are the board's as they stand now: a person moved to another
+ * line since the completion day is offered on the line they are on now.
  *
  * On the demo board (no SharePoint, mock data) the dialog is filled from the
  * board's own orders and its answers are kept on this screen only.
@@ -34,7 +48,10 @@ import {
   type CompletionOrder,
   type StoredDay,
 } from '@/engine/assembly/completionRecord';
-import { LINES, rootLineKey, type LineDef } from '@/domain/assembly';
+import { LINES, activeLineKey, arrangeLines, rootLineKey, type LineDef, type LineKey } from '@/domain/assembly';
+import { isOnLeave } from '@/engine/assembly/attendance';
+import { usePlanStore } from '@/store/planStore';
+import { lineOfWorkerToday } from './boardView';
 import { fromDayKey, toDayKey } from '@/lib/time';
 import { useCompletionStore, type CompletionItem, type Person } from '@/store/completionStore';
 import { useDataStore } from '@/store/dataStore';
@@ -91,6 +108,86 @@ export function boardCrewFor(board: AssemblyGanttView, jobNum: string, day: stri
   return people.map((w) => ({ id: String(w.id), name: w.name }));
 }
 
+/** Worker id → the line the supervisor has put them on (`planStore.workerLines`). */
+export type WorkerLines = Readonly<Record<string, LineKey>>;
+
+/**
+ * The lane a completion's line name means on the board — a bench is its
+ * lane's, and by process Smart Soft Seating is Upholstery's — or null for a
+ * name the board has no line for.
+ */
+export function laneOf(board: AssemblyGanttView, line: string): string | null {
+  const name = line.trim().toLowerCase();
+  if (!name) return null;
+  const hit = [...(board.groups ?? []).map((g) => g.line), ...LINES].find(
+    (l) => l.name.toLowerCase() === name || String(l.key).toLowerCase() === name,
+  );
+  return hit ? activeLineKey(rootLineKey(hit.key)) : null;
+}
+
+/**
+ * The line's group on `day`, as the board draws it: everybody it places on
+ * that line, bench people included, split into who was in and who was on
+ * leave. Empty for a line the board does not know.
+ */
+export function lineCrewFor(
+  board: AssemblyGanttView,
+  workerLines: WorkerLines,
+  line: string,
+  day: string,
+): { people: Person[]; onLeave: Person[] } {
+  const lane = laneOf(board, line);
+  if (!lane) return { people: [], onLeave: [] };
+  const placed = lineOfWorkerToday(board.workers, [...board.rowsByJob.values()], fromDayKey(day), workerLines);
+  const todayKey = board.today ? toDayKey(board.today) : '';
+  const people: Person[] = [];
+  const onLeave: Person[] = [];
+  for (const w of board.workers) {
+    const at = placed.get(String(w.id));
+    if (!at || activeLineKey(rootLineKey(at)) !== lane) continue;
+    const person = { id: String(w.id), name: w.name };
+    (isOnLeave(w, day, board.workerOnLeave ?? {}, todayKey) ? onLeave : people).push(person);
+  }
+  const byName = (a: Person, b: Person) => a.name.localeCompare(b.name);
+  return { people: people.sort(byName), onLeave: onLeave.sort(byName) };
+}
+
+/**
+ * The dialog's items in the board's line order (the supervisor's own
+ * arrangement of the lines), each line's orders by order number. A line the
+ * board does not have comes after, by name.
+ */
+export function groupByLine(
+  board: AssemblyGanttView,
+  items: readonly CompletionItem[],
+  lineOrder: readonly string[] = [],
+): { line: string; items: CompletionItem[] }[] {
+  const lanes = arrangeLines(
+    [...(board.groups ?? []).map((g) => g.line), ...LINES]
+      .filter((l, i, all) => !l.parent && all.findIndex((m) => m.key === l.key) === i)
+      .map((l) => ({ key: String(l.key), name: l.name })),
+    lineOrder,
+  );
+  const rank = new Map(lanes.map((l, i) => [l.key, i]));
+  const byLine = new Map<string, CompletionItem[]>();
+  for (const item of items) {
+    const name = item.line || '—';
+    byLine.set(name, [...(byLine.get(name) ?? []), item]);
+  }
+  const place = (name: string): number => {
+    const lane = laneOf(board, name);
+    return lane === null ? lanes.length : rank.get(lane) ?? lanes.length;
+  };
+  return [...byLine.entries()]
+    .sort(([a], [b]) => place(a) - place(b) || a.localeCompare(b))
+    .map(([line, list]) => ({
+      line,
+      items: [...list].sort(
+        (a, b) => a.completion.jobNum.localeCompare(b.completion.jobNum) || a.completion.day.localeCompare(b.completion.day),
+      ),
+    }));
+}
+
 /** Names on the list, matched to the roster where the roster knows them. */
 function peopleFrom(board: AssemblyGanttView, ids: readonly string[], names: readonly string[]): Person[] {
   return names.map((name, i) => {
@@ -124,16 +221,10 @@ export function itemFor(
   planning: readonly StoredDay[],
   completed: readonly StoredDay[],
   doneToDate: number,
+  workerLines: WorkerLines = {},
 ): CompletionItem {
   const row = recordFor(completed, completion);
   const confirmed = isConfirmed(row);
-  const offered = (() => {
-    if (confirmed && row) return peopleFrom(board, row.completedByIds, row.completedBy);
-    const crew = boardCrewFor(board, completion.jobNum, completion.day);
-    if (crew.length) return crew;
-    const named = suggestedCrew(planning, completion.day);
-    return peopleFrom(board, named.ids, named.names);
-  })();
   const listed = orderFromRows(planning);
   const held = boardOrder(board, completion.jobNum);
   const order: CompletionOrder = {
@@ -141,13 +232,26 @@ export function itemFor(
     dueDate: held?.dueDate ?? listed.dueDate ?? row?.dueDate ?? null,
     orderQty: held?.orderQty ?? listed.orderQty ?? null,
   };
+  const line = (confirmed && row?.line) || order.line;
+  const group = lineCrewFor(board, workerLines, line, completion.day);
+  const offered = ((): { people: Person[]; from: CompletionItem['offeredFrom'] } => {
+    if (confirmed && row) return { people: peopleFrom(board, row.completedByIds, row.completedBy), from: 'saved' };
+    if (group.people.length) return { people: group.people, from: 'line' };
+    const crew = boardCrewFor(board, completion.jobNum, completion.day);
+    if (crew.length) return { people: crew, from: 'order' };
+    const named = suggestedCrew(planning, completion.day);
+    const people = peopleFrom(board, named.ids, named.names);
+    return { people, from: people.length ? 'planning' : 'none' };
+  })();
   return {
     completion,
     row,
-    line: (confirmed && row?.line) || order.line,
+    line,
     order,
     doneToDate,
-    people: offered,
+    people: offered.people,
+    offeredFrom: offered.from,
+    onLeave: group.onLeave,
     confirmed,
     confirmedBy: row?.confirmedBy ?? '',
     saving: false,
@@ -264,7 +368,7 @@ async function load(board: AssemblyGanttView, now: Date): Promise<void> {
     const sameWindow = useCompletionStore.getState().window?.from === window.from;
     // The demo roster has nobody on past days: offer two people of the line.
     const items = demoCompletions(board, window).map((c) => {
-      const item = itemFor(board, c, [], [], c.qty);
+      const item = itemFor(board, c, [], [], c.qty, usePlanStore.getState().workerLines);
       if (item.people.length) return item;
       const key = LINES.find((l) => l.name === item.line)?.key;
       const skilled = board.workers.filter((w) => key && w.skills.some((k) => rootLineKey(k) === key)).slice(0, 2);
@@ -302,8 +406,9 @@ async function load(board: AssemblyGanttView, now: Date): Promise<void> {
     const read = await storedDaysFor(sp, planningList, jobs);
     if (read.ok) planning = read.value;
   }
+  const workerLines = usePlanStore.getState().workerLines;
   const items = completions.map((c) =>
-    itemFor(board, c, planning.get(c.jobNum) ?? [], completed.get(c.jobNum) ?? [], doneQtyThrough(parsed.rows, c.jobNum, c.day)),
+    itemFor(board, c, planning.get(c.jobNum) ?? [], completed.get(c.jobNum) ?? [], doneQtyThrough(parsed.rows, c.jobNum, c.day), workerLines),
   );
   set({
     status: 'ready',

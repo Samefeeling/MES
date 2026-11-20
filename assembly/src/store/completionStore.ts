@@ -26,6 +26,14 @@ export interface CompletionItem {
   doneToDate: number;
   /** Who is down as having finished it — confirmed, or offered until it is. */
   people: Person[];
+  /**
+   * Where the names first offered came from: the saved confirmation, the
+   * line's group on the board that day, the board's crew on the order, the
+   * order's ASSY_Planning rows, or nowhere.
+   */
+  offeredFrom: 'saved' | 'line' | 'order' | 'planning' | 'none';
+  /** The line's group that day who were on leave, and so not offered. */
+  onLeave: Person[];
   confirmed: boolean;
   confirmedBy: string;
   /** Set while this one is being written. */

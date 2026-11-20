@@ -1,7 +1,8 @@
 /**
- * "Who finished it?" — Epicor's finished orders of the last working day, each
- * with the people the board had on it, for the supervisor to confirm or
- * correct.
+ * "Who finished it?" — Epicor's finished orders of the last working day,
+ * grouped by line in the board's own order, each offered with that line's
+ * group on the board that day less anyone on leave, for the supervisor to
+ * review and confirm — a line at a time, or all at once.
  *
  * It opens by itself once a session, the first time a signed-in supervisor
  * has orders in the window nobody has confirmed, and from the header chip at
@@ -16,7 +17,8 @@ import { shortDay } from '@/engine/assembly/completedJobs';
 import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
 import { unconfirmedCount, useCompletionStore, type CompletionItem } from '@/store/completionStore';
 import { Button } from '@/ui';
-import { confirmCompletion, loadCompletions } from './completions';
+import { usePlanStore } from '@/store/planStore';
+import { confirmCompletion, groupByLine, loadCompletions } from './completions';
 
 const windowText = (w: { from: string; to: string } | null): string =>
   !w ? '' : w.from === w.to ? shortDay(w.from) : `${shortDay(w.from)} – ${shortDay(w.to)}`;
@@ -114,9 +116,24 @@ function PeoplePicker({ item, board, locked }: { item: CompletionItem; board: As
         </select>
       )}
       {item.people.length === 0 && locked && <span className="completed-none">—</span>}
+      {!item.confirmed && (item.onLeave.length > 0 || item.offeredFrom !== 'line') && (
+        <div className="completed-hint">
+          {item.offeredFrom === 'order' && 'The board’s crew on this order (nobody grouped on this line). '}
+          {item.offeredFrom === 'planning' && 'From ASSY_Planning (nobody grouped on this line). '}
+          {item.offeredFrom === 'none' && 'Nobody grouped on this line — add who finished it. '}
+          {item.onLeave.length > 0 && `On leave: ${item.onLeave.map((p) => p.name).join(', ')}`}
+        </div>
+      )}
     </div>
   );
 }
+
+/** Confirm every order with names in a list, unless it is already confirmed. */
+const confirmEach = (items: readonly CompletionItem[]): void => {
+  for (const item of items) {
+    if (!item.confirmed && item.people.length > 0) void confirmCompletion(item.completion.key);
+  }
+};
 
 export function CompletedOrdersDialog({ board }: { board: AssemblyGanttView | null }) {
   const open = useCompletionStore((s) => s.open);
@@ -128,6 +145,7 @@ export function CompletedOrdersDialog({ board }: { board: AssemblyGanttView | nu
   const [query, setQuery] = useState('');
   const [note, setNote] = useState<string | null>(null);
   const search = useRef<HTMLInputElement>(null);
+  const lineOrder = usePlanStore((st) => st.lineOrder);
 
   useEffect(() => {
     if (!open) return;
@@ -171,11 +189,8 @@ export function CompletedOrdersDialog({ board }: { board: AssemblyGanttView | nu
     void confirmCompletion(item.completion.key);
   };
 
-  const confirmAll = () => {
-    for (const item of s.items) {
-      if (!item.confirmed && item.people.length > 0) void confirmCompletion(item.completion.key);
-    }
-  };
+  const confirmAll = () => confirmEach(s.items);
+  const groups = groupByLine(board, shown, lineOrder);
 
   return (
     <div className="ot-backdrop" role="dialog" aria-modal="true" aria-labelledby="completed-title" onClick={() => setOpen(false)}>
@@ -189,8 +204,8 @@ export function CompletedOrdersDialog({ board }: { board: AssemblyGanttView | nu
           </button>
         </div>
         <p className="ot-note">
-          Finished in Epicor (CompletedJobs.csv), PMD excepted. Check who finished each order and confirm it — the
-          names go to {s.local ? 'this demo only' : 'ASSY_CompletedJobs'}, which KPIs · Assembly reads.
+          Finished in Epicor (CompletedJobs.csv), PMD excepted, grouped by line. Each order offers its line’s group on
+          the board that day, less anyone on leave — check the names and confirm a line at a time. The names go to {s.local ? 'this demo only' : 'ASSY_CompletedJobs'}, which KPIs · Assembly reads.
         </p>
         {gated && <p className="ot-gate">Sign in as {gate} to confirm.</p>}
         {s.error && <p className="completed-error" role="alert">{s.error}</p>}
@@ -238,7 +253,27 @@ export function CompletedOrdersDialog({ board }: { board: AssemblyGanttView | nu
               {s.status !== 'loading' && shown.length === 0 && (
                 <tr><td colSpan={8} className="completed-empty">{q ? 'No finished order with that number.' : 'Epicor shows no Assembly order finished in this window.'}</td></tr>
               )}
-              {shown.map((item) => {
+              {groups.map((group) => {
+                const ready = group.items.filter((i) => !i.confirmed && i.people.length > 0);
+                const open = group.items.filter((i) => !i.confirmed).length;
+                return [
+                  <tr key={`line:${group.line}`} className="completed-line">
+                    <th colSpan={7}>
+                      {group.line}
+                      <span className="completed-line-count">
+                        {group.items.length} {group.items.length === 1 ? 'order' : 'orders'}
+                        {open ? ` · ${open} to confirm` : ' · all confirmed'}
+                      </span>
+                    </th>
+                    <th className="completed-act">
+                      {ready.length > 0 && (
+                        <Button disabled={gated} onClick={() => confirmEach(ready)} title={`Confirm ${group.line}'s orders with the names shown`}>
+                          Confirm line ({ready.length})
+                        </Button>
+                      )}
+                    </th>
+                  </tr>,
+                  ...group.items.map((item) => {
                 const c = item.completion;
                 return (
                   <tr key={c.key} className={item.confirmed ? 'done' : ''}>
@@ -284,6 +319,8 @@ export function CompletedOrdersDialog({ board }: { board: AssemblyGanttView | nu
                     </td>
                   </tr>
                 );
+                  }),
+                ];
               })}
             </tbody>
           </table>

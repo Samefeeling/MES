@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { AssemblyGanttView } from '@/engine/assembly/board';
 import type { Completion } from '@/engine/assembly/completedJobs';
 import type { StoredDay } from '@/engine/assembly/completionRecord';
-import { boardCrewFor, demoCompletions, itemFor, lineForPlanner } from '@/features/assembly/completions';
+import { boardCrewFor, demoCompletions, groupByLine, itemFor, lineCrewFor, lineForPlanner, type WorkerLines } from '@/features/assembly/completions';
 
 const workers = [
-  { id: '11', name: 'Ana' },
-  { id: '12', name: 'Bo' },
-  { id: '13', name: 'Cy' },
+  { id: '11', name: 'Ana', skills: [], onShift: true },
+  { id: '12', name: 'Bo', skills: [], onShift: true },
+  { id: '13', name: 'Cy', skills: [], onShift: true },
 ];
 
 const boardWith = (rows: unknown[]): AssemblyGanttView =>
@@ -84,5 +84,72 @@ describe('who the dialog offers', () => {
     const demo = demoCompletions(board, { from: '2026-11-13', to: '2026-11-15' });
     expect(demo.map((c) => c.day)).toEqual(['2026-11-13', '2026-11-14']);
     expect(demo[0]).toMatchObject({ jobNum: 'A', qty: 10, hours: 2.5 });
+  });
+});
+
+/**
+ * The supervisors' ask: offer each order its line's group on the board that
+ * day, less anyone on leave, so confirming is a review rather than typing.
+ */
+describe('the line group as the first offer', () => {
+  const roster = [
+    { id: '21', name: 'Dee', skills: ['ASSY'], onShift: true },
+    { id: '22', name: 'Eli', skills: ['ASSY'], onShift: true, plannedLeave: ['2026-11-17'] },
+    { id: '23', name: 'Fay', skills: ['TABLE'], onShift: true },
+    // Grouped on Assembly by the supervisor, whatever the roster says.
+    { id: '24', name: 'Gus', skills: ['TABLE'], onShift: true },
+    // Marked off on the board for the day.
+    { id: '25', name: 'Hal', skills: ['ASSY'], onShift: true },
+    // Away today only: says nothing about the completion day.
+    { id: '26', name: 'Ivy', skills: ['ASSY'], onShift: false },
+  ];
+  const board = {
+    workers: roster,
+    rowsByJob: new Map(),
+    groups: [],
+    today: new Date(2026, 10, 18),
+    workerOnLeave: { '25': ['2026-11-17'] },
+  } as unknown as AssemblyGanttView;
+  const lines: WorkerLines = { '24': 'ASSY' };
+
+  it('is everybody the board groups on the line, less who was on leave that day', () => {
+    const crew = lineCrewFor(board, lines, 'Assembly', '2026-11-17');
+    expect(crew.people.map((p) => p.name)).toEqual(['Dee', 'Gus', 'Ivy']);
+    expect(crew.onLeave.map((p) => p.name)).toEqual(['Eli', 'Hal']);
+    expect(lineCrewFor(board, lines, 'Table', '2026-11-17').people.map((p) => p.name)).toEqual(['Fay']);
+    expect(lineCrewFor(board, lines, 'Nowhere', '2026-11-17')).toEqual({ people: [], onLeave: [] });
+  });
+
+  it('comes before the names on the list, and says who it left out', () => {
+    const planning = [stored({ operators: ['Fay'], operatorIds: ['23'] })];
+    const item = itemFor(board, done(), planning, [], 10, lines);
+    expect(item.line).toBe('Assembly');
+    expect(item.people.map((p) => p.name)).toEqual(['Dee', 'Gus', 'Ivy']);
+    expect(item.offeredFrom).toBe('line');
+    expect(item.onLeave.map((p) => p.name)).toEqual(['Eli', 'Hal']);
+  });
+
+  it('gives way to what was confirmed', () => {
+    const saved = stored({ recordKey: 'J1|2026-11-17', completedBy: ['Fay'], completedByIds: ['23'], confirmedBy: 'Sup', confirmedAt: '2026-11-18T08:00:00Z' });
+    const item = itemFor(board, done(), [], [saved], 10, lines);
+    expect(item.people.map((p) => p.name)).toEqual(['Fay']);
+    expect(item.offeredFrom).toBe('saved');
+  });
+
+  it('groups the dialog by line in the board order, orders by number within', () => {
+    const items = [
+      itemFor(board, done({ key: 'T2|2026-11-17', jobNum: 'T2', planner: 'TABLE' }), [], [], 10, lines),
+      itemFor(board, done({ key: 'A9|2026-11-17', jobNum: 'A9' }), [], [], 10, lines),
+      itemFor(board, done({ key: 'X1|2026-11-17', jobNum: 'X1', planner: 'ODD' }), [], [], 10, lines),
+      itemFor(board, done({ key: 'A1|2026-11-17', jobNum: 'A1' }), [], [], 10, lines),
+    ];
+    const groups = groupByLine(board, items);
+    expect(groups.map((g) => [g.line, g.items.map((i) => i.completion.jobNum)])).toEqual([
+      ['Assembly', ['A1', 'A9']],
+      ['Table', ['T2']],
+      ['ODD', ['X1']],
+    ]);
+    // The supervisor's own arrangement of the lines wins.
+    expect(groupByLine(board, items, ['TABLE']).map((g) => g.line)).toEqual(['Table', 'Assembly', 'ODD']);
   });
 });

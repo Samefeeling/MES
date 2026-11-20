@@ -4448,3 +4448,22 @@ button {
 .completed-table td:nth-child(4) {
   white-space: nowrap;
 }
+/* A line's heading row: the board's grouping, with its own Confirm. */
+.completed-table tr.completed-line th {
+  position: static;
+  background: var(--line-band);
+  color: inherit;
+  border-top: 2px solid var(--line-band-bd);
+  font-size: 13px;
+}
+.completed-line-count {
+  margin-left: 10px;
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 12px;
+}
+.completed-hint {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 11px;
+}
