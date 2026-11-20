@@ -40,7 +40,7 @@ const LINE_ORDER = [
   'Factory General',
 ];
 
-type PeriodKey = 'lastDay' | 'thisWeek' | 'custom';
+export type PeriodKey = 'lastDay' | 'thisWeek' | 'custom';
 
 const PERIODS: Array<{ key: PeriodKey; label: string }> = [
   { key: 'lastDay', label: 'Last 24h' },
@@ -57,12 +57,14 @@ const au = (day: string): string =>
 /**
  * The window each period tab means.
  *
- * "Last 24h" is the last working day, not literally the last twenty-four
- * hours: Assembly books one shift a day, so on a Monday morning the useful
+ * "Last 24h" is the last working day BEFORE today, not literally the last
+ * twenty-four hours: Assembly books one shift a day and its completions are
+ * confirmed the morning after (the board's ✓ Completed dialog covers the last
+ * working day to yesterday), so today has nothing yet. On a Monday the useful
  * question is what Friday did. Named to match the PMD tab beside it, which
  * bridges the weekend the same way.
  */
-function periodRange(key: PeriodKey, now: Date): { from: string; to: string } {
+export function periodRange(key: PeriodKey, now: Date): { from: string; to: string } {
   const day = new Date(now);
   day.setHours(0, 0, 0, 0);
   if (key === 'thisWeek') {
@@ -72,6 +74,7 @@ function periodRange(key: PeriodKey, now: Date): { from: string; to: string } {
     return { from: localDay(monday), to: localDay(day) };
   }
   const last = new Date(day);
+  last.setDate(last.getDate() - 1);
   while (last.getDay() === 0 || last.getDay() === 6) {
     last.setDate(last.getDate() - 1);
   }
