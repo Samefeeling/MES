@@ -56,8 +56,168 @@
       ]
     },
     {
-      "name": "ASSY_Production",
-      "description": "One Assembly job result per production day; separate from PMD machine shifts.",
+      "name": "ASSY_Planning",
+      "description": "The board's planning list (once ASSY_Production): one row per open order per day, kept in step with Planning1.csv and the board; an order leaves it once CompletedJobs.csv shows its whole quantity reported and its completion is confirmed.",
+      "fields": [
+        {
+          "name": "Title",
+          "type": "Text",
+          "required": true,
+          "indexed": true
+        },
+        {
+          "name": "RecordKey",
+          "type": "Text",
+          "required": true,
+          "indexed": true,
+          "unique": true
+        },
+        {
+          "name": "BookedHour",
+          "type": "Number"
+        },
+        {
+          "name": "Date",
+          "type": "DateTime",
+          "format": "DateOnly",
+          "required": true,
+          "indexed": true
+        },
+        {
+          "name": "Line",
+          "type": "Text"
+        },
+        {
+          "name": "Operators",
+          "type": "Text"
+        },
+        {
+          "name": "OperatorIds",
+          "type": "Text"
+        },
+        {
+          "name": "StartDate",
+          "type": "DateTime"
+        },
+        {
+          "name": "ActualStartAt",
+          "type": "DateTime"
+        },
+        {
+          "name": "DueDate",
+          "type": "DateTime"
+        },
+        {
+          "name": "ExpectDate",
+          "type": "DateTime"
+        },
+        {
+          "name": "CompletedAt",
+          "type": "DateTime"
+        },
+        {
+          "name": "StartOverrideReason",
+          "type": "Note"
+        },
+        {
+          "name": "PauseReason",
+          "type": "Note"
+        },
+        {
+          "name": "Notes",
+          "type": "Note"
+        },
+        {
+          "name": "OrderQty",
+          "type": "Number"
+        },
+        {
+          "name": "RemainingQty",
+          "type": "Number"
+        },
+        {
+          "name": "ShiftOutput",
+          "type": "Number"
+        },
+        {
+          "name": "Complete",
+          "type": "Number"
+        },
+        {
+          "name": "Reject",
+          "type": "Number"
+        },
+        {
+          "name": "Rework",
+          "type": "Number"
+        },
+        {
+          "name": "JobCompleted",
+          "type": "Boolean",
+          "default": "0"
+        },
+        {
+          "name": "Paused",
+          "type": "Boolean",
+          "default": "0"
+        },
+        {
+          "name": "WorkType",
+          "type": "Text"
+        },
+        {
+          "name": "WorkDescription",
+          "type": "Note"
+        },
+        {
+          "name": "SupportDepartment",
+          "type": "Text"
+        },
+        {
+          "name": "LaborHours",
+          "type": "Number"
+        },
+        {
+          "name": "PlannedHours",
+          "type": "Number"
+        },
+        {
+          "name": "EpicorQty",
+          "type": "Number"
+        },
+        {
+          "name": "EpicorHours",
+          "type": "Number"
+        },
+        {
+          "name": "EpicorPartNum",
+          "type": "Text"
+        },
+        {
+          "name": "EpicorCompletedAt",
+          "type": "DateTime"
+        },
+        {
+          "name": "CompletedBy",
+          "type": "Text"
+        },
+        {
+          "name": "CompletedByIds",
+          "type": "Text"
+        },
+        {
+          "name": "CompletionConfirmedBy",
+          "type": "Text"
+        },
+        {
+          "name": "CompletionConfirmedAt",
+          "type": "DateTime"
+        }
+      ]
+    },
+    {
+      "name": "ASSY_CompletedJobs",
+      "description": "Confirmed completions, read by KPIs · Assembly: one row per order per day finished in Epicor (CompletedJobs.csv), with the people a supervisor confirmed finished it. RecordKey is Job|YYYY-MM-DD; an order finished over several days has a row for each.",
       "fields": [
         {
           "name": "Title",

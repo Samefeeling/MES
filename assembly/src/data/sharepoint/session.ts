@@ -193,3 +193,9 @@ export async function sessionDelete(cfg: SharePointConfig, list: string, id: str
     headers: { 'X-HTTP-Method': 'DELETE', 'IF-MATCH': '*' },
   });
 }
+
+/** Move one row to the site's recycle bin, where it can be restored from. */
+export async function sessionRecycle(cfg: SharePointConfig, list: string, id: string): Promise<void> {
+  if (!/^\d+$/.test(id)) throw new SharePointHttpError(400, 'Invalid SharePoint item ID.');
+  await sessionRequest(cfg, `${restList(cfg, list)}/items(${id})/recycle()`, { method: 'POST' });
+}

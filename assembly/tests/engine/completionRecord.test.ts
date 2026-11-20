@@ -1,10 +1,10 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import {
   COMPLETION_COLUMNS as C,
-  completionFields,
-  newCompletionRow,
+  completionRow,
+  orderFromRows,
   readStoredDay,
-  rowForCompletion,
+  recordFor,
   suggestedCrew,
   type StoredDay,
 } from '@/engine/assembly/completionRecord';
@@ -17,7 +17,7 @@ vi.mock('@/data/sharepoint/lists.write', () => ({
   fetchListItemsWithIds: vi.fn(),
 }));
 import * as lists from '@/data/sharepoint/lists.write';
-import { storedDaysFor, writeCompletion } from '@/data/sharepoint/completion.list';
+import { fieldsFor, storedDaysFor, writeCompletion } from '@/data/sharepoint/completion.list';
 
 const done: Completion = {
   key: '018474-10-1|2026-11-17',
@@ -33,9 +33,9 @@ const done: Completion = {
 };
 
 const row = (over: Partial<StoredDay> = {}): StoredDay => ({
-  id: '1', day: '2026-11-17', op: '', wip: false, line: 'Table',
-  operators: [], operatorIds: [], completedBy: [], completedByIds: [],
-  confirmedBy: '', confirmedAt: '', epicorQty: null, ...over,
+  id: '1', recordKey: '', day: '2026-11-17', op: '', wip: false, line: 'Table',
+  operators: [], operatorIds: [], dueDate: null, orderQty: null, plannedHours: null,
+  completedBy: [], completedByIds: [], confirmedBy: '', confirmedAt: '', epicorQty: null, ...over,
 });
 
 describe('the row a completion is written into', () => {
@@ -49,16 +49,16 @@ describe('the row a completion is written into', () => {
     })).toMatchObject({ id: '7', op: '30', wip: true, operators: ['Ana', 'Bo'], operatorIds: ['11', '12'], completedBy: ['Ana'], epicorQty: 40, confirmedAt: '2026-11-18T07:10:00Z' });
   });
 
-  it('is the day’s receiving operation, the last of them; none when the order has no row that day', () => {
+  it('is the row holding the completion’s key, else the order’s newest row that day', () => {
     const rows = [
-      row({ id: '1', op: '10', wip: true }),
-      row({ id: '2', op: '20' }),
-      row({ id: '3', op: '30' }),
-      row({ id: '4', day: '2026-11-18' }),
+      row({ id: '4', day: '2026-11-16', recordKey: done.key }),
+      row({ id: '2' }),
+      row({ id: '3' }),
     ];
-    expect(rowForCompletion(rows, '2026-11-17')?.id).toBe('3');
-    expect(rowForCompletion([row({ id: '1', op: '10', wip: true })], '2026-11-17')?.id).toBe('1');
-    expect(rowForCompletion(rows, '2026-11-16')).toBeNull();
+    // The key wins over the Date, which a site's timezone can shift a day.
+    expect(recordFor(rows, done)?.id).toBe('4');
+    expect(recordFor(rows.slice(1), done)?.id).toBe('3');
+    expect(recordFor([row({ day: '2026-11-18' })], done)).toBeNull();
   });
 
   it('offers the people named that day, else the latest day before it that names anyone', () => {
@@ -72,19 +72,41 @@ describe('the row a completion is written into', () => {
     expect(suggestedCrew(rows, '2026-11-01')).toEqual({ ids: [], names: [] });
   });
 
-  it('writes Epicor’s figures and the names into columns of their own, never the board’s', () => {
-    const fields = completionFields(done, [{ id: '11', name: 'Ana' }, { id: '12', name: 'Bo' }], 'Jeff Penn', new Date('2026-11-18T07:00:00Z'));
+  it('writes a whole record: the day’s quantity, the names, and a standard that gives back Epicor’s hours', () => {
+    const people = [{ id: '11', name: 'Ana' }, { id: '12', name: 'Bo' }];
+    const order = { line: 'Table', dueDate: '2026-11-20T00:00:00Z', orderQty: 300 };
+    const fields = completionRow(done, people, 'Jeff Penn', new Date('2026-11-18T07:00:00Z'), order, 150);
     expect(fields).toMatchObject({
-      [C.epicorQty]: 150, [C.epicorHours]: 18.75, [C.epicorPartNum]: 'PODSE00010',
-      [C.completedBy]: 'Ana, Bo', [C.completedByIds]: '11,12', [C.confirmedBy]: 'Jeff Penn',
+      Title: '018474-10-1', Date: '2026-11-17', RecordKey: '018474-10-1|2026-11-17', Line: 'Table',
+      Operators: 'Ana, Bo', OperatorIds: '11,12', Complete: 150, ShiftOutput: 150, Reject: 0,
+      OrderQty: 300, PlannedHours: 37.5, RemainingQty: 150, DueDate: '2026-11-20T00:00:00Z',
+      JobCompleted: false, CompletedAt: null,
+      [C.epicorQty]: 150, [C.epicorHours]: 18.75, [C.completedBy]: 'Ana, Bo', [C.confirmedBy]: 'Jeff Penn',
       [C.confirmedAt]: '2026-11-18T07:00:00.000Z',
     });
-    for (const owned of ['Operators', 'OperatorIds', 'Complete', 'ShiftOutput', 'JobCompleted', 'CompletedAt']) {
-      expect(fields).not.toHaveProperty(owned);
-    }
-    expect(newCompletionRow(done, 'Table', fields)).toMatchObject({
-      Title: '018474-10-1', Date: '2026-11-17', RecordKey: '018474-10-1|2026-11-17', Line: 'Table',
-    });
+    // Complete × PlannedHours ÷ OrderQty is Epicor's hours.
+    expect((150 * 37.5) / 300).toBe(18.75);
+    // The day the running total reaches the order's quantity finishes it.
+    const last = completionRow(done, people, 'J', new Date(), order, 300);
+    expect(last).toMatchObject({ JobCompleted: true, RemainingQty: 0 });
+    expect(last.CompletedAt).toBe(new Date(2026, 10, 17, 15, 3).toISOString());
+    // With no order quantity known, the day's own quantity carries the rate.
+    expect(completionRow(done, people, 'J', new Date(), { line: 'Table', dueDate: null, orderQty: null }, 150))
+      .toMatchObject({ OrderQty: 150, PlannedHours: 18.75, JobCompleted: false });
+  });
+
+  it('takes the order’s line, Due Date and quantity from the planning rows, receiving rows first', () => {
+    expect(orderFromRows([
+      row({ wip: true, line: 'UPL-Gluing', orderQty: 40 }),
+      row({ line: 'UPL-SSS', dueDate: '2026-11-21T00:00:00Z', orderQty: 40 }),
+    ])).toEqual({ line: 'UPL-SSS', dueDate: '2026-11-21T00:00:00Z', orderQty: 40 });
+  });
+
+  it('writes only the columns the list has, but always its key', () => {
+    const schema = ['Title', 'Date', 'Line'].map((n) => ({ InternalName: n, Title: n }));
+    expect(fieldsFor({ Title: 'J', Date: 'd', RecordKey: 'k', Line: 'L', RemainingQty: 1 }, schema))
+      .toEqual({ Title: 'J', Date: 'd', RecordKey: 'k', Line: 'L' });
+    expect(fieldsFor({ RemainingQty: 1 }, null)).toEqual({ RemainingQty: 1 });
   });
 });
 
@@ -92,23 +114,23 @@ describe('writing a confirmation', () => {
   const cfg = { siteUrl: 'https://x.sharepoint.com/sites/PMD', filePath: '', token: '', authMode: 'session' as const };
   beforeEach(() => vi.resetAllMocks());
 
-  it('updates the day’s row in place', async () => {
+  it('writes over the row already holding the completion', async () => {
     vi.mocked(lists.updateListItem).mockResolvedValue({ ok: true, value: undefined } as never);
-    const res = await writeCompletion(cfg, 'ASSY_Production', done, row({ id: '9' }), 'Table', { [C.completedBy]: 'Ana' });
+    const res = await writeCompletion(cfg, 'ASSY_CompletedJobs', done, row({ id: '9' }), { [C.completedBy]: 'Ana' });
     expect(res.ok).toBe(true);
-    expect(lists.updateListItem).toHaveBeenCalledWith(cfg, 'ASSY_Production', '9', { [C.completedBy]: 'Ana' });
+    expect(lists.updateListItem).toHaveBeenCalledWith(cfg, 'ASSY_CompletedJobs', '9', { [C.completedBy]: 'Ana' });
     expect(lists.createListItem).not.toHaveBeenCalled();
   });
 
-  it('opens a row when the order has none that day, and joins one that appeared meanwhile', async () => {
+  it('opens a row for a new completion, and writes over one that appeared meanwhile', async () => {
     vi.mocked(lists.createListItem).mockResolvedValueOnce({ ok: true, value: '21' });
-    const opened = await writeCompletion(cfg, 'L', done, null, 'Table', {});
+    const opened = await writeCompletion(cfg, 'L', done, null, {});
     expect(opened.ok && opened.value.id).toBe('21');
 
     vi.mocked(lists.createListItem).mockResolvedValueOnce({ ok: false, error: { status: 400, message: 'duplicate key' } });
-    vi.mocked(lists.fetchRowsWhere).mockResolvedValueOnce({ ok: true, value: [{ id: '30', fields: { Title: done.jobNum, Date: '2026-11-17' } }] });
+    vi.mocked(lists.fetchRowsWhere).mockResolvedValueOnce({ ok: true, value: [{ id: '30', fields: { Title: done.jobNum, Date: '2026-11-16T13:00:00Z', RecordKey: done.key } }] });
     vi.mocked(lists.updateListItem).mockResolvedValue({ ok: true, value: undefined } as never);
-    const joined = await writeCompletion(cfg, 'L', done, null, 'Table', { x: 1 });
+    const joined = await writeCompletion(cfg, 'L', done, null, { x: 1 });
     expect(joined.ok && joined.value.id).toBe('30');
     expect(lists.updateListItem).toHaveBeenCalledWith(cfg, 'L', '30', { x: 1 });
   });

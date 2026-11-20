@@ -1,5 +1,6 @@
 /**
- * Keeps the `ASSY_Production` SharePoint list in step with the board.
+ * Keeps the `ASSY_Planning` SharePoint list in step with the board, and takes
+ * off it the orders `CompletedJobs.csv` shows finished in full.
  *
  * It runs on three triggers, because three different things change:
  *
@@ -13,20 +14,26 @@
  * nothing actually moved. Writes are debounced: nobody wants a Graph round trip
  * per keystroke of a drag.
  *
- * Writing is **opt-in**: nothing leaves the browser unless `VITE_PRODUCTION_LIST`
- * names a list and Graph is configured. The mock demo never writes.
+ * Writing is **opt-in**: nothing leaves the browser unless the SharePoint
+ * backend is on (or `VITE_PLANNING_LIST` names a list) and the site is
+ * configured. The mock demo never writes.
+ *
+ * While `CompletedJobs.csv` is being read the sync waits: written before it
+ * is in, a finished order still on the board would have its row opened again
+ * only to be taken off a moment later.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AssemblyGanttView } from '@/engine/assembly/board';
 import { readConfigFromEnv } from '@/data/sharepoint/site';
 import {
-  PRODUCTION_LIST,
+  PLANNING_LIST,
   orderFactsFromBoard,
   syncProduction,
   type SyncOutcome,
 } from '@/data/sharepoint/production.sync';
 import { usePlanStore } from '@/store/planStore';
+import { unconfirmedJobs, useCompletionStore } from '@/store/completionStore';
 
 /** Wait this long after the last board change before writing. */
 const DEBOUNCE_MS = 1200;
@@ -44,10 +51,14 @@ export interface PlanSyncState {
 }
 
 export function usePlanSync(board: AssemblyGanttView | null): PlanSyncState {
-  const list = (import.meta.env.VITE_PRODUCTION_LIST ?? (import.meta.env.VITE_BACKEND === 'sharepoint' ? 'ASSY_Production' : '')).trim();
+  const list = (import.meta.env.VITE_PLANNING_LIST ?? (import.meta.env.VITE_BACKEND === 'sharepoint' ? PLANNING_LIST : '')).trim();
   const cfg = readConfigFromEnv();
   const enabled = Boolean(list && cfg.siteUrl && (cfg.token || cfg.authMode === 'session'));
   const production = usePlanStore((s) => s.production);
+  const completionStatus = useCompletionStore((s) => s.status);
+  const doneQty = useCompletionStore((s) => s.doneQty);
+  const hold = useCompletionStore((s) => unconfirmedJobs(s.items).join('\n'));
+  const waiting = completionStatus === 'idle' || completionStatus === 'loading';
 
   const [state, setState] = useState<Omit<PlanSyncState, 'enabled' | 'list'>>({
     busy: false,
@@ -76,9 +87,13 @@ export function usePlanSync(board: AssemblyGanttView | null): PlanSyncState {
     () => (board ? JSON.stringify(orderFactsFromBoard(board, production)) : ''),
     [board, production],
   );
+  const finished = useMemo(
+    () => JSON.stringify({ doneQty, hold: hold ? hold.split('\n') : [] }),
+    [doneQty, hold],
+  );
 
   useEffect(() => {
-    if (!enabled || !fingerprint) return;
+    if (!enabled || !fingerprint || waiting) return;
 
     const run = async () => {
       if (running.current) {
@@ -90,7 +105,7 @@ export function usePlanSync(board: AssemblyGanttView | null): PlanSyncState {
 
       let outcome: SyncOutcome;
       try {
-        outcome = await syncProduction(cfg, list, JSON.parse(fingerprint));
+        outcome = await syncProduction(cfg, list, JSON.parse(fingerprint), JSON.parse(finished));
       } catch (error) {
         // An exception out of the sync itself never reached an answer, so it
         // reads like the transport failures the sync reports for itself.
@@ -139,7 +154,7 @@ export function usePlanSync(board: AssemblyGanttView | null): PlanSyncState {
     };
     // `cfg` is read from import.meta.env and is stable for the session.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, list, fingerprint]);
+  }, [enabled, list, fingerprint, finished, waiting]);
 
-  return { enabled, list: list || PRODUCTION_LIST, ...state };
+  return { enabled, list: list || PLANNING_LIST, ...state };
 }

@@ -37,9 +37,9 @@ export interface AssemblyResult {
   completedAt: string | null;
   /**
    * Epicor's completion of the order that day (`CompletedJobs.csv`), and who
-   * the supervisor confirmed finished it — written by the board's
-   * completed-orders dialog into columns of their own. `null` on a day Epicor
-   * reported nothing for, or that nobody has confirmed.
+   * the supervisor confirmed finished it — the `ASSY_CompletedJobs` row's own
+   * columns, written by the board's completed-orders dialog. `null` on a row
+   * without them (one added by hand), which is read from its standard columns.
    */
   epicor?: EpicorCompletion | null;
 }

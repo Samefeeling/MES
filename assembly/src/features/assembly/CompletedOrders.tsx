@@ -190,7 +190,7 @@ export function CompletedOrdersDialog({ board }: { board: AssemblyGanttView | nu
         </div>
         <p className="ot-note">
           Finished in Epicor (CompletedJobs.csv), PMD excepted. Check who finished each order and confirm it — the
-          names go to the order’s day in {s.local ? 'this demo only' : 'ASSY_Production'} and into KPIs · Assembly.
+          names go to {s.local ? 'this demo only' : 'ASSY_CompletedJobs'}, which KPIs · Assembly reads.
         </p>
         {gated && <p className="ot-gate">Sign in as {gate} to confirm.</p>}
         {s.error && <p className="completed-error" role="alert">{s.error}</p>}

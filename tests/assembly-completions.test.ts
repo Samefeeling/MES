@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   completedOrderDays,
   completionSummary,
+  completionsByLine,
   completionsByPerson,
-  isCompletionOnly,
 } from '../src/core/assembly-completions';
 import { epicorOf } from '../src/dal/sharepoint/assembly';
 import type { AssemblyResult, EpicorCompletion } from '../src/types/assembly';
@@ -18,10 +18,29 @@ const row = (over: Partial<AssemblyResult> = {}): AssemblyResult => ({
 });
 
 describe('Epicor completions on KPIs · Assembly', () => {
-  it('keeps a row opened only to hold a completion out of the board’s figures', () => {
-    expect(isCompletionOnly(row({ epicor: epicor() }))).toBe(true);
-    expect(isCompletionOnly(row({ epicor: epicor(), operators: 'Ana', complete: 4 }))).toBe(false);
-    expect(isCompletionOnly(row())).toBe(false);
+  it('reads a row added by hand without Epicor’s columns from its own figures', () => {
+    const [d] = completedOrderDays([
+      row({ complete: 20, plannedHours: 10, orderQty: 40, operators: 'Ana, Bo', completed: true }),
+      row({ id: '2', job: 'J9' }),
+    ]);
+    expect(d).toMatchObject({ job: 'J1', qty: 20, stdHours: 5, people: ['Ana', 'Bo'], finished: true });
+  });
+
+  it('counts person-days once per person per day, and efficiency over them', () => {
+    const done = completedOrderDays([
+      row({ epicor: epicor({ hours: 6, people: ['Ana', 'Bo'] }) }),
+      row({ id: '2', job: 'J2', epicor: epicor({ hours: 9, people: ['ana'] }) }),
+      row({ id: '3', job: 'J3', line: 'Table', day: '2026-11-18', epicor: epicor({ hours: 7.5, people: ['Ana'] }) }),
+    ]);
+    const sum = completionSummary(done);
+    // Ana 17th, Bo 17th, Ana 18th: 22.5 h over three person-days.
+    expect(sum).toMatchObject({ personDays: 3, perPersonDay: 7.5, efficiency: 100 });
+    const lines = completionsByLine(done, ['Table', 'Assembly']);
+    expect(lines.map((l) => [l.line, l.summary.orders, l.summary.personDays])).toEqual([
+      ['Table', 1, 1],
+      ['Assembly', 2, 2],
+    ]);
+    expect(lines[1].orders.map((o) => o.job)).toEqual(['J1', 'J2']);
   });
 
   it('judges an order on time by its Due Date, once however many days it took', () => {
@@ -36,7 +55,7 @@ describe('Epicor completions on KPIs · Assembly', () => {
       ['J1', '2026-11-17', true],
       ['J2', '2026-11-17', null],
     ]);
-    expect(completionSummary(done)).toEqual({ orders: 2, qty: 25, stdHours: 15, people: 3, datedOrders: 1, onTimeOrders: 0 });
+    expect(completionSummary(done)).toMatchObject({ orders: 2, qty: 25, stdHours: 15, people: 3, datedOrders: 1, onTimeOrders: 0 });
   });
 
   it('shares an order’s standard hours among the people who finished it', () => {

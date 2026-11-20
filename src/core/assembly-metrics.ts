@@ -275,7 +275,7 @@ export interface AssemblyLineRoll {
 /** The assembly line has been written down as ASM and as Assembly Seats before
  *  it was simply Assembly. Older production rows keep whichever name the board
  *  showed when they were signed off, so all three roll up as one line. */
-const lineLabel = (name: string): string => /^(ASM|Assembly Seats|Assembly)$/i.test(name.trim()) ? 'Assembly' : name.trim() || NO_LINE;
+export const lineLabel = (name: string): string => /^(ASM|Assembly Seats|Assembly)$/i.test(name.trim()) ? 'Assembly' : name.trim() || NO_LINE;
 
 /**
  * The window split by line, and each line by order.

@@ -1,5 +1,5 @@
 /**
- * Write-back to the `ASSY_Production` SharePoint list.
+ * Write-back to the `ASSY_Planning` SharePoint list (once `ASSY_Production`).
  *
  * The rules that matter here are about what must *not* happen: a drag must
  * never move Epicor's Due Date, a refresh with nothing changed must not write,
@@ -136,7 +136,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe('syncProduction', () => {
   it('opens one row for an order the list has never seen', async () => {
     const calls = stubGraph([]);
-    const out = await syncProduction(CFG, 'ASSY_Production', [order()]);
+    const out = await syncProduction(CFG, 'ASSY_Planning', [order()]);
 
     expect(out).toMatchObject({ created: 1, updated: 0, unchanged: 0 });
     expect(out.errors).toEqual([]);
@@ -180,7 +180,7 @@ describe('syncProduction', () => {
 
   it('writes nothing when the list already says this', async () => {
     const calls = stubGraph([stored()]);
-    const out = await syncProduction(CFG, 'ASSY_Production', [order()]);
+    const out = await syncProduction(CFG, 'ASSY_Planning', [order()]);
 
     expect(out).toMatchObject({ created: 0, updated: 0, unchanged: 1 });
     expect(writes(calls)).toEqual([]);
@@ -190,7 +190,7 @@ describe('syncProduction', () => {
     // The anchor day would move with the bar; the guard is that an order with
     // any existing row never opens another empty one.
     const calls = stubGraph([stored()]);
-    const out = await syncProduction(CFG, 'ASSY_Production', [
+    const out = await syncProduction(CFG, 'ASSY_Planning', [
       order({ anchorDay: '2026-09-20' }),
     ]);
 
@@ -200,7 +200,7 @@ describe('syncProduction', () => {
 
   it('records the crew when the supervisor allocates', async () => {
     const calls = stubGraph([stored()]);
-    const out = await syncProduction(CFG, 'ASSY_Production', [
+    const out = await syncProduction(CFG, 'ASSY_Planning', [
       order({ operatorIds: ['W02', 'W07'], operatorNames: ['Gate', 'Jones'] }),
     ]);
 
@@ -216,7 +216,7 @@ describe('syncProduction', () => {
 
   it('moves the start day on a drag and does not send the due date at all', async () => {
     const calls = stubGraph([stored()]);
-    await syncProduction(CFG, 'ASSY_Production', [
+    await syncProduction(CFG, 'ASSY_Planning', [
       order({ startDate: '2026-09-17T00:00:00.000Z' }),
     ]);
 
@@ -230,7 +230,7 @@ describe('syncProduction', () => {
     // With a booked shift on that day the full row is written, so the due date
     // does travel — as the value the CSV gave, never one derived from the drag.
     const calls = stubGraph([stored()]);
-    await syncProduction(CFG, 'ASSY_Production', [
+    await syncProduction(CFG, 'ASSY_Planning', [
       order({
         startDate: '2026-09-17T00:00:00.000Z',
         shifts: [shift({ date: '2026-09-14', shiftOutput: 5 })],
@@ -249,7 +249,7 @@ describe('syncProduction', () => {
       stored({ [C.date]: '2026-09-16' }, '3'),
     ];
     const calls = stubGraph(rows);
-    const out = await syncProduction(CFG, 'ASSY_Production', [
+    const out = await syncProduction(CFG, 'ASSY_Planning', [
       order({ dueDate: '2026-09-25T00:00:00.000Z', remainingQty: 42 }),
     ]);
 
@@ -269,7 +269,7 @@ describe('syncProduction', () => {
       '2',
     );
     const calls = stubGraph([stored(), older]);
-    await syncProduction(CFG, 'ASSY_Production', [
+    await syncProduction(CFG, 'ASSY_Planning', [
       order({ dueDate: '2026-09-25T00:00:00.000Z' }),
     ]);
 
@@ -281,7 +281,7 @@ describe('syncProduction', () => {
 
   it('books what the shift entered, one row per day', async () => {
     const calls = stubGraph([stored()]);
-    const out = await syncProduction(CFG, 'ASSY_Production', [
+    const out = await syncProduction(CFG, 'ASSY_Planning', [
       order({
         shifts: [
           shift({ date: '2026-09-14', shiftOutput: 12, complete: 10, reject: 2 }),
@@ -309,7 +309,7 @@ describe('syncProduction', () => {
 
   it('keeps each shift crew snapshot after the active crew changes', async () => {
     const calls = stubGraph([stored({ [C.operators]: 'Gate', [C.operatorIds]: 'W02' })]);
-    await syncProduction(CFG, 'ASSY_Production', [
+    await syncProduction(CFG, 'ASSY_Planning', [
       order({
         operatorIds: [],
         operatorNames: [],
@@ -341,7 +341,7 @@ describe('syncProduction', () => {
       stored({ [C.expectDate]: '2026-09-30T00:00:00Z' }, '1'),
       stored({ [C.expectDate]: '2026-09-30T00:00:00Z' }, '2'),
     ]);
-    const out = await syncProduction(CFG, 'ASSY_Production', [order()]);
+    const out = await syncProduction(CFG, 'ASSY_Planning', [order()]);
 
     expect(out.errors[0]).toContain('item 2');
     expect(out.created).toBe(0);
@@ -363,7 +363,7 @@ describe('syncProduction', () => {
     const calls = stubGraph([
       stored({ [C.date]: '2026-09-13T14:00:00Z', [C.recordKey]: 'ASM8001|2026-09-14' }),
     ]);
-    const out = await syncProduction(CFG, 'ASSY_Production', [
+    const out = await syncProduction(CFG, 'ASSY_Planning', [
       order({ shifts: [shift({ date: '2026-09-14', complete: 12 })] }),
     ]);
 
@@ -388,7 +388,7 @@ describe('syncProduction', () => {
         [C.date]: '2026-09-13T14:00:00Z',
       }),
     ]);
-    const out = await syncProduction(CFG, 'ASSY_Production', [
+    const out = await syncProduction(CFG, 'ASSY_Planning', [
       order({
         shifts: [
           shift({ date: '2026-09-14', recordKey: 'b6f1-2f9c', complete: 12, bookedHours: 9.5 }),
@@ -413,11 +413,11 @@ describe('syncProduction', () => {
     // so the unique index on RecordKey had nothing to refuse. The key is now
     // the same whoever books it.
     const calls = stubGraph([]);
-    await syncProduction(CFG, 'ASSY_Production', [
+    await syncProduction(CFG, 'ASSY_Planning', [
       order({ shifts: [shift({ recordKey: 'fresh-key', complete: 3 })] }),
     ]);
     const routed = stubGraph([]);
-    await syncProduction(CFG, 'ASSY_Production', [
+    await syncProduction(CFG, 'ASSY_Planning', [
       order({
         operation: { seq: 20, step: 'sewing', index: 2, of: 3, last: true },
         shifts: [shift({ recordKey: 'other-key', opSeq: 20, step: 'sewing' })],
@@ -431,7 +431,7 @@ describe('syncProduction', () => {
 
   it('opens one row for an order the board hands it twice', async () => {
     const calls = stubGraph([]);
-    const out = await syncProduction(CFG, 'ASSY_Production', [
+    const out = await syncProduction(CFG, 'ASSY_Planning', [
       order({ shifts: [shift({ complete: 4 })] }),
       order({ shifts: [shift({ complete: 4 })] }),
     ]);
@@ -444,7 +444,7 @@ describe('syncProduction', () => {
 
   it('never writes fallback demo employee ids', async () => {
     const calls = stubGraph([]);
-    const out = await syncProduction(CFG, 'ASSY_Production', [
+    const out = await syncProduction(CFG, 'ASSY_Planning', [
       order({ hasSyntheticCrew: true }),
     ]);
 
@@ -454,7 +454,7 @@ describe('syncProduction', () => {
 
   it('leaves rows for orders that are no longer in the export', async () => {
     const calls = stubGraph([stored(), stored({ Title: 'ASM9999' }, '2')]);
-    const out = await syncProduction(CFG, 'ASSY_Production', [order()]);
+    const out = await syncProduction(CFG, 'ASSY_Planning', [order()]);
 
     expect(out).toMatchObject({ created: 0, updated: 0, unchanged: 1 });
     expect(writes(calls)).toEqual([]);
@@ -462,7 +462,7 @@ describe('syncProduction', () => {
 
   it('writes nothing at all when the list cannot be read', async () => {
     const calls = stubGraph([], false);
-    const out = await syncProduction(CFG, 'ASSY_Production', [order()]);
+    const out = await syncProduction(CFG, 'ASSY_Planning', [order()]);
 
     expect(out.errors[0]).toContain('503');
     expect(out).toMatchObject({ created: 0, updated: 0 });
@@ -471,7 +471,7 @@ describe('syncProduction', () => {
 
   it('refuses to write without a Graph token', async () => {
     const calls = stubGraph([]);
-    const out = await syncProduction({ ...CFG, token: '' }, 'ASSY_Production', [
+    const out = await syncProduction({ ...CFG, token: '' }, 'ASSY_Planning', [
       order(),
     ]);
 
@@ -566,7 +566,7 @@ describe('orderFactsFromBoard', () => {
 describe('what a failed sync asks for', () => {
   const failWith = async (status: number) => {
     stubGraph([], status);
-    return syncProduction(CFG, 'ASSY_Production', [order()]);
+    return syncProduction(CFG, 'ASSY_Planning', [order()]);
   };
 
   it('asks to try again when the far end had a bad moment', async () => {
@@ -589,7 +589,7 @@ describe('what a failed sync asks for', () => {
   it('does not ask again when nothing is configured to try', async () => {
     const out = await syncProduction(
       { ...CFG, token: '' },
-      'ASSY_Production',
+      'ASSY_Planning',
       [order()],
     );
     expect(out.retryable).toBe(false);
@@ -600,7 +600,7 @@ describe('what a failed sync asks for', () => {
     vi.stubGlobal('fetch', async () => {
       throw new TypeError('Failed to fetch');
     });
-    const out = await syncProduction(CFG, 'ASSY_Production', [order()]);
+    const out = await syncProduction(CFG, 'ASSY_Planning', [order()]);
     expect(out.retryable).toBe(true);
   });
 });
@@ -621,7 +621,7 @@ describe('matching a stored row to its shift', () => {
   it('recognises its own row however the column stores the day', async () => {
     for (const value of ['2026-09-14', dayOnly, siteMidnight]) {
       const calls = stubGraph([stored({ [C.date]: value })]);
-      const out = await syncProduction(CFG, 'ASSY_Production', [order()]);
+      const out = await syncProduction(CFG, 'ASSY_Planning', [order()]);
       expect(writes(calls), `date stored as ${value}`).toEqual([]);
       expect(out.unchanged, `date stored as ${value}`).toBe(1);
       expect(out.created).toBe(0);
@@ -633,7 +633,7 @@ describe('matching a stored row to its shift', () => {
     // "Tue" parses on its own in some engines; the Notes column is text and
     // must be compared as text whatever it happens to contain.
     const calls = stubGraph([stored({ [C.notes]: 'Tue: waiting on trim' })]);
-    await syncProduction(CFG, 'ASSY_Production', [
+    await syncProduction(CFG, 'ASSY_Planning', [
       order({ shifts: [shift({ notes: 'Wed: trim arrived' })] }),
     ]);
     // An update patches the fields directly, so the note is at the top level.
@@ -653,7 +653,7 @@ it('writes support labour hours without manufactured quantities', async () => {
     stdHours: 7.5,
     shifts: [shift({ complete: 6, laborHours: 6, jobCompleted: true })],
   });
-  const result = await syncProduction(CFG, 'ASSY_Production', [facts]);
+  const result = await syncProduction(CFG, 'ASSY_Planning', [facts]);
   expect(result.errors).toEqual([]);
   const write = calls.find(call => call.method === 'POST')!;
   expect(write.body?.fields).toMatchObject({
@@ -719,7 +719,7 @@ describe('a row another board opened first', () => {
       return json({ Id: 5 });
     });
 
-    const out = await syncProduction(session, 'ASSY_Production', [
+    const out = await syncProduction(session, 'ASSY_Planning', [
       order({ shifts: [shift({ complete: 7 })] }),
     ]);
 
@@ -731,7 +731,7 @@ describe('a row another board opened first', () => {
     const written = seen.filter((call) => call.method === 'POST');
     expect(written.map((call) => call.url)).toEqual([
       'https://tenant.sharepoint.com/sites/factory/_api/contextinfo',
-      "https://tenant.sharepoint.com/sites/factory/_api/web/lists/getbytitle('ASSY_Production')/items(5)",
+      "https://tenant.sharepoint.com/sites/factory/_api/web/lists/getbytitle('ASSY_Planning')/items(5)",
     ]);
   });
 
@@ -769,7 +769,7 @@ describe('a row another board opened first', () => {
       }
       return json({ Id: 9 });
     });
-    const out = await syncProduction(session, 'ASSY_Production', [facts]);
+    const out = await syncProduction(session, 'ASSY_Planning', [facts]);
     return { out, seen };
   };
 
@@ -787,7 +787,7 @@ describe('a row another board opened first', () => {
     // which is the call that made the second row.
     const written = seen.filter((call) => call.method === 'POST');
     expect(
-      written.filter((call) => call.url.endsWith("('ASSY_Production')/items(5)")),
+      written.filter((call) => call.url.endsWith("('ASSY_Planning')/items(5)")),
     ).toHaveLength(1);
     expect(written.filter((call) => call.url.endsWith('/items'))).toEqual([]);
     // Replacing somebody's figures is said out loud; it is not an error the
@@ -876,7 +876,7 @@ describe('a row another board opened first', () => {
       stored({ [C.recordKey]: 'aaaa-foam', [C.description]: 'Op 10 foaming', [C.shiftOutput]: 5 }),
       stored({ [C.recordKey]: 'bbbb-sew', [C.description]: 'Op 20 sewing', [C.shiftOutput]: 1 }, '2'),
     ]);
-    const out = await syncProduction(CFG, 'ASSY_Production', [
+    const out = await syncProduction(CFG, 'ASSY_Planning', [
       order({
         operation: { seq: 20, step: 'sewing', index: 2, of: 3, last: true },
         shifts: [shift({ recordKey: 'bbbb-sew', opSeq: 20, step: 'sewing', shiftOutput: 4 })],
@@ -896,7 +896,7 @@ describe('a row another board opened first', () => {
       stored({ [C.recordKey]: 'aaaa', [C.description]: 'Op 10 foaming' }),
       stored({ [C.recordKey]: 'bbbb', [C.description]: 'Op 10 foaming' }, '2'),
     ]);
-    const out = await syncProduction(CFG, 'ASSY_Production', [
+    const out = await syncProduction(CFG, 'ASSY_Planning', [
       order({
         operation: { seq: 10, step: 'foaming', index: 1, of: 3, last: false },
         shifts: [shift({ opSeq: 10, step: 'foaming', shiftOutput: 4 })],
@@ -941,7 +941,7 @@ describe('a booking at an operation that does not receive', () => {
 
   const fieldsWritten = async () => {
     const calls = stubGraph([]);
-    await syncProduction(CFG, 'ASSY_Production', [bench()]);
+    await syncProduction(CFG, 'ASSY_Planning', [bench()]);
     const body = writes(calls)[0].body as { fields: Record<string, unknown> };
     return body.fields;
   };
@@ -980,7 +980,7 @@ describe('a booking at an operation that does not receive', () => {
 
   it('is an ordinary production row once the last operation reports', async () => {
     const calls = stubGraph([]);
-    await syncProduction(CFG, 'ASSY_Production', [
+    await syncProduction(CFG, 'ASSY_Planning', [
       bench({
         operation: { seq: 30, step: 'stapling', index: 3, of: 3, last: true },
         shifts: [
@@ -1001,11 +1001,64 @@ describe('a booking at an operation that does not receive', () => {
 
   it('leaves the row carrying the job number counting its units', async () => {
     const calls = stubGraph([]);
-    await syncProduction(CFG, 'ASSY_Production', [
+    await syncProduction(CFG, 'ASSY_Planning', [
       order({ shifts: [shift({ shiftOutput: 9, complete: 9 })] }),
     ]);
     const body = writes(calls)[0].body as { fields: Record<string, unknown> };
     expect(body.fields[C.complete]).toBe(9);
     expect(body.fields[C.orderQty]).toBe(60);
+  });
+});
+
+describe('orders finished in full leave ASSY_Planning', () => {
+  it('moves every row of a finished order to the recycle bin and writes it no more', async () => {
+    const calls = stubGraph([
+      stored({}, '1'),
+      stored({ [C.date]: '2026-09-15' }, '2'),
+      stored({ [C.jobNum]: 'ASM8002', [C.recordKey]: 'ASM8002|2026-09-14' }, '3'),
+    ]);
+    const out = await syncProduction(CFG, 'ASSY_Planning', [order({ shifts: [shift({ complete: 9, shiftOutput: 9 })] })], {
+      doneQty: { ASM8001: 60, ASM8002: 10 },
+    });
+    const sent = writes(calls);
+    expect(sent.map((c) => [c.method, c.url.split('/items/')[1]])).toEqual([
+      ['DELETE', '1'],
+      ['DELETE', '2'],
+    ]);
+    expect(out.removed).toBe(2);
+  });
+
+  it('keeps an order a supervisor has not yet confirmed, and one short of its quantity', async () => {
+    const calls = stubGraph([stored({}, '1')]);
+    await syncProduction(CFG, 'ASSY_Planning', [order()], { doneQty: { ASM8001: 60 }, hold: ['ASM8001'] });
+    expect(writes(calls).filter((c) => c.method === 'DELETE')).toEqual([]);
+    const short = stubGraph([stored({}, '1')]);
+    await syncProduction(CFG, 'ASSY_Planning', [order()], { doneQty: { ASM8001: 59 } });
+    expect(writes(short).filter((c) => c.method === 'DELETE')).toEqual([]);
+  });
+
+  it('judges an order off the board by the quantity on its rows; never a support order', async () => {
+    const calls = stubGraph([
+      stored({ [C.jobNum]: 'OLD1', [C.recordKey]: 'OLD1|2026-09-01', [C.orderQty]: 20 }, '7'),
+      stored({ [C.jobNum]: 'SUP1', [C.recordKey]: 'SUP1|2026-09-01', [C.workType]: 'Support', [C.orderQty]: 1 }, '8'),
+    ]);
+    await syncProduction(CFG, 'ASSY_Planning', [], { doneQty: { OLD1: 25, SUP1: 5 } });
+    expect(writes(calls).map((c) => [c.method, c.url.split('/items/')[1]])).toEqual([['DELETE', '7']]);
+  });
+
+  it('recycles through the site session rather than deleting outright', async () => {
+    const session: SharePointConfig = { ...CFG, token: '', authMode: 'session', siteUrl: 'https://tenant.sharepoint.com/sites/factory' };
+    vi.stubGlobal('window', { location: { origin: 'https://tenant.sharepoint.com' } });
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      urls.push(`${init?.method ?? 'GET'} ${url}`);
+      if (url.endsWith('/_api/contextinfo')) return json({ FormDigestValue: 'd', FormDigestTimeoutSeconds: 1800 });
+      if (url.includes('/items?') || url.includes('/items$')) return json({ value: [{ Id: 4, Title: 'ASM8001', Date: '2026-09-14', OrderQty: 60 }] });
+      if (url.includes('/fields')) return json({ value: [] });
+      return json({});
+    });
+    clearSessionSchemaCache();
+    await syncProduction(session, 'ASSY_Planning', [], { doneQty: { ASM8001: 60 } });
+    expect(urls).toContain("POST https://tenant.sharepoint.com/sites/factory/_api/web/lists/getbytitle('ASSY_Planning')/items(4)/recycle()");
   });
 });

@@ -12,7 +12,7 @@ Source data comes from Epicor via SharePoint, refreshed **every five minutes
 and on demand**: orders from the `Planning1.csv` export, people from the
 `ASSY_Operator` list, material requirements from `JobMaterialReq.csv`, and
 on-hand quantities from `OnHandInventory.csv`. The
-plan goes back the other way, into the `ASSY_Production` list.
+plan goes back the other way, into the `ASSY_Planning` list.
 
 ## What it does
 
@@ -214,7 +214,7 @@ plan goes back the other way, into the `ASSY_Production` list.
   closes the order again — and the crew that was released goes back on it. Both
   are behind the supervisor gate.
 - **Production actuals** — Shift Output, Complete, Reject, Rework, Job Completed and Pause
-  reasons are captured as daily records for the `ASSY_Production` SharePoint
+  reasons are captured as daily records for the `ASSY_Planning` SharePoint
   list, together with the labour hours the day took: the board times the work
   from Start production to Save entry, steps over the breaks, and multiplies by
   the crew. The panel says what it booked, and the KPI page divides the day's
@@ -507,18 +507,22 @@ the last working day to yesterday, one completion per order per day
 the ones nobody has confirmed; the dialog opens by itself once a session for a
 signed-in supervisor. Each order offers the crew the board had on it that day;
 the supervisor corrects and confirms — or types/scans the order number and
-presses Enter. The answer goes to the order's day row in `ASSY_Production`, in
-columns of its own (`engine/assembly/completionRecord`), and from there to
-KPIs · Assembly. On the mock demo the dialog is filled from the board's own
-orders and nothing is written.
+presses Enter. The answer is a row of its own in `ASSY_CompletedJobs` (same
+columns as `ASSY_Planning`, key `Job|YYYY-MM-DD`; `engine/assembly/completionRecord`),
+which is what KPIs · Assembly reads. On the mock demo the dialog is filled from
+the board's own orders and nothing is written.
 
-### The plan → `ASSY_Production`
+Once the export shows an order's whole quantity reported (and nothing of it is
+waiting to be confirmed), the planning sync moves its rows in `ASSY_Planning`
+to the site recycle bin and stops writing it.
 
-The board mirrors itself into the `ASSY_Production` list Resero already
+### The plan → `ASSY_Planning`
+
+The board mirrors itself into the `ASSY_Planning` list (once `ASSY_Production`, which Resero already
 designed — the same shape as `PMD_Production`, so KPI work can aggregate both
-departments without a second mapping layer. **One row per order per day.** Set
-`VITE_PRODUCTION_LIST` to turn it on; blank disables it, so the mock demo never
-writes.
+departments without a second mapping layer). **One row per order per day.**
+It is on with the SharePoint backend (`VITE_PLANNING_LIST` overrides the name);
+the mock demo never writes.
 
 Each row carries two kinds of column, and the split is the whole design:
 
@@ -727,7 +731,7 @@ quantity back into it. No backend to run.
 default — so the board survives a reload before the next sync, and a REST
 service can take over by setting `VITE_PERSIST_API_URL`.
 
-That service receives `X-Production-List: ASSY_Production` and
+That service receives `X-Production-List: ASSY_Planning` and
 upserts `assembly.production` by Job + Date. Each entry has `Complete`,
 `ShiftOutput`, `Complete`, `Reject`, `Rework`, `JobCompleted`, `Paused`,
 `PauseReason`, and `Notes` fields.

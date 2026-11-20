@@ -1,4 +1,7 @@
-// SharePoint data layer — the Assembly board's lists.
+// SharePoint data layer — KPIs · Assembly reads `ASSY_CompletedJobs`: one row
+// per order finished on a day, confirmed on the Assembly board. `ASSY_Planning`
+// (the board's planning list, once `ASSY_Production`) is not read here: an
+// order leaves it once it is finished.
 import type { AssemblyDataLayer, AssemblyResult, EpicorCompletion } from '../../types/assembly';
 import { fetchThroughThrottle } from './http';
 import { type ListField, resolveField } from '../../../assembly/src/data/sharepoint/fieldMap';
@@ -43,7 +46,7 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
       if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) throw new Error('Choose a valid date range.');
       const end = new Date(`${to}T00:00:00Z`);
       end.setUTCDate(end.getUTCDate() + 1);
-      const list = encodeURIComponent((env.VITE_PRODUCTION_LIST || 'ASSY_Production').replace(/'/g, "''")).replace(/'/g, '%27');
+      const list = encodeURIComponent((env.VITE_COMPLETED_JOBS_LIST || 'ASSY_CompletedJobs').replace(/'/g, "''")).replace(/'/g, '%27');
       if (new URL(site).origin !== window.location.origin) throw new Error('Open MES on the configured SharePoint site.');
       const schemaResponse = await fetchThroughThrottle(`${site}/_api/web/lists/getbytitle('${list}')/fields?$select=Title,InternalName,ReadOnlyField`, {
         credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json;odata=nometadata' },
@@ -63,7 +66,7 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
       const filter = `${fields.date} ge datetime'${from}T00:00:00Z' and ${fields.date} lt datetime'${end.toISOString()}'`;
       let url = `${site}/_api/web/lists/getbytitle('${list}')/items?$top=500&$filter=${encodeURIComponent(filter)}`;
       const output: AssemblyResult[] = [];
-      const keys = new Set<string>();
+      const keys = new Map<string, number>();
       for (let page = 0; url && page < 100; page++) {
         if (new URL(url).origin !== window.location.origin) throw new Error('Open MES on the configured SharePoint site.');
         const res = await fetchThroughThrottle(url, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json;odata=nometadata' } });
@@ -73,32 +76,23 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
           const job = String(row[fields.job] ?? '').trim();
           const day = String(row[fields.date] ?? '').slice(0, 10);
           /*
-           * One row per order per day — per *operation*, where a route puts
-           * two benches on one order on the same day.
-           *
-           * Gluing foams and sews side by side, and the board writes each
-           * bench its own row: one carries the hours as work in progress, the
-           * other receives the units. Two records, not a duplicate. Keyed on
-           * the day alone this reader refused the whole range the moment a
-           * routed order was worked at two benches in a day, so a record
-           * written exactly as designed reported nothing at all.
-           *
-           * `WorkDescription` is what tells them apart — the writer puts
-           * `Op 20 sewing` there. A list without the column answers blank for
-           * every row, which is the day-only rule again, so an older record
-           * still guards itself exactly as it used to.
+           * An order finished over several days has a row for each — a big
+           * order never comes off in one — and those are its record, not
+           * duplicates. Two rows for the same order on the same day are one
+           * completion written twice (two screens confirming it at once): the
+           * newer one stands, so the day is counted once.
            */
           const operation = String(row[fields.description] ?? '').trim();
           const key = `${job}|${day}|${operation}`;
           if (!job || !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('Assembly results contain an invalid job/date.');
-          if (keys.has(key)) throw new Error(`Duplicate Assembly result: ${job} ${day}${operation ? ` (${operation})` : ''}. Correct the source before reporting totals.`);
-          keys.add(key);
+          const held = keys.get(key);
+          if (held !== undefined && Number(output[held].id) > Number(row.Id)) continue;
           const number = (field: string): number => {
             const n = Number(row[field] ?? 0);
             if (!Number.isFinite(n) || n < 0) throw new Error(`Invalid ${field} for ${key}.`);
             return n;
           };
-          output.push({ workType: String(row[fields.workType] ?? ""), laborHours: number(fields.laborHours), description: operation, supportDepartment: String(row[fields.supportDepartment] ?? ""), id: String(row.Id), job, day, line: String(row[fields.line] ?? ''), operators: String(row[fields.operators] ?? ''),
+          const result: AssemblyResult = { workType: String(row[fields.workType] ?? ""), laborHours: number(fields.laborHours), description: operation, supportDepartment: String(row[fields.supportDepartment] ?? ""), id: String(row.Id), job, day, line: String(row[fields.line] ?? ''), operators: String(row[fields.operators] ?? ''),
             plannedHours: number(fields.plannedHours), orderQty: number(fields.orderQty),
             // Read apart from `number()`: a missing column and a booked zero
             // must not read alike, or every unmeasured day would be counted as
@@ -107,7 +101,9 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
             output: number(fields.output), complete: number(fields.complete), reject: number(fields.reject), rework: number(fields.rework),
             completed: row[fields.completed] === true, due: row[fields.due] ? String(row[fields.due]) : null,
             completedAt: row[fields.completedAt] ? String(row[fields.completedAt]) : null,
-            epicor: hasCompletions ? epicorOf(row, fields) : null });
+            epicor: hasCompletions ? epicorOf(row, fields) : null };
+          if (held !== undefined) output[held] = result;
+          else keys.set(key, output.push(result) - 1);
         }
         url = body['odata.nextLink'] ?? body['@odata.nextLink'] ?? '';
       }

@@ -1,5 +1,6 @@
 /**
- * Mirrors the board into the `ASSY_Production` SharePoint list.
+ * Mirrors the board into the `ASSY_Planning` SharePoint list (it was
+ * `ASSY_Production`; the columns are unchanged).
  *
  * One row per **order per day**, matching the list Resero already designed —
  * independently of PMD machine/shift records. MES uses a dedicated Assembly
@@ -23,8 +24,17 @@
  * the Due Date and this board never changes it.
  *
  * Rows are diffed before writing, so the five-minute refresh costs one read and
- * no writes when nothing moved. Orders that leave the export keep their rows —
- * the list is the production record, not a copy of today's CSV.
+ * no writes when nothing moved.
+ *
+ * ## Finished orders leave the list
+ *
+ * `ASSY_Planning` holds the orders still to make. Once `CompletedJobs.csv`
+ * shows an order's whole quantity reported, its rows are moved to the site's
+ * recycle bin and the order is not written again — the record of what was
+ * finished, and by whom, is `ASSY_CompletedJobs`, which KPIs · Assembly
+ * reads. An order with a completion the supervisor has not yet confirmed is
+ * kept until it is, because the dialog reads its line, Due Date and crew from
+ * here. An order that merely leaves the export keeps its rows.
  */
 
 import type { AssemblyGanttView } from '@/engine/assembly/board';
@@ -36,13 +46,14 @@ import {
   fetchListItemsWithIds,
   fetchRowsWhere,
   isTransient,
+  recycleListItem,
   updateListItem,
   type ListItem,
   type WriteError,
 } from './lists.write';
 
-/** Default list name; override with `VITE_PRODUCTION_LIST`. */
-export const PRODUCTION_LIST = 'ASSY_Production';
+/** Default list name; override with `VITE_PLANNING_LIST`. */
+export const PLANNING_LIST = 'ASSY_Planning';
 
 /** Internal column names. Create the list with these exact names. */
 export const PRODUCTION_COLUMNS = {
@@ -163,6 +174,8 @@ export interface SyncOutcome {
   created: number;
   updated: number;
   unchanged: number;
+  /** Rows of finished orders moved to the recycle bin. */
+  removed?: number;
   errors: string[];
   /**
    * At least one failure was worth trying again — throttled, unanswered, or a
@@ -731,6 +744,49 @@ async function openRow(
   return isTransient(res.error) ? null : 'abort';
 }
 
+/** What the planning sync is told about finished orders. */
+export interface FinishedOrders {
+  /** Everything `CompletedJobs.csv` shows reported against each order. */
+  doneQty?: Readonly<Record<string, number>>;
+  /** Orders with a completion still waiting for the supervisor: kept for now. */
+  hold?: readonly string[];
+}
+
+/**
+ * The orders whose whole quantity the export shows reported: the board's
+ * quantity for an order it holds, else the largest OrderQty on the order's
+ * rows. Support orders are never finished this way, and an order with no
+ * quantity to compare against is never taken off.
+ */
+export function finishedOrders(
+  orders: readonly OrderFacts[],
+  rows: readonly ListItem[],
+  finished: FinishedOrders = {},
+): Set<string> {
+  const done = finished.doneQty ?? {};
+  const hold = new Set(finished.hold ?? []);
+  const out = new Set<string>();
+  if (Object.keys(done).length === 0) return out;
+  const facts = new Map<string, OrderFacts>();
+  for (const f of orders) facts.set(f.jobNum, f);
+  const listed = new Map<string, number>();
+  const support = new Set<string>();
+  for (const row of rows) {
+    const job = String(row.fields[PRODUCTION_COLUMNS.jobNum] ?? '').trim();
+    if (!job) continue;
+    if (String(row.fields[PRODUCTION_COLUMNS.workType] ?? '').trim() === 'Support') support.add(job);
+    const qty = Number(row.fields[PRODUCTION_COLUMNS.orderQty] ?? 0);
+    if (Number.isFinite(qty) && qty > (listed.get(job) ?? 0)) listed.set(job, qty);
+  }
+  for (const job of new Set([...facts.keys(), ...listed.keys()])) {
+    const f = facts.get(job);
+    if (f?.manual || support.has(job) || hold.has(job)) continue;
+    const qty = f && f.orderQty > 0 ? f.orderQty : (listed.get(job) ?? 0);
+    if (qty > 0 && (done[job] ?? 0) >= qty) out.add(job);
+  }
+  return out;
+}
+
 /**
  * Push the board into the list: open a row for any order that has none, upsert
  * each booked shift, and refresh the order-level columns on every other row of
@@ -743,11 +799,13 @@ export async function syncProduction(
   cfg: SharePointConfig,
   list: string,
   orders: OrderFacts[],
+  finished: FinishedOrders = {},
 ): Promise<SyncOutcome> {
   const out: SyncOutcome = {
     created: 0,
     updated: 0,
     unchanged: 0,
+    removed: 0,
     errors: [],
     retryable: false,
   };
@@ -771,12 +829,23 @@ export async function syncProduction(
     byJob.set(key, rows);
   }
 
+  // Finished in full: off the list, and not written again.
+  const done = finishedOrders(orders, existing.value, finished);
+  for (const job of [...done].sort()) {
+    for (const row of byJob.get(job) ?? []) {
+      const res = await recycleListItem(cfg, list, row.id);
+      if (res.ok) out.removed = (out.removed ?? 0) + 1;
+      else note({ ...res.error, message: `${job}: not removed — ${res.error.message}` });
+    }
+  }
+
   // Said once at the end. While the roster is the built-in fallback this is
   // true of every order on the board, and eighty copies of it in the banner
   // buried whatever else the sync had to say.
   const withDemoCrew: string[] = [];
 
   for (const facts of oneFactsPerJob(orders)) {
+    if (done.has(facts.jobNum)) continue;
     if (facts.hasSyntheticCrew) {
       withDemoCrew.push(facts.jobNum);
       continue;

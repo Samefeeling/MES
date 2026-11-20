@@ -1,30 +1,36 @@
 /**
- * Where a confirmed completion is written: the order's own row for that day
- * in `ASSY_Production`, in columns of its own.
+ * Where a confirmed completion is written: a row of its own in
+ * `ASSY_CompletedJobs`, the list KPIs · Assembly reads.
  *
- * ## Why columns of its own
+ * ## One row per order per day
  *
- * The row's existing columns already have an owner. The board rewrites
- * `Operators`, `Complete` and `JobCompleted` from its shift entry every time
- * it syncs, so a name written there would be put back the next five-minute
- * refresh, and Epicor's quantity in `Complete` would count the same pieces a
- * second time in every figure the KPI page already shows. The columns below
- * are written by this confirmation and by nothing else — the board's sync
- * names its columns and never touches one it does not name.
+ * `ASSY_CompletedJobs` has the columns of `ASSY_Planning`, so the row is a
+ * whole record on its own — the order, the day, the people who finished it,
+ * the quantity Epicor shows finished that day and the order's standard —
+ * rather than a few columns added to the planning row. An order finished over
+ * several days (a big order never comes off in one) has a row for each day;
+ * that is the record's shape, not a duplicate.
  *
- * ## Which row
+ * The row's key is `Job|YYYY-MM-DD`, written into `RecordKey`. It is looked
+ * up by that key first and by its Date only after: a Date column comes back
+ * shaped by the site's timezone, and matching on it alone is how a row that
+ * was already there was missed and a second one refused by the list's unique
+ * index ("duplicate").
  *
- * The one the order already holds for that day; on a routed order, the
- * operation that receives (not a `WIP` bench), the latest of them. When the
- * order has no row that day — finished in Epicor on a day nobody booked it on
- * the board — a row is opened under the key the board would have used, so a
- * booking made later lands in the same row rather than beside it.
+ * ## The figures
+ *
+ * Complete and ShiftOutput are Epicor's quantity for the day. PlannedHours and
+ * OrderQty are written so that Complete × PlannedHours ÷ OrderQty is exactly
+ * Epicor's standard hours for it — Epicor's rate per piece, over the order's
+ * quantity when that is known — so every figure the KPI page draws from the
+ * row agrees with the hours Epicor reported. JobCompleted is set on the day
+ * the export's running total reaches the order's quantity.
  */
 
 import type { NewColumn } from '@/engine/dispatch/waybillList';
 import type { Completion } from './completedJobs';
 
-/** The columns, named as they are created in the list. */
+/** The completion's own columns, named as they are created in the list. */
 export const COMPLETION_COLUMNS = {
   epicorQty: 'EpicorQty',
   epicorHours: 'EpicorHours',
@@ -48,10 +54,14 @@ export const COMPLETION_COLUMN_SPEC: readonly NewColumn[] = [
   { name: COMPLETION_COLUMNS.confirmedAt, type: 'instant', inView: true },
 ];
 
-/** One `ASSY_Production` row, as far as a completion cares. */
+/** Columns a completion row cannot go without; everything else is written only where the list has it. */
+export const ESSENTIAL_COLUMNS = ['Title', 'Date', 'RecordKey'] as const;
+
+/** One row of `ASSY_Planning` or `ASSY_CompletedJobs`, as far as a completion cares. */
 export interface StoredDay {
   id: string;
   etag?: string;
+  recordKey: string;
   day: string;
   /** The operation number from `Op 30 stapling`, '' when the row names none. */
   op: string;
@@ -59,11 +69,22 @@ export interface StoredDay {
   line: string;
   operators: string[];
   operatorIds: string[];
+  dueDate: string | null;
+  orderQty: number | null;
+  plannedHours: number | null;
   completedBy: string[];
   completedByIds: string[];
   confirmedBy: string;
   confirmedAt: string;
   epicorQty: number | null;
+}
+
+/** What is known of the order a completion belongs to. */
+export interface CompletionOrder {
+  line: string;
+  dueDate: string | null;
+  /** The order's whole quantity; null when nothing still holds the order. */
+  orderQty: number | null;
 }
 
 const names = (raw: unknown, sep: RegExp): string[] =>
@@ -72,7 +93,14 @@ const names = (raw: unknown, sep: RegExp): string[] =>
     .map((s) => s.trim())
     .filter(Boolean);
 
+const numberOrNull = (raw: unknown): number | null => {
+  if (raw === null || raw === undefined || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+};
+
 const pad = (n: number): string => String(n).padStart(2, '0');
+const round2 = (n: number): number => Math.round(n * 100) / 100;
 
 /** `YYYY-MM-DD` of a stored Date cell, read the way the board's own sync reads it. */
 export function storedDay(raw: unknown): string {
@@ -88,41 +116,45 @@ export function storedDay(raw: unknown): string {
 export function readStoredDay(item: { id: string; etag?: string; fields: Record<string, unknown> }): StoredDay {
   const f = item.fields;
   const c = COMPLETION_COLUMNS;
-  const qty = f[c.epicorQty];
   return {
     id: item.id,
     etag: item.etag,
+    recordKey: String(f.RecordKey ?? '').trim(),
     day: storedDay(f.Date),
     op: /^Op\s+(\d+)\b/i.exec(String(f.WorkDescription ?? '').trim())?.[1] ?? '',
     wip: String(f.WorkType ?? '').trim().toUpperCase() === 'WIP',
     line: String(f.Line ?? '').trim(),
     operators: names(f.Operators, /,/),
     operatorIds: names(f.OperatorIds, /,/),
+    dueDate: f.DueDate ? String(f.DueDate) : null,
+    orderQty: numberOrNull(f.OrderQty),
+    plannedHours: numberOrNull(f.PlannedHours),
     completedBy: names(f[c.completedBy], /,/),
     completedByIds: names(f[c.completedByIds], /,/),
     confirmedBy: String(f[c.confirmedBy] ?? '').trim(),
     confirmedAt: String(f[c.confirmedAt] ?? '').trim(),
-    epicorQty: qty === null || qty === undefined || qty === '' ? null : Number(qty),
+    epicorQty: numberOrNull(f[c.epicorQty]),
   };
 }
 
-/** The row a completion on `day` belongs in, or null when the order has none that day. */
-export function rowForCompletion(rows: readonly StoredDay[], day: string): StoredDay | null {
-  const onDay = rows.filter((r) => r.day === day);
-  if (onDay.length === 0) return null;
-  const receiving = onDay.filter((r) => !r.wip);
-  const pool = receiving.length ? receiving : onDay;
-  return [...pool].sort((a, b) => Number(b.op || 0) - Number(a.op || 0) || Number(a.id) - Number(b.id))[0];
+/**
+ * The `ASSY_CompletedJobs` row already holding this completion: by its key,
+ * else by the order's row on that day (the newest, should there be two).
+ */
+export function recordFor(rows: readonly StoredDay[], completion: Completion): StoredDay | null {
+  const byKey = rows.filter((r) => r.recordKey === completion.key);
+  const pool = byKey.length ? byKey : rows.filter((r) => r.day === completion.day);
+  return [...pool].sort((a, b) => Number(b.id) - Number(a.id))[0] ?? null;
 }
 
 /** Has somebody already said who finished it? */
 export const isConfirmed = (row: StoredDay | null): boolean => Boolean(row?.confirmedAt);
 
 /**
- * Who to offer before anybody has said: the people already named against the
- * order — on that day's row, else on the latest row before it that names
- * anyone. The board's own crew for the day, when it still has the order, is
- * offered ahead of both by the caller.
+ * Who to offer before anybody has said: the people `ASSY_Planning` names
+ * against the order — on that day's row, else on the latest row before it
+ * that names anyone. The board's own crew for the day, when it still has the
+ * order, is offered ahead of both by the caller.
  */
 export function suggestedCrew(rows: readonly StoredDay[], day: string): { ids: string[]; names: string[] } {
   const named = rows
@@ -132,23 +164,61 @@ export function suggestedCrew(rows: readonly StoredDay[], day: string): { ids: s
   return hit ? { ids: hit.operatorIds, names: hit.operators } : { ids: [], names: [] };
 }
 
-/** The columns a confirmation writes. */
-export function completionFields(
+/** The order's facts, from the first of `ASSY_Planning`'s rows that holds each. */
+export function orderFromRows(rows: readonly StoredDay[]): CompletionOrder {
+  const receiving = [...rows].sort((a, b) => Number(a.wip) - Number(b.wip));
+  return {
+    line: receiving.find((r) => r.line)?.line ?? '',
+    dueDate: receiving.find((r) => r.dueDate)?.dueDate ?? null,
+    orderQty: receiving.find((r) => (r.orderQty ?? 0) > 0)?.orderQty ?? null,
+  };
+}
+
+/**
+ * The whole `ASSY_CompletedJobs` row for one confirmed completion.
+ *
+ * `doneToDate` is the export's running total for the order through the
+ * completion's day, which is what says whether this day finished it.
+ */
+export function completionRow(
   completion: Completion,
   people: ReadonlyArray<{ id: string; name: string }>,
   confirmedBy: string,
   at: Date,
+  order: CompletionOrder,
+  doneToDate: number,
 ): Record<string, unknown> {
   const c = COMPLETION_COLUMNS;
   const [day, time] = completion.lastAt.split('T');
   const [y, m, d] = day.split('-').map(Number);
   const [hh, mm] = (time ?? '00:00').split(':').map(Number);
+  // Entered at a local wall-clock time; sent as the instant it was.
+  const enteredAt = new Date(y, m - 1, d, hh || 0, mm || 0).toISOString();
+  const orderQty = order.orderQty && order.orderQty > 0 ? order.orderQty : null;
+  const base = orderQty ?? completion.qty;
+  const rate = completion.qty > 0 ? completion.hours / completion.qty : 0;
+  const finished = orderQty !== null && doneToDate >= orderQty;
   return {
+    Title: completion.jobNum,
+    Date: completion.day,
+    RecordKey: completion.key,
+    Line: order.line,
+    Operators: people.map((p) => p.name).join(', '),
+    OperatorIds: people.map((p) => p.id).join(','),
+    ShiftOutput: completion.qty,
+    Complete: completion.qty,
+    Reject: 0,
+    Rework: 0,
+    OrderQty: base,
+    PlannedHours: round2(rate * base),
+    ...(orderQty !== null ? { RemainingQty: Math.max(0, orderQty - doneToDate) } : {}),
+    ...(order.dueDate ? { DueDate: order.dueDate } : {}),
+    JobCompleted: finished,
+    CompletedAt: finished ? enteredAt : null,
     [c.epicorQty]: completion.qty,
     [c.epicorHours]: completion.hours,
     [c.epicorPartNum]: completion.partNum,
-    // Entered at a local wall-clock time; sent as the instant it was.
-    [c.epicorCompletedAt]: new Date(y, m - 1, d, hh || 0, mm || 0).toISOString(),
+    [c.epicorCompletedAt]: enteredAt,
     [c.completedBy]: people.map((p) => p.name).join(', '),
     [c.completedByIds]: people.map((p) => p.id).join(','),
     [c.confirmedBy]: confirmedBy,
@@ -156,21 +226,7 @@ export function completionFields(
   };
 }
 
-/**
- * The row to open for an order finished on a day it has none: the board's
- * key for that day (`Job|YYYY-MM-DD`), its line, and the completion — no
- * crew, quantities or flags of the board's, which stay the board's to write.
- */
-export function newCompletionRow(
-  completion: Completion,
-  line: string,
-  fields: Record<string, unknown>,
-): Record<string, unknown> {
-  return {
-    Title: completion.jobNum,
-    Date: completion.day,
-    RecordKey: completion.key,
-    Line: line,
-    ...fields,
-  };
+/** The row as it now stands in the list, for the dialog to hold after a write. */
+export function storedFromRow(id: string, fields: Record<string, unknown>): StoredDay {
+  return readStoredDay({ id, fields });
 }

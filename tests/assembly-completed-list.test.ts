@@ -1,0 +1,97 @@
+/**
+ * Reading `ASSY_CompletedJobs` for KPIs · Assembly.
+ *
+ * One row per order per day — an order finished over several days has a row
+ * for each, and every one counts. Two rows for one order on one day (one
+ * operation) are one completion written twice: the newer stands rather than
+ * the whole range being refused, which is what the reader used to do.
+ */
+
+import { afterEach, expect, it, vi } from 'vitest';
+import { createAssemblyDataLayer } from '../src/dal/sharepoint';
+
+afterEach(() => vi.unstubAllGlobals());
+
+const COLUMNS = ['Title', 'Date', 'ShiftOutput', 'WorkDescription', 'WorkType'];
+
+/** Stub the list: its columns, then one page of rows. */
+function stub(rows: Record<string, unknown>[], columns = COLUMNS): void {
+  vi.stubGlobal('window', {
+    location: { origin: 'https://tenant.sharepoint.com' },
+  });
+  vi.stubGlobal('fetch', async (url: string) => {
+    if (url.includes('/fields?')) {
+      return new Response(
+        JSON.stringify({
+          value: columns.map((name) => ({ Title: name, InternalName: name })),
+        }),
+      );
+    }
+    return new Response(JSON.stringify({ value: rows }));
+  });
+}
+
+const dal = () =>
+  createAssemblyDataLayer({
+    VITE_BACKEND: 'sharepoint',
+    VITE_SITE_URL: 'https://tenant.sharepoint.com/sites/factory',
+  });
+
+const row = (over: Record<string, unknown>) => ({
+  Id: 1,
+  Title: 'ASM8001',
+  Date: '2026-09-21T00:00:00Z',
+  ShiftOutput: 0,
+  ...over,
+});
+
+it('reports both benches of an order worked at two of them in a day', async () => {
+  stub([
+    // Sewing hands its covers on; stapling receives the units.
+    row({ Id: 1, WorkDescription: 'Op 20 sewing', WorkType: 'WIP' }),
+    row({ Id: 2, WorkDescription: 'Op 30 stapling', ShiftOutput: 9 }),
+  ]);
+  const read = await dal().results('2026-09-21', '2026-09-21');
+  expect(read.map((r) => r.description)).toEqual([
+    'Op 20 sewing',
+    'Op 30 stapling',
+  ]);
+  expect(read.map((r) => r.output)).toEqual([0, 9]);
+});
+
+it('keeps the newer of two rows for the same operation on one day', async () => {
+  stub([
+    row({ Id: 2, WorkDescription: 'Op 10 foaming', ShiftOutput: 5 }),
+    row({ Id: 1, WorkDescription: 'Op 10 foaming', ShiftOutput: 2 }),
+  ]);
+  const read = await dal().results('2026-09-21', '2026-09-21');
+  expect(read.map((r) => [r.id, r.output])).toEqual([['2', 5]]);
+});
+
+it('keeps the newer of two rows of an order worked at one place', async () => {
+  stub([row({ Id: 1, ShiftOutput: 2 }), row({ Id: 2, ShiftOutput: 5 })], ['Title', 'Date', 'ShiftOutput']);
+  const read = await dal().results('2026-09-21', '2026-09-21');
+  expect(read.map((r) => [r.id, r.output])).toEqual([['2', 5]]);
+});
+
+it('counts every day of an order finished over several days', async () => {
+  stub([
+    row({ Id: 1, ShiftOutput: 2 }),
+    row({ Id: 2, Date: '2026-09-22T00:00:00Z', ShiftOutput: 5 }),
+    row({ Id: 3, Date: '2026-09-23T00:00:00Z', ShiftOutput: 1 }),
+  ]);
+  const read = await dal().results('2026-09-21', '2026-09-23');
+  expect(read.map((r) => r.day)).toEqual(['2026-09-23', '2026-09-22', '2026-09-21']);
+});
+
+it('reads ASSY_CompletedJobs unless told otherwise', async () => {
+  const seen: string[] = [];
+  vi.stubGlobal('window', { location: { origin: 'https://tenant.sharepoint.com' } });
+  vi.stubGlobal('fetch', async (url: string) => {
+    seen.push(url);
+    if (url.includes('/fields?')) return new Response(JSON.stringify({ value: COLUMNS.map((name) => ({ Title: name, InternalName: name })) }));
+    return new Response(JSON.stringify({ value: [] }));
+  });
+  await dal().results('2026-09-21', '2026-09-21');
+  expect(seen.every((u) => u.includes("getbytitle('ASSY_CompletedJobs')"))).toBe(true);
+});

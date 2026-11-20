@@ -215,3 +215,19 @@ export function shortDay(key: string): string {
   const d = fromDayKey(key);
   return `${d.toLocaleDateString('en-AU', { weekday: 'short' })} ${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
 }
+
+/**
+ * Everything the export shows reported against each order, all days — what
+ * decides whether an order is finished in full. Every planner counts: the
+ * question is about an order number, not about whose board it is on.
+ */
+export function doneQtyByJob(rows: readonly CompletedLabourRow[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const row of rows) out[row.jobNum] = (out[row.jobNum] ?? 0) + row.qty;
+  return out;
+}
+
+/** What the export shows reported against one order up to and including `day`. */
+export function doneQtyThrough(rows: readonly CompletedLabourRow[], jobNum: string, day: string): number {
+  return rows.reduce((sum, row) => (row.jobNum === jobNum && row.day <= day ? sum + row.qty : sum), 0);
+}

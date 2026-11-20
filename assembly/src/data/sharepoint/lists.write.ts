@@ -10,7 +10,7 @@
  */
 
 import { ok, err, type Result } from '@/lib/result';
-import { sessionRows, sessionRowsWhere, sessionCreate, sessionUpdate, SharePointHttpError } from './session';
+import { sessionRows, sessionRowsWhere, sessionCreate, sessionUpdate, sessionRecycle, SharePointHttpError } from './session';
 
 async function sessionResult<T>(run: () => Promise<T>): Promise<Result<T, WriteError>> {
   try { return ok(await run()); } catch (e) { return err({ status: e instanceof SharePointHttpError ? e.status : 0, message: e instanceof Error ? e.message : String(e) }); }
@@ -229,5 +229,31 @@ export async function updateListItem(
     return err(
       unreachable(`Graph list "${list}" update error: ${message(e)}`),
     );
+  }
+}
+
+/**
+ * Take one row off the list. Through the site session it goes to the recycle
+ * bin, where it can be restored; Graph's delete does the same for list items.
+ */
+export async function recycleListItem(
+  cfg: SharePointConfig,
+  list: string,
+  itemId: string,
+): Promise<Result<void, WriteError>> {
+  if (cfg.authMode === 'session') return sessionResult(() => sessionRecycle(cfg, list, itemId));
+  const missing = configured(cfg);
+  if (missing) return err(missing);
+  try {
+    const res = await fetch(`${listUrl(cfg, list)}/items/${encodeURIComponent(itemId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${cfg.token}` },
+    });
+    if (!res.ok) {
+      return err(failed(res.status, `Graph list "${list}" delete failed: ${res.status} ${res.statusText}`));
+    }
+    return ok(undefined);
+  } catch (e) {
+    return err(unreachable(`Graph list "${list}" delete error: ${message(e)}`));
   }
 }

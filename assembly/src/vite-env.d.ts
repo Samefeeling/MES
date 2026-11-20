@@ -22,6 +22,10 @@ interface ImportMetaEnv {
   readonly VITE_WAYBILL_CSV_URL?: string;
   readonly VITE_COMPLETED_JOBS_CSV_URL?: string;
   readonly VITE_COMPLETED_JOBS_CSV_PATH?: string;
+  /** The board's planning list (default `ASSY_Planning` on SharePoint). */
+  readonly VITE_PLANNING_LIST?: string;
+  /** Confirmed completions, which KPIs · Assembly reads (default `ASSY_CompletedJobs`). */
+  readonly VITE_COMPLETED_JOBS_LIST?: string;
   readonly VITE_WAYBILL_CSV_PATH?: string;
   readonly VITE_WAYBILL_LIST?: string;
   readonly VITE_CUBICS_CSV_URL?: string;

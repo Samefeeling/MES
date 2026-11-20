@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   completionsBetween,
+  doneQtyByJob,
+  doneQtyThrough,
   confirmWindow,
   isAssemblyPlanner,
   parseCompletedJobsCsv,
@@ -73,5 +75,21 @@ describe('the days a supervisor is asked about', () => {
     expect(confirmWindow(new Date(2026, 11, 29, 7))).toEqual({ from: '2026-12-24', to: '2026-12-28' });
     setFactoryCalendar({ listed: [{ day: '2026-11-17', name: 'RDO' }] });
     expect(confirmWindow(new Date(2026, 10, 18, 7))).toEqual({ from: '2026-11-16', to: '2026-11-17' });
+  });
+});
+
+describe('how much of each order the export shows reported', () => {
+  const rows = parseCompletedJobsCsv(
+    'LaborDtl_CreateDate,LaborDtl_LaborQty,Calculated_PlannerID,LaborDtl_JobNum\n' +
+      '2026-11-17T00:00:00,100,TABLE,J1\n2026-11-18T00:00:00,50,TABLE,J1\n2026-11-18T00:00:00,5,PMD,SFM1\n',
+  ).rows;
+
+  it('totals every day of every order, PMD’s included', () => {
+    expect(doneQtyByJob(rows)).toEqual({ J1: 150, SFM1: 5 });
+  });
+
+  it('runs a total up to a day', () => {
+    expect(doneQtyThrough(rows, 'J1', '2026-11-17')).toBe(100);
+    expect(doneQtyThrough(rows, 'J1', '2026-11-18')).toBe(150);
   });
 });

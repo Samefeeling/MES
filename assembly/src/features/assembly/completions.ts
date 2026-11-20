@@ -1,32 +1,37 @@
 /**
  * The completed-orders dialog's data: which of Assembly's orders Epicor says
  * were finished in the window (`CompletedJobs.csv`), who is down as having
- * finished them, and writing the supervisor's answer back to `ASSY_Production`.
+ * finished them, and writing the supervisor's answer to `ASSY_CompletedJobs`.
  *
  * Who is offered before anybody has said, best first: the board's own crew on
  * the order that day, while the board still has the order; the people the
- * order's row for that day names; the latest earlier row that names anyone.
+ * order's `ASSY_Planning` row for that day names; the latest earlier row that
+ * names anyone.
  *
  * On the demo board (no SharePoint, mock data) the dialog is filled from the
  * board's own orders and its answers are kept on this screen only.
  */
 
 import { fetchCompletedJobsCsv, hasCompletedJobsSource, readCsvConfigFromEnv } from '@/data/csv/csv.client';
-import { ensureCompletionColumns, storedDaysFor, writeCompletion } from '@/data/sharepoint/completion.list';
+import { ensureCompletionColumns, fieldsFor, storedDaysFor, writeCompletion } from '@/data/sharepoint/completion.list';
 import { sessionRequest } from '@/data/sharepoint/session';
 import { readConfigFromEnv, type SharePointConfig } from '@/data/sharepoint/site';
 import type { AssemblyGanttView } from '@/engine/assembly/board';
 import {
   completionsBetween,
   confirmWindow,
+  doneQtyByJob,
+  doneQtyThrough,
   parseCompletedJobsCsv,
   type Completion,
 } from '@/engine/assembly/completedJobs';
 import {
-  completionFields,
+  completionRow,
   isConfirmed,
-  rowForCompletion,
+  orderFromRows,
+  recordFor,
   suggestedCrew,
+  type CompletionOrder,
   type StoredDay,
 } from '@/engine/assembly/completionRecord';
 import { LINES, rootLineKey, type LineDef } from '@/domain/assembly';
@@ -36,9 +41,13 @@ import { useDataStore } from '@/store/dataStore';
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-/** The production list, named the way the board's own sync names it. */
-export const productionListName = (): string =>
-  (import.meta.env.VITE_PRODUCTION_LIST ?? (import.meta.env.VITE_BACKEND === 'sharepoint' ? 'ASSY_Production' : '')).trim();
+/** The board's planning list — the same name the board's own sync writes. */
+export const planningListName = (): string =>
+  (import.meta.env.VITE_PLANNING_LIST ?? (import.meta.env.VITE_BACKEND === 'sharepoint' ? 'ASSY_Planning' : '')).trim();
+
+/** The list confirmed completions are written to, and KPIs · Assembly reads. */
+export const completedListName = (): string =>
+  (import.meta.env.VITE_COMPLETED_JOBS_LIST ?? (import.meta.env.VITE_BACKEND === 'sharepoint' ? 'ASSY_CompletedJobs' : '')).trim();
 
 const listEnabled = (sp: SharePointConfig, list: string): boolean =>
   Boolean(list && sp.siteUrl && (sp.token || sp.authMode === 'session'));
@@ -92,26 +101,52 @@ function peopleFrom(board: AssemblyGanttView, ids: readonly string[], names: rea
   });
 }
 
-/** One dialog row for a completion and the order's stored rows. */
+/** The order as the board holds it, while it still does. */
+function boardOrder(board: AssemblyGanttView, jobNum: string): CompletionOrder | null {
+  const rows = boardRows(board, jobNum);
+  const row = rows.find((r) => !r.job.operation || r.job.operation.last) ?? rows[0];
+  if (!row) return null;
+  const qty = row.job.remainingQty + row.job.completedQty;
+  return {
+    line: lineName(row.line),
+    dueDate: row.job.dueDate ? row.job.dueDate.toISOString() : null,
+    orderQty: qty > 0 ? qty : null,
+  };
+}
+
+/**
+ * One dialog row for a completion: `planning` is the order's rows in
+ * `ASSY_Planning`, `completed` its rows in `ASSY_CompletedJobs`.
+ */
 export function itemFor(
   board: AssemblyGanttView,
   completion: Completion,
-  stored: readonly StoredDay[],
+  planning: readonly StoredDay[],
+  completed: readonly StoredDay[],
+  doneToDate: number,
 ): CompletionItem {
-  const row = rowForCompletion(stored, completion.day);
+  const row = recordFor(completed, completion);
   const confirmed = isConfirmed(row);
   const offered = (() => {
     if (confirmed && row) return peopleFrom(board, row.completedByIds, row.completedBy);
     const crew = boardCrewFor(board, completion.jobNum, completion.day);
     if (crew.length) return crew;
-    const named = suggestedCrew(stored, completion.day);
+    const named = suggestedCrew(planning, completion.day);
     return peopleFrom(board, named.ids, named.names);
   })();
-  const onBoard = boardRows(board, completion.jobNum)[0];
+  const listed = orderFromRows(planning);
+  const held = boardOrder(board, completion.jobNum);
+  const order: CompletionOrder = {
+    line: held?.line || listed.line || row?.line || lineForPlanner(completion.planner),
+    dueDate: held?.dueDate ?? listed.dueDate ?? row?.dueDate ?? null,
+    orderQty: held?.orderQty ?? listed.orderQty ?? null,
+  };
   return {
     completion,
     row,
-    line: row?.line || stored.find((r) => r.line)?.line || (onBoard ? lineName(onBoard.line) : '') || lineForPlanner(completion.planner),
+    line: (confirmed && row?.line) || order.line,
+    order,
+    doneToDate,
     people: offered,
     confirmed,
     confirmedBy: row?.confirmedBy ?? '',
@@ -211,7 +246,8 @@ async function load(board: AssemblyGanttView, now: Date): Promise<void> {
   const window = confirmWindow(now);
   const csv = readCsvConfigFromEnv();
   const sp = readConfigFromEnv();
-  const list = productionListName();
+  const planningList = planningListName();
+  const list = completedListName();
   const demo = useDataStore.getState().source.name === 'mock' && !hasCompletedJobsSource(csv, sp);
   const keep = (next: CompletionItem[]): CompletionItem[] => {
     // A name somebody is choosing right now is not thrown away by a refresh.
@@ -228,17 +264,17 @@ async function load(board: AssemblyGanttView, now: Date): Promise<void> {
     const sameWindow = useCompletionStore.getState().window?.from === window.from;
     // The demo roster has nobody on past days: offer two people of the line.
     const items = demoCompletions(board, window).map((c) => {
-      const item = itemFor(board, c, []);
+      const item = itemFor(board, c, [], [], c.qty);
       if (item.people.length) return item;
       const key = LINES.find((l) => l.name === item.line)?.key;
       const skilled = board.workers.filter((w) => key && w.skills.some((k) => rootLineKey(k) === key)).slice(0, 2);
       return { ...item, people: skilled.map((w) => ({ id: String(w.id), name: w.name })) };
     });
-    set({ status: 'ready', window, local: true, error: null, warnings: [], items: sameWindow ? keep(items) : items });
+    set({ status: 'ready', window, local: true, error: null, warnings: [], doneQty: {}, items: sameWindow ? keep(items) : items });
     return;
   }
   if (!hasCompletedJobsSource(csv, sp)) {
-    set({ status: 'off', window, items: [], error: null, warnings: [] });
+    set({ status: 'off', window, items: [], error: null, warnings: [], doneQty: {} });
     return;
   }
   set({ status: useCompletionStore.getState().status === 'ready' ? 'ready' : 'loading', window, local: false });
@@ -248,18 +284,34 @@ async function load(board: AssemblyGanttView, now: Date): Promise<void> {
     return;
   }
   const parsed = parseCompletedJobsCsv(text.value);
+  const doneQty = doneQtyByJob(parsed.rows);
   const completions = completionsBetween(parsed.rows, window.from, window.to);
-  let stored = new Map<string, StoredDay[]>();
-  let error: string | null = null;
-  if (listEnabled(sp, list) && completions.length) {
-    const read = await storedDaysFor(sp, list, [...new Set(completions.map((c) => c.jobNum))]);
-    if (read.ok) stored = read.value;
-    else error = `${list} not read: ${read.error}`;
-  } else if (!listEnabled(sp, list)) {
-    error = 'No production list configured: confirmations cannot be saved.';
+  const jobs = [...new Set(completions.map((c) => c.jobNum))];
+  let planning = new Map<string, StoredDay[]>();
+  let completed = new Map<string, StoredDay[]>();
+  const problems: string[] = [];
+  if (!listEnabled(sp, list)) {
+    problems.push('No ASSY_CompletedJobs list configured: confirmations cannot be saved.');
+  } else if (jobs.length) {
+    const read = await storedDaysFor(sp, list, jobs);
+    if (read.ok) completed = read.value;
+    else problems.push(`${list} not read: ${read.error}`);
   }
-  const items = completions.map((c) => itemFor(board, c, stored.get(c.jobNum) ?? []));
-  set({ status: 'ready', items: keep(items), error, warnings: parsed.errors.slice(0, 3) });
+  if (listEnabled(sp, planningList) && jobs.length) {
+    // Only for who to offer and the order's Due Date; the dialog works without it.
+    const read = await storedDaysFor(sp, planningList, jobs);
+    if (read.ok) planning = read.value;
+  }
+  const items = completions.map((c) =>
+    itemFor(board, c, planning.get(c.jobNum) ?? [], completed.get(c.jobNum) ?? [], doneQtyThrough(parsed.rows, c.jobNum, c.day)),
+  );
+  set({
+    status: 'ready',
+    items: keep(items),
+    doneQty,
+    error: problems.length ? problems.join(' · ') : null,
+    warnings: parsed.errors.slice(0, 3),
+  });
 }
 
 /** Write who finished one order. */
@@ -278,9 +330,9 @@ export async function confirmCompletion(key: string): Promise<void> {
     patch({ confirmed: true, confirmedBy: 'Supervisor (demo)', error: null });
     return;
   }
-  const list = productionListName();
+  const list = completedListName();
   if (!listEnabled(sp, list)) {
-    patch({ error: 'No production list configured.' });
+    patch({ error: 'No ASSY_CompletedJobs list configured.' });
     return;
   }
   patch({ saving: true, error: null });
@@ -288,8 +340,9 @@ export async function confirmCompletion(key: string): Promise<void> {
     const columns = await ensureCompletionColumns(sp, list);
     if (!columns.ok) throw new Error(columns.error);
     const by = await confirmer(sp);
-    const fields = completionFields(item.completion, item.people, by, new Date());
-    const res = await writeCompletion(sp, list, item.completion, item.row, item.line, fields);
+    const order = { ...item.order, line: item.line };
+    const fields = fieldsFor(completionRow(item.completion, item.people, by, new Date(), order, item.doneToDate), columns.value);
+    const res = await writeCompletion(sp, list, item.completion, item.row, fields);
     if (!res.ok) throw new Error(res.error);
     patch({ saving: false, confirmed: true, confirmedBy: by, row: res.value });
   } catch (e) {

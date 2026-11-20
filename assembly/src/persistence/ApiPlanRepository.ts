@@ -5,7 +5,7 @@
  *   PUT    {base}/plans/:id      → upsert PersistedPlan
  */
 
-import { PRODUCTION_LIST } from '@/data/sharepoint/production.sync';
+import { PLANNING_LIST } from '@/data/sharepoint/production.sync';
 import {
   CURRENT_PLAN_ID,
   type PersistedPlan,
@@ -26,7 +26,7 @@ export class ApiPlanRepository implements PlanRepository {
         // Keeps the backend adapter explicit: daily production rows belong in
         // the PMD-compatible SharePoint list, not in the source planning CSV.
         // Named once, where the sync names it.
-        'X-Production-List': PRODUCTION_LIST,
+        'X-Production-List': PLANNING_LIST,
       },
       body: JSON.stringify(plan),
     });

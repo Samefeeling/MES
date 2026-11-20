@@ -1,24 +1,26 @@
 /**
- * Reading and writing confirmed completions in `ASSY_Production` — see
- * `engine/assembly/completionRecord` for which row and which columns.
+ * Reading `ASSY_Planning` and `ASSY_CompletedJobs` for the completed-orders
+ * dialog, and writing a confirmation into `ASSY_CompletedJobs` — see
+ * `engine/assembly/completionRecord` for the row.
  *
- * The columns are added to the list the first time a supervisor's screen
- * needs them, the way the Waybill list gains its planner columns: nobody has
- * to edit the list by hand before the dialog works.
+ * The completion columns are added to the list the first time a supervisor's
+ * screen needs them, the way the Waybill list gains its planner columns:
+ * nobody has to edit the list by hand before the dialog works.
  */
 
 import type { Completion } from '@/engine/assembly/completedJobs';
 import {
   COMPLETION_COLUMN_SPEC,
-  newCompletionRow,
+  ESSENTIAL_COLUMNS,
   readStoredDay,
-  rowForCompletion,
+  recordFor,
+  storedFromRow,
   type StoredDay,
 } from '@/engine/assembly/completionRecord';
 import { ok, err, type Result } from '@/lib/result';
 import type { SharePointConfig } from './site';
 import { clearSessionSchemaCache, sessionListFields } from './session';
-import { resolveField } from './fieldMap';
+import { resolveField, type ListField } from './fieldMap';
 import { createColumns } from './waybill.list';
 import {
   createListItem,
@@ -30,26 +32,50 @@ import {
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-/** Add whichever completion columns the list lacks. Session only; Graph lists are made by hand. */
+/**
+ * Add whichever completion columns the list lacks, and say which columns it
+ * has. Session only; a Graph list is made by hand and answers `null`.
+ */
 export async function ensureCompletionColumns(
   cfg: SharePointConfig,
   list: string,
-): Promise<Result<string[], string>> {
-  if (cfg.authMode !== 'session') return ok([]);
+): Promise<Result<ListField[] | null, string>> {
+  if (cfg.authMode !== 'session') return ok(null);
   try {
-    const schema = await sessionListFields(cfg, list);
+    let schema = await sessionListFields(cfg, list);
     const missing = COMPLETION_COLUMN_SPEC.filter((c) => !resolveField(schema, c.name));
-    if (missing.length === 0) return ok([]);
-    const added = await createColumns(cfg, list, missing);
-    clearSessionSchemaCache();
-    if (added.errors.length) return err(`${list}: columns not added — ${added.errors.join('; ')}`);
-    return ok(added.added);
+    if (missing.length) {
+      const added = await createColumns(cfg, list, missing);
+      clearSessionSchemaCache();
+      if (added.errors.length) return err(`${list}: columns not added — ${added.errors.join('; ')}`);
+      schema = await sessionListFields(cfg, list);
+    }
+    return ok(schema);
   } catch (e) {
     return err(`${list}: columns not read — ${message(e)}`);
   }
 }
 
-/** Each order's rows, asked of the list now. */
+/**
+ * The fields the list can take: everything when its columns are unknown,
+ * else the essentials and whatever else it has. A column a copy of the list
+ * happens to lack costs that one figure, not the whole confirmation.
+ */
+export function fieldsFor(fields: Record<string, unknown>, schema: ListField[] | null): Record<string, unknown> {
+  if (!schema) return fields;
+  const essential = new Set<string>(ESSENTIAL_COLUMNS);
+  const writable = (name: string): boolean => {
+    try {
+      const f = resolveField(schema, name);
+      return Boolean(f && !f.ReadOnlyField);
+    } catch {
+      return false;
+    }
+  };
+  return Object.fromEntries(Object.entries(fields).filter(([k]) => essential.has(k) || writable(k)));
+}
+
+/** Each order's rows in one list, asked of the list now. */
 export async function storedDaysFor(
   cfg: SharePointConfig,
   list: string,
@@ -83,45 +109,28 @@ export async function storedDaysFor(
 }
 
 /**
- * Write one confirmation: into the order's row for the day, or a new row when
- * it has none. A row that appears between the read and the write (the board
- * opening the day at the same moment) is written into, not doubled.
+ * Write one confirmation: over the row already holding it, or a new row. A
+ * row that appears between the read and the write (a second screen
+ * confirming the same order) is written over, not doubled.
  */
 export async function writeCompletion(
   cfg: SharePointConfig,
   list: string,
   completion: Completion,
   row: StoredDay | null,
-  line: string,
   fields: Record<string, unknown>,
 ): Promise<Result<StoredDay, string>> {
   const update = async (target: StoredDay): Promise<Result<StoredDay, string>> => {
-    // No version check: a MERGE of these columns alone cannot undo anything
-    // the board wrote to the row's other columns meanwhile, and the board
-    // touches the row on every refresh, so its version is always about to move.
+    // No version check: this row is the confirmation's alone, and the newest
+    // confirmation of it is the one that stands.
     const res = await updateListItem(cfg, list, target.id, fields);
-    return res.ok ? ok(target) : err(`${completion.jobNum}: ${res.error.message}`);
+    return res.ok ? ok(storedFromRow(target.id, fields)) : err(`${completion.jobNum}: ${res.error.message}`);
   };
   if (row) return update(row);
-  const created = await createListItem(cfg, list, newCompletionRow(completion, line, fields));
-  if (created.ok) {
-    return ok({
-      id: created.value,
-      day: completion.day,
-      op: '',
-      wip: false,
-      line,
-      operators: [],
-      operatorIds: [],
-      completedBy: [],
-      completedByIds: [],
-      confirmedBy: '',
-      confirmedAt: '',
-      epicorQty: null,
-    });
-  }
+  const created = await createListItem(cfg, list, fields);
+  if (created.ok) return ok(storedFromRow(created.value, fields));
   const again = await storedDaysFor(cfg, list, [completion.jobNum]);
-  const appeared = again.ok ? rowForCompletion(again.value.get(completion.jobNum) ?? [], completion.day) : null;
+  const appeared = again.ok ? recordFor(again.value.get(completion.jobNum) ?? [], completion) : null;
   if (appeared) return update(appeared);
   return err(`${completion.jobNum}: ${created.error.message}`);
 }

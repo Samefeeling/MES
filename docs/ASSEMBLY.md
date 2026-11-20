@@ -12,37 +12,41 @@ The header reads MES, the former Operator tab reads PMD, and Assembly opens the 
 
 `PMD` and `Assembly` are the first two buttons of the KPI toolbar, ahead of the period tabs (`src/ui/kpi-nav.ts`) — the same kind of choice, so the same control, department first because it decides what the rest of the row means. They were their own band above the page until then, a third row of navigation under the top bar's own.
 
-The page is laid out the way the PMD KPI page is, so the two can be read one after the other in the same meeting: period tabs and a From/To range, headline tiles, one table with a `TOTAL` under it, and a legend saying what every colour means. PMD rolls machine-shifts up per press; Assembly rolls order-days up per **line**, and each line opens into the orders behind it. The day-by-day bookings stay underneath as the evidence. Assembly never contributes to PMD machine OEE, efficiency or shift sign-off totals, and duplicate job/day rows cause a visible error instead of inflated totals.
+The page is laid out the way the PMD KPI page is, so the two can be read one after the other in the same meeting: period tabs and a From/To range, headline tiles, one table with a `TOTAL` under it, and a legend saying what every colour means. Assembly never contributes to PMD machine OEE, efficiency or shift sign-off totals.
+
+**Every figure comes from `ASSY_CompletedJobs`** (`VITE_COMPLETED_JOBS_LIST` overrides the name): one row per order finished on a day, as Epicor reported it in `CompletedJobs.csv` and a supervisor confirmed who finished it on the Assembly board (below). A big order finished over several days has a row for each day — that is the record, not a duplicate — and is **one** order in every count. Two rows for the same order on the same day are one completion written twice; the newer stands. `ASSY_Planning` is not read here: an order leaves it once it is finished, so it cannot be the record of what was made.
+
+Lines roll up the completions, and each line opens into the orders behind it; a per-person table and the list of completions sit underneath.
 
 | Column | Definition |
 | --- | --- |
-| Orders / Complete / Reject / Rework | Summed over the window; an order booked on five days is **one** order in every count. |
-| Output / Plan | What came off the line, over Crew h ÷ the order's standard — what the people actually on it were planned to make. PMD's Output cell reads `Good /expected` and colours itself by that ratio; this is the same reading, with the expectation worked out from the hours the shift had, because Assembly keeps no separate daily schedule. 🟢 ≥ 95% · 🟡 ≥ 80%. |
-| Yield% | Complete ÷ (Complete + Reject) — PMD's own definition. 🟢 ≥ 98% · 🟡 ≥ 95%. |
-| Crew h | People booked on the order that day × 7.5 h — the 07:00–15:30 shift less morning tea and lunch, which is exactly what the board schedules with. It is what the crew **could** have given the order, not what it took. |
-| Booked h | What it took, from `ASSY_Production.BookedHour`. The board times each day's work from **Start production** — 07:00 on any day after the first, since there is no second Start production to press — to the moment the shift pressed **Save entry**, steps over the breaks, and multiplies by the crew on it. A day can never book more than the shift held. Support work has no clock: its hours are the ones somebody entered. |
-| Made h | Output × the order's standard hours per piece — `JobOper_ProdStandard`, which the record carries as `PlannedHours ÷ OrderQty`. |
-| Std h | The same sum over the **good** pieces only, so **Made h − Std h is what the rejects cost in time**. |
-| Efficiency* | Std h ÷ Booked h. 🟢 ≥ 90% · 🟡 ≥ 75%. 100% is a day that went exactly to standard. A day on an order carrying no standard, or one booked before the board measured labour hours, is left out of **both** sides rather than scored zero — an order nobody costed was not worked badly, a day nobody timed did not take no time, and PMD drops an unjudgeable job-shift for the same reason. |
-| Support h | Factory General work, measured in the hours it took. It has no output at all, so it is never folded into Output, Yield or Efficiency. |
-| On time% | Orders finished on or before their Due Date ÷ orders finished with a Due Date to judge. 🟢 ≥ 95% · 🟡 ≥ 85%. |
+| Orders | Distinct orders with a completion in the period. |
+| Qty / Std h | Epicor's quantity and standard hours (`LaborDtl_LaborQty`, `LaborDtl_LaborHrs` — standard hours, not clocked time). |
+| People | Distinct people named as having finished them. |
+| Person-days | Each person counted once for each day they are named on a completion. |
+| Std h / person-day | Std h ÷ Person-days. |
+| Efficiency | Std h / person-day ÷ 7.5 h (the 07:00–15:30 shift less morning tea and lunch). 🟢 ≥ 90% · 🟡 ≥ 75%. It counts **finished** work only: a day spent on an order finished on a later day earns nothing that day, so it reads low for anyone on long orders. |
+| On time% | Orders whose last completion in the period was on or before their Due Date ÷ orders with a Due Date to judge. 🟢 ≥ 95% · 🟡 ≥ 85%. |
 
-### Completed in Epicor (who finished what)
+Per person, an order's Std h is shared equally among the people who finished it. **Order done** in the completions list marks the day the export's running total reached the order's quantity (`JobCompleted`).
 
-A section of its own under the line table, from **`CompletedJobs.csv`** — Epicor's labour entries of finished quantities (`LaborDtl_JobNum`, `LaborDtl_CreateDate`, `LaborDtl_LaborQty`, `LaborDtl_LaborHrs`, `Calculated_PlannerID`, `JobAsmbl_PartNum`, …), exported to the same folder as the PMD dashboard's `Planning.csv` (override with `VITE_COMPLETED_JOBS_CSV_PATH` / `_URL`).
+The board's own shift entries (Output, Reject, Booked h…) stay in `ASSY_Planning` for the board; they are no longer on this page, because they leave with the order.
+
+### Completed orders — who finished what
+
+From **`CompletedJobs.csv`** — Epicor's labour entries of finished quantities (`LaborDtl_JobNum`, `LaborDtl_CreateDate`, `LaborDtl_LaborQty`, `LaborDtl_LaborHrs`, `Calculated_PlannerID`, `JobAsmbl_PartNum`, …), exported to the same folder as the PMD dashboard's `Planning.csv` (override with `VITE_COMPLETED_JOBS_CSV_PATH` / `_URL`).
 
 1. Every morning the Assembly board reads the file and takes **every planner but PMD** (moulding records its own operators) for the days from the last working day up to yesterday — Friday to Sunday on a Monday, and across a public holiday or RDO from the FactoryCalendar. An order reported twice in a day is one completion.
-2. The **✓ Completed** chip in the board header says how many are waiting; the dialog opens by itself once a session when a signed-in supervisor has any. Each order offers the people the board had on it that day (else whoever it has now, else the names on the order's `ASSY_Production` row). The supervisor corrects them and confirms; typing or scanning an order number and pressing **Enter** confirms that order as shown.
-3. The answer is written to the order's `ASSY_Production` row for that day — the receiving operation's on a routed order — in eight columns of its own: `EpicorQty`, `EpicorHours`, `EpicorPartNum`, `EpicorCompletedAt`, `CompletedBy`, `CompletedByIds`, `CompletionConfirmedBy` (the signed-in SharePoint user) and `CompletionConfirmedAt`. The board's sync never writes these, and the confirmation never writes the board's `Operators`, `Complete` or `JobCompleted`, so neither undoes the other. An order with no row that day gets one under the board's own key (`Job|YYYY-MM-DD`); the board's figures leave such a row out until a shift books it. The columns are added to the list the first time a supervisor confirms (session mode), and are in `config/assembly-lists.json`.
-4. KPIs · Assembly shows only **confirmed** completions: Orders, Qty, Std h, On time (completed on or before the Due Date) and People; a per-person table (an order's Std h shared equally among the people who finished it; Std h / day over the days a person is named on a completion; Efficiency = that ÷ 7.5 h); and the order list. It is never added into the board's figures above it.
+2. The **✓ Completed** chip in the board header says how many are waiting; the dialog opens by itself once a session when a signed-in supervisor has any. Each order offers the people the board had on it that day (else whoever it has now, else the names on the order's `ASSY_Planning` rows). The supervisor corrects them and confirms; typing or scanning an order number and pressing **Enter** confirms that order as shown.
+3. The answer is written as a row of its own in **`ASSY_CompletedJobs`** (same columns as `ASSY_Planning`), keyed `RecordKey = Job|YYYY-MM-DD` and looked up by that key before its Date: `Title`, `Date`, `Line`, `Operators`/`OperatorIds` (who finished it), `Complete` = `ShiftOutput` = Epicor's quantity that day, `OrderQty` and `PlannedHours` (written so that Complete × PlannedHours ÷ OrderQty is exactly Epicor's hours), `RemainingQty`, `DueDate`, `JobCompleted`/`CompletedAt` (the day the running total reaches the order's quantity), and the eight completion columns `EpicorQty`, `EpicorHours`, `EpicorPartNum`, `EpicorCompletedAt`, `CompletedBy`, `CompletedByIds`, `CompletionConfirmedBy` (the signed-in SharePoint user) and `CompletionConfirmedAt`. Confirming again writes over the same row. Line, Due Date and order quantity come from the board while it still holds the order, else from the order's `ASSY_Planning` rows. The eight completion columns are added the first time a supervisor confirms (session mode); a column the list lacks otherwise is skipped rather than failing the confirmation.
 
-`LaborDtl_LaborHrs` is read as **standard** hours: in every sample the hours are the quantity times one fixed rate per part (100 pieces 12.5 h, 50 pieces 6.25 h). Per-person Efficiency counts finished work only — a day spent on an order finished later earns nothing that day.
+`LaborDtl_LaborHrs` is read as **standard** hours: in every sample the hours are the quantity times one fixed rate per part (100 pieces 12.5 h, 50 pieces 6.25 h).
+
+### Finished orders leave `ASSY_Planning`
+
+`ASSY_Planning` (once `ASSY_Production`; columns unchanged; `VITE_PLANNING_LIST` overrides the name) is kept in step with `Planning1.csv` and the board as before. Once `CompletedJobs.csv` shows an order's **whole quantity** reported — the export's total for the order across all its days, against the board's order quantity, or the largest `OrderQty` on its rows for an order the board no longer holds — the sync moves all its rows to the **site recycle bin** (restorable) and stops writing it. Two exceptions: an order with a completion in the confirm window that nobody has confirmed yet is kept until it is (the dialog reads its line, Due Date and crew from there), and support orders are never taken off this way. The sync waits for `CompletedJobs.csv` to be read before it writes, so a finished order is not reopened only to be taken off again.
 
 Thresholds are fixed and printed on the page, not editable: PMD's are argued over in the meeting because its presses are compared with one another, and there is no equivalent argument here yet.
-
-**Efficiency is measured against time, not against an allowance.** It used to divide by Crew h — the crew's whole 7.5-hour day, whether or not they spent it on this order — so an order two people picked up for the last two hours of a shift and finished read as 27% efficient. `BookedHour` is what that day actually took. Rows written before the column existed carry no measurement and are excluded from the figure; Efficiency populates from the first entry saved after this change.
-
-**`PlannedHours` now rides on every row**, not just support ones (`assembly/src/data/sharepoint/production.sync.ts`). It is an order-level column, so the next sync backfills it on rows written weeks ago. Without it the record says what came off the line but not what the work was supposed to take, and no honest efficiency can be read back out of it — which is why a row that still lacks one is excluded rather than counted.
 
 ## SharePoint schema
 
@@ -53,9 +57,10 @@ Thresholds are fixed and printed on the page, not editable: PMD's are argued ove
 | ASSY_Operator | Real operator names (Title), Position, Skills, Supervisor, OnShift and PlannedAnnualLeave | SharePoint item ID |
 | ASSY_Plans | Shared working plan, crew windows, pinned starts, output history, ignored orders and the Crew orders rules, plus one read-only row per day of history; a plan too large for one row also has part rows | Unique Title = current, day-YYYY-MM-DD, or `<plan>#<generation>#<n>` for a part |
 | FactoryCalendar | Every day the factory is shut beyond weekends — the public holidays and the RDOs; once read, the whole calendar (the worked-out NSW holidays only stand in when it cannot be read): Date (date only) and Name ("RDO" or the holiday's name). Written from Crew capacity → Closed days the moment a day is added. | SharePoint item ID |
-| ASSY_Production | Daily job quantities, booked labour hours, crew snapshot, dates, completion and pause details; Epicor's confirmed completion and who finished it (`EpicorQty` … `CompletionConfirmedAt`) | Unique RecordKey, generated per booking |
+| ASSY_Planning | The board's planning list (once ASSY_Production): open orders' daily rows — quantities, booked labour hours, crew snapshot, dates, completion and pause details. Finished orders leave it. | Unique RecordKey |
+| ASSY_CompletedJobs | Confirmed completions — what KPIs · Assembly reads: one row per order per day finished in Epicor, with who finished it (same columns as ASSY_Planning plus `EpicorQty` … `CompletionConfirmedAt`) | Unique RecordKey = `Job|YYYY-MM-DD` |
 
-`ASSY_Production.RecordKey` is the row's identity and nothing else: the board generates it when a shift first saves that day's entry, both sides carry it, and it is never rebuilt from anything. It used to be `Job|YYYY-MM-DD`, which tied a row's identity to a date — the one field on the record that can be read two ways, because a SharePoint date column answers in the site's timezone rather than the shift's. Keep the unique index on it. Rows opened by the sync before any booking (the blank row an order starts with) still take `Job|YYYY-MM-DD`, which both sides can work out; the first real entry for that day claims the row and writes its own key over it.
+`ASSY_Planning.RecordKey` is the row's identity and nothing else: the board generates it when a shift first saves that day's entry, both sides carry it, and it is never rebuilt from anything. It used to be `Job|YYYY-MM-DD`, which tied a row's identity to a date — the one field on the record that can be read two ways, because a SharePoint date column answers in the site's timezone rather than the shift's. Keep the unique index on it. Rows opened by the sync before any booking (the blank row an order starts with) still take `Job|YYYY-MM-DD`, which both sides can work out; the first real entry for that day claims the row and writes its own key over it.
 
 **Add the `BookedHour` column before deploying this build.** Every column the sync writes must exist, so until it does the write fails with `Missing SharePoint column: BookedHour` in the board's banner and no production is recorded. `config/assembly-lists.json` carries it; re-run `provision-assembly.ps1 -Apply`, or add a Number column named exactly `BookedHour`.
 
@@ -93,7 +98,8 @@ VITE_PMD_PLANNING_CSV_PATH=/sites/<PMDsite>/Shared Documents/PMD/Planning.csv
 # Optional overrides of the list names
 VITE_PRODUCT_DIE_COLOR_LIST=PMD_ProductDieColor
 VITE_FACTORY_CALENDAR_LIST=FactoryCalendar
-VITE_PRODUCTION_LIST=ASSY_Production
+VITE_PLANNING_LIST=ASSY_Planning
+VITE_COMPLETED_JOBS_LIST=ASSY_CompletedJobs
 VITE_ASSEMBLY_PLAN_LIST=ASSY_Plans
 ```
 
@@ -175,7 +181,7 @@ moving an order — dragging a bar to a new day or line, filing an unplaced orde
 onto a line, and releasing a pinned start — because each writes the shared plan
 and the pinned day goes out to the production list. It remains an operational
 gate on one compiled-in password, not access control: SharePoint's permissions
-on ASSY_Plans and ASSY_Production are what actually decide who may write, and
+on ASSY_Plans, ASSY_Planning and ASSY_CompletedJobs are what actually decide who may write, and
 its Modified By is what records which supervisor did. See
 `assembly/docs/board-interaction-rules.md`. A missing production column stops that sync at the first
 permanent error; correct the list schema and retry. No columns or list records
