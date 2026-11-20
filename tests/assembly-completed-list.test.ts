@@ -119,3 +119,13 @@ it('reads a Sydney site’s date column by its local day, the first day asked fo
     process.env.TZ = tz;
   }
 });
+
+it('takes a row’s day from its RecordKey, whatever its Date column reads', async () => {
+  stub([
+    // A Date the site and browser read as the 18th; the key says the 19th.
+    row({ Id: 1, Date: '2026-11-18T00:00:00Z', RecordKey: '018451-2-1|2026-11-19', ShiftOutput: 150 }),
+    row({ Id: 2, Date: '2026-11-18T00:00:00Z', RecordKey: '018474-5-1|2026-11-18', ShiftOutput: 26 }),
+  ], [...COLUMNS, 'RecordKey']);
+  const read = await dal().results('2026-11-19', '2026-11-19');
+  expect(read.map((r) => [r.day, r.output])).toEqual([['2026-11-19', 150]]);
+});

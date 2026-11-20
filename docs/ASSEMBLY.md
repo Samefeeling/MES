@@ -18,6 +18,8 @@ The page is laid out the way the PMD KPI page is, so the two can be read one aft
 
 Lines roll up the completions, and each line opens into the orders behind it; a per-person table and the list of completions sit underneath.
 
+**Last 24h** is the last working day before today — never today: yesterday on a normal morning, Friday to Sunday on a Monday (the same window the board's completed-orders dialog asks about). The period or range chosen is kept while MES is open, so going to PMD and back does not reset it. Each row's day is the one its `RecordKey` names (`Job|YYYY-MM-DD`, plain text); the `Date` column, which SharePoint returns shifted by the site's timezone, is only the fallback for a row without one.
+
 | Column | Definition |
 | --- | --- |
 | Orders | Distinct orders with a completion in the period. |

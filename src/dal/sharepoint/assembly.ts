@@ -18,6 +18,9 @@ export const DEFAULT_ASSEMBLY_FIELDS = {
   bookedHours: "BookedHour",
   "job": "Title",
   "date": "Date",
+  // `Job|YYYY-MM-DD` (or `Job#Op|YYYY-MM-DD`): the row's day as plain text,
+  // which no timezone can move. Preferred over Date wherever it carries one.
+  recordKey: "RecordKey",
   "line": "Line",
   "operators": "Operators",
   "output": "ShiftOutput",
@@ -84,7 +87,7 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
         const body = await res.json() as { value?: Record<string, unknown>[]; 'odata.nextLink'?: string; '@odata.nextLink'?: string };
         for (const row of body.value ?? []) {
           const job = String(row[fields.job] ?? '').trim();
-          const day = localDay(row[fields.date]);
+          const day = dayOfRow(row[fields.recordKey], row[fields.date]);
           /*
            * An order finished over several days has a row for each — a big
            * order never comes off in one — and those are its record, not
@@ -122,6 +125,18 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
       return output.sort((a, b) => b.day.localeCompare(a.day) || a.job.localeCompare(b.job));
     },
   };
+}
+
+/**
+ * A row's day: the one its RecordKey names (`018451-2-1|2026-11-19`), which
+ * the board writes as text; else its Date column read by local day. The Date
+ * column alone is not enough — what a SharePoint date comes back as depends
+ * on how the column was made and on the site's and the browser's timezones,
+ * and on this site it read a day early.
+ */
+export function dayOfRow(recordKey: unknown, date: unknown): string {
+  const keyed = /\|(\d{4}-\d{2}-\d{2})$/.exec(String(recordKey ?? '').trim())?.[1];
+  return keyed ?? localDay(date);
 }
 
 /** A row's confirmed Epicor completion, or null when it has none. */
