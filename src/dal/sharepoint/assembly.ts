@@ -4,6 +4,7 @@
 // order leaves it once it is finished.
 import type { AssemblyDataLayer, AssemblyResult, EpicorCompletion } from '../../types/assembly';
 import { fetchThroughThrottle } from './http';
+import { localDay } from '../../core/assembly-completions';
 import { type ListField, resolveField } from '../../../assembly/src/data/sharepoint/fieldMap';
 
 export const DEFAULT_ASSEMBLY_FIELDS = {
@@ -44,8 +45,17 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
       const site = (env.VITE_SHAREPOINT_SITE_URL || env.VITE_SITE_URL || '').replace(/\/$/, '');
       if (!site) throw new Error('Assembly SharePoint site is not configured.');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) throw new Error('Choose a valid date range.');
+      /*
+       * Asked a day wider on each side, then judged by each row's own local
+       * day (`localDay`). A SharePoint date column on this site stores 19/11
+       * as the site's midnight — `2026-11-18T13:00:00Z` in Sydney — so a
+       * filter on UTC midnights dropped every row of the first day asked for
+       * and read the rest a day early.
+       */
+      const start = new Date(`${from}T00:00:00Z`);
+      start.setUTCDate(start.getUTCDate() - 1);
       const end = new Date(`${to}T00:00:00Z`);
-      end.setUTCDate(end.getUTCDate() + 1);
+      end.setUTCDate(end.getUTCDate() + 2);
       const list = encodeURIComponent((env.VITE_COMPLETED_JOBS_LIST || 'ASSY_CompletedJobs').replace(/'/g, "''")).replace(/'/g, '%27');
       if (new URL(site).origin !== window.location.origin) throw new Error('Open MES on the configured SharePoint site.');
       const schemaResponse = await fetchThroughThrottle(`${site}/_api/web/lists/getbytitle('${list}')/fields?$select=Title,InternalName,ReadOnlyField`, {
@@ -63,7 +73,7 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
         else absent.add(key);
       }
       const hasCompletions = OPTIONAL_COMPLETION.every((key) => !absent.has(key));
-      const filter = `${fields.date} ge datetime'${from}T00:00:00Z' and ${fields.date} lt datetime'${end.toISOString()}'`;
+      const filter = `${fields.date} ge datetime'${start.toISOString()}' and ${fields.date} lt datetime'${end.toISOString()}'`;
       let url = `${site}/_api/web/lists/getbytitle('${list}')/items?$top=500&$filter=${encodeURIComponent(filter)}`;
       const output: AssemblyResult[] = [];
       const keys = new Map<string, number>();
@@ -74,7 +84,7 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
         const body = await res.json() as { value?: Record<string, unknown>[]; 'odata.nextLink'?: string; '@odata.nextLink'?: string };
         for (const row of body.value ?? []) {
           const job = String(row[fields.job] ?? '').trim();
-          const day = String(row[fields.date] ?? '').slice(0, 10);
+          const day = localDay(row[fields.date]);
           /*
            * An order finished over several days has a row for each — a big
            * order never comes off in one — and those are its record, not
@@ -85,6 +95,7 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
           const operation = String(row[fields.description] ?? '').trim();
           const key = `${job}|${day}|${operation}`;
           if (!job || !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('Assembly results contain an invalid job/date.');
+          if (day < from || day > to) continue;
           const held = keys.get(key);
           if (held !== undefined && Number(output[held].id) > Number(row.Id)) continue;
           const number = (field: string): number => {
