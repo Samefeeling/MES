@@ -57,12 +57,11 @@ const au = (day: string): string =>
 /**
  * The window each period tab means.
  *
- * "Last 24h" is the last working day BEFORE today, not literally the last
- * twenty-four hours: Assembly books one shift a day and its completions are
- * confirmed the morning after (the board's ✓ Completed dialog covers the last
- * working day to yesterday), so today has nothing yet. On a Monday the useful
- * question is what Friday did. Named to match the PMD tab beside it, which
- * bridges the weekend the same way.
+ * "Last 24h" is the last working day before today — never today, which has
+ * not been worked yet, let alone confirmed. On a Monday it is Friday to
+ * Sunday, the same window the board's completed-orders dialog asks about, so
+ * what was confirmed this morning is what this tab shows. Named to match the
+ * PMD tab beside it, which bridges the weekend the same way.
  */
 export function periodRange(key: PeriodKey, now: Date): { from: string; to: string } {
   const day = new Date(now);
@@ -73,13 +72,20 @@ export function periodRange(key: PeriodKey, now: Date): { from: string; to: stri
     monday.setDate(day.getDate() - ((day.getDay() + 6) % 7));
     return { from: localDay(monday), to: localDay(day) };
   }
-  const last = new Date(day);
-  last.setDate(last.getDate() - 1);
-  while (last.getDay() === 0 || last.getDay() === 6) {
-    last.setDate(last.getDate() - 1);
-  }
-  return { from: localDay(last), to: localDay(last) };
+  const yesterday = new Date(day);
+  yesterday.setDate(day.getDate() - 1);
+  const from = new Date(yesterday);
+  while (from.getDay() === 0 || from.getDay() === 6) from.setDate(from.getDate() - 1);
+  return { from: localDay(from), to: localDay(yesterday) };
 }
+
+/**
+ * The period and range last chosen, kept while MES is open: the page is
+ * rebuilt every time it is opened from PMD, and a range somebody typed must
+ * not snap back to the default each time. A preset tab is worked out afresh
+ * from today; a typed range is kept as typed.
+ */
+let chosen: { period: PeriodKey; from: string; to: string } | null = null;
 
 interface PageState {
   period: PeriodKey;
@@ -193,9 +199,10 @@ function detailTables(done: readonly CompletedOrderDay[]): string {
 
 export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
   const app = document.getElementById('app')!;
-  const opening = periodRange('lastDay', new Date());
+  const period: PeriodKey = chosen?.period ?? 'lastDay';
+  const opening = period === 'custom' && chosen ? chosen : periodRange(period, new Date());
   const S: PageState = {
-    period: 'lastDay',
+    period,
     from: opening.from,
     to: opening.to,
     rows: [],
@@ -336,6 +343,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
   }
 
   async function load(): Promise<void> {
+    chosen = { period: S.period, from: S.from, to: S.to };
     const current = ++request;
     S.loading = true;
     S.error = '';

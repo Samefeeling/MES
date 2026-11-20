@@ -154,3 +154,37 @@ it("still finds the day by RecordKey when the site's zone cannot be read", async
   const read = await dal().results('2026-11-19', '2026-11-19');
   expect(read.map((r) => r.day)).toEqual(['2026-11-19']);
 });
+
+it('reads a Sydney site’s date column by its local day, the first day asked for included', async () => {
+  const tz = process.env.TZ;
+  process.env.TZ = 'Australia/Sydney';
+  try {
+    const seen: string[] = [];
+    vi.stubGlobal('window', { location: { origin: 'https://tenant.sharepoint.com' } });
+    vi.stubGlobal('fetch', async (url: string) => {
+      seen.push(decodeURIComponent(url));
+      if (url.includes('/fields?')) return new Response(JSON.stringify({ value: COLUMNS.map((name) => ({ Title: name, InternalName: name })) }));
+      return new Response(JSON.stringify({ value: [
+        // 19/11 and 20/11 as the site stores them: its own midnight, in UTC.
+        row({ Id: 1, Date: '2026-11-18T13:00:00Z', ShiftOutput: 150 }),
+        row({ Id: 2, Date: '2026-11-19T13:00:00Z', ShiftOutput: 9 }),
+        row({ Id: 3, Date: '2026-11-17T13:00:00Z', ShiftOutput: 4 }),
+      ] }));
+    });
+    const read = await dal().results('2026-11-19', '2026-11-19');
+    expect(read.map((r) => [r.day, r.output])).toEqual([['2026-11-19', 150]]);
+    expect(seen.find((u) => u.includes('$filter'))).toContain("ge datetime'2026-11-18T00:00:00");
+  } finally {
+    process.env.TZ = tz;
+  }
+});
+
+it('takes a row’s day from its RecordKey, whatever its Date column reads', async () => {
+  stub([
+    // A Date the site and browser read as the 18th; the key says the 19th.
+    row({ Id: 1, Date: '2026-11-18T00:00:00Z', RecordKey: '018451-2-1|2026-11-19', ShiftOutput: 150 }),
+    row({ Id: 2, Date: '2026-11-18T00:00:00Z', RecordKey: '018474-5-1|2026-11-18', ShiftOutput: 26 }),
+  ], [...COLUMNS, 'RecordKey']);
+  const read = await dal().results('2026-11-19', '2026-11-19');
+  expect(read.map((r) => [r.day, r.output])).toEqual([['2026-11-19', 150]]);
+});

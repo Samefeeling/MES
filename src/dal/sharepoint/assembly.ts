@@ -85,7 +85,7 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
         const body = await res.json() as { value?: Record<string, unknown>[]; 'odata.nextLink'?: string; '@odata.nextLink'?: string };
         for (const row of body.value ?? []) {
           const job = String(row[fields.job] ?? '').trim();
-          const day = rowDay(row, fields, job, zone);
+          const day = rowDay(row, fields, zone);
           /*
            * An order finished over several days has a row for each — a big
            * order never comes off in one — and those are its record, not
@@ -154,10 +154,10 @@ async function siteZone(site: string): Promise<SiteZone | null> {
  * characters of the Date cell — that is the UTC day, one early for a site
  * east of UTC.
  */
-export function rowDay(row: Record<string, unknown>, fields: { date: string; recordKey: string }, job: string, zone: SiteZone | null): string {
-  const key = /^(.*)\|(\d{4}-\d{2}-\d{2})$/.exec(String(row[fields.recordKey] ?? '').trim());
-  if (key && key[1].trim() === job) return key[2];
-  return readCalendarDay(row[fields.date], zone) ?? '';
+export function rowDay(row: Record<string, unknown>, fields: { date: string; recordKey: string }, zone: SiteZone | null): string {
+  // `Job|YYYY-MM-DD`, or `Job#Op|YYYY-MM-DD` on a row copied from ASSY_Planning.
+  const keyed = /\|(\d{4}-\d{2}-\d{2})$/.exec(String(row[fields.recordKey] ?? '').trim())?.[1];
+  return keyed ?? readCalendarDay(row[fields.date], zone) ?? '';
 }
 
 /** A row's confirmed Epicor completion, or null when it has none. */

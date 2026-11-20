@@ -1,22 +1,21 @@
-/**
- * KPIs · Assembly opens on "Last 24h": the last working day before today.
- * Completions are confirmed the morning after, so today has none yet.
- */
 import { expect, it } from 'vitest';
 import { periodRange } from '../src/ui/assembly-kpi';
 
-const at = (iso: string): Date => new Date(`${iso}T09:00:00`);
+// Months are 0-based: 10 is November 2026. The 20th is a Friday.
+const at = (d: number, h = 9) => new Date(2026, 10, d, h, 0, 0);
 
-it('opens on yesterday on a weekday', () => {
-  expect(periodRange('lastDay', at('2026-11-20'))).toEqual({ from: '2026-11-19', to: '2026-11-19' });
+it('Last 24h is the working day before today, never today', () => {
+  expect(periodRange('lastDay', at(20))).toEqual({ from: '2026-11-19', to: '2026-11-19' });
+  expect(periodRange('lastDay', at(20, 23))).toEqual({ from: '2026-11-19', to: '2026-11-19' });
 });
 
-it('opens on Friday on a Monday, Saturday or Sunday', () => {
-  for (const day of ['2026-11-23', '2026-11-22', '2026-11-21']) {
-    expect(periodRange('lastDay', at(day))).toEqual({ from: '2026-11-20', to: '2026-11-20' });
-  }
+it('on a Monday, and over the weekend, Last 24h is Friday to yesterday', () => {
+  expect(periodRange('lastDay', at(23))).toEqual({ from: '2026-11-20', to: '2026-11-22' });
+  expect(periodRange('lastDay', at(22))).toEqual({ from: '2026-11-20', to: '2026-11-21' });
+  expect(periodRange('lastDay', at(21))).toEqual({ from: '2026-11-20', to: '2026-11-20' });
 });
 
-it('This Week runs Monday to today', () => {
-  expect(periodRange('thisWeek', at('2026-11-20'))).toEqual({ from: '2026-11-16', to: '2026-11-20' });
+it('This Week runs from Monday to today', () => {
+  expect(periodRange('thisWeek', at(20))).toEqual({ from: '2026-11-16', to: '2026-11-20' });
+  expect(periodRange('thisWeek', at(22))).toEqual({ from: '2026-11-16', to: '2026-11-22' });
 });

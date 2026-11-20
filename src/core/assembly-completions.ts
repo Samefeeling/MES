@@ -82,7 +82,25 @@ export interface LineCompletions {
   orders: OrderCompletions[];
 }
 
-const day10 = (s: string | null): string | null => (s && /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : null);
+/**
+ * The day a stored Date cell stands for, in this browser's (the site's) time:
+ * a plain `YYYY-MM-DD` as it is; an instant by its local date, so the site's
+ * midnight (`2026-11-18T13:00:00Z` in Sydney) and UTC midnight both read as
+ * the 19th. The board's sync reads the column the same way.
+ */
+export function localDay(raw: unknown): string {
+  const text = String(raw ?? '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const at = Date.parse(text);
+  if (Number.isNaN(at)) return text.slice(0, 10);
+  const d = new Date(at);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+const day10 = (s: string | null): string | null => {
+  const day = s ? localDay(s) : '';
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : null;
+};
 const round = (n: number, places = 2): number => Math.round(n * 10 ** places) / 10 ** places;
 const names = (s: string): string[] => s.split(',').map((p) => p.trim()).filter(Boolean);
 
