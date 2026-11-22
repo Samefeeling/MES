@@ -10,16 +10,21 @@
  * whether each order met its Due Date. See `core/assembly-completions`.
  */
 
-import type { AssemblyDataLayer, AssemblyResult } from '../types/assembly';
+import type { AssemblyDataLayer, AssemblyResult, AssemblyRosterPerson } from '../types/assembly';
 import { ASSEMBLY_THRESHOLDS, PRODUCTIVE_HOURS_PER_PERSON, colourClass } from '../core/assembly-metrics';
 import {
   completedOrderDays,
   completionSummary,
   completionsByLine,
   completionsByPerson,
+  trendWeeks,
+  weeklyEfficiency,
+  weeklyLineEfficiency,
+  weeklyPersonEfficiency,
   type CompletedOrderDay,
   type CompletionSummary,
 } from '../core/assembly-completions';
+import { SERIES_COLORS, renderEfficiencyTrend, type TrendSeries } from './charts';
 import { departmentTabs } from './kpi-nav';
 import { escapeHtml } from './modal';
 
@@ -40,11 +45,11 @@ const LINE_ORDER = [
   'Factory General',
 ];
 
-export type PeriodKey = 'lastDay' | 'thisWeek' | 'custom';
+export type PeriodKey = 'lastDay' | 'lastWeek' | 'custom';
 
 const PERIODS: Array<{ key: PeriodKey; label: string }> = [
   { key: 'lastDay', label: 'Last 24h' },
-  { key: 'thisWeek', label: 'This Week' },
+  { key: 'lastWeek', label: 'Last Week' },
 ];
 
 function localDay(d: Date): string {
@@ -66,11 +71,14 @@ const au = (day: string): string =>
 export function periodRange(key: PeriodKey, now: Date): { from: string; to: string } {
   const day = new Date(now);
   day.setHours(0, 0, 0, 0);
-  if (key === 'thisWeek') {
+  if (key === 'lastWeek') {
+    // Monday to Sunday of the week before this one; a Sunday belongs to the
+    // week that is ending, so on a Sunday "last week" is the one before it.
     const monday = new Date(day);
-    // getDay(): Sunday is 0, so a Sunday belongs to the week that just ended.
-    monday.setDate(day.getDate() - ((day.getDay() + 6) % 7));
-    return { from: localDay(monday), to: localDay(day) };
+    monday.setDate(day.getDate() - ((day.getDay() + 6) % 7) - 7);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    return { from: localDay(monday), to: localDay(sunday) };
   }
   const yesterday = new Date(day);
   yesterday.setDate(day.getDate() - 1);
@@ -86,6 +94,7 @@ export function periodRange(key: PeriodKey, now: Date): { from: string; to: stri
  * from today; a typed range is kept as typed.
  */
 let chosen: { period: PeriodKey; from: string; to: string } | null = null;
+let chosenPerson: string | null = null;
 
 interface PageState {
   period: PeriodKey;
@@ -96,6 +105,12 @@ interface PageState {
   expanded: Set<string>;
   loading: boolean;
   error: string;
+  /** The person picked in the people table, whose trend the chart shows. */
+  person: string | null;
+  roster: AssemblyRosterPerson[];
+  /** The last month's completions, for the trend; null until read. */
+  trend: CompletedOrderDay[] | null;
+  trendError: string;
 }
 
 const n = (v: number): string => (v ? v.toLocaleString('en-AU') : '—');
@@ -147,34 +162,92 @@ function statTiles(sum: CompletionSummary): string {
   </div>`;
 }
 
-/** Per person, and per completion: the detail under the line table. */
-function detailTables(done: readonly CompletedOrderDay[]): string {
+/** Supervisors and managers are on the roster but finish no orders themselves. */
+const OFF_THE_FLOOR = /supervisor|manager/i;
+
+/** The lines in their fixed colour order: a line keeps its colour whichever others appear. */
+const COLOUR_ORDER = LINE_ORDER.filter((l) => l !== 'PMD');
+const lineColour = (line: string): string => {
+  const i = COLOUR_ORDER.findIndex((l) => l.toUpperCase() === line.toUpperCase());
+  return i >= 0 && i < SERIES_COLORS.length ? SERIES_COLORS[i] : '#94a3b8';
+};
+
+/**
+ * The last month's efficiency, week by week: every line, or the person picked
+ * beside the floor as a whole.
+ */
+function trendCard(S: PageState, yesterday: string): string {
+  const { weeks } = trendWeeks(yesterday);
+  const partial = new Date(`${yesterday}T12:00:00`).getDay() !== 0;
+  const labels = weeks.map((w, i) => `${au(w).slice(0, 5)}${partial && i === weeks.length - 1 ? '*' : ''}`);
+  const target = ASSEMBLY_THRESHOLDS.effGreen;
+  let body: string;
+  if (S.trend === null) {
+    body = `<div class="kpi-empty">${S.trendError ? escapeHtml(S.trendError) : 'Loading the last month…'}</div>`;
+  } else {
+    const series: TrendSeries[] = S.person
+      ? [
+          { name: S.person, color: SERIES_COLORS[0], values: weeklyPersonEfficiency(S.trend, weeks, S.person) },
+          { name: 'All Assembly', color: '#94a3b8', values: weeklyEfficiency(S.trend, weeks), reference: true },
+        ]
+      : weeklyLineEfficiency(S.trend, weeks, LINE_ORDER).map((l) => ({ name: l.name, color: lineColour(l.name), values: l.values }));
+    body = renderEfficiencyTrend(labels, series, target);
+  }
+  return `<div class="kpi-chart assembly-trend">
+      <div class="kpi-chart-head">
+        <h4>Efficiency by week — last month · ${S.person ? escapeHtml(S.person) : 'every line'}</h4>
+        ${S.person ? '<button type="button" class="shift-btn kpi-util-all" data-person-clear>All lines</button>' : ''}
+      </div>
+      ${body}
+      <div class="kpi-chart-note">Week starting Monday${partial ? '; * = the week so far' : ''}. Efficiency = Std h ÷ person-days ÷ ${PRODUCTIVE_HOURS_PER_PERSON} h, from <code>ASSY_CompletedJobs</code>; a week with no confirmed completion is a gap. ${
+        S.person ? 'The dashed grey line is the whole floor, for comparison.' : 'Click a person in the table to see theirs.'
+      }</div>
+    </div>`;
+}
+
+/** Per person beside the trend, and per completion: the detail under the line table. */
+function detailTables(done: readonly CompletedOrderDay[], S: PageState, yesterday: string): string {
   const t = ASSEMBLY_THRESHOLDS;
   const people = completionsByPerson(done);
-  return `<h3 class="kpi-section-title">By person</h3>
-    <div class="kpi-table-wrap">
-      <table class="summary-table kpi-table assembly-people-table">
-        <thead><tr>
-          <th class="kpi-machine-head">Person</th><th>Orders</th>
-          <th title="Their share of the standard hours of the orders they finished — an order finished by three people gives each a third">Std h</th>
-          <th title="Days they are named on a completion">Days</th>
-          <th title="Std h ÷ Days">Std h / day</th>
-          <th title="Std h / day ÷ ${PRODUCTIVE_HOURS_PER_PERSON} h">Efficiency</th>
-        </tr></thead>
-        <tbody>${
-          people.length
-            ? people
-                .map(
-                  (p) => `<tr><th>${escapeHtml(p.name)}</th>${cell(n(p.orders))}${cell(h(p.stdHours))}${cell(n(p.days))}${cell(
-                    p.perDay.toFixed(2),
-                  )}${cell(`${p.efficiency}%`, colourClass(p.efficiency, t.effGreen, t.effAmber))}</tr>`,
-                )
-                .join('')
-            : `<tr><td colspan="6" class="kpi-empty">Nobody is named on a completion in this period.</td></tr>`
-        }</tbody>
-      </table>
+  const worked = new Set(people.map((p) => p.name.toLowerCase()));
+  const away = S.roster
+    .filter((r) => !OFF_THE_FLOOR.test(r.position) && !worked.has(r.name.toLowerCase()))
+    .map((r) => r.name)
+    .sort((a, b) => a.localeCompare(b));
+  const picked = (name: string): string =>
+    S.person && S.person.toLowerCase() === name.toLowerCase() ? ' is-selected' : '';
+  const rows =
+    people
+      .map(
+        (p) => `<tr class="kpi-person${picked(p.name)}" data-person="${escapeHtml(p.name)}" title="Show ${escapeHtml(p.name)}'s efficiency by week"><th>${escapeHtml(p.name)}</th>${cell(n(p.orders))}${cell(h(p.stdHours))}${cell(n(p.days))}${cell(
+          p.perDay.toFixed(2),
+        )}${cell(`${p.efficiency}%`, colourClass(p.efficiency, t.effGreen, t.effAmber))}</tr>`,
+      )
+      .join('') +
+    away
+      .map(
+        (name) => `<tr class="kpi-person kpi-away${picked(name)}" data-person="${escapeHtml(name)}" title="On the roster, named on no confirmed completion in this period"><th>${escapeHtml(name)}</th><td colspan="5" class="gray">On leave</td></tr>`,
+      )
+      .join('');
+  return `<div class="assembly-people-grid">
+    <div>
+      <h3 class="kpi-section-title">By person</h3>
+      <div class="kpi-table-wrap">
+        <table class="summary-table kpi-table assembly-people-table">
+          <thead><tr>
+            <th class="kpi-machine-head">Person</th><th>Orders</th>
+            <th title="Their share of the standard hours of the orders they finished — an order finished by three people gives each a third">Std h</th>
+            <th title="Days they are named on a completion">Days</th>
+            <th title="Std h ÷ Days">Std h / day</th>
+            <th title="Std h / day ÷ ${PRODUCTIVE_HOURS_PER_PERSON} h">Efficiency</th>
+          </tr></thead>
+          <tbody>${rows || `<tr><td colspan="6" class="kpi-empty">Nobody is named on a completion in this period.</td></tr>`}</tbody>
+        </table>
+      </div>
     </div>
-    <h3 class="kpi-section-title">Completions</h3>
+    ${trendCard(S, yesterday)}
+  </div>
+    ${done.length ? `<h3 class="kpi-section-title">Completions</h3>
     <div class="kpi-table-wrap kpi-bookings">
       <table class="summary-table kpi-table">
         <thead><tr>
@@ -194,7 +267,7 @@ function detailTables(done: readonly CompletedOrderDay[]): string {
           )
           .join('')}</tbody>
       </table>
-    </div>`;
+    </div>` : ''}`;
 }
 
 export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
@@ -209,7 +282,12 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
     expanded: new Set(),
     loading: true,
     error: '',
+    person: chosenPerson,
+    roster: [],
+    trend: null,
+    trendError: '',
   };
+  const yesterday = periodRange('lastDay', new Date()).to;
   let request = 0;
 
   function render(): void {
@@ -300,13 +378,15 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
           </table>
         </div>
 
-        ${S.loading || done.length === 0 ? '' : detailTables(done)}
+        ${S.loading ? '' : detailTables(done, S, yesterday)}
 
         <div class="kpi-note">
           <div>Every figure comes from <code>ASSY_CompletedJobs</code>: one row per order finished on a day — what <code>CompletedJobs.csv</code> shows reported (every planner but PMD), once a supervisor has confirmed who finished it in the Assembly board's <b>✓ Completed</b> dialog. A big order finished over several days has a row for each day and is <b>one</b> order in every count.</div>
           <div><b>Qty</b> and <b>Std h</b> are Epicor's (<code>LaborDtl_LaborQty</code>, <code>LaborDtl_LaborHrs</code> — standard hours, not clocked time).</div>
           <div><b>Person-days</b> = each person counted once for each day they are named on a completion. <b>Std h / person-day</b> = Std h ÷ Person-days, and <b>Efficiency 🟢🟡🔴</b> is that over ${PRODUCTIVE_HOURS_PER_PERSON} h, the 07:00–15:30 shift less morning tea and lunch — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.effGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.effAmber}%. Per person, an order's Std h is shared equally among the people who finished it. It counts finished work only, so a day spent on an order finished on a later day earns nothing here.</div>
           <div><b>On time% 🟢🟡🔴</b> = orders whose last completion in the period was on or before their Due Date ÷ orders with a Due Date to judge — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.onTimeGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.onTimeAmber}%. <b>Order done</b> marks the day the export's running total reached the order's quantity.</div>
+          <div><b>By person</b> lists everyone on <code>ASSY_Operator</code> (supervisors and managers excepted): a person named on no confirmed completion in the period is marked <b>On leave</b> — which also covers anybody who spent the period on an order not yet finished. Click a person to see their efficiency by week on the right, beside the whole floor; click again for every line.</div>
+          <div><b>Last 24h</b> is the last working day before today (Friday to Sunday on a Monday); <b>Last Week</b> is Monday to Sunday of the week before this one.</div>
           <div>Press "+" on a line to see the orders behind its figures.</div>
         </div>
       </div>`;
@@ -332,6 +412,19 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
         void load();
       }),
     );
+    app.querySelectorAll<HTMLElement>('[data-person]').forEach((tr) =>
+      tr.addEventListener('click', () => {
+        const name = tr.dataset.person!;
+        S.person = S.person?.toLowerCase() === name.toLowerCase() ? null : name;
+        chosenPerson = S.person;
+        render();
+      }),
+    );
+    app.querySelector<HTMLButtonElement>('[data-person-clear]')?.addEventListener('click', () => {
+      S.person = null;
+      chosenPerson = null;
+      render();
+    });
     app.querySelectorAll<HTMLButtonElement>('[data-line]').forEach((b) =>
       b.addEventListener('click', () => {
         const line = b.dataset.line!;
@@ -365,5 +458,20 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
     render();
   }
 
+  /** The last month and the roster: read once a visit, whatever the period. */
+  async function loadContext(): Promise<void> {
+    const range = trendWeeks(yesterday);
+    const [trend, roster] = await Promise.allSettled([
+      dal.results(range.from, range.to),
+      dal.roster ? dal.roster() : Promise.resolve([]),
+    ]);
+    if (!app.isConnected) return;
+    if (trend.status === 'fulfilled') S.trend = completedOrderDays(trend.value);
+    else S.trendError = `The last month could not be read: ${trend.reason instanceof Error ? trend.reason.message : String(trend.reason)}`;
+    if (roster.status === 'fulfilled') S.roster = roster.value;
+    if (!S.loading) render();
+  }
+
+  void loadContext();
   await load();
 }

@@ -2,7 +2,7 @@
 // per order finished on a day, confirmed on the Assembly board. `ASSY_Planning`
 // (the board's planning list, once `ASSY_Production`) is not read here: an
 // order leaves it once it is finished.
-import type { AssemblyDataLayer, AssemblyResult, EpicorCompletion } from '../../types/assembly';
+import type { AssemblyDataLayer, AssemblyResult, AssemblyRosterPerson, EpicorCompletion } from '../../types/assembly';
 import { fetchThroughThrottle } from './http';
 import { localDay } from '../../core/assembly-completions';
 import { type ListField, resolveField } from '../../../assembly/src/data/sharepoint/fieldMap';
@@ -124,7 +124,45 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
       if (url) throw new Error('Assembly results exceed the page limit. Select a shorter date range.');
       return output.sort((a, b) => b.day.localeCompare(a.day) || a.job.localeCompare(b.job));
     },
+    async roster() {
+      if (env.VITE_BACKEND !== 'sharepoint') return [];
+      const site = (env.VITE_SHAREPOINT_SITE_URL || env.VITE_SITE_URL || '').replace(/\/$/, '');
+      if (!site) return [];
+      // The board reads the same list under the same fixed name.
+      const url = `${site}/_api/web/lists/getbytitle('ASSY_Operator')/items?$top=500`;
+      if (new URL(url).origin !== window.location.origin) throw new Error('Open MES on the configured SharePoint site.');
+      const res = await fetchThroughThrottle(url, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json;odata=nometadata' } });
+      if (!res.ok) throw new Error(`Assembly roster could not be loaded (${res.status}).`);
+      const body = await res.json() as { value?: Record<string, unknown>[] };
+      return rosterFrom(body.value ?? []);
+    },
   };
+}
+
+/** The name columns, in the order the board's own roster reader prefers them. */
+const NAME_COLUMNS = ['PreferName', 'PreferredName', 'Operator', 'OperatorName', 'FullName', 'Name', 'Title'];
+const norm = (s: string): string => s.replace(/[\s_.-]+/g, '').toLowerCase();
+
+/** Roster rows → people, each once, named the way the board names them. */
+export function rosterFrom(rows: readonly Record<string, unknown>[]): AssemblyRosterPerson[] {
+  const out: AssemblyRosterPerson[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const byName = new Map<string, unknown>();
+    for (const [k, v] of Object.entries(row)) if (!byName.has(norm(k))) byName.set(norm(k), v);
+    const pick = (names: string[]): string => {
+      for (const n of names) {
+        const v = byName.get(norm(n));
+        if (v !== undefined && v !== null && String(v).trim()) return String(v).trim();
+      }
+      return '';
+    };
+    const name = pick(NAME_COLUMNS);
+    if (!name || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    out.push({ name, position: pick(['Position', 'Role', 'JobTitle']) });
+  }
+  return out;
 }
 
 /**

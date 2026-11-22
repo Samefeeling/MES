@@ -1059,6 +1059,72 @@ describe('orders finished in full leave ASSY_Planning', () => {
     });
     clearSessionSchemaCache();
     await syncProduction(session, 'ASSY_Planning', [], { doneQty: { ASM8001: 60 } });
+    clearSessionSchemaCache();
     expect(urls).toContain("POST https://tenant.sharepoint.com/sites/factory/_api/web/lists/getbytitle('ASSY_Planning')/items(4)/recycle()");
+  });
+});
+
+describe('a row another screen wrote during the pass (409 Save Conflict)', () => {
+  const session: SharePointConfig = {
+    siteUrl: 'https://tenant.sharepoint.com/sites/factory',
+    filePath: '',
+    token: '',
+    authMode: 'session',
+  };
+  const schema = Object.values(C).map((name) => ({ Title: name, InternalName: name }));
+  beforeEach(() => clearSessionSchemaCache());
+  afterEach(() => clearSessionSchemaCache());
+
+  const conflict = (now: Record<string, unknown>) => {
+    vi.stubGlobal('window', { location: { origin: 'https://tenant.sharepoint.com' } });
+    const merges: { url: string; etag: string | null }[] = [];
+    let first = true;
+    const row = (id: number, job: string, extra: Record<string, unknown> = {}) => ({
+      Id: id, 'odata.etag': '"3"', ...stored({ [C.jobNum]: job, [C.recordKey]: `${job}|2026-09-14`, ...extra }).fields,
+    });
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      if (url.includes('/fields?')) return json({ value: schema });
+      if (url.endsWith('/_api/contextinfo')) return json({ FormDigestValue: 'd', FormDigestTimeoutSeconds: 1800 });
+      if (url.includes('$top=200')) return json({ value: [row(1, 'ASM8001'), row(2, 'ASM8002')] });
+      if (decodeURIComponent(url).includes(`${C.jobNum} eq 'ASM8001'`)) {
+        return json({ value: [{ ...row(1, 'ASM8001', now), 'odata.etag': '"4"' }] });
+      }
+      if (headers.get('X-HTTP-Method') === 'MERGE') {
+        merges.push({ url, etag: headers.get('IF-MATCH') });
+        if (url.endsWith('items(1)') && first) {
+          first = false;
+          return new Response('{"odata.error":{"message":{"value":"Save Conflict."}}}', { status: 409 });
+        }
+      }
+      return json({});
+    });
+    return merges;
+  };
+
+  // Level the week: both orders' start moves, nothing else.
+  const levelled = [
+    order({ startDate: '2026-09-16T00:00:00.000Z' }),
+    order({ jobNum: 'ASM8002', startDate: '2026-09-16T00:00:00.000Z' }),
+  ];
+
+  it('reads the row again, writes over its new version, and goes on to the next order', async () => {
+    const merges = conflict({});
+    const out = await syncProduction(session, 'ASSY_Planning', levelled);
+    expect(out.errors).toEqual([]);
+    expect(merges.map((m) => [m.url.split('/').pop(), m.etag])).toEqual([
+      ['items(1)', '"3"'],
+      ['items(1)', '"4"'],
+      ['items(2)', '"3"'],
+    ]);
+  });
+
+  it('leaves a booking somebody changed meanwhile, rather than writing its old figures back', async () => {
+    const merges = conflict({ [C.shiftOutput]: 12, [C.complete]: 12 });
+    const out = await syncProduction(session, 'ASSY_Planning', [
+      order({ shifts: [shift({ shiftOutput: 5, complete: 5 })] }),
+    ]);
+    expect(out.errors).toEqual([]);
+    expect(merges.map((m) => [m.url.split('/').pop(), m.etag])).toEqual([['items(1)', '"3"']]);
   });
 });

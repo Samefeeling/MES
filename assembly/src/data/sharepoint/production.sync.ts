@@ -610,6 +610,42 @@ function oneFactsPerJob(orders: OrderFacts[]): OrderFacts[] {
 }
 
 /**
+ * Write the named columns of one row, at the version this pass read.
+ *
+ * A pass reads the list once and then writes row after row, and it is not the
+ * only writer: every open board runs the same sync, and Level the week moves
+ * every order at once, so its pass is long. A row another screen wrote in the
+ * meantime answers `409 Save Conflict`. That used to stop the whole pass —
+ * a 409 is not transient — so one row written elsewhere left every order
+ * after it unwritten and the banner red.
+ *
+ * Now the row is read again and written over at its new version, because the
+ * columns this board writes follow the plan every board shares. The one
+ * exception is a row whose shift figures changed meanwhile (`ROW_LEVEL`):
+ * that is somebody's booking, newer than this pass's view of it, so it stands
+ * and the row is left for the next pass, which reads it afresh.
+ */
+async function writeRow(
+  cfg: SharePointConfig,
+  list: string,
+  row: ListItem,
+  fields: ListItemFields,
+): Promise<{ ok: true; kept?: boolean } | { ok: false; error: WriteError }> {
+  const first = await updateListItem(cfg, list, row.id, fields, ...(cfg.authMode === 'session' ? [row.etag] : []));
+  if (first.ok) return { ok: true };
+  if (first.error.status !== 409) return first;
+  const job = String(row.fields[PRODUCTION_COLUMNS.jobNum] ?? '').trim();
+  const asked = job ? await fetchRowsWhere(cfg, list, PRODUCTION_COLUMNS.jobNum, job) : null;
+  const now = asked && asked.ok ? asked.value.find((r) => r.id === row.id) : undefined;
+  if (!now) return first;
+  if (same(now.fields, fields)) return { ok: true };
+  const touchesFigures = ROW_LEVEL.some((key) => key in fields);
+  if (touchesFigures && !same(now.fields, rowLevel(row.fields))) return { ok: true, kept: true };
+  const again = await updateListItem(cfg, list, row.id, fields, ...(cfg.authMode === 'session' ? [now.etag] : []));
+  return again.ok ? { ok: true } : again;
+}
+
+/**
  * Open the row for one shift, having first made sure it is not already there.
  *
  * The snapshot a sync works from is as old as the sync, and it is not the only
@@ -699,9 +735,10 @@ async function openRow(
       out.unchanged++;
       return row.id;
     }
-    const res = await updateListItem(cfg, list, row.id, wanted, ...(cfg.authMode === 'session' ? [row.etag] : []));
+    const res = await writeRow(cfg, list, row, wanted);
     if (res.ok) {
-      out.updated++;
+      if (res.kept) out.unchanged++;
+      else out.updated++;
       return row.id;
     }
     note(res.error);
@@ -904,9 +941,11 @@ export async function syncProduction(
         out.unchanged++;
         continue;
       }
-      const res = await updateListItem(cfg, list, found.id, wanted, ...(cfg.authMode === 'session' ? [found.etag] : []));
-      if (res.ok) out.updated++;
-      else { note(res.error); if (!isTransient(res.error)) return out; }
+      const res = await writeRow(cfg, list, found, wanted);
+      if (res.ok) {
+        if (res.kept) out.unchanged++;
+        else out.updated++;
+      } else { note(res.error); if (!isTransient(res.error)) return out; }
     }
 
     // Rows for days this board is not booking — older shifts, or entries the
@@ -936,7 +975,7 @@ export async function syncProduction(
         out.unchanged++;
         continue;
       }
-      const res = await updateListItem(cfg, list, row.id, stale, ...(cfg.authMode === 'session' ? [row.etag] : []));
+      const res = await writeRow(cfg, list, row, stale);
       if (res.ok) out.updated++;
       else { note(res.error); if (!isTransient(res.error)) return out; }
     }

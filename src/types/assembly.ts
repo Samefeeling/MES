@@ -56,6 +56,15 @@ export interface EpicorCompletion {
   confirmedAt: string;
 }
 
+/** One person on the Assembly roster (`ASSY_Operator`). */
+export interface AssemblyRosterPerson {
+  /** The name the board shows — and so the name completions carry. */
+  name: string;
+  position: string;
+}
+
 export interface AssemblyDataLayer {
   results(from: string, to: string): Promise<AssemblyResult[]>;
+  /** The roster, for the people who finished nothing; absent off SharePoint. */
+  roster?(): Promise<AssemblyRosterPerson[]>;
 }

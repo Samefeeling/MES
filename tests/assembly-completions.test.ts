@@ -79,3 +79,31 @@ describe('Epicor completions on KPIs · Assembly', () => {
     expect(epicorOf({ CompletionConfirmedAt: 'x' }, f)).toBeNull();
   });
 });
+
+describe('the last month, week by week', () => {
+  it('takes the week yesterday is in and the four before it', async () => {
+    const { trendWeeks, mondayOf } = await import('../src/core/assembly-completions');
+    expect(mondayOf('2026-11-22')).toBe('2026-11-16');
+    expect(trendWeeks('2026-11-21')).toEqual({
+      weeks: ['2026-10-19', '2026-10-26', '2026-11-02', '2026-11-09', '2026-11-16'],
+      from: '2026-10-19',
+      to: '2026-11-21',
+    });
+  });
+
+  it('gives each line and each person a week’s efficiency, null for a week with nothing', async () => {
+    const { weeklyLineEfficiency, weeklyPersonEfficiency, weeklyEfficiency } = await import('../src/core/assembly-completions');
+    const done = completedOrderDays([
+      row({ day: '2026-11-17', epicor: epicor({ hours: 15, people: ['Ana', 'Bo'] }) }),
+      row({ id: '2', job: 'J2', day: '2026-11-10', line: 'Table', epicor: epicor({ hours: 7.5, people: ['Ana'] }) }),
+    ]);
+    const weeks = ['2026-11-09', '2026-11-16'];
+    expect(weeklyLineEfficiency(done, weeks, ['Table', 'Assembly'])).toEqual([
+      { name: 'Table', values: [100, null] },
+      { name: 'Assembly', values: [null, 100] },
+    ]);
+    expect(weeklyPersonEfficiency(done, weeks, 'ana')).toEqual([100, 100]);
+    expect(weeklyPersonEfficiency(done, weeks, 'Bo')).toEqual([null, 100]);
+    expect(weeklyEfficiency(done, weeks)).toEqual([100, 100]);
+  });
+});

@@ -129,3 +129,18 @@ it('takes a row’s day from its RecordKey, whatever its Date column reads', asy
   const read = await dal().results('2026-11-19', '2026-11-19');
   expect(read.map((r) => [r.day, r.output])).toEqual([['2026-11-19', 150]]);
 });
+
+it('names the roster the way the board does, each person once', async () => {
+  const { rosterFrom } = await import('../src/dal/sharepoint/assembly');
+  expect(rosterFrom([
+    { Title: 'Arisack Phommachanh', PreferName: 'Arisack', Position: 'Operator' },
+    { Title: 'Jimmy' },
+    { Title: 'jimmy' },
+    { Title: 'Sam Lee', Position: 'Supervisor' },
+    { Title: '' },
+  ])).toEqual([
+    { name: 'Arisack', position: 'Operator' },
+    { name: 'Jimmy', position: '' },
+    { name: 'Sam Lee', position: 'Supervisor' },
+  ]);
+});

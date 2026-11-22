@@ -848,3 +848,79 @@ export function renderUtilizationByMachineChart(
     'Utilization by machine',
   );
 }
+
+// =========================================================================
+// Efficiency trend — one line per series over a few weeks (KPIs · Assembly).
+// One y-axis in percent, a dashed target, a legend, and each line's name at
+// its last point so identity never rests on colour alone.
+// =========================================================================
+
+/** Categorical order for series that are entities (lines, people): fixed, never cycled. */
+export const SERIES_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'];
+
+export interface TrendSeries {
+  name: string;
+  color: string;
+  values: (number | null)[];
+  /** A reference series (the floor beside one person): thinner, dashed. */
+  reference?: boolean;
+}
+
+export function renderEfficiencyTrend(labels: string[], series: TrendSeries[], target: number): string {
+  const width = 560;
+  const legendItems: LegendItem[] = series.map((s) => ({ label: s.name, color: s.color, line: true }));
+  const PL = 40, PR = 92, PB = 30;
+  const legend = svgLegend(legendItems, PL, 14, width - 10);
+  const PT = 26 + (legend.rows - 1) * 16;
+  const H2 = 250 + (legend.rows - 1) * 16;
+  const innerW = width - PL - PR;
+  const innerH = H2 - PT - PB;
+  const all = series.flatMap((s) => s.values.filter((v): v is number => v !== null));
+  const top = Math.max(150, Math.ceil(Math.max(target, ...all) / 50) * 50);
+  const n = Math.max(labels.length, 1);
+  const xOf = (i: number): number => PL + (n === 1 ? innerW / 2 : (i / (n - 1)) * innerW);
+  const yOf = (v: number): number => PT + innerH - (v / top) * innerH;
+  let grid = '';
+  for (let v = 0; v <= top; v += 50) {
+    grid += `<line x1="${PL}" x2="${PL + innerW}" y1="${yOf(v)}" y2="${yOf(v)}" stroke="#e2e8f0" stroke-width="1"/>` +
+      `<text x="${PL - 6}" y="${yOf(v) + 4}" font-size="10" text-anchor="end" fill="#64748b">${v}%</text>`;
+  }
+  const targetLine = `<line x1="${PL}" x2="${PL + innerW}" y1="${yOf(target)}" y2="${yOf(target)}" stroke="#64748b" stroke-width="1" stroke-dasharray="4 3"/>` +
+    `<text x="${PL + 4}" y="${yOf(target) - 4}" font-size="10" fill="#64748b">target ${target}%</text>`;
+  const xLabels = labels
+    .map((l, i) => `<text x="${xOf(i)}" y="${H2 - 10}" font-size="10" text-anchor="middle" fill="#64748b">${escAttr(l)}</text>`)
+    .join('');
+  // A line is drawn between weeks that both have a value; a week with none is a gap.
+  const ends: Array<{ y: number; name: string }> = [];
+  const lines = series
+    .map((s) => {
+      let path = '';
+      let pen = false;
+      s.values.forEach((v, i) => {
+        if (v === null) { pen = false; return; }
+        path += `${pen ? 'L' : 'M'}${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`;
+        pen = true;
+      });
+      const dots = s.values
+        .map((v, i) =>
+          v === null
+            ? ''
+            : `<circle cx="${xOf(i).toFixed(1)}" cy="${yOf(v).toFixed(1)}" r="${s.reference ? 3 : 4}" fill="${s.color}" stroke="#fff" stroke-width="2"><title>${escAttr(`${s.name} · ${labels[i]} · ${v}%`)}</title></circle>`,
+        )
+        .join('');
+      const lastIdx = s.values.map((v, i) => (v === null ? -1 : i)).reduce((a, b) => Math.max(a, b), -1);
+      if (lastIdx >= 0) ends.push({ y: yOf(s.values[lastIdx]!), name: s.name });
+      return `<path d="${path}" fill="none" stroke="${s.color}" stroke-width="${s.reference ? 1.5 : 2}"${s.reference ? ' stroke-dasharray="5 3"' : ''} stroke-linejoin="round" stroke-linecap="round"/>${dots}`;
+    })
+    .join('');
+  // Names at the right edge, nudged apart so two lines ending close don't overprint.
+  ends.sort((a, b) => a.y - b.y);
+  for (let i = 1; i < ends.length; i++) ends[i].y = Math.max(ends[i].y, ends[i - 1].y + 12);
+  const names = ends
+    .map((e) => `<text x="${PL + innerW + 8}" y="${(e.y + 4).toFixed(1)}" font-size="10.5" fill="#1e293b">${escAttr(e.name)}</text>`)
+    .join('');
+  const empty = all.length === 0
+    ? `<text x="${PL + innerW / 2}" y="${PT + innerH / 2}" font-size="12" text-anchor="middle" fill="#64748b">No confirmed completion in these weeks</text>`
+    : '';
+  return `<svg viewBox="0 0 ${width} ${H2}" width="100%" role="img" aria-label="Efficiency by week" style="max-width:100%;height:auto">${legend.svg}${grid}${targetLine}${xLabels}${lines}${names}${empty}</svg>`;
+}

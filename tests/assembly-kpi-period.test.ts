@@ -15,7 +15,9 @@ it('on a Monday, and over the weekend, Last 24h is Friday to yesterday', () => {
   expect(periodRange('lastDay', at(21))).toEqual({ from: '2026-11-20', to: '2026-11-20' });
 });
 
-it('This Week runs from Monday to today', () => {
-  expect(periodRange('thisWeek', at(20))).toEqual({ from: '2026-11-16', to: '2026-11-20' });
-  expect(periodRange('thisWeek', at(22))).toEqual({ from: '2026-11-16', to: '2026-11-22' });
+it('Last Week is Monday to Sunday of the week before this one', () => {
+  expect(periodRange('lastWeek', at(20))).toEqual({ from: '2026-11-09', to: '2026-11-15' });
+  expect(periodRange('lastWeek', at(23))).toEqual({ from: '2026-11-16', to: '2026-11-22' });
+  // A Sunday is still in the week that is ending.
+  expect(periodRange('lastWeek', at(22))).toEqual({ from: '2026-11-09', to: '2026-11-15' });
 });

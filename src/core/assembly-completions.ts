@@ -228,3 +228,62 @@ export function completionsByLine(
       };
     });
 }
+
+/** The Monday of a `YYYY-MM-DD` day's week. */
+export function mondayOf(day: string): string {
+  const d = new Date(`${day}T12:00:00`);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * The last month, in weeks: the week `yesterday` is in and the four before it
+ * (their Mondays), and the range of days to read for them.
+ */
+export function trendWeeks(yesterday: string, count = 5): { weeks: string[]; from: string; to: string } {
+  const last = new Date(`${mondayOf(yesterday)}T12:00:00`);
+  const weeks: string[] = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const d = new Date(last);
+    d.setDate(last.getDate() - i * 7);
+    weeks.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+  }
+  return { weeks, from: weeks[0], to: yesterday };
+}
+
+/** One week's efficiency for a group of completions; null with nobody named. */
+const weekEfficiency = (days: readonly CompletedOrderDay[]): number | null => completionSummary(days).efficiency;
+
+/**
+ * Each line's efficiency, week by week — the trend beside the people table.
+ * Weeks, not days: a completion credits the day an order was finished, so a
+ * daily line swings from nothing to 300% on one big order and says little.
+ */
+export function weeklyLineEfficiency(
+  done: readonly CompletedOrderDay[],
+  weeks: readonly string[],
+  lineOrder: readonly string[] = [],
+): Array<{ name: string; values: (number | null)[] }> {
+  return completionsByLine(done, lineOrder).map((line) => ({
+    name: line.line,
+    values: weeks.map((w) => weekEfficiency(done.filter((d) => d.line === line.line && mondayOf(d.day) === w))),
+  }));
+}
+
+/** One person's efficiency, week by week; null for a week they finished nothing. */
+export function weeklyPersonEfficiency(
+  done: readonly CompletedOrderDay[],
+  weeks: readonly string[],
+  name: string,
+): (number | null)[] {
+  const key = name.toLowerCase();
+  return weeks.map((w) => {
+    const week = done.filter((d) => mondayOf(d.day) === w);
+    return completionsByPerson(week).find((p) => p.name.toLowerCase() === key)?.efficiency ?? null;
+  });
+}
+
+/** The whole floor's efficiency, week by week. */
+export function weeklyEfficiency(done: readonly CompletedOrderDay[], weeks: readonly string[]): (number | null)[] {
+  return weeks.map((w) => weekEfficiency(done.filter((d) => mondayOf(d.day) === w)));
+}
