@@ -93,7 +93,66 @@ it('reads ASSY_CompletedJobs unless told otherwise', async () => {
     return new Response(JSON.stringify({ value: [] }));
   });
   await dal().results('2026-09-21', '2026-09-21');
-  expect(seen.every((u) => u.includes("getbytitle('ASSY_CompletedJobs')"))).toBe(true);
+  const lists = seen.filter((u) => u.includes('/lists/'));
+  expect(lists.length).toBeGreaterThan(0);
+  expect(lists.every((u) => u.includes("getbytitle('ASSY_CompletedJobs')"))).toBe(true);
+});
+
+/**
+ * The tenant's regional setting is Auckland: a date-only Date cell for
+ * 19 November comes back as 2026-11-18T11:00:00Z (NZDT, UTC+13). Two orders
+ * confirmed for the 19th went missing from "Last 24h": the filter asked for
+ * the UTC day and the reader took the first ten characters.
+ */
+function stubAuckland(rows: Record<string, unknown>[], seen: string[] = [], zone = true): void {
+  vi.stubGlobal('window', { location: { origin: 'https://tenant.sharepoint.com' } });
+  vi.stubGlobal('fetch', async (url: string) => {
+    seen.push(url);
+    if (url.includes('/RegionalSettings/TimeZone')) {
+      return zone
+        ? new Response(JSON.stringify({ Information: { Bias: -720, StandardBias: 0, DaylightBias: -60 } }))
+        : new Response('', { status: 403 });
+    }
+    if (url.includes('/fields?')) {
+      return new Response(JSON.stringify({ value: [...COLUMNS, 'RecordKey', 'DueDate'].map((name) => ({ Title: name, InternalName: name })) }));
+    }
+    return new Response(JSON.stringify({ value: rows }));
+  });
+}
+
+it("reads a day in the site's zone, not the UTC day", async () => {
+  const seen: string[] = [];
+  stubAuckland(
+    [
+      row({ Id: 1, Title: '018451-2-1', Date: '2026-11-18T11:00:00Z', RecordKey: '018451-2-1|2026-11-19', DueDate: '2026-11-19T11:00:00Z' }),
+      row({ Id: 2, Title: '018474-5-1', Date: '2026-11-18T11:00:00Z', RecordKey: '018474-5-1|2026-11-19' }),
+      // The day before and the day after, inside the wider ask, outside the window.
+      row({ Id: 3, Title: 'ASM1', Date: '2026-11-17T11:00:00Z', RecordKey: 'ASM1|2026-11-18' }),
+      row({ Id: 4, Title: 'ASM2', Date: '2026-11-19T11:00:00Z', RecordKey: 'ASM2|2026-11-20' }),
+    ],
+    seen,
+  );
+  const read = await dal().results('2026-11-19', '2026-11-19');
+  expect(read.map((r) => [r.job, r.day])).toEqual([
+    ['018451-2-1', '2026-11-19'],
+    ['018474-5-1', '2026-11-19'],
+  ]);
+  expect(read[0].due).toBe('2026-11-20');
+  const items = decodeURIComponent(seen.find((u) => u.includes('/items?'))!);
+  expect(items).toContain("Date ge datetime'2026-11-18T00:00:00Z'");
+  expect(items).toContain("Date lt datetime'2026-11-21T00:00:00Z'");
+});
+
+it('takes the day from the Date cell in the site zone when a row has no RecordKey', async () => {
+  stubAuckland([row({ Id: 1, Title: 'ASM9', Date: '2026-11-18T11:00:00Z' })]);
+  const read = await dal().results('2026-11-19', '2026-11-19');
+  expect(read.map((r) => r.day)).toEqual(['2026-11-19']);
+});
+
+it("still finds the day by RecordKey when the site's zone cannot be read", async () => {
+  stubAuckland([row({ Id: 1, Title: '018451-2-1', Date: '2026-11-18T11:00:00Z', RecordKey: '018451-2-1|2026-11-19' })], [], false);
+  const read = await dal().results('2026-11-19', '2026-11-19');
+  expect(read.map((r) => r.day)).toEqual(['2026-11-19']);
 });
 
 it('reads a Sydney site’s date column by its local day, the first day asked for included', async () => {
@@ -114,7 +173,7 @@ it('reads a Sydney site’s date column by its local day, the first day asked fo
     });
     const read = await dal().results('2026-11-19', '2026-11-19');
     expect(read.map((r) => [r.day, r.output])).toEqual([['2026-11-19', 150]]);
-    expect(seen.find((u) => u.includes('$filter'))).toContain("ge datetime'2026-11-18T00:00:00.000Z'");
+    expect(seen.find((u) => u.includes('$filter'))).toContain("ge datetime'2026-11-18T00:00:00");
   } finally {
     process.env.TZ = tz;
   }

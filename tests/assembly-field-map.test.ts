@@ -4,12 +4,14 @@ afterEach(() => vi.unstubAllGlobals());
 it('filters and reads Assembly KPI dates using the imported internal column', async () => {
   vi.stubGlobal('window', { location: { origin: 'https://tenant.sharepoint.com' } });
   const fetcher = vi.fn(async (url: string) => {
+    if (url.includes('/RegionalSettings/')) return new Response('', { status: 404 });
     if (url.includes('/fields?')) return new Response(JSON.stringify({ value: [
       { Title: 'Title', InternalName: 'Title' },
       { Title: 'Date', InternalName: 'field_2' },
       { Title: 'ShiftOutput', InternalName: 'field_3' },
     ] }));
-    expect(decodeURIComponent(url)).toContain("field_2 ge datetime'2026-09-09");
+    // A day wider each side: a Date cell is the site's midnight in UTC.
+    expect(decodeURIComponent(url)).toContain("field_2 ge datetime'2026-09-09T00:00:00Z' and field_2 lt datetime'2026-09-12T00:00:00Z'");
     return new Response(JSON.stringify({ value: [{ Id: 1, Title: 'SFM1', field_2: '2026-09-10T00:00:00Z', field_3: 12 }] }));
   });
   vi.stubGlobal('fetch', fetcher);

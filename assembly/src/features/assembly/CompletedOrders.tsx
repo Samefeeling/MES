@@ -1,7 +1,8 @@
 /**
- * "Who finished it?" — Epicor's finished orders of the last working day, each
- * with the people the board had on it, for the supervisor to confirm or
- * correct.
+ * "Who finished it?" — Epicor's finished orders of the last working day,
+ * grouped by line in the board's own order, each offered with that line's
+ * group on the board that day less anyone on leave, for the supervisor to
+ * review and confirm — a line at a time, or all at once.
  *
  * It opens by itself once a session, the first time a signed-in supervisor
  * has orders in the window nobody has confirmed, and from the header chip at
@@ -10,13 +11,14 @@
  * the board already had the right crew on it.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import type { AssemblyGanttView } from '@/engine/assembly/board';
 import { shortDay } from '@/engine/assembly/completedJobs';
 import { signInAt, useSupervisorStore } from '@/store/supervisorStore';
-import { unconfirmedCount, useCompletionStore, type CompletionItem } from '@/store/completionStore';
+import { unconfirmedCount, useCompletionStore, type CompletionItem, type Person } from '@/store/completionStore';
 import { Button } from '@/ui';
-import { confirmCompletion, loadCompletions } from './completions';
+import { usePlanStore } from '@/store/planStore';
+import { confirmCompletion, groupByLine, loadCompletions } from './completions';
 
 const windowText = (w: { from: string; to: string } | null): string =>
   !w ? '' : w.from === w.to ? shortDay(w.from) : `${shortDay(w.from)} – ${shortDay(w.to)}`;
@@ -35,10 +37,16 @@ export function useCompletions(board: AssemblyGanttView | null, readStamp: numbe
   // Read again when the board fills in: the first board is drawn before the
   // saved plan is in, with no crew and, on the demo, no orders yet.
   const orders = board?.rowsByJob.size ?? -1;
+  // …and again when who is where changes: the roster arriving after the
+  // orders, a supervisor moving somebody to another line, leave being marked.
+  // Names nobody has touched are then offered afresh.
+  const workerLines = usePlanStore((st) => st.workerLines);
+  const people = board?.workers.length ?? 0;
+  const leave = JSON.stringify(board?.workerOnLeave ?? {});
 
   useEffect(() => {
     if (orders >= 0 && readStamp !== null && boardRef.current) void loadCompletions(boardRef.current);
-  }, [orders, readStamp]);
+  }, [orders, readStamp, workerLines, people, leave]);
 
   useEffect(() => {
     if (status !== 'ready' || !unlocked || !window) return;
@@ -67,21 +75,134 @@ export function CompletedOrdersChip() {
   );
 }
 
-function PeoplePicker({ item, board, locked }: { item: CompletionItem; board: AssemblyGanttView; locked: boolean }) {
-  const setPeople = useCompletionStore((s) => s.setPeople);
-  const chosen = new Set(item.people.map((p) => p.id || p.name));
-  const roster = useMemo(
+/** What a dragged name carries. */
+const PERSON_TYPE = 'application/x-assembly-person';
+
+const dragPerson = (person: Person) => (e: DragEvent<HTMLElement>) => {
+  e.dataTransfer.setData(PERSON_TYPE, JSON.stringify(person));
+  e.dataTransfer.setData('text/plain', person.name);
+  e.dataTransfer.effectAllowed = 'copy';
+};
+
+/** The person dropped, if a name was. */
+function droppedPerson(e: DragEvent<HTMLElement>): Person | null {
+  try {
+    const raw = e.dataTransfer.getData(PERSON_TYPE);
+    const p = raw ? (JSON.parse(raw) as Person) : null;
+    return p && typeof p.name === 'string' ? { id: String(p.id ?? ''), name: p.name } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Handlers that let a name be dropped on an element; none while it is locked. */
+function dropTarget(locked: boolean, onPerson: (p: Person) => void, setOver: (over: boolean) => void) {
+  if (locked) return {};
+  return {
+    onDragOver: (e: DragEvent<HTMLElement>) => {
+      if (!e.dataTransfer.types.includes(PERSON_TYPE)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      setOver(true);
+    },
+    onDragLeave: () => setOver(false),
+    onDrop: (e: DragEvent<HTMLElement>) => {
+      setOver(false);
+      const p = droppedPerson(e);
+      if (!p) return;
+      e.preventDefault();
+      onPerson(p);
+    },
+  };
+}
+
+function useRoster(board: AssemblyGanttView): Person[] {
+  return useMemo(
     () =>
       board.workers
         .map((w) => ({ id: String(w.id), name: w.name }))
         .sort((a, b) => a.name.localeCompare(b.name)),
     [board.workers],
   );
+}
+
+/**
+ * A line's heading group: the people the board groups on the line that day,
+ * less who was on leave. Each name can be dragged onto an order; Fill line
+ * puts the whole group on every order of the line not yet confirmed.
+ */
+function LineGroupBar({ line, board, locked }: { line: string; board: AssemblyGanttView; locked: boolean }) {
+  const group = useCompletionStore((s) => s.lineGroups[line]);
+  const setLineGroup = useCompletionStore((s) => s.setLineGroup);
+  const roster = useRoster(board);
+  const [over, setOver] = useState(false);
+  if (!group) return null;
+  const chosen = new Set(group.people.map((p) => p.id || p.name));
+  const add = (p: Person) => {
+    if (!group.people.some((q) => (q.id && q.id === p.id) || q.name === p.name)) setLineGroup(line, [...group.people, p]);
+  };
+  return (
+    <div
+      className={`completed-group${over ? ' over' : ''}`}
+      {...dropTarget(locked, add, setOver)}
+      title="The line's group on the board that day, less anyone on leave. Drag a name onto an order, or Fill line."
+    >
+      <span className="completed-group-label">Group {shortDay(group.day)}:</span>
+      {group.people.length === 0 && <span className="completed-none">nobody grouped on this line</span>}
+      {group.people.map((p) => (
+        <span key={p.id || p.name} className="completed-person drag" draggable={!locked} onDragStart={dragPerson(p)}>
+          {p.name}
+          {!locked && (
+            <button type="button" aria-label={`Take ${p.name} out of the group`} onClick={() => setLineGroup(line, group.people.filter((q) => q !== p))}>
+              ×
+            </button>
+          )}
+        </span>
+      ))}
+      {!locked && (
+        <select
+          aria-label={`Add to ${line}'s group`}
+          value=""
+          onChange={(e) => {
+            const p = roster.find((r) => r.id === e.target.value);
+            if (p) add(p);
+          }}
+        >
+          <option value="">+ Add</option>
+          {roster
+            .filter((r) => !chosen.has(r.id) && !chosen.has(r.name))
+            .map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+              </option>
+            ))}
+        </select>
+      )}
+      {group.onLeave.length > 0 && (
+        <span className="completed-leave">
+          On leave:{' '}
+          {group.onLeave.map((p) => (
+            <span key={p.id || p.name} className="completed-person away" draggable={!locked} onDragStart={dragPerson(p)} title="On leave that day — drag if they did work it">
+              {p.name}
+            </span>
+          ))}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function PeoplePicker({ item, board, locked }: { item: CompletionItem; board: AssemblyGanttView; locked: boolean }) {
+  const setPeople = useCompletionStore((s) => s.setPeople);
+  const addPerson = useCompletionStore((s) => s.addPerson);
+  const [over, setOver] = useState(false);
+  const chosen = new Set(item.people.map((p) => p.id || p.name));
+  const roster = useRoster(board);
   const key = item.completion.key;
   return (
-    <div className="completed-people">
+    <div className={`completed-people${over ? ' over' : ''}`} {...dropTarget(locked, (p) => addPerson(key, p), setOver)}>
       {item.people.map((p) => (
-        <span key={p.id || p.name} className="completed-person">
+        <span key={p.id || p.name} className="completed-person drag" draggable={!locked} onDragStart={dragPerson(p)}>
           {p.name}
           {!locked && (
             <button
@@ -114,9 +235,24 @@ function PeoplePicker({ item, board, locked }: { item: CompletionItem; board: As
         </select>
       )}
       {item.people.length === 0 && locked && <span className="completed-none">—</span>}
+      {!item.confirmed && !item.edited && item.offeredFrom !== 'line' && item.offeredFrom !== 'saved' && (
+        <div className="completed-hint">
+          {item.offeredFrom === 'order' && 'The board’s crew on this order (nobody grouped on this line). '}
+          {item.offeredFrom === 'planning' && 'From ASSY_Planning (nobody grouped on this line). '}
+          {item.offeredFrom === 'none' && 'Nobody grouped on this line — add who finished it. '}
+
+        </div>
+      )}
     </div>
   );
 }
+
+/** Confirm every order with names in a list, unless it is already confirmed. */
+const confirmEach = (items: readonly CompletionItem[]): void => {
+  for (const item of items) {
+    if (!item.confirmed && item.people.length > 0) void confirmCompletion(item.completion.key);
+  }
+};
 
 export function CompletedOrdersDialog({ board }: { board: AssemblyGanttView | null }) {
   const open = useCompletionStore((s) => s.open);
@@ -128,6 +264,8 @@ export function CompletedOrdersDialog({ board }: { board: AssemblyGanttView | nu
   const [query, setQuery] = useState('');
   const [note, setNote] = useState<string | null>(null);
   const search = useRef<HTMLInputElement>(null);
+  const lineOrder = usePlanStore((st) => st.lineOrder);
+  const fillLine = useCompletionStore((st) => st.fillLine);
 
   useEffect(() => {
     if (!open) return;
@@ -171,11 +309,8 @@ export function CompletedOrdersDialog({ board }: { board: AssemblyGanttView | nu
     void confirmCompletion(item.completion.key);
   };
 
-  const confirmAll = () => {
-    for (const item of s.items) {
-      if (!item.confirmed && item.people.length > 0) void confirmCompletion(item.completion.key);
-    }
-  };
+  const confirmAll = () => confirmEach(s.items);
+  const groups = groupByLine(board, shown, lineOrder);
 
   return (
     <div className="ot-backdrop" role="dialog" aria-modal="true" aria-labelledby="completed-title" onClick={() => setOpen(false)}>
@@ -189,8 +324,8 @@ export function CompletedOrdersDialog({ board }: { board: AssemblyGanttView | nu
           </button>
         </div>
         <p className="ot-note">
-          Finished in Epicor (CompletedJobs.csv), PMD excepted. Check who finished each order and confirm it — the
-          names go to {s.local ? 'this demo only' : 'ASSY_CompletedJobs'}, which KPIs · Assembly reads.
+          Finished in Epicor (CompletedJobs.csv), PMD excepted, grouped by line. Each order offers its line’s group on
+          the board that day, less anyone on leave. Drag a name onto an order, or Fill line, then confirm a line at a time. The names go to {s.local ? 'this demo only' : 'ASSY_CompletedJobs'}, which KPIs · Assembly reads.
         </p>
         {gated && <p className="ot-gate">Sign in as {gate} to confirm.</p>}
         {s.error && <p className="completed-error" role="alert">{s.error}</p>}
@@ -238,7 +373,37 @@ export function CompletedOrdersDialog({ board }: { board: AssemblyGanttView | nu
               {s.status !== 'loading' && shown.length === 0 && (
                 <tr><td colSpan={8} className="completed-empty">{q ? 'No finished order with that number.' : 'Epicor shows no Assembly order finished in this window.'}</td></tr>
               )}
-              {shown.map((item) => {
+              {groups.map((group) => {
+                const ready = group.items.filter((i) => !i.confirmed && i.people.length > 0);
+                const open = group.items.filter((i) => !i.confirmed).length;
+                return [
+                  <tr key={`line:${group.line}`} className="completed-line">
+                    <th colSpan={7}>
+                      {group.line}
+                      <span className="completed-line-count">
+                        {group.items.length} {group.items.length === 1 ? 'order' : 'orders'}
+                        {open ? ` · ${open} to confirm` : ' · all confirmed'}
+                      </span>
+                      <LineGroupBar line={group.line} board={board} locked={gated || open === 0} />
+                    </th>
+                    <th className="completed-act">
+                      {open > 0 && !gated && (
+                        <Button
+                          disabled={!s.lineGroups[group.line]?.people.length}
+                          onClick={() => fillLine(group.line)}
+                          title={`Put ${group.line}'s group on every order of the line not yet confirmed`}
+                        >
+                          Fill line
+                        </Button>
+                      )}
+                      {ready.length > 0 && (
+                        <Button disabled={gated} onClick={() => confirmEach(ready)} title={`Confirm ${group.line}'s orders with the names shown`}>
+                          Confirm line ({ready.length})
+                        </Button>
+                      )}
+                    </th>
+                  </tr>,
+                  ...group.items.map((item) => {
                 const c = item.completion;
                 return (
                   <tr key={c.key} className={item.confirmed ? 'done' : ''}>
@@ -284,6 +449,8 @@ export function CompletedOrdersDialog({ board }: { board: AssemblyGanttView | nu
                     </td>
                   </tr>
                 );
+                  }),
+                ];
               })}
             </tbody>
           </table>

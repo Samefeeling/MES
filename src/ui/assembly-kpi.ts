@@ -21,6 +21,7 @@ import {
   weeklyEfficiency,
   weeklyLineEfficiency,
   weeklyPersonEfficiency,
+  filterCompletions,
   type CompletedOrderDay,
   type CompletionSummary,
 } from '../core/assembly-completions';
@@ -103,10 +104,15 @@ interface PageState {
   rows: AssemblyResult[];
   /** Lines opened out into their orders. */
   expanded: Set<string>;
+  /**
+   * The person picked (a name pressed anywhere on the page): narrows the
+   * Completions table and puts their weeks on the chart. `job` narrows the
+   * table to one order.
+   */
+  person: string | null;
+  job: string | null;
   loading: boolean;
   error: string;
-  /** The person picked in the people table, whose trend the chart shows. */
-  person: string | null;
   roster: AssemblyRosterPerson[];
   /** The last month's completions, for the trend; null until read. */
   trend: CompletedOrderDay[] | null;
@@ -125,8 +131,24 @@ function cell(value: string, cls = ''): string {
 const onTimeOf = (sum: CompletionSummary): number | null =>
   sum.datedOrders ? Math.round((sum.onTimeOrders / sum.datedOrders) * 100) : null;
 
-/** The metric cells of one row — a line, an order, or the floor. */
-function metricCells(sum: CompletionSummary): string {
+/** A name that narrows the Completions table to that person when pressed. */
+function nameButton(name: string, active: string | null): string {
+  const on = active !== null && active.toLowerCase() === name.toLowerCase();
+  return `<button type="button" class="kpi-name${on ? ' a' : ''}" data-person="${escapeHtml(name)}" title="${
+    on ? 'Show every completion' : `Show ${escapeHtml(name)}'s completions`
+  }">${escapeHtml(name)}</button>`;
+}
+
+/** The names cell beside People: who is on the line, or on the order. */
+const namesCell = (names: readonly string[], active: string | null): string =>
+  `<td class="kpi-names">${names.map((name) => nameButton(name, active)).join('')}</td>`;
+
+/**
+ * The metric cells of one row — a line, an order, or the floor. `names` is
+ * the names cell; the floor's TOTAL leaves it empty, the By person table
+ * below being the list of everybody.
+ */
+function metricCells(sum: CompletionSummary, names = '<td class="kpi-names"></td>'): string {
   const t = ASSEMBLY_THRESHOLDS;
   const on = onTimeOf(sum);
   return (
@@ -134,6 +156,7 @@ function metricCells(sum: CompletionSummary): string {
     cell(n(sum.qty)) +
     cell(h(sum.stdHours)) +
     cell(n(sum.people)) +
+    names +
     cell(n(sum.personDays)) +
     cell(sum.perPersonDay === null ? '—' : sum.perPersonDay.toFixed(2)) +
     cell(pct(sum.efficiency), colourClass(sum.efficiency, t.effGreen, t.effAmber)) +
@@ -205,37 +228,54 @@ function trendCard(S: PageState, yesterday: string): string {
     </div>`;
 }
 
-/** Per person beside the trend, and per completion: the detail under the line table. */
+/**
+ * Per person beside the trend, and per completion: the detail under the line
+ * table. A person picked (a name pressed anywhere on the page) narrows the
+ * Completions list to them and puts their weeks on the chart.
+ */
 function detailTables(done: readonly CompletedOrderDay[], S: PageState, yesterday: string): string {
   const t = ASSEMBLY_THRESHOLDS;
+  const filter = { person: S.person, job: S.job };
   const people = completionsByPerson(done);
+  const shown = filterCompletions(done, filter);
+  const person = filter.person;
+  // A person's share of each completion: its Std h split equally among the
+  // people who finished it — the figure their row in By person adds up.
+  const share = (d: CompletedOrderDay): number => (d.people.length ? d.stdHours / d.people.length : 0);
+  const filterNote = [
+    person ? `named on by <b>${escapeHtml(person)}</b>` : '',
+    filter.job ? `of order <b>${escapeHtml(filter.job)}</b>` : '',
+  ]
+    .filter(Boolean)
+    .join(' and ');
   const worked = new Set(people.map((p) => p.name.toLowerCase()));
   const away = S.roster
     .filter((r) => !OFF_THE_FLOOR.test(r.position) && !worked.has(r.name.toLowerCase()))
     .map((r) => r.name)
     .sort((a, b) => a.localeCompare(b));
   const picked = (name: string): string =>
-    S.person && S.person.toLowerCase() === name.toLowerCase() ? ' is-selected' : '';
+    person && person.toLowerCase() === name.toLowerCase() ? ' class="kpi-picked"' : '';
   const rows =
     people
       .map(
-        (p) => `<tr class="kpi-person${picked(p.name)}" data-person="${escapeHtml(p.name)}" title="Show ${escapeHtml(p.name)}'s efficiency by week"><th>${escapeHtml(p.name)}</th>${cell(n(p.orders))}${cell(h(p.stdHours))}${cell(n(p.days))}${cell(
+        (p) => `<tr${picked(p.name)}><th>${nameButton(p.name, person)}</th>${cell(n(p.orders))}${cell(h(p.stdHours))}${cell(n(p.days))}${cell(
           p.perDay.toFixed(2),
         )}${cell(`${p.efficiency}%`, colourClass(p.efficiency, t.effGreen, t.effAmber))}</tr>`,
       )
       .join('') +
     away
       .map(
-        (name) => `<tr class="kpi-person kpi-away${picked(name)}" data-person="${escapeHtml(name)}" title="On the roster, named on no confirmed completion in this period"><th>${escapeHtml(name)}</th><td colspan="5" class="gray">On leave</td></tr>`,
+        (name) => `<tr${picked(name) || ' class="kpi-away"'} title="On the roster, named on no confirmed completion in this period"><th>${nameButton(name, person)}</th><td colspan="5" class="gray">On leave</td></tr>`,
       )
       .join('');
   return `<div class="assembly-people-grid">
     <div>
-      <h3 class="kpi-section-title">By person</h3>
+      <h3 class="kpi-section-title">By person<span class="kpi-sub-note">press a name to see their completions and weeks</span></h3>
       <div class="kpi-table-wrap">
         <table class="summary-table kpi-table assembly-people-table">
           <thead><tr>
-            <th class="kpi-machine-head">Person</th><th>Orders</th>
+            <th class="kpi-machine-head">Person</th>
+            <th title="Orders they are named on. An order three people finished is one order for each of them; its Std h is split three ways.">Orders</th>
             <th title="Their share of the standard hours of the orders they finished — an order finished by three people gives each a third">Std h</th>
             <th title="Days they are named on a completion">Days</th>
             <th title="Std h ÷ Days">Std h / day</th>
@@ -247,27 +287,49 @@ function detailTables(done: readonly CompletedOrderDay[], S: PageState, yesterda
     </div>
     ${trendCard(S, yesterday)}
   </div>
-    ${done.length ? `<h3 class="kpi-section-title">Completions</h3>
+    ${done.length ? `<h3 class="kpi-section-title">Completions${
+      filterNote
+        ? `<span class="kpi-filter">${shown.length} ${filterNote} <button type="button" class="kpi-filter-clear" data-clear-filter title="Show every completion">✕ Show all</button></span>`
+        : '<span class="kpi-sub-note">press a name or an order to narrow this list</span>'
+    }</h3>
     <div class="kpi-table-wrap kpi-bookings">
       <table class="summary-table kpi-table">
         <thead><tr>
           <th>Completed</th><th>Order</th><th>Part</th><th>Line</th><th>Qty</th><th>Std h</th>
+          ${person ? `<th title="${escapeHtml(person)}'s share: Std h ÷ the people who finished it">Share</th>` : ''}
           <th>Due</th><th>On time</th><th title="This day finished the order's whole quantity">Order done</th><th>Finished by</th><th>Confirmed by</th>
         </tr></thead>
-        <tbody>${done
+        <tbody>${shown
           .map(
             (d) => `<tr>
-              <td>${au(d.day)}</td><td>${escapeHtml(d.job)}</td><td>${escapeHtml(d.partNum)}</td><td>${escapeHtml(d.line)}</td>
+              <td>${au(d.day)}</td><td>${jobButton(d.job, filter.job)}</td><td>${escapeHtml(d.partNum)}</td><td>${escapeHtml(d.line)}</td>
               <td class="num">${n(d.qty)}</td><td class="num">${h(d.stdHours)}</td>
+              ${person ? `<td class="num">${share(d).toFixed(2)}</td>` : ''}
               <td>${d.due ? au(d.due) : '—'}</td>
               <td class="${d.onTime === null ? 'gray' : d.onTime ? 'green' : 'red'}">${d.onTime === null ? '—' : d.onTime ? 'Yes' : 'Late'}</td>
               <td>${d.finished ? 'Yes' : '—'}</td>
-              <td>${escapeHtml(d.people.join(', '))}</td><td>${escapeHtml(d.confirmedBy)}</td>
+              <td class="kpi-names">${d.people.map((p) => nameButton(p, person)).join('')}</td><td>${escapeHtml(d.confirmedBy)}</td>
             </tr>`,
           )
-          .join('')}</tbody>
+          .join('')}</tbody>${
+          filterNote && shown.length
+            ? `<tfoot><tr class="kpi-total"><th colspan="4">TOTAL</th><td class="num">${n(
+                shown.reduce((a, d) => a + d.qty, 0),
+              )}</td><td class="num">${h(shown.reduce((a, d) => a + d.stdHours, 0))}</td>${
+                person ? `<td class="num">${shown.reduce((a, d) => a + share(d), 0).toFixed(2)}</td>` : ''
+              }<td colspan="5"></td></tr></tfoot>`
+            : ''
+        }
       </table>
     </div>` : ''}`;
+}
+
+/** An order number that narrows the Completions table to it when pressed. */
+function jobButton(job: string, active: string | null): string {
+  const on = active === job;
+  return `<button type="button" class="kpi-job-link${on ? ' a' : ''}" data-job="${escapeHtml(job)}" title="${
+    on ? 'Show every completion' : `Show ${escapeHtml(job)}'s completions`
+  }">${escapeHtml(job)}</button>`;
 }
 
 export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
@@ -280,9 +342,10 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
     to: opening.to,
     rows: [],
     expanded: new Set(),
+    person: chosenPerson,
+    job: null,
     loading: true,
     error: '',
-    person: chosenPerson,
     roster: [],
     trend: null,
     trendError: '',
@@ -304,9 +367,9 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
     const total = completionSummary(done);
     const lines = completionsByLine(done, LINE_ORDER);
     const body = S.loading
-      ? `<tr><td colspan="9" class="kpi-empty">Loading Assembly results…</td></tr>`
+      ? `<tr><td colspan="10" class="kpi-empty">Loading Assembly results…</td></tr>`
       : lines.length === 0
-        ? `<tr><td colspan="9" class="kpi-empty">No confirmed completions in this period. They appear once a supervisor confirms who finished each order in the Assembly board's <b>✓ Completed</b> dialog.</td></tr>`
+        ? `<tr><td colspan="10" class="kpi-empty">No confirmed completions in this period. They appear once a supervisor confirms who finished each order in the Assembly board's <b>✓ Completed</b> dialog.</td></tr>`
         : lines
             .map((line) => {
               const open = S.expanded.has(line.line);
@@ -315,18 +378,18 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
                   line.line,
                 )}" title="${open ? 'Hide' : 'Show'} the orders on this line">${open ? '–' : '+'}</button><span class="kpi-mc-name">${escapeHtml(
                   line.line,
-                )}</span></th>${metricCells(line.summary)}</tr>` +
+                )}</span></th>${metricCells(line.summary, namesCell(line.summary.names, S.person))}</tr>` +
                 (open
                   ? line.orders
                       .map(
                         (order) =>
                           `<tr class="kpi-sub"><th class="kpi-job-name" title="${escapeHtml(
                             order.partNum,
-                          )}">${escapeHtml(order.job)}<span class="kpi-sub-note">${
+                          )}">${jobButton(order.job, S.job)}<span class="kpi-sub-note">${
                             order.days
                           } ${order.days === 1 ? 'day' : 'days'}${
                             order.due ? ` · due ${au(order.due)}` : ''
-                          }${order.finished ? ' · done' : ''}</span></th>${metricCells(order.summary)}</tr>`,
+                          }${order.finished ? ' · done' : ''}</span></th>${metricCells(order.summary, namesCell(order.summary.names, S.person))}</tr>`,
                       )
                       .join('')
                   : '')
@@ -356,7 +419,9 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
           <table class="summary-table kpi-table assembly-kpi-table">
             <colgroup>
               <col class="kpi-col-machine">
-              <col span="8" class="kpi-col-metric">
+              <col span="4" class="kpi-col-metric">
+              <col class="kpi-col-names">
+              <col span="4" class="kpi-col-metric">
             </colgroup>
             <thead><tr>
               <th class="kpi-machine-head">Line</th>
@@ -364,6 +429,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
               <th title="Quantity Epicor shows finished">Qty</th>
               <th title="Standard hours of that quantity, as Epicor values it">Std h</th>
               <th title="People named as having finished them">People</th>
+              <th class="kpi-names-head" title="Who they are — press a name to see their completions below">Names</th>
               <th title="One person named on at least one completion on one day">Person-days</th>
               <th title="Std h ÷ Person-days">Std h / person-day</th>
               <th title="Std h / person-day ÷ ${PRODUCTIVE_HOURS_PER_PERSON} h">Efficiency</th>
@@ -385,9 +451,9 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
           <div><b>Qty</b> and <b>Std h</b> are Epicor's (<code>LaborDtl_LaborQty</code>, <code>LaborDtl_LaborHrs</code> — standard hours, not clocked time).</div>
           <div><b>Person-days</b> = each person counted once for each day they are named on a completion. <b>Std h / person-day</b> = Std h ÷ Person-days, and <b>Efficiency 🟢🟡🔴</b> is that over ${PRODUCTIVE_HOURS_PER_PERSON} h, the 07:00–15:30 shift less morning tea and lunch — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.effGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.effAmber}%. Per person, an order's Std h is shared equally among the people who finished it. It counts finished work only, so a day spent on an order finished on a later day earns nothing here.</div>
           <div><b>On time% 🟢🟡🔴</b> = orders whose last completion in the period was on or before their Due Date ÷ orders with a Due Date to judge — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.onTimeGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.onTimeAmber}%. <b>Order done</b> marks the day the export's running total reached the order's quantity.</div>
-          <div><b>By person</b> lists everyone on <code>ASSY_Operator</code> (supervisors and managers excepted): a person named on no confirmed completion in the period is marked <b>On leave</b> — which also covers anybody who spent the period on an order not yet finished. Click a person to see their efficiency by week on the right, beside the whole floor; click again for every line.</div>
+          <div><b>By person</b> lists everyone on <code>ASSY_Operator</code> (supervisors and managers excepted): a person named on no confirmed completion in the period is marked <b>On leave</b> — which also covers anybody who spent the period on an order not yet finished. The chart beside it is the last month's efficiency by week for every line; with a person picked, theirs beside the whole floor.</div>
           <div><b>Last 24h</b> is the last working day before today (Friday to Sunday on a Monday); <b>Last Week</b> is Monday to Sunday of the week before this one.</div>
-          <div>Press "+" on a line to see the orders behind its figures.</div>
+          <div>Press "+" on a line to see the orders behind its figures. Press a name or an order number to narrow the Completions list to it (a name also puts that person on the chart); filtered by a person, it adds their <b>Share</b> of each order (Std h ÷ the people who finished it), which is what their row in By person adds up.</div>
         </div>
       </div>`;
     wire();
@@ -412,17 +478,32 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
         void load();
       }),
     );
-    app.querySelectorAll<HTMLElement>('[data-person]').forEach((tr) =>
-      tr.addEventListener('click', () => {
-        const name = tr.dataset.person!;
+    // A name or an order narrows the Completions table; pressing it again,
+    // or ✕ Show all, lets go. Nothing is read again for it.
+    app.querySelectorAll<HTMLButtonElement>('[data-person]').forEach((b) =>
+      b.addEventListener('click', () => {
+        const name = b.dataset.person!;
         S.person = S.person?.toLowerCase() === name.toLowerCase() ? null : name;
         chosenPerson = S.person;
+        render();
+      }),
+    );
+    app.querySelectorAll<HTMLButtonElement>('[data-job]').forEach((b) =>
+      b.addEventListener('click', () => {
+        const job = b.dataset.job!;
+        S.job = S.job === job ? null : job;
         render();
       }),
     );
     app.querySelector<HTMLButtonElement>('[data-person-clear]')?.addEventListener('click', () => {
       S.person = null;
       chosenPerson = null;
+      render();
+    });
+    app.querySelector<HTMLButtonElement>('[data-clear-filter]')?.addEventListener('click', () => {
+      S.person = null;
+      chosenPerson = null;
+      S.job = null;
       render();
     });
     app.querySelectorAll<HTMLButtonElement>('[data-line]').forEach((b) =>

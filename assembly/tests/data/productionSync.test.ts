@@ -644,6 +644,44 @@ describe('matching a stored row to its shift', () => {
   });
 });
 
+/**
+ * The site is on Auckland time, the floor on Sydney's. A row for the 19th is
+ * stored as Auckland's midnight, 2026-11-18T11:00:00Z, which a Sydney browser
+ * reads as 22:00 on the 18th: it met the real 18th row there and was reported
+ * as its duplicate on every refresh ("SFM508163 2026-11-18: duplicate row").
+ */
+describe('a site in another time zone from the floor', () => {
+  let tz: string | undefined;
+  beforeEach(() => {
+    tz = process.env.TZ;
+    process.env.TZ = 'Australia/Sydney';
+  });
+  afterEach(() => {
+    process.env.TZ = tz;
+  });
+
+  it('takes a row\'s day from its RecordKey, so two days are not one duplicate', async () => {
+    const rows = [
+      // Written as UTC midnight (as the list once had it): read as the 18th.
+      stored({ [C.date]: '2026-11-18T00:00:00Z', [C.recordKey]: 'ASM8001|2026-11-18' }, '3001'),
+      // Written as the site's midnight of the 19th: read as the 18th too.
+
+      stored({ [C.date]: '2026-11-18T11:00:00Z', [C.recordKey]: 'ASM8001|2026-11-19' }, '3123'),
+    ];
+    const calls = stubGraph(rows);
+    const out = await syncProduction(CFG, 'ASSY_Planning', [
+      order({
+        anchorDay: '2026-11-18',
+        shifts: [shift({ date: '2026-11-18' }), shift({ date: '2026-11-19' })],
+      }),
+    ]);
+    expect(out.errors).toEqual([]);
+    expect(out.created).toBe(0);
+    // Each day's row is its own and already says what the board would write.
+    expect(writes(calls).filter((c) => c.method === 'POST')).toEqual([]);
+  });
+});
+
 it('writes support labour hours without manufactured quantities', async () => {
   const calls = stubGraph([]);
   const facts = order({ jobNum: 'FG-support', line: 'Factory General',

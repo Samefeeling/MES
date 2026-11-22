@@ -38,6 +38,7 @@
  */
 
 import type { AssemblyGanttView } from '@/engine/assembly/board';
+import { recordKeyDay } from '@/engine/assembly/completionRecord';
 import type { SharePointConfig } from '@/data/sharepoint/site';
 import type { ProductionEntry } from '@/store/planStore';
 import type { ListItemFields } from './lists.client';
@@ -432,7 +433,8 @@ function same(existing: ListItemFields, next: ListItemFields): boolean {
     if (typeof value === 'number') return Number(had) === value;
     if (typeof value === 'boolean') return Boolean(had) === value;
     // The Date column names a shift, not a moment — compare the day itself.
-    if (key === PRODUCTION_COLUMNS.date) return dayOf(had) === String(value);
+    // Its RecordKey's day where it names one: see `rowDay`.
+    if (key === PRODUCTION_COLUMNS.date) return rowDay(existing) === String(value);
     if (INSTANT_COLUMNS.has(key)) {
       const wanted = Date.parse(String(value));
       const found = Date.parse(String(had ?? ''));
@@ -480,8 +482,15 @@ function drift(
 }
 
 /** `YYYY-MM-DD` from whatever the list stores in its Date column. */
+/**
+ * A stored row's day: the one its RecordKey names, else its Date read
+ * locally. The key first because the Date column comes back in the site's
+ * zone (Auckland) and is read in the browser's (Sydney): a row for the 19th
+ * read as the 18th, met the real 18th row there, and was reported as its
+ * duplicate on every refresh.
+ */
 const rowDay = (fields: ListItemFields): string =>
-  dayOf(fields[PRODUCTION_COLUMNS.date]);
+  recordKeyDay(fields[PRODUCTION_COLUMNS.recordKey]) ?? dayOf(fields[PRODUCTION_COLUMNS.date]);
 
 /**
  * An order's stored rows, indexed the two ways a shift's row is found.

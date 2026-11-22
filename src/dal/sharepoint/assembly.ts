@@ -4,7 +4,7 @@
 // order leaves it once it is finished.
 import type { AssemblyDataLayer, AssemblyResult, AssemblyRosterPerson, EpicorCompletion } from '../../types/assembly';
 import { fetchThroughThrottle } from './http';
-import { localDay } from '../../core/assembly-completions';
+import { readCalendarDay, readSiteZone, type SiteZone } from './values';
 import { type ListField, resolveField } from '../../../assembly/src/data/sharepoint/fieldMap';
 
 export const DEFAULT_ASSEMBLY_FIELDS = {
@@ -18,8 +18,8 @@ export const DEFAULT_ASSEMBLY_FIELDS = {
   bookedHours: "BookedHour",
   "job": "Title",
   "date": "Date",
-  // `Job|YYYY-MM-DD` (or `Job#Op|YYYY-MM-DD`): the row's day as plain text,
-  // which no timezone can move. Preferred over Date wherever it carries one.
+  // `Job|YYYY-MM-DD`, written with the row: the day the completion is for,
+  // exactly as the board meant it, whatever the Date column's time zone does.
   recordKey: "RecordKey",
   "line": "Line",
   "operators": "Operators",
@@ -48,22 +48,14 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
       const site = (env.VITE_SHAREPOINT_SITE_URL || env.VITE_SITE_URL || '').replace(/\/$/, '');
       if (!site) throw new Error('Assembly SharePoint site is not configured.');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) throw new Error('Choose a valid date range.');
-      /*
-       * Asked a day wider on each side, then judged by each row's own local
-       * day (`localDay`). A SharePoint date column on this site stores 19/11
-       * as the site's midnight — `2026-11-18T13:00:00Z` in Sydney — so a
-       * filter on UTC midnights dropped every row of the first day asked for
-       * and read the rest a day early.
-       */
-      const start = new Date(`${from}T00:00:00Z`);
-      start.setUTCDate(start.getUTCDate() - 1);
-      const end = new Date(`${to}T00:00:00Z`);
-      end.setUTCDate(end.getUTCDate() + 2);
       const list = encodeURIComponent((env.VITE_COMPLETED_JOBS_LIST || 'ASSY_CompletedJobs').replace(/'/g, "''")).replace(/'/g, '%27');
       if (new URL(site).origin !== window.location.origin) throw new Error('Open MES on the configured SharePoint site.');
-      const schemaResponse = await fetchThroughThrottle(`${site}/_api/web/lists/getbytitle('${list}')/fields?$select=Title,InternalName,ReadOnlyField`, {
-        credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json;odata=nometadata' },
-      });
+      const [schemaResponse, zone] = await Promise.all([
+        fetchThroughThrottle(`${site}/_api/web/lists/getbytitle('${list}')/fields?$select=Title,InternalName,ReadOnlyField`, {
+          credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json;odata=nometadata' },
+        }),
+        siteZone(site),
+      ]);
       if (!schemaResponse.ok) throw new Error('Assembly column definitions could not be loaded.');
       const schema = (await schemaResponse.json()).value as ListField[];
       if (!Array.isArray(schema)) throw new Error('Assembly column definitions are invalid.');
@@ -76,7 +68,13 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
         else absent.add(key);
       }
       const hasCompletions = OPTIONAL_COMPLETION.every((key) => !absent.has(key));
-      const filter = `${fields.date} ge datetime'${start.toISOString()}' and ${fields.date} lt datetime'${end.toISOString()}'`;
+      /*
+       * A Date cell is the UTC instant of the SITE's midnight: on this tenant
+       * (Auckland, UTC+13 in summer) 19 November is 2026-11-18T11:00:00Z. A
+       * filter on the UTC day missed every row, so the window asked for is a
+       * day wider each side, and each row's own day decides whether it is in.
+       */
+      const filter = `${fields.date} ge datetime'${shiftDay(from, -1)}T00:00:00Z' and ${fields.date} lt datetime'${shiftDay(to, 2)}T00:00:00Z'`;
       let url = `${site}/_api/web/lists/getbytitle('${list}')/items?$top=500&$filter=${encodeURIComponent(filter)}`;
       const output: AssemblyResult[] = [];
       const keys = new Map<string, number>();
@@ -87,7 +85,7 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
         const body = await res.json() as { value?: Record<string, unknown>[]; 'odata.nextLink'?: string; '@odata.nextLink'?: string };
         for (const row of body.value ?? []) {
           const job = String(row[fields.job] ?? '').trim();
-          const day = dayOfRow(row[fields.recordKey], row[fields.date]);
+          const day = rowDay(row, fields, zone);
           /*
            * An order finished over several days has a row for each — a big
            * order never comes off in one — and those are its record, not
@@ -113,7 +111,7 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
             // a day that took no labour at all.
             bookedHours: row[fields.bookedHours] == null ? null : number(fields.bookedHours),
             output: number(fields.output), complete: number(fields.complete), reject: number(fields.reject), rework: number(fields.rework),
-            completed: row[fields.completed] === true, due: row[fields.due] ? String(row[fields.due]) : null,
+            completed: row[fields.completed] === true, due: row[fields.due] ? readCalendarDay(row[fields.due], zone) : null,
             completedAt: row[fields.completedAt] ? String(row[fields.completedAt]) : null,
             epicor: hasCompletions ? epicorOf(row, fields) : null };
           if (held !== undefined) output[held] = result;
@@ -165,16 +163,39 @@ export function rosterFrom(rows: readonly Record<string, unknown>[]): AssemblyRo
   return out;
 }
 
+/** `YYYY-MM-DD` moved by whole days. */
+function shiftDay(day: string, days: number): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 /**
- * A row's day: the one its RecordKey names (`018451-2-1|2026-11-19`), which
- * the board writes as text; else its Date column read by local day. The Date
- * column alone is not enough — what a SharePoint date comes back as depends
- * on how the column was made and on the site's and the browser's timezones,
- * and on this site it read a day early.
+ * The site's time zone, which is the zone its Date cells mean. Null when the
+ * site will not say: the row's RecordKey still gives its day, and a row
+ * without one is read the way the FactoryCalendar is (`readCalendarDay`).
  */
-export function dayOfRow(recordKey: unknown, date: unknown): string {
-  const keyed = /\|(\d{4}-\d{2}-\d{2})$/.exec(String(recordKey ?? '').trim())?.[1];
-  return keyed ?? localDay(date);
+async function siteZone(site: string): Promise<SiteZone | null> {
+  try {
+    const res = await fetchThroughThrottle(`${site}/_api/web/RegionalSettings/TimeZone`, {
+      credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json;odata=nometadata' },
+    });
+    return res.ok ? readSiteZone(await res.json()) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The day a row is for: its RecordKey's (`Job|YYYY-MM-DD`, the board's own
+ * day), else its Date cell read in the site's zone. Never the first ten
+ * characters of the Date cell — that is the UTC day, one early for a site
+ * east of UTC.
+ */
+export function rowDay(row: Record<string, unknown>, fields: { date: string; recordKey: string }, zone: SiteZone | null): string {
+  // `Job|YYYY-MM-DD`, or `Job#Op|YYYY-MM-DD` on a row copied from ASSY_Planning.
+  const keyed = /\|(\d{4}-\d{2}-\d{2})$/.exec(String(row[fields.recordKey] ?? '').trim())?.[1];
+  return keyed ?? readCalendarDay(row[fields.date], zone) ?? '';
 }
 
 /** A row's confirmed Epicor completion, or null when it has none. */

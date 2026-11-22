@@ -112,6 +112,19 @@ export function storedDay(raw: unknown): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/**
+ * The day a RecordKey names — `Job|YYYY-MM-DD` or `Job#Op|YYYY-MM-DD` — or
+ * null for a key that names none (the random keys of older bookings).
+ *
+ * The key is plain text and is the day the board meant. The Date column is a
+ * SharePoint date, read back in the browser's zone: the site is on Auckland
+ * time and the floor on Sydney's, so the site's midnight of the 19th
+ * (2026-11-18T11:00:00Z) reads as 22:00 on the 18th in Sydney.
+ */
+export function recordKeyDay(raw: unknown): string | null {
+  return /\|(\d{4}-\d{2}-\d{2})$/.exec(String(raw ?? '').trim())?.[1] ?? null;
+}
+
 /** A list row, read. `fields` is keyed by column name. */
 export function readStoredDay(item: { id: string; etag?: string; fields: Record<string, unknown> }): StoredDay {
   const f = item.fields;
@@ -120,7 +133,7 @@ export function readStoredDay(item: { id: string; etag?: string; fields: Record<
     id: item.id,
     etag: item.etag,
     recordKey: String(f.RecordKey ?? '').trim(),
-    day: storedDay(f.Date),
+    day: recordKeyDay(f.RecordKey) ?? storedDay(f.Date),
     op: /^Op\s+(\d+)\b/i.exec(String(f.WorkDescription ?? '').trim())?.[1] ?? '',
     wip: String(f.WorkType ?? '').trim().toUpperCase() === 'WIP',
     line: String(f.Line ?? '').trim(),
