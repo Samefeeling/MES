@@ -866,61 +866,95 @@ export interface TrendSeries {
   reference?: boolean;
 }
 
-export function renderEfficiencyTrend(labels: string[], series: TrendSeries[], target: number): string {
-  const width = 560;
-  const legendItems: LegendItem[] = series.map((s) => ({ label: s.name, color: s.color, line: true }));
-  const PL = 40, PR = 92, PB = 30;
-  const legend = svgLegend(legendItems, PL, 14, width - 10);
-  const PT = 26 + (legend.rows - 1) * 16;
-  const H2 = 250 + (legend.rows - 1) * 16;
-  const innerW = width - PL - PR;
-  const innerH = H2 - PT - PB;
+export interface TrendGeometry {
+  svg: string;
+  /** x of each week, for the hover guide. */
+  xs: number[];
+  top: number;
+  bottom: number;
+}
+
+/**
+ * The efficiency trend, drawn at exactly `width` × `height` CSS pixels — no
+ * viewBox scaling, so its text is the size the page says, the same as the
+ * table beside it. The legend is the caller's (HTML, in the page's font).
+ */
+export function renderEfficiencyTrend(
+  labels: string[],
+  series: TrendSeries[],
+  target: number,
+  size: { width: number; height: number },
+): TrendGeometry {
+  const width = Math.max(320, Math.round(size.width));
+  const height = Math.max(220, Math.round(size.height));
   const all = series.flatMap((s) => s.values.filter((v): v is number => v !== null));
+  const lastOf = (s: TrendSeries): number => s.values.reduce<number>((at, v, i) => (v === null ? at : i), -1);
+  const endText = (s: TrendSeries): string => {
+    const i = lastOf(s);
+    return i < 0 ? '' : `${s.name} ${s.values[i]}%`;
+  };
+  const PL = 46;
+  const PR = Math.min(170, 14 + Math.max(0, ...series.map((s) => endText(s).length)) * 7);
+  const PT = 12;
+  const PB = 30;
+  const innerW = width - PL - PR;
+  const innerH = height - PT - PB;
   const top = Math.max(150, Math.ceil(Math.max(target, ...all) / 50) * 50);
+  const step = innerH / (top / 25) >= 28 ? 25 : 50;
   const n = Math.max(labels.length, 1);
   const xOf = (i: number): number => PL + (n === 1 ? innerW / 2 : (i / (n - 1)) * innerW);
   const yOf = (v: number): number => PT + innerH - (v / top) * innerH;
+  const f = (v: number): string => v.toFixed(1);
   let grid = '';
-  for (let v = 0; v <= top; v += 50) {
-    grid += `<line x1="${PL}" x2="${PL + innerW}" y1="${yOf(v)}" y2="${yOf(v)}" stroke="#e2e8f0" stroke-width="1"/>` +
-      `<text x="${PL - 6}" y="${yOf(v) + 4}" font-size="10" text-anchor="end" fill="#64748b">${v}%</text>`;
+  for (let v = 0; v <= top; v += step) {
+    grid +=
+      `<line x1="${PL}" x2="${PL + innerW}" y1="${f(yOf(v))}" y2="${f(yOf(v))}" stroke="${v === 0 ? '#cbd5e1' : '#eef2f6'}" stroke-width="1"/>` +
+      `<text x="${PL - 8}" y="${f(yOf(v) + 4)}" font-size="12" text-anchor="end" fill="#64748b">${v}%</text>`;
   }
-  const targetLine = `<line x1="${PL}" x2="${PL + innerW}" y1="${yOf(target)}" y2="${yOf(target)}" stroke="#64748b" stroke-width="1" stroke-dasharray="4 3"/>` +
-    `<text x="${PL + 4}" y="${yOf(target) - 4}" font-size="10" fill="#64748b">target ${target}%</text>`;
+  const targetLine =
+    `<line x1="${PL}" x2="${PL + innerW}" y1="${f(yOf(target))}" y2="${f(yOf(target))}" stroke="#15803d" stroke-width="1" stroke-dasharray="5 4" opacity="0.7"/>` +
+    `<text x="${PL + 6}" y="${f(yOf(target) - 5)}" font-size="12" fill="#15803d">Target ${target}%</text>`;
   const xLabels = labels
-    .map((l, i) => `<text x="${xOf(i)}" y="${H2 - 10}" font-size="10" text-anchor="middle" fill="#64748b">${escAttr(l)}</text>`)
+    .map((l, i) => `<text x="${f(xOf(i))}" y="${height - 9}" font-size="12" text-anchor="middle" fill="#64748b">${escAttr(l)}</text>`)
     .join('');
-  // A line is drawn between weeks that both have a value; a week with none is a gap.
-  const ends: Array<{ y: number; name: string }> = [];
+  const ends: Array<{ y: number; text: string; color: string }> = [];
   const lines = series
     .map((s) => {
       let path = '';
       let pen = false;
       s.values.forEach((v, i) => {
         if (v === null) { pen = false; return; }
-        path += `${pen ? 'L' : 'M'}${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`;
+        path += `${pen ? 'L' : 'M'}${f(xOf(i))},${f(yOf(v))}`;
         pen = true;
       });
+      const r = s.reference ? 3 : 4;
       const dots = s.values
-        .map((v, i) =>
-          v === null
-            ? ''
-            : `<circle cx="${xOf(i).toFixed(1)}" cy="${yOf(v).toFixed(1)}" r="${s.reference ? 3 : 4}" fill="${s.color}" stroke="#fff" stroke-width="2"><title>${escAttr(`${s.name} · ${labels[i]} · ${v}%`)}</title></circle>`,
-        )
+        .map((v, i) => (v === null ? '' : `<circle cx="${f(xOf(i))}" cy="${f(yOf(v))}" r="${r}" fill="${s.color}" stroke="#fff" stroke-width="2"/>`))
         .join('');
-      const lastIdx = s.values.map((v, i) => (v === null ? -1 : i)).reduce((a, b) => Math.max(a, b), -1);
-      if (lastIdx >= 0) ends.push({ y: yOf(s.values[lastIdx]!), name: s.name });
-      return `<path d="${path}" fill="none" stroke="${s.color}" stroke-width="${s.reference ? 1.5 : 2}"${s.reference ? ' stroke-dasharray="5 3"' : ''} stroke-linejoin="round" stroke-linecap="round"/>${dots}`;
+      const i = lastOf(s);
+      if (i >= 0) ends.push({ y: yOf(s.values[i]!), text: endText(s), color: s.color });
+      return `<path d="${path}" fill="none" stroke="${s.color}" stroke-width="${s.reference ? 1.5 : 2}"${
+        s.reference ? ' stroke-dasharray="6 4"' : ''
+      } stroke-linejoin="round" stroke-linecap="round"/>${dots}`;
     })
     .join('');
-  // Names at the right edge, nudged apart so two lines ending close don't overprint.
+  // Each line's name and last value at its end, nudged apart so two lines
+  // ending close together don't overprint.
   ends.sort((a, b) => a.y - b.y);
-  for (let i = 1; i < ends.length; i++) ends[i].y = Math.max(ends[i].y, ends[i - 1].y + 12);
+  for (let i = 1; i < ends.length; i++) ends[i].y = Math.max(ends[i].y, ends[i - 1].y + 15);
+  const overflow = ends.length ? ends[ends.length - 1].y - (PT + innerH) : 0;
+  if (overflow > 0) for (const e of ends) e.y -= overflow;
   const names = ends
-    .map((e) => `<text x="${PL + innerW + 8}" y="${(e.y + 4).toFixed(1)}" font-size="10.5" fill="#1e293b">${escAttr(e.name)}</text>`)
+    .map((e) => `<text x="${PL + innerW + 10}" y="${f(e.y + 4)}" font-size="12.5" fill="#1e293b">${escAttr(e.text)}</text>`)
     .join('');
   const empty = all.length === 0
-    ? `<text x="${PL + innerW / 2}" y="${PT + innerH / 2}" font-size="12" text-anchor="middle" fill="#64748b">No confirmed completion in these weeks</text>`
+    ? `<text x="${f(PL + innerW / 2)}" y="${f(PT + innerH / 2)}" font-size="13" text-anchor="middle" fill="#64748b">No confirmed completion in these weeks</text>`
     : '';
-  return `<svg viewBox="0 0 ${width} ${H2}" width="100%" role="img" aria-label="Efficiency by week" style="max-width:100%;height:auto">${legend.svg}${grid}${targetLine}${xLabels}${lines}${names}${empty}</svg>`;
+  const guide = `<line class="trend-guide" x1="0" x2="0" y1="${PT}" y2="${PT + innerH}" stroke="#94a3b8" stroke-width="1" visibility="hidden"/>`;
+  return {
+    svg: `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Efficiency by week" font-family="inherit">${grid}${targetLine}${xLabels}${guide}${lines}${names}${empty}</svg>`,
+    xs: labels.map((_, i) => xOf(i)),
+    top: PT,
+    bottom: PT + innerH,
+  };
 }

@@ -58,13 +58,25 @@ export interface EpicorCompletion {
 
 /** One person on the Assembly roster (`ASSY_Operator`). */
 export interface AssemblyRosterPerson {
+  /** The `ASSY_Operator` item id — the key the board files leave under. */
+  id: string;
   /** The name the board shows — and so the name completions carry. */
   name: string;
   position: string;
+  /**
+   * Days the board has them on leave (`YYYY-MM-DD`): booked annual leave
+   * (`PlannedAnnualLeave`) and days marked off on the board (the saved plan's
+   * `workerOnLeave`).
+   */
+  leaveDays: string[];
 }
 
 export interface AssemblyDataLayer {
   results(from: string, to: string): Promise<AssemblyResult[]>;
-  /** The roster, for the people who finished nothing; absent off SharePoint. */
-  roster?(): Promise<AssemblyRosterPerson[]>;
+  /**
+   * The roster with each person's leave; absent off SharePoint. `warning`
+   * says what could not be read (the board's leave), the roster still being
+   * usable without it.
+   */
+  roster?(): Promise<{ people: AssemblyRosterPerson[]; warning: string | null }>;
 }

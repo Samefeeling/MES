@@ -6,6 +6,7 @@ import type { AssemblyDataLayer, AssemblyResult, AssemblyRosterPerson, EpicorCom
 import { fetchThroughThrottle } from './http';
 import { readCalendarDay, readSiteZone, type SiteZone } from './values';
 import { type ListField, resolveField } from '../../../assembly/src/data/sharepoint/fieldMap';
+import { readPlanText } from '../../../assembly/src/persistence/planCodec';
 
 export const DEFAULT_ASSEMBLY_FIELDS = {
   workType: "WorkType", laborHours: "LaborHours", description: "WorkDescription", supportDepartment: "SupportDepartment",
@@ -123,42 +124,99 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
       return output.sort((a, b) => b.day.localeCompare(a.day) || a.job.localeCompare(b.job));
     },
     async roster() {
-      if (env.VITE_BACKEND !== 'sharepoint') return [];
+      if (env.VITE_BACKEND !== 'sharepoint') return { people: [], warning: null };
       const site = (env.VITE_SHAREPOINT_SITE_URL || env.VITE_SITE_URL || '').replace(/\/$/, '');
-      if (!site) return [];
+      if (!site) return { people: [], warning: null };
       // The board reads the same list under the same fixed name.
       const url = `${site}/_api/web/lists/getbytitle('ASSY_Operator')/items?$top=500`;
       if (new URL(url).origin !== window.location.origin) throw new Error('Open MES on the configured SharePoint site.');
       const res = await fetchThroughThrottle(url, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json;odata=nometadata' } });
       if (!res.ok) throw new Error(`Assembly roster could not be loaded (${res.status}).`);
       const body = await res.json() as { value?: Record<string, unknown>[] };
-      return rosterFrom(body.value ?? []);
+      // Days marked off on the board live in its saved plan, read the way the
+      // board reads it. Without them the booked leave on the roster still counts.
+      let marked: Record<string, string[]> = {};
+      let warning: string | null = null;
+      try {
+        marked = await boardLeave(site, env.VITE_ASSEMBLY_PLAN_LIST || 'ASSY_Plans');
+      } catch (e) {
+        warning = `Leave marked on the board not read (${e instanceof Error ? e.message : String(e)}): only booked annual leave is counted.`;
+      }
+      return { people: rosterFrom(body.value ?? [], marked), warning };
     },
   };
+}
+
+/**
+ * The days marked off on the board, by operator id: `workerOnLeave` in the
+ * board's working plan (the `current` row of ASSY_Plans), unpacked the way the
+ * board packs it (`planCodec`) — a large plan is split across part rows.
+ */
+async function boardLeave(site: string, listName: string): Promise<Record<string, string[]>> {
+  const list = encodeURIComponent(listName.replace(/'/g, "''")).replace(/'/g, '%27');
+  const byTitle = async (title: string): Promise<string | null> => {
+    const filter = encodeURIComponent(`Title eq '${title.replace(/'/g, "''")}'`);
+    const res = await fetchThroughThrottle(`${site}/_api/web/lists/getbytitle('${list}')/items?$select=Title,PlanJson&$filter=${filter}`, {
+      credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json;odata=nometadata' },
+    });
+    if (!res.ok) throw new Error(`${listName} (${res.status})`);
+    const rows = ((await res.json()) as { value?: Record<string, unknown>[] }).value ?? [];
+    const hit = rows.filter((r) => r.Title === title);
+    return hit.length === 1 ? String(hit[0].PlanJson ?? '') : null;
+  };
+  const head = await byTitle('current');
+  if (!head) return {};
+  const plan = JSON.parse(await readPlanText(head, byTitle, 'current')) as { assembly?: { workerOnLeave?: Record<string, unknown> } };
+  const out: Record<string, string[]> = {};
+  for (const [id, days] of Object.entries(plan.assembly?.workerOnLeave ?? {})) {
+    if (Array.isArray(days)) out[id] = days.map(String).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+  }
+  return out;
 }
 
 /** The name columns, in the order the board's own roster reader prefers them. */
 const NAME_COLUMNS = ['PreferName', 'PreferredName', 'Operator', 'OperatorName', 'FullName', 'Name', 'Title'];
 const norm = (s: string): string => s.replace(/[\s_.-]+/g, '').toLowerCase();
 
-/** Roster rows → people, each once, named the way the board names them. */
-export function rosterFrom(rows: readonly Record<string, unknown>[]): AssemblyRosterPerson[] {
+/** `PlannedAnnualLeave`, read the way the board reads it: ISO days, comma-separated. */
+function leaveDaysOf(raw: unknown): string[] {
+  const parts = Array.isArray(raw) ? raw.map(String) : String(raw ?? '').split(/[,;|]+/);
+  return parts.map((p) => p.trim().slice(0, 10)).filter((p) => /^\d{4}-\d{2}-\d{2}$/.test(p));
+}
+
+/**
+ * Roster rows → people, named the way the board names them (so the names are
+ * the ones completions carry), each once, with every day the board has them
+ * on leave: booked (`PlannedAnnualLeave`) and marked off on the board
+ * (`marked`, by operator id — the list item id, as the board keys it).
+ */
+export function rosterFrom(
+  rows: readonly Record<string, unknown>[],
+  marked: Readonly<Record<string, readonly string[]>> = {},
+): AssemblyRosterPerson[] {
   const out: AssemblyRosterPerson[] = [];
   const seen = new Set<string>();
   for (const row of rows) {
     const byName = new Map<string, unknown>();
     for (const [k, v] of Object.entries(row)) if (!byName.has(norm(k))) byName.set(norm(k), v);
-    const pick = (names: string[]): string => {
+    const pick = (names: string[]): unknown => {
       for (const n of names) {
         const v = byName.get(norm(n));
-        if (v !== undefined && v !== null && String(v).trim()) return String(v).trim();
+        if (v !== undefined && v !== null && String(v).trim()) return v;
       }
-      return '';
+      return undefined;
     };
-    const name = pick(NAME_COLUMNS);
+    const name = String(pick(NAME_COLUMNS) ?? '').trim();
     if (!name || seen.has(name.toLowerCase())) continue;
     seen.add(name.toLowerCase());
-    out.push({ name, position: pick(['Position', 'Role', 'JobTitle']) });
+    const id = String(row.Id ?? row.ID ?? row.id ?? name);
+    const booked = leaveDaysOf(pick(['PlannedAnnualLeave', 'AnnualLeave', 'PlannedLeave', 'LeaveDates']));
+    out.push({
+      id,
+      name,
+      position: String(pick(['Position', 'Role', 'JobTitle']) ?? '').trim(),
+      leaveDays: [...new Set([...booked, ...(marked[id] ?? [])])].sort(),
+    });
   }
   return out;
 }

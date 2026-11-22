@@ -44,19 +44,32 @@ describe('Epicor completions on KPIs · Assembly', () => {
     expect(lines[1].orders.map((o) => o.job)).toEqual(['J1', 'J2']);
   });
 
-  it('judges an order on time by its Due Date, once however many days it took', () => {
+  it('judges On time per order: the day it was finished in full against its Due Date', () => {
+    // Due 20/11. J1 part on the 17th, finished on the 21st: late. J4 finished
+    // on the 19th: on time. J5 part on the 18th, not finished: not judged.
     const done = completedOrderDays([
       row({ epicor: epicor() }),
-      row({ id: '2', day: '2026-11-21', epicor: epicor({ qty: 5, hours: 3 }) }),
-      row({ id: '3', job: 'J2', due: null, epicor: epicor({ people: ['Cy'] }) }),
+      row({ id: '2', day: '2026-11-21', completed: true, epicor: epicor({ qty: 5, hours: 3 }) }),
+      row({ id: '3', job: 'J2', due: null, completed: true, epicor: epicor({ people: ['Cy'] }) }),
       row({ id: '4', job: 'J3' }),
+      row({ id: '5', job: 'J4', day: '2026-11-19', completed: true, epicor: epicor() }),
+      row({ id: '6', job: 'J5', day: '2026-11-18', epicor: epicor() }),
     ]);
     expect(done.map((d) => [d.job, d.day, d.onTime])).toEqual([
       ['J1', '2026-11-21', false],
-      ['J1', '2026-11-17', true],
+      ['J4', '2026-11-19', true],
+      ['J5', '2026-11-18', null],
+      ['J1', '2026-11-17', null],
       ['J2', '2026-11-17', null],
     ]);
-    expect(completionSummary(done)).toMatchObject({ orders: 2, qty: 25, stdHours: 15, people: 3, datedOrders: 1, onTimeOrders: 0 });
+    // Judged: J1 (late) and J4 (on time). J2 has no Due Date, J5 is not finished.
+    expect(completionSummary(done)).toMatchObject({ orders: 4, datedOrders: 2, onTimeOrders: 1 });
+  });
+
+  it('counts a part delivered after the Due Date as late before the order is finished', () => {
+    const [d] = completedOrderDays([row({ day: '2026-11-23', epicor: epicor() })]);
+    expect(d.onTime).toBe(false);
+    expect(completionSummary([d])).toMatchObject({ datedOrders: 0 });
   });
 
   it('shares an order’s standard hours among the people who finished it', () => {

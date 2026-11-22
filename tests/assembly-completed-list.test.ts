@@ -189,17 +189,43 @@ it('takes a row’s day from its RecordKey, whatever its Date column reads', asy
   expect(read.map((r) => [r.day, r.output])).toEqual([['2026-11-19', 150]]);
 });
 
-it('names the roster the way the board does, each person once', async () => {
+it('names the roster the way the board does, each person once, with booked leave', async () => {
   const { rosterFrom } = await import('../src/dal/sharepoint/assembly');
   expect(rosterFrom([
-    { Title: 'Arisack Phommachanh', PreferName: 'Arisack', Position: 'Operator' },
-    { Title: 'Jimmy' },
-    { Title: 'jimmy' },
-    { Title: 'Sam Lee', Position: 'Supervisor' },
-    { Title: '' },
-  ])).toEqual([
-    { name: 'Arisack', position: 'Operator' },
-    { name: 'Jimmy', position: '' },
-    { name: 'Sam Lee', position: 'Supervisor' },
+    { Id: 7, Title: 'Arisack Phommachanh', PreferName: 'Arisack', Position: 'Operator', PlannedAnnualLeave: '2026-11-19, 2026-11-20' },
+    { Id: 8, Title: 'Jimmy' },
+    { Id: 9, Title: 'jimmy' },
+    { Id: 10, Title: 'Sam Lee', Position: 'Supervisor' },
+    { Id: 11, Title: '' },
+  ], { '8': ['2026-11-18'], '7': ['2026-11-19'] })).toEqual([
+    { id: '7', name: 'Arisack', position: 'Operator', leaveDays: ['2026-11-19', '2026-11-20'] },
+    { id: '8', name: 'Jimmy', position: '', leaveDays: ['2026-11-18'] },
+    { id: '10', name: 'Sam Lee', position: 'Supervisor', leaveDays: [] },
   ]);
+});
+
+it('adds the days marked off on the board, from its saved plan', async () => {
+  vi.stubGlobal('window', { location: { origin: 'https://tenant.sharepoint.com' } });
+  vi.stubGlobal('fetch', async (url: string) => {
+    const u = decodeURIComponent(url);
+    if (u.includes("getbytitle('ASSY_Operator')")) return new Response(JSON.stringify({ value: [{ Id: 8, Title: 'Jimmy' }] }));
+    if (u.includes("getbytitle('ASSY_Plans')") && u.includes("Title eq 'current'")) {
+      return new Response(JSON.stringify({ value: [{ Title: 'current', PlanJson: JSON.stringify({ id: 'current', assembly: { workerOnLeave: { '8': ['2026-11-17', '2026-11-18'] } } }) }] }));
+    }
+    return new Response('{}', { status: 404 });
+  });
+  const out = await dal().roster!();
+  expect(out).toEqual({ people: [{ id: '8', name: 'Jimmy', position: '', leaveDays: ['2026-11-17', '2026-11-18'] }], warning: null });
+});
+
+it('still lists the roster when the board’s plan cannot be read, and says so', async () => {
+  vi.stubGlobal('window', { location: { origin: 'https://tenant.sharepoint.com' } });
+  vi.stubGlobal('fetch', async (url: string) =>
+    decodeURIComponent(url).includes("getbytitle('ASSY_Operator')")
+      ? new Response(JSON.stringify({ value: [{ Id: 8, Title: 'Jimmy', PlannedAnnualLeave: '2026-11-18' }] }))
+      : new Response('no', { status: 403 }),
+  );
+  const out = await dal().roster!();
+  expect(out.people[0].leaveDays).toEqual(['2026-11-18']);
+  expect(out.warning).toContain('Leave marked on the board not read');
 });

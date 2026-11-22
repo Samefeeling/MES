@@ -50,7 +50,10 @@ export interface CompletionSummary {
   perPersonDay: number | null;
   /** `perPersonDay` over a 7.5 h day, as a percentage. */
   efficiency: number | null;
-  /** Orders with a Due Date to judge, and of those the ones finished by it. */
+  /**
+   * Orders finished in full in the period that have a Due Date, and of those
+   * the ones finished on or before it.
+   */
   datedOrders: number;
   onTimeOrders: number;
 }
@@ -127,7 +130,10 @@ export function completedOrderDays(rows: readonly AssemblyResult[]): CompletedOr
         qty,
         stdHours: e ? e.hours : perUnit === null ? 0 : round(qty * perUnit),
         due,
-        onTime: due ? row.day <= due : null,
+        // Judged against the order's Due Date on the day it was finished in
+        // full. A part of it delivered after the Due Date is already late; a
+        // part delivered before it says nothing yet about the order.
+        onTime: !due ? null : row.completed ? row.day <= due : row.day > due ? false : null,
         finished: row.completed,
         people: e?.people.length ? e.people : names(row.operators),
         confirmedBy: e?.confirmedBy ?? '',
@@ -155,13 +161,21 @@ export function filterCompletions(
 }
 
 export function completionSummary(done: readonly CompletedOrderDay[]): CompletionSummary {
-  // An order finished across two days is judged on the later one.
   const last = new Map<string, CompletedOrderDay>();
   for (const d of done) {
     const held = last.get(d.job);
     if (!held || d.day > held.day) last.set(d.job, d);
   }
-  const judged = [...last.values()].filter((d) => d.onTime !== null);
+  // On time is an order's: the day it was finished in full (JobCompleted)
+  // against its Due Date. An order still being finished is not judged yet,
+  // however many of its parts came off before or after the date.
+  const finishedOn = new Map<string, CompletedOrderDay>();
+  for (const d of done) {
+    if (!d.finished) continue;
+    const held = finishedOn.get(d.job);
+    if (!held || d.day < held.day) finishedOn.set(d.job, d);
+  }
+  const judged = [...finishedOn.values()].filter((d) => d.due !== null);
   const personDays = new Set(done.flatMap((d) => d.people.map((p) => `${p.toLowerCase()}|${d.day}`))).size;
   const stdHours = round(done.reduce((s, d) => s + d.stdHours, 0));
   // Only the hours somebody is named against count towards a person-day.
@@ -177,7 +191,7 @@ export function completionSummary(done: readonly CompletedOrderDay[]): Completio
     perPersonDay: perPersonDay === null ? null : round(perPersonDay),
     efficiency: perPersonDay === null ? null : Math.round((perPersonDay / PRODUCTIVE_HOURS_PER_PERSON) * 100),
     datedOrders: judged.length,
-    onTimeOrders: judged.filter((d) => d.onTime).length,
+    onTimeOrders: judged.filter((d) => d.day <= d.due!).length,
   };
 }
 
