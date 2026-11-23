@@ -1658,8 +1658,17 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .assembly-kpi .kpi-empty{padding:18px;text-align:center;color:var(--mu)}
 /* Who is on a line or an order, beside People. Each name narrows the
    Completions list to that person; so does an order number. */
-.assembly-kpi-table{min-width:1400px}
+.assembly-kpi-table{min-width:1520px}
+.assembly-kpi .assembly-kpi-table .kpi-col-metric{width:96px}
 .assembly-kpi .kpi-col-names{width:280px}
+.assembly-kpi .kpi-col-material{width:220px}
+.assembly-kpi td.kpi-material{text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:0;color:var(--tx)}
+.assembly-kpi tr.kpi-idle th .kpi-mc-name,.assembly-kpi tr.kpi-idle td{color:var(--mu)}
+.assembly-kpi .kpi-toggle-gap{display:inline-block;width:30px}
+th.col-resizable .col-grip{position:absolute;top:0;right:0;width:6px;height:100%;cursor:col-resize;z-index:2;touch-action:none}
+th.col-resizable .col-grip:hover,table.col-resizing .col-grip{background:rgba(255,255,255,.35)}
+table.col-resizing{user-select:none;cursor:col-resize}
+.assembly-people-table td.kpi-est{color:var(--mu)}
 .assembly-kpi td.kpi-names{text-align:left;white-space:normal;line-height:1.9}
 .assembly-kpi th.kpi-names-head{text-align:left}
 .assembly-kpi .kpi-name,.assembly-kpi .kpi-job-link{border:1px solid var(--bd);background:#fff;color:var(--theme-dark);border-radius:10px;padding:0 7px;margin:0 4px 0 0;font:inherit;font-size:12px;font-weight:600;cursor:pointer;line-height:18px}

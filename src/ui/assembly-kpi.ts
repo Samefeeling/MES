@@ -13,26 +13,27 @@
 import type { AssemblyAttendance, AssemblyDataLayer, AssemblyResult, AssemblyRosterPerson } from '../types/assembly';
 import {
   attendanceByEmployee,
-  attendanceCovers,
   attendanceWeeks,
   unusualWorkTypes,
   type AttendanceEntry,
   type PersonAttendance,
 } from '../core/attendance';
-import { HISTORY_GROUPS, historyGroup, isAssessedGroup, type HistoryGroup, type HistoryRow } from '../core/assembly-history';
-import { chartBuckets, efficiencySeries, personEfficiency, type EffPoint, type Grain } from '../core/assembly-efficiency';
+import { HISTORY_GROUPS, boardLineName, firstWords, historyGroup, isAssessedGroup, type HistoryGroup, type HistoryRow } from '../core/assembly-history';
+import { addDay, chartBuckets, efficiencySeries, personEfficiency, type Bucket, type EffPoint, type Grain } from '../core/assembly-efficiency';
 import { ASSEMBLY_THRESHOLDS, PRODUCTIVE_HOURS_PER_PERSON, colourClass } from '../core/assembly-metrics';
 import {
   completedOrderDays,
   completionSummary,
   completionsByLine,
   completionsByPerson,
+  mondayOf,
   filterCompletions,
   type CompletedOrderDay,
   type CompletionSummary,
 } from '../core/assembly-completions';
 import { SERIES_COLORS, renderEfficiencyTrend, type TrendSeries } from './charts';
 import { departmentTabs } from './kpi-nav';
+import { resizableColumns } from './resizable-columns';
 import { escapeHtml } from './modal';
 
 /**
@@ -159,20 +160,77 @@ const namesCell = (names: readonly string[], active: string | null): string =>
  * the names cell; the floor's TOTAL leaves it empty, the By person table
  * below being the list of everybody.
  */
-function metricCells(sum: CompletionSummary, names = '<td class="kpi-names"></td>'): string {
+function metricCells(
+  sum: CompletionSummary,
+  names = '<td class="kpi-names"></td>',
+  people: Staffing | null = null,
+  material = '',
+): string {
   const t = ASSEMBLY_THRESHOLDS;
   const on = onTimeOf(sum);
+  // A line's or the floor's People: on shift / planned. An order's: who finished it.
+  const peopleCell =
+    people && people.planned
+      ? `<td class="num" title="${people.onShift} of the ${people.planned} people planned on it were on shift in this period${
+          sum.people ? `; ${sum.people} named on its completions` : ''
+        }">${people.onShift}/${people.planned}</td>`
+      : cell(n(sum.people));
   return (
+    `<td class="kpi-material"${material ? ` title="${escapeHtml(material)}"` : ''}>${escapeHtml(firstWords(material))}</td>` +
     cell(n(sum.orders)) +
     cell(n(sum.qty)) +
     cell(h(sum.stdHours)) +
-    cell(n(sum.people)) +
+    peopleCell +
     names +
     cell(n(sum.personDays)) +
     cell(sum.perPersonDay === null ? '—' : sum.perPersonDay.toFixed(2)) +
     cell(pct(sum.efficiency), colourClass(sum.efficiency, t.effGreen, t.effAmber)) +
     cell(pct(on), colourClass(on, t.onTimeGreen, t.onTimeAmber))
   );
+}
+
+/** People planned on a line (or the floor), and how many of them were on shift. */
+interface Staffing {
+  planned: number;
+  onShift: number;
+}
+
+/**
+ * Each line's people and the floor's: everyone on ASSY_Operator but
+ * supervisors, managers and the lines not assessed, on their line on the
+ * board (else their first Skill). On shift in the period = named on a
+ * completion, or with hours on a timesheet, or — on the weekdays no timesheet
+ * of theirs covers — not on leave on at least one of them.
+ */
+function staffing(S: PageState, done: readonly CompletedOrderDay[]): { byLine: Map<string, Staffing>; total: Staffing } {
+  const att = attendanceView(S);
+  const clock = att ? attendanceByEmployee(att.entries, S.from, S.to) : new Map<string, PersonAttendance>();
+  const named = new Set(done.flatMap((d) => d.people.map((p) => p.toLowerCase())));
+  const weekdays: string[] = [];
+  for (let d = S.from; d && d <= S.to && weekdays.length < 400; d = addDay(d, 1)) {
+    const wd = new Date(`${d}T12:00:00Z`).getUTCDay();
+    if (wd !== 0 && wd !== 6) weekdays.push(d);
+  }
+  const byLine = new Map<string, Staffing>();
+  const total: Staffing = { planned: 0, onShift: 0 };
+  for (const r of S.roster) {
+    if (OFF_THE_FLOOR.test(r.position) || !isAssessedGroup(historyGroup(r.line))) continue;
+    const c = r.employeeId ? clock.get(r.employeeId) : undefined;
+    const leave = new Set([...r.leaveDays, ...(c?.leaveDays ?? [])]);
+    const unsheeted = weekdays.filter((d) => !(r.employeeId && att?.weeks.has(mondayOf(d))));
+    const on =
+      named.has(r.name.toLowerCase()) || (c ? c.direct + c.indirect > 0 : false) || unsheeted.some((d) => !leave.has(d));
+    const key = boardLineName(r.line).toUpperCase();
+    const held = byLine.get(key) ?? { planned: 0, onShift: 0 };
+    held.planned++;
+    total.planned++;
+    if (on) {
+      held.onShift++;
+      total.onShift++;
+    }
+    if (key) byLine.set(key, held);
+  }
+  return { byLine, total };
 }
 
 /** Headline tiles: what the meeting opens with, before anyone drills in. */
@@ -419,12 +477,14 @@ function detailTables(done: readonly CompletedOrderDay[], S: PageState): string 
     .join(' and ');
   const worked = new Set(people.map((p) => p.name.toLowerCase()));
   const roster = new Map(S.roster.map((r) => [r.name.toLowerCase(), r]));
-  // With timesheets for every week of the period, a person's efficiency is
-  // their share of Std h over the direct hours they attended, and their leave
-  // is payroll's as well as the board's.
+  // A person's hours are decided day by day, as the chart's are: direct hours
+  // attended on a day a timesheet of theirs covers, 7.5 h on any other day
+  // they are named on a completion. Their leave is payroll's as well as the
+  // board's.
   const att = attendanceView(S);
-  const timed = Boolean(att && attendanceCovers(att.weeks, S.from, S.to));
-  const clock = timed ? attendanceByEmployee(att!.entries, S.from, S.to) : new Map<string, PersonAttendance>();
+  const clock = att ? attendanceByEmployee(att.entries, S.from, S.to) : new Map<string, PersonAttendance>();
+  const whole: Bucket = { key: S.from, label: '', from: S.from, to: S.to, partial: false };
+  const effInput = { done, attendance: att?.entries ?? [], covered: att?.weeks ?? new Set<string>() };
   const clockOf = (name: string): PersonAttendance | null => {
     const id = roster.get(name.toLowerCase())?.employeeId;
     return id ? clock.get(id) ?? { direct: 0, indirect: 0, leave: 0, leaveDays: [] } : null;
@@ -451,20 +511,23 @@ function detailTables(done: readonly CompletedOrderDay[], S: PageState): string 
   const picked = (name: string): string =>
     person && person.toLowerCase() === name.toLowerCase() ? ' class="kpi-picked"' : '';
   const personCells = (p: (typeof people)[number]): string => {
-    if (!timed) {
-      return cell(p.perDay.toFixed(2)) + cell(`${p.efficiency}%`, colourClass(p.efficiency, t.effGreen, t.effAmber));
-    }
-    const direct = clockOf(p.name)?.direct ?? null;
-    const eff = direct ? Math.round((p.stdHours / direct) * 100) : null;
+    const employeeId = roster.get(p.name.toLowerCase())?.employeeId ?? '';
+    const [pt] = personEfficiency(effInput, [whole], p.name, employeeId);
+    const hours = pt.timesheetHours + pt.estimatedHours;
+    const title =
+      pt.basis === 'timesheet'
+        ? 'Direct hours attended, from the timesheets'
+        : pt.basis === 'mixed'
+          ? `${h(pt.timesheetHours)} h from the timesheets + ${h(pt.estimatedHours)} h estimated (${PRODUCTIVE_HOURS_PER_PERSON} h a day named, on days no timesheet covers)`
+          : `Estimated: ${PRODUCTIVE_HOURS_PER_PERSON} h for each day named on a completion${employeeId ? ' (no timesheet covers these days)' : ' (no EmployeeId on ASSY_Operator)'}`;
     return (
-      `<td class="num${direct === null ? ' gray' : ''}"${direct === null ? ' title="No EmployeeId on ASSY_Operator: their timesheet cannot be matched"' : ''}>${
-        direct === null ? '?' : h(direct)
-      }</td>` + cell(pct(eff), colourClass(eff, t.effGreen, t.effAmber))
+      `<td class="num${pt.basis === 'timesheet' ? '' : ' kpi-est'}" title="${title}">${h(hours)}${pt.basis === 'timesheet' ? '' : '*'}</td>` +
+      cell(pct(pt.efficiency), colourClass(pt.efficiency, t.effGreen, t.effAmber))
     );
   };
   const awayText = (name: string): { text: string; cls: string; title: string } => {
     if (onLeave(name)) return { text: 'On leave', cls: 'kpi-leave', title: 'On leave in this period' };
-    const c = timed ? clockOf(name) : null;
+    const c = clockOf(name);
     if (c && c.direct > 0) {
       return {
         text: `No completion · ${h(c.direct)} direct h`,
@@ -503,13 +566,11 @@ function detailTables(done: readonly CompletedOrderDay[], S: PageState): string 
       : '',
   ].filter(Boolean);
   const unusual = att ? unusualWorkTypes(att.entries) : [];
-  const timedNote = att
-    ? timed
-      ? `Hours and Efficiency from the timesheets (${S.attendance!.files.length} in <code>Attendance</code>): Efficiency = Std h ÷ direct hours attended.${
-          unusual.length ? ` Counted as work: ${unusual.map(escapeHtml).join(', ')}.` : ''
-        }`
-      : 'No timesheet covers every week of this period: Efficiency here is Std h ÷ days ÷ 7.5 h.'
-    : '';
+  const timedNote = `Efficiency = Std h ÷ Hours. Hours: direct hours attended on days a timesheet covers${
+    att ? ` (${S.attendance!.files.length} in <code>Attendance</code>)` : ' (none read yet)'
+  }, else ${PRODUCTIVE_HOURS_PER_PERSON} h a day named on a completion — * marks hours that are partly or wholly that estimate.${
+    unusual.length ? ` Counted as work: ${unusual.map(escapeHtml).join(', ')}.` : ''
+  }`;
   const leaveNote =
     (timedNote ? `<div class="kpi-chart-note">${timedNote}</div>` : '') +
     warnings.map((w) => `<div class="kpi-chart-note">⚠ ${escapeHtml(w!)}</div>`).join('');
@@ -527,11 +588,8 @@ function detailTables(done: readonly CompletedOrderDay[], S: PageState): string 
             <th title="Orders they are named on. An order three people finished is one order for each of them; its Std h is split three ways.">Orders</th>
             <th title="Their share of the standard hours of the orders they finished — an order finished by three people gives each a third">Std h</th>
             <th title="Days they are named on a completion">Days</th>
-            ${
-              timed
-                ? '<th title="Direct hours attended in the period, from the timesheets (Total Duration of lines at a Direct location, leave excepted)">Direct h</th><th title="Std h ÷ Direct h">Efficiency</th>'
-                : `<th title="Std h ÷ Days">Std h / day</th><th title="Std h / day ÷ ${PRODUCTIVE_HOURS_PER_PERSON} h">Efficiency</th>`
-            }
+            <th title="Direct hours attended on days a timesheet covers (Total Duration at a Direct location, leave excepted), else ${PRODUCTIVE_HOURS_PER_PERSON} h for each day named on a completion (*)">Hours</th>
+            <th title="Std h ÷ Hours">Efficiency</th>
             <th title="Days on leave in this period: booked annual leave, days marked off on the board, and leave lines on the timesheets">Leave</th>
           </tr></thead>
           <tbody>${rows || `<tr><td colspan="7" class="kpi-empty">Nobody is named on a completion in this period.</td></tr>`}</tbody>
@@ -625,20 +683,35 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
 
     const done = assessedDays(S.rows);
     const total = completionSummary(done);
-    const lines = completionsByLine(done, LINE_ORDER);
+    const staff = staffing(S, done);
+    // Lines with people planned and nothing finished still get a row.
+    const finishedLines = completionsByLine(done, LINE_ORDER);
+    const idle = [...staff.byLine.keys()]
+      .filter((key) => !finishedLines.some((l) => l.line.toUpperCase() === key))
+      .map((key) => ({ line: LINE_ORDER.find((l) => l.toUpperCase() === key) ?? key, summary: completionSummary([]), orders: [] as typeof finishedLines[number]['orders'] }));
+    const rank = (line: string): number => {
+      const i = LINE_ORDER.findIndex((l) => l.toUpperCase() === line.toUpperCase());
+      return i < 0 ? LINE_ORDER.length : i;
+    };
+    const lines = done.length || staff.byLine.size ? [...finishedLines, ...idle].sort((a, b) => rank(a.line) - rank(b.line)) : [];
+    // An order's description: its own row's, else the export's for that order.
+    const csvDescription = new Map((S.history ?? []).filter((r) => r.jobNum && r.description).map((r) => [r.jobNum!, r.description!]));
     const body = S.loading
-      ? `<tr><td colspan="10" class="kpi-empty">Loading Assembly results…</td></tr>`
+      ? `<tr><td colspan="11" class="kpi-empty">Loading Assembly results…</td></tr>`
       : lines.length === 0
-        ? `<tr><td colspan="10" class="kpi-empty">No confirmed completions in this period. They appear once a supervisor confirms who finished each order in the Assembly board's <b>✓ Completed</b> dialog.</td></tr>`
+        ? `<tr><td colspan="11" class="kpi-empty">No confirmed completions in this period. They appear once a supervisor confirms who finished each order in the Assembly board's <b>✓ Completed</b> dialog.</td></tr>`
         : lines
             .map((line) => {
               const open = S.expanded.has(line.line);
+              const toggle = line.orders.length
+                ? `<button type="button" class="kpi-toggle" data-line="${escapeHtml(line.line)}" title="${open ? 'Hide' : 'Show'} the orders on this line">${
+                    open ? '–' : '+'
+                  }</button>`
+                : '<span class="kpi-toggle-gap"></span>';
               return (
-                `<tr><th><button type="button" class="kpi-toggle" data-line="${escapeHtml(
+                `<tr${line.orders.length ? '' : ' class="kpi-idle" title="People planned on this line, and no completion confirmed in this period"'}><th>${toggle}<span class="kpi-mc-name">${escapeHtml(
                   line.line,
-                )}" title="${open ? 'Hide' : 'Show'} the orders on this line">${open ? '–' : '+'}</button><span class="kpi-mc-name">${escapeHtml(
-                  line.line,
-                )}</span></th>${metricCells(line.summary, namesCell(line.summary.names, S.person))}</tr>` +
+                )}</span></th>${metricCells(line.summary, namesCell(line.summary.names, S.person), staff.byLine.get(line.line.toUpperCase()) ?? null)}</tr>` +
                 (open
                   ? line.orders
                       .map(
@@ -649,7 +722,12 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
                             order.days
                           } ${order.days === 1 ? 'day' : 'days'}${
                             order.due ? ` · due ${au(order.due)}` : ''
-                          }${order.finished ? ' · done' : ''}</span></th>${metricCells(order.summary, namesCell(order.summary.names, S.person))}</tr>`,
+                          }${order.finished ? ' · done' : ''}</span></th>${metricCells(
+                            order.summary,
+                            namesCell(order.summary.names, S.person),
+                            null,
+                            order.description || csvDescription.get(order.job) || '',
+                          )}</tr>`,
                       )
                       .join('')
                   : '')
@@ -679,16 +757,18 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
           <table class="summary-table kpi-table assembly-kpi-table">
             <colgroup>
               <col class="kpi-col-machine">
-              <col span="4" class="kpi-col-metric">
+              <col class="kpi-col-material">
+              <col class="kpi-col-metric"><col class="kpi-col-metric"><col class="kpi-col-metric"><col class="kpi-col-metric">
               <col class="kpi-col-names">
-              <col span="4" class="kpi-col-metric">
+              <col class="kpi-col-metric"><col class="kpi-col-metric"><col class="kpi-col-metric"><col class="kpi-col-metric">
             </colgroup>
             <thead><tr>
               <th class="kpi-machine-head">Line</th>
+              <th title="The part's description, its first six words (hover for all of it) — on each order under a line">Material</th>
               <th title="Distinct orders with a completion in the period">Orders</th>
               <th title="Quantity Epicor shows finished">Qty</th>
               <th title="Standard hours of that quantity, as Epicor values it">Std h</th>
-              <th title="People named as having finished them">People</th>
+              <th title="A line and the TOTAL: people on shift / people planned on it (ASSY_Operator, on their line on the board). An order: people named as having finished it.">People</th>
               <th class="kpi-names-head" title="Who they are — press a name to see their completions below">Names</th>
               <th title="One person named on at least one completion on one day">Person-days</th>
               <th title="Std h ÷ Person-days">Std h / person-day</th>
@@ -699,7 +779,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
             ${
               S.loading
                 ? ''
-                : `<tfoot><tr class="kpi-total"><th>TOTAL</th>${metricCells(total)}</tr></tfoot>`
+                : `<tfoot><tr class="kpi-total"><th>TOTAL</th>${metricCells(total, undefined, staff.total)}</tr></tfoot>`
             }
           </table>
         </div>
@@ -709,15 +789,17 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
         <div class="kpi-note">
           <div>Every figure comes from <code>ASSY_CompletedJobs</code>: one row per order finished on a day — what <code>CompletedJobs.csv</code> shows reported (every planner but PMD), once a supervisor has confirmed who finished it in the Assembly board's <b>✓ Completed</b> dialog. A big order finished over several days has a row for each day and is <b>one</b> order in every count.</div>
           <div><b>Qty</b> and <b>Std h</b> are Epicor's (<code>LaborDtl_LaborQty</code>, <code>LaborDtl_LaborHrs</code> — standard hours, not clocked time).</div>
+          <div><b>Material</b> is the part's description, its first six words (hover for all of it), on each order under a line. <b>People</b> on a line and the TOTAL is <b>on shift / planned</b>: planned = the people on <code>ASSY_Operator</code> whose line on the board (else their first Skill) is that line, supervisors and managers excepted; on shift = those named on a completion, with hours on a timesheet, or — on weekdays no timesheet of theirs covers — not on leave on at least one of them. A line with people planned and nothing confirmed still has a row. On an order, People is who finished it. Drag a column header's right edge to resize it; double-click the edge to reset.</div>
           <div><b>Person-days</b> = each person counted once for each day they are named on a completion. <b>Std h / person-day</b> = Std h ÷ Person-days, and <b>Efficiency 🟢🟡🔴</b> is that over ${PRODUCTIVE_HOURS_PER_PERSON} h, the 07:00–15:30 shift less morning tea and lunch — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.effGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.effAmber}%. Per person, an order's Std h is shared equally among the people who finished it. It counts finished work only, so a day spent on an order finished on a later day earns nothing here.</div>
           <div><b>On time% 🟢🟡🔴</b> = orders finished in full in the period on or before their <b>Due Date</b> ÷ orders finished in full with a Due Date. An order is judged once, on the day it was finished in full (<b>Order done</b>); in the Completions list a part of an order delivered after its Due Date is already <b>Late</b>, and one before it is <b>In progress</b> — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.onTimeGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.onTimeAmber}%. <b>Order done</b> marks the day the export's running total reached the order's quantity.</div>
           <div><b>By person</b> lists everyone on <code>ASSY_Operator</code> (supervisors and managers excepted): <b>Leave</b> is the days they are on leave in the period — booked annual leave (<code>PlannedAnnualLeave</code>), days marked off on the board, and the leave lines of payroll's timesheets. Somebody named on no confirmed completion is <b>On leave</b> when they have leave and no direct hour in the period, else <b>No completion</b> (with their direct hours when the timesheets have them; indirect-only time is No completion too).</div>
-          <div><b>Timesheets</b> are payroll's weekly exports in the <code>Attendance</code> folder beside Planning.csv (sheet <code>Export</code>), matched to people by <code>EmployeeId</code> on ASSY_Operator. <b>Direct h</b> = Total Duration of the lines at a Direct location (the 54-minute break already out of it), leave and Indirect excepted. When they cover every week of the period, By person's Efficiency is a person's Std h ÷ their Direct h. <b>Efficiency</b> (the chart) covers From–To in days (up to 14 days), weeks (up to 26 weeks) or months: Std h finished in <code>CompletedJobs.csv</code> ÷ hours, by line — on a day a timesheet covers, the direct hours attended (a person's hours go to their line on the board, else the first line of their Skills); on any other day, the people confirmed on that day's completions × ${PRODUCTIVE_HOURS_PER_PERSON} h (hollow points).</div>
+          <div><b>Timesheets</b> are payroll's weekly exports in the <code>Attendance</code> folder beside Planning.csv (sheet <code>Export</code>), matched to people by <code>EmployeeId</code> on ASSY_Operator. <b>Direct h</b> = Total Duration of the lines at a Direct location (the 54-minute break already out of it), leave and Indirect excepted. By person's <b>Hours</b> are a person's direct hours on the days a timesheet of theirs covers, and ${PRODUCTIVE_HOURS_PER_PERSON} h for each other day they are named on a completion (marked *); their Efficiency is Std h ÷ Hours. <b>Efficiency</b> (the chart) covers From–To in days (up to 14 days), weeks (up to 26 weeks) or months: Std h finished in <code>CompletedJobs.csv</code> ÷ hours, by line — on a day a timesheet covers, the direct hours attended (a person's hours go to their line on the board, else the first line of their Skills); on any other day, the people confirmed on that day's completions × ${PRODUCTIVE_HOURS_PER_PERSON} h (hollow points).</div>
           <div><b>Last 24h</b> is the last working day before today (Friday to Sunday on a Monday); <b>Last Week</b> is Monday to Sunday of the week before this one.</div>
           <div>Press "+" on a line to see the orders behind its figures. Press a name or an order number to narrow the Completions list to it (a name also puts that person on the chart); filtered by a person, it adds their <b>Share</b> of each order (Std h ÷ the people who finished it), which is what their row in By person adds up.</div>
         </div>
       </div>`;
     wire();
+    resizableColumns(app.querySelector<HTMLTableElement>('.assembly-kpi-table'), 'mes.assemblyKpi.columns.v1');
     trendObserver?.disconnect();
     trendObserver = S.loading ? null : drawTrend(app, trendModel(S, assessedDays(S.rows)));
   }

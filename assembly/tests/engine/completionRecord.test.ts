@@ -81,7 +81,7 @@ describe('the row a completion is written into', () => {
       Operators: 'Ana, Bo', OperatorIds: '11,12', Complete: 150, ShiftOutput: 150, Reject: 0,
       OrderQty: 300, PlannedHours: 37.5, RemainingQty: 150, DueDate: '2026-11-20T00:00:00Z',
       JobCompleted: false, CompletedAt: null,
-      [C.epicorQty]: 150, [C.epicorHours]: 18.75, [C.completedBy]: 'Ana, Bo', [C.confirmedBy]: 'Jeff Penn',
+      [C.epicorQty]: 150, [C.epicorHours]: 18.75, [C.epicorDescription]: 'C-Leg Table', [C.completedBy]: 'Ana, Bo', [C.confirmedBy]: 'Jeff Penn',
       [C.confirmedAt]: '2026-11-18T07:00:00.000Z',
     });
     // Complete × PlannedHours ÷ OrderQty is Epicor's hours.

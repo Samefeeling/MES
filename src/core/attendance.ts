@@ -102,10 +102,12 @@ export function timesheetDay(raw: string): string | null {
   return at.getUTCDate() === d && at.getUTCMonth() === m - 1 ? `${y}-${pad(m)}-${pad(d)}` : null;
 }
 
-/** Hours of a duration: `7:36:00`, `7:36`, or plain decimal hours. NaN when unreadable. */
+/** Hours of a duration: `7h 36m` (the export's own form), `7:36:00`, `7:36`, or plain decimal hours. NaN when unreadable. */
 export function durationHours(raw: string): number {
   const s = raw.trim();
   if (!s) return NaN;
+  const hm = /^(-?)\s*(?:(\d+(?:\.\d+)?)\s*h(?:rs?|ours?)?)?\s*(?:(\d+(?:\.\d+)?)\s*m(?:in(?:ute)?s?)?)?\s*(?:(\d+)\s*s(?:ec(?:ond)?s?)?)?$/i.exec(s);
+  if (hm && (hm[2] || hm[3] || hm[4])) return (hm[1] ? -1 : 1) * (Number(hm[2] ?? 0) + Number(hm[3] ?? 0) / 60 + Number(hm[4] ?? 0) / 3600);
   const hms = /^(-?)(\d+):(\d{1,2})(?::(\d{1,2}))?$/.exec(s);
   if (hms) return (hms[1] ? -1 : 1) * (+hms[2] + +hms[3] / 60 + (hms[4] ? +hms[4] / 3600 : 0));
   const n = Number(s.replace(/,/g, ''));
@@ -160,7 +162,9 @@ export function parseTimesheet(rows: readonly (readonly string[])[], source: str
   rows.slice(head + 1).forEach((row, i) => {
     if (!row || row.every((c) => String(c ?? '').trim() === '')) return;
     const employeeId = cell(row, 'employeeId').replace(/\.0+$/, '');
-    if (!employeeId) return; // a total or a blank line under the table
+    // The export always ends on a summary row ("Totals" in Employee Id), and
+    // a blank line may sit under the table: neither is anybody's time.
+    if (!employeeId || !/\d/.test(employeeId) || /^totals?$/i.test(employeeId)) return;
     if (/reject|delet|cancel|void/i.test(cell(row, 'status'))) return;
     const day = timesheetDay(cell(row, 'startDate'));
     let hours = durationHours(cell(row, 'totalDuration'));

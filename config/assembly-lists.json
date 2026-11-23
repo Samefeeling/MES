@@ -198,6 +198,10 @@
           "type": "Text"
         },
         {
+          "name": "EpicorPartDescription",
+          "type": "Text"
+        },
+        {
           "name": "EpicorCompletedAt",
           "type": "DateTime"
         },
@@ -355,6 +359,10 @@
         },
         {
           "name": "EpicorPartNum",
+          "type": "Text"
+        },
+        {
+          "name": "EpicorPartDescription",
           "type": "Text"
         },
         {

@@ -48,12 +48,34 @@ export function historyGroup(raw: string): HistoryGroup | null {
   return null;
 }
 
+/**
+ * A roster line (a board line key such as `UPL_GLUING`, or what Skills says)
+ * → the board's line name, as the KPI table names its rows; '' when none.
+ * Read the way the board's roster reader reads Skills: plain "UPL" is Gluing.
+ */
+export function boardLineName(raw: string): string {
+  const s = raw.trim().toLowerCase().replace(/[\s_.-]+/g, '');
+  if (!s) return '';
+  if (/^(pmd|mould|mold)/.test(s)) return 'PMD';
+  if (/^tbp/.test(s)) return 'TBP';
+  if (/(cut|sew)/.test(s)) return 'UPL-CUT';
+  if (/(softie|sss|smartsoft)/.test(s)) return 'UPL-SSS';
+  if (/(glu|^upl|^uph)/.test(s)) return 'UPL-Gluing';
+  if (/^(table|tbl)/.test(s)) return 'Table';
+  if (/^(assy|asm|assembl|finalassembl|sofa|chair|stool|seat)/.test(s)) return 'Assembly';
+  if (/^(general|factory)/.test(s)) return 'General';
+  return '';
+}
+
 /** One labour entry of `CompletedJobs.csv`, as far as the history needs it. */
 export interface HistoryRow {
   day: string;
   stdHours: number;
   group: HistoryGroup | null;
   planner: string;
+  jobNum?: string;
+  /** The part's description, first line only. */
+  description?: string;
 }
 
 const ALIASES = {
@@ -61,7 +83,12 @@ const ALIASES = {
   createDateTime: ['Calculated_CreateDateTime', 'CreateDateTime'],
   hours: ['LaborDtl_LaborHrs', 'LaborHrs'],
   planner: ['Calculated_PlannerID', 'PlannerID', 'PersonID'],
+  jobNum: ['LaborDtl_JobNum', 'JobNum'],
+  description: ['JobAsmbl_Description', 'Description'],
 } as const;
+
+/** The first `n` words of a description — what the KPI table's Material column shows. */
+export const firstWords = (text: string, n = 6): string => text.trim().split(/\s+/).filter(Boolean).slice(0, n).join(' ');
 
 const norm = (s: string): string => s.replace(/[\s_.-]+/g, '').toLowerCase();
 const pad = (n: number): string => String(n).padStart(2, '0');
@@ -84,6 +111,8 @@ export function parseHistoryTable(table: readonly (readonly string[])[]): { rows
     createDateTime: col(ALIASES.createDateTime),
     hours: col(ALIASES.hours),
     planner: col(ALIASES.planner),
+    jobNum: col(ALIASES.jobNum),
+    description: col(ALIASES.description),
   };
   if (at.hours === undefined || (at.createDate === undefined && at.createDateTime === undefined)) {
     return { rows: [], errors: ['CompletedJobs.csv has no LaborDtl_CreateDate or LaborDtl_LaborHrs column.'] };
@@ -100,7 +129,14 @@ export function parseHistoryTable(table: readonly (readonly string[])[]): { rows
       continue;
     }
     const planner = cell(row, at.planner).toUpperCase();
-    rows.push({ day, stdHours, planner, group: historyGroup(planner) });
+    rows.push({
+      day,
+      stdHours,
+      planner,
+      group: historyGroup(planner),
+      jobNum: cell(row, at.jobNum),
+      description: cell(row, at.description).split(/\r?\n/)[0].trim(),
+    });
   }
   return { rows, errors: unreadable ? [`CompletedJobs.csv: ${unreadable} rows with no readable day or hours were skipped.`] : [] };
 }

@@ -35,6 +35,8 @@ export const DEFAULT_ASSEMBLY_FIELDS = {
   // A confirmed Epicor completion — see `EpicorCompletion`. Optional: a list
   // the board has not yet added them to simply has no completions to show.
   epicorQty: "EpicorQty", epicorHours: "EpicorHours", epicorPartNum: "EpicorPartNum", epicorCompletedAt: "EpicorCompletedAt",
+  // The part's description, written by the board from 23/11/2026; older rows have none.
+  partDescription: "EpicorPartDescription",
   completedBy: "CompletedBy", confirmedBy: "CompletionConfirmedBy", confirmedAt: "CompletionConfirmedAt",
 };
 
@@ -115,6 +117,7 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
             output: number(fields.output), complete: number(fields.complete), reject: number(fields.reject), rework: number(fields.rework),
             completed: row[fields.completed] === true, due: row[fields.due] ? readCalendarDay(row[fields.due], zone) : null,
             completedAt: row[fields.completedAt] ? String(row[fields.completedAt]) : null,
+            partDescription: absent.has('partDescription') ? '' : String(row[fields.partDescription] ?? '').trim(),
             epicor: hasCompletions ? epicorOf(row, fields) : null };
           if (held !== undefined) output[held] = result;
           else keys.set(key, output.push(result) - 1);

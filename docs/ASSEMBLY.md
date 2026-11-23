@@ -28,9 +28,10 @@ A **Names** column beside People shows who is on each line and each order. Press
 
 | Column | Definition |
 | --- | --- |
+| Material | On each order under a line: the part's description, its first six words (hover for all of it) — `EpicorPartDescription`, written by the board since 23/11/2026 (the column is added to `ASSY_CompletedJobs` automatically), else `JobAsmbl_Description` from `CompletedJobs.csv` for that order. |
 | Orders | Distinct orders with a completion in the period. |
 | Qty / Std h | Epicor's quantity and standard hours (`LaborDtl_LaborQty`, `LaborDtl_LaborHrs` — standard hours, not clocked time). |
-| People | Distinct people named as having finished them. |
+| People | On a line and the TOTAL: **on shift / planned** (e.g. 11/15). Planned = the people on `ASSY_Operator` whose line on the board (`workerLines`, else their first Skill) is that line, supervisors, managers and TBP excepted. On shift = named on a completion in the period, or with hours on a timesheet, or — on the weekdays no timesheet of theirs covers — not on leave on at least one of them. A line with people planned and nothing confirmed still gets a row. On an order: the people named as having finished it. |
 | Person-days | Each person counted once for each day they are named on a completion. |
 | Std h / person-day | Std h ÷ Person-days. |
 | Efficiency | Std h / person-day ÷ 7.5 h (the 07:00–15:30 shift less morning tea and lunch). 🟢 ≥ 90% · 🟡 ≥ 75%. It counts **finished** work only: a day spent on an order finished on a later day earns nothing that day, so it reads low for anyone on long orders. |
@@ -44,12 +45,13 @@ Payroll's weekly timesheet exports go in an **`Attendance`** folder beside the P
 | --- | --- |
 | Employee Id | The person: matched to `ASSY_Operator.EmployeeId` (add a Text or Number column of that name and fill it in). Names are never matched — payroll's "CHANTHAN PEOV" is not the board's PreferName. |
 | Start Date | The day. |
-| Total Duration (else Duration, else Units in hours, else End − Start Time) | Hours. Paid time: the fixed 54-minute break is already out of it (07:00–15:30 = 7:36). Unpaid Break Duration is not taken off again. |
+| Total Duration (else Duration, else Units in hours or days × 7.6, else End − Start Time) | Hours, written `7h 36m` by the export (`7:36:00` and decimal hours are read too). Paid time: the fixed 54-minute break is already out of it (07:00–15:30 = 7:36). Unpaid Break Duration is not taken off again. |
 | Work Type | Any type naming **leave** or a **holiday** (Annual, Personal, Long Service Leave Taken, Public Holiday…) is leave: its days are leave days, its hours are not worked. Everything else (blank, Ordinary, Overtime…) is worked; the page lists any unusual worked type it counted. |
 | Location | Worked hours at a location whose last level is **Direct** (`… / Assembly / Assembly Direct`) are **direct hours** — the efficiency denominator. **Indirect** hours are not counted (a person with only those is *No completion · indirect only*). |
 | Status | Rejected, deleted or cancelled lines count for nothing. |
+| (last row) | The export ends on a summary row, `Totals` in Employee Id: skipped, as is any row whose Employee Id has no digit. |
 
-With timesheets for **every week** of the period chosen, **By person** shows **Direct h** and Efficiency = their Std h ÷ their Direct h, in place of Std h / day ÷ 7.5 h; otherwise it keeps the person-day measure and says so. Leave there is the board's and the timesheets' together; **On leave** means leave and no direct hour in the period, and someone at work without a confirmed completion shows their direct hours (*No completion · 38.0 direct h*).
+**By person** shows **Hours** and Efficiency = Std h ÷ Hours, the hours decided day by day as the chart's are: a person's direct hours on the days a timesheet of theirs covers, 7.5 h for each other day they are named on a completion (those hours marked `*`). Leave there is the board's and the timesheets' together; **On leave** means leave and no direct hour in the period, and someone at work without a confirmed completion shows their direct hours (*No completion · 38.0 direct h*).
 
 The **Efficiency** chart is **Std h finished in `CompletedJobs.csv` ÷ hours**, by line — earned hours over attended direct hours, which needs no confirmation and so reaches back as far as both files do. The export's planner is the line it can name: TBP, UPL, ASSY (Assembly), TABLE, GENERAL; PMD is left out. **UPL is the three benches together**, because the export does not tell UPL-CUT, UPL-Gluing and UPL-SSS apart. A person's hours go to their line on the board (the saved plan's `workerLines`), else the first line their Skills name; hours of anybody with no `EmployeeId` match count for the whole floor only — the page names them, because their line then reads high. The hours are decided **day by day**: a day a timesheet covers uses the direct hours attended (solid point); any other day uses the **people the supervisor confirmed** on that day's completions **× 7.5 h** (hollow point; a bucket that mixes both says so in the tooltip). With a person picked, their share of confirmed completions over their direct hours, beside the whole floor (dashed). Hovering a point shows the Std h and hours behind it and which kind of hours they are.
 

@@ -25,6 +25,8 @@ export interface CompletedOrderDay {
   day: string;
   line: string;
   partNum: string;
+  /** The part's description; '' when the row does not carry it. */
+  description: string;
   qty: number;
   stdHours: number;
   due: string | null;
@@ -74,6 +76,7 @@ export interface PersonCompletions {
 export interface OrderCompletions {
   job: string;
   partNum: string;
+  description: string;
   days: number;
   lastDay: string;
   due: string | null;
@@ -127,6 +130,7 @@ export function completedOrderDays(rows: readonly AssemblyResult[]): CompletedOr
         day: row.day,
         line: lineLabel(row.line),
         partNum: e?.partNum ?? '',
+        description: row.partDescription ?? '',
         qty,
         stdHours: e ? e.hours : perUnit === null ? 0 : round(qty * perUnit),
         due,
@@ -253,6 +257,7 @@ export function completionsByLine(
           .map(([job, jobDays]) => ({
             job,
             partNum: jobDays.find((d) => d.partNum)?.partNum ?? '',
+            description: jobDays.find((d) => d.description)?.description ?? '',
             days: new Set(jobDays.map((d) => d.day)).size,
             lastDay: jobDays.reduce((a, d) => (d.day > a ? d.day : a), ''),
             due: jobDays.find((d) => d.due)?.due ?? null,

@@ -40,7 +40,7 @@ describe('chartBuckets', () => {
 describe('efficiency: timesheet hours where there are timesheets, people × 7.5 h where not', () => {
   const csv = (day: string, planner: string, stdHours: number): HistoryRow => ({ day, planner, stdHours, group: historyGroup(planner) });
   const done = (day: string, line: string, people: string[], stdHours = 10): CompletedOrderDay => ({
-    job: `J-${day}-${line}`, day, line, partNum: '', qty: 1, stdHours, due: null, onTime: null, finished: true, people, confirmedBy: '',
+    job: `J-${day}-${line}`, day, line, partNum: '', description: '', qty: 1, stdHours, due: null, onTime: null, finished: true, people, confirmedBy: '',
   });
   const att = (employeeId: string, day: string, hours: number): AttendanceEntry => ({ employeeId, name: employeeId, day, hours, kind: 'direct', workType: 'Ordinary', location: 'x / Assembly Direct' });
   const groups: Record<string, ReturnType<typeof historyGroup>> = { a: 'Assembly', t: 'Table' };

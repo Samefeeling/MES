@@ -365,3 +365,39 @@ describe('roster', () => {
     ]);
   });
 });
+
+describe("the real export's forms", () => {
+  it('reads durations written as "7h 36m", and skips the Totals row the export ends on', () => {
+    expect(durationHours('7h 36m')).toBeCloseTo(7.6);
+    expect(durationHours('2085h 3m')).toBeCloseTo(2085.05);
+    expect(durationHours('7h')).toBe(7);
+    expect(durationHours('45m')).toBeCloseTo(0.75);
+    expect(durationHours('0h 0m')).toBe(0);
+    const out = parseTimesheet(
+      [
+        HEADER,
+        HEADER.map((h) => ({ 'Employee Id': '10872482', 'Start Date': '27/10/2026', 'Total Duration': '7h 36m', 'Work Type': 'Ordinary', Location: ASSY, 'Start Time': '7:00:00', 'End Time': '15:30:00' } as Record<string, string>)[h] ?? ''),
+        HEADER.map((h) => ({ 'Employee Id': 'Totals', 'Total Duration': '2085h 3m' } as Record<string, string>)[h] ?? ''),
+      ],
+      'TimesheetReport-PayRun2045380_1.xlsx',
+    );
+    expect(out.errors).toEqual([]);
+    // 7:36 paid, not the 8:30 between the clock times.
+    expect(out.entries.map((e) => Math.round(e.hours * 100) / 100)).toEqual([7.6]);
+  });
+});
+
+describe('the KPI table', () => {
+  it("takes each order's description from the export, and shows its first six words", async () => {
+    const { firstWords, boardLineName } = await import('../src/core/assembly-history');
+    const csv = parseHistoryTable([
+      ['LaborDtl_CreateDate', 'LaborDtl_LaborHrs', 'Calculated_PlannerID', 'LaborDtl_JobNum', 'JobAsmbl_Description'],
+      ['2026-10-27T00:00:00', '3', 'TABLE', 'J1', 'Classroom Table 1200x600 MDF Top Grey Frame Castors\nColour: Oak'],
+    ]);
+    expect(csv.rows[0]).toMatchObject({ jobNum: 'J1', description: 'Classroom Table 1200x600 MDF Top Grey Frame Castors' });
+    expect(firstWords(csv.rows[0].description!)).toBe('Classroom Table 1200x600 MDF Top Grey');
+    expect(['UPL_CUT_SEW', 'Cut/Sewing', 'UPL_GLUING', 'UPL', 'Upholstery', 'UPL_SOFTIE', 'SSS', 'ASSY', 'TABLE', 'FACTORY_GENERAL', 'TBP', ''].map(boardLineName)).toEqual([
+      'UPL-CUT', 'UPL-CUT', 'UPL-Gluing', 'UPL-Gluing', 'UPL-Gluing', 'UPL-SSS', 'UPL-SSS', 'Assembly', 'Table', 'General', 'TBP', '',
+    ]);
+  });
+});

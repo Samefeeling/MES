@@ -38,6 +38,8 @@ export interface AssemblyResult {
   completed: boolean;
   due: string | null;
   completedAt: string | null;
+  /** The part's description (`EpicorPartDescription`); '' on a row written before the board sent it. */
+  partDescription?: string;
   /**
    * Epicor's completion of the order that day (`CompletedJobs.csv`), and who
    * the supervisor confirmed finished it — the `ASSY_CompletedJobs` row's own
