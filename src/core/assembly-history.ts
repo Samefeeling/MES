@@ -48,25 +48,6 @@ export function historyGroup(raw: string): HistoryGroup | null {
   return null;
 }
 
-/**
- * A roster line (a board line key such as `UPL_GLUING`, or what Skills says)
- * → the board's line name, as the KPI table names its rows; '' when none.
- * Read the way the board's roster reader reads Skills: plain "UPL" is Gluing.
- */
-export function boardLineName(raw: string): string {
-  const s = raw.trim().toLowerCase().replace(/[\s_.-]+/g, '');
-  if (!s) return '';
-  if (/^(pmd|mould|mold)/.test(s)) return 'PMD';
-  if (/^tbp/.test(s)) return 'TBP';
-  if (/(cut|sew)/.test(s)) return 'UPL-CUT';
-  if (/(softie|sss|smartsoft)/.test(s)) return 'UPL-SSS';
-  if (/(glu|^upl|^uph)/.test(s)) return 'UPL-Gluing';
-  if (/^(table|tbl)/.test(s)) return 'Table';
-  if (/^(assy|asm|assembl|finalassembl|sofa|chair|stool|seat)/.test(s)) return 'Assembly';
-  if (/^(general|factory)/.test(s)) return 'General';
-  return '';
-}
-
 /** One labour entry of `CompletedJobs.csv`, as far as the history needs it. */
 export interface HistoryRow {
   day: string;

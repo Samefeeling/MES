@@ -72,7 +72,8 @@ describe('who the dialog offers', () => {
   });
 
   it('names the board’s lines for the ERP planners', () => {
-    expect(['ASSY', 'TABLE', 'TBP', 'UPL', 'General'].map(lineForPlanner)).toEqual(['Assembly', 'Table', 'TBP', 'UPL', 'General']);
+    // The board's layout decides: plain UPL is the Upholstery (Gluing) lane.
+    expect(['ASSY', 'TABLE', 'TBP', 'UPL', 'General'].map((p) => lineForPlanner(p))).toEqual(['Assembly', 'Table', 'TBP', 'UPL-Gluing', 'General']);
   });
 
   it('fills the demo from the board’s own crewed orders, spread over the window', () => {

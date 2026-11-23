@@ -210,12 +210,16 @@ it('adds the days marked off on the board, from its saved plan', async () => {
     const u = decodeURIComponent(url);
     if (u.includes("getbytitle('ASSY_Operator')")) return new Response(JSON.stringify({ value: [{ Id: 8, Title: 'Jimmy' }] }));
     if (u.includes("getbytitle('ASSY_Plans')") && u.includes("Title eq 'current'")) {
-      return new Response(JSON.stringify({ value: [{ Title: 'current', PlanJson: JSON.stringify({ id: 'current', assembly: { workerOnLeave: { '8': ['2026-11-17', '2026-11-18'] }, workerLines: { '8': 'TABLE' } } }) }] }));
+      return new Response(JSON.stringify({ value: [{ Title: 'current', PlanJson: JSON.stringify({ id: 'current', assembly: { workerOnLeave: { '8': ['2026-11-17', '2026-11-18'] }, workerLines: { '8': 'TABLE' }, lineNames: { UPL_GLUING: 'Upholstery' }, uplByProcess: true, lineOrder: ['TABLE', 'ASSY'] } }) }] }));
     }
     return new Response('{}', { status: 404 });
   });
   const out = await dal().roster!();
-  expect(out).toEqual({ people: [{ id: '8', name: 'Jimmy', position: '', leaveDays: ['2026-11-17', '2026-11-18'], employeeId: '', line: 'TABLE' }], warning: null });
+  expect(out).toEqual({
+    people: [{ id: '8', name: 'Jimmy', position: '', leaveDays: ['2026-11-17', '2026-11-18'], employeeId: '', line: 'TABLE' }],
+    warning: null,
+    layout: { lineNames: { UPL_GLUING: 'Upholstery' }, uplByProcess: true, virtualLines: [], lineOrder: ['TABLE', 'ASSY'] },
+  });
 });
 
 it('still lists the roster when the board’s plan cannot be read, and says so', async () => {

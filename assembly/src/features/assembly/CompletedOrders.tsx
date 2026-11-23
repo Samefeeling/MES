@@ -43,10 +43,16 @@ export function useCompletions(board: AssemblyGanttView | null, readStamp: numbe
   const workerLines = usePlanStore((st) => st.workerLines);
   const people = board?.workers.length ?? 0;
   const leave = JSON.stringify(board?.workerOnLeave ?? {});
+  // …and again when the line layout changes — a line renamed, opened, moved,
+  // upholstery switched to or from by process — so every order is grouped and
+  // named under the board's lines as they are now (see `boardLayout`).
+  const layout = usePlanStore((st) =>
+    JSON.stringify([st.lineNames, st.uplByProcess, st.virtualLines.map((v) => [v.key, v.name]), st.lineOrder]),
+  );
 
   useEffect(() => {
     if (orders >= 0 && readStamp !== null && boardRef.current) void loadCompletions(boardRef.current);
-  }, [orders, readStamp, workerLines, people, leave]);
+  }, [orders, readStamp, workerLines, people, leave, layout]);
 
   useEffect(() => {
     if (status !== 'ready' || !unlocked || !window) return;

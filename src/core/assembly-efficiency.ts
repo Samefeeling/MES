@@ -111,7 +111,18 @@ export interface EfficiencyInputs {
   /** Weeks (Mondays) a timesheet covers. */
   covered: ReadonlySet<string>;
   /** An employee's line, by payroll id. */
-  groupOf: (employeeId: string) => HistoryGroup | null;
+  groupOf: (employeeId: string) => string | null;
+  /**
+   * The lines to draw, in order, by key and name: the board's layout on the
+   * page. Without it, the export's planner lines (`HISTORY_GROUPS`).
+   */
+  lines?: ReadonlyArray<{ key: string; name: string }>;
+  /** The line an export row counts towards; by default its planner's. */
+  lineOfRow?: (row: HistoryRow) => string | null;
+  /** The line a confirmed completion counts towards; by default its own. */
+  lineOfDone?: (done: CompletedOrderDay) => string | null;
+  /** A line not measured (its Std h and hours left out of everything); by default PMD and TBP. */
+  excluded?: (line: string) => boolean;
 }
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
@@ -132,7 +143,11 @@ function point(std: number, sheet: number, estimate: number, coveredDays: number
 export function efficiencySeries(
   input: EfficiencyInputs,
   buckets: readonly Bucket[],
-): { lines: Array<{ name: string; points: EffPoint[] }>; floor: EffPoint[] } {
+): { lines: Array<{ key: string; name: string; points: EffPoint[] }>; floor: EffPoint[] } {
+  const lineOfRow = input.lineOfRow ?? ((r: HistoryRow) => r.group);
+  const lineOfDone = input.lineOfDone ?? ((d: CompletedOrderDay) => historyGroup(d.line));
+  const excluded = input.excluded ?? ((g: string) => !isAssessedGroup(g as HistoryGroup));
+  const drawn = input.lines ?? HISTORY_GROUPS.map((g) => ({ key: g as string, name: g as string }));
   const first = buckets[0]?.from ?? '';
   const last = buckets[buckets.length - 1]?.to ?? '';
   const inRange = (day: string): boolean => day >= first && day <= last;
@@ -145,15 +160,17 @@ export function efficiencySeries(
   };
   if (input.rows) {
     for (const r of input.rows) {
-      if (!isAssessedGroup(r.group) || !r.planner || !inRange(r.day)) continue;
-      if (r.group) add(std, `${r.day}|${r.group}`, r.stdHours);
+      if (!r.planner || !inRange(r.day)) continue;
+      const g = lineOfRow(r);
+      if ((g && excluded(g)) || r.group === 'PMD' || r.group === 'TBP') continue;
+      if (g) add(std, `${r.day}|${g}`, r.stdHours);
       add(std, `${r.day}|*`, r.stdHours);
     }
   }
   for (const d of input.done) {
     if (!inRange(d.day)) continue;
-    const g = historyGroup(d.line);
-    if (!isAssessedGroup(g)) continue;
+    const g = lineOfDone(d);
+    if (g && excluded(g)) continue;
     if (!input.rows) {
       if (g) add(std, `${d.day}|${g}`, d.stdHours);
       add(std, `${d.day}|*`, d.stdHours);
@@ -169,7 +186,7 @@ export function efficiencySeries(
   for (const e of input.attendance) {
     if (e.kind !== 'direct' || !inRange(e.day)) continue;
     const g = input.groupOf(e.employeeId);
-    if (!isAssessedGroup(g)) continue;
+    if (g && excluded(g)) continue;
     if (g) add(direct, `${e.day}|${g}`, e.hours);
     add(direct, `${e.day}|*`, e.hours);
   }
@@ -192,7 +209,7 @@ export function efficiencySeries(
     }
     return point(s, sheet, estimate, coveredDays, otherDays);
   };
-  const lines = HISTORY_GROUPS.map((g) => ({ name: g as string, points: buckets.map((b) => at(b, g)) })).filter((l) =>
+  const lines = drawn.filter((l) => !excluded(l.key)).map((l) => ({ key: l.key, name: l.name, points: buckets.map((b) => at(b, l.key)) })).filter((l) =>
     l.points.some((p) => p.stdHours > 0 || p.timesheetHours > 0 || p.estimatedHours > 0),
   );
   return { lines, floor: buckets.map((b) => at(b, '*')) };

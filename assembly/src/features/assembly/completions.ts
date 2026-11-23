@@ -49,7 +49,8 @@ import {
   type CompletionOrder,
   type StoredDay,
 } from '@/engine/assembly/completionRecord';
-import { LINES, activeLineKey, arrangeLines, rootLineKey, type LineDef, type LineKey } from '@/domain/assembly';
+import { LINES, activeLineKey, rootLineKey, type LineDef, type LineKey } from '@/domain/assembly';
+import { lineLayout, type LineLayout } from '@/domain/lineLayout';
 import { isOnLeave } from '@/engine/assembly/attendance';
 import { usePlanStore } from '@/store/planStore';
 import { lineOfWorkerToday } from './boardView';
@@ -70,24 +71,31 @@ export const completedListName = (): string =>
 const listEnabled = (sp: SharePointConfig, list: string): boolean =>
   Boolean(list && sp.siteUrl && (sp.token || sp.authMode === 'session'));
 
-/** The board's line name for an ERP planner, for an order the board no longer has. */
-export function lineForPlanner(planner: string): string {
-  switch (planner.trim().toUpperCase()) {
-    case 'ASSY':
-      return 'Assembly';
-    case 'TABLE':
-      return 'Table';
-    case 'GENERAL':
-    case 'FACTORY_GENERAL':
-      return 'General';
-    default:
-      return planner.trim();
-  }
+/**
+ * The board's line layout as the plan has it now — the lines, their names,
+ * their order, by process or not. The dialog groups and names every order by
+ * it, and KPIs · Assembly reads the same plan, so the three agree.
+ */
+export function boardLayout(lineOrder?: readonly string[]): LineLayout {
+  const s = usePlanStore.getState();
+  return lineLayout({
+    lineNames: s.lineNames,
+    uplByProcess: s.uplByProcess,
+    virtualLines: s.virtualLines,
+    lineOrder: lineOrder?.length ? [...lineOrder] : s.lineOrder,
+  });
 }
 
-/** A bench (Foaming, Sewing…) is named for the line it is part of. */
-const lineName = (line: LineDef): string =>
-  line.parent ? LINES.find((l) => l.key === line.parent)?.name ?? line.name : line.name;
+/** The board's line name for an ERP planner, for an order the board no longer has. */
+export function lineForPlanner(planner: string, layout: LineLayout = boardLayout()): string {
+  return layout.nameOf(planner);
+}
+
+/** A line by its name on the board now; a bench (Foaming, Sewing…) by its lane's. */
+const lineName = (line: LineDef): string => {
+  const layout = boardLayout();
+  return (layout.lineOf(line.key ? String(line.key) : '') ?? layout.lineOf(line.name))?.name ?? line.name;
+};
 
 /** The board's rows for one order number — one, or one per operation of a routed order. */
 function boardRows(board: AssemblyGanttView, jobNum: string) {
@@ -117,13 +125,8 @@ export type WorkerLines = Readonly<Record<string, LineKey>>;
  * lane's, and by process Smart Soft Seating is Upholstery's — or null for a
  * name the board has no line for.
  */
-export function laneOf(board: AssemblyGanttView, line: string): string | null {
-  const name = line.trim().toLowerCase();
-  if (!name) return null;
-  const hit = [...(board.groups ?? []).map((g) => g.line), ...LINES].find(
-    (l) => l.name.toLowerCase() === name || String(l.key).toLowerCase() === name,
-  );
-  return hit ? activeLineKey(rootLineKey(hit.key)) : null;
+export function laneOf(_board: AssemblyGanttView, line: string): string | null {
+  return boardLayout().lineOf(line)?.key ?? null;
 }
 
 /**
@@ -163,12 +166,8 @@ export function groupByLine(
   items: readonly CompletionItem[],
   lineOrder: readonly string[] = [],
 ): { line: string; items: CompletionItem[] }[] {
-  const lanes = arrangeLines(
-    [...(board.groups ?? []).map((g) => g.line), ...LINES]
-      .filter((l, i, all) => !l.parent && all.findIndex((m) => m.key === l.key) === i)
-      .map((l) => ({ key: String(l.key), name: l.name })),
-    lineOrder,
-  );
+  // The plan's own order of the lines, the same the board draws them in.
+  const lanes = boardLayout(lineOrder).lines;
   const rank = new Map(lanes.map((l, i) => [l.key, i]));
   const byLine = new Map<string, CompletionItem[]>();
   for (const item of items) {
@@ -247,12 +246,15 @@ export function itemFor(
   const confirmed = isConfirmed(row);
   const listed = orderFromRows(planning);
   const held = boardOrder(board, completion.jobNum);
+  const layout = boardLayout();
+  // Whatever name a record carries — an older one, a bench's, the planner's —
+  // the order is shown under its line as the board names it now.
   const order: CompletionOrder = {
-    line: held?.line || listed.line || row?.line || lineForPlanner(completion.planner),
+    line: layout.nameOf(held?.line || listed.line || row?.line || completion.planner),
     dueDate: held?.dueDate ?? listed.dueDate ?? row?.dueDate ?? null,
     orderQty: held?.orderQty ?? listed.orderQty ?? null,
   };
-  const line = (confirmed && row?.line) || order.line;
+  const line = layout.nameOf((confirmed && row?.line) || order.line);
   const group = lineCrewFor(board, workerLines, line, completion.day);
   const offered = ((): { people: Person[]; from: CompletionItem['offeredFrom'] } => {
     if (confirmed && row) return { people: peopleFrom(board, row.completedByIds, row.completedBy), from: 'saved' };

@@ -389,15 +389,19 @@ describe("the real export's forms", () => {
 
 describe('the KPI table', () => {
   it("takes each order's description from the export, and shows its first six words", async () => {
-    const { firstWords, boardLineName } = await import('../src/core/assembly-history');
+    const { firstWords } = await import('../src/core/assembly-history');
+    const { lineLayout } = await import('../assembly/src/domain/lineLayout');
     const csv = parseHistoryTable([
       ['LaborDtl_CreateDate', 'LaborDtl_LaborHrs', 'Calculated_PlannerID', 'LaborDtl_JobNum', 'JobAsmbl_Description'],
       ['2026-10-27T00:00:00', '3', 'TABLE', 'J1', 'Classroom Table 1200x600 MDF Top Grey Frame Castors\nColour: Oak'],
     ]);
     expect(csv.rows[0]).toMatchObject({ jobNum: 'J1', description: 'Classroom Table 1200x600 MDF Top Grey Frame Castors' });
     expect(firstWords(csv.rows[0].description!)).toBe('Classroom Table 1200x600 MDF Top Grey');
-    expect(['UPL_CUT_SEW', 'Cut/Sewing', 'UPL_GLUING', 'UPL', 'Upholstery', 'UPL_SOFTIE', 'SSS', 'ASSY', 'TABLE', 'FACTORY_GENERAL', 'TBP', ''].map(boardLineName)).toEqual([
-      'UPL-CUT', 'UPL-CUT', 'UPL-Gluing', 'UPL-Gluing', 'UPL-Gluing', 'UPL-SSS', 'UPL-SSS', 'Assembly', 'Table', 'General', 'TBP', '',
+    // Roster lines (a board key, or a Skills word) are read by the board's layout.
+    const layout = lineLayout({ lineNames: { UPL_GLUING: 'Upholstery', UPL_SOFTIE: 'Smart Soft Seating' }, uplByProcess: true });
+    expect(['UPL_CUT_SEW', 'Cut/Sewing', 'UPL_GLUING', 'UPL', 'Gluing', 'UPL_SOFTIE', 'SSS', 'ASSY', 'TABLE', 'FACTORY_GENERAL', 'TBP'].map((r) => layout.nameOf(r))).toEqual([
+      'UPL-CUT', 'UPL-CUT', 'Upholstery + Smart Soft Seating', 'Upholstery + Smart Soft Seating', 'Upholstery + Smart Soft Seating',
+      'Upholstery + Smart Soft Seating', 'Upholstery + Smart Soft Seating', 'Assembly', 'Table', 'General', 'TBP',
     ]);
   });
 });

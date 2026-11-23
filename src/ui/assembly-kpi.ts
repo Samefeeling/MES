@@ -18,7 +18,8 @@ import {
   type AttendanceEntry,
   type PersonAttendance,
 } from '../core/attendance';
-import { HISTORY_GROUPS, boardLineName, firstWords, historyGroup, isAssessedGroup, type HistoryGroup, type HistoryRow } from '../core/assembly-history';
+import { firstWords, type HistoryRow } from '../core/assembly-history';
+import { lineLayout, type LineLayout } from '../../assembly/src/domain/lineLayout';
 import { addDay, chartBuckets, efficiencySeries, personEfficiency, type Bucket, type EffPoint, type Grain } from '../core/assembly-efficiency';
 import { ASSEMBLY_THRESHOLDS, PRODUCTIVE_HOURS_PER_PERSON, colourClass } from '../core/assembly-metrics';
 import {
@@ -37,21 +38,22 @@ import { resizableColumns } from './resizable-columns';
 import { escapeHtml } from './modal';
 
 /**
- * The lines in the order the board lays them out, so the table reads like the
- * floor rather than like an alphabet. Names, not keys: the record stores what
- * the board displayed. Anything not on this list still gets a row, after these.
+ * The lines are the Assembly board's, as its plan lays them out now (see
+ * `assembly/src/domain/lineLayout`): their names, their order, upholstery by
+ * process or not. A completion filed under an older name, a bench or a
+ * planner is shown under the line it belongs to today, so this page, the
+ * board and its completed-orders dialog always name the same lines — and
+ * follow the board when its layout changes.
  */
-const LINE_ORDER = [
-  'TBP',
-  'PMD',
-  'UPL-CUT',
-  'UPL-Gluing',
-  'UPL-SSS',
-  'Assembly',
-  'Table',
-  'General',
-  'Factory General',
-];
+
+/** Lines not measured: PMD is moulding's, TBP waits for new equipment. */
+const NOT_ASSESSED_LINES = new Set(['PMD', 'TBP']);
+
+/** Is this a line the page leaves out? A name the layout does not know is kept. */
+const notAssessed = (layout: LineLayout, raw: string | null | undefined): boolean => {
+  const line = layout.lineOf(raw);
+  return Boolean(line && NOT_ASSESSED_LINES.has(line.key));
+};
 
 export type PeriodKey = 'lastDay' | 'lastWeek' | 'custom';
 
@@ -123,6 +125,8 @@ interface PageState {
   roster: AssemblyRosterPerson[];
   /** What of the roster's leave could not be read. */
   rosterWarning: string | null;
+  /** The board's line layout (from its plan); the built-in one until the plan is read. */
+  layout: LineLayout;
   /** Payroll's timesheets; null until read (or with none to read). */
   attendance: AssemblyAttendance | null;
   attendanceError: string;
@@ -214,13 +218,13 @@ function staffing(S: PageState, done: readonly CompletedOrderDay[]): { byLine: M
   const byLine = new Map<string, Staffing>();
   const total: Staffing = { planned: 0, onShift: 0 };
   for (const r of S.roster) {
-    if (OFF_THE_FLOOR.test(r.position) || !isAssessedGroup(historyGroup(r.line))) continue;
+    if (OFF_THE_FLOOR.test(r.position) || notAssessed(S.layout, r.line)) continue;
     const c = r.employeeId ? clock.get(r.employeeId) : undefined;
     const leave = new Set([...r.leaveDays, ...(c?.leaveDays ?? [])]);
     const unsheeted = weekdays.filter((d) => !(r.employeeId && att?.weeks.has(mondayOf(d))));
     const on =
       named.has(r.name.toLowerCase()) || (c ? c.direct + c.indirect > 0 : false) || unsheeted.some((d) => !leave.has(d));
-    const key = boardLineName(r.line).toUpperCase();
+    const key = (S.layout.lineOf(r.line)?.name ?? '').toUpperCase();
     const held = byLine.get(key) ?? { planned: 0, onShift: 0 };
     held.planned++;
     total.planned++;
@@ -258,8 +262,10 @@ function statTiles(sum: CompletionSummary): string {
  * The completions the page measures: every line but TBP (and PMD), which are
  * not assessed — see `NOT_ASSESSED`.
  */
-function assessedDays(rows: readonly AssemblyResult[]): CompletedOrderDay[] {
-  return completedOrderDays(rows).filter((d) => isAssessedGroup(historyGroup(d.line)));
+function assessedDays(S: PageState): CompletedOrderDay[] {
+  return completedOrderDays(S.rows)
+    .filter((d) => !notAssessed(S.layout, d.line))
+    .map((d) => ({ ...d, line: S.layout.lineOf(d.line)?.name ?? d.line }));
 }
 
 /** Supervisors and managers are on the roster but finish no orders themselves. */
@@ -274,9 +280,9 @@ interface TrendModel {
 }
 
 /** The history lines' colours: fixed, so a line keeps its colour whichever others appear. */
-const groupColour = (g: string): string => {
-  const i = HISTORY_GROUPS.indexOf(g as (typeof HISTORY_GROUPS)[number]);
-  return i >= 0 ? SERIES_COLORS[i] : '#94a3b8';
+const lineColour = (layout: LineLayout, key: string): string => {
+  const i = layout.lines.filter((l) => !NOT_ASSESSED_LINES.has(l.key)).findIndex((l) => l.key === key);
+  return i >= 0 ? SERIES_COLORS[i % SERIES_COLORS.length] : '#94a3b8';
 };
 
 /**
@@ -288,7 +294,7 @@ interface AttendanceView {
   entries: AttendanceEntry[];
   weeks: Set<string>;
   byName: Map<string, AssemblyRosterPerson>;
-  groupOf: (employeeId: string) => HistoryGroup | null;
+  groupOf: (employeeId: string) => string | null;
   /** Payroll names with Assembly hours and no `EmployeeId` on ASSY_Operator. */
   unmatched: string[];
 }
@@ -302,7 +308,7 @@ function attendanceView(S: PageState): AttendanceView | null {
     entries,
     weeks: attendanceWeeks(entries),
     byName: new Map(S.roster.map((r) => [r.name.toLowerCase(), r])),
-    groupOf: (id) => historyGroup(byEmployee.get(id)?.line ?? ''),
+    groupOf: (id) => S.layout.lineOf(byEmployee.get(id)?.line ?? '')?.key ?? null,
     unmatched,
   };
 }
@@ -320,7 +326,12 @@ function pointDetail(p: EffPoint): string | null {
 /** The From–To range's efficiency, in days, weeks or months: every line, or the person picked beside the whole floor. */
 function trendModel(S: PageState, done: readonly CompletedOrderDay[]): TrendModel | null {
   const att = attendanceView(S);
-  const busy = new Set([...done.map((d) => d.day), ...(S.history ?? []).filter((r) => isAssessedGroup(r.group)).map((r) => r.day)]);
+  const jobLine = new Map(
+    completedOrderDays(S.rows)
+      .map((d) => [d.job, S.layout.lineOf(d.line)?.key ?? ''] as const)
+      .filter(([, key]) => key),
+  );
+  const busy = new Set([...done.map((d) => d.day), ...(S.history ?? []).filter((r) => r.group !== 'PMD' && r.group !== 'TBP').map((r) => r.day)]);
   const { grain, buckets } = chartBuckets(S.from, S.to, (day) => busy.has(day));
   if (!buckets.length) return null;
   const input = {
@@ -329,6 +340,12 @@ function trendModel(S: PageState, done: readonly CompletedOrderDay[]): TrendMode
     attendance: att?.entries ?? [],
     covered: att?.weeks ?? new Set<string>(),
     groupOf: att?.groupOf ?? (() => null),
+    // The board's lines. An export row goes to the line its order was
+    // confirmed on; an order nobody has confirmed, to its planner's line.
+    lines: S.layout.lines,
+    lineOfRow: (r: HistoryRow) => (r.jobNum && jobLine.get(r.jobNum)) || S.layout.lineOf(r.planner)?.key || null,
+    lineOfDone: (d: CompletedOrderDay) => S.layout.lineOf(d.line)?.key ?? null,
+    excluded: (key: string) => NOT_ASSESSED_LINES.has(key),
   };
   const hist = efficiencySeries(input, buckets);
   const toSeries = (name: string, color: string, points: EffPoint[], reference = false): TrendSeries => ({
@@ -342,7 +359,7 @@ function trendModel(S: PageState, done: readonly CompletedOrderDay[]): TrendMode
   });
   const labels = buckets.map((b) => `${b.label}${b.partial ? '*' : ''}`);
   if (!S.person) {
-    return { grain, labels, target: ASSEMBLY_THRESHOLDS.effGreen, series: hist.lines.map((l) => toSeries(l.name, groupColour(l.name), l.points)) };
+    return { grain, labels, target: ASSEMBLY_THRESHOLDS.effGreen, series: hist.lines.map((l) => toSeries(l.name, lineColour(S.layout, l.key), l.points)) };
   }
   const who = S.roster.find((r) => r.name.toLowerCase() === S.person!.toLowerCase());
   return {
@@ -505,7 +522,7 @@ function detailTables(done: readonly CompletedOrderDay[], S: PageState): string 
   /** Away all period: leave, and no direct hour on the timesheet (when there is one). */
   const onLeave = (name: string): boolean => leaveIn(name) > 0 && !((clockOf(name)?.direct ?? 0) > 0);
   const away = S.roster
-    .filter((r) => !OFF_THE_FLOOR.test(r.position) && isAssessedGroup(historyGroup(r.line)) && !worked.has(r.name.toLowerCase()))
+    .filter((r) => !OFF_THE_FLOOR.test(r.position) && !notAssessed(S.layout, r.line) && !worked.has(r.name.toLowerCase()))
     .map((r) => r.name)
     .sort((a, b) => Number(onLeave(b)) - Number(onLeave(a)) || a.localeCompare(b));
   const picked = (name: string): string =>
@@ -663,6 +680,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
     error: '',
     roster: [],
     rosterWarning: null,
+    layout: lineLayout(),
     attendance: null,
     attendanceError: '',
     history: null,
@@ -681,17 +699,18 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
           )}</button>`,
       ).join('');
 
-    const done = assessedDays(S.rows);
+    const done = assessedDays(S);
     const total = completionSummary(done);
     const staff = staffing(S, done);
     // Lines with people planned and nothing finished still get a row.
-    const finishedLines = completionsByLine(done, LINE_ORDER);
+    const order = S.layout.lines.filter((l) => !NOT_ASSESSED_LINES.has(l.key)).map((l) => l.name);
+    const finishedLines = completionsByLine(done, order);
     const idle = [...staff.byLine.keys()]
       .filter((key) => !finishedLines.some((l) => l.line.toUpperCase() === key))
-      .map((key) => ({ line: LINE_ORDER.find((l) => l.toUpperCase() === key) ?? key, summary: completionSummary([]), orders: [] as typeof finishedLines[number]['orders'] }));
+      .map((key) => ({ line: order.find((l) => l.toUpperCase() === key) ?? key, summary: completionSummary([]), orders: [] as typeof finishedLines[number]['orders'] }));
     const rank = (line: string): number => {
-      const i = LINE_ORDER.findIndex((l) => l.toUpperCase() === line.toUpperCase());
-      return i < 0 ? LINE_ORDER.length : i;
+      const i = order.findIndex((l) => l.toUpperCase() === line.toUpperCase());
+      return i < 0 ? order.length : i;
     };
     const lines = done.length || staff.byLine.size ? [...finishedLines, ...idle].sort((a, b) => rank(a.line) - rank(b.line)) : [];
     // An order's description: its own row's, else the export's for that order.
@@ -801,7 +820,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
     wire();
     resizableColumns(app.querySelector<HTMLTableElement>('.assembly-kpi-table'), 'mes.assemblyKpi.columns.v1');
     trendObserver?.disconnect();
-    trendObserver = S.loading ? null : drawTrend(app, trendModel(S, assessedDays(S.rows)));
+    trendObserver = S.loading ? null : drawTrend(app, trendModel(S, assessedDays(S)));
   }
 
   function wire(): void {
@@ -888,7 +907,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
   async function loadContext(): Promise<void> {
     const reason = (r: PromiseRejectedResult): string => (r.reason instanceof Error ? r.reason.message : String(r.reason));
     const [roster, attendance, history] = await Promise.allSettled([
-      dal.roster ? dal.roster() : Promise.resolve({ people: [], warning: null }),
+      dal.roster ? dal.roster() : Promise.resolve({ people: [], warning: null, layout: null }),
       dal.attendance ? dal.attendance() : Promise.resolve(null),
       dal.history ? dal.history() : Promise.resolve(null),
     ]);
@@ -902,6 +921,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
     if (roster.status === 'fulfilled') {
       S.roster = roster.value.people;
       S.rosterWarning = roster.value.warning;
+      if (roster.value.layout) S.layout = lineLayout(roster.value.layout);
     } else {
       S.rosterWarning = `ASSY_Operator not read (${roster.reason instanceof Error ? roster.reason.message : String(roster.reason)}): nobody without a completion is listed.`;
     }

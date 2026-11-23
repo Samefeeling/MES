@@ -1,5 +1,6 @@
 import type { AttendanceEntry } from '../core/attendance';
 import type { HistoryRow } from '../core/assembly-history';
+import type { LayoutSettings } from '../../assembly/src/domain/lineLayout';
 
 /** Assembly uses job/day results; PMD uses machine/shift records. */
 export interface AssemblyResult {
@@ -100,7 +101,7 @@ export interface AssemblyDataLayer {
    * says what could not be read (the board's leave), the roster still being
    * usable without it.
    */
-  roster?(): Promise<{ people: AssemblyRosterPerson[]; warning: string | null }>;
+  roster?(): Promise<{ people: AssemblyRosterPerson[]; warning: string | null; layout?: LayoutSettings | null }>;
   /** Every timesheet export in the Attendance folder; absent off SharePoint. */
   attendance?(): Promise<AssemblyAttendance>;
   /** Every entry of `CompletedJobs.csv` (standard hours by day and planner); absent off SharePoint. */

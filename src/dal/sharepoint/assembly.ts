@@ -7,6 +7,7 @@ import { fetchThroughThrottle } from './http';
 import { readCalendarDay, readSiteZone, type SiteZone } from './values';
 import { type ListField, resolveField } from '../../../assembly/src/data/sharepoint/fieldMap';
 import { readPlanText } from '../../../assembly/src/persistence/planCodec';
+import type { LayoutSettings } from '../../../assembly/src/domain/lineLayout';
 import { attendanceFolder, completedJobsCsvPath, readAttendance, readCompletedJobsHistory } from './attendance';
 
 export const DEFAULT_ASSEMBLY_FIELDS = {
@@ -128,9 +129,9 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
       return output.sort((a, b) => b.day.localeCompare(a.day) || a.job.localeCompare(b.job));
     },
     async roster() {
-      if (env.VITE_BACKEND !== 'sharepoint') return { people: [], warning: null };
+      if (env.VITE_BACKEND !== 'sharepoint') return { people: [], warning: null, layout: null };
       const site = (env.VITE_SHAREPOINT_SITE_URL || env.VITE_SITE_URL || '').replace(/\/$/, '');
-      if (!site) return { people: [], warning: null };
+      if (!site) return { people: [], warning: null, layout: null };
       // The board reads the same list under the same fixed name.
       const url = `${site}/_api/web/lists/getbytitle('ASSY_Operator')/items?$top=500`;
       if (new URL(url).origin !== window.location.origin) throw new Error('Open MES on the configured SharePoint site.');
@@ -139,14 +140,14 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
       const body = await res.json() as { value?: Record<string, unknown>[] };
       // Days marked off on the board live in its saved plan, read the way the
       // board reads it. Without them the booked leave on the roster still counts.
-      let plan: BoardPlan = { leave: {}, lines: {} };
+      let plan: BoardPlan = { leave: {}, lines: {}, layout: null };
       let warning: string | null = null;
       try {
         plan = await boardPlan(site, env.VITE_ASSEMBLY_PLAN_LIST || 'ASSY_Plans');
       } catch (e) {
         warning = `The board's saved plan not read (${e instanceof Error ? e.message : String(e)}): only booked annual leave is counted, and lines come from Skills.`;
       }
-      return { people: rosterFrom(body.value ?? [], plan.leave, plan.lines), warning };
+      return { people: rosterFrom(body.value ?? [], plan.leave, plan.lines), warning, layout: plan.layout };
     },
     async attendance() {
       const folder = attendanceFolder(env);
@@ -175,6 +176,8 @@ interface BoardPlan {
   leave: Record<string, string[]>;
   /** The line the supervisor has put each operator on, by operator id (a board line key). */
   lines: Record<string, string>;
+  /** The board's line layout — names, order, by process — or null when the plan has none. */
+  layout: LayoutSettings | null;
 }
 
 /**
@@ -196,9 +199,9 @@ async function boardPlan(site: string, listName: string): Promise<BoardPlan> {
     return hit.length === 1 ? String(hit[0].PlanJson ?? '') : null;
   };
   const head = await byTitle('current');
-  if (!head) return { leave: {}, lines: {} };
+  if (!head) return { leave: {}, lines: {}, layout: null };
   const plan = JSON.parse(await readPlanText(head, byTitle, 'current')) as {
-    assembly?: { workerOnLeave?: Record<string, unknown>; workerLines?: Record<string, unknown> };
+    assembly?: { workerOnLeave?: Record<string, unknown>; workerLines?: Record<string, unknown> } & LayoutSettings;
   };
   const leave: Record<string, string[]> = {};
   for (const [id, days] of Object.entries(plan.assembly?.workerOnLeave ?? {})) {
@@ -208,7 +211,14 @@ async function boardPlan(site: string, listName: string): Promise<BoardPlan> {
   for (const [id, line] of Object.entries(plan.assembly?.workerLines ?? {})) {
     if (typeof line === 'string' && line.trim()) lines[id] = line.trim();
   }
-  return { leave, lines };
+  const a = plan.assembly ?? {};
+  const layout: LayoutSettings = {
+    lineNames: a.lineNames && typeof a.lineNames === 'object' ? a.lineNames : {},
+    uplByProcess: a.uplByProcess === true,
+    virtualLines: Array.isArray(a.virtualLines) ? a.virtualLines.filter((v) => v && typeof v.key === 'string' && typeof v.name === 'string') : [],
+    lineOrder: Array.isArray(a.lineOrder) ? a.lineOrder.map(String) : [],
+  };
+  return { leave, lines, layout };
 }
 
 /** The name columns, in the order the board's own roster reader prefers them. */
