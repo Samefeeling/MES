@@ -27,6 +27,9 @@
 
 import { mondayOf } from './assembly-completions';
 
+/** The paid day, 07:00–15:30 less the 54-minute break. */
+export const PAID_DAY_HOURS = 7.6;
+
 export type AttendanceKind = 'direct' | 'indirect' | 'leave';
 
 export interface AttendanceEntry {
@@ -163,13 +166,25 @@ export function parseTimesheet(rows: readonly (readonly string[])[], source: str
     let hours = durationHours(cell(row, 'totalDuration'));
     if (!Number.isFinite(hours)) hours = durationHours(cell(row, 'duration'));
     if (!Number.isFinite(hours) && /hour/i.test(cell(row, 'unitType'))) hours = durationHours(cell(row, 'units'));
+    // Leave entered in days: a day is the 7:36 paid day.
+    if (!Number.isFinite(hours) && /day/i.test(cell(row, 'unitType'))) hours = durationHours(cell(row, 'units')) * PAID_DAY_HOURS;
     if (!Number.isFinite(hours)) {
       const start = clockMinutes(cell(row, 'startTime'));
       const end = clockMinutes(cell(row, 'endTime'));
       if (start !== null && end !== null) hours = ((end - start + 1440) % 1440) / 60;
     }
     if (!day || !Number.isFinite(hours) || hours < 0) {
-      errors.push(`${source} row ${head + i + 2}: no readable Start Date or Duration.`);
+      const shown = (f: Field, label: string): string => `${label} "${cell(row, f)}"`;
+      errors.push(
+        `${source} row ${head + i + 2}: no readable Start Date or Duration (${[
+          shown('employeeId', 'Employee Id'),
+          shown('startDate', 'Start Date'),
+          shown('totalDuration', 'Total Duration'),
+          shown('units', 'Units'),
+          shown('unitType', 'Unit Type'),
+          shown('workType', 'Work Type'),
+        ].join(', ')}).`,
+      );
       return;
     }
     const workType = cell(row, 'workType');

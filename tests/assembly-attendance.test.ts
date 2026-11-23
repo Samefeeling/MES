@@ -201,12 +201,13 @@ describe('parseTimesheet', () => {
         row({ ...base, Duration: '8.5', 'Work Type': 'Ordinary' }),
         row({ ...base, Units: '4', 'Unit Type': 'Hours', 'Work Type': 'Training' }),
         row({ ...base, 'Start Time': '7:00:00', 'End Time': '2:36 PM', 'Work Type': 'Ordinary' }),
+        row({ ...base, Units: '2', 'Unit Type': 'Days', 'Work Type': 'Annual Leave' }),
         row({ ...base, 'Start Date': 'tomorrow', 'Total Duration': '7:36:00' }),
       ],
       'f.xlsx',
     );
-    expect(out.entries.map((e) => Math.round(e.hours * 100) / 100)).toEqual([8.5, 4, 7.6]);
-    expect(out.errors).toEqual(['f.xlsx row 5: no readable Start Date or Duration.']);
+    expect(out.entries.map((e) => Math.round(e.hours * 100) / 100)).toEqual([8.5, 4, 7.6, 15.2]);
+    expect(out.errors[0]).toMatch(/^f\.xlsx row 6: no readable Start Date or Duration \(Employee Id "10872482", Start Date "tomorrow", Total Duration "7:36:00"/);
     expect(unusualWorkTypes(out.entries)).toEqual(['Training']);
   });
 

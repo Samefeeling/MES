@@ -154,6 +154,89 @@ async function check(): Promise<void> {
   }
 }
 
+// ---- the hourly refresh ------------------------------------------------
+//
+// Every screen reloads itself once an hour, so a page left open all day (a
+// wall screen, a supervisor's KPI tab) shows this hour's data and the
+// current build without anybody pressing refresh. It waits for a quiet
+// moment: not while a field has focus, a dialog is open, or someone touched
+// the screen in the last two minutes — it asks again every minute until then.
+
+/** Minutes between refreshes: `VITE_AUTO_REFRESH_MINUTES` (0 turns it off), else 60. */
+export function refreshMinutes(raw: string | undefined): number {
+  const n = Number(raw);
+  return raw !== undefined && raw.trim() !== '' && Number.isFinite(n) && n >= 0 ? n : 60;
+}
+
+/** How long the screen must have been left alone before it may reload. */
+export const QUIET_MS = 2 * 60_000;
+
+/**
+ * May the hourly refresh reload now? Pure so it can be unit-tested: due when
+ * `every` ms have passed since the page loaded, and only at a quiet moment.
+ */
+export function refreshDue(
+  now: number,
+  loadedAt: number,
+  lastActivity: number,
+  every: number,
+  busy: boolean,
+  hidden: boolean,
+): boolean {
+  if (every <= 0 || now - loadedAt < every || busy) return false;
+  return hidden || now - lastActivity >= QUIET_MS;
+}
+
+/** A field with focus or an open dialog, here or in a same-origin frame (the Assembly board). */
+function busyScreen(doc: Document = document, depth = 0): boolean {
+  const el = doc.activeElement;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || (el as HTMLElement).isContentEditable)) return true;
+  if (doc.querySelector('dialog[open], [role="dialog"], [aria-modal="true"], .modal-backdrop, .modal-overlay')) return true;
+  if (depth > 2) return false;
+  for (const frame of Array.from(doc.querySelectorAll('iframe'))) {
+    try {
+      const inner = frame.contentDocument;
+      if (inner && busyScreen(inner, depth + 1)) return true;
+    } catch {
+      /* another origin: nothing to see */
+    }
+  }
+  return false;
+}
+
+let lastActivity = Date.now();
+const ACTIVITY = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const;
+const watched = new WeakSet<Document>();
+
+/** Count touches in the page and in any same-origin frame. */
+function watchActivity(doc: Document = document): void {
+  if (watched.has(doc)) return;
+  watched.add(doc);
+  const mark = (): void => {
+    lastActivity = Date.now();
+  };
+  for (const type of ACTIVITY) doc.addEventListener(type, mark, { capture: true, passive: true });
+}
+
+function startHourlyRefresh(): void {
+  const every = refreshMinutes(import.meta.env?.VITE_AUTO_REFRESH_MINUTES as string | undefined) * 60_000;
+  if (every <= 0) return;
+  const loadedAt = Date.now();
+  watchActivity();
+  setInterval(() => {
+    for (const frame of Array.from(document.querySelectorAll('iframe'))) {
+      try {
+        if (frame.contentDocument) watchActivity(frame.contentDocument);
+      } catch {
+        /* another origin */
+      }
+    }
+    if (applying || !refreshDue(Date.now(), loadedAt, lastActivity, every, busyScreen(), document.hidden)) return;
+    applying = true;
+    void refreshAssetCaches().finally(() => window.location.reload());
+  }, 60_000);
+}
+
 /**
  * Start polling for new deploys. Safe to call once at boot. Checks on a timer,
  * whenever the tab regains focus/visibility (iPad woken / app foregrounded),
@@ -170,4 +253,5 @@ export function startAutoUpdate(): void {
   window.addEventListener('focus', () => void check());
   window.addEventListener('focusout', () => maybeReload());
   void check();
+  startHourlyRefresh();
 }

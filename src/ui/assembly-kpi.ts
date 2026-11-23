@@ -19,17 +19,14 @@ import {
   type AttendanceEntry,
   type PersonAttendance,
 } from '../core/attendance';
-import { HISTORY_GROUPS, historyGroup, weeklyHistory, type HistoryGroup, type HistoryRow } from '../core/assembly-history';
+import { HISTORY_GROUPS, historyGroup, type HistoryGroup, type HistoryRow } from '../core/assembly-history';
+import { chartBuckets, efficiencySeries, personEfficiency, type EffPoint, type Grain } from '../core/assembly-efficiency';
 import { ASSEMBLY_THRESHOLDS, PRODUCTIVE_HOURS_PER_PERSON, colourClass } from '../core/assembly-metrics';
 import {
   completedOrderDays,
   completionSummary,
   completionsByLine,
   completionsByPerson,
-  mondayOf,
-  weeklyEfficiency,
-  weeklyLineEfficiency,
-  weeklyPersonEfficiency,
   filterCompletions,
   type CompletedOrderDay,
   type CompletionSummary,
@@ -202,15 +199,9 @@ function statTiles(sum: CompletionSummary): string {
 /** Supervisors and managers are on the roster but finish no orders themselves. */
 const OFF_THE_FLOOR = /supervisor|manager/i;
 
-/** The lines in their fixed colour order: a line keeps its colour whichever others appear. */
-const COLOUR_ORDER = LINE_ORDER.filter((l) => l !== 'PMD');
-const lineColour = (line: string): string => {
-  const i = COLOUR_ORDER.findIndex((l) => l.toUpperCase() === line.toUpperCase());
-  return i >= 0 && i < SERIES_COLORS.length ? SERIES_COLORS[i] : '#94a3b8';
-};
-
 /** What the trend chart draws; drawn once the card is on the page and its size is known. */
 interface TrendModel {
+  grain: Grain;
   labels: string[];
   series: TrendSeries[];
   target: number;
@@ -250,105 +241,80 @@ function attendanceView(S: PageState): AttendanceView | null {
   };
 }
 
-const addDaysLocal = (day: string, n: number): string => {
-  const d = new Date(`${day}T12:00:00`);
-  d.setDate(d.getDate() + n);
-  return localDay(d);
-};
-
 const hoursOf = (v: number | null): string => (v === null ? '—' : v.toFixed(v >= 100 ? 0 : 1));
 
-/**
- * The weeks of the From–To range (their Mondays), and which of them the range
- * holds only part of — the first and last, when it starts after a Monday or
- * ends before a Sunday.
- */
-export function rangeWeeks(from: string, to: string): { weeks: string[]; partial: boolean[] } {
-  const weeks: string[] = [];
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) return { weeks, partial: [] };
-  for (let w = mondayOf(from); w <= to && weeks.length < 160; w = addDaysLocal(w, 7)) weeks.push(w);
-  return { weeks, partial: weeks.map((w) => w < from || addDaysLocal(w, 6) > to) };
+/** What each point's hours rest on, for the tooltip. */
+function pointDetail(p: EffPoint): string | null {
+  if (!p.stdHours && !p.basis) return null;
+  const hours = p.timesheetHours + p.estimatedHours;
+  const how = p.basis === 'timesheet' ? 'timesheet' : p.basis === 'estimate' ? `people × ${PRODUCTIVE_HOURS_PER_PERSON} h` : p.basis === 'mixed' ? 'part timesheet' : 'no hours';
+  return `${hoursOf(p.stdHours)} / ${hoursOf(hours)} h · ${how}`;
 }
 
-/** The From–To range's efficiency, week by week: every line, or the person picked beside the whole floor. */
+/** The From–To range's efficiency, in days, weeks or months: every line, or the person picked beside the whole floor. */
 function trendModel(S: PageState, done: readonly CompletedOrderDay[]): TrendModel | null {
-  const { weeks, partial } = rangeWeeks(S.from, S.to);
-  if (!weeks.length) return null;
-  const labels = weeks.map((w, i) => `w/c ${au(w).slice(0, 5)}${partial[i] ? '*' : ''}`);
   const att = attendanceView(S);
-  const inRange = (d: { day: string }): boolean => d.day >= S.from && d.day <= S.to;
-  // Std h finished over direct hours attended, once there are timesheets and
-  // the export to set them against — both counted only inside From–To.
-  if (att && S.history) {
-    const hist = weeklyHistory(S.history.filter(inRange), att.entries.filter(inRange), att.groupOf, weeks, att.weeks);
-    const detail = (p: { stdHours: number; directHours: number | null }): string =>
-      p.directHours === null ? `${hoursOf(p.stdHours)} Std h · no timesheet` : `${hoursOf(p.stdHours)} / ${hoursOf(p.directHours)} h`;
-    const floor: TrendSeries = {
-      name: 'All Assembly',
-      color: '#94a3b8',
-      values: hist.floor.map((p) => p.efficiency),
-      details: hist.floor.map(detail),
-      reference: true,
-    };
-    if (!S.person) {
-      return {
-        labels,
-        target: ASSEMBLY_THRESHOLDS.effGreen,
-        series: hist.lines.map((l) => ({
-          name: l.name,
-          color: groupColour(l.name),
-          values: l.points.map((p) => p.efficiency),
-          details: l.points.map(detail),
-        })),
-      };
-    }
-    const who = att.byName.get(S.person.toLowerCase());
-    if (who?.employeeId) {
-      const mine = done;
-      const points = weeks.map((w) => {
-        const start = w < S.from ? S.from : w;
-        const end = addDaysLocal(w, 6) > S.to ? S.to : addDaysLocal(w, 6);
-        const share = completionsByPerson(mine.filter((d) => d.day >= start && d.day <= end)).find(
-          (p) => p.name.toLowerCase() === S.person!.toLowerCase(),
-        )?.stdHours ?? 0;
-        const direct = att.weeks.has(w) ? attendanceByEmployee(att.entries, start, end).get(who.employeeId)?.direct ?? 0 : null;
-        return { stdHours: share, directHours: direct, efficiency: direct ? Math.round((share / direct) * 100) : null };
-      });
-      return {
-        labels,
-        target: ASSEMBLY_THRESHOLDS.effGreen,
-        series: [
-          { name: S.person, color: SERIES_COLORS[0], values: points.map((p) => p.efficiency), details: points.map(detail) },
-          floor,
-        ],
-      };
-    }
+  const busy = new Set([...done.map((d) => d.day), ...(S.history ?? []).filter((r) => r.group !== 'PMD').map((r) => r.day)]);
+  const { grain, buckets } = chartBuckets(S.from, S.to, (day) => busy.has(day));
+  if (!buckets.length) return null;
+  const input = {
+    rows: S.history,
+    done,
+    attendance: att?.entries ?? [],
+    covered: att?.weeks ?? new Set<string>(),
+    groupOf: att?.groupOf ?? (() => null),
+  };
+  const hist = efficiencySeries(input, buckets);
+  const toSeries = (name: string, color: string, points: EffPoint[], reference = false): TrendSeries => ({
+    name,
+    color,
+    reference,
+    values: points.map((p) => p.efficiency),
+    details: points.map(pointDetail),
+    // Hours estimated from the people confirmed, not read off a timesheet.
+    hollow: points.map((p) => p.basis === 'estimate'),
+  });
+  const labels = buckets.map((b) => `${b.label}${b.partial ? '*' : ''}`);
+  if (!S.person) {
+    return { grain, labels, target: ASSEMBLY_THRESHOLDS.effGreen, series: hist.lines.map((l) => toSeries(l.name, groupColour(l.name), l.points)) };
   }
-  const series: TrendSeries[] = S.person
-    ? [
-        { name: S.person, color: SERIES_COLORS[0], values: weeklyPersonEfficiency(done, weeks, S.person) },
-        { name: 'All Assembly', color: '#94a3b8', values: weeklyEfficiency(done, weeks), reference: true },
-      ]
-    : weeklyLineEfficiency(done, weeks, LINE_ORDER).map((l) => ({ name: l.name, color: lineColour(l.name), values: l.values }));
-  return { labels, series, target: ASSEMBLY_THRESHOLDS.effGreen };
+  const who = S.roster.find((r) => r.name.toLowerCase() === S.person!.toLowerCase());
+  return {
+    grain,
+    labels,
+    target: ASSEMBLY_THRESHOLDS.effGreen,
+    series: [
+      toSeries(S.person, SERIES_COLORS[0], personEfficiency(input, buckets, S.person, who?.employeeId ?? '')),
+      toSeries('All Assembly', '#94a3b8', hist.floor, true),
+    ],
+  };
 }
 
-/** The chart's card: legend, the plot (filled in by `drawTrend`), and how to read it. */
-function trendCard(S: PageState, model: TrendModel | null): string {
-  const partial = rangeWeeks(S.from, S.to).partial.some(Boolean);
+/** How to read the chart: under its card, on the page, like the notes under By person. */
+function trendNote(S: PageState, model: TrendModel | null): string {
   const att = attendanceView(S);
-  const byHours = Boolean(att && S.history && (!S.person || att.byName.get(S.person.toLowerCase())?.employeeId));
-  const note = byHours
-    ? `Weeks start on Monday${partial ? '; * = only part of the week is inside From–To' : ''}. Efficiency = Std h finished (<code>CompletedJobs.csv</code>${
-        S.person ? `; for ${escapeHtml(S.person)}, their share of confirmed completions` : ''
-      }) ÷ direct hours attended (timesheets in <code>Attendance</code>). UPL is its three benches together — the export does not tell them apart. A week no timesheet covers is a gap. ${
-        S.person ? 'Dashed grey: the whole floor, for comparison.' : 'Press a name to see that person beside the floor.'
-      }`
-    : `Weeks start on Monday${partial ? '; * = only part of the week is inside From–To' : ''}. Efficiency = Std h ÷ person-days ÷ ${PRODUCTIVE_HOURS_PER_PERSON} h, from <code>ASSY_CompletedJobs</code>; a week with no confirmed completion is a gap. ${
-        S.person ? 'Dashed grey: the whole floor, for comparison.' : 'Press a name to see that person beside the floor.'
-      }${
-        S.person && att && S.history ? ` ${escapeHtml(S.person)} has no <code>EmployeeId</code> on ASSY_Operator, so their timesheet cannot be matched.` : ''
-      }${!att && S.history && S.attendance ? ' No timesheet found in <code>Attendance</code> yet: once there is one, this becomes Std h ÷ direct hours attended.' : ''}`;
+  const grain = model?.grain ?? 'week';
+  const unit = grain === 'day' ? 'Each point is a day' : grain === 'week' ? 'Each point is a week (from Monday)' : 'Each point is a month';
+  const partial = model?.labels.some((l) => l.endsWith('*'));
+  const who = S.person ? S.roster.find((r) => r.name.toLowerCase() === S.person!.toLowerCase()) : null;
+  return [
+    `${unit}, chosen by the length of From–To${partial ? '; * = only part of it is inside From–To' : ''}.`,
+    `Efficiency = Std h finished (${S.history ? '<code>CompletedJobs.csv</code>' : 'confirmed completions'}${
+      S.person ? `; for ${escapeHtml(S.person)}, their share of confirmed completions` : ''
+    }) ÷ hours: direct hours attended on days a timesheet in <code>Attendance</code> covers (● solid point), else the people confirmed on that day's completions × ${PRODUCTIVE_HOURS_PER_PERSON} h (○ hollow point).${
+      att ? '' : ' No timesheet read yet, so every point is the estimate.'
+    }`,
+    'UPL is its three benches together — the export does not tell them apart.',
+    S.person
+      ? `Dashed grey: the whole floor, for comparison.${
+          who && !who.employeeId ? ` ${escapeHtml(S.person)} has no <code>EmployeeId</code> on ASSY_Operator, so their timesheet cannot be matched.` : ''
+        }`
+      : 'Press a name to see that person beside the floor.',
+  ].join(' ');
+}
+
+/** The chart's card: legend and the plot (filled in by `drawTrend`). */
+function trendCard(S: PageState, model: TrendModel | null): string {
   const legend = model
     ? model.series
         .map(
@@ -365,7 +331,6 @@ function trendCard(S: PageState, model: TrendModel | null): string {
       <div class="trend-plot" data-trend-plot>${
         model ? '' : '<div class="kpi-empty">Choose a From–To range.</div>'
       }<div class="trend-tip" hidden></div></div>
-      <div class="kpi-chart-note">${note}</div>
     </div>`;
 }
 
@@ -540,9 +505,10 @@ function detailTables(done: readonly CompletedOrderDay[], S: PageState): string 
   const leaveNote =
     (timedNote ? `<div class="kpi-chart-note">${timedNote}</div>` : '') +
     warnings.map((w) => `<div class="kpi-chart-note">⚠ ${escapeHtml(w!)}</div>`).join('');
+  const model = trendModel(S, done);
   return `<div class="assembly-people-grid">
     <h3 class="kpi-section-title apg-title-l">By person<span class="kpi-sub-note">press a name to see their completions and weeks</span></h3>
-    <h3 class="kpi-section-title apg-title-r">Efficiency by week<span class="kpi-sub-note">${au(S.from)} – ${au(S.to)} · ${
+    <h3 class="kpi-section-title apg-title-r">Efficiency<span class="kpi-sub-note">${au(S.from)} – ${au(S.to)} · ${
       S.person ? escapeHtml(S.person) : 'every line'
     }</span></h3>
     <div class="apg-box-l">
@@ -563,9 +529,10 @@ function detailTables(done: readonly CompletedOrderDay[], S: PageState): string 
           <tbody>${rows || `<tr><td colspan="7" class="kpi-empty">Nobody is named on a completion in this period.</td></tr>`}</tbody>
         </table>
       </div>
-      ${leaveNote}
     </div>
-    ${trendCard(S, trendModel(S, done))}
+    ${trendCard(S, model)}
+    <div class="apg-note-l">${leaveNote}</div>
+    <div class="apg-note-r"><div class="kpi-chart-note">${trendNote(S, model)}</div></div>
   </div>
     ${done.length ? `<h3 class="kpi-section-title">Completions${
       filterNote
@@ -737,7 +704,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
           <div><b>Person-days</b> = each person counted once for each day they are named on a completion. <b>Std h / person-day</b> = Std h ÷ Person-days, and <b>Efficiency 🟢🟡🔴</b> is that over ${PRODUCTIVE_HOURS_PER_PERSON} h, the 07:00–15:30 shift less morning tea and lunch — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.effGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.effAmber}%. Per person, an order's Std h is shared equally among the people who finished it. It counts finished work only, so a day spent on an order finished on a later day earns nothing here.</div>
           <div><b>On time% 🟢🟡🔴</b> = orders finished in full in the period on or before their <b>Due Date</b> ÷ orders finished in full with a Due Date. An order is judged once, on the day it was finished in full (<b>Order done</b>); in the Completions list a part of an order delivered after its Due Date is already <b>Late</b>, and one before it is <b>In progress</b> — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.onTimeGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.onTimeAmber}%. <b>Order done</b> marks the day the export's running total reached the order's quantity.</div>
           <div><b>By person</b> lists everyone on <code>ASSY_Operator</code> (supervisors and managers excepted): <b>Leave</b> is the days they are on leave in the period — booked annual leave (<code>PlannedAnnualLeave</code>), days marked off on the board, and the leave lines of payroll's timesheets. Somebody named on no confirmed completion is <b>On leave</b> when they have leave and no direct hour in the period, else <b>No completion</b> (with their direct hours when the timesheets have them; indirect-only time is No completion too).</div>
-          <div><b>Timesheets</b> are payroll's weekly exports in the <code>Attendance</code> folder beside Planning.csv (sheet <code>Export</code>), matched to people by <code>EmployeeId</code> on ASSY_Operator. <b>Direct h</b> = Total Duration of the lines at a Direct location (the 54-minute break already out of it), leave and Indirect excepted. When they cover every week of the period, By person's Efficiency is a person's Std h ÷ their Direct h. The chart is then Std h finished in <code>CompletedJobs.csv</code> ÷ direct hours attended, by line (a person's hours go to their line on the board, else the first line of their Skills); without timesheets it is Std h ÷ person-days ÷ ${PRODUCTIVE_HOURS_PER_PERSON} h of confirmed completions.</div>
+          <div><b>Timesheets</b> are payroll's weekly exports in the <code>Attendance</code> folder beside Planning.csv (sheet <code>Export</code>), matched to people by <code>EmployeeId</code> on ASSY_Operator. <b>Direct h</b> = Total Duration of the lines at a Direct location (the 54-minute break already out of it), leave and Indirect excepted. When they cover every week of the period, By person's Efficiency is a person's Std h ÷ their Direct h. <b>Efficiency</b> (the chart) covers From–To in days (up to 14 days), weeks (up to 26 weeks) or months: Std h finished in <code>CompletedJobs.csv</code> ÷ hours, by line — on a day a timesheet covers, the direct hours attended (a person's hours go to their line on the board, else the first line of their Skills); on any other day, the people confirmed on that day's completions × ${PRODUCTIVE_HOURS_PER_PERSON} h (hollow points).</div>
           <div><b>Last 24h</b> is the last working day before today (Friday to Sunday on a Monday); <b>Last Week</b> is Monday to Sunday of the week before this one.</div>
           <div>Press "+" on a line to see the orders behind its figures. Press a name or an order number to narrow the Completions list to it (a name also puts that person on the chart); filtered by a person, it adds their <b>Share</b> of each order (Std h ÷ the people who finished it), which is what their row in By person adds up.</div>
         </div>

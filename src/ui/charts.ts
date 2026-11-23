@@ -874,6 +874,8 @@ export interface TrendSeries {
   reference?: boolean;
   /** What each point is made of, for the tooltip (e.g. `312 / 380 h`). */
   details?: (string | null)[];
+  /** Points drawn hollow: a figure resting on an estimate. */
+  hollow?: boolean[];
 }
 
 export interface TrendGeometry {
@@ -946,7 +948,11 @@ export function renderEfficiencyTrend(
       });
       const r = (s.reference ? 3 : 4) * (n > 26 ? 0.6 : n > 13 ? 0.8 : 1);
       const dots = s.values
-        .map((v, i) => (v === null ? '' : `<circle cx="${f(xOf(i))}" cy="${f(yOf(v))}" r="${r}" fill="${s.color}" stroke="#fff" stroke-width="${n > 26 ? 1 : 2}"/>`))
+        .map((v, i) => (v === null
+            ? ''
+            : s.hollow?.[i]
+              ? `<circle cx="${f(xOf(i))}" cy="${f(yOf(v))}" r="${r}" fill="#fff" stroke="${s.color}" stroke-width="1.75"/>`
+              : `<circle cx="${f(xOf(i))}" cy="${f(yOf(v))}" r="${r}" fill="${s.color}" stroke="#fff" stroke-width="${n > 26 ? 1 : 2}"/>`))
         .join('');
       const i = lastOf(s);
       if (i >= 0) ends.push({ y: yOf(s.values[i]!), text: endText(s), color: s.color });
@@ -965,11 +971,11 @@ export function renderEfficiencyTrend(
     .map((e) => `<text x="${PL + innerW + 10}" y="${f(e.y + 4)}" font-size="12.5" fill="#1e293b">${escAttr(e.text)}</text>`)
     .join('');
   const empty = all.length === 0
-    ? `<text x="${f(PL + innerW / 2)}" y="${f(PT + innerH / 2)}" font-size="13" text-anchor="middle" fill="#64748b">No confirmed completion in these weeks</text>`
+    ? `<text x="${f(PL + innerW / 2)}" y="${f(PT + innerH / 2)}" font-size="13" text-anchor="middle" fill="#64748b">Nothing finished in this range</text>`
     : '';
   const guide = `<line class="trend-guide" x1="0" x2="0" y1="${PT}" y2="${PT + innerH}" stroke="#94a3b8" stroke-width="1" visibility="hidden"/>`;
   return {
-    svg: `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Efficiency by week" font-family="inherit">${grid}${targetLine}${xLabels}${guide}${lines}${names}${empty}</svg>`,
+    svg: `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Efficiency" font-family="inherit">${grid}${targetLine}${xLabels}${guide}${lines}${names}${empty}</svg>`,
     xs: labels.map((_, i) => xOf(i)),
     top: PT,
     bottom: PT + innerH,
