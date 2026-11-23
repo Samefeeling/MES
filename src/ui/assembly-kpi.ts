@@ -26,7 +26,7 @@ import {
   completionSummary,
   completionsByLine,
   completionsByPerson,
-  trendWeeks,
+  mondayOf,
   weeklyEfficiency,
   weeklyLineEfficiency,
   weeklyPersonEfficiency,
@@ -125,9 +125,6 @@ interface PageState {
   roster: AssemblyRosterPerson[];
   /** What of the roster's leave could not be read. */
   rosterWarning: string | null;
-  /** The last month's completions, for the trend; null until read. */
-  trend: CompletedOrderDay[] | null;
-  trendError: string;
   /** Payroll's timesheets; null until read (or with none to read). */
   attendance: AssemblyAttendance | null;
   attendanceError: string;
@@ -261,16 +258,29 @@ const addDaysLocal = (day: string, n: number): string => {
 
 const hoursOf = (v: number | null): string => (v === null ? '—' : v.toFixed(v >= 100 ? 0 : 1));
 
-/** The last month's efficiency, week by week: every line, or the person picked beside the whole floor. */
-function trendModel(S: PageState, yesterday: string): TrendModel | null {
-  const { weeks } = trendWeeks(yesterday);
-  const partial = new Date(`${yesterday}T12:00:00`).getDay() !== 0;
-  const labels = weeks.map((w, i) => `w/c ${au(w).slice(0, 5)}${partial && i === weeks.length - 1 ? '*' : ''}`);
+/**
+ * The weeks of the From–To range (their Mondays), and which of them the range
+ * holds only part of — the first and last, when it starts after a Monday or
+ * ends before a Sunday.
+ */
+export function rangeWeeks(from: string, to: string): { weeks: string[]; partial: boolean[] } {
+  const weeks: string[] = [];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) return { weeks, partial: [] };
+  for (let w = mondayOf(from); w <= to && weeks.length < 160; w = addDaysLocal(w, 7)) weeks.push(w);
+  return { weeks, partial: weeks.map((w) => w < from || addDaysLocal(w, 6) > to) };
+}
+
+/** The From–To range's efficiency, week by week: every line, or the person picked beside the whole floor. */
+function trendModel(S: PageState, done: readonly CompletedOrderDay[]): TrendModel | null {
+  const { weeks, partial } = rangeWeeks(S.from, S.to);
+  if (!weeks.length) return null;
+  const labels = weeks.map((w, i) => `w/c ${au(w).slice(0, 5)}${partial[i] ? '*' : ''}`);
   const att = attendanceView(S);
+  const inRange = (d: { day: string }): boolean => d.day >= S.from && d.day <= S.to;
   // Std h finished over direct hours attended, once there are timesheets and
-  // the export to set them against.
+  // the export to set them against — both counted only inside From–To.
   if (att && S.history) {
-    const hist = weeklyHistory(S.history, att.entries, att.groupOf, weeks, att.weeks);
+    const hist = weeklyHistory(S.history.filter(inRange), att.entries.filter(inRange), att.groupOf, weeks, att.weeks);
     const detail = (p: { stdHours: number; directHours: number | null }): string =>
       p.directHours === null ? `${hoursOf(p.stdHours)} Std h · no timesheet` : `${hoursOf(p.stdHours)} / ${hoursOf(p.directHours)} h`;
     const floor: TrendSeries = {
@@ -293,14 +303,15 @@ function trendModel(S: PageState, yesterday: string): TrendModel | null {
       };
     }
     const who = att.byName.get(S.person.toLowerCase());
-    if (who?.employeeId && S.trend) {
-      const mine = S.trend;
+    if (who?.employeeId) {
+      const mine = done;
       const points = weeks.map((w) => {
-        const end = addDaysLocal(w, 6);
-        const share = completionsByPerson(mine.filter((d) => d.day >= w && d.day <= end)).find(
+        const start = w < S.from ? S.from : w;
+        const end = addDaysLocal(w, 6) > S.to ? S.to : addDaysLocal(w, 6);
+        const share = completionsByPerson(mine.filter((d) => d.day >= start && d.day <= end)).find(
           (p) => p.name.toLowerCase() === S.person!.toLowerCase(),
         )?.stdHours ?? 0;
-        const direct = att.weeks.has(w) ? attendanceByEmployee(att.entries, w, end).get(who.employeeId)?.direct ?? 0 : null;
+        const direct = att.weeks.has(w) ? attendanceByEmployee(att.entries, start, end).get(who.employeeId)?.direct ?? 0 : null;
         return { stdHours: share, directHours: direct, efficiency: direct ? Math.round((share / direct) * 100) : null };
       });
       return {
@@ -313,28 +324,27 @@ function trendModel(S: PageState, yesterday: string): TrendModel | null {
       };
     }
   }
-  if (S.trend === null) return null;
   const series: TrendSeries[] = S.person
     ? [
-        { name: S.person, color: SERIES_COLORS[0], values: weeklyPersonEfficiency(S.trend, weeks, S.person) },
-        { name: 'All Assembly', color: '#94a3b8', values: weeklyEfficiency(S.trend, weeks), reference: true },
+        { name: S.person, color: SERIES_COLORS[0], values: weeklyPersonEfficiency(done, weeks, S.person) },
+        { name: 'All Assembly', color: '#94a3b8', values: weeklyEfficiency(done, weeks), reference: true },
       ]
-    : weeklyLineEfficiency(S.trend, weeks, LINE_ORDER).map((l) => ({ name: l.name, color: lineColour(l.name), values: l.values }));
+    : weeklyLineEfficiency(done, weeks, LINE_ORDER).map((l) => ({ name: l.name, color: lineColour(l.name), values: l.values }));
   return { labels, series, target: ASSEMBLY_THRESHOLDS.effGreen };
 }
 
 /** The chart's card: legend, the plot (filled in by `drawTrend`), and how to read it. */
-function trendCard(S: PageState, yesterday: string, model: TrendModel | null): string {
-  const partial = new Date(`${yesterday}T12:00:00`).getDay() !== 0;
+function trendCard(S: PageState, model: TrendModel | null): string {
+  const partial = rangeWeeks(S.from, S.to).partial.some(Boolean);
   const att = attendanceView(S);
   const byHours = Boolean(att && S.history && (!S.person || att.byName.get(S.person.toLowerCase())?.employeeId));
   const note = byHours
-    ? `Weeks start on Monday${partial ? '; * = the week so far' : ''}. Efficiency = Std h finished (<code>CompletedJobs.csv</code>${
+    ? `Weeks start on Monday${partial ? '; * = only part of the week is inside From–To' : ''}. Efficiency = Std h finished (<code>CompletedJobs.csv</code>${
         S.person ? `; for ${escapeHtml(S.person)}, their share of confirmed completions` : ''
       }) ÷ direct hours attended (timesheets in <code>Attendance</code>). UPL is its three benches together — the export does not tell them apart. A week no timesheet covers is a gap. ${
         S.person ? 'Dashed grey: the whole floor, for comparison.' : 'Press a name to see that person beside the floor.'
       }`
-    : `Weeks start on Monday${partial ? '; * = the week so far' : ''}. Efficiency = Std h ÷ person-days ÷ ${PRODUCTIVE_HOURS_PER_PERSON} h, from <code>ASSY_CompletedJobs</code>; a week with no confirmed completion is a gap. ${
+    : `Weeks start on Monday${partial ? '; * = only part of the week is inside From–To' : ''}. Efficiency = Std h ÷ person-days ÷ ${PRODUCTIVE_HOURS_PER_PERSON} h, from <code>ASSY_CompletedJobs</code>; a week with no confirmed completion is a gap. ${
         S.person ? 'Dashed grey: the whole floor, for comparison.' : 'Press a name to see that person beside the floor.'
       }${
         S.person && att && S.history ? ` ${escapeHtml(S.person)} has no <code>EmployeeId</code> on ASSY_Operator, so their timesheet cannot be matched.` : ''
@@ -353,7 +363,7 @@ function trendCard(S: PageState, yesterday: string, model: TrendModel | null): s
         ${S.person ? '<button type="button" class="kpi-filter-clear" data-person-clear title="Every line">✕ All lines</button>' : ''}
       </div>
       <div class="trend-plot" data-trend-plot>${
-        model ? '' : `<div class="kpi-empty">${S.trendError ? escapeHtml(S.trendError) : 'Loading the last month…'}</div>`
+        model ? '' : '<div class="kpi-empty">Choose a From–To range.</div>'
       }<div class="trend-tip" hidden></div></div>
       <div class="kpi-chart-note">${note}</div>
     </div>`;
@@ -419,7 +429,7 @@ function drawTrend(app: HTMLElement, model: TrendModel | null): ResizeObserver |
  * table. A person picked (a name pressed anywhere on the page) narrows the
  * Completions list to them and puts their weeks on the chart.
  */
-function detailTables(done: readonly CompletedOrderDay[], S: PageState, yesterday: string): string {
+function detailTables(done: readonly CompletedOrderDay[], S: PageState): string {
   const t = ASSEMBLY_THRESHOLDS;
   const filter = { person: S.person, job: S.job };
   const people = completionsByPerson(done);
@@ -532,7 +542,7 @@ function detailTables(done: readonly CompletedOrderDay[], S: PageState, yesterda
     warnings.map((w) => `<div class="kpi-chart-note">⚠ ${escapeHtml(w!)}</div>`).join('');
   return `<div class="assembly-people-grid">
     <h3 class="kpi-section-title apg-title-l">By person<span class="kpi-sub-note">press a name to see their completions and weeks</span></h3>
-    <h3 class="kpi-section-title apg-title-r">Efficiency by week<span class="kpi-sub-note">last month · ${
+    <h3 class="kpi-section-title apg-title-r">Efficiency by week<span class="kpi-sub-note">${au(S.from)} – ${au(S.to)} · ${
       S.person ? escapeHtml(S.person) : 'every line'
     }</span></h3>
     <div class="apg-box-l">
@@ -555,7 +565,7 @@ function detailTables(done: readonly CompletedOrderDay[], S: PageState, yesterda
       </div>
       ${leaveNote}
     </div>
-    ${trendCard(S, yesterday, trendModel(S, yesterday))}
+    ${trendCard(S, trendModel(S, done))}
   </div>
     ${done.length ? `<h3 class="kpi-section-title">Completions${
       filterNote
@@ -620,14 +630,11 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
     error: '',
     roster: [],
     rosterWarning: null,
-    trend: null,
-    trendError: '',
     attendance: null,
     attendanceError: '',
     history: null,
     historyError: '',
   };
-  const yesterday = periodRange('lastDay', new Date()).to;
   let request = 0;
   let trendObserver: ResizeObserver | null = null;
 
@@ -722,7 +729,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
           </table>
         </div>
 
-        ${S.loading ? '' : detailTables(done, S, yesterday)}
+        ${S.loading ? '' : detailTables(done, S)}
 
         <div class="kpi-note">
           <div>Every figure comes from <code>ASSY_CompletedJobs</code>: one row per order finished on a day — what <code>CompletedJobs.csv</code> shows reported (every planner but PMD), once a supervisor has confirmed who finished it in the Assembly board's <b>✓ Completed</b> dialog. A big order finished over several days has a row for each day and is <b>one</b> order in every count.</div>
@@ -737,7 +744,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
       </div>`;
     wire();
     trendObserver?.disconnect();
-    trendObserver = S.loading ? null : drawTrend(app, trendModel(S, yesterday));
+    trendObserver = S.loading ? null : drawTrend(app, trendModel(S, completedOrderDays(S.rows)));
   }
 
   function wire(): void {
@@ -820,12 +827,10 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
     render();
   }
 
-  /** The last month and the roster: read once a visit, whatever the period. */
+  /** The roster, the timesheets and the export: read once a visit, whatever the period. */
   async function loadContext(): Promise<void> {
-    const range = trendWeeks(yesterday);
     const reason = (r: PromiseRejectedResult): string => (r.reason instanceof Error ? r.reason.message : String(r.reason));
-    const [trend, roster, attendance, history] = await Promise.allSettled([
-      dal.results(range.from, range.to),
+    const [roster, attendance, history] = await Promise.allSettled([
       dal.roster ? dal.roster() : Promise.resolve({ people: [], warning: null }),
       dal.attendance ? dal.attendance() : Promise.resolve(null),
       dal.history ? dal.history() : Promise.resolve(null),
@@ -837,8 +842,6 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
       S.history = history.value?.rows ?? null;
       S.historyError = history.value?.errors[0] ?? '';
     } else S.historyError = `CompletedJobs.csv not read (${reason(history)}): the chart stays on confirmed completions.`;
-    if (trend.status === 'fulfilled') S.trend = completedOrderDays(trend.value);
-    else S.trendError = `The last month could not be read: ${trend.reason instanceof Error ? trend.reason.message : String(trend.reason)}`;
     if (roster.status === 'fulfilled') {
       S.roster = roster.value.people;
       S.rosterWarning = roster.value.warning;

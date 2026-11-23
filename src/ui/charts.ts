@@ -710,8 +710,9 @@ export interface UtilizationBar {
   toMonth?: string | null;
 }
 
+/** Width drawn at before the card is measured; the height is fixed. */
 const UTIL_W = 460;
-const UTIL_H = 190;
+const UTIL_H = 220;
 
 const utilMonthShort = (m: string): string =>
   new Date(Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1, 1).toLocaleDateString('en-AU', { month: 'short' });
@@ -758,24 +759,28 @@ function utilTip(c: UtilColumn): string {
  * drawn darker and set off by a rule. The axis runs to 100%, or past it if a
  * bar does; the 100% line is dashed.
  */
-function renderUtilColumns(cols: UtilColumn[], ariaLabel: string): string {
-  const padL = 34;
-  const padR = 8;
-  const padT = 16;
-  const padB = 22;
-  const innerW = UTIL_W - padL - padR;
+function renderUtilColumns(cols: UtilColumn[], ariaLabel: string, width = UTIL_W): string {
+  // Drawn at the card's own width in CSS pixels and a fixed height — never
+  // scaled to fit — so its text is the size of every other chart's on the
+  // page whatever the window's width.
+  const W = Math.max(280, Math.round(width));
+  const padL = 40;
+  const padR = 10;
+  const padT = 18;
+  const padB = 28;
+  const innerW = W - padL - padR;
   const innerH = UTIL_H - padT - padB;
   const top = Math.max(100, Math.ceil(Math.max(0, ...cols.map((c) => c.bar.pct ?? 0)) / 25) * 25);
   const y = (pct: number): number => padT + innerH - (pct / top) * innerH;
   const n = Math.max(1, cols.length);
   const slot = innerW / n;
-  const bw = Math.min(26, slot * 0.7);
+  const bw = Math.min(48, slot * 0.6);
   let grid = '';
   for (let v = 0; v <= top; v += top > 200 ? 100 : top > 100 ? 50 : 25) {
-    grid += `<line x1="${padL}" y1="${y(v).toFixed(1)}" x2="${UTIL_W - padR}" y2="${y(v).toFixed(1)}" stroke="#e2e8f0"/>`;
-    grid += `<text x="${padL - 4}" y="${(y(v) + 3).toFixed(1)}" font-size="9.5" fill="#64748b" text-anchor="end">${v}%</text>`;
+    grid += `<line x1="${padL}" y1="${y(v).toFixed(1)}" x2="${W - padR}" y2="${y(v).toFixed(1)}" stroke="#e2e8f0" stroke-width="1"/>`;
+    grid += `<text x="${padL - 6}" y="${(y(v) + 3).toFixed(1)}" font-size="10" fill="#64748b" text-anchor="end">${v}%</text>`;
   }
-  grid += `<line x1="${padL}" y1="${y(100).toFixed(1)}" x2="${UTIL_W - padR}" y2="${y(100).toFixed(1)}" stroke="#64748b" stroke-dasharray="4 3"/>`;
+  grid += `<line x1="${padL}" y1="${y(100).toFixed(1)}" x2="${W - padR}" y2="${y(100).toFixed(1)}" stroke="#64748b" stroke-dasharray="4 3"/>`;
   let marks = '';
   cols.forEach((c, i) => {
     const b = c.bar;
@@ -787,12 +792,12 @@ function renderUtilColumns(cols: UtilColumn[], ariaLabel: string): string {
     const op = c.dim ? 0.3 : b.partial ? 0.55 : 1;
     if (b.pct != null && b.pct > 0) {
       const h = (b.pct / top) * innerH;
-      marks += `<rect x="${(cx - bw / 2).toFixed(1)}" y="${y(b.pct).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${c.summary ? '#075985' : '#0284c7'}"${op < 1 ? ` fill-opacity="${op}"` : ''}${c.picked ? ' stroke="#0f172a" stroke-width="1.5"' : ''}/>`;
-      marks += `<text x="${cx.toFixed(1)}" y="${(y(b.pct) - 3).toFixed(1)}" font-size="9.5" fill="#1e293b" text-anchor="middle" font-weight="700"${c.dim ? ' fill-opacity="0.45"' : ''}>${Math.round(b.pct)}</text>`;
+      marks += `<rect x="${(cx - bw / 2).toFixed(1)}" y="${y(b.pct).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="3" fill="${c.summary ? '#075985' : '#0284c7'}"${op < 1 ? ` fill-opacity="${op}"` : ''}${c.picked ? ' stroke="#0f172a" stroke-width="1.5"' : ''}/>`;
+      marks += `<text x="${cx.toFixed(1)}" y="${(y(b.pct) - 4).toFixed(1)}" font-size="11" fill="#1e293b" text-anchor="middle" font-weight="700"${c.dim ? ' fill-opacity="0.45"' : ''}>${Math.round(b.pct)}</text>`;
     }
     const labelFill = b.beforeMes ? '#cbd5e1' : c.summary ? '#075985' : c.picked ? '#0f172a' : '#475569';
     const bold = c.summary || c.picked;
-    marks += `<text x="${cx.toFixed(1)}" y="${UTIL_H - 7}" font-size="9.5" fill="${labelFill}" text-anchor="middle"${bold ? ' font-weight="700"' : ''}>${escAttr(c.label)}</text>`;
+    marks += `<text x="${cx.toFixed(1)}" y="${UTIL_H - 10}" font-size="11" fill="${labelFill}" text-anchor="middle"${bold ? ' font-weight="700"' : ''}>${escAttr(c.label)}</text>`;
     // The whole column carries the hover (and the click), so a short or
     // empty bar has one too.
     const hit =
@@ -801,7 +806,7 @@ function renderUtilColumns(cols: UtilColumn[], ariaLabel: string): string {
         : '';
     marks += `<rect x="${(cx - slot / 2).toFixed(1)}" y="${padT}" width="${slot.toFixed(1)}" height="${innerH + padB}" fill="transparent"${hit}><title>${escAttr(utilTip(c))}</title></rect>`;
   });
-  return `<svg viewBox="0 0 ${UTIL_W} ${UTIL_H}" width="100%" role="img" aria-label="${escAttr(ariaLabel)}" preserveAspectRatio="xMidYMid meet">${grid}${marks}</svg>`;
+  return `<svg width="${W}" height="${UTIL_H}" viewBox="0 0 ${W} ${UTIL_H}" role="img" aria-label="${escAttr(ariaLabel)}">${grid}${marks}</svg>`;
 }
 
 /**
@@ -809,7 +814,7 @@ function renderUtilColumns(cols: UtilColumn[], ariaLabel: string): string {
  * bar first. A month before MES recorded in full, or still to come, has no
  * bar.
  */
-export function renderUtilizationChart(bars: UtilizationBar[]): string {
+export function renderUtilizationChart(bars: UtilizationBar[], width?: number): string {
   return renderUtilColumns(
     bars.map((b) => {
       const ytd = b.month === 'YTD';
@@ -822,6 +827,7 @@ export function renderUtilizationChart(bars: UtilizationBar[]): string {
       };
     }),
     'Utilization by month',
+    width,
   );
 }
 
@@ -834,6 +840,7 @@ export function renderUtilizationByMachineChart(
   items: ReadonlyArray<{ machineCode: string; bar: UtilizationBar; total?: boolean }>,
   picked: string,
   period: string,
+  width?: number,
 ): string {
   return renderUtilColumns(
     items.map((it) => ({
@@ -846,6 +853,7 @@ export function renderUtilizationByMachineChart(
       pick: it.total ? '' : it.machineCode === picked ? '' : it.machineCode,
     })),
     'Utilization by machine',
+    width,
   );
 }
 
@@ -888,7 +896,7 @@ export function renderEfficiencyTrend(
   size: { width: number; height: number },
 ): TrendGeometry {
   const width = Math.max(320, Math.round(size.width));
-  const height = Math.max(220, Math.round(size.height));
+  const height = Math.max(150, Math.round(size.height));
   const all = series.flatMap((s) => s.values.filter((v): v is number => v !== null));
   const lastOf = (s: TrendSeries): number => s.values.reduce<number>((at, v, i) => (v === null ? at : i), -1);
   const endText = (s: TrendSeries): string => {
@@ -916,8 +924,15 @@ export function renderEfficiencyTrend(
   const targetLine =
     `<line x1="${PL}" x2="${PL + innerW}" y1="${f(yOf(target))}" y2="${f(yOf(target))}" stroke="#15803d" stroke-width="1" stroke-dasharray="5 4" opacity="0.7"/>` +
     `<text x="${PL + 6}" y="${f(yOf(target) - 5)}" font-size="12" fill="#15803d">Target ${target}%</text>`;
+  // As many week labels as fit, counted back from the last week so the
+  // latest is always named; a long range keeps every point, not every label.
+  const every = Math.max(1, Math.ceil(n / Math.max(1, Math.floor(innerW / 78))));
   const xLabels = labels
-    .map((l, i) => `<text x="${f(xOf(i))}" y="${height - 9}" font-size="12" text-anchor="middle" fill="#64748b">${escAttr(l)}</text>`)
+    .map((l, i) =>
+      (n - 1 - i) % every === 0
+        ? `<text x="${f(xOf(i))}" y="${height - 9}" font-size="12" text-anchor="middle" fill="#64748b">${escAttr(l)}</text>`
+        : '',
+    )
     .join('');
   const ends: Array<{ y: number; text: string; color: string }> = [];
   const lines = series
@@ -929,9 +944,9 @@ export function renderEfficiencyTrend(
         path += `${pen ? 'L' : 'M'}${f(xOf(i))},${f(yOf(v))}`;
         pen = true;
       });
-      const r = s.reference ? 3 : 4;
+      const r = (s.reference ? 3 : 4) * (n > 26 ? 0.6 : n > 13 ? 0.8 : 1);
       const dots = s.values
-        .map((v, i) => (v === null ? '' : `<circle cx="${f(xOf(i))}" cy="${f(yOf(v))}" r="${r}" fill="${s.color}" stroke="#fff" stroke-width="2"/>`))
+        .map((v, i) => (v === null ? '' : `<circle cx="${f(xOf(i))}" cy="${f(yOf(v))}" r="${r}" fill="${s.color}" stroke="#fff" stroke-width="${n > 26 ? 1 : 2}"/>`))
         .join('');
       const i = lastOf(s);
       if (i >= 0) ends.push({ y: yOf(s.values[i]!), text: endText(s), color: s.color });

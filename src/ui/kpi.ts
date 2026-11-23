@@ -798,19 +798,21 @@ function renderUtilizationSection(): string {
             `<option value="${m}"${utilView.period === m ? ' selected' : ''}>${escapeHtml(utilMonthName(m))}${m === thisMonth ? ' (so far)' : ''}</option>`,
         ),
     ].join('');
-    const byMachine = renderUtilizationByMachineChart(
-      [
-        { machineCode: UTILIZATION_TOTAL, bar: pick(total), total: true },
-        ...load.presses.map((p) => ({ machineCode: p.machineCode, bar: { ...pick(p), partial: utilView.period === thisMonth } })),
-      ],
-      utilView.machine,
-      periodName,
-    );
+    const machineItems = [
+      { machineCode: UTILIZATION_TOTAL, bar: pick(total), total: true },
+      ...load.presses.map((p) => ({ machineCode: p.machineCode, bar: { ...pick(p), partial: utilView.period === thisMonth } })),
+    ];
+    const picked = utilView.machine;
     const series = load.presses.find((p) => p.machineCode === utilView.machine) ?? total;
-    const byMonth = renderUtilizationChart([
-      series.ytd,
-      ...series.months.map((m) => ({ ...m, partial: m.month === thisMonth })),
-    ]);
+    const monthBars = [series.ytd, ...series.months.map((m) => ({ ...m, partial: m.month === thisMonth }))];
+    // Drawn once the cards are on the page and their width is known (see
+    // drawUtilization), at that width.
+    utilPlots = {
+      machine: (w) => renderUtilizationByMachineChart(machineItems, picked, periodName, w),
+      month: (w) => renderUtilizationChart(monthBars, w),
+    };
+    const byMachine = '<div class="kpi-util-plot" data-util-plot="machine"></div>';
+    const byMonth = '<div class="kpi-util-plot" data-util-plot="month"></div>';
     body = `<div class="kpi-util-grid">
       <div class="kpi-chart kpi-util-card">
         <div class="kpi-chart-head">
@@ -837,25 +839,56 @@ function renderUtilizationSection(): string {
   </section>`;
 }
 
+/** The Utilization charts' drawings, by plot, at a given width; set by renderUtilizationSection. */
+let utilPlots: Record<string, (width: number) => string> = {};
+let utilObserver: ResizeObserver | null = null;
+
+/** Draw each Utilization chart at its card's width, and again whenever that width changes. */
+function drawUtilization(app: HTMLElement): void {
+  utilObserver?.disconnect();
+  utilObserver = null;
+  const plots = [...app.querySelectorAll<HTMLElement>('.kpi-util [data-util-plot]')];
+  const draw = (el: HTMLElement): void => {
+    const plot = utilPlots[el.dataset.utilPlot ?? ''];
+    const width = el.clientWidth;
+    if (!plot || !width || Number(el.dataset.drawnAt) === width) return;
+    el.dataset.drawnAt = String(width);
+    el.innerHTML = plot(width);
+  };
+  plots.forEach(draw);
+  if (!plots.length || typeof ResizeObserver === 'undefined') return;
+  let frame = 0;
+  utilObserver = new ResizeObserver(() => {
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => plots.forEach((el) => el.isConnected && draw(el)));
+  });
+  plots.forEach((el) => utilObserver!.observe(el));
+}
+
 /** The Utilization charts' month pick and press clicks. */
 function wireUtilization(app: HTMLElement): void {
+  drawUtilization(app);
   app.querySelector<HTMLSelectElement>('.kpi-util [data-util-period]')?.addEventListener('change', (e) => {
     utilView.period = (e.target as HTMLSelectElement).value;
     render();
   });
-  app.querySelectorAll<Element>('.kpi-util [data-util-machine]').forEach((el) => {
-    const go = (): void => {
-      utilView.machine = (el as HTMLElement).dataset?.utilMachine ?? el.getAttribute('data-util-machine') ?? '';
-      render();
-    };
-    el.addEventListener('click', go);
-    el.addEventListener('keydown', (e) => {
+  // On the section, not on each bar: a chart is drawn again whenever its
+  // card changes width, and its bars with it.
+  const section = app.querySelector<HTMLElement>('.kpi-util');
+  if (!section) return;
+  const go = (e: Event): void => {
+    const el = (e.target as Element | null)?.closest?.('[data-util-machine]');
+    if (!el || !section.contains(el)) return;
+    if (e.type === 'keydown') {
       const k = (e as KeyboardEvent).key;
       if (k !== 'Enter' && k !== ' ') return;
       e.preventDefault();
-      go();
-    });
-  });
+    }
+    utilView.machine = el.getAttribute('data-util-machine') ?? '';
+    render();
+  };
+  section.addEventListener('click', go);
+  section.addEventListener('keydown', go);
 }
 let computeVersion = 0;
 let kpiMount = 0;
