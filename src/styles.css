@@ -1818,6 +1818,7 @@ button.die-maint-badge.wo-ok:hover{background:#dcfce7;border-color:#4ade80}
 .trend-tip div:not(.trend-tip-head){display:flex;align-items:center;gap:6px;line-height:20px}
 .trend-tip i{width:8px;height:8px;border-radius:50%;background:var(--c);flex:none}
 .trend-tip b{margin-left:auto;padding-left:12px;font-variant-numeric:tabular-nums}
+.trend-tip small{color:var(--mut,#64748b);font-size:11.5px;padding-left:8px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .assembly-trend-card .kpi-chart-note{margin-top:4px}
 .assembly-people-table td.kpi-leave{color:#b45309;font-weight:600}
 .assembly-people-table .kpi-away th{font-weight:500;color:var(--mu)}

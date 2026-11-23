@@ -30,6 +30,10 @@
         {
           "name": "PlannedAnnualLeave",
           "type": "Note"
+        },
+        {
+          "name": "EmployeeId",
+          "type": "Text"
         }
       ]
     },

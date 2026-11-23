@@ -36,6 +36,25 @@ A **Names** column beside People shows who is on each line and each order. Press
 | Efficiency | Std h / person-day ÷ 7.5 h (the 07:00–15:30 shift less morning tea and lunch). 🟢 ≥ 90% · 🟡 ≥ 75%. It counts **finished** work only: a day spent on an order finished on a later day earns nothing that day, so it reads low for anyone on long orders. |
 | On time% | Orders finished in full in the period on or before their Due Date ÷ orders finished in full with a Due Date (see below). 🟢 ≥ 95% · 🟡 ≥ 85%. |
 
+### Attendance — the timesheets behind efficiency
+
+Payroll's weekly timesheet exports go in an **`Attendance`** folder beside the PMD `Planning.csv` (the folder `CompletedJobs.csv` is in), one workbook per pay run, e.g. `TimesheetReport-PayRun44.xlsx`. MES reads the **`Export`** sheet of every `.xlsx` (or `.csv` saved from it) in the folder — the 60 most recently changed — with its own reader (no spreadsheet library; the browser's own decompression). A line in two overlapping exports is counted once.
+
+| Timesheet column | Read as |
+| --- | --- |
+| Employee Id | The person: matched to `ASSY_Operator.EmployeeId` (add a Text or Number column of that name and fill it in). Names are never matched — payroll's "CHANTHAN PEOV" is not the board's PreferName. |
+| Start Date | The day. |
+| Total Duration (else Duration, else Units in hours, else End − Start Time) | Hours. Paid time: the fixed 54-minute break is already out of it (07:00–15:30 = 7:36). Unpaid Break Duration is not taken off again. |
+| Work Type | Any type naming **leave** or a **holiday** (Annual, Personal, Long Service Leave Taken, Public Holiday…) is leave: its days are leave days, its hours are not worked. Everything else (blank, Ordinary, Overtime…) is worked; the page lists any unusual worked type it counted. |
+| Location | Worked hours at a location whose last level is **Direct** (`… / Assembly / Assembly Direct`) are **direct hours** — the efficiency denominator. **Indirect** hours are not counted (a person with only those is *No completion · indirect only*). |
+| Status | Rejected, deleted or cancelled lines count for nothing. |
+
+With timesheets for **every week** of the period chosen, **By person** shows **Direct h** and Efficiency = their Std h ÷ their Direct h, in place of Std h / day ÷ 7.5 h; otherwise it keeps the person-day measure and says so. Leave there is the board's and the timesheets' together; **On leave** means leave and no direct hour in the period, and someone at work without a confirmed completion shows their direct hours (*No completion · 38.0 direct h*).
+
+The **Efficiency by week** chart then becomes **Std h finished in `CompletedJobs.csv` ÷ direct hours attended**, by line — earned hours over attended direct hours, which needs no confirmation and so reaches back as far as both files do. The export's planner is the line it can name: TBP, UPL, ASSY (Assembly), TABLE, GENERAL; PMD is left out. **UPL is the three benches together**, because the export does not tell UPL-CUT, UPL-Gluing and UPL-SSS apart. A person's hours go to their line on the board (the saved plan's `workerLines`), else the first line their Skills name; hours of anybody with no `EmployeeId` match count for the whole floor only — the page names them, because their line then reads high. A week no timesheet covers is a gap. With a person picked, their share of confirmed completions over their direct hours, beside the whole floor (dashed). Hovering a week shows Std h / direct h behind each figure. Without any timesheet the chart stays on confirmed completions (Std h ÷ person-days ÷ 7.5 h).
+
+The headline tiles and the line table keep the person-day measure for now.
+
 Per person, an order's Std h is shared equally among the people who finished it. **Order done** in the completions list marks the day the export's running total reached the order's quantity (`JobCompleted`).
 
 The board's own shift entries (Output, Reject, Booked h…) stay in `ASSY_Planning` for the board; they are no longer on this page, because they leave with the order.
@@ -66,7 +85,7 @@ Thresholds are fixed and printed on the page, not editable: PMD's are argued ove
 
 | List | Purpose | Key |
 | --- | --- | --- |
-| ASSY_Operator | Real operator names (Title), Position, Skills, Supervisor, OnShift and PlannedAnnualLeave | SharePoint item ID |
+| ASSY_Operator | Real operator names (Title), Position, Skills, Supervisor, OnShift, PlannedAnnualLeave and EmployeeId (payroll's, to match the timesheets) | SharePoint item ID |
 | ASSY_Plans | Shared working plan, crew windows, pinned starts, output history, ignored orders and the Crew orders rules, plus one read-only row per day of history; a plan too large for one row also has part rows | Unique Title = current, day-YYYY-MM-DD, or `<plan>#<generation>#<n>` for a part |
 | FactoryCalendar | Every day the factory is shut beyond weekends — the public holidays and the RDOs; once read, the whole calendar (the worked-out NSW holidays only stand in when it cannot be read): Date (date only) and Name ("RDO" or the holiday's name). Written from Crew capacity → Closed days the moment a day is added. | SharePoint item ID |
 | ASSY_Planning | The board's planning list (once ASSY_Production): open orders' daily rows — quantities, booked labour hours, crew snapshot, dates, completion and pause details. Finished orders leave it. | Unique RecordKey |
@@ -113,6 +132,10 @@ VITE_FACTORY_CALENDAR_LIST=FactoryCalendar
 VITE_PLANNING_LIST=ASSY_Planning
 VITE_COMPLETED_JOBS_LIST=ASSY_CompletedJobs
 VITE_ASSEMBLY_PLAN_LIST=ASSY_Plans
+# KPIs · Assembly: payroll's timesheets and Epicor's export. Default to the
+# Attendance folder and CompletedJobs.csv beside VITE_PLANNING_CSV_PATH.
+VITE_ATTENDANCE_FOLDER=/sites/<PMDsite>/Shared Documents/PMD/Attendance
+VITE_COMPLETED_JOBS_CSV_PATH=/sites/<PMDsite>/Shared Documents/PMD/CompletedJobs.csv
 ```
 
 Do not reuse PMD's VITE_PLANNING_CSV_PATH for Assembly. A production Assembly build selects planning-csv and cookie-authenticated SharePoint REST when VITE_BACKEND=sharepoint. No Graph bearer token is bundled for this path. Keep the existing VITE_SUPERVISOR_PASSWORD configuration for the host operational gate.

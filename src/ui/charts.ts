@@ -864,6 +864,8 @@ export interface TrendSeries {
   values: (number | null)[];
   /** A reference series (the floor beside one person): thinner, dashed. */
   reference?: boolean;
+  /** What each point is made of, for the tooltip (e.g. `312 / 380 h`). */
+  details?: (string | null)[];
 }
 
 export interface TrendGeometry {

@@ -7,6 +7,7 @@ import { fetchThroughThrottle } from './http';
 import { readCalendarDay, readSiteZone, type SiteZone } from './values';
 import { type ListField, resolveField } from '../../../assembly/src/data/sharepoint/fieldMap';
 import { readPlanText } from '../../../assembly/src/persistence/planCodec';
+import { attendanceFolder, completedJobsCsvPath, readAttendance, readCompletedJobsHistory } from './attendance';
 
 export const DEFAULT_ASSEMBLY_FIELDS = {
   workType: "WorkType", laborHours: "LaborHours", description: "WorkDescription", supportDepartment: "SupportDepartment",
@@ -135,24 +136,51 @@ export function createAssemblyDataLayer(env: Record<string, string | undefined>,
       const body = await res.json() as { value?: Record<string, unknown>[] };
       // Days marked off on the board live in its saved plan, read the way the
       // board reads it. Without them the booked leave on the roster still counts.
-      let marked: Record<string, string[]> = {};
+      let plan: BoardPlan = { leave: {}, lines: {} };
       let warning: string | null = null;
       try {
-        marked = await boardLeave(site, env.VITE_ASSEMBLY_PLAN_LIST || 'ASSY_Plans');
+        plan = await boardPlan(site, env.VITE_ASSEMBLY_PLAN_LIST || 'ASSY_Plans');
       } catch (e) {
-        warning = `Leave marked on the board not read (${e instanceof Error ? e.message : String(e)}): only booked annual leave is counted.`;
+        warning = `The board's saved plan not read (${e instanceof Error ? e.message : String(e)}): only booked annual leave is counted, and lines come from Skills.`;
       }
-      return { people: rosterFrom(body.value ?? [], marked), warning };
+      return { people: rosterFrom(body.value ?? [], plan.leave, plan.lines), warning };
+    },
+    async attendance() {
+      const folder = attendanceFolder(env);
+      if (env.VITE_BACKEND !== 'sharepoint' || !folder) return { entries: [], errors: [], folder, files: [] };
+      const site = sameOriginSite(env);
+      return readAttendance(site, folder);
+    },
+    async history() {
+      const path = completedJobsCsvPath(env);
+      if (env.VITE_BACKEND !== 'sharepoint' || !path) return { rows: [], errors: [] };
+      return readCompletedJobsHistory(sameOriginSite(env), path);
     },
   };
 }
 
+/** The configured site, which MES must be opened on to read it. */
+function sameOriginSite(env: Record<string, string | undefined>): string {
+  const site = (env.VITE_SHAREPOINT_SITE_URL || env.VITE_SITE_URL || '').replace(/\/$/, '');
+  if (!site) throw new Error('Assembly SharePoint site is not configured.');
+  if (new URL(site).origin !== window.location.origin) throw new Error('Open MES on the configured SharePoint site.');
+  return site;
+}
+
+interface BoardPlan {
+  /** Days marked off, by operator id. */
+  leave: Record<string, string[]>;
+  /** The line the supervisor has put each operator on, by operator id (a board line key). */
+  lines: Record<string, string>;
+}
+
 /**
- * The days marked off on the board, by operator id: `workerOnLeave` in the
- * board's working plan (the `current` row of ASSY_Plans), unpacked the way the
- * board packs it (`planCodec`) — a large plan is split across part rows.
+ * From the board's working plan (the `current` row of ASSY_Plans), unpacked
+ * the way the board packs it (`planCodec`) — a large plan is split across part
+ * rows: the days marked off (`workerOnLeave`) and the line each operator is
+ * on (`workerLines`), by operator id.
  */
-async function boardLeave(site: string, listName: string): Promise<Record<string, string[]>> {
+async function boardPlan(site: string, listName: string): Promise<BoardPlan> {
   const list = encodeURIComponent(listName.replace(/'/g, "''")).replace(/'/g, '%27');
   const byTitle = async (title: string): Promise<string | null> => {
     const filter = encodeURIComponent(`Title eq '${title.replace(/'/g, "''")}'`);
@@ -165,13 +193,19 @@ async function boardLeave(site: string, listName: string): Promise<Record<string
     return hit.length === 1 ? String(hit[0].PlanJson ?? '') : null;
   };
   const head = await byTitle('current');
-  if (!head) return {};
-  const plan = JSON.parse(await readPlanText(head, byTitle, 'current')) as { assembly?: { workerOnLeave?: Record<string, unknown> } };
-  const out: Record<string, string[]> = {};
+  if (!head) return { leave: {}, lines: {} };
+  const plan = JSON.parse(await readPlanText(head, byTitle, 'current')) as {
+    assembly?: { workerOnLeave?: Record<string, unknown>; workerLines?: Record<string, unknown> };
+  };
+  const leave: Record<string, string[]> = {};
   for (const [id, days] of Object.entries(plan.assembly?.workerOnLeave ?? {})) {
-    if (Array.isArray(days)) out[id] = days.map(String).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+    if (Array.isArray(days)) leave[id] = days.map(String).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
   }
-  return out;
+  const lines: Record<string, string> = {};
+  for (const [id, line] of Object.entries(plan.assembly?.workerLines ?? {})) {
+    if (typeof line === 'string' && line.trim()) lines[id] = line.trim();
+  }
+  return { leave, lines };
 }
 
 /** The name columns, in the order the board's own roster reader prefers them. */
@@ -193,6 +227,7 @@ function leaveDaysOf(raw: unknown): string[] {
 export function rosterFrom(
   rows: readonly Record<string, unknown>[],
   marked: Readonly<Record<string, readonly string[]>> = {},
+  placed: Readonly<Record<string, string>> = {},
 ): AssemblyRosterPerson[] {
   const out: AssemblyRosterPerson[] = [];
   const seen = new Set<string>();
@@ -216,9 +251,18 @@ export function rosterFrom(
       name,
       position: String(pick(['Position', 'Role', 'JobTitle']) ?? '').trim(),
       leaveDays: [...new Set([...booked, ...(marked[id] ?? [])])].sort(),
+      employeeId: String(pick(['EmployeeId', 'EmployeeID', 'EmployeeNo', 'EmployeeNumber', 'PayrollId']) ?? '').trim().replace(/\.0+$/, ''),
+      line: placed[id] ?? firstSkill(pick(['Skills', 'Skill', 'SkillSet', 'Lines'])),
     });
   }
   return out;
+}
+
+/** The first entry of a Skills cell (a multi-choice column comes back as an array). */
+function firstSkill(raw: unknown): string {
+  const value = raw && typeof raw === 'object' && 'results' in raw ? (raw as { results: unknown }).results : raw;
+  const parts = Array.isArray(value) ? value.map(String) : String(value ?? '').split(/[,;|+\n]+/);
+  return parts.map((p) => p.trim()).find(Boolean) ?? '';
 }
 
 /** `YYYY-MM-DD` moved by whole days. */

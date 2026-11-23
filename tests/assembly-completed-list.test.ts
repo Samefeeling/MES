@@ -198,9 +198,9 @@ it('names the roster the way the board does, each person once, with booked leave
     { Id: 10, Title: 'Sam Lee', Position: 'Supervisor' },
     { Id: 11, Title: '' },
   ], { '8': ['2026-11-18'], '7': ['2026-11-19'] })).toEqual([
-    { id: '7', name: 'Arisack', position: 'Operator', leaveDays: ['2026-11-19', '2026-11-20'] },
-    { id: '8', name: 'Jimmy', position: '', leaveDays: ['2026-11-18'] },
-    { id: '10', name: 'Sam Lee', position: 'Supervisor', leaveDays: [] },
+    { id: '7', name: 'Arisack', position: 'Operator', leaveDays: ['2026-11-19', '2026-11-20'], employeeId: '', line: '' },
+    { id: '8', name: 'Jimmy', position: '', leaveDays: ['2026-11-18'], employeeId: '', line: '' },
+    { id: '10', name: 'Sam Lee', position: 'Supervisor', leaveDays: [], employeeId: '', line: '' },
   ]);
 });
 
@@ -210,12 +210,12 @@ it('adds the days marked off on the board, from its saved plan', async () => {
     const u = decodeURIComponent(url);
     if (u.includes("getbytitle('ASSY_Operator')")) return new Response(JSON.stringify({ value: [{ Id: 8, Title: 'Jimmy' }] }));
     if (u.includes("getbytitle('ASSY_Plans')") && u.includes("Title eq 'current'")) {
-      return new Response(JSON.stringify({ value: [{ Title: 'current', PlanJson: JSON.stringify({ id: 'current', assembly: { workerOnLeave: { '8': ['2026-11-17', '2026-11-18'] } } }) }] }));
+      return new Response(JSON.stringify({ value: [{ Title: 'current', PlanJson: JSON.stringify({ id: 'current', assembly: { workerOnLeave: { '8': ['2026-11-17', '2026-11-18'] }, workerLines: { '8': 'TABLE' } } }) }] }));
     }
     return new Response('{}', { status: 404 });
   });
   const out = await dal().roster!();
-  expect(out).toEqual({ people: [{ id: '8', name: 'Jimmy', position: '', leaveDays: ['2026-11-17', '2026-11-18'] }], warning: null });
+  expect(out).toEqual({ people: [{ id: '8', name: 'Jimmy', position: '', leaveDays: ['2026-11-17', '2026-11-18'], employeeId: '', line: 'TABLE' }], warning: null });
 });
 
 it('still lists the roster when the board’s plan cannot be read, and says so', async () => {
@@ -227,5 +227,5 @@ it('still lists the roster when the board’s plan cannot be read, and says so',
   );
   const out = await dal().roster!();
   expect(out.people[0].leaveDays).toEqual(['2026-11-18']);
-  expect(out.warning).toContain('Leave marked on the board not read');
+  expect(out.warning).toContain("The board's saved plan not read");
 });

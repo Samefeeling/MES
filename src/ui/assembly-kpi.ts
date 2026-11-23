@@ -10,7 +10,16 @@
  * whether each order met its Due Date. See `core/assembly-completions`.
  */
 
-import type { AssemblyDataLayer, AssemblyResult, AssemblyRosterPerson } from '../types/assembly';
+import type { AssemblyAttendance, AssemblyDataLayer, AssemblyResult, AssemblyRosterPerson } from '../types/assembly';
+import {
+  attendanceByEmployee,
+  attendanceCovers,
+  attendanceWeeks,
+  unusualWorkTypes,
+  type AttendanceEntry,
+  type PersonAttendance,
+} from '../core/attendance';
+import { HISTORY_GROUPS, historyGroup, weeklyHistory, type HistoryGroup, type HistoryRow } from '../core/assembly-history';
 import { ASSEMBLY_THRESHOLDS, PRODUCTIVE_HOURS_PER_PERSON, colourClass } from '../core/assembly-metrics';
 import {
   completedOrderDays,
@@ -119,6 +128,12 @@ interface PageState {
   /** The last month's completions, for the trend; null until read. */
   trend: CompletedOrderDay[] | null;
   trendError: string;
+  /** Payroll's timesheets; null until read (or with none to read). */
+  attendance: AssemblyAttendance | null;
+  attendanceError: string;
+  /** `CompletedJobs.csv`'s standard hours, every day it holds; null until read. */
+  history: HistoryRow[] | null;
+  historyError: string;
 }
 
 const n = (v: number): string => (v ? v.toLocaleString('en-AU') : '—');
@@ -204,12 +219,101 @@ interface TrendModel {
   target: number;
 }
 
+/** The history lines' colours: fixed, so a line keeps its colour whichever others appear. */
+const groupColour = (g: string): string => {
+  const i = HISTORY_GROUPS.indexOf(g as (typeof HISTORY_GROUPS)[number]);
+  return i >= 0 ? SERIES_COLORS[i] : '#94a3b8';
+};
+
+/**
+ * What the timesheets say, made ready for the page: the lines that are
+ * Assembly's (a person on ASSY_Operator, or anybody whose Location is an
+ * Assembly one), each roster person's payroll id, and the weeks covered.
+ */
+interface AttendanceView {
+  entries: AttendanceEntry[];
+  weeks: Set<string>;
+  byName: Map<string, AssemblyRosterPerson>;
+  groupOf: (employeeId: string) => HistoryGroup | null;
+  /** Payroll names with Assembly hours and no `EmployeeId` on ASSY_Operator. */
+  unmatched: string[];
+}
+
+function attendanceView(S: PageState): AttendanceView | null {
+  if (!S.attendance || S.attendance.entries.length === 0) return null;
+  const byEmployee = new Map(S.roster.filter((r) => r.employeeId).map((r) => [r.employeeId, r]));
+  const entries = S.attendance.entries.filter((e) => byEmployee.has(e.employeeId) || /assembly/i.test(e.location));
+  const unmatched = [...new Set(entries.filter((e) => !byEmployee.has(e.employeeId) && e.kind === 'direct').map((e) => e.name || e.employeeId))].sort();
+  return {
+    entries,
+    weeks: attendanceWeeks(entries),
+    byName: new Map(S.roster.map((r) => [r.name.toLowerCase(), r])),
+    groupOf: (id) => historyGroup(byEmployee.get(id)?.line ?? ''),
+    unmatched,
+  };
+}
+
+const addDaysLocal = (day: string, n: number): string => {
+  const d = new Date(`${day}T12:00:00`);
+  d.setDate(d.getDate() + n);
+  return localDay(d);
+};
+
+const hoursOf = (v: number | null): string => (v === null ? '—' : v.toFixed(v >= 100 ? 0 : 1));
+
 /** The last month's efficiency, week by week: every line, or the person picked beside the whole floor. */
 function trendModel(S: PageState, yesterday: string): TrendModel | null {
-  if (S.trend === null) return null;
   const { weeks } = trendWeeks(yesterday);
   const partial = new Date(`${yesterday}T12:00:00`).getDay() !== 0;
   const labels = weeks.map((w, i) => `w/c ${au(w).slice(0, 5)}${partial && i === weeks.length - 1 ? '*' : ''}`);
+  const att = attendanceView(S);
+  // Std h finished over direct hours attended, once there are timesheets and
+  // the export to set them against.
+  if (att && S.history) {
+    const hist = weeklyHistory(S.history, att.entries, att.groupOf, weeks, att.weeks);
+    const detail = (p: { stdHours: number; directHours: number | null }): string =>
+      p.directHours === null ? `${hoursOf(p.stdHours)} Std h · no timesheet` : `${hoursOf(p.stdHours)} / ${hoursOf(p.directHours)} h`;
+    const floor: TrendSeries = {
+      name: 'All Assembly',
+      color: '#94a3b8',
+      values: hist.floor.map((p) => p.efficiency),
+      details: hist.floor.map(detail),
+      reference: true,
+    };
+    if (!S.person) {
+      return {
+        labels,
+        target: ASSEMBLY_THRESHOLDS.effGreen,
+        series: hist.lines.map((l) => ({
+          name: l.name,
+          color: groupColour(l.name),
+          values: l.points.map((p) => p.efficiency),
+          details: l.points.map(detail),
+        })),
+      };
+    }
+    const who = att.byName.get(S.person.toLowerCase());
+    if (who?.employeeId && S.trend) {
+      const mine = S.trend;
+      const points = weeks.map((w) => {
+        const end = addDaysLocal(w, 6);
+        const share = completionsByPerson(mine.filter((d) => d.day >= w && d.day <= end)).find(
+          (p) => p.name.toLowerCase() === S.person!.toLowerCase(),
+        )?.stdHours ?? 0;
+        const direct = att.weeks.has(w) ? attendanceByEmployee(att.entries, w, end).get(who.employeeId)?.direct ?? 0 : null;
+        return { stdHours: share, directHours: direct, efficiency: direct ? Math.round((share / direct) * 100) : null };
+      });
+      return {
+        labels,
+        target: ASSEMBLY_THRESHOLDS.effGreen,
+        series: [
+          { name: S.person, color: SERIES_COLORS[0], values: points.map((p) => p.efficiency), details: points.map(detail) },
+          floor,
+        ],
+      };
+    }
+  }
+  if (S.trend === null) return null;
   const series: TrendSeries[] = S.person
     ? [
         { name: S.person, color: SERIES_COLORS[0], values: weeklyPersonEfficiency(S.trend, weeks, S.person) },
@@ -222,6 +326,19 @@ function trendModel(S: PageState, yesterday: string): TrendModel | null {
 /** The chart's card: legend, the plot (filled in by `drawTrend`), and how to read it. */
 function trendCard(S: PageState, yesterday: string, model: TrendModel | null): string {
   const partial = new Date(`${yesterday}T12:00:00`).getDay() !== 0;
+  const att = attendanceView(S);
+  const byHours = Boolean(att && S.history && (!S.person || att.byName.get(S.person.toLowerCase())?.employeeId));
+  const note = byHours
+    ? `Weeks start on Monday${partial ? '; * = the week so far' : ''}. Efficiency = Std h finished (<code>CompletedJobs.csv</code>${
+        S.person ? `; for ${escapeHtml(S.person)}, their share of confirmed completions` : ''
+      }) ÷ direct hours attended (timesheets in <code>Attendance</code>). UPL is its three benches together — the export does not tell them apart. A week no timesheet covers is a gap. ${
+        S.person ? 'Dashed grey: the whole floor, for comparison.' : 'Press a name to see that person beside the floor.'
+      }`
+    : `Weeks start on Monday${partial ? '; * = the week so far' : ''}. Efficiency = Std h ÷ person-days ÷ ${PRODUCTIVE_HOURS_PER_PERSON} h, from <code>ASSY_CompletedJobs</code>; a week with no confirmed completion is a gap. ${
+        S.person ? 'Dashed grey: the whole floor, for comparison.' : 'Press a name to see that person beside the floor.'
+      }${
+        S.person && att && S.history ? ` ${escapeHtml(S.person)} has no <code>EmployeeId</code> on ASSY_Operator, so their timesheet cannot be matched.` : ''
+      }${!att && S.history && S.attendance ? ' No timesheet found in <code>Attendance</code> yet: once there is one, this becomes Std h ÷ direct hours attended.' : ''}`;
   const legend = model
     ? model.series
         .map(
@@ -238,9 +355,7 @@ function trendCard(S: PageState, yesterday: string, model: TrendModel | null): s
       <div class="trend-plot" data-trend-plot>${
         model ? '' : `<div class="kpi-empty">${S.trendError ? escapeHtml(S.trendError) : 'Loading the last month…'}</div>`
       }<div class="trend-tip" hidden></div></div>
-      <div class="kpi-chart-note">Weeks start on Monday${partial ? '; * = the week so far' : ''}. Efficiency = Std h ÷ person-days ÷ ${PRODUCTIVE_HOURS_PER_PERSON} h, from <code>ASSY_CompletedJobs</code>; a week with no confirmed completion is a gap. ${
-        S.person ? 'Dashed grey: the whole floor, for comparison.' : 'Press a name to see that person beside the floor.'
-      }</div>
+      <div class="kpi-chart-note">${note}</div>
     </div>`;
 }
 
@@ -274,7 +389,12 @@ function drawTrend(app: HTMLElement, model: TrendModel | null): ResizeObserver |
     guide?.setAttribute('x2', String(xs[i]));
     guide?.setAttribute('visibility', 'visible');
     const rows = model.series
-      .map((s) => `<div><i style="--c:${s.color}"></i>${escapeHtml(s.name)}<b>${s.values[i] === null ? '—' : `${s.values[i]}%`}</b></div>`)
+      .map(
+        (s) =>
+          `<div><i style="--c:${s.color}"></i>${escapeHtml(s.name)}<b>${s.values[i] === null ? '—' : `${s.values[i]}%`}</b>${
+            s.details?.[i] ? `<small>${escapeHtml(s.details[i]!)}</small>` : ''
+          }</div>`,
+      )
       .join('');
     tip.innerHTML = `<div class="trend-tip-head">${escapeHtml(model.labels[i])}</div>${rows}`;
     tip.hidden = false;
@@ -316,39 +436,100 @@ function detailTables(done: readonly CompletedOrderDay[], S: PageState, yesterda
     .join(' and ');
   const worked = new Set(people.map((p) => p.name.toLowerCase()));
   const roster = new Map(S.roster.map((r) => [r.name.toLowerCase(), r]));
-  // Leave the board records for them inside the period: booked annual leave
-  // and days marked off on the board.
-  const leaveIn = (name: string): number =>
-    roster.get(name.toLowerCase())?.leaveDays.filter((d) => d >= S.from && d <= S.to).length ?? 0;
+  // With timesheets for every week of the period, a person's efficiency is
+  // their share of Std h over the direct hours they attended, and their leave
+  // is payroll's as well as the board's.
+  const att = attendanceView(S);
+  const timed = Boolean(att && attendanceCovers(att.weeks, S.from, S.to));
+  const clock = timed ? attendanceByEmployee(att!.entries, S.from, S.to) : new Map<string, PersonAttendance>();
+  const clockOf = (name: string): PersonAttendance | null => {
+    const id = roster.get(name.toLowerCase())?.employeeId;
+    return id ? clock.get(id) ?? { direct: 0, indirect: 0, leave: 0, leaveDays: [] } : null;
+  };
+  // Leave inside the period: booked annual leave and days marked off on the
+  // board, and the leave lines of the timesheets.
+  const leaveDays = (name: string): string[] => [
+    ...new Set([
+      ...(roster.get(name.toLowerCase())?.leaveDays.filter((d) => d >= S.from && d <= S.to) ?? []),
+      ...(clockOf(name)?.leaveDays ?? []),
+    ]),
+  ];
+  const leaveIn = (name: string): number => leaveDays(name).length;
   const leaveCell = (name: string): string => {
     const days = leaveIn(name);
     return `<td class="num${days ? '' : ' gray'}">${days ? `${days} d` : '—'}</td>`;
   };
+  /** Away all period: leave, and no direct hour on the timesheet (when there is one). */
+  const onLeave = (name: string): boolean => leaveIn(name) > 0 && !((clockOf(name)?.direct ?? 0) > 0);
   const away = S.roster
     .filter((r) => !OFF_THE_FLOOR.test(r.position) && !worked.has(r.name.toLowerCase()))
     .map((r) => r.name)
-    .sort((a, b) => Number(leaveIn(b) > 0) - Number(leaveIn(a) > 0) || a.localeCompare(b));
+    .sort((a, b) => Number(onLeave(b)) - Number(onLeave(a)) || a.localeCompare(b));
   const picked = (name: string): string =>
     person && person.toLowerCase() === name.toLowerCase() ? ' class="kpi-picked"' : '';
+  const personCells = (p: (typeof people)[number]): string => {
+    if (!timed) {
+      return cell(p.perDay.toFixed(2)) + cell(`${p.efficiency}%`, colourClass(p.efficiency, t.effGreen, t.effAmber));
+    }
+    const direct = clockOf(p.name)?.direct ?? null;
+    const eff = direct ? Math.round((p.stdHours / direct) * 100) : null;
+    return (
+      `<td class="num${direct === null ? ' gray' : ''}"${direct === null ? ' title="No EmployeeId on ASSY_Operator: their timesheet cannot be matched"' : ''}>${
+        direct === null ? '?' : h(direct)
+      }</td>` + cell(pct(eff), colourClass(eff, t.effGreen, t.effAmber))
+    );
+  };
+  const awayText = (name: string): { text: string; cls: string; title: string } => {
+    if (onLeave(name)) return { text: 'On leave', cls: 'kpi-leave', title: 'On leave in this period' };
+    const c = timed ? clockOf(name) : null;
+    if (c && c.direct > 0) {
+      return {
+        text: `No completion · ${h(c.direct)} direct h`,
+        cls: 'gray',
+        title: 'At work on direct hours, and named on no confirmed completion in this period',
+      };
+    }
+    if (c && c.indirect > 0) return { text: 'No completion · indirect only', cls: 'gray', title: 'Only indirect hours on the timesheet in this period' };
+    return { text: 'No completion', cls: 'gray', title: 'Not on leave, and named on no confirmed completion in this period' };
+  };
   const rows =
     people
       .map(
-        (p) => `<tr${picked(p.name)}><th>${nameButton(p.name, person)}</th>${cell(n(p.orders))}${cell(h(p.stdHours))}${cell(n(p.days))}${cell(
-          p.perDay.toFixed(2),
-        )}${cell(`${p.efficiency}%`, colourClass(p.efficiency, t.effGreen, t.effAmber))}${leaveCell(p.name)}</tr>`,
+        (p) => `<tr${picked(p.name)}><th>${nameButton(p.name, person)}</th>${cell(n(p.orders))}${cell(h(p.stdHours))}${cell(n(p.days))}${personCells(
+          p,
+        )}${leaveCell(p.name)}</tr>`,
       )
       .join('') +
     away
       .map((name) => {
-        const onLeave = leaveIn(name) > 0;
-        return `<tr${picked(name) || ' class="kpi-away"'} title="${
-          onLeave ? 'On leave in this period, as the board records it' : 'Not on leave, and named on no confirmed completion in this period'
-        }"><th>${nameButton(name, person)}</th><td colspan="5" class="${onLeave ? 'kpi-leave' : 'gray'}">${
-          onLeave ? 'On leave' : 'No completion'
+        const a = awayText(name);
+        return `<tr${picked(name) || ' class="kpi-away"'} title="${a.title}"><th>${nameButton(name, person)}</th><td colspan="5" class="${a.cls}">${
+          a.text
         }</td>${leaveCell(name)}</tr>`;
       })
       .join('');
-  const leaveNote = S.rosterWarning ? `<div class="kpi-chart-note">⚠ ${escapeHtml(S.rosterWarning)}</div>` : '';
+  const warnings = [
+    S.rosterWarning,
+    S.attendanceError,
+    S.historyError,
+    ...(S.attendance?.errors.slice(0, 3) ?? []),
+    att?.unmatched.length
+      ? `${att.unmatched.length} on the timesheets with Assembly direct hours have no EmployeeId on ASSY_Operator (${att.unmatched.slice(0, 6).join(', ')}${
+          att.unmatched.length > 6 ? '…' : ''
+        }): their hours count for the whole floor only, so the line they work on reads high. Fill in their EmployeeId to fix it.`
+      : '',
+  ].filter(Boolean);
+  const unusual = att ? unusualWorkTypes(att.entries) : [];
+  const timedNote = att
+    ? timed
+      ? `Hours and Efficiency from the timesheets (${S.attendance!.files.length} in <code>Attendance</code>): Efficiency = Std h ÷ direct hours attended.${
+          unusual.length ? ` Counted as work: ${unusual.map(escapeHtml).join(', ')}.` : ''
+        }`
+      : 'No timesheet covers every week of this period: Efficiency here is Std h ÷ days ÷ 7.5 h.'
+    : '';
+  const leaveNote =
+    (timedNote ? `<div class="kpi-chart-note">${timedNote}</div>` : '') +
+    warnings.map((w) => `<div class="kpi-chart-note">⚠ ${escapeHtml(w!)}</div>`).join('');
   return `<div class="assembly-people-grid">
     <h3 class="kpi-section-title apg-title-l">By person<span class="kpi-sub-note">press a name to see their completions and weeks</span></h3>
     <h3 class="kpi-section-title apg-title-r">Efficiency by week<span class="kpi-sub-note">last month · ${
@@ -362,9 +543,12 @@ function detailTables(done: readonly CompletedOrderDay[], S: PageState, yesterda
             <th title="Orders they are named on. An order three people finished is one order for each of them; its Std h is split three ways.">Orders</th>
             <th title="Their share of the standard hours of the orders they finished — an order finished by three people gives each a third">Std h</th>
             <th title="Days they are named on a completion">Days</th>
-            <th title="Std h ÷ Days">Std h / day</th>
-            <th title="Std h / day ÷ ${PRODUCTIVE_HOURS_PER_PERSON} h">Efficiency</th>
-            <th title="Days the board has them on leave in this period: booked annual leave and days marked off on the board">Leave</th>
+            ${
+              timed
+                ? '<th title="Direct hours attended in the period, from the timesheets (Total Duration of lines at a Direct location, leave excepted)">Direct h</th><th title="Std h ÷ Direct h">Efficiency</th>'
+                : `<th title="Std h ÷ Days">Std h / day</th><th title="Std h / day ÷ ${PRODUCTIVE_HOURS_PER_PERSON} h">Efficiency</th>`
+            }
+            <th title="Days on leave in this period: booked annual leave, days marked off on the board, and leave lines on the timesheets">Leave</th>
           </tr></thead>
           <tbody>${rows || `<tr><td colspan="7" class="kpi-empty">Nobody is named on a completion in this period.</td></tr>`}</tbody>
         </table>
@@ -438,6 +622,10 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
     rosterWarning: null,
     trend: null,
     trendError: '',
+    attendance: null,
+    attendanceError: '',
+    history: null,
+    historyError: '',
   };
   const yesterday = periodRange('lastDay', new Date()).to;
   let request = 0;
@@ -541,7 +729,8 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
           <div><b>Qty</b> and <b>Std h</b> are Epicor's (<code>LaborDtl_LaborQty</code>, <code>LaborDtl_LaborHrs</code> — standard hours, not clocked time).</div>
           <div><b>Person-days</b> = each person counted once for each day they are named on a completion. <b>Std h / person-day</b> = Std h ÷ Person-days, and <b>Efficiency 🟢🟡🔴</b> is that over ${PRODUCTIVE_HOURS_PER_PERSON} h, the 07:00–15:30 shift less morning tea and lunch — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.effGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.effAmber}%. Per person, an order's Std h is shared equally among the people who finished it. It counts finished work only, so a day spent on an order finished on a later day earns nothing here.</div>
           <div><b>On time% 🟢🟡🔴</b> = orders finished in full in the period on or before their <b>Due Date</b> ÷ orders finished in full with a Due Date. An order is judged once, on the day it was finished in full (<b>Order done</b>); in the Completions list a part of an order delivered after its Due Date is already <b>Late</b>, and one before it is <b>In progress</b> — 🟢 ≥ ${ASSEMBLY_THRESHOLDS.onTimeGreen}% · 🟡 ≥ ${ASSEMBLY_THRESHOLDS.onTimeAmber}%. <b>Order done</b> marks the day the export's running total reached the order's quantity.</div>
-          <div><b>By person</b> lists everyone on <code>ASSY_Operator</code> (supervisors and managers excepted): <b>Leave</b> is the days the board has them on leave in the period — booked annual leave (<code>PlannedAnnualLeave</code>) and days marked off on the board. Somebody named on no confirmed completion is <b>On leave</b> when the board has leave for them in the period, else <b>No completion</b> (at work on orders not yet finished, or not recorded). The chart beside it is the last month's efficiency by week for every line; with a person picked, theirs beside the whole floor.</div>
+          <div><b>By person</b> lists everyone on <code>ASSY_Operator</code> (supervisors and managers excepted): <b>Leave</b> is the days they are on leave in the period — booked annual leave (<code>PlannedAnnualLeave</code>), days marked off on the board, and the leave lines of payroll's timesheets. Somebody named on no confirmed completion is <b>On leave</b> when they have leave and no direct hour in the period, else <b>No completion</b> (with their direct hours when the timesheets have them; indirect-only time is No completion too).</div>
+          <div><b>Timesheets</b> are payroll's weekly exports in the <code>Attendance</code> folder beside Planning.csv (sheet <code>Export</code>), matched to people by <code>EmployeeId</code> on ASSY_Operator. <b>Direct h</b> = Total Duration of the lines at a Direct location (the 54-minute break already out of it), leave and Indirect excepted. When they cover every week of the period, By person's Efficiency is a person's Std h ÷ their Direct h. The chart is then Std h finished in <code>CompletedJobs.csv</code> ÷ direct hours attended, by line (a person's hours go to their line on the board, else the first line of their Skills); without timesheets it is Std h ÷ person-days ÷ ${PRODUCTIVE_HOURS_PER_PERSON} h of confirmed completions.</div>
           <div><b>Last 24h</b> is the last working day before today (Friday to Sunday on a Monday); <b>Last Week</b> is Monday to Sunday of the week before this one.</div>
           <div>Press "+" on a line to see the orders behind its figures. Press a name or an order number to narrow the Completions list to it (a name also puts that person on the chart); filtered by a person, it adds their <b>Share</b> of each order (Std h ÷ the people who finished it), which is what their row in By person adds up.</div>
         </div>
@@ -634,11 +823,20 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
   /** The last month and the roster: read once a visit, whatever the period. */
   async function loadContext(): Promise<void> {
     const range = trendWeeks(yesterday);
-    const [trend, roster] = await Promise.allSettled([
+    const reason = (r: PromiseRejectedResult): string => (r.reason instanceof Error ? r.reason.message : String(r.reason));
+    const [trend, roster, attendance, history] = await Promise.allSettled([
       dal.results(range.from, range.to),
       dal.roster ? dal.roster() : Promise.resolve({ people: [], warning: null }),
+      dal.attendance ? dal.attendance() : Promise.resolve(null),
+      dal.history ? dal.history() : Promise.resolve(null),
     ]);
     if (!app.isConnected) return;
+    if (attendance.status === 'fulfilled') S.attendance = attendance.value;
+    else S.attendanceError = `Timesheets not read (${reason(attendance)}): efficiency stays on person-days.`;
+    if (history.status === 'fulfilled') {
+      S.history = history.value?.rows ?? null;
+      S.historyError = history.value?.errors[0] ?? '';
+    } else S.historyError = `CompletedJobs.csv not read (${reason(history)}): the chart stays on confirmed completions.`;
     if (trend.status === 'fulfilled') S.trend = completedOrderDays(trend.value);
     else S.trendError = `The last month could not be read: ${trend.reason instanceof Error ? trend.reason.message : String(trend.reason)}`;
     if (roster.status === 'fulfilled') {

@@ -1,3 +1,6 @@
+import type { AttendanceEntry } from '../core/attendance';
+import type { HistoryRow } from '../core/assembly-history';
+
 /** Assembly uses job/day results; PMD uses machine/shift records. */
 export interface AssemblyResult {
   workType?: string;
@@ -69,6 +72,23 @@ export interface AssemblyRosterPerson {
    * `workerOnLeave`).
    */
   leaveDays: string[];
+  /** Payroll's Employee Id (`ASSY_Operator.EmployeeId`): the key to their timesheet lines. '' when not filled in. */
+  employeeId: string;
+  /**
+   * The line their hours count towards, as the board names it: where the
+   * supervisor has put them (the saved plan's `workerLines`), else the first
+   * line their Skills name. '' when neither says.
+   */
+  line: string;
+}
+
+/** Payroll's timesheets as read from the Attendance folder. */
+export interface AssemblyAttendance {
+  entries: AttendanceEntry[];
+  /** Lines or files that could not be read. */
+  errors: string[];
+  folder: string;
+  files: string[];
 }
 
 export interface AssemblyDataLayer {
@@ -79,4 +99,8 @@ export interface AssemblyDataLayer {
    * usable without it.
    */
   roster?(): Promise<{ people: AssemblyRosterPerson[]; warning: string | null }>;
+  /** Every timesheet export in the Attendance folder; absent off SharePoint. */
+  attendance?(): Promise<AssemblyAttendance>;
+  /** Every entry of `CompletedJobs.csv` (standard hours by day and planner); absent off SharePoint. */
+  history?(): Promise<{ rows: HistoryRow[]; errors: string[] }>;
 }
