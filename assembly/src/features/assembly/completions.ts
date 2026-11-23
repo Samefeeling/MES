@@ -33,6 +33,7 @@ import { readConfigFromEnv, type SharePointConfig } from '@/data/sharepoint/site
 import type { AssemblyGanttView } from '@/engine/assembly/board';
 import {
   completionsBetween,
+  isAssessedLine,
   confirmWindow,
   doneQtyByJob,
   doneQtyThrough,
@@ -400,7 +401,7 @@ async function load(board: AssemblyGanttView, now: Date): Promise<void> {
   if (demo) {
     const sameWindow = useCompletionStore.getState().window?.from === window.from;
     // The demo roster has nobody on past days: offer two people of the line.
-    const items = demoCompletions(board, window).map((c) => {
+    const items = demoCompletions(board, window).filter((c) => isAssessedLine(c.planner)).map((c) => {
       const item = itemFor(board, c, [], [], c.qty, usePlanStore.getState().workerLines);
       if (item.people.length) return item;
       const key = LINES.find((l) => l.name === item.line)?.key;
@@ -441,9 +442,12 @@ async function load(board: AssemblyGanttView, now: Date): Promise<void> {
     if (read.ok) planning = read.value;
   }
   const workerLines = usePlanStore.getState().workerLines;
-  const items = completions.map((c) =>
-    itemFor(board, c, planning.get(c.jobNum) ?? [], completed.get(c.jobNum) ?? [], doneQtyThrough(parsed.rows, c.jobNum, c.day), workerLines),
-  );
+  // An order the board files under TBP is left out too, whatever its planner.
+  const items = completions
+    .map((c) =>
+      itemFor(board, c, planning.get(c.jobNum) ?? [], completed.get(c.jobNum) ?? [], doneQtyThrough(parsed.rows, c.jobNum, c.day), workerLines),
+    )
+    .filter((item) => isAssessedLine(item.line));
   const shown = keep(items);
   set({
     status: 'ready',

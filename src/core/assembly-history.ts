@@ -13,19 +13,27 @@
  * ## Lines
  *
  * The export's planner is the line it can name: TBP, UPL, ASSY, TABLE,
- * GENERAL (PMD is moulding's and left out). The board's upholstery benches
+ * GENERAL (PMD is moulding's and left out, and TBP is not measured). The board's upholstery benches
  * (UPL-CUT, UPL-Gluing, UPL-SSS) are one UPL here, because the export does
  * not tell them apart. A person's hours go to their line on the board
  * (`workerLines`), else to the first line their Skills name; hours of
  * somebody with no line count towards the whole floor only.
  */
 
-import { mondayOf } from './assembly-completions';
-import type { AttendanceEntry } from './attendance';
 
-/** The lines the history can tell apart, in the board's order. */
-export const HISTORY_GROUPS = ['TBP', 'UPL', 'Assembly', 'Table', 'General'] as const;
-export type HistoryGroup = (typeof HISTORY_GROUPS)[number] | 'PMD';
+/** The lines the history can tell apart and measures, in the board's order. */
+export const HISTORY_GROUPS = ['UPL', 'Assembly', 'Table', 'General'] as const;
+export type HistoryGroup = (typeof HISTORY_GROUPS)[number] | 'TBP' | 'PMD';
+
+/**
+ * Lines the page does not measure: PMD is moulding's, and TBP is not assessed
+ * while its equipment waits to be replaced. Their standard hours, their
+ * people's hours and their completions are all left out.
+ */
+export const NOT_ASSESSED = new Set<HistoryGroup>(['PMD', 'TBP']);
+
+/** Is this line (a planner, a board line name or key) one the page measures? Unknown lines are. */
+export const isAssessedGroup = (g: HistoryGroup | null): boolean => !g || !NOT_ASSESSED.has(g);
 
 /** A planner, a board line key or name, or a Skills entry → the history line it belongs to; null when none. */
 export function historyGroup(raw: string): HistoryGroup | null {
@@ -95,71 +103,4 @@ export function parseHistoryTable(table: readonly (readonly string[])[]): { rows
     rows.push({ day, stdHours, planner, group: historyGroup(planner) });
   }
   return { rows, errors: unreadable ? [`CompletedJobs.csv: ${unreadable} rows with no readable day or hours were skipped.`] : [] };
-}
-
-/** One week of one line (or of the floor). */
-export interface HistoryPoint {
-  stdHours: number;
-  /** Direct hours attended; null for a week no timesheet covers. */
-  directHours: number | null;
-  /** Std h ÷ direct hours, as a percentage; null without both. */
-  efficiency: number | null;
-}
-
-export interface HistorySeries {
-  name: string;
-  points: HistoryPoint[];
-}
-
-const round1 = (n: number): number => Math.round(n * 10) / 10;
-
-function point(std: number, hours: number | null): HistoryPoint {
-  return {
-    stdHours: round1(std),
-    directHours: hours === null ? null : round1(hours),
-    efficiency: hours && hours > 0 ? Math.round((std / hours) * 100) : null,
-  };
-}
-
-/**
- * Each history line's weeks, and the whole floor's. `groupOf` is an
- * employee's line (by payroll Employee Id); `covered` the weeks a timesheet
- * covers. A week without a timesheet keeps its standard hours and has no
- * efficiency.
- */
-export function weeklyHistory(
-  rows: readonly HistoryRow[],
-  attendance: readonly AttendanceEntry[],
-  groupOf: (employeeId: string) => HistoryGroup | null,
-  weeks: readonly string[],
-  covered: ReadonlySet<string>,
-): { lines: HistorySeries[]; floor: HistoryPoint[] } {
-  const wanted = new Set(weeks);
-  const std = new Map<string, number>(); // `week|group`
-  const hours = new Map<string, number>();
-  const add = (m: Map<string, number>, key: string, v: number): void => {
-    m.set(key, (m.get(key) ?? 0) + v);
-  };
-  for (const r of rows) {
-    if (r.group === 'PMD' || !r.planner) continue;
-    const w = mondayOf(r.day);
-    if (!wanted.has(w)) continue;
-    add(std, `${w}|${r.group ?? ''}`, r.stdHours);
-    add(std, `${w}|*`, r.stdHours);
-  }
-  for (const e of attendance) {
-    if (e.kind !== 'direct') continue;
-    const w = mondayOf(e.day);
-    if (!wanted.has(w)) continue;
-    const g = groupOf(e.employeeId);
-    if (g === 'PMD') continue;
-    if (g) add(hours, `${w}|${g}`, e.hours);
-    add(hours, `${w}|*`, e.hours);
-  }
-  const at = (w: string, g: string): HistoryPoint =>
-    point(std.get(`${w}|${g}`) ?? 0, covered.has(w) ? hours.get(`${w}|${g}`) ?? 0 : null);
-  const lines = HISTORY_GROUPS.map((g) => ({ name: g, points: weeks.map((w) => at(w, g)) })).filter((s) =>
-    s.points.some((p) => p.stdHours > 0 || (p.directHours ?? 0) > 0),
-  );
-  return { lines, floor: weeks.map((w) => at(w, '*')) };
 }

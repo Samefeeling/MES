@@ -11,7 +11,8 @@ import {
   timesheetDay,
   unusualWorkTypes,
 } from '../src/core/attendance';
-import { historyGroup, parseHistoryTable, weeklyHistory } from '../src/core/assembly-history';
+import { historyGroup, parseHistoryTable } from '../src/core/assembly-history';
+import { chartBuckets, efficiencySeries } from '../src/core/assembly-efficiency';
 import { readAttendance, readTimesheetFile, splitDelimited } from '../src/dal/sharepoint/attendance';
 import { rosterFrom } from '../src/dal/sharepoint/assembly';
 
@@ -257,12 +258,13 @@ describe('weeks and people', () => {
     expect(by.get('1')).toEqual({ direct: 9.6, indirect: 7.6, leave: 7.6, leaveDays: ['2026-10-26'] });
   });
 
-  it('weekly history: Std h of the export over direct hours, per line and for the floor', () => {
+  it('Std h of the export over direct hours, per line and for the floor; PMD and TBP left out', () => {
     const csv = parseHistoryTable([
       ['LaborDtl_CreateDate', 'LaborDtl_LaborQty', 'LaborDtl_LaborHrs', 'Calculated_PlannerID', 'LaborDtl_JobNum'],
       ['2026-10-27T00:00:00', '10', '30', 'UPL', 'J1'],
       ['2026-10-28T00:00:00', '5', '15.2', 'ASSY', 'J2'],
       ['2026-10-29T00:00:00', '5', '50', 'PMD', 'J3'],
+      ['2026-10-29T00:00:00', '5', '40', 'TBP', 'J7'],
       ['2026-11-04T00:00:00', '5', '20', 'TABLE', 'J4'],
       ['2026-11-05T00:00:00', '5', '4', 'ODD', 'J5'],
       ['bad', '1', '1', 'UPL', 'J6'],
@@ -272,22 +274,26 @@ describe('weeks and people', () => {
       entry('u', '2026-10-27', 38), // UPL
       entry('a', '2026-10-27', 19), // Assembly
       entry('p', '2026-10-27', 38), // PMD: out
+      entry('b', '2026-10-27', 38), // TBP: out
       entry('x', '2026-10-27', 5), // nobody's line: the floor only
       entry('a', '2026-10-28', 7.6, 'leave'),
       entry('u', '2026-10-28', 7.6, 'indirect'),
     ];
-    const groups: Record<string, ReturnType<typeof historyGroup>> = { u: historyGroup('UPL_GLUING'), a: historyGroup('ASSY'), p: historyGroup('PMD') };
-    const weeks = ['2026-10-26', '2026-11-02'];
-    const out = weeklyHistory(csv.rows, attendance, (id) => groups[id] ?? null, weeks, new Set(['2026-10-26']));
+    const groups: Record<string, ReturnType<typeof historyGroup>> = { u: historyGroup('UPL_GLUING'), a: historyGroup('ASSY'), p: historyGroup('PMD'), b: historyGroup('TBP') };
+    const weeks = chartBuckets('2026-10-26', '2026-11-09').buckets.slice(0, 2); // 15 days → weeks
+    const out = efficiencySeries(
+      { rows: csv.rows, done: [], attendance, covered: new Set(['2026-10-26']), groupOf: (id) => groups[id] ?? null },
+      weeks,
+    );
     expect(out.lines.map((l) => [l.name, l.points.map((p) => p.efficiency)])).toEqual([
       ['UPL', [79, null]],
       ['Assembly', [80, null]],
       ['Table', [null, null]],
     ]);
-    expect(out.lines.find((l) => l.name === 'Table')!.points[1]).toEqual({ stdHours: 20, directHours: null, efficiency: null });
-    // 45.2 Std h over 62 h; PMD's hours and Std h left out; ODD counts for the floor.
-    expect(out.floor[0]).toEqual({ stdHours: 45.2, directHours: 62, efficiency: 73 });
-    expect(out.floor[1]).toEqual({ stdHours: 24, directHours: null, efficiency: null });
+    // A week no timesheet covers and nobody confirmed: Std h, no hours.
+    expect(out.lines.find((l) => l.name === 'Table')!.points[1]).toEqual({ stdHours: 20, timesheetHours: 0, estimatedHours: 0, efficiency: null, basis: null });
+    // 45.2 Std h over 62 h; PMD's and TBP's hours and Std h left out; ODD counts for the floor.
+    expect(out.floor[0]).toMatchObject({ stdHours: 45.2, timesheetHours: 62, efficiency: 73, basis: 'timesheet' });
   });
 
   it('maps planners, board line keys and Skills onto the history lines', () => {

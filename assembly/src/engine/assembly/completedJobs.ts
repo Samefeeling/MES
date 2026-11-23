@@ -19,6 +19,10 @@
  * dashboard and its operators record who ran them there — so asking an
  * Assembly supervisor who made them would ask the wrong person.
  *
+ * TBP is left out as well (`NOT_ASSESSED_PLANNERS`): the line is not measured
+ * while its equipment waits to be replaced, so nobody is asked who finished
+ * its orders and none of them reach `ASSY_CompletedJobs`.
+ *
  * ## The hours
  *
  * `LaborDtl_LaborHrs` is read as **standard** hours: in every sample the hours
@@ -154,10 +158,19 @@ export function parseCompletedJobsCsv(text: string): {
   return { rows, errors };
 }
 
+/** Lines whose completions nobody is asked about (see the file comment). */
+export const NOT_ASSESSED_PLANNERS: readonly string[] = ['TBP'];
+
 /** Assembly's rows: every planner but PMD (see the file comment). */
 export const isAssemblyPlanner = (planner: string): boolean => {
   const p = planner.trim().toUpperCase();
   return p !== '' && p !== 'PMD';
+};
+
+/** A line the completed-orders dialog asks about: Assembly's, and measured. */
+export const isAssessedLine = (lineOrPlanner: string): boolean => {
+  const p = lineOrPlanner.trim().toUpperCase();
+  return isAssemblyPlanner(p) && !NOT_ASSESSED_PLANNERS.includes(p);
 };
 
 /** Assembly's labour entries from `from` to `to` (inclusive), one completion per order per day. */
@@ -168,7 +181,7 @@ export function completionsBetween(
 ): Completion[] {
   const byKey = new Map<string, Completion>();
   for (const row of rows) {
-    if (!isAssemblyPlanner(row.planner) || row.day < from || row.day > to) continue;
+    if (!isAssessedLine(row.planner) || row.day < from || row.day > to) continue;
     const key = `${row.jobNum}|${row.day}`;
     const stamp = `${row.day}T${row.time || '00:00'}`;
     const held = byKey.get(key);

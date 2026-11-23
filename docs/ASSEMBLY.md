@@ -61,6 +61,8 @@ The board's own shift entries (Output, Reject, Booked h…) stay in `ASSY_Planni
 
 ### Completed orders — who finished what
 
+**TBP is not assessed** while its equipment waits to be replaced: the dialog asks about no TBP order (by its planner, or by the board's line for it), nothing of TBP is written to `ASSY_CompletedJobs`, and KPIs · Assembly leaves TBP out everywhere — its standard hours in `CompletedJobs.csv`, the hours of people whose line is TBP, any older TBP completion, and its people in By person. A finished TBP order still leaves `ASSY_Planning` as any other does. To measure it again, remove it from `NOT_ASSESSED_PLANNERS` (`assembly/src/engine/assembly/completedJobs.ts`) and `NOT_ASSESSED` (`src/core/assembly-history.ts`).
+
 From **`CompletedJobs.csv`** — Epicor's labour entries of finished quantities (`LaborDtl_JobNum`, `LaborDtl_CreateDate`, `LaborDtl_LaborQty`, `LaborDtl_LaborHrs`, `Calculated_PlannerID`, `JobAsmbl_PartNum`, …), exported to the same folder as the PMD dashboard's `Planning.csv` (override with `VITE_COMPLETED_JOBS_CSV_PATH` / `_URL`).
 
 1. Every morning the Assembly board reads the file and takes **every planner but PMD** (moulding records its own operators) for the days from the last working day up to yesterday — Friday to Sunday on a Monday, and across a public holiday or RDO from the FactoryCalendar. An order reported twice in a day is one completion.

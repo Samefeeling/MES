@@ -7,6 +7,7 @@ import {
   doneQtyThrough,
   confirmWindow,
   isAssemblyPlanner,
+  isAssessedLine,
   parseCompletedJobsCsv,
 } from '@/engine/assembly/completedJobs';
 import { setFactoryCalendar } from '@/engine/assembly/dates';
@@ -50,10 +51,21 @@ describe('CompletedJobs.csv', () => {
     expect(isAssemblyPlanner('')).toBe(false);
   });
 
+  it('leaves TBP out too: the line is not measured, so nobody is asked about it', () => {
+    expect(['TABLE', 'ASSY', 'UPL', 'Assembly', 'UPL-Gluing'].every(isAssessedLine)).toBe(true);
+    expect(['TBP', ' tbp ', 'PMD', ''].some(isAssessedLine)).toBe(false);
+    const { rows } = parseCompletedJobsCsv(
+      'LaborDtl_CreateDate,LaborDtl_LaborQty,LaborDtl_LaborHrs,Calculated_PlannerID,LaborDtl_JobNum\n' +
+        '2026-11-18T00:00:00,4,2,TBP,T1\n2026-11-18T00:00:00,4,2,TABLE,T2\n',
+    );
+    expect(completionsBetween(rows, '2026-11-18', '2026-11-18').map((c) => c.jobNum)).toEqual(['T2']);
+  });
+
   it('folds an order reported twice in a day into one completion', () => {
     const { rows } = parseCompletedJobsCsv(sample);
     const done = completionsBetween(rows, '2026-11-18', '2026-11-18');
-    expect(done.map((c) => c.jobNum)).toEqual(['018474-10-1', '018474-4-1', '508202', 'SFM508163']);
+    // 508202 is TBP's: not asked about.
+    expect(done.map((c) => c.jobNum)).toEqual(['018474-10-1', '018474-4-1', 'SFM508163']);
     expect(done[0]).toMatchObject({ key: '018474-10-1|2026-11-18', qty: 150, hours: 18.75, entries: 2, lastAt: '2026-11-18T15:03' });
     expect(completionsBetween(rows, '2026-11-19', '2026-11-20')).toEqual([]);
   });

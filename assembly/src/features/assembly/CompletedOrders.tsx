@@ -324,7 +324,7 @@ export function CompletedOrdersDialog({ board }: { board: AssemblyGanttView | nu
           </button>
         </div>
         <p className="ot-note">
-          Finished in Epicor (CompletedJobs.csv), PMD excepted, grouped by line. Each order offers its line’s group on
+          Finished in Epicor (CompletedJobs.csv), PMD and TBP excepted (TBP is not measured), grouped by line. Each order offers its line’s group on
           the board that day, less anyone on leave. Drag a name onto an order, or Fill line, then confirm a line at a time. The names go to {s.local ? 'this demo only' : 'ASSY_CompletedJobs'}, which KPIs · Assembly reads.
         </p>
         {gated && <p className="ot-gate">Sign in as {gate} to confirm.</p>}

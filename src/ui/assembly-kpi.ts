@@ -19,7 +19,7 @@ import {
   type AttendanceEntry,
   type PersonAttendance,
 } from '../core/attendance';
-import { HISTORY_GROUPS, historyGroup, type HistoryGroup, type HistoryRow } from '../core/assembly-history';
+import { HISTORY_GROUPS, historyGroup, isAssessedGroup, type HistoryGroup, type HistoryRow } from '../core/assembly-history';
 import { chartBuckets, efficiencySeries, personEfficiency, type EffPoint, type Grain } from '../core/assembly-efficiency';
 import { ASSEMBLY_THRESHOLDS, PRODUCTIVE_HOURS_PER_PERSON, colourClass } from '../core/assembly-metrics';
 import {
@@ -196,6 +196,14 @@ function statTiles(sum: CompletionSummary): string {
   </div>`;
 }
 
+/**
+ * The completions the page measures: every line but TBP (and PMD), which are
+ * not assessed — see `NOT_ASSESSED`.
+ */
+function assessedDays(rows: readonly AssemblyResult[]): CompletedOrderDay[] {
+  return completedOrderDays(rows).filter((d) => isAssessedGroup(historyGroup(d.line)));
+}
+
 /** Supervisors and managers are on the roster but finish no orders themselves. */
 const OFF_THE_FLOOR = /supervisor|manager/i;
 
@@ -254,7 +262,7 @@ function pointDetail(p: EffPoint): string | null {
 /** The From–To range's efficiency, in days, weeks or months: every line, or the person picked beside the whole floor. */
 function trendModel(S: PageState, done: readonly CompletedOrderDay[]): TrendModel | null {
   const att = attendanceView(S);
-  const busy = new Set([...done.map((d) => d.day), ...(S.history ?? []).filter((r) => r.group !== 'PMD').map((r) => r.day)]);
+  const busy = new Set([...done.map((d) => d.day), ...(S.history ?? []).filter((r) => isAssessedGroup(r.group)).map((r) => r.day)]);
   const { grain, buckets } = chartBuckets(S.from, S.to, (day) => busy.has(day));
   if (!buckets.length) return null;
   const input = {
@@ -437,7 +445,7 @@ function detailTables(done: readonly CompletedOrderDay[], S: PageState): string 
   /** Away all period: leave, and no direct hour on the timesheet (when there is one). */
   const onLeave = (name: string): boolean => leaveIn(name) > 0 && !((clockOf(name)?.direct ?? 0) > 0);
   const away = S.roster
-    .filter((r) => !OFF_THE_FLOOR.test(r.position) && !worked.has(r.name.toLowerCase()))
+    .filter((r) => !OFF_THE_FLOOR.test(r.position) && isAssessedGroup(historyGroup(r.line)) && !worked.has(r.name.toLowerCase()))
     .map((r) => r.name)
     .sort((a, b) => Number(onLeave(b)) - Number(onLeave(a)) || a.localeCompare(b));
   const picked = (name: string): string =>
@@ -615,7 +623,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
           )}</button>`,
       ).join('');
 
-    const done = completedOrderDays(S.rows);
+    const done = assessedDays(S.rows);
     const total = completionSummary(done);
     const lines = completionsByLine(done, LINE_ORDER);
     const body = S.loading
@@ -711,7 +719,7 @@ export async function renderAssemblyKpi(dal: AssemblyDataLayer): Promise<void> {
       </div>`;
     wire();
     trendObserver?.disconnect();
-    trendObserver = S.loading ? null : drawTrend(app, trendModel(S, completedOrderDays(S.rows)));
+    trendObserver = S.loading ? null : drawTrend(app, trendModel(S, assessedDays(S.rows)));
   }
 
   function wire(): void {

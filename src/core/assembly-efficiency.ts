@@ -18,7 +18,7 @@
  */
 
 import { mondayOf, type CompletedOrderDay } from './assembly-completions';
-import { HISTORY_GROUPS, historyGroup, type HistoryGroup, type HistoryRow } from './assembly-history';
+import { HISTORY_GROUPS, historyGroup, isAssessedGroup, type HistoryGroup, type HistoryRow } from './assembly-history';
 import type { AttendanceEntry } from './attendance';
 import { PRODUCTIVE_HOURS_PER_PERSON } from './assembly-metrics';
 
@@ -145,7 +145,7 @@ export function efficiencySeries(
   };
   if (input.rows) {
     for (const r of input.rows) {
-      if (r.group === 'PMD' || !r.planner || !inRange(r.day)) continue;
+      if (!isAssessedGroup(r.group) || !r.planner || !inRange(r.day)) continue;
       if (r.group) add(std, `${r.day}|${r.group}`, r.stdHours);
       add(std, `${r.day}|*`, r.stdHours);
     }
@@ -153,7 +153,7 @@ export function efficiencySeries(
   for (const d of input.done) {
     if (!inRange(d.day)) continue;
     const g = historyGroup(d.line);
-    if (g === 'PMD') continue;
+    if (!isAssessedGroup(g)) continue;
     if (!input.rows) {
       if (g) add(std, `${d.day}|${g}`, d.stdHours);
       add(std, `${d.day}|*`, d.stdHours);
@@ -169,7 +169,7 @@ export function efficiencySeries(
   for (const e of input.attendance) {
     if (e.kind !== 'direct' || !inRange(e.day)) continue;
     const g = input.groupOf(e.employeeId);
-    if (g === 'PMD') continue;
+    if (!isAssessedGroup(g)) continue;
     if (g) add(direct, `${e.day}|${g}`, e.hours);
     add(direct, `${e.day}|*`, e.hours);
   }
