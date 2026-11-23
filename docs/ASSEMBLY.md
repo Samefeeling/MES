@@ -57,6 +57,8 @@ The **Efficiency** chart is **Std h finished in `CompletedJobs.csv` ÷ hours**, 
 
 The headline tiles and the line table keep the person-day measure for now.
 
+The line table's columns can be resized by dragging a header's right edge; the widths are kept in this browser, and double-clicking an edge resets them.
+
 Per person, an order's Std h is shared equally among the people who finished it. **Order done** in the completions list marks the day the export's running total reached the order's quantity (`JobCompleted`).
 
 The board's own shift entries (Output, Reject, Booked h…) stay in `ASSY_Planning` for the board; they are no longer on this page, because they leave with the order.
