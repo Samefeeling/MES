@@ -13,11 +13,15 @@
 // The registry is per-device (localStorage): confirmation is a statement
 // by THIS iPad's worker that this press is really running this order.
 // Keys are `machine|shiftId|job`; entries self-prune once the shift date
-// is more than PRUNE_DAYS old, so the list never grows unbounded.
+// is more than PRUNE_DAYS old, so the list never grows unbounded. That is
+// longer than the live mirror keeps unsigned work (62 days, see
+// dal/sharepoint/rows LIVE_HARD_CAP_MS): the mirror only pushes a confirmed
+// tuple, and a confirmation pruned after 3 days left an older sheet nobody
+// signed stuck on the iPad, out of sight of KPIs.
 // ---------------------------------------------------------------------
 
 const STORE_KEY = 'pmd_confirmed_tuples_v1';
-const PRUNE_DAYS = 3;
+const PRUNE_DAYS = 64;
 
 export function confirmKey(machineCode: string, shiftId: string, jobNumber: string): string {
   return `${machineCode}|${shiftId}|${jobNumber}`;

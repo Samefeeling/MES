@@ -94,6 +94,14 @@ describe('the standby press of a shift is not held to its plan', () => {
     expect(pct(judged)).toBe(75); // P4 counts, nothing credited until signed
   });
 
+  it('a press with one order signed and one not is crewed once, and is not the standby', () => {
+    // P4's first order was signed (its operator is among the 4), its second
+    // is not: counting P4 as crewed again would make 5 people for 5 presses.
+    const lines = [...four, press('P4', 3, 0, { jobNumber: 'J-P4b', unsigned: true }), press('S', 7, 0)];
+    const judged = withStandbyPress(lines, operators(4));
+    expect(standbyOf(judged)).toEqual(['S']);
+  });
+
   it('output on a press with nothing planned is no part of it', () => {
     const extra: AttainmentTuple = {
       machineCode: 'X', shiftId: SHIFT, jobNumber: 'J-X', planned: 0, good: 50, credited: 0, source: 'unscheduled',

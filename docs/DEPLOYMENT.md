@@ -486,7 +486,10 @@ this set:
 | `SchedulePlan` | Number | **N (add when ready)** | The pieces that shift's plan asked for (0 = nothing planned). The weight ScheduleAttain needs: a period is Σ(ScheduleAttain × SchedulePlan) ÷ Σ SchedulePlan. Without it the KPI page can only average the shifts. See `docs/kpi-shift-target.md`. |
 
 PMD_LiveStatus mirrors PMD_Production's schema (same field map). The
-list re-uses the same DEFAULT_FIELDS section.
+list re-uses the same DEFAULT_FIELDS section. A row is work not signed off
+yet: Sign Off & Save moves it to PMD_Production. One that carries a machine
+status is kept 62 days after its shift (then swept by the next read), so the
+KPI page can show it as unsigned; one with no status is swept 8 h after.
 
 ## PMD_ShiftPlan (the plan of record of each press-shift)
 

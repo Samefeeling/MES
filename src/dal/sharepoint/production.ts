@@ -21,6 +21,8 @@ import {
   type HeaderRow,
   shiftEndedLongAgo,
   LIVE_HARD_CAP_MS,
+  DEVICE_COPY_MS,
+  mirrorSignature,
   isStaleLiveHeader,
   productionMatches,
   timelineOf,
@@ -115,6 +117,17 @@ export class SharePointProduction extends SharePointPlanning {
 
   protected static readonly DIRTY_TUPLES_KEY = 'pmd_dirty_tuples_v1';
 
+  /**
+   * The signature (rows.ts `mirrorSignature`) of what this device last got
+   * onto PMD_LiveStatus for each tuple it authored. A finished shift's copy
+   * whose signature matches is safely on the server: it is not pushed again
+   * (so a row a supervisor deleted by hand stays deleted) and the device may
+   * let its own copy go. Persisted beside editCache, pruned to its keys.
+   */
+  protected mirrored = new Map<string, string>();
+
+  protected static readonly MIRRORED_KEY = 'pmd_mirrored_v1';
+
   /** PMD_Production.ScheduleAttain is a number column formatted as a
    *  percentage (stores 0.875 for 87.5 %). Asked once per session (scheduleAttainAsFraction). */
   protected scheduleAttainFraction: Promise<boolean> | null = null;
@@ -167,6 +180,21 @@ export class SharePointProduction extends SharePointPlanning {
     }
   }
 
+  protected rehydrateMirrored(): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      const raw = localStorage.getItem(SharePointProduction.MIRRORED_KEY);
+      for (const [k, v] of raw ? (JSON.parse(raw) as Array<[string, string]>) : []) this.mirrored.set(k, v);
+    } catch (e) {
+      console.warn('[pmd] could not rehydrate mirror signatures:', e);
+    }
+  }
+
+  /** Is this device's copy of the tuple the one PMD_LiveStatus holds? */
+  protected safelyMirrored(key: string, slots: ProductionRecord[]): boolean {
+    return this.mirrored.get(key) === mirrorSignature(slots);
+  }
+
   protected rehydrateDirtyTuples(): void {
     if (typeof localStorage === 'undefined') {
       // Node test env: no persistence, no migration needed.
@@ -208,6 +236,13 @@ export class SharePointProduction extends SharePointPlanning {
         for (const k of this.dirtyTuples) {
           if (!this.editCache.has(k)) this.dirtyTuples.delete(k);
         }
+        for (const k of Array.from(this.mirrored.keys())) {
+          if (!this.editCache.has(k)) this.mirrored.delete(k);
+        }
+        localStorage.setItem(
+          SharePointProduction.MIRRORED_KEY,
+          JSON.stringify(Array.from(this.mirrored.entries())),
+        );
         const payload = JSON.stringify(Array.from(this.editCache.entries()));
         localStorage.setItem(SharePointProduction.EDIT_CACHE_KEY, payload);
         localStorage.setItem(
@@ -580,10 +615,11 @@ export class SharePointProduction extends SharePointPlanning {
     const liveFresh: HeaderRow[] = [];
     for (const h of liveHeaders) {
       const hSid = `${h.date}-${h.shift}`;
-      // Hard 24 h cap (Task: never-signed-off rows lingering forever):
-      // sweep ANY live row whose shift ended > 24 h ago, status or not.
-      // This is the only path that removes an OLD row that DOES carry
-      // status — isStaleLiveHeader deliberately leaves those alone. A
+      // Retention cap (LIVE_HARD_CAP_MS, 62 days): sweep ANY live row whose
+      // shift ended longer ago than that, status or not. This is the only
+      // path that removes an OLD row that DOES carry status —
+      // isStaleLiveHeader deliberately leaves those alone. Within the cap
+      // such a row is unsigned work, and KPIs must still see it as such. A
       // tuple actively unlocked for correction is exempt (its live mirror
       // is the supervisor's in-progress re-edit).
       if (
@@ -638,9 +674,8 @@ export class SharePointProduction extends SharePointPlanning {
     // server rows left to react to (e.g. the supervisor already deleted
     // the junk from PMD_LiveStatus by hand). Gating it on "saw a stale
     // server row" was the bug that let pushLiveSnapshot keep re-mirroring
-    // the local copy straight back onto the list. Status-empty only here
-    // so we never drop real local work; OLD rows that carry status are
-    // left in the cache but pushLiveSnapshot refuses to re-broadcast them.
+    // the local copy straight back onto the list. Real local work (status
+    // set) goes only once the server has it, or past LIVE_HARD_CAP_MS.
     for (const k of Array.from(this.editCache.keys())) {
       const slots = this.editCache.get(k) ?? [];
       const sid = k.split('|')[1];
@@ -650,10 +685,21 @@ export class SharePointProduction extends SharePointPlanning {
       // shift, and dropping it mid-edit would lose the correction before
       // re-sign-off commits it.
       if (this.unlockedTuples.has(k)) continue;
-      // Hard 24 h cap mirrors the live-row sweep above so an abandoned
-      // in-progress job (status set, never signed off) doesn't get
-      // re-broadcast from this device's localStorage indefinitely.
+      // The retention cap mirrors the live-row sweep above.
       if (shiftEndedLongAgo(sid, liveNow, LIVE_HARD_CAP_MS)) {
+        this.editCache.delete(k);
+        purged = true;
+        continue;
+      }
+      // A day after the shift, this device lets its copy go once the server
+      // has it: a copy it only viewed, or one whose last state it pushed.
+      // Its own copy that never reached PMD_LiveStatus is the only record of
+      // that work — kept, and pushed whenever the mirror next can. (Dropping
+      // every copy at 24 h was one way a forgotten sign-off went missing.)
+      if (
+        shiftEndedLongAgo(sid, liveNow, DEVICE_COPY_MS) &&
+        (!this.dirtyTuples.has(k) || this.safelyMirrored(k, slots))
+      ) {
         this.editCache.delete(k);
         purged = true;
         continue;

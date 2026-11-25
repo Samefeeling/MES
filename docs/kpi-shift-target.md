@@ -184,11 +184,27 @@ Lines outside the comparison:
   *unscheduled*: neither credited nor asked for; the tooltip reports it.
 - Output of an order Planning.csv no longer holds (Epicor drops finished
   jobs) uses the ShiftTarget saved when it ran.
-- A shift with unsigned records and no signed ones is *awaiting sign-off*:
-  its plan counts and nothing is credited until it is signed — the KPI page
-  credits signed output only. The row is tagged **UNSIGNED** so it is not
-  read as a press that never ran. (It used to be left out of both sides,
-  which let a shift nobody signed take its plan out of the comparison.)
+- Work booked and not signed off is *awaiting sign-off*: its plan counts
+  and nothing is credited until it is signed — the KPI page credits signed
+  output only. Every (press, shift, order) with production on its sheet
+  (a machine status, a counter, a reject) and no signed record is listed
+  (`core/unsigned`), planned or not, and whatever else of the shift was
+  signed. The press row, the shift row and TOTAL are tagged **UNSIGNED**
+  (**2 UNSIGNED** for two), and the tag's tooltip names the shift and order
+  of each. (It used to be left out of both sides, which let a shift nobody
+  signed take its plan out of the comparison; then it was tagged only when
+  every order of a shift was unsigned and planned, so an order left
+  unsigned beside a signed one, or on a press nobody planned, went
+  unmarked.)
+- Where the KPI page finds unsigned work: PMD_LiveStatus, which each iPad
+  keeps filled from its own cache. Real work (a machine status on any slot)
+  is mirrored and kept for 62 days, or until it is signed off; the iPad
+  keeps its own copy until that copy is on the list (and a day after the
+  shift). It used to stop mirroring 8 h after the shift and every read
+  deleted the list's rows a day after it, so a sheet filled in the next
+  morning, one whose pushes failed while the shift ran, or any sign-off
+  forgotten for over a day stayed on the iPad or vanished, and the press
+  read "not run". A status-empty sheet (a mis-tap) is still swept after 8 h.
 - A planned order with no rate, or a run order with no saved ShiftTarget,
   has no known quantity: the total shows /— and no percentage; hover for
   coverage.

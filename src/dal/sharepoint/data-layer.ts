@@ -4,7 +4,7 @@ import type { PmdDataLayer } from '../types';
 import { type SharePointOptions, LISTS } from './schema';
 import type { ProductionRecord, ProductDieColor } from '../../types';
 import { type RollbackAction, runRollback } from './http';
-import { shiftEndedLongAgo, aggregateSlots, hasMeaningfulProgress } from './rows';
+import { shiftEndedLongAgo, aggregateSlots, hasMeaningfulProgress, mirrorSignature, LIVE_HARD_CAP_MS } from './rows';
 import {
   type SavedShiftPlan,
   keptPlanSnapshot,
@@ -80,6 +80,7 @@ export class SharePointDataLayer extends SharePointRecords implements PmdDataLay
     this.rehydrateEditCache();
     this.rehydrateUnlockedTuples();
     this.rehydrateDirtyTuples();
+    this.rehydrateMirrored();
   }
 
   /** Read (or mint + persist) this device's stable id. */
@@ -672,18 +673,25 @@ export class SharePointDataLayer extends SharePointRecords implements PmdDataLay
       // ("this order really runs on this press, by these people") is
       // broadcast. Browse artefacts stay local until discarded.
       if (this.liveGate && !this.liveGate(machineCode, shiftId, jobNumber)) continue;
-      // Never mirror a shift that is well over. PMD_LiveStatus is an
-      // IN-PROGRESS board; an old un-signed-off tuple that is still
-      // sitting in THIS device's localStorage editCache (e.g. an
-      // abandoned 03/06 experiment, or a mis-tap from days ago) must
-      // not be re-broadcast every 60 s poll tick. That re-broadcast is
-      // exactly why rows deleted by hand from PMD_LiveStatus kept
-      // reappearing: deleting the server row never touched the device
-      // cache that recreated it. shiftEndedLongAgo also covers the
-      // no-status junk, but the key win here is that it catches OLD
-      // rows that DO carry status, which the listProduction junk
-      // filter deliberately leaves alone.
-      if (shiftEndedLongAgo(shiftId, now)) continue;
+      // How long after its shift a tuple is still mirrored. It used to stop
+      // 8 h after the shift ended — and that was a way unsigned work stayed
+      // on the iPad alone: a sheet back-filled the next morning (Afternoon
+      // ends 23:00, so from 07:00), or one whose pushes failed while the
+      // shift ran (Wi-Fi, an expired sign-in, the iPad asleep), never
+      // reached PMD_LiveStatus, so KPIs could not see it was unsigned.
+      //   - Real work (a machine status on any slot) is mirrored for as long
+      //     as it is kept (LIVE_HARD_CAP_MS) — until it is signed off.
+      //   - A status-empty tuple stops at 8 h: it is a mis-tap, swept from
+      //     the list on read (isStaleLiveHeader) and from the cache.
+      //   - Once the shift is over, a tuple is pushed only when it differs
+      //     from what this device last got onto the list (`mirrored`). That
+      //     keeps the retained tuples from costing a round trip a minute,
+      //     and a row a supervisor deleted by hand from coming back — the
+      //     reason the old 8 h stop was there.
+      if (shiftEndedLongAgo(shiftId, now, LIVE_HARD_CAP_MS)) continue;
+      if (shiftEndedLongAgo(shiftId, now) && !slots.some((s) => s.statusCode)) continue;
+      const signature = mirrorSignature(slots);
+      if (shiftEndedLongAgo(shiftId, now, 0) && this.mirrored.get(key) === signature) continue;
       // Read-only devices (PC viewer with no supervisor signed in)
       // never push. Without this gate a stale local cache on a viewer
       // would mirror straight back over the iPad's fresh data on every
@@ -750,6 +758,8 @@ export class SharePointDataLayer extends SharePointRecords implements PmdDataLay
               slots,
             );
           }
+          this.mirrored.set(key, signature);
+          this.persistEditCache();
         } catch (e) {
           // Snapshot push is best-effort; never propagate. Recorded for
           // the mirror-health badge so a silently-failing iPad is

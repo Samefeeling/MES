@@ -384,6 +384,8 @@ export function withStandbyPress(
 
   interface Press {
     key: string; planned: boolean; plan: number; earned: number; good: number; unsigned: boolean;
+    /** Every line of it is unsigned: nothing of it is signed, so nobody on it is in the crews. */
+    allUnsigned: boolean;
     /** A line of it has no known plan or rate: what it earned is not known. */
     unknown: boolean;
   }
@@ -394,13 +396,14 @@ export function withStandbyPress(
     if (!presses) byShift.set(line.shiftId, (presses = new Map()));
     const key = pressKey(line);
     let press = presses.get(key);
-    if (!press) presses.set(key, (press = { key, planned: false, plan: 0, earned: 0, good: 0, unsigned: false, unknown: false }));
+    if (!press) presses.set(key, (press = { key, planned: false, plan: 0, earned: 0, good: 0, unsigned: false, allUnsigned: true, unknown: false }));
     // A plan whose rate nobody knows is a plan all the same.
     if ((line.planned ?? 0) > 0 || line.planned == null) press.planned = true;
     press.plan += plan(line);
     press.earned += earned(line);
     press.good += line.good;
     if (line.unsigned) press.unsigned = true;
+    else press.allUnsigned = false;
     if (line.planned == null || (inHours && line.plannedHrs == null)) press.unknown = true;
   }
 
@@ -412,7 +415,10 @@ export function withStandbyPress(
     const attended = planned.filter((press) => !nobodyAt.has(press.key));
     const operators = operatorsOn(shiftId, new Set(attended.map((press) => press.key)));
     if (operators < 1) continue;
-    const crewed = operators + attended.filter((press) => press.unsigned).length;
+    // A press with nothing signed was run by somebody the signed sheets do
+    // not name. One with a signed order beside an unsigned one has its
+    // operator in `operators` already.
+    const crewed = operators + attended.filter((press) => press.allUnsigned).length;
     if (attended.length <= crewed) continue;
     const [spare] = attended
       // Not a press that ran on a plan nobody can price: its place in the

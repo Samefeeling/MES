@@ -13,6 +13,7 @@ import type {
 import { dieLookup, planningOrderMatchesMachine } from '../core/schedule';
 import { aggregate, countSetupEvents, type Kpi } from '../core/metrics';
 import { repairFromHistory } from '../core/order-history';
+import { markUnsignedLines, shiftsAwaitingSignOff, unsignedLabel, unsignedTuples, type UnsignedTuple } from '../core/unsigned';
 import {
   COLOR_CHANGE_STD_HRS,
   DIE_CHANGE_STD_HRS,
@@ -372,6 +373,8 @@ interface KpiRow {
   /** Per-Job# rollup across every shift in the selected period — drives
    *  the "> Orders" toggle on the machine row. Sorted by output desc. */
   byJobTotal: JobAgg[];
+  /** Order-shifts of the period booked and not signed off (core/unsigned). */
+  unsigned: UnsignedTuple[];
 }
 
 interface KpiState {
@@ -1498,14 +1501,16 @@ async function compute(now = new Date()): Promise<void> {
   // plan still counts and nothing is credited until it is signed, and the
   // table says which shifts those are. Leaving the plan out let a shift
   // nobody signed take its plan out of Schedule Adherence with it.
-  const awaitingSignOff = perMachineRead.map((recs) => {
-    const signed = new Set(recs.filter((r) => r.locked).map((r) => r.shiftId));
-    return new Set(
-      recs
-        .filter((r) => !r.locked && (r.jobNumber || r.statusCode) && !signed.has(r.shiftId))
-        .map((r) => r.shiftId),
-    );
-  });
+  // Every order-shift of the window with work on its sheet and no signed
+  // record (core/unsigned) — whether or not it was planned, and whatever
+  // else of its shift was signed. Only finished shifts: a running shift is
+  // not late signing off.
+  const finishedBy = (sid: string): boolean => {
+    const b = shiftBounds(sid);
+    return !!b && b.end <= now;
+  };
+  const unsignedByMachine = perMachineRead.map((recs) => unsignedTuples(recs, finishedBy));
+  const awaitingSignOff = perMachineRead.map((recs, i) => shiftsAwaitingSignOff(recs, unsignedByMachine[i]));
   // Every finished shift of the window is judged, run or not.
   const periodShifts = finishedShiftsInPeriod(from, to, shiftIds, now);
   // All or nothing over the page, so the floor and category totals never
@@ -1664,7 +1669,7 @@ async function compute(now = new Date()): Promise<void> {
               planCtx,
             ),
           ];
-    return withStandardHours(pieceLines, hoursPerPiece, equalWeight);
+    return withStandardHours(markUnsignedLines(pieceLines, unsignedByMachine[i]), hoursPerPiece, equalWeight);
     });
     // The shift's standby press is contingency, not commitment: where more
     // presses were planned than the shift had operators, one press's plan
@@ -1840,6 +1845,7 @@ async function compute(now = new Date()): Promise<void> {
       operatorsByShift,
       jobsByShift,
       byJobTotal,
+      unsigned: unsignedByMachine[i],
     };
   });
 
@@ -2142,11 +2148,21 @@ function outputCell(a: ComparisonSlice & { output: number }): string {
     + a.output + ' <span class="kpi-exp">/' + plan + '</span></td>';
 }
 
-/** Beside a row's name when every plan line in it booked work nobody has
- *  signed: its 0 is "not signed yet", not "never ran" — or when all it was
- *  planned for was as a shift's standby press: its "—" is "not held to a
- *  plan", not "nothing planned". */
-function unsignedTag(a: ComparisonSlice): string {
+/** Beside a row's name when it holds work booked and not signed off
+ *  (`tuples`, core/unsigned): its figures credit none of it until it is —
+ *  or when all it was planned for was as a shift's standby press: its "—"
+ *  is "not held to a plan", not "nothing planned". `withPress` names the
+ *  press in the tooltip (the TOTAL row's list covers every press). */
+function unsignedTag(a: ComparisonSlice, tuples: ReadonlyArray<UnsignedTuple> = [], withPress = false): string {
+  if (tuples.length) {
+    const shown = tuples.slice(0, 12).map((t) => unsignedLabel(t, withPress));
+    const more = tuples.length > shown.length ? ['… and ' + (tuples.length - shown.length) + ' more'] : [];
+    const title = 'Not signed off yet — booked on the sheet, credited nothing until it is signed:\n'
+      + [...shown, ...more].join('\n')
+      + (a.unsignedLines > 0 ? '\nTheir plan counts: ' + a.unsignedLines + ' planned order-shift' + (a.unsignedLines === 1 ? '' : 's') + '.' : '');
+    return '<span class="kpi-unsigned" title="' + escapeHtml(title) + '">'
+      + (tuples.length > 1 ? tuples.length + ' ' : '') + 'unsigned</span>';
+  }
   if (a.standbyLines > 0 && a.comparisonTotal === 0) {
     return '<span class="kpi-unsigned kpi-standby" title="' + escapeHtml(standbyLine(a).trim()) + '">standby</span>';
   }
@@ -2154,6 +2170,10 @@ function unsignedTag(a: ComparisonSlice): string {
     ? '<span class="kpi-unsigned" title="Booked, not signed off yet: the plan counts, nothing is credited until it is signed.">unsigned</span>'
     : '';
 }
+
+/** The tuples of one shift code (Day / Afternoon / Night). */
+const unsignedOn = (tuples: ReadonlyArray<UnsignedTuple>, code: ShiftCode | null | undefined): UnsignedTuple[] =>
+  code ? tuples.filter((t) => parseShiftId(t.shiftId)?.code === code) : [...tuples];
 
 /** Die / Colour / Insert hour cell judged against the standard allowance
  *  (changeovers × standard, one per order). Blue = within standard,
@@ -3489,7 +3509,7 @@ function render(): void {
             }</button>`
           : '';
         const headRow = `<tr class="kpi-machine">
-          <th>${toggle}${ordersToggle}<span class="kpi-mc-name">${escapeHtml(r.machineCode)}</span>${unsignedTag(rowAgg)}</th>
+          <th>${toggle}${ordersToggle}<span class="kpi-mc-name">${escapeHtml(r.machineCode)}</span>${unsignedTag(rowAgg, unsignedOn(r.unsigned, only))}</th>
           ${operatorCell(only ? r.operatorsByShift[only] : r.operators)}
           ${colorCell()}
           ${
@@ -3529,7 +3549,7 @@ function render(): void {
               } jobs for ${escapeHtml(code)}">${jobsOpen ? '▾' : '▸'}</button>`
             : '<span class="kpi-job-toggle ph"></span>';
           const shiftRow = `<tr class="kpi-shift">
-            <th class="kpi-shift-name">${chev}${escapeHtml(code)}${unsignedTag(a)}</th>
+            <th class="kpi-shift-name">${chev}${escapeHtml(code)}${unsignedTag(a, unsignedOn(r.unsigned, code))}</th>
             ${operatorCell(r.operatorsByShift[code])}
             ${colorCell()}
             ${aggCells(a, null, false)}
@@ -3892,7 +3912,7 @@ function render(): void {
                   const totCls = planColourClass(totPct, S!.thresholds);
                   const t = tableTot;
                   return `<tfoot><tr class="kpi-total">
-                    <th>TOTAL${only ? ' — ' + only : ''}</th>
+                    <th>TOTAL${only ? ' — ' + only : ''}${((u) => (u.length ? unsignedTag(t, u, true) : ''))(unsignedOn(S!.rows.flatMap((r) => r.unsigned), only))}</th>
                     ${only ? crewCell(S!.staffByShift[only]) : crewCell(S!.staff, true)}
                     ${colorCell()}
                     ${outputCell(t)}

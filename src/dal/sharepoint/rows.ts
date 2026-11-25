@@ -351,26 +351,52 @@ export interface RejectEvent {
  * about which order to start.
  */
 /**
- * Grace window after a shift's end during which its rows may still be
- * legitimately written/mirrored (late sign-off, last-minute edits).
- * Past this, a shift can no longer be "in progress".
+ * Grace window after a shift's end. Past it, a sheet with no machine
+ * status on any slot is a mis-tap: swept from PMD_LiveStatus on read
+ * (isStaleLiveHeader) and from a device's cache, and no longer mirrored.
+ * Real work is kept far longer (LIVE_HARD_CAP_MS).
  */
 export const LIVE_STALE_GRACE_MS = 8 * 3600_000;
 
 /**
- * Hard retention cap for PMD_LiveStatus. Any live row whose shift ended
- * more than this ago is swept on the next read, WITH or WITHOUT machine
- * status. The 8 h grace above only sweeps status-empty mis-taps; a real
- * in-progress job that the operator recorded but never signed off would
- * otherwise linger on the live board forever. 24 h still covers the
- * observed late-sign-off pattern (a Night/Afternoon shift back-filled
- * the next morning) while getting stale rows off the live board — and
- * out of the cross-shift Good totals — a day sooner. NOTE: this also
- * bounds how long un-signed-off work survives in a device's editCache;
- * a shift must be signed off within a day of ending or its unsigned
- * data is dropped.
+ * How long unsigned work that carries a machine status is kept: on
+ * PMD_LiveStatus, and on the iPad until it is safely there. 62 days, so
+ * every period KPIs offer (Last month included) still sees a forgotten
+ * sign-off as "unsigned" rather than as a press that never ran.
+ *
+ * It used to be 24 h, and every read on any device — the KPI page on a PC
+ * included — deleted the live rows of a shift that had ended more than a
+ * day ago, and every device dropped its own copy at the same age. A sign-off
+ * forgotten for over a day therefore vanished: the work was lost and the
+ * KPI page scored the press "not run". Status-empty mis-taps are still swept
+ * after 8 h (isStaleLiveHeader); only real work is kept this long, and
+ * signing it off (or a supervisor deleting the row) ends it.
  */
-export const LIVE_HARD_CAP_MS = 24 * 3600_000;
+export const LIVE_HARD_CAP_MS = 62 * 24 * 3600_000;
+
+/**
+ * How long a device keeps its own copy of a finished shift's unsigned work
+ * once that copy is on PMD_LiveStatus (see mirrorSignature). The server
+ * keeps it from then on; a copy that never got there is kept up to
+ * LIVE_HARD_CAP_MS and pushed whenever the device next can.
+ */
+export const DEVICE_COPY_MS = 24 * 3600_000;
+
+/**
+ * What of a tuple the live mirror publishes, as one string: equal strings,
+ * equal PMD_LiveStatus rows. A device records the signature it last pushed,
+ * so it can tell a copy that is safely on the server from one that is not.
+ */
+export function mirrorSignature(slots: ProductionRecord[]): string {
+  const canon = slots.find((s) => s.slotIndex === 0) ?? slots[0];
+  const agg = aggregateSlots(slots);
+  return JSON.stringify([
+    agg.timeline, agg.countStart, agg.countEnd, agg.reject, agg.runTime, agg.downTime,
+    agg.handover, agg.qcChecks, agg.rejectsBySlot,
+    canon?.operator ?? '', canon?.supervisor ?? '', canon?.cycleTime ?? 0, canon?.cavities ?? null,
+    slots.find((s) => s.jobRequired && s.jobRequired > 0)?.jobRequired ?? 0,
+  ]);
+}
 
 /**
  * True when `shiftId`'s shift ended more than `graceMs` ago — i.e. it
@@ -413,9 +439,9 @@ export function shiftEndedLongAgo(
  *
  * NOTE: an OLD row that DOES carry status (e.g. an abandoned 03/06
  * experiment) is NOT junk by this definition — deleting real data is
- * out of scope here. The defence against those re-appearing on the
- * live board lives in pushLiveSnapshot, which refuses to mirror any
- * shift that `shiftEndedLongAgo`.
+ * out of scope here. It is unsigned work, kept until it is signed off or
+ * LIVE_HARD_CAP_MS passes; pushLiveSnapshot re-sends it only when the
+ * device's copy changes, so a row deleted by hand stays deleted.
  *
  * `now` is injected so the helper is testable; pass `new Date()` in
  * the live path.

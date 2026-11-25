@@ -840,6 +840,108 @@ describe('pushLiveSnapshot does not re-broadcast old shifts', () => {
     expect(pushed).not.toContain('EXP1');
     expect(pushed).toContain('CUR1');
   });
+
+  // A sheet back-filled the morning after, or one whose pushes failed while
+  // its shift ran, used to stay on the iPad alone once the shift was 8 h
+  // over — and KPIs could not see it was unsigned.
+  const daysAgo = (n: number): string => {
+    const d = new Date();
+    d.setDate(d.getDate() - n);
+    const pad = (x: number): string => String(x).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
+  const slot = (job: string, shiftId: string, over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: -1, machineCode: 'A', shiftId, jobNumber: job, slotIndex: 0,
+    statusCode: 'R', countStart: 0, countEnd: 10, rejects: '{}', purgeKg: null,
+    rejectCount: 0, bdIssue: '', mangoTicket: '', handoverNote: '', operator: 'Joe',
+    supervisor: 'Sue', qcBy: '', locked: false, lockedBy: '', lockedAt: '',
+    createdAt: '', updatedAt: '', ...over,
+  });
+  function pushHarness(): {
+    dal: SharePointDataLayer;
+    cache: Map<string, Array<Record<string, unknown>>>;
+    pushed: string[];
+    author: (key: string, rows: Array<Record<string, unknown>>) => void;
+  } {
+    store.clear();
+    const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
+    const cache = (dal as unknown as { editCache: Map<string, Array<Record<string, unknown>>> }).editCache;
+    const dirty = (dal as unknown as { dirtyTuples: Set<string> }).dirtyTuples;
+    const pushed: string[] = [];
+    const o = dal as unknown as {
+      listPlanning: () => Promise<unknown[]>;
+      upsertHeaderInto: (list: string, h: { jobNumber: string }) => Promise<void>;
+    };
+    o.listPlanning = async (): Promise<unknown[]> => [];
+    o.upsertHeaderInto = async (_list: string, h: { jobNumber: string }): Promise<void> => {
+      pushed.push(h.jobNumber);
+    };
+    return {
+      dal,
+      cache,
+      pushed,
+      author: (key, rows) => {
+        cache.set(key, rows);
+        dirty.add(key);
+      },
+    };
+  }
+
+  it('pushes a finished shift’s unsigned work days later, once per change', async () => {
+    const { dal, cache, pushed, author } = pushHarness();
+    const sid = `${daysAgo(3)}-Day`;
+    const key = `A|${sid}|LATE1`;
+    author(key, [slot('LATE1', sid)]);
+    await dal.pushLiveSnapshot!();
+    expect(pushed).toEqual(['LATE1']);
+    // Safely on the list: not pushed every minute (nor back over a row a
+    // supervisor deleted by hand).
+    await dal.pushLiveSnapshot!();
+    expect(pushed).toEqual(['LATE1']);
+    // Back-filled further: pushed again.
+    cache.get(key)!.push(slot('LATE1', sid, { slotIndex: 1, countStart: null, countEnd: null }));
+    await dal.pushLiveSnapshot!();
+    expect(pushed).toEqual(['LATE1', 'LATE1']);
+  });
+
+  it('does not push a status-empty tuple 8 h after its shift (a mis-tap)', async () => {
+    const { dal, pushed, author } = pushHarness();
+    const sid = `${daysAgo(2)}-Day`;
+    author(`A|${sid}|TAP1`, [slot('TAP1', sid, { statusCode: '' })]);
+    await dal.pushLiveSnapshot!();
+    expect(pushed).toEqual([]);
+  });
+
+  it('keeps its own copy until it is on the list, then lets it go after a day', async () => {
+    const { dal, cache, pushed, author } = pushHarness();
+    const sid = `${daysAgo(3)}-Day`;
+    const key = `A|${sid}|KEEP1`;
+    author(key, [slot('KEEP1', sid)]);
+    const o = dal as unknown as {
+      fetchHeaders: () => Promise<unknown[]>;
+      fetchRejectsByKey: () => Promise<Map<string, unknown[]>>;
+      fetchBreakdownDetailsByKey: () => Promise<Map<string, unknown>>;
+      upsertHeaderInto: (list: string, h: { jobNumber: string }) => Promise<void>;
+    };
+    o.fetchHeaders = async (): Promise<unknown[]> => [];
+    o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
+    o.fetchBreakdownDetailsByKey = async (): Promise<Map<string, unknown>> => new Map();
+    // The push fails (Wi-Fi, an expired sign-in): the copy is the only record.
+    o.upsertHeaderInto = async (): Promise<void> => {
+      throw new Error('offline');
+    };
+    await dal.pushLiveSnapshot!();
+    await dal.listProduction({ machineCode: 'A' });
+    expect(cache.has(key)).toBe(true);
+    // It gets through: the server holds it, the device lets its copy go.
+    o.upsertHeaderInto = async (_l, h): Promise<void> => {
+      pushed.push(h.jobNumber);
+    };
+    await dal.pushLiveSnapshot!();
+    expect(pushed).toEqual(['KEEP1']);
+    await dal.listProduction({ machineCode: 'A' });
+    expect(cache.has(key)).toBe(false);
+  });
 });
 
 describe('device-class write rule (canWrite hook)', () => {
@@ -2819,12 +2921,16 @@ describe('signed-off history, 24h live cap, and Signoff timestamp', () => {
     expect(prodBody!.JobLeft).toBe(1186);
   });
 
-  it('24h hard cap sweeps an old live row that still carries status', async () => {
+  it('keeps unsigned work for the retention window and sweeps it only past it', async () => {
     store.clear();
     const dal = new SharePointDataLayer({ siteUrl: 'https://example.sharepoint.com/sites/x' });
-    const old = new Date();
-    old.setDate(old.getDate() - 3); // 3 days ago → past the 24h cap
-    const oldDate = dayId(old);
+    const at = (days: number): string => {
+      const d = new Date();
+      d.setDate(d.getDate() - days);
+      return dayId(d);
+    };
+    const recent = at(3); // a sign-off forgotten 3 days ago: still unsigned work
+    const ancient = at(70); // past the 62-day retention
     const deleted: string[] = [];
     const o = dal as unknown as {
       fetchHeaders: (list: string) => Promise<unknown[]>;
@@ -2834,16 +2940,22 @@ describe('signed-off history, 24h live cap, and Signoff timestamp', () => {
     };
     o.fetchHeaders = async (list: string): Promise<unknown[]> =>
       list === 'PMD_LiveStatus'
-        ? [signedHeader({ date: oldDate, jobNumber: 'SFM700', supervisor: '', timeline: 'RRRR············' })]
+        ? [
+            signedHeader({ date: recent, jobNumber: 'SFM700', supervisor: '', timeline: 'RRRR············' }),
+            signedHeader({ date: ancient, jobNumber: 'SFM701', supervisor: '', timeline: 'RRRR············' }),
+          ]
         : [];
     o.fetchRejectsByKey = async (): Promise<Map<string, unknown[]>> => new Map();
     o.fetchBreakdownTimelines = async (): Promise<Map<string, string>> => new Map();
     o.deleteLiveRow = async (_mc, sid, job): Promise<void> => { deleted.push(`${sid}|${job}`); };
 
-    await dal.listProduction({ machineCode: '1300T' });
-    // The old (status-bearing, never-signed-off) live row is swept even
-    // though isStaleLiveHeader (status-empty only) would have kept it.
-    expect(deleted).toContain(`${oldDate}-Day|SFM700`);
+    const rows = await dal.listProduction({ machineCode: '1300T' });
+    // The 3-day-old row used to be deleted by any read at 24 h — the KPI
+    // page then saw a press that never ran. It is kept, and read unsigned.
+    expect(deleted).not.toContain(`${recent}-Day|SFM700`);
+    expect(rows.some((r) => r.jobNumber === 'SFM700' && !r.locked && r.statusCode === 'R')).toBe(true);
+    expect(deleted).toContain(`${ancient}-Day|SFM701`);
+    expect(rows.some((r) => r.jobNumber === 'SFM701')).toBe(false);
   });
 });
 

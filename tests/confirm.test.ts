@@ -13,13 +13,15 @@ describe('confirmKey / pruneConfirmedKeys', () => {
     const keys = [
       confirmKey('125T', '2026-07-09-Day', 'A'), // today
       confirmKey('125T', '2026-07-07-Night', 'B'), // 2 days old — kept
-      confirmKey('125T', '2026-07-01-Day', 'C'), // 8 days old — pruned
+      confirmKey('125T', '2026-05-07-Day', 'D'), // 63 days old — kept: the mirror still pushes it
+      confirmKey('125T', '2026-05-01-Day', 'C'), // 69 days old — pruned
       'garbage-without-pipes',
       '125T|not-a-date-Day|X',
     ];
     expect(pruneConfirmedKeys(keys, '2026-07-09')).toEqual([
       '125T|2026-07-09-Day|A',
       '125T|2026-07-07-Night|B',
+      '125T|2026-05-07-Day|D',
     ]);
   });
 });
