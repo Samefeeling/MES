@@ -439,7 +439,7 @@ function stopsTable(v: OperatorView): string {
         <th class="${p.operator ? '' : 'muted'}" title="${escapeHtml(nameOf(p.operator))}"><span class="kpi-ops-chev" aria-hidden="true">${open ? '▾' : '▸'}</span>${escapeHtml(nameOf(p.operator))}</th>
         <td class="num kpi-ops-grp" title="Die ${hrs(k.dieHrs)} · colour ${hrs(k.colorHrs)} · insert ${hrs(k.insertHrs)}">${hrs(k.setupHrs)}</td>
         <td class="num">${hrs(k.startupHrs)}</td>
-        <td class="num" title="Breakdown and smoko, as Down h in the machine table">${hrs(k.downtimeHrs)}</td>
+        <td class="num" title="Breakdown and Break/Relief, as Down h in the machine table">${hrs(k.downtimeHrs)}</td>
         ${LIMITED.map((kind, i) => flaggedCell(p.tally[kind].flagged, p.tally[kind].events, STOP_LIMIT_HRS[kind], i === 0)).join('')}
         <td class="num kpi-ops-grp ${bd.events ? '' : 'muted'}">${bd.events || '—'}</td>
         <td class="num ${bd.events ? '' : 'muted'}">${bd.events ? bd.hours.toFixed(1) : '—'}</td>

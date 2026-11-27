@@ -46,7 +46,7 @@ dashboard to Assembly's registry being reachable.
 - **Live-column highlight**: the whole current-time column (status + all
   reject rows) is tinted, not just the status cell.
 - **Mango IMPW actions** (`#/kpi`): signed-off shifts that lost time to a
-  breakdown (B slots only — *not* the Down h column, which counts Smoko),
+  breakdown (B slots only — *not* the Down h column, which counts Break/Relief),
   missed the yield threshold, or blew the per-shift reject allowance raise a
   "ready to raise" card with Yes / No, open to anyone at the screen. Yes
   drafts the improvement (`core/impw.ts`) and files it through **Mango's
@@ -446,7 +446,7 @@ never OEE.
 `core/schedule.plannedRuntimeForShift` works out the hours the shift actually
 had to run in — elapsed at `asOf`, less the standard changeover allowance (die
 4 h, colour/insert 30 min; standard, not actual, so a changeover that dragged
-shows as missed output rather than lowering its own bar) and smoko — then shares
+shows as missed output rather than lowering its own bar) and Break/Relief — then shares
 them between the planned orders. Two things it fixes:
 
 - **One press runs one order at a time.** Epicor's Start–Due windows overlap
@@ -461,7 +461,7 @@ them between the planned orders. Two things it fixes:
   two co-running orders cannot deduct eight hours from an eight-hour shift.
 
 This reverses an earlier deliberate note on `expectedScheduledOutputForShift`
-("changeovers and smoko are intentionally not inputs to vs Plan"). That function
+("changeovers and Break/Relief are intentionally not inputs to vs Plan"). That function
 is now a thin wrapper over `plannedRuntimeForShift` with no deduction — planning
 geometry on its own — so there is one model rather than the four that had drifted
 apart in `core/standards.ts`.

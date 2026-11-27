@@ -64,7 +64,7 @@ the shift's eight hours.
 Always counted: a planned press that did not run (0 earned); a shift booked
 and not signed off (plan counts, nothing earned until signed). Not judged: a
 press-shift with nothing planned. The plan is reduced only by the standard
-changeover allowance and smoko the shift booked, and only when the plan left
+changeover allowance and Break/Relief the shift booked, and only when the plan left
 no room for them (`keptPlanShare`).
 
 The sections below say where each line's planned pieces come from; they are
@@ -343,7 +343,7 @@ Every press in every shift gets one row (`shiftPlanChanges`):
 Judging a shift by its row (`keptPlanTuples`): per order, credited =
 min(signed Good, plan); output on an order the row does not have is
 unscheduled. The plan is shared down only when the shift booked more
-changeover allowance and smoko than the plan left room for (the rule
+changeover allowance and Break/Relief than the plan left room for (the rule
 Planning.csv's plan is judged by). Sign-off saves that same figure to
 PMD_Production.ScheduleAttain / SchedulePlan (`keptPlanSnapshot`).
 

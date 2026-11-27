@@ -123,7 +123,7 @@ function result(
  *     change 4 h, a colour or insert change 30 min — not the time it actually
  *     took. Standard, so a die change that dragged to six hours shows up as
  *     missed output instead of quietly lowering the bar it is judged against.
- *   - Smoko is deducted at its actual length. It is a scheduled break, there is
+ *   - Break/Relief (M) is deducted at its actual length. It is a scheduled break, there is
  *     no site standard for it in the data, and a shift cannot be asked to
  *     produce through one.
  *

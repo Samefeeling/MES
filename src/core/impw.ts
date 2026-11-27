@@ -92,7 +92,7 @@ export interface ImpwSlice {
   yieldPct: number;
   /**
    * Hours in B (Breakdown) slots — NOT the KPI table's "Down h", which is
-   * the downtime *kind* and so also carries M (Smoko). Every shift takes a
+   * the downtime *kind* and so also carries M (Break/Relief). Every shift takes a
    * smoko, so triggering on Down h would raise a ticket for every shift
    * ever worked. An unplanned stoppage is B and only B.
    */
@@ -1115,7 +1115,7 @@ export function describeImpwLookupFailure(status: number, body: string): string 
  * Fold a shift's slots into one entry per breakdown cause.
  *
  * B AND ONLY B. The KPI table's "Down h" is the downtime *kind*, which also
- * counts M (Smoko) — every shift takes its break, so anything keyed off
+ * counts M (Break/Relief) — every shift takes its break, so anything keyed off
  * that column would report a breakdown on every shift ever worked. This is
  * the one place the distinction is made, so no caller can get it wrong.
  */
