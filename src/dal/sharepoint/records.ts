@@ -711,6 +711,9 @@ export class SharePointRecords extends SharePointProduction {
     // number (the register did not know the tool) leaves the column alone.
     const cavities = h.cavities && h.cavities > 0 ? h.cavities : 1;
     if (F.cavities && h.cavities != null && h.cavities > 0) body[F.cavities] = h.cavities;
+    // Only an order that has batched carries the field at all, so a tenant
+    // without the column is never told about it for an ordinary shift.
+    if (F.batchJobs && h.batchJobs !== undefined) body[F.batchJobs] = h.batchJobs;
     if (F.totalGood) {
       const cs = h.countStart;
       const ce = h.countEnd;

@@ -12,7 +12,7 @@
 - **Slot**: 30 min. 16 per shift, index 0–15. Slot 0 is "canonical" — holds
   per-job counts/operator/supervisor in the memory model.
 - **Status codes** (9): R Run, B Breakdown, C Colour, D Die, I Insert,
-  M Maintenance, O No-work, P Purge, S Startup.
+  M Break/Relief (labelled "Smoko" before 2026-11), O No-work, P Purge, S Startup.
 - **Defect codes** (10, flat): D01 ShortShot, D02 FlashMelt-out,
   D03 Burnmarks, D04 SinksWarpage, D05 FlowMarks, D06 WhiteStressMarks,
   D07 BubblesBlisters, D08 Cracked, D09 DamagedDirty, D10 Contamination.
@@ -78,7 +78,7 @@ constructor `fieldMap` option, never edit call sites.
 | `PMD_Supervisor` | role title | `Name` (person) |
 | `PMD_Products` | PartNum | `field_1`=desc, `field_2..6`=family/group/class/type/cost |
 | `PMD_Planning` | machine code | `StartDateTime`, `Qty_x002f_Hour`, `DueDate`, `JobHead_JobNum`, `JobHead_PartNum`, `JobHead_PartDescription`, `JobHead_ProdQty`(=Order Qty), `Calculated_RemainingQty`(=Job Left), `Duration`, `Machine`(=DieNumber!), `D_x002f_C` |
-| `PMD_Production` | machine code | `SlotStart_x003a_`(DateTime, "Date"), `ShiftId`, `Status`(timeline), `JobNumber`, `CountStart/End`, `Reject`, `Operator`, `Supervisor`, `RunTime`, `Downtime`, **`Handover`** (multi-line, **must be added** — field map default `''` skips it until present) |
+| `PMD_Production` | machine code | `SlotStart_x003a_`(DateTime, "Date"), `ShiftId`, `Status`(timeline), `JobNumber`, `CountStart/End`, `Reject`, `Operator`, `Supervisor`, `RunTime`, `Downtime`, **`Handover`** (multi-line, **must be added** — field map default `''` skips it until present), `BatchJobs` (single line of text, optional — hot stamp batch `A,B,C`; also on `PMD_LiveStatus`) |
 | `PMD_Rejects` | machine code | `Date`(DateTime), `Shift`, `Timeline`, `JobHead_JobNum`, `RejectCode`, **`RejectCategory` = the slot's machine STATUS** (R/D/C/…) so you can split defects "while running" vs "during a die change", `RejectNumber` |
 | `PMD_BreakDownlog` | machine code | `Date`(DateTime), `Shift`, `JobHead_JobNum`, `JobHead_PartNum`, `StatusTimeline`, `BDCode`, `R_Runtime`,`B_BreakDown`,`C_ColorChange`,`D_DieChange`,`I_InsertChange`,`M_Maintainance`,`O_NoWork`,`P_Purge`,`S_StartUpShutdown` |
 | `PMD_RejectCategories` | code (D01..) | `Description` (label) |
@@ -93,3 +93,31 @@ Gotchas baked into the adapter:
   code is in `Title`.
 - `Title = machine code` is the deliberate, consistent convention across
   Production / Rejects / BreakDownlog (confirmed by the user).
+
+## Hot stamp batches (`core/hs-batch.ts`, `ui/operator/batch.ts`)
+
+On the hot stamp press (`Hstamp` in the register, `HS` in Planning.csv) an
+order already running can take other orders of HS's Job# list with it
+(**＋ Run together**). While the batch runs, the sheet keeps ONE timeline —
+the first order's — and its canonical slot 0 carries the others in
+`batchJobs` (`A,B,C`), which the live mirror carries to `PMD_LiveStatus`
+(when the `BatchJobs` column exists) and the edit cache keeps on the iPad.
+The other orders have no records until sign-off.
+
+Sign-off is one list: Good and Reject per order, no Count Start / End. The
+timeline is then shared out and recorded as ordinary orders:
+
+- each order gets a block of the running (R) half-hours in proportion to
+  Good + Reject, largest remainder, at least one each; blocks laid end to end
+  in plan order (planned start); a non-R half-hour belongs to the block it
+  falls in, one between blocks to the next order;
+- each order's canonical row: `CountStart 0`, `CountEnd = Good + Reject`,
+  `Cavities 1` (pieces, so `TotalGood` = Good); its reject as one code on the
+  last half-hour of its block; `BatchJobs` = the whole batch;
+- an order with nothing entered is left out and stays open;
+- each order is then signed (`lockShift`) in plan order. Every record is
+  written before the first is signed, so a failure half-way leaves ordinary
+  orders to sign one by one.
+
+KPIs, Shift Target, Schedule Adherence and Trace read the result like any
+shift — nothing downstream knows a batch happened.

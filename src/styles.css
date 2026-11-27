@@ -561,6 +561,32 @@ html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe
 .op-meta .m-corun{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px;font-size:12px;font-weight:800;color:#6d28d9;text-transform:none;letter-spacing:0}
 .op-meta .corun-chip{height:auto;padding:4px 10px;border:2px solid #6d28d9;border-radius:999px;background:#f5f3ff;color:#5b21b6;font-size:13px;font-weight:800;cursor:pointer;font-variant-numeric:tabular-nums}
 .op-meta .corun-chip:active{background:#6d28d9;color:#fff}
+/* Hot stamp batch: the orders running on this order's timeline, and the
+   button that adds more. Teal, so it is never read as a co-run. */
+.op-meta .m-batch{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px;font-size:12px;font-weight:800;color:#0f766e;text-transform:none;letter-spacing:0}
+.op-meta .batch-chip{display:inline-flex;align-items:center;gap:4px;padding:4px 6px 4px 10px;border:2px solid #0f766e;border-radius:999px;background:#f0fdfa;color:#115e59;font-size:13px;font-weight:800;font-variant-numeric:tabular-nums}
+.op-meta .batch-chip button{height:auto;min-width:22px;padding:0 4px;border:0;background:none;color:#115e59;font-size:16px;font-weight:800;line-height:1;cursor:pointer}
+.op-meta .batch-add{height:auto;padding:4px 10px;border:2px dashed #0f766e;border-radius:999px;background:#fff;color:#0f766e;font-size:13px;font-weight:800;cursor:pointer}
+.op-meta .batch-add:active{background:#0f766e;color:#fff}
+.mdl:has(.batch-modal){max-width:min(1000px,96vw)}
+.batch-side-note{margin:6px 0 8px;padding:8px 10px;border-radius:8px;background:#f0fdfa;border:1px solid #99f6e4;color:#115e59;font-size:12px;font-weight:700;line-height:1.35}
+.batch-pick-list{display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow:auto;margin:10px 0}
+.batch-pick{display:grid;grid-template-columns:28px 110px 130px 1fr 80px 90px;align-items:center;gap:8px;padding:10px;border:1px solid var(--bd);border-radius:10px;font-size:14px;cursor:pointer}
+.batch-pick input{width:22px;height:22px}
+.batch-pick:has(input:checked){border-color:#0f766e;background:#f0fdfa}
+.batch-pick-desc{color:var(--mu);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.batch-table-wrap{max-height:50vh;overflow:auto;margin:10px 0;border:1px solid var(--bd);border-radius:10px}
+.batch-table{width:100%;border-collapse:collapse;font-size:14px}
+.batch-table th,.batch-table td{padding:8px 10px;border-bottom:1px solid #e2e8f0;text-align:left;white-space:nowrap}
+.batch-table th{position:sticky;top:0;background:#f8fafc;color:var(--mu);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+.batch-table .num{text-align:right;font-variant-numeric:tabular-nums}
+.batch-table input{width:84px;height:40px;font-size:18px;text-align:right;padding:0 8px}
+.batch-table select{height:40px;font-size:14px;max-width:170px}
+.batch-table .batch-part{max-width:150px;overflow:hidden;text-overflow:ellipsis}
+.batch-table th,.batch-table td{padding:8px 8px}
+.batch-first{display:inline-block;margin-left:4px;padding:1px 6px;border-radius:6px;background:#f0fdfa;color:#0f766e;font-size:11px;font-weight:800}
+.batch-error{min-height:1.2em;color:#b91c1c;font-weight:700}
+@media (max-width:760px){.batch-pick{grid-template-columns:28px 1fr 1fr}.batch-pick-desc{display:none}}
 /* Cavities starts at PMD_DieMaster's count and can be lowered when a
    cavity is blocked off. Sized like the count inputs; amber, with the
    number blocked beside the label, whenever it runs below the register —

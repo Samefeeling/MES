@@ -413,6 +413,13 @@ export interface ProductionRecord {
    *  few presses (550T / 320T / 150T / 125T) ever run a 2-cavity die, and
    *  the operator ticks a box to set it. Undefined / 0 is treated as 1. */
   cavities?: number;
+  /** Hot stamp batch (`core/hs-batch`): the other orders running with this
+   *  one, `A,B,C`, on the FIRST order's canonical slot 0 while the batch is
+   *  open; at sign-off every order of the batch is stamped with the whole
+   *  batch, itself included. '' once a batch has been taken apart, so the
+   *  column is cleared; undefined on an order that never batched (nothing is
+   *  written). Persisted to PMD_Production / PMD_LiveStatus.BatchJobs. */
+  batchJobs?: string;
   /** The shift's Schedule % at the moment it was signed off, persisted to
    *  PMD_Production.VSPLAN. Schedule Adherence is otherwise recomputed live
    *  from Planning.csv, and Epicor drops an order from planning the moment it

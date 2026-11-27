@@ -48,6 +48,7 @@ import { jobTotals } from './index';
 import { jobLeftPiecesFor } from '../../core/targets';
 import { parseHandover } from './events';
 import { MANGO_HOME_URL } from './photos';
+import { batchBadge, batchCompanions, batchPrimaryFor } from './batch';
 
 /**
  * Names from a roster that belong to the selected shift, so the
@@ -160,7 +161,11 @@ export function buildMeta(): string {
         : '';
       // id > 0 = a real PMD_ManualOrders row (supervisor-added); id 0 =
       // the synthetic order rebuilt from PMD_Production history.
-      const tag = ord.manuallyAdded
+      // An order running in another order's hot stamp batch is entered there.
+      const batchOf = batchPrimaryFor(ord.jobNumber);
+      const tag = batchOf
+        ? ` (in ${batchOf} batch)`
+        : ord.manuallyAdded
         ? ord.id > 0
           ? ' (manual)'
           : isCarried(ord.jobNumber) && !S!.prod.some((r) => r.jobNumber === ord.jobNumber)
@@ -279,7 +284,7 @@ export function buildMeta(): string {
       : '';
   return `<div class="op-meta">
     <label class="m-mc">Machine <select data-meta="machine">${machineOpts}</select></label>
-    <label class="m-job">Job# ${jobField}${addOrderBtn}${coRunBadge}${jobWarn}</label>
+    <label class="m-job">Job# ${jobField}${addOrderBtn}${coRunBadge}${batchBadge()}${jobWarn}</label>
     <label class="m-orderqty">Order Qty <input type="text" disabled value="${escapeHtml(String(orderQty))}"></label>
     <label class="m-part"><span class="m-part-title">Part# ${swatch}</span><input type="text" disabled value="${escapeHtml(o?.partNumber ?? '')}"></label>
     <label class="m-desc"><span class="m-desc-title">Product Description${dieNumberLabel}</span><input type="text" disabled value="${escapeHtml(o?.partDescription ?? '')}"></label>
@@ -500,6 +505,14 @@ function handoverBox(
  * pill above, so it gets the explanation without the flag.
  */
 function cavityRow(rdo: string, rdoTitle: string): string {
+  // A hot stamp batch counts pieces: its Count End is the Good + Reject typed
+  // at sign-off, one piece a count, so cavities is 1 and not the die's —
+  // shown fixed, never as cavities blocked off, and never offered for
+  // "correction" to the die's count (which would multiply the Good by it).
+  if (S!.selJob && (canonical()?.batchJobs || batchCompanions().length)) {
+    const note = 'Hot stamp batch: Good and Reject are entered per order at sign-off, as pieces — one piece a count.';
+    return `<div class="sk sk-cavity"><label title="${escapeHtml(note)}">Cavities</label><b class="cav-val" data-cavities="1" title="${escapeHtml(note)}">×1 · batch</b></div>`;
+  }
   const src = cavitySource();
   const cav = cavities();
   const blocked = blockedCavities(cav, src);
@@ -564,6 +577,11 @@ export function buildSide(): string {
     : `Shift Target = the smaller of Job Left and (8h − hours used by earlier orders this shift − changeover time) ÷ ${o!.qtyPerHr} h/piece.`;
   return `<aside class="op-side">
     <div class="side-title">Shift counters</div>
+    ${
+      batchCompanions().length
+        ? `<div class="batch-side-note">⛓ Batch of ${batchCompanions().length + 1} orders — no counter needed: Good and Reject per order are entered at sign-off.</div>`
+        : ''
+    }
     <div class="sk"><label>Job left</label><b data-live="jobLeft">${jobLeft}</b><span class="jl-warn" data-live="jlWarn" title="${escapeHtml(jobLeftWarnTitle())}"${S!.unsignedEarlier.length ? '' : ' style="display:none"'}>⚠</span></div>
     <div class="sk"><label title="${escapeHtml(targetTitle)}">Shift Target</label><b title="${escapeHtml(targetTitle)}">${targetDisplay}</b></div>
     <div class="sk"><label>Count Start</label><input class="count-input${outputWarning ? ' count-invalid' : ''}" type="text" inputmode="numeric" pattern="[0-9]*" data-meta="cstart" value="${cs}" aria-invalid="${outputWarning ? 'true' : 'false'}" ${rdo}${rdoTitle}></div>

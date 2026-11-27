@@ -206,6 +206,8 @@ export interface HeaderRow {
    *  Stamped onto the canonical record so every Good computation can
    *  multiply (CountEnd − CountStart) by it. */
   cavities?: number;
+  /** Hot stamp batch, `A,B,C`; '' when the column is absent or empty. */
+  batchJobs?: string;
   timeline: string;
   countStart: number | null;
   countEnd: number | null;
@@ -278,6 +280,9 @@ export interface HeaderInput {
   /** Identical cavities on the die (pieces per cycle). 1 (or 0/undefined)
    *  leaves the column at its default; written when > 1. */
   cavities?: number;
+  /** Hot stamp batch, `A,B,C`. undefined skips the column (an order that
+   *  never batched); '' clears it. */
+  batchJobs?: string;
   timeline: string;
   countStart: number | null;
   countEnd: number | null;
@@ -393,7 +398,7 @@ export function mirrorSignature(slots: ProductionRecord[]): string {
   return JSON.stringify([
     agg.timeline, agg.countStart, agg.countEnd, agg.reject, agg.runTime, agg.downTime,
     agg.handover, agg.qcChecks, agg.rejectsBySlot,
-    canon?.operator ?? '', canon?.supervisor ?? '', canon?.cycleTime ?? 0, canon?.cavities ?? null,
+    canon?.operator ?? '', canon?.supervisor ?? '', canon?.cycleTime ?? 0, canon?.cavities ?? null, canon?.batchJobs ?? null,
     slots.find((s) => s.jobRequired && s.jobRequired > 0)?.jobRequired ?? 0,
   ]);
 }

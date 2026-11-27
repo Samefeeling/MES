@@ -297,7 +297,7 @@ appears with the totals. Trainer taps **Confirm**.
 
 ---
 
-# Part 2 — Three Useful Tricks
+# Part 2 — Useful Tricks
 
 > Goal: small things that save time. Watch when you have a quiet
 > moment. Not needed on day one.
@@ -352,6 +352,34 @@ B instead.
 > Wrong letter? tap again → pick the right one
 
 **PAUSE 3 seconds**
+
+---
+
+## Trick 4 — Hot stamp only: run several orders together
+
+**SHOW**: The Hstamp press, an order already started and confirmed. Trainer
+taps **＋ Run together** next to the Job#, ticks two more orders, taps
+**Save**. The orders appear as teal chips: **⛓ Batch**. At the end of the
+shift, **Sign off** opens a list with one line per order.
+
+**NARRATION**
+> On the hot stamp press you often run small orders one after another on
+> the same set-up. You do not need to start and sign off each one.
+>
+> Start the first order as usual. Then tap **Run together** next to the
+> Job number, tick the other orders you are running, and tap **Save**.
+> Fill the status row as normal — just once, for the whole batch. You do
+> not need the counter.
+>
+> At the end, tap **Sign off**. You see a list. For each order, type the
+> **Good** and the **Reject**, and pick the reject reason. Tap the green
+> button. Every order is saved, and the time is shared out for you.
+
+**ON-SCREEN TEXT**
+> Hot stamp: **＋ Run together** → tick orders → **Save**
+> Sign off: Good + Reject for each order → green button
+
+**PAUSE 5 seconds**
 
 ---
 

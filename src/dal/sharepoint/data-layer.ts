@@ -514,6 +514,7 @@ export class SharePointDataLayer extends SharePointRecords implements PmdDataLay
           jobRequired: required,
           cycleTime,
           cavities,
+          batchJobs: slots.find((s) => s.slotIndex === 0)?.batchJobs,
           plannedStart: plannedStartOf(job, slots),
           shiftTarget: shiftTargetSnap,
           vsPlan: vsPlanSnap,
@@ -729,6 +730,7 @@ export class SharePointDataLayer extends SharePointRecords implements PmdDataLay
             // spread to every device (SFM507147's phantom "200").
             cycleTime: canon.cycleTime ?? 0,
             cavities: canon.cavities,
+            batchJobs: canon.batchJobs,
             timeline: agg.timeline,
             countStart: agg.countStart,
             countEnd: agg.countEnd,

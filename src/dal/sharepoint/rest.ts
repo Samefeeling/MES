@@ -350,6 +350,7 @@ export class SharePointRest {
       F.jobLeft,
       F.reopened,
       F.plannedStart,
+      F.batchJobs,
     ].filter(Boolean)).has(field);
   }
 

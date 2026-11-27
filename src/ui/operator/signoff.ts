@@ -18,6 +18,7 @@ import { openModal, escapeHtml, closeModal } from '../modal';
 import { multiFillApply } from './status-picker';
 import type { StatusCode } from '../../types';
 import { flushPhotoQueue } from './photos';
+import { batchCompanions, openBatchSignoffModal } from './batch';
 
 // Guard against a double Sign Off. On a laggy iPad the supervisor used
 // to tap the confirm button repeatedly (no feedback while lockShift's
@@ -97,6 +98,12 @@ export async function openSaveSignoffModal(): Promise<void> {
   // shift). Exempt as the gaps gate is: a supervisor correcting data, or a
   // reopened order whose timeline was already accepted.
   if (!isSupervisor() && !reopenedForCorrection() && !(await dieChangeLoggedForSignoff())) return;
+  // A hot stamp batch signs off as one list: Good and Reject per order, no
+  // Count Start / End — see ./batch and core/hs-batch.
+  if (batchCompanions().length) {
+    openBatchSignoffModal();
+    return;
+  }
   const c = canonical();
   if (c?.countStart == null || c?.countEnd == null) {
     toast('Count Start and Count End are required — enter 0 if no parts were counted', 'err');

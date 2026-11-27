@@ -25,6 +25,7 @@ import { queuePhoto, renderPhotoStrip, lastPhotoFlushAt, flushPhotoQueue } from 
 import { openSaveSignoffModal, openUnlockModal } from './signoff';
 import { wireStatusPicker } from './status-picker';
 import { type Handover, parseHandover as sharedParseHandover } from '../../core/handover';
+import { batchPrimaryFor, openBatchPicker, removeFromBatch } from './batch';
 
 export function wire(): void {
   const app = document.getElementById('app')!;
@@ -84,6 +85,18 @@ export function wire(): void {
       S!.selJob = j;
       saveView();
       void reload();
+    });
+  });
+  // ⛓ Hot stamp batch: ＋ Run together, and × to take an order out.
+  app.querySelector<HTMLButtonElement>('[data-batch-pick]')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    openBatchPicker();
+  });
+  app.querySelectorAll<HTMLButtonElement>('[data-batch-remove]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const j = btn.dataset.batchRemove;
+      if (j) removeFromBatch(j);
     });
   });
   // Die# pill — deep-link into the Tool board's drilldown for this die.
@@ -308,6 +321,18 @@ export function onMetaChange(el: HTMLElement): void {
       // moving between jobs. Job Left discipline is handled by the shift-end
       // sign-off reminder instead of a gate here.
       discardIfUnconfirmed();
+      // An order in another order's hot stamp batch has no timeline of its
+      // own to fill in: it is entered on the batch, so go there instead.
+      {
+        const batchOf = batchPrimaryFor(val);
+        if (batchOf) {
+          toast(`${val} runs in ${batchOf}'s batch — its time and counts are entered there`, 'warn');
+          S!.selJob = batchOf;
+          saveView();
+          void reload();
+          break;
+        }
+      }
       S!.selJob = val;
       saveView();
       // Full reload, not just render(): Job Left / Total Good and the

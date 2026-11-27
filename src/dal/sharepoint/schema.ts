@@ -178,6 +178,11 @@ export const DEFAULT_FIELDS = {
      *  Optional column; stripRejectedFields tolerates absence (defaults
      *  to 1). */
     cavities: 'Cavities',
+    /** Hot stamp batch: the orders run together, `A,B,C` (single line of
+     *  text). Optional column on PMD_Production and PMD_LiveStatus — without
+     *  it a batch still works on the iPad that runs it, and the sign-off
+     *  notice says the value was not saved. */
+    batchJobs: 'BatchJobs',
     reject: 'Reject',
     operator: 'Operator',
     supervisor: 'Supervisor',

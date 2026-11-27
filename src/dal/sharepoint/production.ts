@@ -912,6 +912,7 @@ export class SharePointProduction extends SharePointPlanning {
       // number yet" (fill it from PMD_DieMaster) from a 1 somebody set
       // because a cavity was blocked off (leave it alone).
       cavities: F.cavities && num(r[F.cavities]) > 0 ? num(r[F.cavities]) : undefined,
+      batchJobs: F.batchJobs ? str(r[F.batchJobs]).trim() : '',
       // The 16-char status timeline lives in the MachineCode column on
       // this tenant; prefer it over the (empty / fallback) F.timeline
       // entry so listProduction can rebuild per-slot status without a
@@ -1005,7 +1006,14 @@ export class SharePointProduction extends SharePointPlanning {
       );
     }
     // History by the thousand rows: only the columns a header is read from.
-    const columns = [...Object.values(this.F.production), 'Modified'];
+    // BatchJobs is left out: history has no use for it, and on a list that
+    // does not have the column yet asking for it would answer 400 and send
+    // every history read the slow way. The sheet's own one-shift read asks
+    // for every column and gets it there.
+    const columns = [
+      ...Object.values(this.F.production).filter((c) => c !== this.F.production.batchJobs),
+      'Modified',
+    ];
     const entry = { list, ...span, writes: this.writesStarted, rows: this.getColumnItems(list, columns, qs) };
     const settled = (): void => {
       this.spanReadsInFlight = this.spanReadsInFlight.filter((r) => r !== entry);
@@ -1276,6 +1284,9 @@ export class SharePointProduction extends SharePointPlanning {
     // undefined: 507381 on 550T 29/07 ran 10:00-12:00 with 2 cavities,
     // stored Good 212 in PMD_Production, and read back as 106 everywhere.
     slots[0].cavities = h.cavities;
+    // A hot stamp batch rides on the canonical slot too: the sheet reads it
+    // from there, on whichever device opens the press.
+    if (h.batchJobs) slots[0].batchJobs = h.batchJobs;
     // Frozen-at-start Job Left / Shift Target ride on the canonical slot
     // so Trace can read demand-at-start per row. -1 sentinel = column
     // absent / never written (legacy or live-without-freeze rows); 0 is a
